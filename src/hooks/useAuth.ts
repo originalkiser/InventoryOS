@@ -5,13 +5,17 @@ import { completeSetup } from '@/pages/Setup'
 import type { User } from '@supabase/supabase-js'
 
 export function useAuth() {
-  const { setUser, setSession, setProfile, clear } = useAuthStore()
+  const { setUser, setSession, setProfile, setInitialized, clear } = useAuthStore()
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
-      if (session?.user) loadProfile(session.user)
+      if (session?.user) {
+        loadProfile(session.user).finally(() => setInitialized())
+      } else {
+        setInitialized()
+      }
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
