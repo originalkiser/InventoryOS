@@ -14,13 +14,19 @@ interface ColumnMapperProps {
   requiredFields: RequiredField[]
   onConfirm: (mappings: ColumnMapping[]) => void
   onCancel?: () => void
+  // Optional saved-template mappings; pre-fill any whose sourceColumn exists in the file.
+  initialMappings?: ColumnMapping[]
 }
 
-export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel }: ColumnMapperProps) {
+export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings }: ColumnMapperProps) {
   const headerOptions = ['', ...headers]
 
   const [mappings, setMappings] = useState<ColumnMapping[]>(
     requiredFields.map((f) => {
+      const fromTemplate = initialMappings?.find(
+        (m) => m.fieldName === f.name && headers.includes(m.sourceColumn)
+      )
+      if (fromTemplate) return { ...fromTemplate }
       const auto = headers.find(
         (h) => h.toLowerCase().replace(/[^a-z0-9]/g, '') === f.name.toLowerCase().replace(/[^a-z0-9]/g, '')
       )

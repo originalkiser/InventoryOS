@@ -7,7 +7,9 @@ interface DataTableProps<T> {
   globalFilter: string
   onGlobalFilterChange: (v: string) => void
   exportFilename?: string
-  exportData?: T[]
+  // Widened to unknown[] so callers can export a flattened/custom CSV shape
+  // independent of the table's row type.
+  exportData?: unknown[]
   loading?: boolean
   actions?: React.ReactNode
 }

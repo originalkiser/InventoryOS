@@ -26,6 +26,11 @@ export interface Database {
       issue_statuses: { Row: IssueStatus; Insert: Partial<IssueStatus>; Update: Partial<IssueStatus> }
       issues: { Row: Issue; Insert: Partial<Issue>; Update: Partial<Issue> }
       schedule_events: { Row: ScheduleEvent; Insert: Partial<ScheduleEvent>; Update: Partial<ScheduleEvent> }
+      count_upload_batches: { Row: CountUploadBatch; Insert: Partial<CountUploadBatch>; Update: Partial<CountUploadBatch> }
+      count_mapping_templates: { Row: CountMappingTemplate; Insert: Partial<CountMappingTemplate>; Update: Partial<CountMappingTemplate> }
+      order_profiles: { Row: OrderProfile; Insert: Partial<OrderProfile>; Update: Partial<OrderProfile> }
+      order_min_rules: { Row: OrderMinRule; Insert: Partial<OrderMinRule>; Update: Partial<OrderMinRule> }
+      order_documents: { Row: OrderDocument; Insert: Partial<OrderDocument>; Update: Partial<OrderDocument> }
     }
   }
 }
@@ -147,6 +152,7 @@ export interface MonthlyCount {
   company_id: string
   location_id: string | null
   count_date: string
+  count_month: string | null
   count_type: string | null
   total_adjustments: number | null
   adjustment_value: number | null
@@ -162,6 +168,7 @@ export interface MonthlyCountProduct {
   id: string
   company_id: string
   upload_batch_id: string | null
+  count_month: string | null
   location_id: string | null
   product_id: string
   on_hand: number | null
@@ -182,6 +189,7 @@ export interface RecountRequest {
   recount_fields: Json | null
   completed_flags: boolean[] | null
   completed_dates: string[] | null
+  recount_status: 'open' | 'in_progress' | 'complete'
   created_at: string
   updated_at: string
 }
@@ -219,8 +227,13 @@ export interface OrderSession {
   id: string
   company_id: string
   created_by: string | null
-  status: 'draft' | 'exported' | 'pending' | 'fulfilled'
+  name: string | null
+  status: 'draft' | 'generated' | 'exported' | 'pending' | 'fulfilled'
+  source_mode: 'manual' | 'file' | 'live' | null
+  input_snapshot: Json | null
+  generation_params: Json | null
   export_data: Json | null
+  exported_at: string | null
   notes: string | null
   created_at: string
   updated_at: string
@@ -229,13 +242,56 @@ export interface OrderSession {
 export interface OrderLineItem {
   id: string
   order_session_id: string
+  company_id: string | null
   location_id: string | null
   product_id: string
-  quantity: number
+  vendor_part_number: string | null
+  suggested_qty: number | null
+  final_qty: number | null
+  quantity: number | null
   unit_of_measure: string | null
+  package_type: string | null
+  applied_min_rule: string | null
+  trigger_reason: string | null
+  manual_override: boolean
   notes: string | null
   created_at: string
   updated_at: string
+}
+
+export interface OrderProfile {
+  id: string
+  company_id: string
+  name: string
+  scope: string | null
+  config: Json
+  created_by: string | null
+  created_at: string
+}
+
+export interface OrderMinRule {
+  id: string
+  company_id: string
+  name: string | null
+  applies_to: Json // { scope, location, field, value }
+  bulk_minimum: number | null
+  individual_minimum: number | null
+  uom: string | null
+  package_type: string | null
+  rule_logic: Json | null // { caseSize, maxQty, maxOnHandAfter }
+  active: boolean
+  created_at: string
+}
+
+export interface OrderDocument {
+  id: string
+  company_id: string
+  order_session_id: string | null
+  stage: 'start' | 'export'
+  file_name: string
+  storage_path: string
+  uploaded_by: string | null
+  created_at: string
 }
 
 export interface IssueCategory {
@@ -283,4 +339,33 @@ export interface ScheduleEvent {
   notes: string | null
   created_at: string
   updated_at: string
+}
+
+export interface CountUploadBatch {
+  id: string
+  company_id: string
+  module: 'monthly' | 'weekly'
+  count_month: string | null
+  file_name: string | null
+  source_type: 'file' | 'api' | 'google_sheets' | 'onedrive' | 'sharepoint'
+  uploaded_by: string | null
+  row_count: number
+  created_at: string
+}
+
+export interface CountMappingTemplate {
+  id: string
+  company_id: string
+  module: 'monthly_summary' | 'monthly_product' | 'weekly'
+  name: string
+  mappings: ColumnMappingJson[]
+  created_by: string | null
+  created_at: string
+}
+
+// Shape stored in count_mapping_templates.mappings (mirrors ColumnMapping in types/index.ts)
+export interface ColumnMappingJson {
+  fieldName: string
+  sourceColumn: string
+  invert: boolean
 }

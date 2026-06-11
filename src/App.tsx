@@ -11,7 +11,7 @@ import { UsersPage } from '@/modules/admin/UsersPage'
 import { DashboardPage } from '@/pages/Dashboard'
 import { ConfigPage } from '@/modules/config/ConfigPage'
 import { MonthEndPage } from '@/modules/monthend/MonthEndPage'
-import { WeeklyCountsPage } from '@/modules/weekly/WeeklyCountsPage'
+import { WeeklyPage } from '@/modules/weekly/WeeklyPage'
 import { OrdersPage } from '@/modules/orders/OrdersPage'
 import { IssuesPage } from '@/modules/issues/IssuesPage'
 import { SchedulePage } from '@/modules/schedule/SchedulePage'
@@ -76,7 +76,8 @@ export default function App() {
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="config" element={<ConfigPage />} />
           <Route path="monthend" element={<MonthEndPage />} />
-          <Route path="weekly" element={<WeeklyCountsPage />} />
+          <Route path="month-end" element={<Navigate to="/monthend" replace />} />
+          <Route path="weekly" element={<WeeklyPage />} />
           <Route path="orders" element={<OrdersPage />} />
           <Route path="issues" element={<IssuesPage />} />
           <Route path="schedule" element={<SchedulePage />} />
