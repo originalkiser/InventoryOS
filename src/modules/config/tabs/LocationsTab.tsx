@@ -1,72 +1,131 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab } from '../useConfigTab'
+import { useCustomFields } from '@/hooks/useCustomFields'
+import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { ColumnMapper } from '@/components/upload/ColumnMapper'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
+import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import type { Location, ColumnMapping, ParsedUpload } from '@/types'
-import toast from 'react-hot-toast'
-import { useForm } from 'react-hook-form'
+import { format } from 'date-fns'
 
-const REQUIRED_FIELDS = [
+// Code / Name / Region are real columns; the rest are recommended custom columns.
+const RECOMMENDED = [
+  { label: 'Market' },
+  { label: 'Area Manager' },
+  { label: 'Regional Director' },
+  { label: 'Delivery Day' },
+  { label: 'Location Phone' },
+  { label: 'Area Manager Phone' },
+  { label: 'Regional Director Phone' },
+]
+
+const BASE_FIELDS = [
   { name: 'location_code', label: 'Location Code', required: true },
   { name: 'name', label: 'Name', required: true },
   { name: 'region', label: 'Region' },
   { name: 'active', label: 'Active (bool)' },
 ]
 
+function coerce(value: string, type: string): unknown {
+  const v = value.trim()
+  if (v === '') return null
+  if (type === 'number') { const n = Number(v.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
+  return v
+}
+
 const col = createColumnHelper<Location>()
-const COLUMNS = [
-  col.accessor('location_code', { header: 'Code' }),
-  col.accessor('name', { header: 'Name' }),
-  col.accessor('region', { header: 'Region', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('active', { header: 'Active', cell: (i) => i.getValue() ? '✓' : '✗' }),
-  col.accessor('created_at', { header: 'Added', cell: (i) => new Date(i.getValue()).toLocaleDateString() }),
-]
 
 export function LocationsTab() {
+  const { profile } = useAuthStore()
   const { data, loading, insert, upsertBatch } = useConfigTab<Location>('locations')
-  const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
+  const { active: customFields } = useCustomFields('locations')
 
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
-  const [mappings, setMappings] = useState<ColumnMapping[] | null>(null)
-  const [confirmOpen, setConfirmOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [columnsOpen, setColumnsOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
 
-  const { register, handleSubmit, reset } = useForm<{ location_code: string; name: string; region: string }>()
+  // Add-form state: base + dynamic custom values
+  const [base, setBase] = useState({ location_code: '', name: '', region: '' })
+  const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
-  function applyMappings(rows: Record<string, string>[], maps: ColumnMapping[]) {
-    return rows.map((row) => {
-      const out: Record<string, unknown> = {}
-      for (const m of maps) {
-        const raw = row[m.sourceColumn] ?? ''
-        if (m.fieldName === 'active') {
-          out[m.fieldName] = ['true', '1', 'yes'].includes(raw.toLowerCase())
-        } else {
-          out[m.fieldName] = raw
-        }
-      }
-      return out
-    })
+  const columns = useMemo(() => {
+    const cols: any[] = [
+      col.accessor('location_code', { header: 'Code' }),
+      col.accessor('name', { header: 'Name' }),
+      col.accessor('region', { header: 'Region', cell: (i) => i.getValue() ?? '—' }),
+    ]
+    for (const f of customFields) {
+      cols.push({
+        id: `cf_${f.field_key}`,
+        header: f.label,
+        accessorFn: (r: Location) => (r.metadata as any)?.[f.field_key] ?? '',
+        cell: (i: any) => i.getValue() || '—',
+      })
+    }
+    cols.push(col.accessor('active', { header: 'Active', cell: (i) => (i.getValue() ? '✓' : '✗') }))
+    cols.push(col.accessor('updated_at', {
+      header: 'Last Updated',
+      cell: (i) => {
+        const r = i.row.original as Location
+        const src = r.last_change_source ? ` (${r.last_change_source})` : ''
+        return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${src}` : '—'
+      },
+    }))
+    return cols
+  }, [customFields])
+
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+
+  function buildMetadata(values: Record<string, string>) {
+    const meta: Record<string, unknown> = {}
+    for (const f of customFields) meta[f.field_key] = coerce(values[f.field_key] ?? '', f.field_type)
+    return meta
   }
 
-  async function confirmImport() {
-    if (!parsed || !mappings) return
-    const rows = applyMappings(parsed.rows, mappings)
-    await upsertBatch(rows as Partial<Location>[])
-    setParsed(null)
-    setMappings(null)
-    setConfirmOpen(false)
-  }
-
-  async function onAddSubmit(form: { location_code: string; name: string; region: string }) {
-    await insert(form)
-    reset()
+  async function onAddSubmit() {
+    if (!base.location_code.trim() || !base.name.trim()) return
+    await insert({
+      location_code: base.location_code.trim(),
+      name: base.name.trim(),
+      region: base.region.trim() || null,
+      metadata: buildMetadata(customVals),
+      updated_by: profile?.id ?? null,
+      last_change_source: 'manual',
+    } as Partial<Location>)
+    setBase({ location_code: '', name: '', region: '' })
+    setCustomVals({})
     setAddOpen(false)
   }
+
+  async function confirmImport(maps: ColumnMapping[]) {
+    if (!parsed) return
+    setImporting(true)
+    const customKeys = new Set(customFields.map((f) => f.field_key))
+    const typeByKey = new Map(customFields.map((f) => [f.field_key, f.field_type]))
+    const rows = parsed.rows.map((row) => {
+      const out: Record<string, unknown> = { last_change_source: 'upload', updated_by: profile?.id ?? null }
+      const meta: Record<string, unknown> = {}
+      for (const m of maps) {
+        const raw = row[m.sourceColumn] ?? ''
+        if (m.fieldName === 'active') out.active = ['true', '1', 'yes'].includes(raw.toLowerCase())
+        else if (customKeys.has(m.fieldName)) meta[m.fieldName] = coerce(raw, typeByKey.get(m.fieldName) ?? 'text')
+        else out[m.fieldName] = raw
+      }
+      out.metadata = meta
+      return out as Partial<Location>
+    })
+    await upsertBatch(rows)
+    setParsed(null)
+    setImporting(false)
+  }
+
+  const uploadFields = [...BASE_FIELDS, ...customFields.map((f) => ({ name: f.field_key, label: f.label }))]
 
   return (
     <div className="flex flex-col gap-6">
@@ -77,59 +136,60 @@ export function LocationsTab() {
         exportFilename="locations.csv"
         exportData={data}
         loading={loading}
-        actions={<Button size="sm" onClick={() => setAddOpen(true)}>+ Add Location</Button>}
+        actions={
+          <>
+            <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
+            <Button size="sm" onClick={() => setAddOpen(true)}>+ Add Location</Button>
+          </>
+        }
       />
 
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
           {!parsed ? (
-            <FileUploadZone
-              onParsed={(result) => { setParsed(result) }}
-            />
-          ) : !mappings ? (
+            <FileUploadZone onParsed={(result) => setParsed(result)} />
+          ) : (
             <div className="border border-[#2a2d3e] rounded-lg p-4 bg-[#0f1117]">
               <h4 className="text-xs font-mono text-gray-400 uppercase mb-3">Map Columns</h4>
               <ColumnMapper
                 headers={parsed.headers}
-                requiredFields={REQUIRED_FIELDS}
-                onConfirm={(maps) => { setMappings(maps); setConfirmOpen(true) }}
+                requiredFields={uploadFields}
+                onConfirm={confirmImport}
                 onCancel={() => setParsed(null)}
               />
+              {importing && <p className="text-xs text-[#00e5ff] font-mono mt-2">Importing…</p>}
             </div>
-          ) : null}
-
-          {confirmOpen && parsed && mappings && (
-            <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Confirm Import" size="md">
-              <p className="text-sm text-gray-300 mb-4 font-mono">
-                Import {parsed.totalRowsParsed.toLocaleString()} locations?
-                {parsed.skippedRows > 0 && ` (${parsed.skippedRows} header rows skipped)`}
-              </p>
-              <div className="flex justify-end gap-2">
-                <Button variant="secondary" size="sm" onClick={() => { setConfirmOpen(false); setMappings(null) }}>
-                  Back
-                </Button>
-                <Button size="sm" onClick={confirmImport}>
-                  Import
-                </Button>
-              </div>
-            </Modal>
           )}
         </div>
 
         <DataSourceLinker configType="locations" />
       </div>
 
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Location">
-        <form onSubmit={handleSubmit(onAddSubmit)} className="flex flex-col gap-3">
-          <Input label="Location Code *" {...register('location_code', { required: true })} />
-          <Input label="Name *" {...register('name', { required: true })} />
-          <Input label="Region" {...register('region')} />
+      {/* Add location */}
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Location" size="lg">
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Location Code *" value={base.location_code} onChange={(e) => setBase({ ...base, location_code: e.target.value })} />
+            <Input label="Name *" value={base.name} onChange={(e) => setBase({ ...base, name: e.target.value })} />
+            <Input label="Region" value={base.region} onChange={(e) => setBase({ ...base, region: e.target.value })} />
+            {customFields.map((f) => (
+              <Input key={f.id} label={f.label}
+                type={f.field_type === 'date' ? 'date' : 'text'}
+                value={customVals[f.field_key] ?? ''}
+                onChange={(e) => setCustomVals({ ...customVals, [f.field_key]: e.target.value })} />
+            ))}
+          </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" size="sm" type="button" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" type="submit">Save</Button>
+            <Button size="sm" onClick={onAddSubmit} disabled={!base.location_code.trim() || !base.name.trim()}>Save</Button>
           </div>
-        </form>
+        </div>
+      </Modal>
+
+      {/* Manage columns */}
+      <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Location Columns" size="lg">
+        <CustomFieldsEditor section="locations" recommended={RECOMMENDED} />
       </Modal>
     </div>
   )

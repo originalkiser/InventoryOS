@@ -78,6 +78,8 @@ export interface Location {
   region: string | null
   active: boolean
   metadata: Json | null
+  updated_by: string | null
+  last_change_source: string | null
   created_at: string
   updated_at: string
 }
