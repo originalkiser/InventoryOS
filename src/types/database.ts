@@ -31,8 +31,26 @@ export interface Database {
       order_profiles: { Row: OrderProfile; Insert: Partial<OrderProfile>; Update: Partial<OrderProfile> }
       order_min_rules: { Row: OrderMinRule; Insert: Partial<OrderMinRule>; Update: Partial<OrderMinRule> }
       order_documents: { Row: OrderDocument; Insert: Partial<OrderDocument>; Update: Partial<OrderDocument> }
+      custom_field_definitions: { Row: CustomFieldDefinition; Insert: Partial<CustomFieldDefinition>; Update: Partial<CustomFieldDefinition> }
     }
   }
+}
+
+export type CustomFieldSection = 'locations' | 'order_config' | 'ending_balance' | 'vendor_parts' | 'vendors'
+
+export interface CustomFieldDefinition {
+  id: string
+  company_id: string
+  section: CustomFieldSection
+  field_key: string
+  label: string
+  field_type: 'text' | 'number' | 'date'
+  position: number
+  linked_section: string | null
+  linked_match_key: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
 }
 
 export interface Company {
@@ -78,6 +96,7 @@ export interface VendorPart {
   company_id: string
   vendor_id: string | null
   part_number: string
+  our_part_number: string | null
   description: string | null
   unit_of_measure: string | null
   package_type: string | null
@@ -119,6 +138,9 @@ export interface LocationOrderConfig {
   order_trigger: number | null
   order_limit: number | null
   active: boolean
+  metadata: Json | null
+  updated_by: string | null
+  last_change_source: string | null
   created_at: string
   updated_at: string
 }
@@ -129,6 +151,9 @@ export interface MonthlyEndingBalance {
   location_id: string | null
   month: string
   ending_balance: number
+  metadata: Json | null
+  updated_by: string | null
+  last_change_source: string | null
   uploaded_at: string
   created_at: string
   updated_at: string
