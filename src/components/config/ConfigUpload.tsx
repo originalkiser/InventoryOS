@@ -1,0 +1,70 @@
+import { useState } from 'react'
+import { FileUploadZone } from '@/components/upload/FileUploadZone'
+import { ColumnMapper } from '@/components/upload/ColumnMapper'
+import type { ColumnMapping, ParsedUpload } from '@/types'
+import type { ImportMode } from '@/modules/config/useConfigTab'
+
+interface RequiredField { name: string; label: string; required?: boolean }
+
+interface Props {
+  requiredFields: RequiredField[]
+  onImport: (rows: Record<string, string>[], mappings: ColumnMapping[], mode: ImportMode) => void | Promise<void>
+  importing?: boolean
+  // 'merge' offered by default; set allowReplace=false to hide replace-all
+  allowReplace?: boolean
+}
+
+// Single upload surface for config sections: file → mode choice → column map →
+// direct import. "Replace all" warns before proceeding. Mapping isn't lost on
+// re-open because the chosen file/mode stay until the user clicks Replace File.
+export function ConfigUpload({ requiredFields, onImport, importing, allowReplace = true }: Props) {
+  const [parsed, setParsed] = useState<ParsedUpload | null>(null)
+  const [mode, setMode] = useState<ImportMode>('merge')
+
+  function handleConfirm(mappings: ColumnMapping[]) {
+    if (!parsed) return
+    if (mode === 'replace') {
+      const ok = window.confirm(
+        'Replace all: this DELETES every existing row in this section and replaces it with the uploaded file. This cannot be undone. Continue?'
+      )
+      if (!ok) return
+    }
+    onImport(parsed.rows, mappings, mode)
+  }
+
+  if (!parsed) {
+    return <FileUploadZone onParsed={(r) => setParsed(r)} />
+  }
+
+  return (
+    <div className="flex flex-col gap-3 border border-[#2a2d3e] rounded-lg p-4 bg-[#0f1117]">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">Mode</span>
+          <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+            <button onClick={() => setMode('merge')}
+              className={['px-3 py-1 text-xs font-mono', mode === 'merge' ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+              Update changes only
+            </button>
+            {allowReplace && (
+              <button onClick={() => setMode('replace')}
+                className={['px-3 py-1 text-xs font-mono', mode === 'replace' ? 'bg-red-500/15 text-red-400' : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+                Replace all
+              </button>
+            )}
+          </div>
+        </div>
+        <button onClick={() => setParsed(null)} className="text-xs font-mono text-gray-500 hover:text-gray-300">Replace file</button>
+      </div>
+
+      {mode === 'replace' && (
+        <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">
+          ⚠ Replace all wipes existing rows in this section before importing.
+        </div>
+      )}
+
+      <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} onConfirm={handleConfirm} onCancel={() => setParsed(null)} />
+      {importing && <p className="text-xs text-[#00e5ff] font-mono">Importing…</p>}
+    </div>
+  )
+}

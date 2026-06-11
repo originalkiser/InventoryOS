@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { useConfigTab } from '../useConfigTab'
+import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { DataTable } from '@/components/shared/DataTable'
-import { FileUploadZone } from '@/components/upload/FileUploadZone'
-import { ColumnMapper } from '@/components/upload/ColumnMapper'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
+import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import type { ProductIdMapping, ColumnMapping, ParsedUpload } from '@/types'
+import type { ProductIdMapping, ColumnMapping } from '@/types'
 import { useForm } from 'react-hook-form'
+import { format } from 'date-fns'
 
 const REQUIRED_FIELDS = [
   { name: 'old_product_id', label: 'Old Product ID', required: true },
@@ -21,27 +21,25 @@ const COLUMNS = [
   col.accessor('old_product_id', { header: 'Old ID' }),
   col.accessor('new_product_id', { header: 'New ID' }),
   col.accessor('notes', { header: 'Notes', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('created_at', { header: 'Added', cell: (i) => new Date(i.getValue()).toLocaleDateString() }),
+  col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
 ]
 
 export function ProductMappingTab() {
-  const { data, loading, insert, upsertBatch } = useConfigTab<ProductIdMapping>('product_id_mappings')
+  const { data, loading, insert, importRows } = useConfigTab<ProductIdMapping>('product_id_mappings')
   const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
-  const [parsed, setParsed] = useState<ParsedUpload | null>(null)
-  const [mappings, setMappings] = useState<ColumnMapping[] | null>(null)
-  const [confirmOpen, setConfirmOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
   const { register, handleSubmit, reset } = useForm<{ old_product_id: string; new_product_id: string; notes: string }>()
 
-  async function confirmImport() {
-    if (!parsed || !mappings) return
-    const rows = parsed.rows.map((row) => {
+  async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
+    setImporting(true)
+    const payload = rows.map((row) => {
       const out: Record<string, unknown> = {}
-      for (const m of mappings) out[m.fieldName] = row[m.sourceColumn] || null
-      return out
-    })
-    await upsertBatch(rows as Partial<ProductIdMapping>[])
-    setParsed(null); setMappings(null); setConfirmOpen(false)
+      for (const m of maps) out[m.fieldName] = row[m.sourceColumn] || null
+      return out as Partial<ProductIdMapping>
+    }).filter((r: any) => r.old_product_id)
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.old_product_id ?? '').toLowerCase() })
+    setImporting(false)
   }
 
   async function onAdd(form: { old_product_id: string; new_product_id: string; notes: string }) {
@@ -57,20 +55,7 @@ export function ProductMappingTab() {
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
-          {!parsed ? <FileUploadZone onParsed={(r) => setParsed(r)} />
-            : !mappings ? (
-              <div className="border border-[#2a2d3e] rounded-lg p-4 bg-[#0f1117]">
-                <ColumnMapper headers={parsed.headers} requiredFields={REQUIRED_FIELDS}
-                  onConfirm={(m) => { setMappings(m); setConfirmOpen(true) }} onCancel={() => setParsed(null)} />
-              </div>
-            ) : null}
-          <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Confirm Import">
-            <p className="text-sm text-gray-300 mb-4 font-mono">Import {parsed?.totalRowsParsed} mappings?</p>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => { setConfirmOpen(false); setMappings(null) }}>Back</Button>
-              <Button size="sm" onClick={confirmImport}>Import</Button>
-            </div>
-          </Modal>
+          <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
         </div>
         <DataSourceLinker configType="product_id_mappings" />
       </div>

@@ -1,16 +1,15 @@
 import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { useConfigTab } from '../useConfigTab'
+import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
-import { FileUploadZone } from '@/components/upload/FileUploadZone'
-import { ColumnMapper } from '@/components/upload/ColumnMapper'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
+import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import type { Location, ColumnMapping, ParsedUpload } from '@/types'
+import type { Location, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
 // Code / Name / Region are real columns; the rest are recommended custom columns.
@@ -42,10 +41,9 @@ const col = createColumnHelper<Location>()
 
 export function LocationsTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, upsertBatch } = useConfigTab<Location>('locations')
+  const { data, loading, insert, importRows } = useConfigTab<Location>('locations')
   const { active: customFields } = useCustomFields('locations')
 
-  const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -103,13 +101,12 @@ export function LocationsTab() {
     setAddOpen(false)
   }
 
-  async function confirmImport(maps: ColumnMapping[]) {
-    if (!parsed) return
+  async function confirmImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
     const customKeys = new Set(customFields.map((f) => f.field_key))
     const typeByKey = new Map(customFields.map((f) => [f.field_key, f.field_type]))
-    const rows = parsed.rows.map((row) => {
-      const out: Record<string, unknown> = { last_change_source: 'upload', updated_by: profile?.id ?? null }
+    const payload = rows.map((row) => {
+      const out: Record<string, unknown> = {}
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
         const raw = row[m.sourceColumn] ?? ''
@@ -119,9 +116,8 @@ export function LocationsTab() {
       }
       out.metadata = meta
       return out as Partial<Location>
-    })
-    await upsertBatch(rows)
-    setParsed(null)
+    }).filter((r: any) => r.location_code)
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.location_code ?? '').toLowerCase() })
     setImporting(false)
   }
 
@@ -147,20 +143,7 @@ export function LocationsTab() {
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
-          {!parsed ? (
-            <FileUploadZone onParsed={(result) => setParsed(result)} />
-          ) : (
-            <div className="border border-[#2a2d3e] rounded-lg p-4 bg-[#0f1117]">
-              <h4 className="text-xs font-mono text-gray-400 uppercase mb-3">Map Columns</h4>
-              <ColumnMapper
-                headers={parsed.headers}
-                requiredFields={uploadFields}
-                onConfirm={confirmImport}
-                onCancel={() => setParsed(null)}
-              />
-              {importing && <p className="text-xs text-[#00e5ff] font-mono mt-2">Importing…</p>}
-            </div>
-          )}
+          <ConfigUpload requiredFields={uploadFields} onImport={confirmImport} importing={importing} />
         </div>
 
         <DataSourceLinker configType="locations" />

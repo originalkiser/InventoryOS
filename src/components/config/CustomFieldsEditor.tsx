@@ -32,7 +32,9 @@ export function CustomFieldsEditor({ section, recommended, linkSections }: Props
       label,
       field_type: type,
       linked_section: linkSection || null,
-      linked_match_key: linkSection ? 'location_code' : null, // default match key; refine per need
+      // Linking is by shared key: the same field_key is looked up in the linked
+      // section (so "Area Manager" here pulls "Area Manager" from Locations).
+      linked_match_key: null,
     })
     setLabel(''); setType('text'); setLinkSection('')
   }

@@ -1,98 +1,154 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { useConfigTab } from '../useConfigTab'
+import { useConfigTab, type ImportMode } from '../useConfigTab'
+import { useCustomFields } from '@/hooks/useCustomFields'
+import { useLocations } from '@/hooks/useLocations'
+import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
-import { FileUploadZone } from '@/components/upload/FileUploadZone'
-import { ColumnMapper } from '@/components/upload/ColumnMapper'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
-import { Button, Input, Modal } from '@/components/ui'
+import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
+import { Button, Input, Modal, Combobox } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import type { MonthlyEndingBalance, ColumnMapping, ParsedUpload } from '@/types'
-import { useForm } from 'react-hook-form'
+import type { MonthlyEndingBalance, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
-const REQUIRED_FIELDS = [
-  { name: 'location_code', label: 'Location Code', required: true },
-  { name: 'month', label: 'Month (date)', required: true },
-  { name: 'ending_balance', label: 'Ending Balance', required: true },
+const RECOMMENDED = [
+  { label: 'Food', field_type: 'number' as const },
+  { label: 'Beverage', field_type: 'number' as const },
+  { label: 'Paper & Supplies', field_type: 'number' as const },
 ]
 
-const col = createColumnHelper<MonthlyEndingBalance>()
 const fmt = (v: number | null) =>
   v != null ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v) : '—'
 
-const COLUMNS = [
-  col.accessor('month', { header: 'Month', cell: (i) => {
-    try { return format(new Date(i.getValue() + 'T00:00:00'), 'MMM yyyy') } catch { return i.getValue() }
-  }}),
-  col.accessor('ending_balance', { header: 'Ending Balance', cell: (i) => fmt(i.getValue()) }),
-  col.accessor('uploaded_at', { header: 'Uploaded', cell: (i) => new Date(i.getValue()).toLocaleDateString() }),
-]
+// Normalize any month input ('YYYY-MM', a date) to a first-of-month 'YYYY-MM-01'.
+function monthKey(v: string): string | null {
+  const t = v.trim()
+  if (!t) return null
+  const m = /^(\d{4})-(\d{2})/.exec(t)
+  if (m) return `${m[1]}-${m[2]}-01`
+  const d = new Date(t)
+  if (isNaN(d.getTime())) return null
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+}
+
+function num(v: string): number | null {
+  const t = v.trim(); if (!t) return null
+  const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n
+}
+
+const col = createColumnHelper<MonthlyEndingBalance>()
 
 export function EndingBalancesTab() {
-  const { data, loading, insert, upsertBatch } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
-  const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
-  const [parsed, setParsed] = useState<ParsedUpload | null>(null)
-  const [mappings, setMappings] = useState<ColumnMapping[] | null>(null)
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [addOpen, setAddOpen] = useState(false)
-  const { register, handleSubmit, reset } = useForm<{ month: string; ending_balance: string }>()
+  const { profile } = useAuthStore()
+  const { data, loading, insert, importRows } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
+  const { active: categories } = useCustomFields('ending_balance')
+  const loc = useLocations()
 
-  async function confirmImport() {
-    if (!parsed || !mappings) return
-    const rows = parsed.rows.map((row) => {
-      const out: Record<string, unknown> = {}
-      for (const m of mappings) {
-        const v = row[m.sourceColumn] ?? ''
-        if (m.fieldName === 'ending_balance') out[m.fieldName] = v ? parseFloat(v.replace(/[$,]/g, '')) : 0
-        else out[m.fieldName] = v || null
+  const [addOpen, setAddOpen] = useState(false)
+  const [columnsOpen, setColumnsOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
+
+  const [form, setForm] = useState({ locationId: '', month: '', ending_balance: '' })
+  const [catVals, setCatVals] = useState<Record<string, string>>({})
+
+  const columns = useMemo(() => {
+    const cols: any[] = [
+      { id: 'location', header: 'Location', accessorFn: (r: MonthlyEndingBalance) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
+      col.accessor('month', { header: 'Month', cell: (i) => { try { return format(new Date(i.getValue() + 'T00:00:00'), 'MMM yyyy') } catch { return i.getValue() } } }),
+      col.accessor('ending_balance', { header: 'Ending Balance', cell: (i) => fmt(i.getValue()) }),
+    ]
+    for (const c of categories) {
+      cols.push({ id: `cf_${c.field_key}`, header: c.label, accessorFn: (r: MonthlyEndingBalance) => (r.metadata as any)?.[c.field_key] ?? '', cell: (i: any) => (i.getValue() === '' ? '—' : fmt(Number(i.getValue()))) })
+    }
+    cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as MonthlyEndingBalance; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
+    return cols
+  }, [categories, loc])
+
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+
+  const uploadFields = [
+    { name: 'location', label: 'Location', required: true },
+    { name: 'month', label: 'Month', required: true },
+    { name: 'ending_balance', label: 'Ending Balance', required: true },
+    ...categories.map((c) => ({ name: c.field_key, label: c.label })),
+  ]
+
+  async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
+    setImporting(true)
+    const catKeys = new Set(categories.map((c) => c.field_key))
+    const payload = rows.map((row) => {
+      const meta: Record<string, unknown> = {}
+      let location_id: string | null = null
+      let month: string | null = null
+      let ending_balance: number | null = null
+      for (const m of maps) {
+        const raw = row[m.sourceColumn] ?? ''
+        if (m.fieldName === 'location') location_id = loc.resolveId(raw)
+        else if (m.fieldName === 'month') month = monthKey(raw)
+        else if (m.fieldName === 'ending_balance') ending_balance = num(raw)
+        else if (catKeys.has(m.fieldName)) meta[m.fieldName] = num(raw)
       }
-      return out
-    })
-    await upsertBatch(rows as Partial<MonthlyEndingBalance>[])
-    setParsed(null); setMappings(null); setConfirmOpen(false)
+      return { location_id, month, ending_balance: ending_balance ?? 0, metadata: meta } as Partial<MonthlyEndingBalance>
+    }).filter((r) => r.month)
+    // Stack monthly: match on location + month so re-uploading a month updates it
+    // while all prior months stay.
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.month}` })
+    setImporting(false)
   }
 
-  async function onAdd(form: { month: string; ending_balance: string }) {
-    await insert({ month: form.month, ending_balance: parseFloat(form.ending_balance) })
-    reset(); setAddOpen(false)
+  async function onAdd() {
+    const month = monthKey(form.month)
+    if (!form.locationId || !month) return
+    const meta: Record<string, unknown> = {}
+    for (const c of categories) meta[c.field_key] = num(catVals[c.field_key] ?? '')
+    await insert({ location_id: form.locationId, month, ending_balance: num(form.ending_balance) ?? 0, metadata: meta } as Partial<MonthlyEndingBalance>)
+    setForm({ locationId: '', month: '', ending_balance: '' }); setCatVals({}); setAddOpen(false)
   }
 
   return (
     <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="text-sm font-bold text-white uppercase tracking-wide">Month End Ending Balance</h2>
+        <p className="text-xs text-gray-500 mt-0.5">Location-specific ending balances by month. Uploads stack — prior months are always kept.</p>
+      </div>
+
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
-        exportFilename="ending_balances.csv" exportData={data} loading={loading}
-        actions={<Button size="sm" onClick={() => setAddOpen(true)}>+ Add Balance</Button>}
+        exportFilename="month_end_ending_balance.csv" exportData={data} loading={loading}
+        actions={<>
+          <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Categories</Button>
+          <Button size="sm" onClick={() => setAddOpen(true)}>+ Add Balance</Button>
+        </>}
       />
+
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
-          {!parsed ? <FileUploadZone onParsed={(r) => setParsed(r)} />
-            : !mappings ? (
-              <div className="border border-[#2a2d3e] rounded-lg p-4 bg-[#0f1117]">
-                <ColumnMapper headers={parsed.headers} requiredFields={REQUIRED_FIELDS}
-                  onConfirm={(m) => { setMappings(m); setConfirmOpen(true) }} onCancel={() => setParsed(null)} />
-              </div>
-            ) : null}
-          <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Confirm Import">
-            <p className="text-sm text-gray-300 mb-4 font-mono">Import {parsed?.totalRowsParsed} balance rows?</p>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => { setConfirmOpen(false); setMappings(null) }}>Back</Button>
-              <Button size="sm" onClick={confirmImport}>Import</Button>
-            </div>
-          </Modal>
+          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} />
         </div>
         <DataSourceLinker configType="monthly_ending_balances" />
       </div>
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Ending Balance">
-        <form onSubmit={handleSubmit(onAdd)} className="flex flex-col gap-3">
-          <Input label="Month *" type="month" {...register('month', { required: true })} />
-          <Input label="Ending Balance *" type="number" step="0.01" {...register('ending_balance', { required: true })} />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" size="sm" type="button" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" type="submit">Save</Button>
+
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Ending Balance" size="lg">
+        <div className="flex flex-col gap-3">
+          <Combobox label="Location *" options={loc.options} value={form.locationId} onChange={(v) => setForm({ ...form, locationId: v })} placeholder="Select location" />
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Month *" type="month" value={form.month} onChange={(e) => setForm({ ...form, month: e.target.value })} />
+            <Input label="Ending Balance *" type="number" step="0.01" value={form.ending_balance} onChange={(e) => setForm({ ...form, ending_balance: e.target.value })} />
+            {categories.map((c) => (
+              <Input key={c.id} label={c.label} type="number" step="0.01" value={catVals[c.field_key] ?? ''} onChange={(e) => setCatVals({ ...catVals, [c.field_key]: e.target.value })} />
+            ))}
           </div>
-        </form>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={onAdd} disabled={!form.locationId || !form.month}>Save</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Ending-Balance Categories" size="lg">
+        <CustomFieldsEditor section="ending_balance" recommended={RECOMMENDED} />
       </Modal>
     </div>
   )

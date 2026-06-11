@@ -21,7 +21,7 @@ export function ConfigPage() {
           <TabsTrigger value="order-config">Order Config</TabsTrigger>
           <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
           <TabsTrigger value="global-products">Global Products</TabsTrigger>
-          <TabsTrigger value="ending-balances">Ending Balances</TabsTrigger>
+          <TabsTrigger value="ending-balances">Month End Ending Balance</TabsTrigger>
         </TabsList>
 
         <TabsContent value="locations"><LocationsTab /></TabsContent>
