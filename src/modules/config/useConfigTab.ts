@@ -25,7 +25,7 @@ export function useConfigTab<T>(tableName: string) {
   useEffect(() => { load() }, [load])
 
   async function insert(row: Partial<T> & { company_id?: string }) {
-    if (!profile?.company_id) return
+    if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase as any).from(tableName).insert({ ...row, company_id: profile.company_id })
     if (error) toast.error(error.message)
@@ -33,7 +33,7 @@ export function useConfigTab<T>(tableName: string) {
   }
 
   async function upsertBatch(rows: Partial<T>[]) {
-    if (!profile?.company_id) return
+    if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
     const payload = rows.map((r) => ({ ...r, company_id: profile.company_id }))
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase as any).from(tableName).upsert(payload)

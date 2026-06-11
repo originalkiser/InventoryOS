@@ -3,6 +3,10 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { completeSetup } from '@/pages/Setup'
 import type { User } from '@supabase/supabase-js'
+import toast from 'react-hot-toast'
+
+// Guards against concurrent repair runs (getSession + onAuthStateChange both fire on load)
+let healInFlight = false
 
 export function useAuth() {
   const { setUser, setSession, setProfile, setInitialized, clear } = useAuthStore()
@@ -32,34 +36,60 @@ export function useAuth() {
   }, [])
 
   async function loadProfile(user: User) {
-    const { data } = await (supabase as any)
+    const sb = supabase as any
+    const { data: prof } = await sb
       .from('profiles')
       .select('*')
       .eq('id', user.id)
-      .single()
+      .maybeSingle()
 
-    if (data) {
-      setProfile(data)
+    // Healthy profile — done.
+    if (prof && prof.company_id) {
+      setProfile(prof)
       return
     }
 
-    // No profile — check if this is a first login after email confirmation
-    const meta = user.user_metadata ?? {}
-    if (meta.pending_company && meta.full_name) {
-      try {
-        await completeSetup(user.id, meta.pending_company, meta.full_name, user.email ?? '')
-        // Clear the pending flags from user metadata
-        await supabase.auth.updateUser({ data: { pending_company: null, full_name: meta.full_name } })
-        // Reload the profile we just created
-        const { data: newProfile } = await (supabase as any)
-          .from('profiles')
-          .select('*')
+    // Either no profile, or a profile with no company linked (a setup that never
+    // completed). Self-heal: ensure a company exists and the profile points to it.
+    if (healInFlight) {
+      if (prof) setProfile(prof)
+      return
+    }
+    healInFlight = true
+    try {
+      const meta = user.user_metadata ?? {}
+      const emailLocal = (user.email ?? 'workspace').split('@')[0]
+      const companyName: string = meta.pending_company || prof?.full_name || `${emailLocal}'s Workspace`
+      const fullName: string = meta.full_name || prof?.full_name || user.email || emailLocal
+
+      if (prof && !prof.company_id) {
+        // Repair an existing company-less profile
+        const { data: company, error: cErr } = await sb.from('companies').insert({ name: companyName }).select().single()
+        if (cErr) throw cErr
+        const { error: uErr } = await sb.from('profiles')
+          .update({ company_id: company.id, full_name: fullName, email: user.email })
           .eq('id', user.id)
-          .single()
-        if (newProfile) setProfile(newProfile)
-      } catch (e) {
-        console.error('Failed to complete workspace setup:', e)
+        if (uErr) throw uErr
+      } else if (!prof) {
+        // No profile row at all — create company + profile
+        await completeSetup(user.id, companyName, fullName, user.email ?? '')
       }
+
+      await supabase.auth.updateUser({ data: { pending_company: null, full_name: fullName } })
+      const { data: fresh } = await sb.from('profiles').select('*').eq('id', user.id).single()
+      if (fresh) {
+        setProfile(fresh)
+        toast.success('Workspace ready')
+      } else if (prof) {
+        setProfile(prof)
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'unknown error'
+      console.error('Workspace setup/repair failed:', e)
+      toast.error(`Workspace setup incomplete: ${msg}`)
+      if (prof) setProfile(prof) // set what we have so the shell isn't fully dead
+    } finally {
+      healInFlight = false
     }
   }
 }

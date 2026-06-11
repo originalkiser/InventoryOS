@@ -34,13 +34,13 @@ export function Combobox({
   const selectedLabel = options.find((o) => o.value === value)?.label ?? value
 
   const filtered = query
-    ? options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase()))
+    ? options.filter((o) => String(o.label ?? '').toLowerCase().includes(query.toLowerCase()))
     : options
 
   const showCreate =
     allowCreate &&
     query.trim() &&
-    !options.some((o) => o.label.toLowerCase() === query.toLowerCase())
+    !options.some((o) => String(o.label ?? '').toLowerCase() === query.toLowerCase())
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
