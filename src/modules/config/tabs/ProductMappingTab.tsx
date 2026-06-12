@@ -6,6 +6,7 @@ import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { applyTransform } from '@/lib/columnTransform'
 import type { ProductIdMapping, ColumnMapping } from '@/types'
 import { useForm } from 'react-hook-form'
 import { format } from 'date-fns'
@@ -35,7 +36,7 @@ export function ProductMappingTab() {
     setImporting(true)
     const payload = rows.map((row) => {
       const out: Record<string, unknown> = {}
-      for (const m of maps) out[m.fieldName] = row[m.sourceColumn] || null
+      for (const m of maps) out[m.fieldName] = applyTransform(row[m.sourceColumn] ?? '', m.transform) || null
       return out as Partial<ProductIdMapping>
     }).filter((r: any) => r.old_product_id)
     await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.old_product_id ?? '').toLowerCase() })

@@ -11,6 +11,7 @@ import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { applyTransform } from '@/lib/columnTransform'
 import type { VendorPart, Vendor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -97,7 +98,7 @@ export function VendorPartsTab() {
       const out: Record<string, unknown> = { vendor_id: uploadVendorId }
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = row[m.sourceColumn] ?? ''
+        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
         if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)
         else if (customKeys.has(m.fieldName)) meta[m.fieldName] = raw || null
         else out[m.fieldName] = raw || null

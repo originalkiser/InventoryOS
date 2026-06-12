@@ -9,6 +9,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { applyTransform } from '@/lib/columnTransform'
 import type { LocationOrderConfig, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
@@ -78,7 +79,7 @@ export function OrderConfigTab() {
       const out: Record<string, unknown> = {}
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = row[m.sourceColumn] ?? ''
+        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
         if (m.fieldName === 'location') out.location_id = loc.resolveId(raw)
         else if (m.fieldName === 'active') out.active = ['true', '1', 'yes'].includes(raw.toLowerCase())
         else if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)

@@ -10,6 +10,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { applyTransform } from '@/lib/columnTransform'
 import type { MonthlyEndingBalance, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
@@ -84,7 +85,7 @@ export function EndingBalancesTab() {
       let month: string | null = null
       let ending_balance: number | null = null
       for (const m of maps) {
-        const raw = row[m.sourceColumn] ?? ''
+        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
         if (m.fieldName === 'location') location_id = loc.resolveId(raw)
         else if (m.fieldName === 'month') month = monthKey(raw)
         else if (m.fieldName === 'ending_balance') ending_balance = num(raw)

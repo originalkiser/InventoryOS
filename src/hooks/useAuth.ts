@@ -63,11 +63,13 @@ export function useAuth() {
       const fullName: string = meta.full_name || prof?.full_name || user.email || emailLocal
 
       if (prof && !prof.company_id) {
-        // Repair an existing company-less profile
-        const { data: company, error: cErr } = await sb.from('companies').insert({ name: companyName }).select().single()
+        // Repair an existing company-less profile. Client-generated id avoids the
+        // RLS read-back problem (can't SELECT the new company before it's linked).
+        const newCompanyId = crypto.randomUUID()
+        const { error: cErr } = await sb.from('companies').insert({ id: newCompanyId, name: companyName })
         if (cErr) throw cErr
         const { error: uErr } = await sb.from('profiles')
-          .update({ company_id: company.id, full_name: fullName, email: user.email })
+          .update({ company_id: newCompanyId, full_name: fullName, email: user.email })
           .eq('id', user.id)
         if (uErr) throw uErr
       } else if (!prof) {

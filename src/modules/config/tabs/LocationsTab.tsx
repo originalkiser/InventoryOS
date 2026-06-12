@@ -9,6 +9,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { applyTransform } from '@/lib/columnTransform'
 import type { Location, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
@@ -109,7 +110,7 @@ export function LocationsTab() {
       const out: Record<string, unknown> = {}
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = row[m.sourceColumn] ?? ''
+        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
         if (m.fieldName === 'active') out.active = ['true', '1', 'yes'].includes(raw.toLowerCase())
         else if (customKeys.has(m.fieldName)) meta[m.fieldName] = coerce(raw, typeByKey.get(m.fieldName) ?? 'text')
         else out[m.fieldName] = raw

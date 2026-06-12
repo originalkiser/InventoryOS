@@ -209,18 +209,20 @@ export async function completeSetup(
   fullName: string,
   email: string
 ) {
-  const { data: company, error: companyErr } = await (supabase as any)
+  // Generate the company id client-side: the companies SELECT policy only allows
+  // viewing your own company (id = get_my_company_id()), which is still null
+  // until the profile is linked — so we can't read back an auto-generated id here.
+  const companyId = crypto.randomUUID()
+  const { error: companyErr } = await (supabase as any)
     .from('companies')
-    .insert({ name: companyName })
-    .select()
-    .single()
+    .insert({ id: companyId, name: companyName })
   if (companyErr) throw companyErr
 
   const { error: profileErr } = await (supabase as any)
     .from('profiles')
     .insert({
       id: userId,
-      company_id: company.id,
+      company_id: companyId,
       full_name: fullName,
       email,
       role: 'admin',

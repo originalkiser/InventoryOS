@@ -6,6 +6,7 @@ import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { applyTransform } from '@/lib/columnTransform'
 import type { GlobalProduct, ColumnMapping } from '@/types'
 import { useForm } from 'react-hook-form'
 import { format } from 'date-fns'
@@ -41,7 +42,7 @@ export function GlobalProductsTab() {
     const payload = rows.map((row) => {
       const out: Record<string, unknown> = {}
       for (const m of maps) {
-        const v = row[m.sourceColumn] ?? ''
+        const v = applyTransform(row[m.sourceColumn] ?? '', m.transform)
         out[m.fieldName] = NUM.includes(m.fieldName) ? (v ? parseFloat(v.replace(/[$,]/g, '')) : null) : v || null
       }
       return out as Partial<GlobalProduct>
