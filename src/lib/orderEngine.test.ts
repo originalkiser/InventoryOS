@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   calcOrder, isTotalRow, resolveProductIds, generateOrder, applyMinOrderRules, buildExport,
+  calcDaysOnHand, getUsageMultiplier, getUomConversion, buildPendingIndex, autoPendingColMap,
+  detectPrefixSuffixPatterns,
   type InventoryRow, type OrderConfigData, type GenerationParams,
 } from './orderEngine'
 import type {
@@ -133,6 +135,74 @@ describe('days_supply mode', () => {
     // 2*(3+14)-5 = 29
     expect(out[0].suggested_qty).toBe(29)
     expect(out[0].trigger_reason).toBe('days_supply')
+  })
+})
+
+describe('ported calc.js extras', () => {
+  it('calcDaysOnHand = on_hand / usage (null when usage 0)', () => {
+    expect(calcDaysOnHand(2, 10)).toBe(5)
+    expect(calcDaysOnHand(0, 10)).toBeNull()
+  })
+
+  it('getUsageMultiplier resolves product → category → global', () => {
+    const adj = { global: 10, categories: { Dairy: 20 }, products: { P1: 50 } }
+    expect(getUsageMultiplier('P1', 'Dairy', adj)).toBe(1.5) // product wins
+    expect(getUsageMultiplier('PX', 'Dairy', adj)).toBe(1.2) // category
+    expect(getUsageMultiplier('PX', 'Other', adj)).toBeCloseTo(1.1) // global
+    expect(getUsageMultiplier('PX', null, null)).toBe(1) // none
+  })
+
+  it('getUomConversion returns identity without config and a named factor with it', () => {
+    expect(getUomConversion({ product: 'P1' }, null).onHandToOrderFactor).toBe(1)
+    const conv = getUomConversion(
+      { product: 'P1', uom: 'EA', category: 'C' },
+      { uomMappings: [{ fromUnit: 'EA', toUnit: 'CS', factor: 0.25 }], categoryUomSettings: { C: { orderUom: 'CS' } } },
+    )
+    expect(conv.hasConversion).toBe(true)
+    expect(conv.onHandToOrderFactor).toBe(0.25)
+    expect(conv.orderToOnHandFactor).toBe(4)
+  })
+
+  it('buildPendingIndex sums by location|product and autoPendingColMap guesses headers', () => {
+    const idx = buildPendingIndex([
+      { location: 'S1', product: 'P1', qty: 5 },
+      { location: 'S1', product: 'P1', qty: 3 },
+    ])
+    expect(idx.get('s1|p1')).toBe(8)
+    expect(autoPendingColMap(['Store', 'SKU', 'Qty Ordered'])).toEqual({ location: 'Store', product: 'SKU', qty: 'Qty Ordered' })
+  })
+
+  it('detectPrefixSuffixPatterns finds a shared prefix', () => {
+    const pats = detectPrefixSuffixPatterns(['AB100', 'AB200', 'AB300', 'XY900'])
+    expect(pats.some((p) => p.type === 'prefix' && p.text === 'AB')).toBe(true)
+  })
+})
+
+describe('generateOrder — ported feature wiring', () => {
+  it('applies a usage multiplier in days_supply mode', () => {
+    const params: GenerationParams = { targetDays: 14, orderMode: 'days_supply', zeroUsageFill: 'none', triggerOverride: null, limitOverride: null, usageAdjustment: { global: 100 } }
+    const rows: InventoryRow[] = [{ location: 'S1', product: 'P1', on_hand: 5, daily_usage: 2, leadtime: 3 }]
+    const out = generateOrder(rows, config, params)
+    // usage doubled to 4: 4*(3+14)-5 = 63
+    expect(out[0].suggested_qty).toBe(63)
+    expect(out[0].days_on_hand).toBe(2.5) // metric uses raw usage (10/... wait on_hand 5 / usage 2)
+  })
+
+  it('subtracts pending qty into final_qty but leaves suggested_qty', () => {
+    const params: GenerationParams = { ...minMaxParams, pending: buildPendingIndex([{ location: 'S1', product: 'P1', qty: 10 }]) }
+    const rows: InventoryRow[] = [{ location: 'S1', product: 'P1', on_hand: 3, daily_usage: 0, leadtime: 2 }]
+    const out = generateOrder(rows, config, params)
+    expect(out[0].suggested_qty).toBe(47) // 50 - 3
+    expect(out[0].pending_qty).toBe(10)
+    expect(out[0].final_qty).toBe(37) // 47 - 10
+  })
+
+  it('honors per-row min/max on-hand overrides', () => {
+    // No config row for PX; row carries its own min/max on-hand.
+    const params: GenerationParams = { ...minMaxParams }
+    const rows: InventoryRow[] = [{ location: 'S1', product: 'PX', on_hand: 2, daily_usage: 1, leadtime: 1, min_on_hand: 5, max_on_hand: 20 }]
+    const out = generateOrder(rows, config, params)
+    expect(out[0].suggested_qty).toBe(18) // up to max 20 - 2 on hand
   })
 })
 

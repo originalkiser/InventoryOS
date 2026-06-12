@@ -207,6 +207,9 @@ function OrderDetailModal({
       trigger_reason: l.trigger_reason ?? 'days_supply',
       category: null,
       raw_location: l.location_id ?? '',
+      days_on_hand: null,
+      pending_qty: 0,
+      order_uom: null,
     }))
     onDuplicate(asGen)
   }

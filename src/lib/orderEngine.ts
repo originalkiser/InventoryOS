@@ -17,6 +17,50 @@ export interface InventoryRow {
   leadtime?: number | string
   category?: string
   cost?: number | string
+  uom?: string // on-hand unit of measure (for UoM conversion)
+  min_on_hand?: number | string // per-row min on-hand override (else config trigger)
+  max_on_hand?: number | string // per-row max on-hand override (else config capacity)
+}
+
+// ---------------------------------------------------------------------------
+// Usage adjustment (calc.js getUsageMultiplier) — percentage bumps to daily
+// usage, resolved product → category → global.
+// ---------------------------------------------------------------------------
+export interface UsageAdjustment {
+  global?: number // percent, e.g. 10 means +10% usage
+  categories?: Record<string, number>
+  products?: Record<string, number>
+}
+
+// ---------------------------------------------------------------------------
+// UoM conversion config (calc.js getUomConversion). order-generator pulls these
+// from product rules / category settings / a UoM mapping table / prefix-suffix
+// pack rules. All optional — absent ⇒ identity (factor 1), unchanged math.
+// ---------------------------------------------------------------------------
+export interface UomMapping { fromUnit: string; toUnit: string; factor: number }
+export interface UomProductRule { productId: string; onHandUom?: string; orderUom?: string }
+export interface PrefixSuffixRule {
+  text: string
+  matchType: 'prefix' | 'suffix'
+  purchaseSize?: number
+  orderMode?: 'pack' | 'round'
+  exclusions?: { products?: string[]; categories?: string[] }
+}
+export interface UomConfig {
+  uomMappings?: UomMapping[]
+  productRules?: UomProductRule[]
+  categoryUomSettings?: Record<string, { onHandUom?: string; orderUom?: string }>
+  prefixSuffixRules?: PrefixSuffixRule[]
+}
+export interface UomConversion {
+  onHandUom: string
+  orderUom: string
+  onHandToOrderFactor: number
+  orderToOnHandFactor: number
+  hasConversion: boolean
+  conversionMissing?: boolean
+  isPack?: boolean
+  packSize?: number
 }
 
 export interface OrderConfigData {
@@ -33,6 +77,10 @@ export interface GenerationParams {
   zeroUsageFill: 'none' | 'min' | 'max'
   triggerOverride?: number | null // overrides order_trigger when set
   limitOverride?: number | null // overrides order_limit when set
+  usageAdjustment?: UsageAdjustment | null // % usage bumps (calc.js getUsageMultiplier)
+  uom?: UomConfig | null // UoM conversion config (calc.js getUomConversion)
+  pending?: Map<string, number> | null // already-ordered qty by `loc|product` (calc.js buildPendingIndex)
+  ignoreMax?: { products?: string[]; categories?: string[] } | null // skip max-on-hand cap for these
 }
 
 export interface GeneratedLineItem {
@@ -51,6 +99,9 @@ export interface GeneratedLineItem {
   trigger_reason: string
   category: string | null
   raw_location: string
+  days_on_hand: number | null // calc.js calcDaysOnHand (on_hand / daily_usage)
+  pending_qty: number // already-on-order qty subtracted from this line
+  order_uom: string | null // resolved order unit (when a UoM conversion applies)
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +158,168 @@ function locLabel(locationId: string | null, raw: string, locations: Location[])
   return raw || '—'
 }
 
+/** calc.js calcDaysOnHand — days of stock remaining (on_hand / daily_usage). */
+export function calcDaysOnHand(usage: number, onHand: number): number | null {
+  if (isNaN(usage) || isNaN(onHand) || usage === 0) return null
+  return onHand / usage
+}
+
+/** calc.js getUsageMultiplier — product → category → global percent bump (1 = no change). */
+export function getUsageMultiplier(
+  productId: string, category: string | null | undefined, adj: UsageAdjustment | null | undefined
+): number {
+  if (!adj) return 1
+  if (adj.products?.[productId] != null) return 1 + adj.products[productId] / 100
+  if (category && adj.categories?.[category] != null) return 1 + adj.categories[category] / 100
+  if (adj.global != null) return 1 + adj.global / 100
+  return 1
+}
+
+/** calc.js getUomConversion — resolve on-hand↔order unit factors. Absent config ⇒ identity. */
+export function getUomConversion(row: InventoryRow, uom: UomConfig | null | undefined): UomConversion {
+  const identity: UomConversion = { onHandUom: '', orderUom: '', onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false }
+  if (!uom) return identity
+  const productId = String(row.product ?? '').trim()
+  const rule = (uom.productRules || []).find((r) => String(r.productId).trim() === productId)
+  const onHandUom = (rule?.onHandUom || '').trim() || (row.uom && String(row.uom).trim()) || (row.category && uom.categoryUomSettings?.[row.category]?.onHandUom) || ''
+  const orderUom = (rule?.orderUom || '').trim() || (row.category && uom.categoryUomSettings?.[row.category]?.orderUom) || ''
+
+  // Named UoM conversion path (product rule / column / category)
+  if (onHandUom && orderUom && onHandUom !== orderUom) {
+    const m = (uom.uomMappings || []).find((u) => u.fromUnit === onHandUom && u.toUnit === orderUom)
+    if (m && m.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: m.factor, orderToOnHandFactor: 1 / m.factor, hasConversion: true }
+    const rev = (uom.uomMappings || []).find((u) => u.fromUnit === orderUom && u.toUnit === onHandUom)
+    if (rev && rev.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: 1 / rev.factor, orderToOnHandFactor: rev.factor, hasConversion: true }
+    return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false, conversionMissing: true }
+  }
+
+  // Prefix/suffix pack-size path (fallback when no named UoM applies)
+  if (!rule?.onHandUom && !rule?.orderUom) {
+    const ps = (uom.prefixSuffixRules || []).find((r) => {
+      const t = (r.text || '').trim()
+      if (!t || !r.purchaseSize) return false
+      const excl = r.exclusions || { products: [], categories: [] }
+      if (excl.products?.includes(productId)) return false
+      if (row.category && excl.categories?.includes(row.category)) return false
+      return r.matchType === 'prefix' ? productId.startsWith(t) : productId.endsWith(t)
+    })
+    if (ps) {
+      const packSize = Number(ps.purchaseSize)
+      if (ps.orderMode === 'pack') {
+        return { onHandUom: 'unit', orderUom: ps.text, onHandToOrderFactor: 1 / packSize, orderToOnHandFactor: packSize, hasConversion: true, isPack: true, packSize }
+      }
+      return { onHandUom: 'unit', orderUom: 'unit', onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false, isPack: true, packSize }
+    }
+  }
+
+  return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false }
+}
+
+/** calc.js buildPendingIndex (adapted) — sum already-ordered qty by `location|product`. */
+export function buildPendingIndex(
+  rows: Array<{ location?: string; product: string; qty: number | string }>
+): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const r of rows) {
+    const prod = String(r.product ?? '').trim()
+    if (!prod) continue
+    const loc = String(r.location ?? '').trim()
+    const key = `${loc}|${prod}`.toLowerCase()
+    const qty = parseFloat(String(r.qty ?? '')) || 0
+    m.set(key, (m.get(key) || 0) + qty)
+  }
+  return m
+}
+
+/** calc.js autoPendingColMap — guess location/product/qty headers in a pending-orders file. */
+export function autoPendingColMap(headers: string[]): { location: string; product: string; qty: string } {
+  const norm = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const location = headers.find((h) => ['location', 'loc', 'store', 'site', 'warehouse'].includes(norm(h))) || ''
+  const product = headers.find((h) => ['product', 'productid', 'item', 'itemid', 'sku', 'productname', 'prodid', 'itemno'].includes(norm(h))) || ''
+  const qty = headers.find((h) => ['quantity', 'qty', 'qtyordered', 'orderqty', 'units', 'ordered', 'qtyorder'].includes(norm(h))) || ''
+  return { location, product, qty }
+}
+
+/** Look up pending (already-ordered) qty for a line from a buildPendingIndex map. */
+function pendingFor(index: Map<string, number> | null | undefined, rawLoc: string, product: string): number {
+  if (!index) return 0
+  const key = `${rawLoc}|${product}`.toLowerCase()
+  return index.get(key) ?? 0
+}
+
+/** calc.js applyOnHandConstraints — raise to min / cap to max on-hand-after, in order units. */
+export function applyOnHandConstraints(
+  order: number, minOH: number, maxOH: number, effectiveOnHand: number | null,
+  orderToOnHandFactor: number, skipMax: boolean
+): { order: number; minC: boolean; maxC: boolean } {
+  if (effectiveOnHand === null) return { order, minC: false, maxC: false }
+  const ohFactor = orderToOnHandFactor || 1
+  let minC = false, maxC = false
+  if (!isNaN(minOH)) {
+    const mo = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor))
+    if (mo > order) { order = mo; minC = true }
+  }
+  if (!isNaN(maxOH) && !skipMax) {
+    const mo = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor))
+    if (mo < order) { order = mo; maxC = true }
+  }
+  return { order, minC, maxC }
+}
+
+/** calc.js detectPrefixSuffixPatterns — find common product-id prefixes/suffixes for pack rules. */
+export function detectPrefixSuffixPatterns(
+  productIds: string[], ignoredKeys: Set<string> = new Set()
+): Array<{ type: 'prefix' | 'suffix' | 'both'; text: string; count: number; examples: string[]; key: string; prefix?: string; suffix?: string }> {
+  if (productIds.length < 2) return []
+  const total = productIds.length
+  const minCount = Math.max(2, Math.ceil(total * 0.03))
+  const prefixCounts = new Map<string, number>()
+  const suffixCounts = new Map<string, number>()
+  productIds.forEach((id) => {
+    const up = String(id).trim().toUpperCase()
+    if (!up) return
+    for (let len = 1; len <= 3; len++) {
+      if (up.length > len + 1) {
+        const pre = up.slice(0, len)
+        if (/^[A-Z]+$/.test(pre)) prefixCounts.set(pre, (prefixCounts.get(pre) || 0) + 1)
+        const suf = up.slice(-len)
+        if (/^[A-Z]+$/.test(suf)) suffixCounts.set(suf, (suffixCounts.get(suf) || 0) + 1)
+      }
+    }
+  })
+  const results: Array<{ type: 'prefix' | 'suffix' | 'both'; text: string; count: number; examples: string[]; key: string; prefix?: string; suffix?: string }> = []
+  const validPrefixes: string[] = [], validSuffixes: string[] = []
+  prefixCounts.forEach((count, pre) => {
+    if (count >= minCount && count < total * 0.9 && !ignoredKeys.has(`prefix:${pre}`)) {
+      validPrefixes.push(pre)
+      const examples = productIds.filter((id) => String(id).toUpperCase().startsWith(pre)).slice(0, 3)
+      results.push({ type: 'prefix', text: pre, count, examples, key: `prefix:${pre}` })
+    }
+  })
+  suffixCounts.forEach((count, suf) => {
+    if (count >= minCount && count < total * 0.9 && !ignoredKeys.has(`suffix:${suf}`)) {
+      validSuffixes.push(suf)
+      const examples = productIds.filter((id) => String(id).toUpperCase().endsWith(suf)).slice(0, 3)
+      results.push({ type: 'suffix', text: suf, count, examples, key: `suffix:${suf}` })
+    }
+  })
+  validPrefixes.forEach((pre) => {
+    validSuffixes.forEach((suf) => {
+      if (pre === suf) return
+      const key = `both:${pre}:${suf}`
+      if (ignoredKeys.has(key)) return
+      const matching = productIds.filter((id) => {
+        const up = String(id).toUpperCase()
+        return up.startsWith(pre) && up.endsWith(suf) && up.length > pre.length + suf.length
+      })
+      if (matching.length >= minCount) {
+        results.push({ type: 'both', prefix: pre, suffix: suf, text: `${pre}…${suf}`, count: matching.length, examples: matching.slice(0, 3), key })
+      }
+    })
+  })
+  return results.sort((a, b) => b.count - a.count)
+}
+
 // ---------------------------------------------------------------------------
 // generateOrder — produce line items from inventory + InventoryOS config.
 // Min/max model: order_trigger = min (reorder point), capacity = max (target),
@@ -127,12 +340,15 @@ export function generateOrder(
     const rawLoc = String(row.location ?? '').trim()
     const locationId = resolveLocationId(rawLoc, config.locations)
 
-    // Per location+product order config
+    // Per location+product order config. Per-row min/max on-hand columns (when
+    // mapped) override the config trigger/capacity for this row.
     const cfg = config.locationConfigs.find(
       (c) => c.product_id === product && (locationId ? c.location_id === locationId : true)
     )
-    const trigger = params.triggerOverride ?? (cfg?.order_trigger ?? null) // min / reorder point
-    const capacity = cfg?.capacity ?? null // max / target level
+    const rowMin = toNum(row.min_on_hand)
+    const rowMax = toNum(row.max_on_hand)
+    const trigger = params.triggerOverride ?? (!isNaN(rowMin) ? rowMin : (cfg?.order_trigger ?? null)) // min / reorder point
+    const capacity = !isNaN(rowMax) ? rowMax : (cfg?.capacity ?? null) // max / target level
     const limit = params.limitOverride ?? (cfg?.order_limit ?? null) // max-order cap
 
     // Product info (vendor_parts preferred, else global_products)
@@ -144,8 +360,15 @@ export function generateOrder(
     const individual_minimum = vp?.individual_minimum ?? gp?.individual_minimum ?? null
     const vendor_part_number = vp?.part_number ?? null
 
+    // UoM conversion (calc.js getUomConversion) — identity factors when unconfigured.
+    const uomConv = getUomConversion(row, params.uom)
+    const ohFactor = uomConv.orderToOnHandFactor || 1 // order units → on-hand units
+
     const onHand = toNum(row.on_hand)
-    const usage = toNum(row.daily_usage)
+    const rawUsage = toNum(row.daily_usage)
+    // Usage multiplier (calc.js getUsageMultiplier) — defaults to ×1.
+    const mult = getUsageMultiplier(product, row.category, params.usageAdjustment)
+    const usage = isNaN(rawUsage) ? rawUsage : rawUsage * mult
     const lead = isNaN(toNum(row.leadtime)) ? 0 : toNum(row.leadtime)
     const hasUsage = !isNaN(usage) && usage > 0
     const effectiveOnHand = isNaN(onHand) ? null : onHand
@@ -160,24 +383,24 @@ export function generateOrder(
       const projectedBelow = hasUsage && projectedAtDelivery < trigger
       if (belowTrigger || projectedBelow) {
         if (capacity != null && effectiveOnHand !== null) {
-          suggested = Math.max(0, Math.ceil(capacity - effectiveOnHand))
+          suggested = Math.max(0, Math.ceil((capacity - effectiveOnHand) / ohFactor))
         } else {
-          suggested = calcOrder(usage, effectiveOnHand ?? 0, lead, params.targetDays) ?? 0
+          suggested = calcOrder(usage, effectiveOnHand ?? 0, lead, params.targetDays, uomConv.onHandToOrderFactor) ?? 0
         }
         reason = belowTrigger ? 'below_trigger' : 'projected_below_trigger'
       } else if (!hasUsage && effectiveOnHand !== null) {
         // zero-usage fill (calc.js zeroUsageFill)
         if (params.zeroUsageFill === 'max' && capacity != null) {
-          suggested = Math.max(0, Math.ceil(capacity - effectiveOnHand))
+          suggested = Math.max(0, Math.ceil((capacity - effectiveOnHand) / ohFactor))
           reason = 'zero_usage_fill_max'
         } else if (params.zeroUsageFill === 'min' && trigger != null) {
-          suggested = Math.max(0, Math.ceil(trigger - effectiveOnHand))
+          suggested = Math.max(0, Math.ceil((trigger - effectiveOnHand) / ohFactor))
           reason = 'zero_usage_fill_min'
         }
       }
     } else {
       // days_supply mode — pure calcOrder
-      const o = calcOrder(usage, effectiveOnHand ?? 0, lead, params.targetDays)
+      const o = calcOrder(usage, effectiveOnHand ?? 0, lead, params.targetDays, uomConv.onHandToOrderFactor)
       suggested = o ?? 0
       reason = suggested > 0 ? 'days_supply' : 'no_order'
     }
@@ -185,7 +408,24 @@ export function generateOrder(
     // order_limit cap
     if (limit != null && suggested > limit) suggested = limit
 
+    // Per-row min/max on-hand-after constraints (calc.js applyOnHandConstraints).
+    // Only the explicit per-row min_on_hand/max_on_hand columns drive this layer —
+    // config trigger/capacity already shaped the min_max suggestion above, so we
+    // don't re-cap days_supply orders by them.
+    const skipMax = !!(params.ignoreMax && (
+      (row.category && params.ignoreMax.categories?.includes(row.category)) ||
+      params.ignoreMax.products?.includes(product)
+    ))
+    const constrained = applyOnHandConstraints(
+      suggested, rowMin, rowMax, effectiveOnHand, ohFactor, skipMax
+    )
+    suggested = constrained.order
+
     if (suggested <= 0 && reason === 'no_order') continue
+
+    // Subtract already-ordered (pending) qty from what we still need to order.
+    const pending_qty = pendingFor(params.pending, rawLoc, product)
+    const final_qty = Math.max(0, suggested - pending_qty)
 
     out.push({
       location_id: locationId,
@@ -194,7 +434,7 @@ export function generateOrder(
       vendor_part_number,
       on_hand: effectiveOnHand,
       suggested_qty: suggested,
-      final_qty: suggested,
+      final_qty,
       unit_of_measure,
       package_type,
       bulk_minimum,
@@ -203,6 +443,9 @@ export function generateOrder(
       trigger_reason: reason,
       category: row.category ?? null,
       raw_location: rawLoc,
+      days_on_hand: calcDaysOnHand(rawUsage, onHand),
+      pending_qty,
+      order_uom: uomConv.hasConversion ? uomConv.orderUom : null,
     })
   }
 
