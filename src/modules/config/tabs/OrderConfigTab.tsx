@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/authStore'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useLocations } from '@/hooks/useLocations'
@@ -8,9 +10,10 @@ import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
+import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
-import type { LocationOrderConfig, ColumnMapping } from '@/types'
+import type { LocationOrderConfig, Vendor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
 const NUM_FIELDS = ['capacity', 'order_trigger', 'order_limit']
@@ -23,23 +26,38 @@ function num(v: string): number | null {
 const col = createColumnHelper<LocationOrderConfig>()
 
 export function OrderConfigTab() {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
   const { data, loading, insert, importRows } = useConfigTab<LocationOrderConfig>('location_order_configs')
   const { active: customFields, addField } = useCustomFields('order_config')
   const loc = useLocations()
 
+  const [vendors, setVendors] = useState<Vendor[]>([])
+  const [uploadVendorId, setUploadVendorId] = useState('')
   const [addOpen, setAddOpen] = useState(false)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
+
+  const loadVendors = useCallback(async () => {
+    if (!companyId) return
+    const { data: v } = await (supabase as any).from('vendors').select('*').eq('company_id', companyId).order('name')
+    setVendors((v ?? []) as Vendor[])
+  }, [companyId])
+  useEffect(() => { loadVendors() }, [loadVendors])
+
+  const vendorName = (id: string | null) => vendors.find((v) => v.id === id)?.name ?? '—'
+  const vendorOptions: ComboboxOption[] = vendors.map((v) => ({ value: v.id, label: v.name }))
 
   // Non-linked custom fields are editable/stored; linked ones derive from the location.
   const ownFields = customFields.filter((f) => !f.linked_section)
   const linkedFields = customFields.filter((f) => f.linked_section)
 
-  const [form, setForm] = useState({ locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' })
+  const [form, setForm] = useState({ vendorId: '', locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' })
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
   const columns = useMemo(() => {
     const cols: any[] = [
+      { id: 'vendor', header: 'Vendor', accessorFn: (r: LocationOrderConfig) => vendorName(r.vendor_id), cell: (i: any) => i.getValue() },
       { id: 'location', header: 'Location', accessorFn: (r: LocationOrderConfig) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
       col.accessor('product_id', { header: 'Product ID' }),
       col.accessor('capacity', { header: 'Capacity', cell: (i) => i.getValue() ?? '—' }),
@@ -58,7 +76,7 @@ export function OrderConfigTab() {
     cols.push(col.accessor('active', { header: 'Active', cell: (i) => (i.getValue() ? '✓' : '✗') }))
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as LocationOrderConfig; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
     return cols
-  }, [customFields, loc])
+  }, [customFields, loc, vendors])
 
   const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
 
@@ -76,7 +94,7 @@ export function OrderConfigTab() {
     setImporting(true)
     const ownKeys = new Set(ownFields.map((f) => f.field_key))
     const payload = rows.map((row) => {
-      const out: Record<string, unknown> = {}
+      const out: Record<string, unknown> = { vendor_id: uploadVendorId || null }
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
         const raw = mappedValue(row, m)
@@ -89,7 +107,9 @@ export function OrderConfigTab() {
       out.metadata = meta
       return out as Partial<LocationOrderConfig>
     }).filter((r: any) => r.product_id)
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.product_id}` })
+    // Per-vendor: key by vendor + location + product so each vendor's config is
+    // separate and re-uploading a vendor's file updates only its rows.
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.vendor_id ?? ''}|${r.location_id ?? ''}|${r.product_id}` })
     setImporting(false)
   }
 
@@ -98,11 +118,12 @@ export function OrderConfigTab() {
     const meta: Record<string, unknown> = {}
     for (const f of ownFields) meta[f.field_key] = customVals[f.field_key] || null
     await insert({
+      vendor_id: form.vendorId || null,
       location_id: form.locationId, product_id: form.product_id.trim(),
       capacity: num(form.capacity), order_trigger: num(form.order_trigger), order_limit: num(form.order_limit),
       active: true, metadata: meta,
     } as Partial<LocationOrderConfig>)
-    setForm({ locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' }); setCustomVals({}); setAddOpen(false)
+    setForm({ vendorId: '', locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' }); setCustomVals({}); setAddOpen(false)
   }
 
   return (
@@ -117,15 +138,21 @@ export function OrderConfigTab() {
 
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
-          <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
+          <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File (per vendor)</h3>
+          <Combobox label="Vendor for this file" options={[{ value: '', label: '— No vendor —' }, ...vendorOptions]} value={uploadVendorId}
+            onChange={(v) => setUploadVendorId(v)} placeholder="Select vendor (optional)" />
           <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label })} />
+          <p className="text-xs font-mono text-gray-600">Tag the file with a vendor to keep each vendor's order config separate. Re-uploading a vendor's file updates only its rows.</p>
         </div>
         <DataSourceLinker configType="location_order_configs" />
       </div>
 
       <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Order Config" size="lg">
         <div className="flex flex-col gap-3">
-          <Combobox label="Location *" options={loc.options} value={form.locationId} onChange={(v) => setForm({ ...form, locationId: v })} placeholder="Select location" />
+          <div className="grid grid-cols-2 gap-3">
+            <Combobox label="Vendor" options={[{ value: '', label: '— No vendor —' }, ...vendorOptions]} value={form.vendorId} onChange={(v) => setForm({ ...form, vendorId: v })} placeholder="Optional" />
+            <Combobox label="Location *" options={loc.options} value={form.locationId} onChange={(v) => setForm({ ...form, locationId: v })} placeholder="Select location" />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Input label="Product ID *" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} />
             <Input label="Capacity" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })} />

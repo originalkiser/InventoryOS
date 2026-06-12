@@ -135,6 +135,7 @@ export interface LocationOrderConfig {
   id: string
   company_id: string
   location_id: string | null
+  vendor_id: string | null
   product_id: string
   capacity: number | null
   order_trigger: number | null
