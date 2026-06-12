@@ -83,6 +83,24 @@ Original wizard flow: `Upload | Manual` → `Map` → `UoM` → `MinRules` → `
   as an option. The export payload is saved to `order_sessions.export_data` and
   the session marked `exported` for later pending logic.
 
+## (h) Full calc.js parity (added later — source @ 5b15edf)
+The remaining calc.js functions are now ported into `src/lib/orderEngine.ts`
+(math verbatim) and wired through `generateOrder`:
+- **`getUsageMultiplier`** — product/category/global % usage adjustment.
+  Exposed as a global "Usage Adjust %" in the New Order params.
+- **`getUomConversion`** — order/on-hand unit factors via the **`uom_mappings`**
+  table (phase8) + per-product **`global_products.order_uom`**; prefix/suffix
+  pack rules supported in the engine. Managed in the new "UoM Conversions"
+  config tab. Identity (factor 1) when unconfigured, so prior math is unchanged.
+- **`buildPendingIndex` / `autoPendingColMap`** — upload a pending-order file in
+  the params step; matching product+location qty is subtracted into `final_qty`
+  (suggested_qty stays the raw suggestion, `pending_qty` records the offset).
+- **`applyOnHandConstraints`** — per-row min/max on-hand-after, driven by the
+  optional `min_on_hand`/`max_on_hand` mapped columns (config trigger/capacity
+  still drive the min_max suggestion; days_supply is not re-capped by them).
+- **`calcDaysOnHand`** — shown as "Days OH" in review.
+- **`detectPrefixSuffixPatterns`** — ported (engine helper; auto-detect UI TBD).
+
 ## Field reference (InventoryOS config tables feeding the engine)
 - `location_order_configs`: `order_trigger`, `capacity`, `order_limit` (per
   location+product).
