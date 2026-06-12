@@ -296,7 +296,7 @@ function RecountSlideOver({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/80" onClick={onClose} />
       <div className="relative w-full max-w-lg h-full bg-[#161820] border-l border-[#2a2d3e] shadow-2xl overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#2a2d3e] sticky top-0 bg-[#161820] z-10">
           <div className="flex items-center gap-3">
