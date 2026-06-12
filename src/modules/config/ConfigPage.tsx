@@ -4,6 +4,7 @@ import { VendorPartsTab } from './tabs/VendorPartsTab'
 import { OrderConfigTab } from './tabs/OrderConfigTab'
 import { ProductMappingTab } from './tabs/ProductMappingTab'
 import { GlobalProductsTab } from './tabs/GlobalProductsTab'
+import { UomMappingsTab } from './tabs/UomMappingsTab'
 import { EndingBalancesTab } from './tabs/EndingBalancesTab'
 
 export function ConfigPage() {
@@ -21,6 +22,7 @@ export function ConfigPage() {
           <TabsTrigger value="order-config">Order Config</TabsTrigger>
           <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
           <TabsTrigger value="global-products">Global Products</TabsTrigger>
+          <TabsTrigger value="uom-mappings">UoM Conversions</TabsTrigger>
           <TabsTrigger value="ending-balances">Month End Ending Balance</TabsTrigger>
         </TabsList>
 
@@ -29,6 +31,7 @@ export function ConfigPage() {
         <TabsContent value="order-config"><OrderConfigTab /></TabsContent>
         <TabsContent value="product-mapping"><ProductMappingTab /></TabsContent>
         <TabsContent value="global-products"><GlobalProductsTab /></TabsContent>
+        <TabsContent value="uom-mappings"><UomMappingsTab /></TabsContent>
         <TabsContent value="ending-balances"><EndingBalancesTab /></TabsContent>
       </Tabs>
     </div>

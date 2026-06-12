@@ -11,11 +11,12 @@ import type { GlobalProduct, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
-const EMPTY = { product_id: '', unit_of_measure: '', package_type: '', bulk_minimum: '', individual_minimum: '' }
+const EMPTY = { product_id: '', unit_of_measure: '', order_uom: '', package_type: '', bulk_minimum: '', individual_minimum: '' }
 
 const REQUIRED_FIELDS = [
   { name: 'product_id', label: 'Product ID', required: true },
-  { name: 'unit_of_measure', label: 'Unit of Measure' },
+  { name: 'unit_of_measure', label: 'Unit of Measure (on-hand)' },
+  { name: 'order_uom', label: 'Order Unit' },
   { name: 'package_type', label: 'Package Type' },
   { name: 'bulk_minimum', label: 'Bulk Minimum' },
   { name: 'individual_minimum', label: 'Individual Minimum' },
@@ -33,7 +34,8 @@ export function GlobalProductsTab() {
 
   const COLUMNS = [
     col.accessor('product_id', { header: 'Product ID' }),
-    col.accessor('unit_of_measure', { header: 'UoM', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('unit_of_measure', { header: 'On-Hand UoM', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('order_uom', { header: 'Order UoM', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
@@ -45,7 +47,7 @@ export function GlobalProductsTab() {
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: GlobalProduct) {
     setEditId(r.id)
-    setForm({ product_id: r.product_id ?? '', unit_of_measure: r.unit_of_measure ?? '', package_type: r.package_type ?? '', bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '' })
+    setForm({ product_id: r.product_id ?? '', unit_of_measure: r.unit_of_measure ?? '', order_uom: r.order_uom ?? '', package_type: r.package_type ?? '', bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '' })
     setAddOpen(true)
   }
 
@@ -67,6 +69,7 @@ export function GlobalProductsTab() {
     if (!form.product_id.trim()) return
     const payload = {
       product_id: form.product_id.trim(), unit_of_measure: form.unit_of_measure.trim() || null,
+      order_uom: form.order_uom.trim() || null,
       package_type: form.package_type.trim() || null, bulk_minimum: num(form.bulk_minimum), individual_minimum: num(form.individual_minimum),
     } as Partial<GlobalProduct>
     if (editId) await update(editId, payload)
@@ -97,7 +100,8 @@ export function GlobalProductsTab() {
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
             <Input label="Product ID *" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} />
-            <Input label="Unit of Measure" value={form.unit_of_measure} onChange={(e) => setForm({ ...form, unit_of_measure: e.target.value })} />
+            <Input label="On-Hand Unit" value={form.unit_of_measure} onChange={(e) => setForm({ ...form, unit_of_measure: e.target.value })} />
+            <Input label="Order Unit" value={form.order_uom} onChange={(e) => setForm({ ...form, order_uom: e.target.value })} />
             <Input label="Package Type" value={form.package_type} onChange={(e) => setForm({ ...form, package_type: e.target.value })} />
             <Input label="Bulk Minimum" value={form.bulk_minimum} onChange={(e) => setForm({ ...form, bulk_minimum: e.target.value })} />
             <Input label="Individual Minimum" value={form.individual_minimum} onChange={(e) => setForm({ ...form, individual_minimum: e.target.value })} />

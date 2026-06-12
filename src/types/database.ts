@@ -32,8 +32,21 @@ export interface Database {
       order_min_rules: { Row: OrderMinRule; Insert: Partial<OrderMinRule>; Update: Partial<OrderMinRule> }
       order_documents: { Row: OrderDocument; Insert: Partial<OrderDocument>; Update: Partial<OrderDocument> }
       custom_field_definitions: { Row: CustomFieldDefinition; Insert: Partial<CustomFieldDefinition>; Update: Partial<CustomFieldDefinition> }
+      uom_mappings: { Row: UomMapping; Insert: Partial<UomMapping>; Update: Partial<UomMapping> }
     }
   }
+}
+
+export interface UomMapping {
+  id: string
+  company_id: string
+  from_unit: string
+  to_unit: string
+  factor: number
+  updated_by: string | null
+  last_change_source: string | null
+  created_at: string
+  updated_at: string
 }
 
 export type CustomFieldSection = 'locations' | 'order_config' | 'ending_balance' | 'vendor_parts' | 'vendors'
@@ -124,6 +137,7 @@ export interface GlobalProduct {
   company_id: string
   product_id: string
   unit_of_measure: string | null
+  order_uom: string | null
   package_type: string | null
   bulk_minimum: number | null
   individual_minimum: number | null

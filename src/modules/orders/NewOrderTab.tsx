@@ -11,11 +11,11 @@ import { OrderDocuments } from './OrderDocuments'
 import {
   generateOrder, applyMinOrderRules, buildExport, DEFAULT_EXPORT_COLUMNS,
   buildPendingIndex, autoPendingColMap,
-  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData,
+  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig,
 } from '@/lib/orderEngine'
 import type {
   Location, LocationOrderConfig, ProductIdMapping, GlobalProduct, VendorPart, OrderMinRule,
-  ParsedUpload, ColumnMapping,
+  UomMapping, ParsedUpload, ColumnMapping,
 } from '@/types'
 import toast from 'react-hot-toast'
 
@@ -54,6 +54,7 @@ export function NewOrderTab() {
   const [stage, setStage] = useState<Stage>('start')
   const [source, setSource] = useState<Source>('file')
   const [config, setConfig] = useState<OrderConfigData | null>(null)
+  const [uomConfig, setUomConfig] = useState<UomConfig | null>(null)
   const [minRules, setMinRules] = useState<OrderMinRule[]>([])
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [manualRows, setManualRows] = useState<InventoryRow[]>([{ location: '', product: '', on_hand: '', daily_usage: '', leadtime: '' }])
@@ -71,21 +72,31 @@ export function NewOrderTab() {
   const loadConfig = useCallback(async () => {
     if (!companyId) return
     const sb = supabase as any
-    const [loc, cfg, pm, gp, vp, mr] = await Promise.all([
+    const [loc, cfg, pm, gp, vp, mr, um] = await Promise.all([
       sb.from('locations').select('*').eq('company_id', companyId),
       sb.from('location_order_configs').select('*').eq('company_id', companyId).eq('active', true),
       sb.from('product_id_mappings').select('*').eq('company_id', companyId),
       sb.from('global_products').select('*').eq('company_id', companyId),
       sb.from('vendor_parts').select('*').eq('company_id', companyId),
       sb.from('order_min_rules').select('*').eq('company_id', companyId).eq('active', true),
+      sb.from('uom_mappings').select('*').eq('company_id', companyId),
     ])
+    const globalProducts = (gp.data ?? []) as GlobalProduct[]
     setConfig({
       locations: (loc.data ?? []) as Location[],
       locationConfigs: (cfg.data ?? []) as LocationOrderConfig[],
       productMappings: (pm.data ?? []) as ProductIdMapping[],
-      globalProducts: (gp.data ?? []) as GlobalProduct[],
+      globalProducts,
       vendorParts: (vp.data ?? []) as VendorPart[],
     })
+
+    // UoM conversion config: factor table + per-product order units.
+    const uomMappings = ((um.data ?? []) as UomMapping[]).map((u) => ({ fromUnit: u.from_unit, toUnit: u.to_unit, factor: Number(u.factor) }))
+    const productRules = globalProducts
+      .filter((p) => p.order_uom)
+      .map((p) => ({ productId: p.product_id, onHandUom: p.unit_of_measure ?? undefined, orderUom: p.order_uom ?? undefined }))
+    setUomConfig(uomMappings.length || productRules.length ? { uomMappings, productRules } : null)
+
     const rules = (mr.data ?? []) as OrderMinRule[]
     setMinRules(rules)
     if (store.selectedMinRuleIds.length === 0) store.setSelectedMinRuleIds(rules.map((r) => r.id))
@@ -113,9 +124,9 @@ export function NewOrderTab() {
     if (!config) { toast.error('Config not loaded'); return }
     const rows = store.inputRows
     if (!rows.length) { toast.error('No inventory rows to generate from'); return }
-    // pending is a Map (non-serializable) so it's threaded in here rather than
-    // living in the persisted store params.
-    const gen = generateOrder(rows, config, { ...store.params, pending })
+    // pending (a Map) and uom config are threaded in here rather than living in
+    // the persisted store params.
+    const gen = generateOrder(rows, config, { ...store.params, pending, uom: uomConfig })
     const selected = minRules.filter((r) => store.selectedMinRuleIds.includes(r.id))
     const withRules = applyMinOrderRules(gen, selected)
     store.setLineItems(withRules)
@@ -493,7 +504,7 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
                 <td className="px-3 py-1.5 text-right text-gray-500">{l.pending_qty > 0 ? `−${l.pending_qty}` : '—'}</td>
                 <td className="px-3 py-1.5"><Badge color={l.trigger_reason.startsWith('below') || l.trigger_reason.startsWith('projected') ? 'amber' : 'gray'}>{TRIGGER_REASON_LABELS[l.trigger_reason] ?? l.trigger_reason}</Badge></td>
                 <td className="px-3 py-1.5 text-gray-500">{l.applied_min_rule ?? '—'}</td>
-                <td className="px-3 py-1.5 text-gray-500">{l.unit_of_measure ?? '—'}{l.package_type ? ` · ${l.package_type}` : ''}</td>
+                <td className="px-3 py-1.5 text-gray-500">{l.order_uom ? <span className="text-[#00e5ff]">{l.order_uom}</span> : (l.unit_of_measure ?? '—')}{l.package_type ? ` · ${l.package_type}` : ''}</td>
                 <td className="px-3 py-1.5 text-right">
                   <input type="number" min={0} value={l.final_qty}
                     onChange={(e) => store.updateFinalQty(i, Number(e.target.value))}
