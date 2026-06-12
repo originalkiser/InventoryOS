@@ -1,6 +1,7 @@
 import { flexRender, type Table as TTable } from '@tanstack/react-table'
 import { Button, Input } from '@/components/ui'
 import { exportTableToCsv } from '@/hooks/useTable'
+import { ColumnFilter } from '@/components/shared/ColumnFilter'
 
 interface DataTableProps<T> {
   table: TTable<T>
@@ -73,15 +74,17 @@ export function DataTable<T>({
                 {hg.headers.map((header) => (
                   <th
                     key={header.id}
-                    onClick={header.column.getToggleSortingHandler()}
-                    className={[
-                      'px-3 py-2 text-left text-gray-500 uppercase tracking-wide whitespace-nowrap',
-                      header.column.getCanSort() ? 'cursor-pointer hover:text-gray-300' : '',
-                    ].join(' ')}
+                    className="px-3 py-2 text-left text-gray-500 uppercase tracking-wide whitespace-nowrap"
                   >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                    {header.column.getIsSorted() === 'asc' && ' ↑'}
-                    {header.column.getIsSorted() === 'desc' && ' ↓'}
+                    <span
+                      onClick={header.column.getToggleSortingHandler()}
+                      className={header.column.getCanSort() ? 'cursor-pointer hover:text-gray-300' : ''}
+                    >
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {header.column.getIsSorted() === 'asc' && ' ↑'}
+                      {header.column.getIsSorted() === 'desc' && ' ↓'}
+                    </span>
+                    {header.column.getCanFilter() && <ColumnFilter column={header.column} />}
                   </th>
                 ))}
               </tr>

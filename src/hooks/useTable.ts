@@ -5,27 +5,42 @@ import {
   getSortedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
+  getFacetedRowModel,
+  getFacetedUniqueValues,
   type ColumnDef,
   type SortingState,
   type VisibilityState,
+  type ColumnFiltersState,
+  type FilterFn,
 } from '@tanstack/react-table'
+
+// Excel-style multi-select: filter value is an array of allowed display strings.
+const multiSelectFilter: FilterFn<any> = (row, columnId, value: string[]) => {
+  if (!value || value.length === 0) return true
+  return value.includes(String(row.getValue(columnId) ?? ''))
+}
 
 export function useTable<T>(data: T[], columns: ColumnDef<T, any>[]) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [globalFilter, setGlobalFilter] = useState('')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, globalFilter, columnVisibility },
+    state: { sorting, globalFilter, columnVisibility, columnFilters },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
     onColumnVisibilityChange: setColumnVisibility,
+    onColumnFiltersChange: setColumnFilters,
+    defaultColumn: { filterFn: multiSelectFilter },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
+    getFacetedUniqueValues: getFacetedUniqueValues(),
     initialState: { pagination: { pageSize: 50 } },
     // Callers often pass a freshly-filtered/mapped array each render (e.g. a new
     // reference even when contents are unchanged). With autoResetPageIndex on
@@ -35,7 +50,7 @@ export function useTable<T>(data: T[], columns: ColumnDef<T, any>[]) {
     autoResetPageIndex: false,
   })
 
-  return { table, globalFilter, setGlobalFilter, columnVisibility }
+  return { table, globalFilter, setGlobalFilter, columnVisibility, columnFilters }
 }
 
 export function exportTableToCsv<T>(data: T[], filename: string) {
