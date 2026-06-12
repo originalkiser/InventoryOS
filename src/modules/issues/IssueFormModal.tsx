@@ -19,6 +19,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   const [categories, setCategories] = useState<ComboboxOption[]>([])
   const [statuses, setStatuses] = useState<ComboboxOption[]>([])
 
+  const [title, setTitle] = useState(existing?.title ?? '')
   const [locationId, setLocationId] = useState(existing?.location_id ?? '')
   const [categoryId, setCategoryId] = useState(existing?.category_id ?? '')
   const [statusId, setStatusId] = useState(existing?.status_id ?? '')
@@ -38,6 +39,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   }, [companyId, open])
 
   useEffect(() => {
+    setTitle(existing?.title ?? '')
     setLocationId(existing?.location_id ?? '')
     setCategoryId(existing?.category_id ?? '')
     setStatusId(existing?.status_id ?? '')
@@ -86,9 +88,14 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
 
   async function save() {
     if (!companyId) return
+    if (!title.trim() && !locationId) {
+      toast.error('Add a title (or pick a location) for the issue')
+      return
+    }
     setSaving(true)
     const payload = {
       company_id: companyId,
+      title: title.trim() || null,
       location_id: locationId || null,
       category_id: categoryId || null,
       status_id: statusId || null,
@@ -116,9 +123,17 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
 
   return (
     <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Issue' : 'New Issue'} size="lg">
+      <div className="mb-4">
+        <Input
+          label="Title / Summary"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="e.g. Walk-in freezer running warm — or just a quick note"
+        />
+      </div>
       <div className="grid grid-cols-2 gap-4">
-        <Combobox label="Location" options={locations} value={locationId}
-          onChange={(v) => setLocationId(v)} placeholder="Select location..." />
+        <Combobox label="Location (optional)" options={locations} value={locationId}
+          onChange={(v) => setLocationId(v)} placeholder="None — general issue" />
 
         <Combobox label="Category" options={categories} value={categoryId}
           onChange={(v) => setCategoryId(v)} placeholder="Select or create..."

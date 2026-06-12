@@ -34,6 +34,7 @@ const statusColor = (name: string | undefined) => {
 }
 
 const COLUMNS = [
+  col.accessor('title', { header: 'Title', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('location_name', { header: 'Location', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('category_name', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('status_name', { header: 'Status', cell: (i) => (

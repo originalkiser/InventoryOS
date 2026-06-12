@@ -338,6 +338,7 @@ export interface IssueStatus {
 export interface Issue {
   id: string
   company_id: string
+  title: string | null
   location_id: string | null
   category_id: string | null
   status_id: string | null
