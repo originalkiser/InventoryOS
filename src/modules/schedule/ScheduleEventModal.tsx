@@ -3,11 +3,34 @@ import { Modal, Button, Input, Toggle } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import type { ScheduleEvent } from '@/types'
-import { format } from 'date-fns'
+import { format, parseISO, addDays, addWeeks, addMonths } from 'date-fns'
 import toast from 'react-hot-toast'
 
 const EVENT_TYPES = ['order', 'monthly_count', 'weekly_count', 'meeting', 'other']
 const RECURRENCE_OPTIONS = ['none', 'daily', 'weekly', 'monthly']
+
+// Safety cap so an open-ended recurrence can't insert unbounded rows.
+const MAX_OCCURRENCES = 366
+
+function stepDate(d: Date, type: string): Date {
+  if (type === 'weekly') return addWeeks(d, 1)
+  if (type === 'monthly') return addMonths(d, 1)
+  return addDays(d, 1) // daily (and fallback)
+}
+
+// Expand a recurrence into individual occurrence dates (yyyy-MM-dd), from
+// `start` through `until` inclusive. Open-ended recurrences (no until) are
+// capped at one year out so we never generate forever.
+function occurrenceDates(start: string, until: string | null, type: string): string[] {
+  const out: string[] = []
+  let d = parseISO(start)
+  const horizon = until ? parseISO(until) : addMonths(parseISO(start), 12)
+  while (d <= horizon && out.length < MAX_OCCURRENCES) {
+    out.push(format(d, 'yyyy-MM-dd'))
+    d = stepDate(d, type)
+  }
+  return out
+}
 
 interface ScheduleEventModalProps {
   open: boolean
@@ -59,28 +82,84 @@ export function ScheduleEventModal({
 
   const resolvedEventType = eventType === 'other' && customType.trim() ? customType.trim() : eventType
 
+  // An existing row that belongs to a generated series. Its recurrence is locked
+  // (edit/delete the whole series instead), so it's edited as a single occurrence.
+  const isSeriesMember = !!existing?.series_id
+  // We materialize a series only when creating, or converting a standalone event.
+  const willGenerateSeries = recurrence !== 'none' && !isSeriesMember
+
   async function save() {
     if (!profile?.company_id || !title.trim() || !startDate) {
       toast.error('Title and start date are required')
       return
     }
     setSaving(true)
-    const payload: Partial<ScheduleEvent> = {
+
+    const base = {
       company_id: profile.company_id,
       title: title.trim(),
       event_type: resolvedEventType,
-      start_date: startDate,
-      end_date: endDate || null,
-      recurrence: recurrence !== 'none' ? { type: recurrence } : null,
       is_checklist: isChecklist,
-      completed,
-      completed_at: completed ? (existing?.completed_at ?? new Date().toISOString()) : null,
-      completed_by: completed ? (existing?.completed_by ?? profile.id) : null,
       notes: notes || null,
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = supabase as any
+
+    // Recurring: explode into one row per occurrence so it shows up everywhere
+    // (calendar, dashboard, top-bar reminders). end_date is the "repeat until".
+    if (willGenerateSeries) {
+      const dates = occurrenceDates(startDate, endDate || null, recurrence)
+      if (dates.length === 0) {
+        toast.error('No occurrences fall in that range')
+        setSaving(false)
+        return
+      }
+      const seriesId = crypto.randomUUID()
+      const rows = dates.map((d) => ({
+        ...base,
+        start_date: d,
+        end_date: d, // each occurrence is a single day
+        recurrence: { type: recurrence, until: endDate || null },
+        series_id: seriesId,
+        completed: false,
+        completed_at: null,
+        completed_by: null,
+      }))
+
+      // Converting an existing standalone event into a series: drop the original.
+      let error: { message: string } | null = null
+      if (existing?.id) {
+        const del = await sb.from('schedule_events').delete().eq('id', existing.id)
+        error = del.error
+      }
+      if (!error) {
+        const ins = await sb.from('schedule_events').insert(rows)
+        error = ins.error
+      }
+
+      if (error) toast.error(error.message)
+      else {
+        const capped = rows.length >= MAX_OCCURRENCES && !endDate
+        toast.success(`Scheduled ${rows.length} occurrence${rows.length > 1 ? 's' : ''}${capped ? ' (capped — set an end date for more)' : ''}`)
+        onSaved(); onClose()
+      }
+      setSaving(false)
+      return
+    }
+
+    // Non-recurring, or editing a single occurrence within a series.
+    const payload: Partial<ScheduleEvent> = {
+      ...base,
+      start_date: startDate,
+      end_date: endDate || null,
+      recurrence: isSeriesMember ? (existing?.recurrence ?? null) : null,
+      series_id: existing?.series_id ?? null,
+      completed,
+      completed_at: completed ? (existing?.completed_at ?? new Date().toISOString()) : null,
+      completed_by: completed ? (existing?.completed_by ?? profile.id) : null,
+    }
+
     const { error } = existing?.id
       ? await sb.from('schedule_events').update(payload).eq('id', existing.id)
       : await sb.from('schedule_events').insert(payload)
@@ -97,6 +176,17 @@ export function ScheduleEventModal({
     const { error } = await (supabase as any).from('schedule_events').delete().eq('id', existing.id)
     if (error) toast.error(error.message)
     else { toast.success('Deleted'); onSaved(); onClose() }
+    setDeleting(false)
+  }
+
+  async function deleteSeries() {
+    if (!existing?.series_id) return
+    if (!confirm('Delete every occurrence in this recurring series?')) return
+    setDeleting(true)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from('schedule_events').delete().eq('series_id', existing.series_id)
+    if (error) toast.error(error.message)
+    else { toast.success('Series deleted'); onSaved(); onClose() }
     setDeleting(false)
   }
 
@@ -128,14 +218,26 @@ export function ScheduleEventModal({
           <select
             value={recurrence}
             onChange={(e) => setRecurrence(e.target.value)}
-            className="bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-[#00e5ff]"
+            disabled={isSeriesMember}
+            className="bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-[#00e5ff] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {RECURRENCE_OPTIONS.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
           </select>
+          {willGenerateSeries && (
+            <p className="text-[10px] font-mono text-gray-500">Generates one task per {recurrence === 'daily' ? 'day' : recurrence === 'weekly' ? 'week' : 'month'} until the repeat-until date.</p>
+          )}
+          {isSeriesMember && (
+            <p className="text-[10px] font-mono text-gray-500">Part of a recurring series — recurrence is locked. Use “Delete Series” to remove all.</p>
+          )}
         </div>
 
         <Input label="Start Date *" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        <Input label="End Date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        <Input
+          label={willGenerateSeries ? 'Repeat Until' : 'End Date'}
+          type="date"
+          value={endDate}
+          onChange={(e) => setEndDate(e.target.value)}
+        />
 
         <div className="flex flex-col gap-2">
           <Toggle
@@ -167,13 +269,20 @@ export function ScheduleEventModal({
 
       <div className="flex items-center justify-between mt-4">
         {existing?.id ? (
-          <Button variant="danger" size="sm" loading={deleting} onClick={deleteEvent}>
-            Delete
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="danger" size="sm" loading={deleting} onClick={deleteEvent}>
+              Delete{isSeriesMember ? ' This' : ''}
+            </Button>
+            {isSeriesMember && (
+              <Button variant="danger" size="sm" loading={deleting} onClick={deleteSeries}>
+                Delete Series
+              </Button>
+            )}
+          </div>
         ) : <div />}
         <div className="flex gap-2">
           <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" loading={saving} onClick={save}>Save Event</Button>
+          <Button size="sm" loading={saving} onClick={save}>{willGenerateSeries ? 'Schedule Series' : 'Save Event'}</Button>
         </div>
       </div>
     </Modal>

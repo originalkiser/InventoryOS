@@ -360,6 +360,7 @@ export interface ScheduleEvent {
   start_date: string
   end_date: string | null
   recurrence: Json | null
+  series_id: string | null
   is_checklist: boolean
   completed: boolean
   completed_at: string | null
