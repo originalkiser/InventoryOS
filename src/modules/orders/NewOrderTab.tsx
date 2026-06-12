@@ -10,6 +10,7 @@ import { Button, Input, Select, Toggle, Badge, Card, CardHeader, CardBody } from
 import { OrderDocuments } from './OrderDocuments'
 import {
   generateOrder, applyMinOrderRules, buildExport, DEFAULT_EXPORT_COLUMNS,
+  buildPendingIndex, autoPendingColMap,
   TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData,
 } from '@/lib/orderEngine'
 import type {
@@ -29,8 +30,14 @@ const MAP_FIELDS = [
   { name: 'leadtime', label: 'Lead Time (days)' },
   { name: 'category', label: 'Category' },
   { name: 'cost', label: 'Cost' },
+  { name: 'min_on_hand', label: 'Min On Hand' },
+  { name: 'max_on_hand', label: 'Max On Hand' },
+  { name: 'uom', label: 'Unit of Measure' },
 ]
-const NUMERIC_FIELDS = ['on_hand', 'daily_usage', 'leadtime', 'cost']
+const NUMERIC_FIELDS = ['on_hand', 'daily_usage', 'leadtime', 'cost', 'min_on_hand', 'max_on_hand']
+
+// Map (location|product → already-ordered qty) for pending subtraction.
+type PendingIndex = Map<string, number>
 
 function toNum(raw: string): number | string {
   const t = raw.trim()
@@ -50,6 +57,10 @@ export function NewOrderTab() {
   const [minRules, setMinRules] = useState<OrderMinRule[]>([])
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [manualRows, setManualRows] = useState<InventoryRow[]>([{ location: '', product: '', on_hand: '', daily_usage: '', leadtime: '' }])
+
+  // Pending-order subtraction (optional)
+  const [pending, setPending] = useState<PendingIndex | null>(null)
+  const [pendingCount, setPendingCount] = useState(0)
 
   // Export options
   const [format, setFormat] = useState<'csv' | 'xlsx'>('xlsx')
@@ -102,7 +113,9 @@ export function NewOrderTab() {
     if (!config) { toast.error('Config not loaded'); return }
     const rows = store.inputRows
     if (!rows.length) { toast.error('No inventory rows to generate from'); return }
-    const gen = generateOrder(rows, config, store.params)
+    // pending is a Map (non-serializable) so it's threaded in here rather than
+    // living in the persisted store params.
+    const gen = generateOrder(rows, config, { ...store.params, pending })
     const selected = minRules.filter((r) => store.selectedMinRuleIds.includes(r.id))
     const withRules = applyMinOrderRules(gen, selected)
     store.setLineItems(withRules)
@@ -168,8 +181,20 @@ export function NewOrderTab() {
   }
 
   function startOver() {
-    store.reset(); setParsed(null); setStage('start')
+    store.reset(); setParsed(null); setStage('start'); setPending(null); setPendingCount(0)
     setManualRows([{ location: '', product: '', on_hand: '', daily_usage: '', leadtime: '' }])
+  }
+
+  function applyPendingFile(p: ParsedUpload, mapping: { location: string; product: string; qty: string }) {
+    const rows = p.rows.map((r) => ({
+      location: r[mapping.location] ?? '',
+      product: r[mapping.product] ?? '',
+      qty: r[mapping.qty] ?? '',
+    })).filter((r) => String(r.product).trim())
+    const idx = buildPendingIndex(rows)
+    setPending(idx)
+    setPendingCount(idx.size)
+    toast.success(`Pending orders loaded — ${idx.size} product/location lines`)
   }
 
   if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
@@ -221,6 +246,9 @@ export function NewOrderTab() {
       {stage === 'params' && (
         <ParamsStage
           minRules={minRules}
+          pendingCount={pendingCount}
+          onPendingFile={applyPendingFile}
+          onClearPending={() => { setPending(null); setPendingCount(0) }}
           onBack={() => setStage('start')}
           onGenerate={generate}
         />
@@ -321,9 +349,17 @@ function ManualGrid({ rows, onChange, onConfirm }: { rows: InventoryRow[]; onCha
   )
 }
 
-function ParamsStage({ minRules, onBack, onGenerate }: { minRules: OrderMinRule[]; onBack: () => void; onGenerate: () => void }) {
+function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, onBack, onGenerate }: {
+  minRules: OrderMinRule[]
+  pendingCount: number
+  onPendingFile: (p: ParsedUpload, mapping: { location: string; product: string; qty: string }) => void
+  onClearPending: () => void
+  onBack: () => void
+  onGenerate: () => void
+}) {
   const store = useOrderStore()
   const p = store.params
+  const usageGlobal = p.usageAdjustment?.global ?? null
   return (
     <div className="flex flex-col gap-4">
       <Card>
@@ -335,11 +371,15 @@ function ParamsStage({ minRules, onBack, onGenerate }: { minRules: OrderMinRule[
             <Input label="Target Days" value={String(p.targetDays)} onChange={(e) => store.setParams({ targetDays: Number(e.target.value) || 0 })} />
             <Select label="Zero-Usage Fill" options={[{ value: 'none', label: 'None' }, { value: 'min', label: 'To Trigger' }, { value: 'max', label: 'To Capacity' }]}
               value={p.zeroUsageFill} onChange={(e) => store.setParams({ zeroUsageFill: e.target.value as 'none' | 'min' | 'max' })} />
+            <Input label="Usage Adjust %" value={usageGlobal?.toString() ?? ''} placeholder="e.g. 10 = +10%"
+              onChange={(e) => { const t = e.target.value.trim(); store.setParams({ usageAdjustment: t === '' ? null : { global: Number(t) || 0 } }) }} />
             <Input label="Trigger Override" value={p.triggerOverride?.toString() ?? ''} onChange={(e) => store.setParams({ triggerOverride: e.target.value.trim() === '' ? null : Number(e.target.value) })} placeholder="optional" />
             <Input label="Order Limit Override" value={p.limitOverride?.toString() ?? ''} onChange={(e) => store.setParams({ limitOverride: e.target.value.trim() === '' ? null : Number(e.target.value) })} placeholder="optional" />
           </div>
         </CardBody>
       </Card>
+
+      <PendingOrdersCard count={pendingCount} onFile={onPendingFile} onClear={onClearPending} />
 
       <Card>
         <CardHeader><span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Minimum-Order Rule Set ({store.selectedMinRuleIds.length} selected)</span></CardHeader>
@@ -367,6 +407,57 @@ function ParamsStage({ minRules, onBack, onGenerate }: { minRules: OrderMinRule[
   )
 }
 
+function PendingOrdersCard({ count, onFile, onClear }: {
+  count: number
+  onFile: (p: ParsedUpload, mapping: { location: string; product: string; qty: string }) => void
+  onClear: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [parsed, setParsed] = useState<ParsedUpload | null>(null)
+  const [map, setMap] = useState({ location: '', product: '', qty: '' })
+
+  function onParsed(p: ParsedUpload) {
+    setParsed(p)
+    setMap(autoPendingColMap(p.headers))
+  }
+
+  const colOptions = (parsed?.headers ?? []).map((h) => ({ value: h, label: h }))
+
+  return (
+    <Card>
+      <CardHeader className="flex items-center justify-between">
+        <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">
+          Pending Orders {count > 0 ? <span className="text-[#39ff14]">· {count} lines loaded</span> : <span className="text-gray-600">· optional</span>}
+        </span>
+        <div className="flex gap-2">
+          {count > 0 && <button onClick={() => { onClear(); setParsed(null) }} className="text-xs font-mono text-red-400 hover:text-red-300">Clear</button>}
+          <button onClick={() => setOpen((v) => !v)} className="text-xs font-mono text-[#00e5ff] hover:underline">{open ? 'Hide' : 'Add file'}</button>
+        </div>
+      </CardHeader>
+      {open && (
+        <CardBody className="flex flex-col gap-3">
+          <p className="text-xs font-mono text-gray-600">Upload an already-placed/pending order file. Matching product+location qty is subtracted from each suggestion.</p>
+          {!parsed ? (
+            <FileUploadZone onParsed={onParsed} />
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="grid grid-cols-3 gap-3">
+                <Select label="Location Col" options={[{ value: '', label: '—' }, ...colOptions]} value={map.location} onChange={(e) => setMap({ ...map, location: e.target.value })} />
+                <Select label="Product Col" options={[{ value: '', label: '—' }, ...colOptions]} value={map.product} onChange={(e) => setMap({ ...map, product: e.target.value })} />
+                <Select label="Qty Col" options={[{ value: '', label: '—' }, ...colOptions]} value={map.qty} onChange={(e) => setMap({ ...map, qty: e.target.value })} />
+              </div>
+              <div className="flex justify-between">
+                <Button size="sm" variant="secondary" onClick={() => setParsed(null)}>Choose different file</Button>
+                <Button size="sm" disabled={!map.product || !map.qty} onClick={() => { onFile(parsed, map); setOpen(false) }}>Apply Pending</Button>
+              </div>
+            </div>
+          )}
+        </CardBody>
+      )}
+    </Card>
+  )
+}
+
 function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
   const store = useOrderStore()
   const ordered = store.lineItems.filter((l) => l.final_qty > 0).length
@@ -382,7 +473,9 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
               <th className="px-3 py-2 text-left">Location</th>
               <th className="px-3 py-2 text-left">Product</th>
               <th className="px-3 py-2 text-right">On Hand</th>
+              <th className="px-3 py-2 text-right">Days OH</th>
               <th className="px-3 py-2 text-right">Suggested</th>
+              <th className="px-3 py-2 text-right">Pending</th>
               <th className="px-3 py-2 text-left">Reason</th>
               <th className="px-3 py-2 text-left">Min Rule</th>
               <th className="px-3 py-2 text-left">UoM</th>
@@ -395,7 +488,9 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
                 <td className="px-3 py-1.5 text-gray-300">{l.location_label}</td>
                 <td className="px-3 py-1.5 text-gray-300">{l.product_id}</td>
                 <td className="px-3 py-1.5 text-right text-gray-400">{l.on_hand ?? '—'}</td>
+                <td className="px-3 py-1.5 text-right text-gray-500">{l.days_on_hand != null ? l.days_on_hand.toFixed(1) : '—'}</td>
                 <td className="px-3 py-1.5 text-right text-gray-400">{l.suggested_qty}</td>
+                <td className="px-3 py-1.5 text-right text-gray-500">{l.pending_qty > 0 ? `−${l.pending_qty}` : '—'}</td>
                 <td className="px-3 py-1.5"><Badge color={l.trigger_reason.startsWith('below') || l.trigger_reason.startsWith('projected') ? 'amber' : 'gray'}>{TRIGGER_REASON_LABELS[l.trigger_reason] ?? l.trigger_reason}</Badge></td>
                 <td className="px-3 py-1.5 text-gray-500">{l.applied_min_rule ?? '—'}</td>
                 <td className="px-3 py-1.5 text-gray-500">{l.unit_of_measure ?? '—'}{l.package_type ? ` · ${l.package_type}` : ''}</td>
