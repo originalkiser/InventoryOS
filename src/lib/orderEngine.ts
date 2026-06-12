@@ -408,6 +408,12 @@ export function generateOrder(
     // order_limit cap
     if (limit != null && suggested > limit) suggested = limit
 
+    // Prefix/suffix pack rule, "round" mode: round the order up to a whole pack
+    // multiple. ("pack" mode is already handled by the conversion factor above.)
+    if (uomConv.isPack && !uomConv.hasConversion && uomConv.packSize && uomConv.packSize > 1 && suggested > 0) {
+      suggested = Math.ceil(suggested / uomConv.packSize) * uomConv.packSize
+    }
+
     // Per-row min/max on-hand-after constraints (calc.js applyOnHandConstraints).
     // Only the explicit per-row min_on_hand/max_on_hand columns drive this layer —
     // config trigger/capacity already shaped the min_max suggestion above, so we

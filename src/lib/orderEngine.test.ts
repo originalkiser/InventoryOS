@@ -204,6 +204,29 @@ describe('generateOrder — ported feature wiring', () => {
     const out = generateOrder(rows, config, params)
     expect(out[0].suggested_qty).toBe(18) // up to max 20 - 2 on hand
   })
+
+  it('prefix/suffix pack rule (pack mode) orders in whole packs via the conversion factor', () => {
+    const params: GenerationParams = {
+      targetDays: 14, orderMode: 'days_supply', zeroUsageFill: 'none', triggerOverride: null, limitOverride: null,
+      uom: { prefixSuffixRules: [{ text: 'P3', matchType: 'prefix', purchaseSize: 6, orderMode: 'pack' }] },
+    }
+    const rows: InventoryRow[] = [{ location: 'S1', product: 'P3', on_hand: 5, daily_usage: 2, leadtime: 3 }]
+    const out = generateOrder(rows, config, params)
+    // need 29 units → ceil(29/6) = 5 packs
+    expect(out[0].suggested_qty).toBe(5)
+    expect(out[0].order_uom).toBe('P3')
+  })
+
+  it('prefix/suffix pack rule (round mode) rounds the order up to a pack multiple', () => {
+    const params: GenerationParams = {
+      targetDays: 14, orderMode: 'days_supply', zeroUsageFill: 'none', triggerOverride: null, limitOverride: null,
+      uom: { prefixSuffixRules: [{ text: 'P3', matchType: 'prefix', purchaseSize: 6, orderMode: 'round' }] },
+    }
+    const rows: InventoryRow[] = [{ location: 'S1', product: 'P3', on_hand: 5, daily_usage: 2, leadtime: 3 }]
+    const out = generateOrder(rows, config, params)
+    // need 29 units → round up to next multiple of 6 = 30
+    expect(out[0].suggested_qty).toBe(30)
+  })
 })
 
 describe('buildExport', () => {

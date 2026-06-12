@@ -99,7 +99,11 @@ The remaining calc.js functions are now ported into `src/lib/orderEngine.ts`
   optional `min_on_hand`/`max_on_hand` mapped columns (config trigger/capacity
   still drive the min_max suggestion; days_supply is not re-capped by them).
 - **`calcDaysOnHand`** — shown as "Days OH" in review.
-- **`detectPrefixSuffixPatterns`** — ported (engine helper; auto-detect UI TBD).
+- **`detectPrefixSuffixPatterns`** — ported, with a "Pack Rules" card in the New
+  Order params step: scans the uploaded product IDs, lists common prefix/suffix
+  patterns, and lets you set a pack size + mode per pattern. **Pack** mode orders
+  whole packs (via the UoM factor); **Round** mode rounds the order up to a pack
+  multiple. Rules feed the engine's `prefixSuffixRules`.
 
 ## Field reference (InventoryOS config tables feeding the engine)
 - `location_order_configs`: `order_trigger`, `capacity`, `order_limit` (per

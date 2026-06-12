@@ -10,8 +10,8 @@ import { Button, Input, Select, Toggle, Badge, Card, CardHeader, CardBody } from
 import { OrderDocuments } from './OrderDocuments'
 import {
   generateOrder, applyMinOrderRules, buildExport, DEFAULT_EXPORT_COLUMNS,
-  buildPendingIndex, autoPendingColMap,
-  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig,
+  buildPendingIndex, autoPendingColMap, detectPrefixSuffixPatterns,
+  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig, type PrefixSuffixRule,
 } from '@/lib/orderEngine'
 import type {
   Location, LocationOrderConfig, ProductIdMapping, GlobalProduct, VendorPart, OrderMinRule,
@@ -62,6 +62,9 @@ export function NewOrderTab() {
   // Pending-order subtraction (optional)
   const [pending, setPending] = useState<PendingIndex | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
+
+  // Prefix/suffix pack rules detected from the uploaded product IDs (optional)
+  const [packRules, setPackRules] = useState<PrefixSuffixRule[]>([])
 
   // Export options
   const [format, setFormat] = useState<'csv' | 'xlsx'>('xlsx')
@@ -125,8 +128,11 @@ export function NewOrderTab() {
     const rows = store.inputRows
     if (!rows.length) { toast.error('No inventory rows to generate from'); return }
     // pending (a Map) and uom config are threaded in here rather than living in
-    // the persisted store params.
-    const gen = generateOrder(rows, config, { ...store.params, pending, uom: uomConfig })
+    // the persisted store params. Detected pack rules merge into the UoM config.
+    const uom: UomConfig | null = packRules.length
+      ? { ...(uomConfig ?? {}), prefixSuffixRules: packRules }
+      : uomConfig
+    const gen = generateOrder(rows, config, { ...store.params, pending, uom })
     const selected = minRules.filter((r) => store.selectedMinRuleIds.includes(r.id))
     const withRules = applyMinOrderRules(gen, selected)
     store.setLineItems(withRules)
@@ -192,7 +198,7 @@ export function NewOrderTab() {
   }
 
   function startOver() {
-    store.reset(); setParsed(null); setStage('start'); setPending(null); setPendingCount(0)
+    store.reset(); setParsed(null); setStage('start'); setPending(null); setPendingCount(0); setPackRules([])
     setManualRows([{ location: '', product: '', on_hand: '', daily_usage: '', leadtime: '' }])
   }
 
@@ -260,6 +266,8 @@ export function NewOrderTab() {
           pendingCount={pendingCount}
           onPendingFile={applyPendingFile}
           onClearPending={() => { setPending(null); setPendingCount(0) }}
+          productIds={store.inputRows.map((r) => String(r.product ?? ''))}
+          onPackRulesChange={setPackRules}
           onBack={() => setStage('start')}
           onGenerate={generate}
         />
@@ -360,11 +368,13 @@ function ManualGrid({ rows, onChange, onConfirm }: { rows: InventoryRow[]; onCha
   )
 }
 
-function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, onBack, onGenerate }: {
+function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, productIds, onPackRulesChange, onBack, onGenerate }: {
   minRules: OrderMinRule[]
   pendingCount: number
   onPendingFile: (p: ParsedUpload, mapping: { location: string; product: string; qty: string }) => void
   onClearPending: () => void
+  productIds: string[]
+  onPackRulesChange: (rules: PrefixSuffixRule[]) => void
   onBack: () => void
   onGenerate: () => void
 }) {
@@ -391,6 +401,8 @@ function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, on
       </Card>
 
       <PendingOrdersCard count={pendingCount} onFile={onPendingFile} onClear={onClearPending} />
+
+      <PackRulesCard productIds={productIds} onChange={onPackRulesChange} />
 
       <Card>
         <CardHeader><span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Minimum-Order Rule Set ({store.selectedMinRuleIds.length} selected)</span></CardHeader>
@@ -461,6 +473,99 @@ function PendingOrdersCard({ count, onFile, onClear }: {
                 <Button size="sm" variant="secondary" onClick={() => setParsed(null)}>Choose different file</Button>
                 <Button size="sm" disabled={!map.product || !map.qty} onClick={() => { onFile(parsed, map); setOpen(false) }}>Apply Pending</Button>
               </div>
+            </div>
+          )}
+        </CardBody>
+      )}
+    </Card>
+  )
+}
+
+type DetectedPattern = ReturnType<typeof detectPrefixSuffixPatterns>[number]
+type PackCfg = { size: string; mode: 'pack' | 'round'; enabled: boolean }
+
+function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChange: (rules: PrefixSuffixRule[]) => void }) {
+  const [open, setOpen] = useState(false)
+  const [detected, setDetected] = useState<DetectedPattern[]>([])
+  const [cfg, setCfg] = useState<Record<string, PackCfg>>({})
+
+  function detect() {
+    // Only prefix/suffix patterns are usable as pack rules (the engine matches
+    // startsWith/endsWith); 'both' combos are informational only.
+    const pats = detectPrefixSuffixPatterns(productIds.filter(Boolean)).filter((p) => p.type === 'prefix' || p.type === 'suffix')
+    setDetected(pats)
+    if (pats.length === 0) toast('No common prefixes/suffixes found', { icon: '🔍' })
+  }
+
+  // Emit the active rule set whenever the config changes.
+  useEffect(() => {
+    const rules: PrefixSuffixRule[] = detected
+      .filter((d) => cfg[d.key]?.enabled && Number(cfg[d.key]?.size) > 0)
+      .map((d) => ({ text: d.text, matchType: d.type as 'prefix' | 'suffix', purchaseSize: Number(cfg[d.key].size), orderMode: cfg[d.key].mode }))
+    onChange(rules)
+  }, [cfg, detected, onChange])
+
+  const activeCount = detected.filter((d) => cfg[d.key]?.enabled && Number(cfg[d.key]?.size) > 0).length
+
+  function update(key: string, patch: Partial<PackCfg>) {
+    setCfg((c) => {
+      const prev: PackCfg = c[key] ?? { size: '', mode: 'pack', enabled: false }
+      return { ...c, [key]: { ...prev, ...patch } }
+    })
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex items-center justify-between">
+        <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">
+          Pack Rules {activeCount > 0 ? <span className="text-[#39ff14]">· {activeCount} active</span> : <span className="text-gray-600">· optional</span>}
+        </span>
+        <button onClick={() => setOpen((v) => !v)} className="text-xs font-mono text-[#00e5ff] hover:underline">{open ? 'Hide' : 'Detect packs'}</button>
+      </CardHeader>
+      {open && (
+        <CardBody className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-mono text-gray-600">Detect common product-ID prefixes/suffixes and order them in packs. <span className="text-gray-500">Pack</span> = order whole packs; <span className="text-gray-500">Round</span> = order units rounded up to a pack multiple.</p>
+            <Button size="sm" variant="secondary" onClick={detect}>Scan {productIds.length} products</Button>
+          </div>
+          {detected.length > 0 && (
+            <div className="overflow-auto rounded border border-[#2a2d3e]">
+              <table className="w-full text-xs font-mono">
+                <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide">
+                  <tr>
+                    <th className="px-2 py-2 text-left">Use</th>
+                    <th className="px-2 py-2 text-left">Pattern</th>
+                    <th className="px-2 py-2 text-right">Count</th>
+                    <th className="px-2 py-2 text-left">Examples</th>
+                    <th className="px-2 py-2 text-right">Pack Size</th>
+                    <th className="px-2 py-2 text-left">Mode</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detected.map((d) => {
+                    const c = cfg[d.key] ?? { size: '', mode: 'pack' as const, enabled: false }
+                    return (
+                      <tr key={d.key} className="border-t border-[#2a2d3e]/50">
+                        <td className="px-2 py-1"><input type="checkbox" checked={c.enabled} className="accent-[#00e5ff]" onChange={(e) => update(d.key, { enabled: e.target.checked })} /></td>
+                        <td className="px-2 py-1 text-gray-200"><span className="text-[#ffb300] uppercase">{d.type}</span> “{d.text}”</td>
+                        <td className="px-2 py-1 text-right text-gray-400">{d.count}</td>
+                        <td className="px-2 py-1 text-gray-600">{d.examples.join(', ')}</td>
+                        <td className="px-2 py-1 text-right">
+                          <input type="number" min={1} value={c.size} onChange={(e) => update(d.key, { size: e.target.value, enabled: true })}
+                            className="w-16 bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-right text-white focus:outline-none focus:border-[#00e5ff]" />
+                        </td>
+                        <td className="px-2 py-1">
+                          <select value={c.mode} onChange={(e) => update(d.key, { mode: e.target.value as 'pack' | 'round' })}
+                            className="bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]">
+                            <option value="pack">Pack</option>
+                            <option value="round">Round</option>
+                          </select>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </CardBody>
