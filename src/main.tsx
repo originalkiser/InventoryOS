@@ -4,6 +4,14 @@ import { Toaster } from 'react-hot-toast'
 import './index.css'
 import App from './App'
 
+// The update banner reloads with a `?_v=…` cache-buster. Strip it from the URL
+// once we're loaded so it doesn't linger or confuse the router.
+if (typeof window !== 'undefined' && window.location.search.includes('_v=')) {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('_v')
+  window.history.replaceState({}, '', url.toString())
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
