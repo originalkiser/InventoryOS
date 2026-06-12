@@ -27,6 +27,12 @@ export function useTable<T>(data: T[], columns: ColumnDef<T, any>[]) {
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize: 50 } },
+    // Callers often pass a freshly-filtered/mapped array each render (e.g. a new
+    // reference even when contents are unchanged). With autoResetPageIndex on
+    // (the default), that fires a page-index reset on every render, and any
+    // subsequent state change spins into a render loop that locks the main
+    // thread. We don't need page auto-reset, so disable it.
+    autoResetPageIndex: false,
   })
 
   return { table, globalFilter, setGlobalFilter, columnVisibility }
