@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
@@ -42,16 +42,32 @@ const col = createColumnHelper<Location>()
 
 export function LocationsTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, importRows } = useConfigTab<Location>('locations')
+  const { data, loading, insert, update, remove, importRows } = useConfigTab<Location>('locations')
   const { active: customFields, addField } = useCustomFields('locations')
 
   const [addOpen, setAddOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
 
-  // Add-form state: base + dynamic custom values
+  // Add/Edit-form state: base + dynamic custom values
   const [base, setBase] = useState({ location_code: '', name: '', region: '' })
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
+
+  const openAdd = useCallback(() => {
+    setEditId(null)
+    setBase({ location_code: '', name: '', region: '' })
+    setCustomVals({})
+    setAddOpen(true)
+  }, [])
+
+  const openEdit = useCallback((r: Location) => {
+    setEditId(r.id)
+    setBase({ location_code: r.location_code, name: r.name, region: r.region ?? '' })
+    const meta = (r.metadata ?? {}) as Record<string, unknown>
+    setCustomVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
+    setAddOpen(true)
+  }, [])
 
   const columns = useMemo(() => {
     const cols: any[] = [
@@ -76,8 +92,14 @@ export function LocationsTab() {
         return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${src}` : '—'
       },
     }))
+    cols.push({
+      id: 'edit', header: '', enableColumnFilter: false, enableSorting: false,
+      cell: (i: any) => (
+        <button onClick={() => openEdit(i.row.original as Location)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button>
+      ),
+    })
     return cols
-  }, [customFields])
+  }, [customFields, openEdit])
 
   const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
 
@@ -87,19 +109,26 @@ export function LocationsTab() {
     return meta
   }
 
-  async function onAddSubmit() {
+  async function onSubmit() {
     if (!base.location_code.trim() || !base.name.trim()) return
-    await insert({
+    const payload = {
       location_code: base.location_code.trim(),
       name: base.name.trim(),
       region: base.region.trim() || null,
       metadata: buildMetadata(customVals),
-      updated_by: profile?.id ?? null,
-      last_change_source: 'manual',
-    } as Partial<Location>)
-    setBase({ location_code: '', name: '', region: '' })
-    setCustomVals({})
+    } as Partial<Location>
+    if (editId) await update(editId, payload)
+    else await insert({ ...payload, updated_by: profile?.id ?? null, last_change_source: 'manual' } as Partial<Location>)
     setAddOpen(false)
+    setEditId(null)
+  }
+
+  async function onDelete() {
+    if (!editId) return
+    if (!confirm(`Delete location "${base.name}"? This cannot be undone.`)) return
+    await remove(editId)
+    setAddOpen(false)
+    setEditId(null)
   }
 
   async function confirmImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
@@ -136,7 +165,7 @@ export function LocationsTab() {
         actions={
           <>
             <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
-            <Button size="sm" onClick={() => setAddOpen(true)}>+ Add Location</Button>
+            <Button size="sm" onClick={openAdd}>+ Add Location</Button>
           </>
         }
       />
@@ -150,8 +179,8 @@ export function LocationsTab() {
         <DataSourceLinker configType="locations" />
       </div>
 
-      {/* Add location */}
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Location" size="lg">
+      {/* Add / Edit location */}
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Location' : 'Add Location'} size="lg">
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
             <Input label="Location Code *" value={base.location_code} onChange={(e) => setBase({ ...base, location_code: e.target.value })} />
@@ -164,9 +193,14 @@ export function LocationsTab() {
                 onChange={(e) => setCustomVals({ ...customVals, [f.field_key]: e.target.value })} />
             ))}
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" size="sm" type="button" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" onClick={onAddSubmit} disabled={!base.location_code.trim() || !base.name.trim()}>Save</Button>
+          <div className="flex justify-between gap-2 pt-2">
+            <div>
+              {editId && <Button variant="danger" size="sm" type="button" onClick={onDelete}>Delete</Button>}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" type="button" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
+              <Button size="sm" onClick={onSubmit} disabled={!base.location_code.trim() || !base.name.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
+            </div>
           </div>
         </div>
       </Modal>
