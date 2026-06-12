@@ -1,4 +1,4 @@
-import type { TransformKind } from '@/types'
+import { CONSTANT_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
 
 export const TRANSFORM_OPTIONS: { value: TransformKind; label: string }[] = [
   { value: 'none', label: 'Text (as-is)' },
@@ -27,4 +27,13 @@ export function applyTransform(raw: string, t?: TransformKind): string {
     case 'lower': return v.trim().toLowerCase()
     default: return v
   }
+}
+
+/**
+ * Resolve a mapping's value for a given file row: a constant when the source is
+ * set to "constant", otherwise the file cell — then apply the transform.
+ */
+export function mappedValue(row: Record<string, string>, m: ColumnMapping): string {
+  const raw = m.sourceColumn === CONSTANT_SOURCE ? (m.constant ?? '') : (row[m.sourceColumn] ?? '')
+  return applyTransform(raw, m.transform)
 }

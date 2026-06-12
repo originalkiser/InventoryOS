@@ -10,7 +10,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import { applyTransform } from '@/lib/columnTransform'
+import { mappedValue } from '@/lib/columnTransform'
 import type { MonthlyEndingBalance, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
@@ -44,7 +44,7 @@ const col = createColumnHelper<MonthlyEndingBalance>()
 export function EndingBalancesTab() {
   const { profile } = useAuthStore()
   const { data, loading, insert, importRows } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
-  const { active: categories } = useCustomFields('ending_balance')
+  const { active: categories, addField } = useCustomFields('ending_balance')
   const loc = useLocations()
 
   const [addOpen, setAddOpen] = useState(false)
@@ -85,7 +85,7 @@ export function EndingBalancesTab() {
       let month: string | null = null
       let ending_balance: number | null = null
       for (const m of maps) {
-        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
+        const raw = mappedValue(row, m)
         if (m.fieldName === 'location') location_id = loc.resolveId(raw)
         else if (m.fieldName === 'month') month = monthKey(raw)
         else if (m.fieldName === 'ending_balance') ending_balance = num(raw)
@@ -126,7 +126,7 @@ export function EndingBalancesTab() {
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
-          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} />
+          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label, field_type: 'number' })} />
         </div>
         <DataSourceLinker configType="monthly_ending_balances" />
       </div>

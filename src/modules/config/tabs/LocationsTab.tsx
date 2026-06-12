@@ -9,7 +9,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import { applyTransform } from '@/lib/columnTransform'
+import { mappedValue } from '@/lib/columnTransform'
 import type { Location, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
@@ -43,7 +43,7 @@ const col = createColumnHelper<Location>()
 export function LocationsTab() {
   const { profile } = useAuthStore()
   const { data, loading, insert, importRows } = useConfigTab<Location>('locations')
-  const { active: customFields } = useCustomFields('locations')
+  const { active: customFields, addField } = useCustomFields('locations')
 
   const [addOpen, setAddOpen] = useState(false)
   const [columnsOpen, setColumnsOpen] = useState(false)
@@ -110,7 +110,7 @@ export function LocationsTab() {
       const out: Record<string, unknown> = {}
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
+        const raw = mappedValue(row, m)
         if (m.fieldName === 'active') out.active = ['true', '1', 'yes'].includes(raw.toLowerCase())
         else if (customKeys.has(m.fieldName)) meta[m.fieldName] = coerce(raw, typeByKey.get(m.fieldName) ?? 'text')
         else out[m.fieldName] = raw
@@ -144,7 +144,7 @@ export function LocationsTab() {
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
-          <ConfigUpload requiredFields={uploadFields} onImport={confirmImport} importing={importing} />
+          <ConfigUpload requiredFields={uploadFields} onImport={confirmImport} importing={importing} onAddColumn={(label) => addField({ label })} />
         </div>
 
         <DataSourceLinker configType="locations" />

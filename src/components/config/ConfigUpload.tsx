@@ -12,12 +12,14 @@ interface Props {
   importing?: boolean
   // 'merge' offered by default; set allowReplace=false to hide replace-all
   allowReplace?: boolean
+  // Optional: add a new custom column inline during mapping
+  onAddColumn?: (label: string) => void | Promise<void>
 }
 
 // Single upload surface for config sections: file → mode choice → column map →
 // direct import. "Replace all" warns before proceeding. Mapping isn't lost on
 // re-open because the chosen file/mode stay until the user clicks Replace File.
-export function ConfigUpload({ requiredFields, onImport, importing, allowReplace = true }: Props) {
+export function ConfigUpload({ requiredFields, onImport, importing, allowReplace = true, onAddColumn }: Props) {
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [mode, setMode] = useState<ImportMode>('merge')
 
@@ -63,7 +65,7 @@ export function ConfigUpload({ requiredFields, onImport, importing, allowReplace
         </div>
       )}
 
-      <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} onConfirm={handleConfirm} onCancel={() => setParsed(null)} />
+      <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} onConfirm={handleConfirm} onCancel={() => setParsed(null)} onAddColumn={onAddColumn} />
       {importing && <p className="text-xs text-[#00e5ff] font-mono">Importing…</p>}
     </div>
   )

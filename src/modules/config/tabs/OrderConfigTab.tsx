@@ -9,7 +9,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import { applyTransform } from '@/lib/columnTransform'
+import { mappedValue } from '@/lib/columnTransform'
 import type { LocationOrderConfig, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
@@ -24,7 +24,7 @@ const col = createColumnHelper<LocationOrderConfig>()
 
 export function OrderConfigTab() {
   const { data, loading, insert, importRows } = useConfigTab<LocationOrderConfig>('location_order_configs')
-  const { active: customFields } = useCustomFields('order_config')
+  const { active: customFields, addField } = useCustomFields('order_config')
   const loc = useLocations()
 
   const [addOpen, setAddOpen] = useState(false)
@@ -79,7 +79,7 @@ export function OrderConfigTab() {
       const out: Record<string, unknown> = {}
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
+        const raw = mappedValue(row, m)
         if (m.fieldName === 'location') out.location_id = loc.resolveId(raw)
         else if (m.fieldName === 'active') out.active = ['true', '1', 'yes'].includes(raw.toLowerCase())
         else if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)
@@ -118,7 +118,7 @@ export function OrderConfigTab() {
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
-          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} />
+          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label })} />
         </div>
         <DataSourceLinker configType="location_order_configs" />
       </div>

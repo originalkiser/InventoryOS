@@ -11,7 +11,7 @@ import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import { applyTransform } from '@/lib/columnTransform'
+import { mappedValue } from '@/lib/columnTransform'
 import type { VendorPart, Vendor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -32,7 +32,7 @@ export function VendorPartsTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const { data, loading, insert, importRows } = useConfigTab<VendorPart>('vendor_parts')
-  const { active: customFields } = useCustomFields('vendor_parts')
+  const { active: customFields, addField } = useCustomFields('vendor_parts')
 
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [uploadVendorId, setUploadVendorId] = useState('')
@@ -98,7 +98,7 @@ export function VendorPartsTab() {
       const out: Record<string, unknown> = { vendor_id: uploadVendorId }
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = applyTransform(row[m.sourceColumn] ?? '', m.transform)
+        const raw = mappedValue(row, m)
         if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)
         else if (customKeys.has(m.fieldName)) meta[m.fieldName] = raw || null
         else out[m.fieldName] = raw || null
@@ -147,7 +147,7 @@ export function VendorPartsTab() {
           <Combobox label="Vendor for this file *" options={vendorOptions} value={uploadVendorId}
             onChange={(v) => setUploadVendorId(v)} placeholder="Select or create vendor"
             allowCreate onCreateOption={createVendor} />
-          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} />
+          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label })} />
           <p className="text-xs font-mono text-gray-600">Upload one file per vendor — each can map differently. Re-uploading a vendor's file updates its parts; other vendors are untouched.</p>
         </div>
         <DataSourceLinker configType="vendor_parts" />
