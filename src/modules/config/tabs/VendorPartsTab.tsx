@@ -31,12 +31,13 @@ const col = createColumnHelper<VendorPart>()
 export function VendorPartsTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, importRows } = useConfigTab<VendorPart>('vendor_parts')
+  const { data, loading, insert, update, remove, importRows } = useConfigTab<VendorPart>('vendor_parts')
   const { active: customFields, addField } = useCustomFields('vendor_parts')
 
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [uploadVendorId, setUploadVendorId] = useState('')
   const [addOpen, setAddOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
 
@@ -74,6 +75,7 @@ export function VendorPartsTab() {
     ]
     for (const f of customFields) cols.push({ id: `cf_${f.field_key}`, header: f.label, accessorFn: (r: VendorPart) => (r.metadata as any)?.[f.field_key] ?? '', cell: (i: any) => i.getValue() || '—' })
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
+    cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as VendorPart)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> })
     return cols
   }, [customFields, vendors])
 
@@ -112,11 +114,28 @@ export function VendorPartsTab() {
     setImporting(false)
   }
 
-  async function onAdd() {
+  function resetForm() {
+    setForm({ vendorId: '', part_number: '', our_part_number: '', description: '', unit_of_measure: '', package_type: '', bulk_minimum: '', individual_minimum: '' })
+    setCustomVals({})
+  }
+  function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
+  function openEdit(r: VendorPart) {
+    setEditId(r.id)
+    setForm({
+      vendorId: r.vendor_id ?? '', part_number: r.part_number ?? '', our_part_number: r.our_part_number ?? '',
+      description: r.description ?? '', unit_of_measure: r.unit_of_measure ?? '', package_type: r.package_type ?? '',
+      bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '',
+    })
+    const meta = (r.metadata ?? {}) as Record<string, unknown>
+    setCustomVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
+    setAddOpen(true)
+  }
+
+  async function onSubmit() {
     if (!form.part_number.trim()) { toast.error('Vendor Part # is required'); return }
     const meta: Record<string, unknown> = {}
     for (const f of customFields) meta[f.field_key] = customVals[f.field_key] || null
-    await insert({
+    const payload = {
       vendor_id: form.vendorId || null,
       part_number: form.part_number.trim(),
       our_part_number: form.our_part_number.trim() || null,
@@ -126,9 +145,16 @@ export function VendorPartsTab() {
       bulk_minimum: num(form.bulk_minimum),
       individual_minimum: num(form.individual_minimum),
       metadata: meta,
-    } as Partial<VendorPart>)
-    setForm({ vendorId: '', part_number: '', our_part_number: '', description: '', unit_of_measure: '', package_type: '', bulk_minimum: '', individual_minimum: '' })
-    setCustomVals({}); setAddOpen(false)
+    } as Partial<VendorPart>
+    if (editId) await update(editId, payload)
+    else await insert(payload)
+    resetForm(); setAddOpen(false); setEditId(null)
+  }
+
+  async function onDelete() {
+    if (!editId) return
+    if (!confirm(`Delete part "${form.part_number}"?`)) return
+    await remove(editId); resetForm(); setAddOpen(false); setEditId(null)
   }
 
   return (
@@ -137,7 +163,7 @@ export function VendorPartsTab() {
         exportFilename="vendor_parts.csv" exportData={data} loading={loading}
         actions={<>
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
-          <Button size="sm" onClick={() => setAddOpen(true)}>+ Add Part</Button>
+          <Button size="sm" onClick={openAdd}>+ Add Part</Button>
         </>}
       />
 
@@ -153,7 +179,7 @@ export function VendorPartsTab() {
         <DataSourceLinker configType="vendor_parts" />
       </div>
 
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Vendor Part" size="lg">
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Vendor Part' : 'Add Vendor Part'} size="lg">
         <div className="flex flex-col gap-3">
           <Combobox label="Vendor" options={vendorOptions} value={form.vendorId} onChange={(v) => setForm({ ...form, vendorId: v })} placeholder="Select or create vendor" allowCreate onCreateOption={createVendor} />
           <div className="grid grid-cols-2 gap-3">
@@ -168,9 +194,12 @@ export function VendorPartsTab() {
               <Input key={f.id} label={f.label} value={customVals[f.field_key] ?? ''} onChange={(e) => setCustomVals({ ...customVals, [f.field_key]: e.target.value })} />
             ))}
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" onClick={onAdd} disabled={!form.part_number.trim()}>Save</Button>
+          <div className="flex justify-between gap-2 pt-2">
+            <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
+              <Button size="sm" onClick={onSubmit} disabled={!form.part_number.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
+            </div>
           </div>
         </div>
       </Modal>

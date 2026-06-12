@@ -8,7 +8,6 @@ import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { ProductIdMapping, ColumnMapping } from '@/types'
-import { useForm } from 'react-hook-form'
 import { format } from 'date-fns'
 
 const REQUIRED_FIELDS = [
@@ -18,19 +17,30 @@ const REQUIRED_FIELDS = [
 ]
 
 const col = createColumnHelper<ProductIdMapping>()
-const COLUMNS = [
-  col.accessor('old_product_id', { header: 'Old ID' }),
-  col.accessor('new_product_id', { header: 'New ID' }),
-  col.accessor('notes', { header: 'Notes', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
-]
+const EMPTY = { old_product_id: '', new_product_id: '', notes: '' }
 
 export function ProductMappingTab() {
-  const { data, loading, insert, importRows } = useConfigTab<ProductIdMapping>('product_id_mappings')
-  const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
+  const { data, loading, insert, update, remove, importRows } = useConfigTab<ProductIdMapping>('product_id_mappings')
   const [addOpen, setAddOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
-  const { register, handleSubmit, reset } = useForm<{ old_product_id: string; new_product_id: string; notes: string }>()
+  const [form, setForm] = useState({ ...EMPTY })
+
+  const COLUMNS = [
+    col.accessor('old_product_id', { header: 'Old ID' }),
+    col.accessor('new_product_id', { header: 'New ID' }),
+    col.accessor('notes', { header: 'Notes', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
+    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductIdMapping)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
+  ]
+  const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
+
+  function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
+  function openEdit(r: ProductIdMapping) {
+    setEditId(r.id)
+    setForm({ old_product_id: r.old_product_id ?? '', new_product_id: r.new_product_id ?? '', notes: r.notes ?? '' })
+    setAddOpen(true)
+  }
 
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
@@ -43,15 +53,25 @@ export function ProductMappingTab() {
     setImporting(false)
   }
 
-  async function onAdd(form: { old_product_id: string; new_product_id: string; notes: string }) {
-    await insert(form); reset(); setAddOpen(false)
+  async function onSubmit() {
+    if (!form.old_product_id.trim() || !form.new_product_id.trim()) return
+    const payload = { old_product_id: form.old_product_id.trim(), new_product_id: form.new_product_id.trim(), notes: form.notes.trim() || null } as Partial<ProductIdMapping>
+    if (editId) await update(editId, payload)
+    else await insert(payload)
+    setForm({ ...EMPTY }); setAddOpen(false); setEditId(null)
+  }
+
+  async function onDelete() {
+    if (!editId) return
+    if (!confirm('Delete this mapping?')) return
+    await remove(editId); setForm({ ...EMPTY }); setAddOpen(false); setEditId(null)
   }
 
   return (
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="product_mappings.csv" exportData={data} loading={loading}
-        actions={<Button size="sm" onClick={() => setAddOpen(true)}>+ Add Mapping</Button>}
+        actions={<Button size="sm" onClick={openAdd}>+ Add Mapping</Button>}
       />
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
@@ -60,16 +80,19 @@ export function ProductMappingTab() {
         </div>
         <DataSourceLinker configType="product_id_mappings" />
       </div>
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Product Mapping">
-        <form onSubmit={handleSubmit(onAdd)} className="flex flex-col gap-3">
-          <Input label="Old Product ID *" {...register('old_product_id', { required: true })} />
-          <Input label="New Product ID *" {...register('new_product_id', { required: true })} />
-          <Input label="Notes" {...register('notes')} />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" size="sm" type="button" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" type="submit">Save</Button>
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Product Mapping' : 'Add Product Mapping'}>
+        <div className="flex flex-col gap-3">
+          <Input label="Old Product ID *" value={form.old_product_id} onChange={(e) => setForm({ ...form, old_product_id: e.target.value })} />
+          <Input label="New Product ID *" value={form.new_product_id} onChange={(e) => setForm({ ...form, new_product_id: e.target.value })} />
+          <Input label="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          <div className="flex justify-between gap-2 pt-2">
+            <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
+              <Button size="sm" onClick={onSubmit} disabled={!form.old_product_id.trim() || !form.new_product_id.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
+            </div>
           </div>
-        </form>
+        </div>
       </Modal>
     </div>
   )

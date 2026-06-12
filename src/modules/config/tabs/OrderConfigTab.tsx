@@ -28,13 +28,14 @@ const col = createColumnHelper<LocationOrderConfig>()
 export function OrderConfigTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, importRows } = useConfigTab<LocationOrderConfig>('location_order_configs')
+  const { data, loading, insert, update, remove, importRows } = useConfigTab<LocationOrderConfig>('location_order_configs')
   const { active: customFields, addField } = useCustomFields('order_config')
   const loc = useLocations()
 
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [uploadVendorId, setUploadVendorId] = useState('')
   const [addOpen, setAddOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
 
@@ -75,6 +76,7 @@ export function OrderConfigTab() {
     }
     cols.push(col.accessor('active', { header: 'Active', cell: (i) => (i.getValue() ? '✓' : '✗') }))
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as LocationOrderConfig; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
+    cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as LocationOrderConfig)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> })
     return cols
   }, [customFields, loc, vendors])
 
@@ -113,17 +115,38 @@ export function OrderConfigTab() {
     setImporting(false)
   }
 
-  async function onAdd() {
+  function resetForm() { setForm({ vendorId: '', locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' }); setCustomVals({}) }
+  function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
+  function openEdit(r: LocationOrderConfig) {
+    setEditId(r.id)
+    setForm({
+      vendorId: r.vendor_id ?? '', locationId: r.location_id ?? '', product_id: r.product_id ?? '',
+      capacity: r.capacity?.toString() ?? '', order_trigger: r.order_trigger?.toString() ?? '', order_limit: r.order_limit?.toString() ?? '',
+    })
+    const meta = (r.metadata ?? {}) as Record<string, unknown>
+    setCustomVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
+    setAddOpen(true)
+  }
+
+  async function onSubmit() {
     if (!form.locationId || !form.product_id.trim()) return
     const meta: Record<string, unknown> = {}
     for (const f of ownFields) meta[f.field_key] = customVals[f.field_key] || null
-    await insert({
+    const payload = {
       vendor_id: form.vendorId || null,
       location_id: form.locationId, product_id: form.product_id.trim(),
       capacity: num(form.capacity), order_trigger: num(form.order_trigger), order_limit: num(form.order_limit),
       active: true, metadata: meta,
-    } as Partial<LocationOrderConfig>)
-    setForm({ vendorId: '', locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' }); setCustomVals({}); setAddOpen(false)
+    } as Partial<LocationOrderConfig>
+    if (editId) await update(editId, payload)
+    else await insert(payload)
+    resetForm(); setAddOpen(false); setEditId(null)
+  }
+
+  async function onDelete() {
+    if (!editId) return
+    if (!confirm('Delete this order config row?')) return
+    await remove(editId); resetForm(); setAddOpen(false); setEditId(null)
   }
 
   return (
@@ -132,7 +155,7 @@ export function OrderConfigTab() {
         exportFilename="order_config.csv" exportData={data} loading={loading}
         actions={<>
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
-          <Button size="sm" onClick={() => setAddOpen(true)}>+ Add Config</Button>
+          <Button size="sm" onClick={openAdd}>+ Add Config</Button>
         </>}
       />
 
@@ -147,7 +170,7 @@ export function OrderConfigTab() {
         <DataSourceLinker configType="location_order_configs" />
       </div>
 
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Order Config" size="lg">
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Order Config' : 'Add Order Config'} size="lg">
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
             <Combobox label="Vendor" options={[{ value: '', label: '— No vendor —' }, ...vendorOptions]} value={form.vendorId} onChange={(v) => setForm({ ...form, vendorId: v })} placeholder="Optional" />
@@ -165,9 +188,12 @@ export function OrderConfigTab() {
           {linkedFields.length > 0 && (
             <p className="text-xs font-mono text-gray-600">Linked columns ({linkedFields.map((f) => f.label).join(', ')}) are pulled from the selected location automatically.</p>
           )}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" onClick={onAdd} disabled={!form.locationId || !form.product_id.trim()}>Save</Button>
+          <div className="flex justify-between gap-2 pt-2">
+            <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
+              <Button size="sm" onClick={onSubmit} disabled={!form.locationId || !form.product_id.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
+            </div>
           </div>
         </div>
       </Modal>

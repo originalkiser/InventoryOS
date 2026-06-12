@@ -8,8 +8,10 @@ import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { GlobalProduct, ColumnMapping } from '@/types'
-import { useForm } from 'react-hook-form'
 import { format } from 'date-fns'
+
+function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
+const EMPTY = { product_id: '', unit_of_measure: '', package_type: '', bulk_minimum: '', individual_minimum: '' }
 
 const REQUIRED_FIELDS = [
   { name: 'product_id', label: 'Product ID', required: true },
@@ -21,21 +23,31 @@ const REQUIRED_FIELDS = [
 const NUM = ['bulk_minimum', 'individual_minimum']
 
 const col = createColumnHelper<GlobalProduct>()
-const COLUMNS = [
-  col.accessor('product_id', { header: 'Product ID' }),
-  col.accessor('unit_of_measure', { header: 'UoM', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
-]
 
 export function GlobalProductsTab() {
-  const { data, loading, insert, importRows } = useConfigTab<GlobalProduct>('global_products')
-  const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
+  const { data, loading, insert, update, remove, importRows } = useConfigTab<GlobalProduct>('global_products')
   const [addOpen, setAddOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
-  const { register, handleSubmit, reset } = useForm<{ product_id: string; unit_of_measure: string }>()
+  const [form, setForm] = useState({ ...EMPTY })
+
+  const COLUMNS = [
+    col.accessor('product_id', { header: 'Product ID' }),
+    col.accessor('unit_of_measure', { header: 'UoM', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
+    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as GlobalProduct)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
+  ]
+  const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
+
+  function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
+  function openEdit(r: GlobalProduct) {
+    setEditId(r.id)
+    setForm({ product_id: r.product_id ?? '', unit_of_measure: r.unit_of_measure ?? '', package_type: r.package_type ?? '', bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '' })
+    setAddOpen(true)
+  }
 
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
@@ -51,15 +63,28 @@ export function GlobalProductsTab() {
     setImporting(false)
   }
 
-  async function onAdd(form: { product_id: string; unit_of_measure: string }) {
-    await insert(form); reset(); setAddOpen(false)
+  async function onSubmit() {
+    if (!form.product_id.trim()) return
+    const payload = {
+      product_id: form.product_id.trim(), unit_of_measure: form.unit_of_measure.trim() || null,
+      package_type: form.package_type.trim() || null, bulk_minimum: num(form.bulk_minimum), individual_minimum: num(form.individual_minimum),
+    } as Partial<GlobalProduct>
+    if (editId) await update(editId, payload)
+    else await insert(payload)
+    setForm({ ...EMPTY }); setAddOpen(false); setEditId(null)
+  }
+
+  async function onDelete() {
+    if (!editId) return
+    if (!confirm(`Delete product "${form.product_id}"?`)) return
+    await remove(editId); setForm({ ...EMPTY }); setAddOpen(false); setEditId(null)
   }
 
   return (
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="global_products.csv" exportData={data} loading={loading}
-        actions={<Button size="sm" onClick={() => setAddOpen(true)}>+ Add Product</Button>}
+        actions={<Button size="sm" onClick={openAdd}>+ Add Product</Button>}
       />
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
@@ -68,15 +93,23 @@ export function GlobalProductsTab() {
         </div>
         <DataSourceLinker configType="global_products" />
       </div>
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Global Product">
-        <form onSubmit={handleSubmit(onAdd)} className="flex flex-col gap-3">
-          <Input label="Product ID *" {...register('product_id', { required: true })} />
-          <Input label="Unit of Measure" {...register('unit_of_measure')} />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" size="sm" type="button" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" type="submit">Save</Button>
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Global Product' : 'Add Global Product'}>
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Product ID *" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} />
+            <Input label="Unit of Measure" value={form.unit_of_measure} onChange={(e) => setForm({ ...form, unit_of_measure: e.target.value })} />
+            <Input label="Package Type" value={form.package_type} onChange={(e) => setForm({ ...form, package_type: e.target.value })} />
+            <Input label="Bulk Minimum" value={form.bulk_minimum} onChange={(e) => setForm({ ...form, bulk_minimum: e.target.value })} />
+            <Input label="Individual Minimum" value={form.individual_minimum} onChange={(e) => setForm({ ...form, individual_minimum: e.target.value })} />
           </div>
-        </form>
+          <div className="flex justify-between gap-2 pt-2">
+            <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
+              <Button size="sm" onClick={onSubmit} disabled={!form.product_id.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
+            </div>
+          </div>
+        </div>
       </Modal>
     </div>
   )

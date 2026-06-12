@@ -43,11 +43,12 @@ const col = createColumnHelper<MonthlyEndingBalance>()
 
 export function EndingBalancesTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, importRows } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
+  const { data, loading, insert, update, remove, importRows } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
   const { active: categories, addField } = useCustomFields('ending_balance')
   const loc = useLocations()
 
   const [addOpen, setAddOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
 
@@ -64,6 +65,7 @@ export function EndingBalancesTab() {
       cols.push({ id: `cf_${c.field_key}`, header: c.label, accessorFn: (r: MonthlyEndingBalance) => (r.metadata as any)?.[c.field_key] ?? '', cell: (i: any) => (i.getValue() === '' ? '—' : fmt(Number(i.getValue()))) })
     }
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as MonthlyEndingBalance; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
+    cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as MonthlyEndingBalance)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> })
     return cols
   }, [categories, loc])
 
@@ -99,13 +101,31 @@ export function EndingBalancesTab() {
     setImporting(false)
   }
 
-  async function onAdd() {
+  function resetForm() { setForm({ locationId: '', month: '', ending_balance: '' }); setCatVals({}) }
+  function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
+  function openEdit(r: MonthlyEndingBalance) {
+    setEditId(r.id)
+    setForm({ locationId: r.location_id ?? '', month: (r.month ?? '').slice(0, 7), ending_balance: r.ending_balance?.toString() ?? '' })
+    const meta = (r.metadata ?? {}) as Record<string, unknown>
+    setCatVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
+    setAddOpen(true)
+  }
+
+  async function onSubmit() {
     const month = monthKey(form.month)
     if (!form.locationId || !month) return
     const meta: Record<string, unknown> = {}
     for (const c of categories) meta[c.field_key] = num(catVals[c.field_key] ?? '')
-    await insert({ location_id: form.locationId, month, ending_balance: num(form.ending_balance) ?? 0, metadata: meta } as Partial<MonthlyEndingBalance>)
-    setForm({ locationId: '', month: '', ending_balance: '' }); setCatVals({}); setAddOpen(false)
+    const payload = { location_id: form.locationId, month, ending_balance: num(form.ending_balance) ?? 0, metadata: meta } as Partial<MonthlyEndingBalance>
+    if (editId) await update(editId, payload)
+    else await insert(payload)
+    resetForm(); setAddOpen(false); setEditId(null)
+  }
+
+  async function onDelete() {
+    if (!editId) return
+    if (!confirm('Delete this ending-balance row?')) return
+    await remove(editId); resetForm(); setAddOpen(false); setEditId(null)
   }
 
   return (
@@ -119,7 +139,7 @@ export function EndingBalancesTab() {
         exportFilename="month_end_ending_balance.csv" exportData={data} loading={loading}
         actions={<>
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Categories</Button>
-          <Button size="sm" onClick={() => setAddOpen(true)}>+ Add Balance</Button>
+          <Button size="sm" onClick={openAdd}>+ Add Balance</Button>
         </>}
       />
 
@@ -131,7 +151,7 @@ export function EndingBalancesTab() {
         <DataSourceLinker configType="monthly_ending_balances" />
       </div>
 
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Ending Balance" size="lg">
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Ending Balance' : 'Add Ending Balance'} size="lg">
         <div className="flex flex-col gap-3">
           <Combobox label="Location *" options={loc.options} value={form.locationId} onChange={(v) => setForm({ ...form, locationId: v })} placeholder="Select location" />
           <div className="grid grid-cols-2 gap-3">
@@ -141,9 +161,12 @@ export function EndingBalancesTab() {
               <Input key={c.id} label={c.label} type="number" step="0.01" value={catVals[c.field_key] ?? ''} onChange={(e) => setCatVals({ ...catVals, [c.field_key]: e.target.value })} />
             ))}
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" onClick={onAdd} disabled={!form.locationId || !form.month}>Save</Button>
+          <div className="flex justify-between gap-2 pt-2">
+            <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
+              <Button size="sm" onClick={onSubmit} disabled={!form.locationId || !form.month}>{editId ? 'Save Changes' : 'Save'}</Button>
+            </div>
           </div>
         </div>
       </Modal>
