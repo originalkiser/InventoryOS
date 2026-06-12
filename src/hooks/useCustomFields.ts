@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import type { CustomFieldDefinition, CustomFieldSection } from '@/types'
@@ -21,6 +21,10 @@ export function useCustomFields(section: CustomFieldSection) {
   const companyId = profile?.company_id ?? null
   const [fields, setFields] = useState<CustomFieldDefinition[]>([])
   const [loading, setLoading] = useState(true)
+  // Unique per hook instance — the same section's hook can mount in two places
+  // at once (the config tab + the Manage Columns modal), and reusing a channel
+  // topic throws "cannot add postgres_changes callbacks after subscribe()".
+  const instanceId = useRef(Math.random().toString(36).slice(2)).current
 
   const reload = useCallback(async () => {
     if (!companyId) { setFields([]); setLoading(false); return }
@@ -40,11 +44,11 @@ export function useCustomFields(section: CustomFieldSection) {
   useEffect(() => {
     if (!companyId) return
     const ch = supabase
-      .channel(`custom-fields-${section}`)
+      .channel(`custom-fields-${section}-${instanceId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'custom_field_definitions', filter: `company_id=eq.${companyId}` }, () => reload())
       .subscribe()
     return () => { void supabase.removeChannel(ch) }
-  }, [companyId, section, reload])
+  }, [companyId, section, reload, instanceId])
 
   const active = fields.filter((f) => f.active)
 
