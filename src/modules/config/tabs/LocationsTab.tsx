@@ -7,7 +7,7 @@ import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
-import { Button, Input, Modal } from '@/components/ui'
+import { Button, Input, Modal, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { Location, ColumnMapping } from '@/types'
@@ -28,8 +28,18 @@ const BASE_FIELDS = [
   { name: 'location_code', label: 'Location Code', required: true },
   { name: 'name', label: 'Name', required: true },
   { name: 'region', label: 'Region' },
-  { name: 'active', label: 'Active (bool)' },
+  { name: 'active', label: 'Active Status (text)' },
 ]
+
+// Text-based active check: "Active" (case-insensitive) — and a few common
+// affirmatives for backward-compatible files — count as active; any other text
+// ("Inactive", "Closed", etc.) marks the location inactive. Blank keeps the
+// default (active) rather than deactivating on a missing value.
+function isActiveText(raw: string): boolean {
+  const v = raw.trim().toLowerCase()
+  if (v === '') return true
+  return ['active', 'true', 'yes', 'y', '1', 'open'].includes(v)
+}
 
 function coerce(value: string, type: string): unknown {
   const v = value.trim()
@@ -52,11 +62,13 @@ export function LocationsTab() {
 
   // Add/Edit-form state: base + dynamic custom values
   const [base, setBase] = useState({ location_code: '', name: '', region: '' })
+  const [active, setActive] = useState(true)
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
   const openAdd = useCallback(() => {
     setEditId(null)
     setBase({ location_code: '', name: '', region: '' })
+    setActive(true)
     setCustomVals({})
     setAddOpen(true)
   }, [])
@@ -64,6 +76,7 @@ export function LocationsTab() {
   const openEdit = useCallback((r: Location) => {
     setEditId(r.id)
     setBase({ location_code: r.location_code, name: r.name, region: r.region ?? '' })
+    setActive(r.active)
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     setCustomVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
     setAddOpen(true)
@@ -115,6 +128,7 @@ export function LocationsTab() {
       location_code: base.location_code.trim(),
       name: base.name.trim(),
       region: base.region.trim() || null,
+      active,
       metadata: buildMetadata(customVals),
     } as Partial<Location>
     if (editId) await update(editId, payload)
@@ -140,7 +154,7 @@ export function LocationsTab() {
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
         const raw = mappedValue(row, m)
-        if (m.fieldName === 'active') out.active = ['true', '1', 'yes'].includes(raw.toLowerCase())
+        if (m.fieldName === 'active') out.active = isActiveText(raw)
         else if (customKeys.has(m.fieldName)) meta[m.fieldName] = coerce(raw, typeByKey.get(m.fieldName) ?? 'text')
         else out[m.fieldName] = raw
       }
@@ -193,6 +207,7 @@ export function LocationsTab() {
                 onChange={(e) => setCustomVals({ ...customVals, [f.field_key]: e.target.value })} />
             ))}
           </div>
+          <Toggle checked={active} onChange={setActive} label="Active location" color="green" />
           <div className="flex justify-between gap-2 pt-2">
             <div>
               {editId && <Button variant="danger" size="sm" type="button" onClick={onDelete}>Delete</Button>}

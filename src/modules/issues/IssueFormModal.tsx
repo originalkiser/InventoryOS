@@ -93,7 +93,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
       return
     }
     setSaving(true)
-    const payload = {
+    const payload: Record<string, unknown> = {
       company_id: companyId,
       title: title.trim() || null,
       location_id: locationId || null,
@@ -103,8 +103,9 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
       target_resolution_date: targetDate || null,
       resolved_date: resolvedDate || null,
       resolution_notes: notes || null,
-      created_by: profile?.id ?? null,
     }
+    // Only stamp the creator on insert — editing must not reassign it.
+    if (!existing?.id) payload.created_by = profile?.id ?? null
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = supabase as any

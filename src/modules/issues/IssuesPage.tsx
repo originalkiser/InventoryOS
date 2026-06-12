@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
@@ -83,15 +83,29 @@ export function IssuesPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editIssue, setEditIssue] = useState<IssueRow | null>(null)
 
-  const allTable = useTable(issues, COLUMNS)
+  const openEdit = useCallback((r: IssueRow) => { setEditIssue(r); setModalOpen(true) }, [])
+
+  // Base columns + an Edit action. Memoized (stable deps) so the table identity
+  // doesn't churn — see the IssuesTable hoist note above.
+  const columns = useMemo(() => [
+    ...COLUMNS,
+    {
+      id: 'edit', header: '', enableColumnFilter: false, enableSorting: false,
+      cell: (i: any) => (
+        <button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button>
+      ),
+    },
+  ], [openEdit])
+
+  const allTable = useTable(issues, columns)
   const pendingTable = useTable(issues.filter((i) => {
     const s = i.status_name?.toLowerCase() ?? ''
     return s.includes('pending') || s.includes('open')
-  }), COLUMNS)
+  }), columns)
   const resolvedTable = useTable(issues.filter((i) => {
     const s = i.status_name?.toLowerCase() ?? ''
     return s.includes('resolved') || s.includes('closed')
-  }), COLUMNS)
+  }), columns)
 
   useEffect(() => {
     if (!profile?.company_id) return

@@ -53,10 +53,12 @@ export function ScheduleEventModal({
   const [isChecklist, setIsChecklist] = useState(false)
   const [completed, setCompleted] = useState(false)
   const [notes, setNotes] = useState('')
+  const [applyToSeries, setApplyToSeries] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
+    setApplyToSeries(false)
     if (existing) {
       setTitle(existing.title)
       setEventType(EVENT_TYPES.includes(existing.event_type) ? existing.event_type : 'other')
@@ -144,6 +146,29 @@ export function ScheduleEventModal({
         toast.success(`Scheduled ${rows.length} occurrence${rows.length > 1 ? 's' : ''}${capped ? ' (capped — set an end date for more)' : ''}`)
         onSaved(); onClose()
       }
+      setSaving(false)
+      return
+    }
+
+    // Editing a single occurrence but propagating shared attributes to the whole
+    // series. Per-occurrence fields (dates, completion) stay row-specific.
+    if (isSeriesMember && applyToSeries && existing?.series_id) {
+      const shared = { ...base }
+      const seriesUpdate = await sb.from('schedule_events').update(shared).eq('series_id', existing.series_id)
+      let error = seriesUpdate.error
+      if (!error) {
+        // This occurrence still gets its own date/completion changes.
+        const own = await sb.from('schedule_events').update({
+          start_date: startDate,
+          end_date: endDate || null,
+          completed,
+          completed_at: completed ? (existing.completed_at ?? new Date().toISOString()) : null,
+          completed_by: completed ? (existing.completed_by ?? profile.id) : null,
+        }).eq('id', existing.id)
+        error = own.error
+      }
+      if (error) toast.error(error.message)
+      else { toast.success('Updated all occurrences'); onSaved(); onClose() }
       setSaving(false)
       return
     }
@@ -265,6 +290,22 @@ export function ScheduleEventModal({
             className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-sm font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#00e5ff] resize-none"
           />
         </div>
+
+        {isSeriesMember && (
+          <div className="col-span-2 flex flex-col gap-1 border-t border-[#2a2d3e] pt-3">
+            <Toggle
+              checked={applyToSeries}
+              onChange={setApplyToSeries}
+              label="Apply changes to all occurrences"
+              color="cyan"
+            />
+            <p className="text-[10px] font-mono text-gray-500">
+              {applyToSeries
+                ? 'Title, type, notes, and checklist flag update across the whole series. This occurrence keeps its own date and completion.'
+                : 'Off — changes apply to this occurrence only.'}
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between mt-4">
@@ -282,7 +323,7 @@ export function ScheduleEventModal({
         ) : <div />}
         <div className="flex gap-2">
           <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" loading={saving} onClick={save}>{willGenerateSeries ? 'Schedule Series' : 'Save Event'}</Button>
+          <Button size="sm" loading={saving} onClick={save}>{willGenerateSeries ? 'Schedule Series' : applyToSeries ? 'Update All' : 'Save Event'}</Button>
         </div>
       </div>
     </Modal>
