@@ -45,6 +45,33 @@ const COLUMNS = [
   col.accessor('start_date', { id: 'days_open', header: 'Days Open', cell: (i) => daysOpen(i.getValue()) }),
 ]
 
+// Hoisted to module scope — defining this inside IssuesPage made it a new
+// component type on every render, remounting the whole table subtree on each
+// state change (which swallowed the "+ New Issue" click before it could open
+// the modal).
+function IssuesTable({
+  table, filter, onFilterChange, issues, loading, onNew,
+}: {
+  table: any
+  filter: string
+  onFilterChange: (v: string) => void
+  issues: IssueRow[]
+  loading: boolean
+  onNew: () => void
+}) {
+  return (
+    <DataTable
+      table={table}
+      globalFilter={filter}
+      onGlobalFilterChange={onFilterChange}
+      exportFilename="issues.csv"
+      exportData={issues}
+      loading={loading}
+      actions={<Button size="sm" onClick={onNew}>+ New Issue</Button>}
+    />
+  )
+}
+
 export function IssuesPage() {
   const { profile } = useAuthStore()
   const [searchParams] = useSearchParams()
@@ -108,28 +135,7 @@ export function IssuesPage() {
     setLoading(false)
   }
 
-  function openEdit(issue: IssueRow) {
-    setEditIssue(issue)
-    setModalOpen(true)
-  }
-
-  function TableWithActions({ table, filter, onFilterChange }: { table: any; filter: string; onFilterChange: (v: string) => void }) {
-    return (
-      <DataTable
-        table={table}
-        globalFilter={filter}
-        onGlobalFilterChange={onFilterChange}
-        exportFilename="issues.csv"
-        exportData={issues}
-        loading={loading}
-        actions={
-          <Button size="sm" onClick={() => { setEditIssue(null); setModalOpen(true) }}>
-            + New Issue
-          </Button>
-        }
-      />
-    )
-  }
+  const onNew = () => { setEditIssue(null); setModalOpen(true) }
 
   return (
     <div className="flex flex-col gap-6">
@@ -147,13 +153,13 @@ export function IssuesPage() {
           <TabsTrigger value="resolved">Resolved ({resolvedTable.table.getCoreRowModel().rows.length})</TabsTrigger>
         </TabsList>
         <TabsContent value="all">
-          <TableWithActions table={allTable.table} filter={allTable.globalFilter} onFilterChange={allTable.setGlobalFilter} />
+          <IssuesTable table={allTable.table} filter={allTable.globalFilter} onFilterChange={allTable.setGlobalFilter} issues={issues} loading={loading} onNew={onNew} />
         </TabsContent>
         <TabsContent value="pending">
-          <TableWithActions table={pendingTable.table} filter={pendingTable.globalFilter} onFilterChange={pendingTable.setGlobalFilter} />
+          <IssuesTable table={pendingTable.table} filter={pendingTable.globalFilter} onFilterChange={pendingTable.setGlobalFilter} issues={issues} loading={loading} onNew={onNew} />
         </TabsContent>
         <TabsContent value="resolved">
-          <TableWithActions table={resolvedTable.table} filter={resolvedTable.globalFilter} onFilterChange={resolvedTable.setGlobalFilter} />
+          <IssuesTable table={resolvedTable.table} filter={resolvedTable.globalFilter} onFilterChange={resolvedTable.setGlobalFilter} issues={issues} loading={loading} onNew={onNew} />
         </TabsContent>
       </Tabs>
 
