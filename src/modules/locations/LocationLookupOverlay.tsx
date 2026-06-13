@@ -6,6 +6,7 @@ import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } 
 import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { useLocations } from '@/hooks/useLocations'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { Badge, Button } from '@/components/ui'
 
@@ -376,9 +377,11 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
   onChange: (p: Partial<Block>) => void
 }) {
   const { profile } = useAuthStore()
+  const loc = useLocations()
   const [rows, setRows] = useState<Record<string, any>[]>([])
   const [allCols, setAllCols] = useState<string[]>([])
   const [seeAll, setSeeAll] = useState(false)
+  const isLocations = block.source === 'locations'
 
   useEffect(() => {
     if (!profile?.company_id) return
@@ -393,19 +396,24 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
         const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
         const metaKeys = new Set<string>()
         for (const row of r) { const m = row.metadata; if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`) }
-        setAllCols([...base, ...metaKeys])
+        // Locations gain a derived POS String column (reverse of POS mapping).
+        setAllCols([...base, ...metaKeys, ...(block.source === 'locations' ? ['__pos__'] : [])])
       })
     return () => { cancelled = true }
   }, [block.source, profile?.company_id])
+
+  // Value/label resolvers that also handle the derived POS column.
+  const valueOf = (r: Record<string, any>, c: string) => (c === '__pos__' && isLocations ? loc.posStringFor(r.id) : cellVal(r, c))
+  const labelFor = (c: string) => (c === '__pos__' ? 'POS String' : colLabel(c))
 
   const cols = block.columns.length ? block.columns : allCols.slice(0, 4)
   const filtered = useMemo(() => {
     let r = rows
     const q = search.trim().toLowerCase()
-    if (q) r = r.filter((row) => cols.some((c) => String(cellVal(row, c) ?? '').toLowerCase().includes(q)))
-    if (activeFilter) r = r.filter((row) => String(cellVal(row, activeFilter.column) ?? '').toLowerCase() === activeFilter.value.toLowerCase())
+    if (q) r = r.filter((row) => cols.some((c) => String(valueOf(row, c) ?? '').toLowerCase().includes(q)))
+    if (activeFilter) r = r.filter((row) => String(valueOf(row, activeFilter.column) ?? '').toLowerCase() === activeFilter.value.toLowerCase())
     return r
-  }, [rows, search, cols, activeFilter])
+  }, [rows, search, cols, activeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
   const shown = seeAll ? filtered : filtered.slice(0, 20)
 
   return (
@@ -423,7 +431,7 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
               <label key={c} className="flex cursor-pointer items-center gap-1 text-[11px] font-mono text-gray-400">
                 <input type="checkbox" checked={cols.includes(c)} className="accent-[#00e5ff]"
                   onChange={() => onChange({ columns: cols.includes(c) ? cols.filter((x) => x !== c) : [...cols, c] })} />
-                {colLabel(c)}
+                {labelFor(c)}
               </label>
             ))}
           </div>
@@ -432,10 +440,10 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
 
       <div className="overflow-auto rounded border border-[#2a2d3e]">
         <table className="w-full text-[11px] font-mono">
-          <thead className="bg-[#161820] text-gray-500"><tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left">{colLabel(c)}</th>)}</tr></thead>
+          <thead className="bg-[#161820] text-gray-500"><tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left">{labelFor(c)}</th>)}</tr></thead>
           <tbody>
             {shown.map((r, i) => (
-              <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>{cols.map((c) => <td key={c} className="px-2 py-1 text-gray-300">{String(cellVal(r, c) ?? '—')}</td>)}</tr>
+              <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>{cols.map((c) => <td key={c} className="px-2 py-1 text-gray-300">{String(valueOf(r, c) ?? '—') || '—'}</td>)}</tr>
             ))}
             {shown.length === 0 && <tr><td colSpan={Math.max(1, cols.length)} className="px-2 py-2 text-gray-600">No rows</td></tr>}
           </tbody>

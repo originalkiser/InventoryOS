@@ -17,6 +17,11 @@ describe('applyTransforms', () => {
     expect(applyTransforms('SKU: 7.5 units', [{ kind: 'parse_after', delimiter: ':' }])).toBe('7.5')
   })
 
+  it('parses number before a delimiter', () => {
+    expect(applyTransforms('001 - Thomasville', [{ kind: 'parse_before', delimiter: '-' }])).toBe('001')
+    expect(applyTransforms('42 | extra', [{ kind: 'parse_before', delimiter: '|' }])).toBe('42')
+  })
+
   it('extracts the POS location number', () => {
     expect(applyTransforms('1 - Thomasville', [{ kind: 'pos_location' }])).toBe('1')
     expect(applyTransforms('12 - Raleigh North', [{ kind: 'pos_location' }])).toBe('12')

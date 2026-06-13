@@ -12,6 +12,7 @@ export type Transform =
   | { kind: 'gal_to_qt' } // ×4
   | { kind: 'qt_to_gal' } // ÷4
   | { kind: 'parse_after'; delimiter: string } // =VALUE(TEXTAFTER(data, delim))
+  | { kind: 'parse_before'; delimiter: string } // number before the delimiter ("001 - X" → 001)
   | { kind: 'pos_location' } // "1 - Thomasville" → "1"
   | { kind: 'phone' } // right-most 10 digits → (###) ###-####
   | { kind: 'date' } // → yyyy-MM-dd
@@ -27,6 +28,7 @@ export const TRANSFORM_CATALOG: { kind: TransformChainKind; label: string; opera
   { kind: 'gal_to_qt', label: 'Gallons → Quarts (×4)' },
   { kind: 'qt_to_gal', label: 'Quarts → Gallons (÷4)' },
   { kind: 'parse_after', label: 'Number after delimiter', operand: 'text' },
+  { kind: 'parse_before', label: 'Number before delimiter', operand: 'text' },
   { kind: 'pos_location', label: 'POS location number' },
   { kind: 'phone', label: 'Phone (last 10 digits)' },
   { kind: 'date', label: 'Date (no time)' },
@@ -63,6 +65,12 @@ function applyOne(value: string, t: Transform): string {
       const after = idx >= 0 ? v.slice(idx + delim.length) : v
       return firstNumber(after)
     }
+    case 'parse_before': {
+      const delim = t.delimiter || '-'
+      const idx = v.indexOf(delim)
+      const before = idx >= 0 ? v.slice(0, idx) : v
+      return firstNumber(before)
+    }
     case 'pos_location': return firstNumber(v)
     case 'phone': return formatPhone(v)
     case 'date': { const d = new Date(v); return isNaN(d.getTime()) ? v : format(d, 'yyyy-MM-dd') }
@@ -91,6 +99,7 @@ export function describeTransform(t: Transform): string {
     case 'gal_to_qt': return 'gal→qt'
     case 'qt_to_gal': return 'qt→gal'
     case 'parse_after': return `after "${t.delimiter || '#'}"`
+    case 'parse_before': return `before "${t.delimiter || '-'}"`
     case 'pos_location': return 'POS #'
     case 'phone': return 'phone'
     case 'date': return 'date'

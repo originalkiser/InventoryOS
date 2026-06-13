@@ -5,6 +5,9 @@ export type TransformKind = 'none' | 'number' | 'integer' | 'trim' | 'upper' | '
 
 // Sentinel sourceColumn meaning "use the constant value for every row".
 export const CONSTANT_SOURCE = '__constant__'
+// Sentinel sourceColumn meaning "build the value from a template of {Header}
+// tokens + literals", e.g. "{location_code}-{city}".
+export const COMPOSITE_SOURCE = '__composite__'
 
 export interface ColumnMapping {
   fieldName: string
@@ -17,6 +20,9 @@ export interface ColumnMapping {
   transforms?: import('@/lib/transforms').Transform[]
   // When sourceColumn === CONSTANT_SOURCE, this value is applied to all rows.
   constant?: string
+  // When sourceColumn === COMPOSITE_SOURCE, this template is filled per row by
+  // replacing {Header} tokens with that row's values (literals kept as-is).
+  template?: string
 }
 
 export interface ParsedUpload {

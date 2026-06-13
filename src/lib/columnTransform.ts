@@ -1,5 +1,10 @@
-import { CONSTANT_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
+import { CONSTANT_SOURCE, COMPOSITE_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
 import { applyTransforms } from '@/lib/transforms'
+
+// Fill a composite template: {Header} tokens → row[Header], literals kept.
+export function fillTemplate(template: string, row: Record<string, string>): string {
+  return (template ?? '').replace(/\{([^}]+)\}/g, (_, key) => row[String(key).trim()] ?? '')
+}
 
 export const TRANSFORM_OPTIONS: { value: TransformKind; label: string }[] = [
   { value: 'none', label: 'Text (as-is)' },
@@ -35,7 +40,9 @@ export function applyTransform(raw: string, t?: TransformKind): string {
  * set to "constant", otherwise the file cell — then apply the transform.
  */
 export function mappedValue(row: Record<string, string>, m: ColumnMapping): string {
-  const raw = m.sourceColumn === CONSTANT_SOURCE ? (m.constant ?? '') : (row[m.sourceColumn] ?? '')
+  const raw = m.sourceColumn === CONSTANT_SOURCE ? (m.constant ?? '')
+    : m.sourceColumn === COMPOSITE_SOURCE ? fillTemplate(m.template ?? '', row)
+    : (row[m.sourceColumn] ?? '')
   // Legacy single transform first, then the richer ordered chain.
   return applyTransforms(applyTransform(raw, m.transform), m.transforms)
 }

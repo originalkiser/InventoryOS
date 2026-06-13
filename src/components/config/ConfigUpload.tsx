@@ -14,14 +14,26 @@ interface Props {
   allowReplace?: boolean
   // Optional: add a new custom column inline during mapping
   onAddColumn?: (label: string) => void | Promise<void>
+  // Optional explicit key for remembering the last mapping; defaults to the
+  // set of field names so each import target keeps its own memory.
+  storageKey?: string
+}
+
+function loadSavedMappings(key: string): ColumnMapping[] | undefined {
+  try { const v = JSON.parse(localStorage.getItem(key) || 'null'); if (Array.isArray(v)) return v } catch { /* ignore */ }
+  return undefined
 }
 
 // Single upload surface for config sections: file → mode choice → column map →
 // direct import. "Replace all" warns before proceeding. Mapping isn't lost on
 // re-open because the chosen file/mode stay until the user clicks Replace File.
-export function ConfigUpload({ requiredFields, onImport, importing, allowReplace = true, onAddColumn }: Props) {
+export function ConfigUpload({ requiredFields, onImport, importing, allowReplace = true, onAddColumn, storageKey }: Props) {
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [mode, setMode] = useState<ImportMode>('merge')
+  // Remember the last confirmed mapping (incl. transforms/constants/templates)
+  // per import target so re-uploads pre-fill it.
+  const mapKey = `import.map.${storageKey ?? requiredFields.map((f) => f.name).join('|')}`
+  const [saved] = useState<ColumnMapping[] | undefined>(() => loadSavedMappings(mapKey))
 
   function handleConfirm(mappings: ColumnMapping[]) {
     if (!parsed) return
@@ -31,6 +43,7 @@ export function ConfigUpload({ requiredFields, onImport, importing, allowReplace
       )
       if (!ok) return
     }
+    try { localStorage.setItem(mapKey, JSON.stringify(mappings)) } catch { /* ignore */ }
     onImport(parsed.rows, mappings, mode)
   }
 
@@ -65,7 +78,7 @@ export function ConfigUpload({ requiredFields, onImport, importing, allowReplace
         </div>
       )}
 
-      <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} onConfirm={handleConfirm} onCancel={() => setParsed(null)} onAddColumn={onAddColumn} />
+      <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} initialMappings={saved} onConfirm={handleConfirm} onCancel={() => setParsed(null)} onAddColumn={onAddColumn} />
       {importing && <p className="text-xs text-[#00e5ff] font-mono">Importing…</p>}
     </div>
   )

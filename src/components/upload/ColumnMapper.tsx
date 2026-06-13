@@ -3,13 +3,14 @@ import { InverseToggle } from '@/components/shared/InverseToggle'
 import { Button } from '@/components/ui'
 import { TRANSFORM_OPTIONS } from '@/lib/columnTransform'
 import { TRANSFORM_CATALOG, describeTransform, type Transform, type TransformChainKind } from '@/lib/transforms'
-import { CONSTANT_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
+import { CONSTANT_SOURCE, COMPOSITE_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
 
 function defaultTransform(kind: TransformChainKind): Transform {
   switch (kind) {
     case 'multiply': return { kind: 'multiply', by: 1 }
     case 'divide': return { kind: 'divide', by: 1 }
     case 'parse_after': return { kind: 'parse_after', delimiter: '#' }
+    case 'parse_before': return { kind: 'parse_before', delimiter: '-' }
     default: return { kind } as Transform
   }
 }
@@ -28,7 +29,7 @@ function TransformChainEditor({ transforms = [], onChange }: { transforms?: Tran
             <input type="number" value={(t as any).by} onChange={(e) => update(i, { by: Number(e.target.value) })}
               className="w-12 border-b border-[#2a2d3e] bg-transparent text-[10px] text-[#00e5ff] focus:outline-none" />
           )}
-          {t.kind === 'parse_after' && (
+          {(t.kind === 'parse_after' || t.kind === 'parse_before') && (
             <input value={(t as any).delimiter} onChange={(e) => update(i, { delimiter: e.target.value })}
               className="w-8 border-b border-[#2a2d3e] bg-transparent text-center text-[10px] text-[#00e5ff] focus:outline-none" />
           )}
@@ -67,7 +68,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
   const [mappings, setMappings] = useState<ColumnMapping[]>(
     requiredFields.map((f) => {
       const fromTemplate = initialMappings?.find(
-        (m) => m.fieldName === f.name && (m.sourceColumn === CONSTANT_SOURCE || headers.includes(m.sourceColumn))
+        (m) => m.fieldName === f.name && (m.sourceColumn === CONSTANT_SOURCE || m.sourceColumn === COMPOSITE_SOURCE || headers.includes(m.sourceColumn))
       )
       if (fromTemplate) return { ...fromTemplate }
       const auto = headers.find((h) => norm(h) === norm(f.name))
@@ -124,6 +125,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
         {requiredFields.map((field) => {
           const mapping = mappings.find((m) => m.fieldName === field.name)!
           const isConstant = mapping.sourceColumn === CONSTANT_SOURCE
+          const isComposite = mapping.sourceColumn === COMPOSITE_SOURCE
           return (
             <div key={field.name} className="flex flex-col gap-1">
             <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-3 items-center">
@@ -138,6 +140,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
               >
                 <option value="">— Not mapped —</option>
                 <option value={CONSTANT_SOURCE}>✎ Constant value…</option>
+                <option value={COMPOSITE_SOURCE}>⊕ Composite (template)…</option>
                 {headers.map((h) => (
                   <option key={h} value={h}>{h}</option>
                 ))}
@@ -148,6 +151,14 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
                   onChange={(e) => patch(field.name, { constant: e.target.value })}
                   placeholder="Value for all rows"
                   className="bg-[#0f1117] border border-[#ffb300]/40 rounded px-2 py-1.5 text-xs font-mono text-[#ffb300] focus:outline-none focus:border-[#ffb300]"
+                />
+              ) : isComposite ? (
+                <input
+                  value={mapping.template ?? ''}
+                  onChange={(e) => patch(field.name, { template: e.target.value })}
+                  placeholder="{location_code}-{city}"
+                  title="Use {Header} tokens; literals are kept as-is"
+                  className="bg-[#0f1117] border border-[#00e5ff]/40 rounded px-2 py-1.5 text-xs font-mono text-[#00e5ff] focus:outline-none focus:border-[#00e5ff]"
                 />
               ) : (
                 <select
@@ -163,9 +174,11 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
               )}
               <InverseToggle inverted={mapping.invert} onChange={(v) => patch(field.name, { invert: v })} />
             </div>
-            {!isConstant && (
+            {isComposite ? (
+              <div className="pl-1 text-[10px] font-mono text-gray-600">Tokens: {headers.slice(0, 8).map((h) => `{${h}}`).join('  ')}{headers.length > 8 ? '  …' : ''}</div>
+            ) : !isConstant ? (
               <TransformChainEditor transforms={mapping.transforms} onChange={(t) => patch(field.name, { transforms: t })} />
-            )}
+            ) : null}
             </div>
           )
         })}

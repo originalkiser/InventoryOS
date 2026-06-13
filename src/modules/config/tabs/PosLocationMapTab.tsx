@@ -12,6 +12,7 @@ import type { PosLocationMap, ColumnMapping } from '@/types'
 
 const REQUIRED_FIELDS = [
   { name: 'pos_string', label: 'POS String', required: true },
+  { name: 'location_code', label: 'Location Code (force match)' },
   { name: 'location', label: 'Location (code/name)' },
 ]
 const col = createColumnHelper<PosLocationMap>()
@@ -28,7 +29,7 @@ export function PosLocationMapTab() {
   const columns = useMemo(() => [
     col.accessor('pos_string', { header: 'POS String' }),
     { id: 'parsed', header: 'Parsed #', accessorFn: (r: PosLocationMap) => applyTransforms(r.pos_string, [{ kind: 'pos_location' }]), cell: (i: any) => i.getValue() || '—' },
-    { id: 'location', header: 'Mapped Location', accessorFn: (r: PosLocationMap) => r.location_id, cell: (i: any) => (i.getValue() ? loc.labelOf(i.getValue()) : <Badge color="amber">Unmatched</Badge>) },
+    { id: 'location', header: 'Location Code', accessorFn: (r: PosLocationMap) => r.location_id, cell: (i: any) => (i.getValue() ? <span className="text-[#00e5ff]">{loc.codeOf(i.getValue())}</span> : <Badge color="amber">Unmatched</Badge>) },
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
   ], [loc])
 
@@ -40,13 +41,15 @@ export function PosLocationMapTab() {
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
     const payload = rows.map((row) => {
-      let pos_string = '', location_id: string | null = null
+      let pos_string = '', location_id: string | null = null, code = ''
       for (const m of maps) {
         const v = mappedValue(row, m)
         if (m.fieldName === 'pos_string') pos_string = v
+        else if (m.fieldName === 'location_code') code = v
         else if (m.fieldName === 'location') location_id = loc.resolveId(v)
       }
-      // Auto-match on the parsed leading number against the location code.
+      // Priority: explicit location_code (force match) → location → parsed leading number.
+      if (!location_id && code) location_id = loc.resolveId(code)
       if (!location_id && pos_string) location_id = loc.resolveId(applyTransforms(pos_string, [{ kind: 'pos_location' }]))
       return { pos_string, location_id } as Partial<PosLocationMap>
     }).filter((r: any) => r.pos_string)
