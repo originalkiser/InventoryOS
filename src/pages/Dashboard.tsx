@@ -92,6 +92,14 @@ export function DashboardPage() {
   })
   const [loading, setLoading] = useState(true)
 
+  // Hooks must run on every render (before any early return) — React error #310.
+  const [issuesView, setIssuesView] = useTileView('issues_by_category', 'graph')
+  const [eventsView, setEventsView] = useTileView('events_week', 'list')
+  const [ordersView, setOrdersView] = useTileView('recent_orders', 'list')
+  const [countView, setCountView] = useTileView('count_progress', 'graph')
+  const [invView, setInvView] = useTileView('inventory', 'list')
+  const inv = useInventory()
+
   useEffect(() => {
     if (!profile?.company_id) return
     loadStats()
@@ -154,15 +162,7 @@ export function DashboardPage() {
     ? Math.round((stats.submittedThisMonth / stats.totalShops) * 100)
     : 0
 
-  // Per-tile view preferences + the graph/list aggregations.
-  const [issuesView, setIssuesView] = useTileView('issues_by_category', 'graph')
-  const [eventsView, setEventsView] = useTileView('events_week', 'list')
-  const [ordersView, setOrdersView] = useTileView('recent_orders', 'list')
-  const [countView, setCountView] = useTileView('count_progress', 'graph')
-  const [invView, setInvView] = useTileView('inventory', 'list')
-
-  // D4 inventory callout + D3 tile data.
-  const inv = useInventory()
+  // D3/D4 aggregations (hooks already ran above the early return).
   const flaggedByShop = Object.entries(inv.rows.filter((r) => r.flag === 'red' || r.flag === 'amber').reduce((m, r) => { m[r.location_label] = (m[r.location_label] ?? 0) + 1; return m }, {} as Record<string, number>))
     .map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 8)
 
