@@ -5,10 +5,14 @@ import { useAuthStore } from '@/stores/authStore'
 import { useOrderStore } from '@/stores/orderStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
-import { Button, Badge, Select, Modal } from '@/components/ui'
+import { Button, Badge, Select, Modal, Input } from '@/components/ui'
 import { exportTableToCsv } from '@/hooks/useTable'
 import { buildExport, DEFAULT_EXPORT_COLUMNS, type GeneratedLineItem } from '@/lib/orderEngine'
-import type { OrderSession, OrderLineItem, OrderDocument } from '@/types'
+import { FileUploadZone } from '@/components/upload/FileUploadZone'
+import { ColumnMapper } from '@/components/upload/ColumnMapper'
+import { useLocations } from '@/hooks/useLocations'
+import { mappedValue } from '@/lib/columnTransform'
+import type { OrderSession, OrderLineItem, OrderDocument, ParsedUpload, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -37,6 +41,7 @@ export function OrderHistoryTab() {
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('')
   const [detail, setDetail] = useState<OrderSession | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -92,6 +97,7 @@ export function OrderHistoryTab() {
     col.accessor('location_count', { header: 'Locations' }),
     col.accessor('line_count', { header: 'Lines' }),
     col.accessor('status', { header: 'Status', cell: (i) => <Badge color={STATUS_COLOR[i.getValue()] ?? 'gray'}>{i.getValue()}</Badge> }),
+    col.accessor('source', { header: 'Source', cell: (i) => <Badge color={i.getValue() === 'import' ? 'amber' : 'gray'}>{i.getValue() === 'import' ? 'imported' : 'app'}</Badge> }),
     col.accessor('exported_at', { header: 'Exported', cell: (i) => (i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—') }),
     col.display({
       id: 'open', header: '',
@@ -120,13 +126,18 @@ export function OrderHistoryTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="w-44">
-        <Select label="Filter — Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-          options={[{ value: '', label: 'All statuses' }, ...['draft', 'generated', 'exported', 'pending', 'fulfilled'].map((s) => ({ value: s, label: s }))]} />
+      <div className="flex items-end justify-between gap-2">
+        <div className="w-44">
+          <Select label="Filter — Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+            options={[{ value: '', label: 'All statuses' }, ...['draft', 'generated', 'exported', 'pending', 'fulfilled'].map((s) => ({ value: s, label: s }))]} />
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>⬆ Import Order History</Button>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="order_history.csv" exportData={exportRows} loading={loading} />
+
+      {importOpen && <OrderImportModal companyId={companyId} createdBy={profile?.id ?? null} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); load() }} />}
 
       {detail && (
         <OrderDetailModal
@@ -145,6 +156,73 @@ export function OrderHistoryTab() {
         />
       )}
     </div>
+  )
+}
+
+function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId: string; createdBy: string | null; onClose: () => void; onDone: () => void }) {
+  const loc = useLocations()
+  const [parsed, setParsed] = useState<ParsedUpload | null>(null)
+  const [mode, setMode] = useState<'additive' | 'replace'>('additive')
+  const [name, setName] = useState('')
+
+  const FIELDS = [
+    { name: 'location', label: 'Location', required: true },
+    { name: 'product', label: 'Product', required: true },
+    { name: 'quantity', label: 'Quantity', required: true },
+  ]
+
+  async function doImport(maps: ColumnMapping[]) {
+    const lines = parsed!.rows.map((row) => {
+      let location_id: string | null = null, product = '', quantity = 0
+      for (const m of maps) {
+        const v = mappedValue(row, m)
+        if (m.fieldName === 'location') location_id = loc.resolveId(v)
+        else if (m.fieldName === 'product') product = v
+        else if (m.fieldName === 'quantity') quantity = parseFloat(v.replace(/[$,]/g, '')) || 0
+      }
+      return { location_id, product_id: product, quantity }
+    }).filter((l) => l.product_id)
+    if (!lines.length) { toast.error('No rows to import'); return }
+    const msg = mode === 'replace'
+      ? `Replace ALL imported order history with ${lines.length} line(s)? This deletes previously-imported orders (app-created orders are kept).`
+      : `Add ${lines.length} line(s) as a new imported order?`
+    if (!confirm(msg)) return
+
+    const sb = supabase as any
+    if (mode === 'replace') {
+      const { error: delErr } = await sb.from('order_sessions').delete().eq('company_id', companyId).eq('source', 'import')
+      if (delErr) { toast.error(delErr.message); return }
+    }
+    const { data: sess, error } = await sb.from('order_sessions')
+      .insert({ company_id: companyId, created_by: createdBy, name: name.trim() || `Imported orders ${new Date().toISOString().slice(0, 10)}`, status: 'fulfilled', source: 'import', source_mode: 'file' })
+      .select().single()
+    if (error || !sess) { toast.error(error?.message ?? 'Import failed'); return }
+    const liRows = lines.map((l) => ({ order_session_id: sess.id, company_id: companyId, location_id: l.location_id, product_id: l.product_id, quantity: l.quantity }))
+    const { error: liErr } = await sb.from('order_line_items').insert(liRows)
+    if (liErr) { toast.error(liErr.message); return }
+    toast.success(`Imported ${liRows.length} line(s)`); onDone()
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Import Order History" size="lg">
+      {!parsed ? (
+        <FileUploadZone onParsed={setParsed} />
+      ) : (
+        <div className="flex flex-col gap-4">
+          <Input label="Import name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. May vendor orders" />
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Mode</span>
+            {(['additive', 'replace'] as const).map((m) => (
+              <label key={m} className="flex cursor-pointer items-center gap-1.5 text-xs font-mono text-gray-300">
+                <input type="radio" checked={mode === m} onChange={() => setMode(m)} className="accent-[#00e5ff]" />
+                {m === 'additive' ? 'Additive (append)' : 'Replace imported'}
+              </label>
+            ))}
+          </div>
+          <ColumnMapper headers={parsed.headers} requiredFields={FIELDS} onConfirm={doImport} onCancel={() => setParsed(null)} />
+        </div>
+      )}
+    </Modal>
   )
 }
 

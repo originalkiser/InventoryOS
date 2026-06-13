@@ -3,6 +3,7 @@ import { createColumnHelper } from '@tanstack/react-table'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import { Badge } from '@/components/ui'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { RECOUNT_FLAG_LABELS } from '@/lib/recountEngine'
 import { format } from 'date-fns'
 
@@ -61,10 +62,36 @@ function flagColor(code: string): 'red' | 'amber' {
 const sc = createColumnHelper<SummaryResultRow>()
 const pc = createColumnHelper<ProductResultRow>()
 
+const rowKey = (r: SummaryResultRow) => `${r.location_id ?? ''}|${r.count_type ?? ''}|${r.count_date ?? ''}`
+
 export function CountsResultsTable({ summaryRows, productRows, lookbackN, loading }: Props) {
   const [view, setView] = useState<'summary' | 'product'>('summary')
 
+  // G1 — Allowable types: types present, which are allowable (empty = all),
+  // and per-row include/exclude overrides.
+  const distinctTypes = useMemo(() => Array.from(new Set(summaryRows.map((r) => r.count_type ?? '—'))).sort(), [summaryRows])
+  const [allowable, setAllowable] = useAppSetting<string[]>('monthend.allowableTypes', [])
+  const [overrides, setOverrides] = useState<Record<string, 'include' | 'exclude'>>({})
+  const allowableSet = useMemo(() => new Set(allowable), [allowable])
+  function included(r: SummaryResultRow): boolean {
+    const ov = overrides[rowKey(r)]
+    if (ov) return ov === 'include'
+    return allowable.length === 0 || allowableSet.has(r.count_type ?? '—')
+  }
+  function toggleType(t: string) {
+    // First interaction seeds from "all" so unticking one keeps the rest.
+    const base = allowable.length === 0 ? distinctTypes : allowable
+    setAllowable(base.includes(t) ? base.filter((x) => x !== t) : [...base, t])
+  }
+  function toggleOverride(r: SummaryResultRow) {
+    const k = rowKey(r); const next = included(r) ? 'exclude' : 'include'
+    setOverrides((o) => ({ ...o, [k]: next }))
+  }
+  const filteredSummary = useMemo(() => summaryRows.filter(included), [summaryRows, allowable, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
+  const excludedCount = summaryRows.length - filteredSummary.length
+
   const summaryColumns = useMemo(() => [
+    { id: 'incl', header: '', enableSorting: false, enableColumnFilter: false, cell: (i: any) => { const r = i.row.original as SummaryResultRow; const inc = included(r); return <button onClick={() => toggleOverride(r)} title={inc ? 'Exclude this row' : 'Include this row'} className={inc ? 'text-[#39ff14]' : 'text-gray-600'}>{inc ? '✓' : '✕'}</button> } },
     sc.accessor('location_label', { header: 'Location' }),
     sc.accessor('count_type', { header: 'Type', cell: (i) => i.getValue() ?? '—' }),
     sc.accessor('count_date', {
@@ -103,7 +130,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
         )
       },
     }),
-  ], [lookbackN])
+  ], [lookbackN, allowable, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const productColumns = useMemo(() => [
     pc.accessor('location_label', { header: 'Location' }),
@@ -121,11 +148,11 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
     }),
   ], [])
 
-  const summaryTbl = useTable(summaryRows, summaryColumns)
+  const summaryTbl = useTable(filteredSummary, summaryColumns)
   const productTbl = useTable(productRows, productColumns)
 
   // Flattened CSV export rows
-  const summaryExport = useMemo(() => summaryRows.map((r) => ({
+  const summaryExport = useMemo(() => filteredSummary.map((r) => ({
     location: r.location_label,
     count_type: r.count_type ?? '',
     count_date: r.count_date ?? '',
@@ -138,7 +165,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
     var_vs_last_month: pct(r.var_vs_last_month),
     var_vs_median: pct(r.var_vs_median),
     flags: r.flags.map((f) => RECOUNT_FLAG_LABELS[f] ?? f).join(' | '),
-  })), [summaryRows])
+  })), [filteredSummary])
 
   return (
     <div className="flex flex-col gap-3">
@@ -159,6 +186,22 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
           ))}
         </div>
       </div>
+
+      {view === 'summary' && distinctTypes.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-[#2a2d3e] bg-[#0f1117] px-3 py-2">
+          <span className="text-xs font-mono uppercase tracking-wide text-gray-500">Allowable types:</span>
+          {distinctTypes.map((t) => {
+            const on = allowable.length === 0 || allowableSet.has(t)
+            return (
+              <button key={t} onClick={() => toggleType(t)}
+                className={['rounded border px-2 py-0.5 text-xs font-mono', on ? 'border-[#39ff14]/40 bg-[#39ff14]/10 text-[#39ff14]' : 'border-[#2a2d3e] text-gray-600'].join(' ')}>
+                {on ? '✓ ' : ''}{t}
+              </button>
+            )
+          })}
+          {excludedCount > 0 && <span className="text-xs font-mono text-[#ffb300]">{excludedCount} row{excludedCount !== 1 ? 's' : ''} excluded</span>}
+        </div>
+      )}
 
       {view === 'summary' ? (
         <DataTable

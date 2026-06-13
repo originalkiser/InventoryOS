@@ -399,6 +399,7 @@ export interface OrderSession {
   name: string | null
   status: 'draft' | 'generated' | 'exported' | 'pending' | 'fulfilled'
   source_mode: 'manual' | 'file' | 'live' | null
+  source: string | null
   input_snapshot: Json | null
   generation_params: Json | null
   export_data: Json | null
