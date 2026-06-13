@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
@@ -101,11 +101,44 @@ function CustomColHeader({ col: c, onMove, onPin, onDelete }: {
   )
 }
 
-const BASE_COLUMNS = [
+interface StatusOpt { id: string; name: string }
+
+// Inline status: badge button + fixed-position dropdown (escapes the grid's
+// overflow clip) writing status_id.
+function IssueStatusCell({ name, statuses, onChange }: { name: string | undefined; statuses: StatusOpt[]; onChange: (statusId: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  function toggle() {
+    if (!open && btnRef.current) { const r = btnRef.current.getBoundingClientRect(); setRect({ left: r.left, top: r.bottom + 4 }) }
+    setOpen((o) => !o)
+  }
+  return (
+    <>
+      <button ref={btnRef} onClick={toggle}><Badge color={statusColor(name)}>{name ?? '—'}</Badge></button>
+      {open && rect && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+          <div className="fixed z-[61] w-44 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
+            {statuses.length === 0 && <div className="px-2 py-1 text-xs font-mono text-gray-600">No statuses defined</div>}
+            {statuses.map((s) => (
+              <button key={s.id} onClick={() => { onChange(s.id); setOpen(false) }} className="flex w-full px-2 py-1 hover:bg-white/5">
+                <Badge color={statusColor(s.name)}>{s.name}</Badge>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+const BASE_BEFORE = [
   col.accessor('title', { header: 'Title', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('location_name', { header: 'Location', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('category_name', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('status_name', { header: 'Status', cell: (i) => (<Badge color={statusColor(i.getValue())}>{i.getValue() ?? '—'}</Badge>) }),
+]
+const BASE_AFTER = [
   col.accessor('start_date', { header: 'Start', cell: (i) => i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—' }),
   col.accessor('target_resolution_date', { header: 'Target', cell: (i) => i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—' }),
   col.accessor('resolved_date', { header: 'Resolved', cell: (i) => i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—' }),
@@ -133,6 +166,7 @@ export function IssuesPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editIssue, setEditIssue] = useState<IssueRow | null>(null)
   const [addColOpen, setAddColOpen] = useState(false)
+  const [statuses, setStatuses] = useState<StatusOpt[]>([])
 
   const issueCols = useIssueColumns()
 
@@ -163,6 +197,21 @@ export function IssuesPage() {
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
+  // Optimistic inline edit for status / resolution notes (dbPatch writes the row;
+  // localPatch carries derived display fields like status_name).
+  const updateIssue = useCallback(async (id: string, dbPatch: Record<string, unknown>, localPatch: Partial<IssueRow> = {}) => {
+    setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbPatch, ...localPatch } : i)))
+    const { error } = await (supabase as any).from('issues').update(dbPatch).eq('id', id)
+    if (error) { toast.error(error.message); loadIssues() }
+  }, [loadIssues])
+
+  // Load the company's issue statuses for the inline dropdown.
+  useEffect(() => {
+    if (!profile?.company_id) return
+    ;(supabase as any).from('issue_statuses').select('id, name').eq('company_id', profile.company_id)
+      .then(({ data }: any) => setStatuses((data ?? []) as StatusOpt[]))
+  }, [profile?.company_id])
+
   const { columns: customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn } = issueCols
 
   const columns = useMemo(() => {
@@ -173,13 +222,24 @@ export function IssuesPage() {
       header: () => <CustomColHeader col={c} onMove={moveColumn} onPin={togglePin} onDelete={removeColumn} />,
       cell: (i: any) => <CustomCell type={c.type} value={valueFor(i.row.original.id, c.id)} onSave={(v) => setValue(i.row.original.id, c.id, v)} />,
     }))
+    const statusCol = {
+      id: 'status', header: 'Status', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.status_name ?? '',
+      cell: (i: any) => <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onChange={(sid) => updateIssue(i.row.original.id, { status_id: sid }, { status_name: statuses.find((s) => s.id === sid)?.name })} />,
+    }
+    const notesCol = {
+      id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
+      cell: (i: any) => <InlineText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
+    }
     return [
-      ...BASE_COLUMNS,
+      ...BASE_BEFORE,
+      statusCol,
+      ...BASE_AFTER,
       { id: 'vendor', header: 'Vendor', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.vendor ?? '', cell: (i: any) => <InlineText value={i.row.original.vendor} onSave={(v) => updateVendor(i.row.original.id, v)} /> },
       ...customs,
+      notesCol,
       { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (<button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button>) },
     ]
-  }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor])
+  }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, statuses])
 
   const allTable = useTable(issues, columns)
   const pendingTable = useTable(issues.filter((i) => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('pending') || s.includes('open') }), columns)
