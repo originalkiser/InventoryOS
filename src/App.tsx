@@ -16,6 +16,7 @@ import { WeeklyPage } from '@/modules/weekly/WeeklyPage'
 import { OrdersPage } from '@/modules/orders/OrdersPage'
 import { IssuesPage } from '@/modules/issues/IssuesPage'
 import { SchedulePage } from '@/modules/schedule/SchedulePage'
+import { ProjectsModule } from '@/modules/projects/ProjectsModule'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, initialized } = useAuthStore()
@@ -82,6 +83,7 @@ export default function App() {
           <Route path="weekly" element={<WeeklyPage />} />
           <Route path="orders" element={<OrdersPage />} />
           <Route path="issues" element={<IssuesPage />} />
+          <Route path="projects" element={<ProjectsModule />} />
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="admin/users" element={<UsersPage />} />
         </Route>

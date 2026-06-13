@@ -33,8 +33,85 @@ export interface Database {
       order_documents: { Row: OrderDocument; Insert: Partial<OrderDocument>; Update: Partial<OrderDocument> }
       custom_field_definitions: { Row: CustomFieldDefinition; Insert: Partial<CustomFieldDefinition>; Update: Partial<CustomFieldDefinition> }
       uom_mappings: { Row: UomMapping; Insert: Partial<UomMapping>; Update: Partial<UomMapping> }
+      projects: { Row: Project; Insert: Partial<Project>; Update: Partial<Project> }
+      project_tasks: { Row: ProjectTask; Insert: Partial<ProjectTask>; Update: Partial<ProjectTask> }
+      projects_column_config: { Row: ProjectsColumnConfig; Insert: Partial<ProjectsColumnConfig>; Update: Partial<ProjectsColumnConfig> }
+      issue_tracker_columns: { Row: IssueTrackerColumn; Insert: Partial<IssueTrackerColumn>; Update: Partial<IssueTrackerColumn> }
+      issue_custom_values: { Row: IssueCustomValue; Insert: Partial<IssueCustomValue>; Update: Partial<IssueCustomValue> }
     }
   }
+}
+
+export interface Project {
+  id: string
+  company_id: string
+  project_name: string
+  start_date: string | null
+  target_end_date: string | null
+  status: string | null
+  last_update: string | null
+  description: string | null
+  vendor: string | null
+  category: string | null
+  sort_order: number
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectTask {
+  id: string
+  company_id: string
+  project_id: string
+  task_name: string
+  status: string | null
+  assignee: string | null
+  due_date: string | null
+  notes: string | null
+  done: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+// One persisted column layout entry for the projects grid.
+export interface ProjectColumnConfigEntry {
+  key: string
+  label: string
+  width: number
+  pinned: boolean
+  visible: boolean
+  order: number
+}
+
+export interface ProjectsColumnConfig {
+  id: string
+  company_id: string
+  user_id: string
+  config: ProjectColumnConfigEntry[]
+  updated_at: string
+}
+
+export type IssueColumnType = 'text' | 'number' | 'date' | 'status' | 'checkbox'
+
+export interface IssueTrackerColumn {
+  id: string
+  company_id: string
+  label: string
+  type: IssueColumnType
+  sort_order: number
+  width: number
+  pinned: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface IssueCustomValue {
+  id: string
+  company_id: string
+  issue_id: string
+  column_id: string
+  value: string | null
 }
 
 export interface UomMapping {
@@ -361,6 +438,7 @@ export interface Issue {
   target_resolution_date: string | null
   resolved_date: string | null
   resolution_notes: string | null
+  vendor: string | null
   created_by: string | null
   created_at: string
   updated_at: string
