@@ -2,7 +2,47 @@ import { useState, useEffect } from 'react'
 import { InverseToggle } from '@/components/shared/InverseToggle'
 import { Button } from '@/components/ui'
 import { TRANSFORM_OPTIONS } from '@/lib/columnTransform'
+import { TRANSFORM_CATALOG, describeTransform, type Transform, type TransformChainKind } from '@/lib/transforms'
 import { CONSTANT_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
+
+function defaultTransform(kind: TransformChainKind): Transform {
+  switch (kind) {
+    case 'multiply': return { kind: 'multiply', by: 1 }
+    case 'divide': return { kind: 'divide', by: 1 }
+    case 'parse_after': return { kind: 'parse_after', delimiter: '#' }
+    default: return { kind } as Transform
+  }
+}
+
+function TransformChainEditor({ transforms = [], onChange }: { transforms?: Transform[]; onChange: (t: Transform[]) => void }) {
+  function add(kind: string) { if (kind) onChange([...transforms, defaultTransform(kind as TransformChainKind)]) }
+  function update(i: number, patch: any) { onChange(transforms.map((t, j) => (j === i ? { ...t, ...patch } : t))) }
+  function remove(i: number) { onChange(transforms.filter((_, j) => j !== i)) }
+  return (
+    <div className="flex flex-wrap items-center gap-1 pl-1">
+      <span className="text-[10px] font-mono text-gray-600">transforms:</span>
+      {transforms.map((t, i) => (
+        <span key={i} className="inline-flex items-center gap-1 rounded border border-[#2a2d3e] bg-[#0f1117] px-1.5 py-0.5 text-[10px] font-mono text-gray-300">
+          {describeTransform(t)}
+          {(t.kind === 'multiply' || t.kind === 'divide') && (
+            <input type="number" value={(t as any).by} onChange={(e) => update(i, { by: Number(e.target.value) })}
+              className="w-12 border-b border-[#2a2d3e] bg-transparent text-[10px] text-[#00e5ff] focus:outline-none" />
+          )}
+          {t.kind === 'parse_after' && (
+            <input value={(t as any).delimiter} onChange={(e) => update(i, { delimiter: e.target.value })}
+              className="w-8 border-b border-[#2a2d3e] bg-transparent text-center text-[10px] text-[#00e5ff] focus:outline-none" />
+          )}
+          <button onClick={() => remove(i)} className="text-gray-600 hover:text-red-400">×</button>
+        </span>
+      ))}
+      <select value="" onChange={(e) => { add(e.target.value); e.currentTarget.value = '' }}
+        className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-0.5 text-[10px] font-mono text-gray-400 focus:outline-none">
+        <option value="">+ transform</option>
+        {TRANSFORM_CATALOG.map((c) => <option key={c.kind} value={c.kind}>{c.label}</option>)}
+      </select>
+    </div>
+  )
+}
 
 interface RequiredField {
   name: string
@@ -85,7 +125,8 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
           const mapping = mappings.find((m) => m.fieldName === field.name)!
           const isConstant = mapping.sourceColumn === CONSTANT_SOURCE
           return (
-            <div key={field.name} className="grid grid-cols-[1fr_1fr_auto_auto] gap-3 items-center">
+            <div key={field.name} className="flex flex-col gap-1">
+            <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-3 items-center">
               <div className="text-sm font-mono text-gray-300">
                 {field.label}
                 {field.required && <span className="text-red-400 ml-1">*</span>}
@@ -121,6 +162,10 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
                 </select>
               )}
               <InverseToggle inverted={mapping.invert} onChange={(v) => patch(field.name, { invert: v })} />
+            </div>
+            {!isConstant && (
+              <TransformChainEditor transforms={mapping.transforms} onChange={(t) => patch(field.name, { transforms: t })} />
+            )}
             </div>
           )
         })}

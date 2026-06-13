@@ -1,4 +1,5 @@
 import { CONSTANT_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
+import { applyTransforms } from '@/lib/transforms'
 
 export const TRANSFORM_OPTIONS: { value: TransformKind; label: string }[] = [
   { value: 'none', label: 'Text (as-is)' },
@@ -35,5 +36,6 @@ export function applyTransform(raw: string, t?: TransformKind): string {
  */
 export function mappedValue(row: Record<string, string>, m: ColumnMapping): string {
   const raw = m.sourceColumn === CONSTANT_SOURCE ? (m.constant ?? '') : (row[m.sourceColumn] ?? '')
-  return applyTransform(raw, m.transform)
+  // Legacy single transform first, then the richer ordered chain.
+  return applyTransforms(applyTransform(raw, m.transform), m.transforms)
 }

@@ -1,4 +1,5 @@
 export * from './database'
+export type { Transform } from '@/lib/transforms'
 
 export type TransformKind = 'none' | 'number' | 'integer' | 'trim' | 'upper' | 'lower'
 
@@ -11,6 +12,9 @@ export interface ColumnMapping {
   invert: boolean
   // Optional value transform applied at import time (e.g. "001" → 1 via 'number')
   transform?: TransformKind
+  // Optional ordered chain of richer transforms (multiply, phone, date, …),
+  // applied after the legacy `transform`. See lib/transforms.ts.
+  transforms?: import('@/lib/transforms').Transform[]
   // When sourceColumn === CONSTANT_SOURCE, this value is applied to all rows.
   constant?: string
 }
