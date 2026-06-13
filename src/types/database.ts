@@ -38,8 +38,58 @@ export interface Database {
       projects_column_config: { Row: ProjectsColumnConfig; Insert: Partial<ProjectsColumnConfig>; Update: Partial<ProjectsColumnConfig> }
       issue_tracker_columns: { Row: IssueTrackerColumn; Insert: Partial<IssueTrackerColumn>; Update: Partial<IssueTrackerColumn> }
       issue_custom_values: { Row: IssueCustomValue; Insert: Partial<IssueCustomValue>; Update: Partial<IssueCustomValue> }
+      tank_monitors: { Row: TankMonitor; Insert: Partial<TankMonitor>; Update: Partial<TankMonitor> }
+      product_usage: { Row: ProductUsage; Insert: Partial<ProductUsage>; Update: Partial<ProductUsage> }
+      pos_location_map: { Row: PosLocationMap; Insert: Partial<PosLocationMap>; Update: Partial<PosLocationMap> }
+      app_settings: { Row: AppSetting; Insert: Partial<AppSetting>; Update: Partial<AppSetting> }
     }
   }
+}
+
+export interface TankMonitor {
+  id: string
+  company_id: string
+  location_id: string | null
+  reading_date: string
+  value: number | null
+  unit: string | null
+  updated_by: string | null
+  last_change_source: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProductUsage {
+  id: string
+  company_id: string
+  location_id: string | null
+  product_id: string
+  daily_usage: number | null
+  on_hands: number | null
+  days_of_supply: number | null
+  updated_by: string | null
+  last_change_source: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PosLocationMap {
+  id: string
+  company_id: string
+  pos_string: string
+  location_id: string | null
+  updated_by: string | null
+  last_change_source: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AppSetting {
+  id: string
+  company_id: string
+  key: string
+  value: Json
+  updated_at: string
 }
 
 export interface Project {

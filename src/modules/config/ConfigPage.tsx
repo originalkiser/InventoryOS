@@ -5,6 +5,9 @@ import { OrderConfigTab } from './tabs/OrderConfigTab'
 import { ProductMappingTab } from './tabs/ProductMappingTab'
 import { GlobalProductsTab } from './tabs/GlobalProductsTab'
 import { UomMappingsTab } from './tabs/UomMappingsTab'
+import { ProductUsageTab } from './tabs/ProductUsageTab'
+import { TankMonitorTab } from './tabs/TankMonitorTab'
+import { PosLocationMapTab } from './tabs/PosLocationMapTab'
 import { EndingBalancesTab } from './tabs/EndingBalancesTab'
 
 export function ConfigPage() {
@@ -23,6 +26,9 @@ export function ConfigPage() {
           <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
           <TabsTrigger value="global-products">Global Products</TabsTrigger>
           <TabsTrigger value="uom-mappings">UoM Conversions</TabsTrigger>
+          <TabsTrigger value="product-usage">Product Usage</TabsTrigger>
+          <TabsTrigger value="tank-monitor">Tank Monitor</TabsTrigger>
+          <TabsTrigger value="pos-map">POS Mapping</TabsTrigger>
           <TabsTrigger value="ending-balances">Month End Ending Balance</TabsTrigger>
         </TabsList>
 
@@ -32,6 +38,9 @@ export function ConfigPage() {
         <TabsContent value="product-mapping"><ProductMappingTab /></TabsContent>
         <TabsContent value="global-products"><GlobalProductsTab /></TabsContent>
         <TabsContent value="uom-mappings"><UomMappingsTab /></TabsContent>
+        <TabsContent value="product-usage"><ProductUsageTab /></TabsContent>
+        <TabsContent value="tank-monitor"><TankMonitorTab /></TabsContent>
+        <TabsContent value="pos-map"><PosLocationMapTab /></TabsContent>
         <TabsContent value="ending-balances"><EndingBalancesTab /></TabsContent>
       </Tabs>
     </div>
