@@ -105,13 +105,20 @@ interface StatusOpt { id: string; name: string }
 
 // Inline status: badge button + fixed-position dropdown (escapes the grid's
 // overflow clip) writing status_id.
-function IssueStatusCell({ name, statuses, onChange }: { name: string | undefined; statuses: StatusOpt[]; onChange: (statusId: string) => void }) {
+function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | undefined; statuses: StatusOpt[]; onChange: (statusId: string) => void; onAdd: (name: string) => Promise<string | null> }) {
   const [open, setOpen] = useState(false)
   const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   function toggle() {
     if (!open && btnRef.current) { const r = btnRef.current.getBoundingClientRect(); setRect({ left: r.left, top: r.bottom + 4 }) }
     setOpen((o) => !o)
+  }
+  async function addNew() {
+    const n = prompt('New status name')?.trim()
+    setOpen(false)
+    if (!n) return
+    const id = await onAdd(n)
+    if (id) onChange(id)
   }
   return (
     <>
@@ -120,12 +127,12 @@ function IssueStatusCell({ name, statuses, onChange }: { name: string | undefine
         <>
           <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
           <div className="fixed z-[61] w-44 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
-            {statuses.length === 0 && <div className="px-2 py-1 text-xs font-mono text-gray-600">No statuses defined</div>}
             {statuses.map((s) => (
               <button key={s.id} onClick={() => { onChange(s.id); setOpen(false) }} className="flex w-full px-2 py-1 hover:bg-white/5">
                 <Badge color={statusColor(s.name)}>{s.name}</Badge>
               </button>
             ))}
+            <button onClick={addNew} className="flex w-full px-2 py-1 text-xs font-mono text-[#00e5ff] hover:bg-white/5">＋ add status…</button>
           </div>
         </>
       )}
@@ -212,6 +219,15 @@ export function IssuesPage() {
       .then(({ data }: any) => setStatuses((data ?? []) as StatusOpt[]))
   }, [profile?.company_id])
 
+  // Create a new status inline (no full dialog) and add it to the dropdown.
+  const addStatus = useCallback(async (name: string): Promise<string | null> => {
+    if (!profile?.company_id) return null
+    const { data, error } = await (supabase as any).from('issue_statuses').insert({ company_id: profile.company_id, name }).select().single()
+    if (error || !data) { toast.error(error?.message ?? 'Could not add status'); return null }
+    setStatuses((prev) => [...prev, { id: data.id, name: data.name }])
+    return data.id as string
+  }, [profile?.company_id])
+
   const { columns: customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn } = issueCols
 
   const columns = useMemo(() => {
@@ -224,7 +240,7 @@ export function IssuesPage() {
     }))
     const statusCol = {
       id: 'status', header: 'Status', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.status_name ?? '',
-      cell: (i: any) => <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onChange={(sid) => updateIssue(i.row.original.id, { status_id: sid }, { status_name: statuses.find((s) => s.id === sid)?.name })} />,
+      cell: (i: any) => <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onAdd={addStatus} onChange={(sid) => updateIssue(i.row.original.id, { status_id: sid }, { status_name: statuses.find((s) => s.id === sid)?.name })} />,
     }
     const notesCol = {
       id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
@@ -239,7 +255,7 @@ export function IssuesPage() {
       notesCol,
       { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (<button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button>) },
     ]
-  }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, statuses])
+  }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, statuses, addStatus])
 
   const allTable = useTable(issues, columns)
   const pendingTable = useTable(issues.filter((i) => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('pending') || s.includes('open') }), columns)

@@ -31,7 +31,10 @@ export function Combobox({
   const [creating, setCreating] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  const selectedLabel = options.find((o) => o.value === value)?.label ?? value
+  // Only show a label when the value actually matches an option — otherwise the
+  // field would falsely imply a selection (e.g. a stale/unlinked id).
+  const matched = options.find((o) => o.value === value)
+  const selectedLabel = matched?.label ?? ''
 
   const filtered = query
     ? options.filter((o) => String(o.label ?? '').toLowerCase().includes(query.toLowerCase()))

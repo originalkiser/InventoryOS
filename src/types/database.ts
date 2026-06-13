@@ -50,7 +50,10 @@ export interface TankMonitor {
   id: string
   company_id: string
   location_id: string | null
+  product_id: string | null
+  keep_fill: boolean
   reading_date: string
+  on_hand: number | null
   value: number | null
   unit: string | null
   updated_by: string | null

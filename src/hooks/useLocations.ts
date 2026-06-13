@@ -32,9 +32,20 @@ export function useLocations() {
       (l) => l.id.toLowerCase() === v || l.location_code.toLowerCase() === v || l.name.toLowerCase() === v
     )
     if (m) return m.id
-    // Fall back to the POS map: exact pos_string, or its parsed leading number.
+    // Exact POS-string match.
     const pos = posMaps.find((p) => String(p.pos_string ?? '').trim().toLowerCase() === v)
     if (pos?.location_id) return pos.location_id
+    // Numeric fallback: match the value's number against location-code numbers
+    // (handles "SB 1521 - Port Arthur" → code 1521, and "001" ↔ "1") or a POS
+    // string's number.
+    const digits = String(value ?? '').match(/\d+/)?.[0]
+    if (digits) {
+      const n = Number(digits)
+      const byCode = locations.find((l) => { const cd = String(l.location_code ?? '').match(/\d+/)?.[0]; return cd != null && Number(cd) === n })
+      if (byCode) return byCode.id
+      const posByNum = posMaps.find((p) => { const pd = String(p.pos_string ?? '').match(/\d+/)?.[0]; return pd != null && Number(pd) === n && p.location_id })
+      if (posByNum?.location_id) return posByNum.location_id
+    }
     return null
   }
 
