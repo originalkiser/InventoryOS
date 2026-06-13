@@ -6,6 +6,52 @@ import { Card, CardHeader, CardBody, Badge } from '@/components/ui'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { format, startOfWeek, endOfWeek } from 'date-fns'
 
+type TileView = 'graph' | 'list'
+
+// Per-tile graph/list preference, persisted to localStorage.
+function useTileView(tileId: string, def: TileView = 'graph'): [TileView, (v: TileView) => void] {
+  const key = `dashboard_tile_view_${tileId}`
+  const [view, setView] = useState<TileView>(() => (localStorage.getItem(key) as TileView) || def)
+  const set = (v: TileView) => { setView(v); localStorage.setItem(key, v) }
+  return [view, set]
+}
+
+function TileToggle({ view, onChange }: { view: TileView; onChange: (v: TileView) => void }) {
+  const btn = (active: boolean) =>
+    ['p-1 rounded transition-colors', active ? 'text-[#00e5ff] bg-[#00e5ff]/10' : 'text-gray-600 hover:text-gray-300'].join(' ')
+  return (
+    <div className="flex items-center gap-0.5 border border-[#2a2d3e] rounded p-0.5">
+      <button onClick={() => onChange('graph')} className={btn(view === 'graph')} title="Graph view">
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V9m4 10V5m4 14v-6M5 19h14" /></svg>
+      </button>
+      <button onClick={() => onChange('list')} className={btn(view === 'list')} title="List view">
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+      </button>
+    </div>
+  )
+}
+
+// Compact tabular list with alternating row shading, matching the theme.
+function CompactList({ columns, rows }: { columns: string[]; rows: (string | number)[][] }) {
+  if (rows.length === 0) return <p className="px-1 py-2 text-xs text-gray-600 font-mono">No data</p>
+  return (
+    <div className="overflow-auto max-h-[200px] rounded border border-[#2a2d3e]">
+      <table className="w-full text-xs font-mono">
+        <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide sticky top-0">
+          <tr>{columns.map((c) => <th key={c} className="px-3 py-1.5 text-left">{c}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>
+              {r.map((cell, j) => <td key={j} className="px-3 py-1.5 text-gray-300">{cell}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 interface DashStats {
   openIssuesByCategory: { name: string; count: number }[]
   upcomingEvents: Array<{ id: string; title: string; start_date: string; event_type: string }>
@@ -105,6 +151,18 @@ export function DashboardPage() {
     ? Math.round((stats.submittedThisMonth / stats.totalShops) * 100)
     : 0
 
+  // Per-tile view preferences + the graph/list aggregations.
+  const [issuesView, setIssuesView] = useTileView('issues_by_category', 'graph')
+  const [eventsView, setEventsView] = useTileView('events_week', 'list')
+  const [ordersView, setOrdersView] = useTileView('recent_orders', 'list')
+  const [countView, setCountView] = useTileView('count_progress', 'graph')
+
+  const countBy = (arr: { event_type?: string; status?: string }[], field: 'event_type' | 'status') =>
+    Object.entries(arr.reduce((m, x) => { const k = (x as any)[field] ?? '—'; m[k] = (m[k] ?? 0) + 1; return m }, {} as Record<string, number>))
+      .map(([name, count]) => ({ name, count }))
+  const eventsByType = countBy(stats.upcomingEvents, 'event_type')
+  const ordersByStatus = countBy(stats.recentOrders, 'status')
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -141,14 +199,17 @@ export function DashboardPage() {
       <div className="grid grid-cols-2 gap-6">
         {/* Issues by Category */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex items-center justify-between">
             <span className="text-xs font-mono font-semibold text-gray-400 uppercase tracking-wide">
               Open Issues by Category
             </span>
+            <TileToggle view={issuesView} onChange={setIssuesView} />
           </CardHeader>
           <CardBody>
             {stats.openIssuesByCategory.length === 0 ? (
               <p className="text-xs text-gray-600 font-mono">No open issues</p>
+            ) : issuesView === 'list' ? (
+              <CompactList columns={['Category', 'Open']} rows={stats.openIssuesByCategory.map((c) => [c.name, c.count])} />
             ) : (
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={stats.openIssuesByCategory} layout="vertical" margin={{ left: 0 }}>
@@ -170,14 +231,28 @@ export function DashboardPage() {
 
         {/* Upcoming events */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex items-center justify-between">
             <span className="text-xs font-mono font-semibold text-gray-400 uppercase tracking-wide">
               Events This Week
             </span>
+            <TileToggle view={eventsView} onChange={setEventsView} />
           </CardHeader>
           <CardBody className="p-0">
             {stats.upcomingEvents.length === 0 ? (
               <p className="px-5 py-4 text-xs text-gray-600 font-mono">No events this week</p>
+            ) : eventsView === 'graph' ? (
+              <div className="p-4">
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={eventsByType} layout="vertical" margin={{ left: 0 }}>
+                    <XAxis type="number" hide />
+                    <YAxis type="category" dataKey="name" width={110} tick={{ fill: '#9ca3af', fontSize: 11, fontFamily: 'monospace' }} tickFormatter={(v) => String(v).replace(/_/g, ' ')} />
+                    <Tooltip contentStyle={{ background: '#161820', border: '1px solid #2a2d3e', borderRadius: '4px', fontFamily: 'monospace', fontSize: '11px', color: '#e5e7eb' }} />
+                    <Bar dataKey="count" radius={[0, 3, 3, 0]}>
+                      {eventsByType.map((e, i) => <Cell key={i} fill={EVENT_COLORS[e.name] ?? '#6b7280'} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             ) : (
               <div className="divide-y divide-[#2a2d3e]">
                 {stats.upcomingEvents.map((e) => (
@@ -199,14 +274,28 @@ export function DashboardPage() {
 
         {/* Recent orders */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex items-center justify-between">
             <span className="text-xs font-mono font-semibold text-gray-400 uppercase tracking-wide">
               Recent Orders
             </span>
+            <TileToggle view={ordersView} onChange={setOrdersView} />
           </CardHeader>
           <CardBody className="p-0">
             {stats.recentOrders.length === 0 ? (
               <p className="px-5 py-4 text-xs text-gray-600 font-mono">No orders yet</p>
+            ) : ordersView === 'graph' ? (
+              <div className="p-4">
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={ordersByStatus} layout="vertical" margin={{ left: 0 }}>
+                    <XAxis type="number" hide />
+                    <YAxis type="category" dataKey="name" width={90} tick={{ fill: '#9ca3af', fontSize: 11, fontFamily: 'monospace' }} />
+                    <Tooltip contentStyle={{ background: '#161820', border: '1px solid #2a2d3e', borderRadius: '4px', fontFamily: 'monospace', fontSize: '11px', color: '#e5e7eb' }} />
+                    <Bar dataKey="count" radius={[0, 3, 3, 0]}>
+                      {ordersByStatus.map((_, i) => <Cell key={i} fill={['#ffb300', '#00e5ff', '#39ff14', '#6b7280'][i % 4]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             ) : (
               <div className="divide-y divide-[#2a2d3e]">
                 {stats.recentOrders.map((o) => (
@@ -226,12 +315,16 @@ export function DashboardPage() {
 
         {/* Not submitted this month */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex items-center justify-between">
             <span className="text-xs font-mono font-semibold text-gray-400 uppercase tracking-wide">
               Monthly Count Progress
             </span>
+            <TileToggle view={countView} onChange={setCountView} />
           </CardHeader>
           <CardBody>
+            {countView === 'list' ? (
+              <CompactList columns={['Metric', 'Count']} rows={[['Submitted', stats.submittedThisMonth], ['Not Submitted', notSubmitted], ['Total Shops', stats.totalShops]]} />
+            ) : (
             <div className="flex flex-col gap-3">
               <div className="flex justify-between text-xs font-mono text-gray-400">
                 <span>Submitted</span>
@@ -248,6 +341,7 @@ export function DashboardPage() {
                 {format(new Date(), 'MMMM yyyy')}
               </p>
             </div>
+            )}
           </CardBody>
         </Card>
       </div>
