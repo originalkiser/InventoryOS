@@ -34,28 +34,41 @@ const STATUS_COLOR: Record<string, 'gray' | 'cyan' | 'red' | 'green'> = {
 const CTRL_W = 64
 
 // ---------------------------------------------------------------------------
-function StatusPill({ value, onChange }: { value: string | null; onChange: (v: string) => void }) {
+function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf }: {
+  value: string | null
+  onChange: (v: string) => void
+  options?: string[]
+  colorOf?: (s: string) => 'gray' | 'cyan' | 'red' | 'green' | 'amber' | 'magenta'
+}) {
   const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
   const v = value ?? 'Not Started'
+  const color = (s: string) => (colorOf ? colorOf(s) : (STATUS_COLOR[s] ?? 'gray'))
+  function toggle() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect()
+      setRect({ left: r.left, top: r.bottom + 4 })
+    }
+    setOpen((o) => !o)
+  }
   return (
-    <div className="relative inline-block">
-      <button onClick={() => setOpen((o) => !o)}>
-        <Badge color={STATUS_COLOR[v] ?? 'gray'}>{v}</Badge>
-      </button>
-      {open && (
+    <>
+      <button ref={btnRef} onClick={toggle}><Badge color={color(v)}>{v}</Badge></button>
+      {open && rect && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute z-50 mt-1 w-40 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl">
-            {STATUS_OPTIONS.map((s) => (
-              <button key={s} onClick={() => { onChange(s); setOpen(false) }}
-                className="flex w-full items-center px-2 py-1 hover:bg-white/5">
-                <Badge color={STATUS_COLOR[s]}>{s}</Badge>
+          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+          {/* fixed so the menu isn't clipped by the grid's overflow container */}
+          <div className="fixed z-[61] w-44 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
+            {options.map((s) => (
+              <button key={s} onClick={() => { onChange(s); setOpen(false) }} className="flex w-full items-center px-2 py-1 hover:bg-white/5">
+                <Badge color={color(s)}>{s}</Badge>
               </button>
             ))}
           </div>
         </>
       )}
-    </div>
+    </>
   )
 }
 

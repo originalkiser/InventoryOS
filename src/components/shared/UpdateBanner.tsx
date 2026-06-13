@@ -50,11 +50,15 @@ export function UpdateBanner() {
     check()
     const interval = window.setInterval(check, POLL_MS)
     const onFocus = () => check()
+    // visibilitychange catches backgrounded tabs that never fire 'focus'.
+    const onVisible = () => { if (document.visibilityState === 'visible') check() }
     window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       cancelled = true
       window.clearInterval(interval)
       window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [runningId])
 

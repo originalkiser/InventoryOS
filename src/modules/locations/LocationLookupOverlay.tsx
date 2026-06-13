@@ -94,6 +94,9 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
 
   const right = pos?.right ?? 16
   const bottom = pos?.bottom ?? 16
+  // Pinned (non-mobile) docks the panel full-height on the right so it fills the
+  // pushed margin with no blank gutter; unpinned floats as a corner popout.
+  const docked = pinned && !mobile
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   // Unpinned: close when clicking outside the panel (and not the trigger).
@@ -121,7 +124,7 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
   function startMove(e: React.MouseEvent) {
-    if (mobile) return
+    if (mobile || docked) return
     const sx = e.clientX, sy = e.clientY, sr = right, sb = bottom
     const move = (ev: MouseEvent) => {
       const nr = Math.min(Math.max(sr - (ev.clientX - sx), 0), window.innerWidth - 120)
@@ -157,6 +160,8 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
 
   const panelStyle: React.CSSProperties = mobile
     ? { position: 'fixed', left: 0, right: 0, bottom: 0, height: '70vh', zIndex: 55 }
+    : docked
+    ? { position: 'fixed', top: 0, right: 0, bottom: 0, width, zIndex: 55 }
     : { position: 'fixed', right, bottom, width, height: Math.min(height, window.innerHeight * 0.9), maxHeight: '92vh', zIndex: 55 }
 
   return (
@@ -166,7 +171,7 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
       {/* header (drag to move) */}
-      <div onMouseDown={startMove} className={['flex items-center justify-between border-b border-[#2a2d3e] px-3 py-2', mobile ? '' : 'cursor-move'].join(' ')}>
+      <div onMouseDown={startMove} className={['flex items-center justify-between border-b border-[#2a2d3e] px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
         <span className="text-xs font-mono font-semibold uppercase tracking-wide text-[#ffb300]">Location Lookup</span>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
           <button onClick={() => setEditing((v) => !v)} title="Edit view"
