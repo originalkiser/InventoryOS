@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
+import { InventoryLeftPanel } from '@/components/inventory/InventoryLeftPanel'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 
 const OPEN_KEY = 'locationLookup.open'
@@ -45,6 +46,7 @@ export function AppShell() {
         open={open} pinned={pinned} width={width} mobile={mobile}
         onOpenChange={setOpenP} onPinnedChange={setPinnedP} onWidthChange={setWidthP}
       />
+      <InventoryLeftPanel />
     </div>
   )
 }

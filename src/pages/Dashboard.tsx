@@ -5,6 +5,9 @@ import { useAuthStore } from '@/stores/authStore'
 import { Card, CardHeader, CardBody, Badge } from '@/components/ui'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { format, startOfWeek, endOfWeek } from 'date-fns'
+import { useInventory } from '@/hooks/useInventory'
+import { InventoryView } from '@/components/inventory/InventoryView'
+import { FLAG_HEX } from '@/lib/flagScale'
 
 type TileView = 'graph' | 'list'
 
@@ -156,6 +159,12 @@ export function DashboardPage() {
   const [eventsView, setEventsView] = useTileView('events_week', 'list')
   const [ordersView, setOrdersView] = useTileView('recent_orders', 'list')
   const [countView, setCountView] = useTileView('count_progress', 'graph')
+  const [invView, setInvView] = useTileView('inventory', 'list')
+
+  // D4 inventory callout + D3 tile data.
+  const inv = useInventory()
+  const flaggedByShop = Object.entries(inv.rows.filter((r) => r.flag === 'red' || r.flag === 'amber').reduce((m, r) => { m[r.location_label] = (m[r.location_label] ?? 0) + 1; return m }, {} as Record<string, number>))
+    .map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 8)
 
   const countBy = (arr: { event_type?: string; status?: string }[], field: 'event_type' | 'status') =>
     Object.entries(arr.reduce((m, x) => { const k = (x as any)[field] ?? '—'; m[k] = (m[k] ?? 0) + 1; return m }, {} as Record<string, number>))
@@ -196,7 +205,44 @@ export function DashboardPage() {
         </Card>
       </div>
 
+      {/* D4 — Inventory callout */}
+      <Card>
+        <CardHeader><span className="text-xs font-mono font-semibold text-gray-400 uppercase tracking-wide">Inventory Health</span></CardHeader>
+        <CardBody>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <div><div className="text-xs text-gray-500 font-mono uppercase tracking-wide mb-1">Critical Shops</div><div className="text-2xl font-bold" style={{ color: FLAG_HEX.red }}>{inv.stats.shopsWithCritical}</div></div>
+            <div><div className="text-xs text-gray-500 font-mono uppercase tracking-wide mb-1">Products Tracked</div><div className="text-2xl font-bold text-[#00e5ff]">{inv.stats.totalProducts}</div><div className="text-xs text-gray-600 font-mono mt-1">{inv.stats.flaggedProducts} flagged</div></div>
+            <div><div className="text-xs text-gray-500 font-mono uppercase tracking-wide mb-1">Avg Flagged / Shop</div><div className="text-2xl font-bold text-[#ffb300]">{inv.stats.avgFlaggedPerShop}</div></div>
+            <div><div className="text-xs text-gray-500 font-mono uppercase tracking-wide mb-1">Worst Shop</div><div className="text-sm font-bold text-white truncate">{inv.stats.worstShop}</div><div className="text-xs text-gray-600 font-mono mt-1">{inv.stats.worstCount} flagged</div></div>
+          </div>
+        </CardBody>
+      </Card>
+
       <div className="grid grid-cols-2 gap-6">
+        {/* D3 — Inventory days-of-supply */}
+        <Card className="col-span-2">
+          <CardHeader className="flex items-center justify-between">
+            <span className="text-xs font-mono font-semibold text-gray-400 uppercase tracking-wide">Inventory · Days of Supply</span>
+            <TileToggle view={invView} onChange={setInvView} />
+          </CardHeader>
+          <CardBody>
+            {invView === 'graph' ? (
+              flaggedByShop.length === 0 ? <p className="text-xs text-gray-600 font-mono">No flagged products</p> : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={flaggedByShop} layout="vertical" margin={{ left: 0 }}>
+                    <XAxis type="number" hide />
+                    <YAxis type="category" dataKey="name" width={140} tick={{ fill: '#9ca3af', fontSize: 11, fontFamily: 'monospace' }} />
+                    <Tooltip contentStyle={{ background: '#161820', border: '1px solid #2a2d3e', borderRadius: '4px', fontFamily: 'monospace', fontSize: '11px', color: '#e5e7eb' }} />
+                    <Bar dataKey="count" radius={[0, 3, 3, 0]}>{flaggedByShop.map((_, i) => <Cell key={i} fill={FLAG_HEX.red} />)}</Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )
+            ) : (
+              <InventoryView maxHeight="320px" />
+            )}
+          </CardBody>
+        </Card>
+
         {/* Issues by Category */}
         <Card>
           <CardHeader className="flex items-center justify-between">
