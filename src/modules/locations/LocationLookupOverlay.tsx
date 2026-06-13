@@ -12,7 +12,9 @@ import { Badge, Button } from '@/components/ui'
 type BadgeColor = 'cyan' | 'green' | 'magenta' | 'amber' | 'red' | 'gray'
 const COLORS: BadgeColor[] = ['cyan', 'green', 'magenta', 'amber', 'red', 'gray']
 
-interface Pill { label: string; color: BadgeColor }
+type PillOp = '=' | '!=' | '<' | '>'
+// A pill is a live count chip: count of `source` rows where `column op value`.
+interface Pill { label: string; color: BadgeColor; source?: string; column?: string; op?: PillOp; value?: string }
 type Block =
   | { id: string; type: 'pills'; title: string; pills: Pill[] }
   | { id: string; type: 'table'; title: string; source: string; columns: string[] }
@@ -32,7 +34,7 @@ const uid = () => Math.random().toString(36).slice(2)
 const DEFAULT_VIEW: ViewConfig = {
   showSearch: true,
   blocks: [
-    { id: uid(), type: 'pills', title: 'Quick Status', pills: [{ label: 'Low Stock', color: 'amber' }, { label: 'On Hold', color: 'red' }] },
+    { id: uid(), type: 'pills', title: 'Quick Status', pills: [{ label: 'Inactive', color: 'red', source: 'locations', column: 'active', op: '=', value: 'false' }] },
     { id: uid(), type: 'table', title: 'Locations', source: 'locations', columns: ['location_code', 'name', 'region'] },
   ],
 }
@@ -90,6 +92,8 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
   const [editing, setEditing] = useState(false)
   const [configId, setConfigId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // Clicking a pill filters the location mini-tables to matching rows.
+  const [activeFilter, setActiveFilter] = useState<{ column: string; value: string; label: string } | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
   const right = pos?.right ?? 16
@@ -184,11 +188,18 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
         </div>
       </div>
 
-      {/* search (pinned top) */}
-      {view.showSearch && (
-        <div className="border-b border-[#2a2d3e] p-2">
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search tables…"
-            className="w-full rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white placeholder-gray-600 focus:border-[#00e5ff] focus:outline-none" />
+      {/* search (pinned top) + active pill filter chip */}
+      {(view.showSearch || activeFilter) && (
+        <div className="flex items-center gap-2 border-b border-[#2a2d3e] p-2">
+          {view.showSearch && (
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search tables…"
+              className="flex-1 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white placeholder-gray-600 focus:border-[#00e5ff] focus:outline-none" />
+          )}
+          {activeFilter && (
+            <button onClick={() => setActiveFilter(null)} className="inline-flex items-center gap-1 rounded border border-[#ffb300]/40 bg-[#ffb300]/10 px-2 py-1 text-xs font-mono text-[#ffb300]">
+              {activeFilter.label} ✕
+            </button>
+          )}
         </div>
       )}
 
@@ -201,8 +212,8 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
                 <BlockWrap key={b.id} id={b.id} editing={editing}
                   onConfig={() => setConfigId((c) => (c === b.id ? null : b.id))} onRemove={() => removeBlock(b.id)}>
                   {b.type === 'pills'
-                    ? <PillsBlock block={b} editing={editing && configId === b.id} onChange={(p) => updateBlock(b.id, p)} />
-                    : <TableBlock block={b} editing={editing && configId === b.id} search={search} onChange={(p) => updateBlock(b.id, p)} />}
+                    ? <PillsBlock block={b} editing={editing && configId === b.id} onChange={(p) => updateBlock(b.id, p)} onFilter={setActiveFilter} />
+                    : <TableBlock block={b} editing={editing && configId === b.id} search={search} activeFilter={activeFilter} onChange={(p) => updateBlock(b.id, p)} />}
                 </BlockWrap>
               ))}
               {view.blocks.length === 0 && <p className="py-6 text-center text-xs font-mono text-gray-600">No blocks. Add one below.</p>}
@@ -263,7 +274,38 @@ function BlockWrap({ id, editing, onConfig, onRemove, children }: { id: string; 
   )
 }
 
-function PillsBlock({ block, editing, onChange }: { block: Extract<Block, { type: 'pills' }>; editing: boolean; onChange: (p: Partial<Block>) => void }) {
+// Parse a filter value to its likely JS type for the count query.
+function parseVal(v: string): string | number | boolean {
+  if (v === 'true') return true
+  if (v === 'false') return false
+  const n = Number(v)
+  return v.trim() !== '' && !isNaN(n) ? n : v
+}
+
+function PillsBlock({ block, editing, onChange, onFilter }: {
+  block: Extract<Block, { type: 'pills' }>; editing: boolean
+  onChange: (p: Partial<Block>) => void
+  onFilter: (f: { column: string; value: string; label: string } | null) => void
+}) {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const [counts, setCounts] = useState<(number | null)[]>([])
+
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    Promise.all(block.pills.map(async (p) => {
+      let q = (supabase as any).from(p.source || 'locations').select('*', { count: 'exact', head: true }).eq('company_id', companyId)
+      if (p.column && p.op && p.value !== undefined && p.value !== '') {
+        const val = parseVal(p.value)
+        q = p.op === '!=' ? q.neq(p.column, val) : p.op === '<' ? q.lt(p.column, val) : p.op === '>' ? q.gt(p.column, val) : q.eq(p.column, val)
+      }
+      const { count } = await q
+      return (count ?? 0) as number
+    })).then((cs) => { if (!cancelled) setCounts(cs) }).catch(() => { if (!cancelled) setCounts([]) })
+    return () => { cancelled = true }
+  }, [block.pills, companyId])
+
   return (
     <div className="flex flex-col gap-2">
       {editing ? (
@@ -273,15 +315,15 @@ function PillsBlock({ block, editing, onChange }: { block: Extract<Block, { type
       <div className="flex flex-wrap gap-1.5">
         {block.pills.map((p, i) => (
           <span key={i} className="inline-flex items-center gap-1">
-            <Badge color={p.color}>{p.label || '—'}</Badge>
+            <button onClick={() => { if (p.column && p.value != null) onFilter({ column: p.column, value: p.value, label: p.label }) }} title={p.column ? `${p.column} ${p.op} ${p.value}` : undefined}>
+              <Badge color={p.color}>{p.label || '—'}: {counts[i] ?? '…'}</Badge>
+            </button>
             {editing && <button onClick={() => onChange({ pills: block.pills.filter((_, j) => j !== i) })} className="text-gray-600 hover:text-red-400">×</button>}
           </span>
         ))}
         {block.pills.length === 0 && !editing && <span className="text-xs font-mono text-gray-600">No pills</span>}
       </div>
-      {editing && (
-        <PillEditor onAdd={(pill) => onChange({ pills: [...block.pills, pill] })} />
-      )}
+      {editing && <PillEditor onAdd={(pill) => onChange({ pills: [...block.pills, pill] })} />}
     </div>
   )
 }
@@ -289,21 +331,50 @@ function PillsBlock({ block, editing, onChange }: { block: Extract<Block, { type
 function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
   const [label, setLabel] = useState('')
   const [color, setColor] = useState<BadgeColor>('cyan')
+  const [source, setSource] = useState('locations')
+  const [column, setColumn] = useState('')
+  const [op, setOp] = useState<PillOp>('=')
+  const [value, setValue] = useState('')
   return (
-    <div className="flex items-center gap-1">
-      <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Pill label"
-        className="flex-1 rounded border border-[#2a2d3e] bg-[#161820] px-2 py-1 text-xs font-mono text-white" />
-      <select value={color} onChange={(e) => setColor(e.target.value as BadgeColor)}
-        className="rounded border border-[#2a2d3e] bg-[#161820] px-1 py-1 text-xs font-mono text-white">
-        {COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
-      </select>
-      <button onClick={() => { if (label.trim()) { onAdd({ label: label.trim(), color }); setLabel('') } }}
-        className="rounded border border-[#2a2d3e] px-2 py-1 text-xs font-mono text-[#00e5ff] hover:bg-white/5">+</button>
+    <div className="flex flex-col gap-1 rounded border border-[#2a2d3e] p-2">
+      <div className="flex items-center gap-1">
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Pill label"
+          className="flex-1 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white" />
+        <select value={color} onChange={(e) => setColor(e.target.value as BadgeColor)} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+          {COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="flex items-center gap-1">
+        <select value={source} onChange={(e) => setSource(e.target.value)} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+          {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+        <input value={column} onChange={(e) => setColumn(e.target.value)} placeholder="column"
+          className="w-24 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white" />
+        <select value={op} onChange={(e) => setOp(e.target.value as PillOp)} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+          {(['=', '!=', '<', '>'] as PillOp[]).map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="value"
+          className="w-20 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white" />
+        <button onClick={() => { if (label.trim()) { onAdd({ label: label.trim(), color, source, column: column.trim() || undefined, op, value }); setLabel(''); setColumn(''); setValue('') } }}
+          className="rounded border border-[#2a2d3e] px-2 py-1 text-xs font-mono text-[#00e5ff] hover:bg-white/5">+ pill</button>
+      </div>
+      <p className="text-[10px] font-mono text-gray-600">Live count of {source} where column ⋄ value (e.g. active = false). Click a pill to filter the table below.</p>
     </div>
   )
 }
 
-function TableBlock({ block, editing, search, onChange }: { block: Extract<Block, { type: 'table' }>; editing: boolean; search: string; onChange: (p: Partial<Block>) => void }) {
+// Value for a (possibly metadata-derived) column key.
+function cellVal(r: Record<string, any>, c: string): any {
+  if (c.startsWith('meta:')) return (r.metadata as any)?.[c.slice(5)]
+  return r[c]
+}
+const colLabel = (c: string) => (c.startsWith('meta:') ? c.slice(5) : c)
+
+function TableBlock({ block, editing, search, activeFilter, onChange }: {
+  block: Extract<Block, { type: 'table' }>; editing: boolean; search: string
+  activeFilter: { column: string; value: string; label: string } | null
+  onChange: (p: Partial<Block>) => void
+}) {
   const { profile } = useAuthStore()
   const [rows, setRows] = useState<Record<string, any>[]>([])
   const [allCols, setAllCols] = useState<string[]>([])
@@ -317,17 +388,24 @@ function TableBlock({ block, editing, search, onChange }: { block: Extract<Block
         if (cancelled) return
         const r = (data ?? []) as Record<string, any>[]
         setRows(r)
-        setAllCols(r[0] ? Object.keys(r[0]).filter((k) => !['company_id'].includes(k)) : [])
+        // Dynamic columns from the actual rows, with metadata jsonb keys expanded
+        // into individually-selectable meta:<key> columns (union across rows).
+        const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
+        const metaKeys = new Set<string>()
+        for (const row of r) { const m = row.metadata; if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`) }
+        setAllCols([...base, ...metaKeys])
       })
     return () => { cancelled = true }
   }, [block.source, profile?.company_id])
 
   const cols = block.columns.length ? block.columns : allCols.slice(0, 4)
   const filtered = useMemo(() => {
+    let r = rows
     const q = search.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter((r) => cols.some((c) => String(r[c] ?? '').toLowerCase().includes(q)))
-  }, [rows, search, cols])
+    if (q) r = r.filter((row) => cols.some((c) => String(cellVal(row, c) ?? '').toLowerCase().includes(q)))
+    if (activeFilter) r = r.filter((row) => String(cellVal(row, activeFilter.column) ?? '').toLowerCase() === activeFilter.value.toLowerCase())
+    return r
+  }, [rows, search, cols, activeFilter])
   const shown = seeAll ? filtered : filtered.slice(0, 20)
 
   return (
@@ -345,7 +423,7 @@ function TableBlock({ block, editing, search, onChange }: { block: Extract<Block
               <label key={c} className="flex cursor-pointer items-center gap-1 text-[11px] font-mono text-gray-400">
                 <input type="checkbox" checked={cols.includes(c)} className="accent-[#00e5ff]"
                   onChange={() => onChange({ columns: cols.includes(c) ? cols.filter((x) => x !== c) : [...cols, c] })} />
-                {c}
+                {colLabel(c)}
               </label>
             ))}
           </div>
@@ -354,10 +432,10 @@ function TableBlock({ block, editing, search, onChange }: { block: Extract<Block
 
       <div className="overflow-auto rounded border border-[#2a2d3e]">
         <table className="w-full text-[11px] font-mono">
-          <thead className="bg-[#161820] text-gray-500"><tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left">{c}</th>)}</tr></thead>
+          <thead className="bg-[#161820] text-gray-500"><tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left">{colLabel(c)}</th>)}</tr></thead>
           <tbody>
             {shown.map((r, i) => (
-              <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>{cols.map((c) => <td key={c} className="px-2 py-1 text-gray-300">{String(r[c] ?? '—')}</td>)}</tr>
+              <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>{cols.map((c) => <td key={c} className="px-2 py-1 text-gray-300">{String(cellVal(r, c) ?? '—')}</td>)}</tr>
             ))}
             {shown.length === 0 && <tr><td colSpan={Math.max(1, cols.length)} className="px-2 py-2 text-gray-600">No rows</td></tr>}
           </tbody>
