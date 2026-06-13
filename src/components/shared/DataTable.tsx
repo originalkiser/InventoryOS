@@ -74,7 +74,13 @@ export function DataTable<T>({
                 {hg.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="px-3 py-2 text-left text-gray-500 uppercase tracking-wide whitespace-nowrap"
+                    style={header.column.getIsPinned() === 'left'
+                      ? { position: 'sticky', left: header.column.getStart('left'), zIndex: 20 }
+                      : undefined}
+                    className={[
+                      'px-3 py-2 text-left text-gray-500 uppercase tracking-wide whitespace-nowrap',
+                      header.column.getIsPinned() === 'left' ? 'bg-[#161820] border-r border-[#2a2d3e]' : '',
+                    ].join(' ')}
                   >
                     <span
                       onClick={header.column.getToggleSortingHandler()}
@@ -110,7 +116,16 @@ export function DataTable<T>({
                   className="border-b border-[#2a2d3e]/50 hover:bg-[#00e5ff]/5 transition-colors"
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-3 py-2 text-gray-300">
+                    <td
+                      key={cell.id}
+                      style={cell.column.getIsPinned() === 'left'
+                        ? { position: 'sticky', left: cell.column.getStart('left'), zIndex: 10 }
+                        : undefined}
+                      className={[
+                        'px-3 py-2 text-gray-300',
+                        cell.column.getIsPinned() === 'left' ? 'bg-[#0f1117] border-r border-[#2a2d3e]' : '',
+                      ].join(' ')}
+                    >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}

@@ -11,6 +11,8 @@ import {
   type SortingState,
   type VisibilityState,
   type ColumnFiltersState,
+  type ColumnOrderState,
+  type ColumnPinningState,
   type FilterFn,
 } from '@tanstack/react-table'
 
@@ -25,15 +27,21 @@ export function useTable<T>(data: T[], columns: ColumnDef<T, any>[]) {
   const [globalFilter, setGlobalFilter] = useState('')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  // Optional ordering/pinning — empty by default, so tables that don't use them
+  // are unaffected (no column is pinned/reordered).
+  const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([])
+  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>({ left: [], right: [] })
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, globalFilter, columnVisibility, columnFilters },
+    state: { sorting, globalFilter, columnVisibility, columnFilters, columnOrder, columnPinning },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnFiltersChange: setColumnFilters,
+    onColumnOrderChange: setColumnOrder,
+    onColumnPinningChange: setColumnPinning,
     defaultColumn: { filterFn: multiSelectFilter },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -50,7 +58,7 @@ export function useTable<T>(data: T[], columns: ColumnDef<T, any>[]) {
     autoResetPageIndex: false,
   })
 
-  return { table, globalFilter, setGlobalFilter, columnVisibility, columnFilters }
+  return { table, globalFilter, setGlobalFilter, columnVisibility, columnFilters, columnOrder, setColumnOrder, columnPinning, setColumnPinning }
 }
 
 export function exportTableToCsv<T>(data: T[], filename: string) {

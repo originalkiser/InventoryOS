@@ -26,6 +26,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   const [startDate, setStartDate] = useState(existing?.start_date ?? '')
   const [targetDate, setTargetDate] = useState(existing?.target_resolution_date ?? '')
   const [resolvedDate, setResolvedDate] = useState(existing?.resolved_date ?? '')
+  const [vendor, setVendor] = useState(existing?.vendor ?? '')
   const [notes, setNotes] = useState(existing?.resolution_notes ?? '')
   const [saving, setSaving] = useState(false)
 
@@ -46,6 +47,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
     setStartDate(existing?.start_date ?? '')
     setTargetDate(existing?.target_resolution_date ?? '')
     setResolvedDate(existing?.resolved_date ?? '')
+    setVendor(existing?.vendor ?? '')
     setNotes(existing?.resolution_notes ?? '')
   }, [existing])
 
@@ -102,6 +104,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
       start_date: startDate || null,
       target_resolution_date: targetDate || null,
       resolved_date: resolvedDate || null,
+      vendor: vendor.trim() || null,
       resolution_notes: notes || null,
     }
     // Only stamp the creator on insert — editing must not reassign it.
@@ -149,6 +152,9 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
 
         <Input label="Target Resolution" type="date" value={targetDate}
           onChange={(e) => setTargetDate(e.target.value)} />
+
+        <Input label="Vendor" value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Vendor name" />
+
 
         {isResolved && (
           <Input label="Resolved Date" type="date" value={resolvedDate}
