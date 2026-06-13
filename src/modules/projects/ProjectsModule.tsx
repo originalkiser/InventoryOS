@@ -11,6 +11,7 @@ import { format } from 'date-fns'
 import { Button, Badge } from '@/components/ui'
 import { useProjects } from '@/hooks/useProjects'
 import { useProjectColumns, type ColumnDef } from '@/hooks/useProjectColumns'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import type { Project, ProjectTask } from '@/types'
 
 type CellType = 'text' | 'date' | 'status' | 'datetime'
@@ -27,30 +28,71 @@ const COLUMN_DEFS: (ColumnDef & { type: CellType })[] = [
 ]
 const TYPE_OF = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.type])) as Record<string, CellType>
 
-const STATUS_OPTIONS = ['Not Started', 'In Progress', 'Blocked', 'Complete']
-const STATUS_COLOR: Record<string, 'gray' | 'cyan' | 'red' | 'green'> = {
-  'Not Started': 'gray', 'In Progress': 'cyan', 'Blocked': 'red', 'Complete': 'green',
+const STATUS_OPTIONS = ['Not Started', 'In Progress', 'Stuck (Vendor)', 'Blocked', 'Complete']
+type PillColor = 'gray' | 'cyan' | 'red' | 'green' | 'amber' | 'magenta'
+// Generalized so custom statuses still get a sensible color.
+function colorForStatus(s: string): PillColor {
+  const v = (s || '').toLowerCase()
+  if (v.includes('complete') || v.includes('done')) return 'green'
+  if (v.includes('progress')) return 'cyan'
+  if (v.includes('stuck') || v.includes('block')) return 'red'
+  if (v.includes('not started') || v === '') return 'gray'
+  return 'magenta'
 }
 const CTRL_W = 64
 
+// Wrapping, expand/collapse, click-to-edit text cell (Description / Notes).
+function ExpandableTextCell({ value, onSave, placeholder }: { value: string | null; onSave: (v: string) => void; placeholder?: string }) {
+  const [editing, setEditing] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [v, setV] = useState(value ?? '')
+  useEffect(() => { setV(value ?? '') }, [value])
+  if (editing) {
+    return (
+      <textarea autoFocus value={v} onChange={(e) => setV(e.target.value)}
+        onBlur={() => { setEditing(false); if ((value ?? '') !== v) onSave(v) }}
+        rows={3}
+        className="w-full resize-y rounded border border-[#00e5ff] bg-[#0f1117] px-1.5 py-1 text-xs font-mono text-gray-200 focus:outline-none" />
+    )
+  }
+  const text = value ?? ''
+  return (
+    <div className="px-1.5 py-1">
+      <div onClick={() => setEditing(true)}
+        className={['cursor-text whitespace-pre-wrap break-words text-xs font-mono', text ? 'text-gray-200' : 'text-gray-600', expanded ? '' : 'line-clamp-2'].join(' ')}>
+        {text || placeholder || '—'}
+      </div>
+      {text.length > 60 && (
+        <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-[#00e5ff] hover:underline">{expanded ? 'less' : 'more'}</button>
+      )}
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
-function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf }: {
+function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf, onAddOption }: {
   value: string | null
   onChange: (v: string) => void
   options?: string[]
-  colorOf?: (s: string) => 'gray' | 'cyan' | 'red' | 'green' | 'amber' | 'magenta'
+  colorOf?: (s: string) => PillColor
+  onAddOption?: (name: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   const v = value ?? 'Not Started'
-  const color = (s: string) => (colorOf ? colorOf(s) : (STATUS_COLOR[s] ?? 'gray'))
+  const color = (s: string) => (colorOf ? colorOf(s) : colorForStatus(s))
   function toggle() {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect()
       setRect({ left: r.left, top: r.bottom + 4 })
     }
     setOpen((o) => !o)
+  }
+  function addCustom() {
+    const name = prompt('New status name')?.trim()
+    if (name && onAddOption) { onAddOption(name); onChange(name) }
+    setOpen(false)
   }
   return (
     <>
@@ -65,6 +107,9 @@ function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf }: {
                 <Badge color={color(s)}>{s}</Badge>
               </button>
             ))}
+            {onAddOption && (
+              <button onClick={addCustom} className="flex w-full items-center px-2 py-1 text-xs font-mono text-[#00e5ff] hover:bg-white/5">＋ custom…</button>
+            )}
           </div>
         </>
       )}
@@ -127,13 +172,15 @@ function HeaderCell({ col, left, sortDir, onSort, onTogglePin, onResize }: {
 }
 
 // ---------------------------------------------------------------------------
-function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder }: {
+function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, statusOptions, onAddStatus }: {
   projectId: string
   tasks: ProjectTask[]
   onAdd: (projectId: string) => void
   onUpdate: (id: string, patch: Partial<ProjectTask>) => void
   onDelete: (id: string) => void
   onReorder: (projectId: string, ordered: ProjectTask[]) => void
+  statusOptions: string[]
+  onAddStatus: (name: string) => void
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
   function onDragEnd(e: DragEndEvent) {
@@ -161,7 +208,7 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder }: {
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
               <tbody>
-                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} />)}
+                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} />)}
                 {tasks.length === 0 && (
                   <tr><td colSpan={8} className="px-2 py-2 text-gray-600">No tasks yet.</td></tr>
                 )}
@@ -175,7 +222,7 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder }: {
   )
 }
 
-function SubTaskRow({ task, onUpdate, onDelete }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void }) {
+function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void; statusOptions: string[]; onAddStatus: (name: string) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
   return (
     <tr ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
@@ -186,10 +233,10 @@ function SubTaskRow({ task, onUpdate, onDelete }: { task: ProjectTask; onUpdate:
           onChange={(e) => onUpdate(task.id, { done: e.target.checked, status: e.target.checked ? 'Complete' : task.status })} />
       </td>
       <td><EditableCell value={task.task_name} type="text" placeholder="Task name…" onSave={(v) => onUpdate(task.id, { task_name: v })} /></td>
-      <td><StatusPill value={task.status} onChange={(v) => onUpdate(task.id, { status: v })} /></td>
+      <td><StatusPill value={task.status} onChange={(v) => onUpdate(task.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={onAddStatus} /></td>
       <td><EditableCell value={task.assignee} type="text" placeholder="—" onSave={(v) => onUpdate(task.id, { assignee: v })} /></td>
       <td><EditableCell value={task.due_date} type="date" onSave={(v) => onUpdate(task.id, { due_date: v || null })} /></td>
-      <td><EditableCell value={task.notes} type="text" placeholder="—" onSave={(v) => onUpdate(task.id, { notes: v })} /></td>
+      <td className="min-w-[160px]"><ExpandableTextCell value={task.notes} placeholder="—" onSave={(v) => onUpdate(task.id, { notes: v || null })} /></td>
       <td className="px-1 text-center"><button onClick={() => onDelete(task.id)} className="text-gray-600 hover:text-red-400">✕</button></td>
     </tr>
   )
@@ -207,6 +254,11 @@ export function ProjectsModule() {
   const [colMenuOpen, setColMenuOpen] = useState(false)
   const focusName = useRef<string | null>(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  // Custom statuses (shared by projects + sub-tasks), persisted per company.
+  const [customStatuses, setCustomStatuses] = useAppSetting<string[]>('project_custom_statuses', [])
+  const statusOptions = useMemo(() => [...STATUS_OPTIONS, ...customStatuses.filter((s) => !STATUS_OPTIONS.includes(s))], [customStatuses])
+  const addStatus = (name: string) => { if (!statusOptions.includes(name)) setCustomStatuses([...customStatuses, name]) }
 
   const visible = useMemo(() => columns.filter((c) => c.visible), [columns])
   const ordered = useMemo(() => [...visible.filter((c) => c.pinned), ...visible.filter((c) => !c.pinned)], [visible])
@@ -271,8 +323,9 @@ export function ProjectsModule() {
 
   function renderCell(p: Project, key: string) {
     const type = TYPE_OF[key]
-    if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} />
+    if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={addStatus} />
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-gray-500">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
+    if (key === 'description') return <ExpandableTextCell value={p.description} placeholder="Description…" onSave={(v) => updateProject(p.id, { description: v || null })} />
     const dataKey = key === 'project_name' ? { 'data-name-input': p.id } : {}
     return (
       <span {...dataKey as any}>
@@ -359,7 +412,8 @@ export function ProjectsModule() {
                       expanded={expanded.has(p.id)} onToggle={() => toggleExpand(p.id)}
                       renderCell={renderCell} onDelete={() => deleteProject(p.id)}
                       tasks={tasks.filter((t) => t.project_id === p.id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))}
-                      onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks} />
+                      onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks}
+                      statusOptions={statusOptions} onAddStatus={addStatus} />
                   ))}
                 </GroupBlock>
               ))}
@@ -381,7 +435,7 @@ function GroupBlock({ label, count, totalCols, children }: { label: string | nul
   )
 }
 
-function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask }: {
+function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, statusOptions, onAddStatus }: {
   project: Project
   ordered: { key: string; width: number; pinned: boolean }[]
   leftOffsets: Record<string, number>
@@ -395,6 +449,8 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
   onUpdateTask: (id: string, patch: Partial<ProjectTask>) => void
   onDeleteTask: (id: string) => void
   onReorderTask: (projectId: string, ordered: ProjectTask[]) => void
+  statusOptions: string[]
+  onAddStatus: (name: string) => void
 }) {
   const taskCount = tasks.length
   const doneCount = tasks.filter((t) => t.done).length
@@ -423,7 +479,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
         <tr>
           <td />
           <td colSpan={totalCols - 1} className="p-0">
-            <SubTasks projectId={project.id} tasks={tasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} />
+            <SubTasks projectId={project.id} tasks={tasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} statusOptions={statusOptions} onAddStatus={onAddStatus} />
           </td>
         </tr>
       )}
