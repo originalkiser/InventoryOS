@@ -88,18 +88,11 @@ const NAV_ITEMS = [
 ]
 
 interface SidebarProps {
-  locationPanelOpen: boolean
-  onToggleLocationPanel: () => void
   collapsed: boolean
   onToggleCollapsed: () => void
 }
 
-export function Sidebar({
-  locationPanelOpen,
-  onToggleLocationPanel,
-  collapsed,
-  onToggleCollapsed,
-}: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   const { profile } = useAuthStore()
 
   async function handleSignOut() {
@@ -176,26 +169,6 @@ export function Sidebar({
             {!collapsed && <span className="truncate">Users</span>}
           </NavLink>
         )}
-
-        {/* Location Lookup toggle */}
-        <button
-          onClick={onToggleLocationPanel}
-          className={[
-            'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-mono transition-all duration-150 text-left',
-            locationPanelOpen
-              ? 'bg-[#ffb300]/10 text-[#ffb300] border border-[#ffb300]/20'
-              : 'text-gray-500 hover:text-gray-200 hover:bg-white/5',
-          ].join(' ')}
-        >
-          <span className="flex-shrink-0">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </span>
-          {!collapsed && <span>Location Lookup</span>}
-        </button>
       </nav>
 
       {/* Footer */}
