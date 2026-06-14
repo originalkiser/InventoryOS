@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -21,6 +21,9 @@ import toast from 'react-hot-toast'
 
 type Stage = 'start' | 'params' | 'review' | 'export'
 type Source = 'manual' | 'file' | 'live'
+// Config-based (uses InventoryOS config), Manual (grouped entry), or Independent
+// (standalone — uploaded file only; config is optional). All share one engine.
+export type OrderMode = 'config' | 'manual' | 'independent'
 
 const MAP_FIELDS = [
   { name: 'location', label: 'Location', required: true },
@@ -46,18 +49,17 @@ function toNum(raw: string): number | string {
   return isNaN(n) ? '' : n
 }
 
-export function NewOrderTab() {
+export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const store = useOrderStore()
 
   const [stage, setStage] = useState<Stage>('start')
-  const [source, setSource] = useState<Source>('file')
+  const [source, setSource] = useState<Source>(mode === 'manual' ? 'manual' : 'file')
   const [config, setConfig] = useState<OrderConfigData | null>(null)
   const [uomConfig, setUomConfig] = useState<UomConfig | null>(null)
   const [minRules, setMinRules] = useState<OrderMinRule[]>([])
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
-  const [manualRows, setManualRows] = useState<InventoryRow[]>([{ location: '', product: '', on_hand: '', daily_usage: '', leadtime: '' }])
 
   // Pending-order subtraction (optional)
   const [pending, setPending] = useState<PendingIndex | null>(null)
@@ -106,6 +108,13 @@ export function NewOrderTab() {
   }, [companyId])
 
   useEffect(() => { loadConfig() }, [loadConfig])
+
+  // Independent mode mirrors the standalone order-generator: days-supply by
+  // default and config is optional.
+  useEffect(() => {
+    if (mode === 'independent') store.setParams({ orderMode: 'days_supply' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode])
 
   function rowsFromFile(mappings: ColumnMapping[]): InventoryRow[] {
     if (!parsed) return []
@@ -199,7 +208,7 @@ export function NewOrderTab() {
 
   function startOver() {
     store.reset(); setParsed(null); setStage('start'); setPending(null); setPendingCount(0); setPackRules([])
-    setManualRows([{ location: '', product: '', on_hand: '', daily_usage: '', leadtime: '' }])
+    setSource(mode === 'manual' ? 'manual' : 'file')
   }
 
   function applyPendingFile(p: ParsedUpload, mapping: { location: string; product: string; qty: string }) {
@@ -224,35 +233,41 @@ export function NewOrderTab() {
         <div className="flex flex-col gap-4">
           <Card>
             <CardHeader className="flex items-center justify-between">
-              <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Inventory Source</span>
-              <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
-                {(['file', 'manual', 'live'] as Source[]).map((s) => (
-                  <button key={s} onClick={() => { setSource(s); setParsed(null) }}
-                    className={['px-3 py-1 text-xs font-mono capitalize', source === s ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300'].join(' ')}>
-                    {s === 'live' ? 'Live Source' : s}
-                  </button>
-                ))}
-              </div>
+              <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">
+                {mode === 'manual' ? 'Manual Order Entry' : mode === 'independent' ? 'Upload Inventory (standalone)' : 'Inventory Source'}
+              </span>
+              {/* Config mode lets you switch between an uploaded file and a live source. */}
+              {mode === 'config' && (
+                <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+                  {(['file', 'live'] as Source[]).map((s) => (
+                    <button key={s} onClick={() => { setSource(s); setParsed(null) }}
+                      className={['px-3 py-1 text-xs font-mono capitalize', source === s ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+                      {s === 'live' ? 'Live Source' : s}
+                    </button>
+                  ))}
+                </div>
+              )}
             </CardHeader>
             <CardBody className="flex flex-col gap-4">
-              {source === 'file' && (!parsed ? (
+              {mode === 'independent' && (
+                <p className="text-xs font-mono text-gray-500">Standalone generator — works from just the uploaded file. The InventoryOS config (order configs, vendor parts, UoM) is used when present but isn&apos;t required.</p>
+              )}
+
+              {mode === 'manual' ? (
+                <ManualEntry
+                  locations={config?.locations ?? []}
+                  onConfirm={(rows) => { store.setInputRows(rows); store.setSourceMode('manual'); setStage('params') }}
+                />
+              ) : source === 'live' ? (
+                <DataSourceLinker configType="orders" />
+              ) : !parsed ? (
                 <FileUploadZone onParsed={(r) => setParsed(r)} />
               ) : (
                 <ColumnMapper headers={parsed.headers} requiredFields={MAP_FIELDS}
                   initialMappings={store.mapping.length ? store.mapping : undefined}
                   onConfirm={(m) => { store.setInputRows(rowsFromFile(m)); setStage('params'); toast.success(`Loaded ${parsed.rows.length} rows`) }}
                   onCancel={() => setParsed(null)} />
-              ))}
-
-              {source === 'manual' && (
-                <ManualGrid rows={manualRows} onChange={setManualRows} onConfirm={() => {
-                  const clean = manualRows.filter((r) => String(r.product ?? '').trim())
-                  if (!clean.length) { toast.error('Add at least one product row'); return }
-                  store.setInputRows(clean); store.setSourceMode('manual'); setStage('params')
-                }} />
               )}
-
-              {source === 'live' && <DataSourceLinker configType="orders" />}
             </CardBody>
           </Card>
 
@@ -330,39 +345,90 @@ function StageBar({ stage }: { stage: Stage }) {
   )
 }
 
-function ManualGrid({ rows, onChange, onConfirm }: { rows: InventoryRow[]; onChange: (r: InventoryRow[]) => void; onConfirm: () => void }) {
-  function set(i: number, key: keyof InventoryRow, val: string) {
-    onChange(rows.map((r, idx) => (idx === i ? { ...r, [key]: val } : r)))
+interface PRow { product: string; on_hand: string; daily_usage: string; leadtime: string }
+interface LGroup { location: string; rows: PRow[] }
+const blankRow = (): PRow => ({ product: '', on_hand: '', daily_usage: '', leadtime: '' })
+const cellCls = 'w-full bg-[#161820] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]'
+
+// Location-grouped manual entry: set a location once (config datalist or free
+// text), then add products under it without retyping the location. Tab across
+// fields; Enter on Lead Time adds another product row and focuses it.
+function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfirm: (rows: InventoryRow[]) => void }) {
+  const [groups, setGroups] = useState<LGroup[]>([{ location: '', rows: [blankRow()] }])
+  const focusKey = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!focusKey.current) return
+    document.querySelector<HTMLInputElement>(`[data-cell="${focusKey.current}"]`)?.focus()
+    focusKey.current = null
+  })
+
+  function setGroup(gi: number, patch: Partial<LGroup>) { setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, ...patch } : grp))) }
+  function setCell(gi: number, ri: number, key: keyof PRow, val: string) {
+    setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, rows: grp.rows.map((r, j) => (j === ri ? { ...r, [key]: val } : r)) } : grp)))
   }
-  const cols: { key: keyof InventoryRow; label: string }[] = [
-    { key: 'location', label: 'Location' }, { key: 'product', label: 'Product' },
-    { key: 'on_hand', label: 'On Hand' }, { key: 'daily_usage', label: 'Daily Usage' }, { key: 'leadtime', label: 'Lead Time' },
-  ]
+  function addRow(gi: number) {
+    focusKey.current = `${gi}-${groups[gi].rows.length}-product`
+    setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, rows: [...grp.rows, blankRow()] } : grp)))
+  }
+  function removeRow(gi: number, ri: number) { setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, rows: grp.rows.filter((_, j) => j !== ri) } : grp))) }
+  function addGroup() { focusKey.current = `${groups.length}-loc`; setGroups((g) => [...g, { location: '', rows: [blankRow()] }]) }
+  function removeGroup(gi: number) { setGroups((g) => g.filter((_, i) => i !== gi)) }
+
+  function confirm() {
+    const out: InventoryRow[] = []
+    for (const grp of groups) for (const r of grp.rows) {
+      if (!r.product.trim()) continue
+      out.push({ location: grp.location.trim(), product: r.product.trim(), on_hand: toNum(r.on_hand), daily_usage: toNum(r.daily_usage), leadtime: toNum(r.leadtime) })
+    }
+    if (!out.length) { toast.error('Add at least one product'); return }
+    onConfirm(out)
+  }
+
+  const totalProducts = groups.reduce((n, g) => n + g.rows.filter((r) => r.product.trim()).length, 0)
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="overflow-auto rounded border border-[#2a2d3e]">
-        <table className="w-full text-xs font-mono">
-          <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide">
-            <tr>{cols.map((c) => <th key={c.key} className="px-2 py-2 text-left">{c.label}</th>)}<th /></tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-t border-[#2a2d3e]/50">
-                {cols.map((c) => (
-                  <td key={c.key} className="px-1 py-1">
-                    <input value={String(r[c.key] ?? '')} onChange={(e) => set(i, c.key, e.target.value)}
-                      className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]" />
-                  </td>
-                ))}
-                <td className="px-2"><button onClick={() => onChange(rows.filter((_, idx) => idx !== i))} className="text-red-400 hover:text-red-300">×</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="flex justify-between">
-        <Button size="sm" variant="secondary" onClick={() => onChange([...rows, { location: '', product: '', on_hand: '', daily_usage: '', leadtime: '' }])}>+ Add Row</Button>
-        <Button size="sm" onClick={onConfirm}>Continue →</Button>
+    <div className="flex flex-col gap-4">
+      <datalist id="manual-loc-list">
+        {locations.map((l) => <option key={l.id} value={l.location_code}>{l.location_code} — {l.name}</option>)}
+      </datalist>
+      <p className="text-xs font-mono text-gray-600">Add a location (pick from config or type any), then add products under it. Tab between fields; Enter on Lead Time adds another product.</p>
+
+      {groups.map((grp, gi) => (
+        <div key={gi} className="flex flex-col gap-2 rounded border border-[#2a2d3e] bg-[#0f1117] p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono uppercase tracking-wide text-gray-500">Location</span>
+            <input list="manual-loc-list" data-cell={`${gi}-loc`} value={grp.location} onChange={(e) => setGroup(gi, { location: e.target.value })}
+              placeholder="Code or name (or free text)" className="flex-1 bg-[#161820] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]" />
+            {groups.length > 1 && <button onClick={() => removeGroup(gi)} className="text-gray-600 hover:text-red-400" title="Remove location">✕</button>}
+          </div>
+          <table className="w-full text-xs font-mono">
+            <thead className="text-gray-500 uppercase tracking-wide"><tr>
+              <th className="px-1 py-1 text-left">Product</th><th className="px-1 py-1 text-left">On Hand</th><th className="px-1 py-1 text-left">Daily Usage</th><th className="px-1 py-1 text-left">Lead Time</th><th />
+            </tr></thead>
+            <tbody>
+              {grp.rows.map((r, ri) => (
+                <tr key={ri}>
+                  <td className="px-1 py-0.5"><input data-cell={`${gi}-${ri}-product`} value={r.product} onChange={(e) => setCell(gi, ri, 'product', e.target.value)} className={cellCls} /></td>
+                  <td className="px-1 py-0.5"><input value={r.on_hand} onChange={(e) => setCell(gi, ri, 'on_hand', e.target.value)} className={cellCls} /></td>
+                  <td className="px-1 py-0.5"><input value={r.daily_usage} onChange={(e) => setCell(gi, ri, 'daily_usage', e.target.value)} className={cellCls} /></td>
+                  <td className="px-1 py-0.5"><input value={r.leadtime} onChange={(e) => setCell(gi, ri, 'leadtime', e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRow(gi) } }} className={cellCls} /></td>
+                  <td className="px-1">{grp.rows.length > 1 && <button onClick={() => removeRow(gi, ri)} className="text-gray-600 hover:text-red-400">×</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button onClick={() => addRow(gi)} className="self-start text-xs font-mono text-[#00e5ff] hover:underline">+ Add product</button>
+        </div>
+      ))}
+
+      <div className="flex items-center justify-between">
+        <Button size="sm" variant="secondary" onClick={addGroup}>+ Add Location</Button>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-mono text-gray-500">{totalProducts} product line{totalProducts !== 1 ? 's' : ''}</span>
+          <Button size="sm" onClick={confirm}>Continue →</Button>
+        </div>
       </div>
     </div>
   )

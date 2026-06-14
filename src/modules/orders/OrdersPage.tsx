@@ -12,14 +12,18 @@ export function OrdersPage() {
         <p className="text-xs text-gray-500 mt-0.5">Inventory-driven order planning</p>
       </div>
 
-      <Tabs defaultValue="new">
+      <Tabs defaultValue="config">
         <TabsList>
-          <TabsTrigger value="new">New Order</TabsTrigger>
+          <TabsTrigger value="config">Config Order</TabsTrigger>
+          <TabsTrigger value="manual">Manual Order</TabsTrigger>
+          <TabsTrigger value="independent">Independent</TabsTrigger>
           <TabsTrigger value="history">Order History</TabsTrigger>
           <TabsTrigger value="rules">Min Rules</TabsTrigger>
           <TabsTrigger value="profiles">Profiles</TabsTrigger>
         </TabsList>
-        <TabsContent value="new"><NewOrderTab /></TabsContent>
+        <TabsContent value="config"><NewOrderTab mode="config" /></TabsContent>
+        <TabsContent value="manual"><NewOrderTab mode="manual" /></TabsContent>
+        <TabsContent value="independent"><NewOrderTab mode="independent" /></TabsContent>
         <TabsContent value="history"><OrderHistoryTab /></TabsContent>
         <TabsContent value="rules"><MinRulesTab /></TabsContent>
         <TabsContent value="profiles"><ProfilesTab /></TabsContent>
