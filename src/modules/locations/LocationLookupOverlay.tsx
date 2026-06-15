@@ -330,12 +330,23 @@ function PillsBlock({ block, editing, onChange, onFilter }: {
 }
 
 function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
+  const { profile } = useAuthStore()
   const [label, setLabel] = useState('')
   const [color, setColor] = useState<BadgeColor>('cyan')
   const [source, setSource] = useState('locations')
   const [column, setColumn] = useState('')
   const [op, setOp] = useState<PillOp>('=')
   const [value, setValue] = useState('')
+  const [cols, setCols] = useState<string[]>([])
+
+  // Populate the column dropdown from the chosen table's actual columns.
+  useEffect(() => {
+    if (!profile?.company_id) return
+    let cancelled = false
+    ;(supabase as any).from(source).select('*').eq('company_id', profile.company_id).limit(1)
+      .then(({ data }: any) => { if (!cancelled) setCols(data?.[0] ? Object.keys(data[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []) })
+    return () => { cancelled = true }
+  }, [source, profile?.company_id])
   return (
     <div className="flex flex-col gap-1 rounded border border-[#2a2d3e] p-2">
       <div className="flex items-center gap-1">
@@ -346,11 +357,13 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
         </select>
       </div>
       <div className="flex items-center gap-1">
-        <select value={source} onChange={(e) => setSource(e.target.value)} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+        <select value={source} onChange={(e) => { setSource(e.target.value); setColumn('') }} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
           {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <input value={column} onChange={(e) => setColumn(e.target.value)} placeholder="column"
-          className="w-24 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white" />
+        <select value={column} onChange={(e) => setColumn(e.target.value)} className="w-28 rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+          <option value="">column…</option>
+          {cols.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
         <select value={op} onChange={(e) => setOp(e.target.value as PillOp)} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
           {(['=', '!=', '<', '>'] as PillOp[]).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>

@@ -53,6 +53,7 @@ export interface TankMonitor {
   product_id: string | null
   keep_fill: boolean
   reading_date: string
+  inventory_time: string | null
   on_hand: number | null
   value: number | null
   unit: string | null

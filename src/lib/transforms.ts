@@ -45,6 +45,25 @@ function firstNumber(s: string): string {
   return m ? m[0] : ''
 }
 
+// Parse a date value safely. Handles Excel serial numbers and rejects absurd
+// years (a serial like 46186 parsed as the year 46186 caused Postgres
+// "time zone displacement out of range"). Returns null when unparseable.
+function parseDateSafe(v: string): Date | null {
+  const s = String(v ?? '').trim()
+  if (!s) return null
+  let d: Date
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    // Bare number → Excel serial date (days since 1899-12-30).
+    d = new Date(Math.round((Number(s) - 25569) * 86400 * 1000))
+  } else {
+    d = new Date(s)
+  }
+  if (isNaN(d.getTime())) return null
+  const y = d.getFullYear()
+  if (y < 1900 || y > 9999) return null
+  return d
+}
+
 export function formatPhone(raw: string): string {
   const digits = String(raw ?? '').replace(/\D/g, '')
   if (digits.length < 10) return String(raw ?? '') // too short — leave raw (caller may flag)
@@ -73,8 +92,8 @@ function applyOne(value: string, t: Transform): string {
     }
     case 'pos_location': return firstNumber(v)
     case 'phone': return formatPhone(v)
-    case 'date': { const d = new Date(v); return isNaN(d.getTime()) ? v : format(d, 'yyyy-MM-dd') }
-    case 'datetime': { const d = new Date(v); return isNaN(d.getTime()) ? v : d.toISOString() }
+    case 'date': { const d = parseDateSafe(v); return d ? format(d, 'yyyy-MM-dd') : '' }
+    case 'datetime': { const d = parseDateSafe(v); return d ? d.toISOString() : '' }
     case 'currency': { const n = toNum(v); return isNaN(n) ? '' : String(n) }
     default: return v
   }

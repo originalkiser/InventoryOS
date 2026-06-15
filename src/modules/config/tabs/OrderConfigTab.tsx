@@ -53,7 +53,7 @@ export function OrderConfigTab() {
   const ownFields = customFields.filter((f) => !f.linked_section)
   const linkedFields = customFields.filter((f) => f.linked_section)
 
-  const [form, setForm] = useState({ vendorId: '', locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' })
+  const [form, setForm] = useState({ vendorId: '', locationId: '', product_id: '', uom: '', capacity: '', order_trigger: '', order_limit: '' })
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
   const columns = useMemo(() => {
@@ -61,9 +61,10 @@ export function OrderConfigTab() {
       { id: 'vendor', header: 'Vendor', accessorFn: (r: LocationOrderConfig) => vendorName(r.vendor_id), cell: (i: any) => i.getValue() },
       { id: 'location', header: 'Location', accessorFn: (r: LocationOrderConfig) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
       col.accessor('product_id', { header: 'Product ID' }),
+      { id: 'uom', header: 'UoM', accessorFn: (r: LocationOrderConfig) => (r.metadata as any)?.uom ?? '', cell: (i: any) => i.getValue() || '—' },
       col.accessor('capacity', { header: 'Capacity', cell: (i) => i.getValue() ?? '—' }),
       col.accessor('order_trigger', { header: 'Trigger', cell: (i) => i.getValue() ?? '—' }),
-      col.accessor('order_limit', { header: 'Limit', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('order_limit', { header: 'Limit (0 = inactive)', cell: (i) => i.getValue() ?? '—' }),
     ]
     for (const f of customFields) {
       cols.push({
@@ -74,7 +75,6 @@ export function OrderConfigTab() {
         cell: (i: any) => i.getValue() || '—',
       })
     }
-    cols.push(col.accessor('active', { header: 'Active', cell: (i) => (i.getValue() ? '✓' : '✗') }))
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as LocationOrderConfig; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
     cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as LocationOrderConfig)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> })
     return cols
@@ -82,13 +82,15 @@ export function OrderConfigTab() {
 
   const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
 
+  // All uploaded products are treated as active; set Order Limit to 0 to make a
+  // product inactive. UoM is captured (used by UoM conversions).
   const uploadFields = [
     { name: 'location', label: 'Location', required: true },
     { name: 'product_id', label: 'Product ID', required: true },
+    { name: 'uom', label: 'Unit of Measure' },
     { name: 'capacity', label: 'Capacity' },
     { name: 'order_trigger', label: 'Order Trigger' },
-    { name: 'order_limit', label: 'Order Limit' },
-    { name: 'active', label: 'Active' },
+    { name: 'order_limit', label: 'Order Limit (0 = inactive)' },
     ...ownFields.map((f) => ({ name: f.field_key, label: f.label })),
   ]
 
@@ -96,12 +98,12 @@ export function OrderConfigTab() {
     setImporting(true)
     const ownKeys = new Set(ownFields.map((f) => f.field_key))
     const payload = rows.map((row) => {
-      const out: Record<string, unknown> = { vendor_id: uploadVendorId || null }
+      const out: Record<string, unknown> = { vendor_id: uploadVendorId || null, active: true }
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
         const raw = mappedValue(row, m)
         if (m.fieldName === 'location') out.location_id = loc.resolveId(raw)
-        else if (m.fieldName === 'active') out.active = ['true', '1', 'yes'].includes(raw.toLowerCase())
+        else if (m.fieldName === 'uom') meta.uom = raw || null
         else if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)
         else if (ownKeys.has(m.fieldName)) meta[m.fieldName] = raw || null
         else out[m.fieldName] = raw || null
@@ -115,12 +117,12 @@ export function OrderConfigTab() {
     setImporting(false)
   }
 
-  function resetForm() { setForm({ vendorId: '', locationId: '', product_id: '', capacity: '', order_trigger: '', order_limit: '' }); setCustomVals({}) }
+  function resetForm() { setForm({ vendorId: '', locationId: '', product_id: '', uom: '', capacity: '', order_trigger: '', order_limit: '' }); setCustomVals({}) }
   function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
   function openEdit(r: LocationOrderConfig) {
     setEditId(r.id)
     setForm({
-      vendorId: r.vendor_id ?? '', locationId: r.location_id ?? '', product_id: r.product_id ?? '',
+      vendorId: r.vendor_id ?? '', locationId: r.location_id ?? '', product_id: r.product_id ?? '', uom: ((r.metadata as any)?.uom ?? '') as string,
       capacity: r.capacity?.toString() ?? '', order_trigger: r.order_trigger?.toString() ?? '', order_limit: r.order_limit?.toString() ?? '',
     })
     const meta = (r.metadata ?? {}) as Record<string, unknown>
@@ -132,6 +134,7 @@ export function OrderConfigTab() {
     if (!form.locationId || !form.product_id.trim()) return
     const meta: Record<string, unknown> = {}
     for (const f of ownFields) meta[f.field_key] = customVals[f.field_key] || null
+    if (form.uom.trim()) meta.uom = form.uom.trim()
     const payload = {
       vendor_id: form.vendorId || null,
       location_id: form.locationId, product_id: form.product_id.trim(),
@@ -178,6 +181,7 @@ export function OrderConfigTab() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Input label="Product ID *" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} />
+            <Input label="Unit of Measure" value={form.uom} onChange={(e) => setForm({ ...form, uom: e.target.value })} />
             <Input label="Capacity" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })} />
             <Input label="Order Trigger" value={form.order_trigger} onChange={(e) => setForm({ ...form, order_trigger: e.target.value })} />
             <Input label="Order Limit" value={form.order_limit} onChange={(e) => setForm({ ...form, order_limit: e.target.value })} />

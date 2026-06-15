@@ -7,22 +7,28 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
+import { applyTransforms } from '@/lib/transforms'
 import type { TankMonitor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
 const truthy = (v: string) => ['true', '1', 'yes', 'y', 'keep', 'enabled'].includes(v.trim().toLowerCase())
+// Safe parse a date/time value (handles Excel serials, rejects absurd years).
+const toIso = (v: string) => applyTransforms(v, [{ kind: 'datetime' }]) || null
+const toDate = (v: string) => applyTransforms(v, [{ kind: 'date' }]) || null
 
 const REQUIRED_FIELDS = [
   { name: 'location', label: 'Location', required: true },
   { name: 'product_id', label: 'Product' },
   { name: 'keep_fill', label: 'Keep-fill enabled?' },
-  { name: 'reading_date', label: 'Inventory Date' },
+  { name: 'inventory_time', label: 'Inventory Time (date & time)' },
   { name: 'on_hand', label: 'On Hand' },
 ]
 const col = createColumnHelper<TankMonitor>()
 const today = () => format(new Date(), 'yyyy-MM-dd')
-const EMPTY = { locationId: '', product_id: '', keep_fill: false, reading_date: today(), on_hand: '' }
+// datetime-local wants "yyyy-MM-ddTHH:mm".
+const nowLocal = () => format(new Date(), "yyyy-MM-dd'T'HH:mm")
+const EMPTY = { locationId: '', product_id: '', keep_fill: false, inventory_time: nowLocal(), on_hand: '' }
 
 export function TankMonitorTab() {
   const { data, loading, insert, update, remove, importRows } = useConfigTab<TankMonitor>('tank_monitors')
@@ -36,7 +42,7 @@ export function TankMonitorTab() {
     { id: 'location', header: 'Location', accessorFn: (r: TankMonitor) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
     col.accessor('product_id', { header: 'Product', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('keep_fill', { header: 'Keep-fill', cell: (i) => (i.getValue() ? '✓' : '—') }),
-    col.accessor('reading_date', { header: 'Inventory Date', cell: (i) => { try { return format(new Date(i.getValue() + 'T00:00:00'), 'MMM d, yyyy') } catch { return i.getValue() } } }),
+    { id: 'inventory_time', header: 'Inventory Time', accessorFn: (r: TankMonitor) => r.inventory_time ?? r.reading_date, cell: (i: any) => { const v = i.getValue(); if (!v) return '—'; try { return format(new Date(v), 'MMM d, yyyy h:mm a') } catch { return String(v) } } },
     col.accessor('on_hand', { header: 'On Hand', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => i.getValue() ? format(new Date(i.getValue()), 'MMM d, yyyy') : '—' }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as TankMonitor)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
@@ -46,24 +52,26 @@ export function TankMonitorTab() {
 
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: TankMonitor) {
+    const it = r.inventory_time ? format(new Date(r.inventory_time), "yyyy-MM-dd'T'HH:mm") : (r.reading_date ? `${r.reading_date}T00:00` : nowLocal())
     setEditId(r.id)
-    setForm({ locationId: r.location_id ?? '', product_id: r.product_id ?? '', keep_fill: !!r.keep_fill, reading_date: r.reading_date ?? today(), on_hand: r.on_hand?.toString() ?? '' })
+    setForm({ locationId: r.location_id ?? '', product_id: r.product_id ?? '', keep_fill: !!r.keep_fill, inventory_time: it, on_hand: r.on_hand?.toString() ?? '' })
     setAddOpen(true)
   }
 
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
     const payload = rows.map((row) => {
-      let location_id: string | null = null, product_id = '', keep_fill = false, reading_date = today(), on_hand: number | null = null
+      let location_id: string | null = null, product_id = '', keep_fill = false, inventory_time: string | null = null, reading_date: string | null = null, on_hand: number | null = null
       for (const m of maps) {
         const v = mappedValue(row, m)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
         else if (m.fieldName === 'product_id') product_id = v
         else if (m.fieldName === 'keep_fill') keep_fill = truthy(v)
-        else if (m.fieldName === 'reading_date') reading_date = v || today()
+        else if (m.fieldName === 'inventory_time') { inventory_time = toIso(v); reading_date = toDate(v) }
         else if (m.fieldName === 'on_hand') on_hand = num(v)
       }
-      return { location_id, product_id: product_id || null, keep_fill, reading_date, on_hand } as Partial<TankMonitor>
+      if (!reading_date) reading_date = today()
+      return { location_id, product_id: product_id || null, keep_fill, inventory_time, reading_date, on_hand } as Partial<TankMonitor>
     }).filter((r: any) => r.location_id || r.product_id)
     // One reading per location + product + date.
     await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}|${r.reading_date}` })
@@ -72,7 +80,13 @@ export function TankMonitorTab() {
 
   async function onSubmit() {
     if (!form.locationId) return
-    const payload = { location_id: form.locationId, product_id: form.product_id.trim() || null, keep_fill: form.keep_fill, reading_date: form.reading_date, on_hand: num(form.on_hand) } as Partial<TankMonitor>
+    const d = form.inventory_time ? new Date(form.inventory_time) : null
+    const payload = {
+      location_id: form.locationId, product_id: form.product_id.trim() || null, keep_fill: form.keep_fill,
+      inventory_time: d && !isNaN(d.getTime()) ? d.toISOString() : null,
+      reading_date: d && !isNaN(d.getTime()) ? format(d, 'yyyy-MM-dd') : today(),
+      on_hand: num(form.on_hand),
+    } as Partial<TankMonitor>
     if (editId) await update(editId, payload)
     else await insert(payload)
     setForm({ ...EMPTY }); setAddOpen(false); setEditId(null)
@@ -104,7 +118,7 @@ export function TankMonitorTab() {
           <Combobox label="Location *" options={loc.options} value={form.locationId} onChange={(v) => setForm({ ...form, locationId: v })} placeholder="Select location" />
           <div className="grid grid-cols-3 gap-3">
             <Input label="Product" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} />
-            <Input label="Inventory Date" type="date" value={form.reading_date} onChange={(e) => setForm({ ...form, reading_date: e.target.value })} />
+            <Input label="Inventory Time" type="datetime-local" value={form.inventory_time} onChange={(e) => setForm({ ...form, inventory_time: e.target.value })} />
             <Input label="On Hand" type="number" step="0.01" value={form.on_hand} onChange={(e) => setForm({ ...form, on_hand: e.target.value })} />
           </div>
           <Toggle checked={form.keep_fill} onChange={(v) => setForm({ ...form, keep_fill: v })} label="Keep-fill enabled?" color="green" />

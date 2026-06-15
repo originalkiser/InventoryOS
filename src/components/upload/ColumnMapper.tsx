@@ -60,14 +60,22 @@ interface ColumnMapperProps {
   initialMappings?: ColumnMapping[]
   // Optional: allow adding a brand-new (custom) column inline during mapping.
   onAddColumn?: (label: string) => void | Promise<void>
+  // Optional: remember the confirmed mapping (incl. transforms) in localStorage
+  // under this key and pre-fill it next time.
+  rememberKey?: string
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+function loadSavedMap(key: string): ColumnMapping[] | undefined {
+  try { const v = JSON.parse(localStorage.getItem(`import.map.${key}`) || 'null'); if (Array.isArray(v)) return v } catch { /* ignore */ }
+  return undefined
+}
 
-export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn }: ColumnMapperProps) {
+export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn, rememberKey }: ColumnMapperProps) {
+  const effectiveInitial = initialMappings ?? (rememberKey ? loadSavedMap(rememberKey) : undefined)
   const [mappings, setMappings] = useState<ColumnMapping[]>(
     requiredFields.map((f) => {
-      const fromTemplate = initialMappings?.find(
+      const fromTemplate = effectiveInitial?.find(
         (m) => m.fieldName === f.name && (m.sourceColumn === CONSTANT_SOURCE || m.sourceColumn === COMPOSITE_SOURCE || headers.includes(m.sourceColumn))
       )
       if (fromTemplate) return { ...fromTemplate }
@@ -104,6 +112,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
       alert(`Please map required fields: ${missing.map((f) => f.label).join(', ')}`)
       return
     }
+    if (rememberKey) { try { localStorage.setItem(`import.map.${rememberKey}`, JSON.stringify(mappings)) } catch { /* ignore */ } }
     onConfirm(mappings.filter((m) => m.sourceColumn))
   }
 

@@ -53,10 +53,12 @@ function parseCsv(file: File): Promise<ParseResult> {
 
 async function parseExcel(file: File): Promise<ParseResult> {
   const buffer = await readFileAsArrayBuffer(file)
-  const workbook = XLSX.read(buffer, { type: 'array' })
+  // cellDates: real JS Dates for date/time cells instead of Excel serial numbers
+  // (a serial like 46186 was being parsed as the year 46186 downstream).
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
-  const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' })
+  const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true })
   return processRawRows(raw)
 }
 

@@ -11,7 +11,7 @@ import { OrderDocuments } from './OrderDocuments'
 import {
   generateOrder, applyMinOrderRules, buildExport, DEFAULT_EXPORT_COLUMNS,
   buildPendingIndex, autoPendingColMap, detectPrefixSuffixPatterns,
-  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig, type PrefixSuffixRule,
+  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig, type PrefixSuffixRule, type GeneratedLineItem,
 } from '@/lib/orderEngine'
 import type {
   Location, LocationOrderConfig, ProductIdMapping, GlobalProduct, VendorPart, OrderMinRule,
@@ -227,7 +227,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <StageBar stage={stage} />
+      <StageBar stage={stage} mode={mode} />
 
       {stage === 'start' && (
         <div className="flex flex-col gap-4">
@@ -256,14 +256,14 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
               {mode === 'manual' ? (
                 <ManualEntry
                   locations={config?.locations ?? []}
-                  onConfirm={(rows) => { store.setInputRows(rows); store.setSourceMode('manual'); setStage('params') }}
+                  onConfirm={(lines) => { store.setLineItems(lines); store.setSourceMode('manual'); setStage('review') }}
                 />
               ) : source === 'live' ? (
                 <DataSourceLinker configType="orders" />
               ) : !parsed ? (
                 <FileUploadZone onParsed={(r) => setParsed(r)} />
               ) : (
-                <ColumnMapper headers={parsed.headers} requiredFields={MAP_FIELDS}
+                <ColumnMapper headers={parsed.headers} requiredFields={MAP_FIELDS} rememberKey="orders.inventory"
                   initialMappings={store.mapping.length ? store.mapping : undefined}
                   onConfirm={(m) => { store.setInputRows(rowsFromFile(m)); setStage('params'); toast.success(`Loaded ${parsed.rows.length} rows`) }}
                   onCancel={() => setParsed(null)} />
@@ -289,7 +289,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
       )}
 
       {stage === 'review' && (
-        <ReviewStage onBack={() => setStage('params')} onContinue={() => setStage('export')} />
+        <ReviewStage onBack={() => setStage(mode === 'manual' ? 'start' : 'params')} onContinue={() => setStage('export')} />
       )}
 
       {stage === 'export' && (
@@ -324,13 +324,15 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
 }
 
 // ---------------------------------------------------------------------------
-function StageBar({ stage }: { stage: Stage }) {
-  const steps: { key: Stage; label: string }[] = [
-    { key: 'start', label: '1 · Source' },
-    { key: 'params', label: '2 · Params' },
-    { key: 'review', label: '3 · Generate' },
-    { key: 'export', label: '4 · Export' },
-  ]
+function StageBar({ stage, mode }: { stage: Stage; mode: OrderMode }) {
+  const steps: { key: Stage; label: string }[] = mode === 'manual'
+    ? [{ key: 'start', label: '1 · Entry' }, { key: 'review', label: '2 · Order' }, { key: 'export', label: '3 · Export' }]
+    : [
+        { key: 'start', label: '1 · Source' },
+        { key: 'params', label: '2 · Params' },
+        { key: 'review', label: '3 · Generate' },
+        { key: 'export', label: '4 · Export' },
+      ]
   const idx = steps.findIndex((s) => s.key === stage)
   return (
     <div className="flex gap-2 flex-wrap">
@@ -345,90 +347,91 @@ function StageBar({ stage }: { stage: Stage }) {
   )
 }
 
-interface PRow { product: string; on_hand: string; daily_usage: string; leadtime: string }
-interface LGroup { location: string; rows: PRow[] }
-const blankRow = (): PRow => ({ product: '', on_hand: '', daily_usage: '', leadtime: '' })
+interface MRow { location: string; product: string; amount: string }
 const cellCls = 'w-full bg-[#161820] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]'
 
-// Location-grouped manual entry: set a location once (config datalist or free
-// text), then add products under it without retyping the location. Tab across
-// fields; Enter on Lead Time adds another product row and focuses it.
-function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfirm: (rows: InventoryRow[]) => void }) {
-  const [groups, setGroups] = useState<LGroup[]>([{ location: '', rows: [blankRow()] }])
-  const focusKey = useRef<string | null>(null)
+// Manual order = Location + Product + Order Amount. The entry row keeps the last
+// location so you can add the same/next product fast (Tab across, Enter on
+// Amount pushes the row). The accumulating table below is fully editable.
+function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfirm: (lines: GeneratedLineItem[]) => void }) {
+  const [rows, setRows] = useState<MRow[]>([])
+  const [entry, setEntry] = useState<MRow>({ location: '', product: '', amount: '' })
+  const productRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    if (!focusKey.current) return
-    document.querySelector<HTMLInputElement>(`[data-cell="${focusKey.current}"]`)?.focus()
-    focusKey.current = null
-  })
+  function resolveLoc(locStr: string): { id: string | null; label: string } {
+    const v = locStr.trim().toLowerCase()
+    const m = locations.find((l) => l.id.toLowerCase() === v || l.location_code.toLowerCase() === v || l.name.toLowerCase() === v)
+    if (m) return { id: m.id, label: `${m.location_code} — ${m.name}` }
+    return { id: null, label: locStr.trim() || '—' }
+  }
 
-  function setGroup(gi: number, patch: Partial<LGroup>) { setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, ...patch } : grp))) }
-  function setCell(gi: number, ri: number, key: keyof PRow, val: string) {
-    setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, rows: grp.rows.map((r, j) => (j === ri ? { ...r, [key]: val } : r)) } : grp)))
+  function addEntry() {
+    if (!entry.product.trim() || !entry.amount.trim()) { toast.error('Enter a product and order amount'); return }
+    setRows((r) => [...r, { ...entry }])
+    setEntry((e) => ({ location: e.location, product: '', amount: '' })) // keep location
+    productRef.current?.focus()
   }
-  function addRow(gi: number) {
-    focusKey.current = `${gi}-${groups[gi].rows.length}-product`
-    setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, rows: [...grp.rows, blankRow()] } : grp)))
-  }
-  function removeRow(gi: number, ri: number) { setGroups((g) => g.map((grp, i) => (i === gi ? { ...grp, rows: grp.rows.filter((_, j) => j !== ri) } : grp))) }
-  function addGroup() { focusKey.current = `${groups.length}-loc`; setGroups((g) => [...g, { location: '', rows: [blankRow()] }]) }
-  function removeGroup(gi: number) { setGroups((g) => g.filter((_, i) => i !== gi)) }
+  function setRow(i: number, key: keyof MRow, val: string) { setRows((r) => r.map((x, j) => (j === i ? { ...x, [key]: val } : x))) }
+  function removeRow(i: number) { setRows((r) => r.filter((_, j) => j !== i)) }
 
   function confirm() {
-    const out: InventoryRow[] = []
-    for (const grp of groups) for (const r of grp.rows) {
-      if (!r.product.trim()) continue
-      out.push({ location: grp.location.trim(), product: r.product.trim(), on_hand: toNum(r.on_hand), daily_usage: toNum(r.daily_usage), leadtime: toNum(r.leadtime) })
-    }
-    if (!out.length) { toast.error('Add at least one product'); return }
-    onConfirm(out)
+    const valid = rows.filter((r) => r.product.trim())
+    if (!valid.length) { toast.error('Add at least one product'); return }
+    const lines: GeneratedLineItem[] = valid.map((r) => {
+      const { id, label } = resolveLoc(r.location)
+      const amt = parseFloat(r.amount.replace(/[$,]/g, '')) || 0
+      return {
+        location_id: id, location_label: label, product_id: r.product.trim(), vendor_part_number: null,
+        on_hand: null, suggested_qty: amt, final_qty: amt, unit_of_measure: null, package_type: null,
+        bulk_minimum: null, individual_minimum: null, applied_min_rule: null, trigger_reason: 'manual',
+        category: null, raw_location: r.location.trim(), days_on_hand: null, pending_qty: 0, order_uom: null,
+      }
+    })
+    onConfirm(lines)
   }
-
-  const totalProducts = groups.reduce((n, g) => n + g.rows.filter((r) => r.product.trim()).length, 0)
 
   return (
     <div className="flex flex-col gap-4">
       <datalist id="manual-loc-list">
         {locations.map((l) => <option key={l.id} value={l.location_code}>{l.location_code} — {l.name}</option>)}
       </datalist>
-      <p className="text-xs font-mono text-gray-600">Add a location (pick from config or type any), then add products under it. Tab between fields; Enter on Lead Time adds another product.</p>
+      <p className="text-xs font-mono text-gray-600">Enter a location, product, and order amount, then Enter (or +). The location is kept for the next product so you can order the same item across shops quickly. Rows below are editable.</p>
 
-      {groups.map((grp, gi) => (
-        <div key={gi} className="flex flex-col gap-2 rounded border border-[#2a2d3e] bg-[#0f1117] p-3">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono uppercase tracking-wide text-gray-500">Location</span>
-            <input list="manual-loc-list" data-cell={`${gi}-loc`} value={grp.location} onChange={(e) => setGroup(gi, { location: e.target.value })}
-              placeholder="Code or name (or free text)" className="flex-1 bg-[#161820] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]" />
-            {groups.length > 1 && <button onClick={() => removeGroup(gi)} className="text-gray-600 hover:text-red-400" title="Remove location">✕</button>}
-          </div>
+      {/* Quick entry row */}
+      <div className="grid grid-cols-[1.4fr_1.4fr_0.8fr_auto] items-end gap-2 rounded border border-[#2a2d3e] bg-[#0f1117] p-3">
+        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-gray-500">Location</span>
+          <input list="manual-loc-list" value={entry.location} onChange={(e) => setEntry({ ...entry, location: e.target.value })} placeholder="Code / name / free text" className={cellCls} /></label>
+        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-gray-500">Product</span>
+          <input ref={productRef} value={entry.product} onChange={(e) => setEntry({ ...entry, product: e.target.value })} className={cellCls} /></label>
+        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-gray-500">Order Amount</span>
+          <input value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEntry() } }} className={cellCls} /></label>
+        <Button size="sm" onClick={addEntry}>+ Add</Button>
+      </div>
+
+      {/* Accumulated, editable order table */}
+      {rows.length > 0 && (
+        <div className="overflow-auto rounded border border-[#2a2d3e]">
           <table className="w-full text-xs font-mono">
-            <thead className="text-gray-500 uppercase tracking-wide"><tr>
-              <th className="px-1 py-1 text-left">Product</th><th className="px-1 py-1 text-left">On Hand</th><th className="px-1 py-1 text-left">Daily Usage</th><th className="px-1 py-1 text-left">Lead Time</th><th />
-            </tr></thead>
+            <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide">
+              <tr><th className="px-2 py-2 text-left">Location</th><th className="px-2 py-2 text-left">Product</th><th className="px-2 py-2 text-left">Order Amount</th><th /></tr>
+            </thead>
             <tbody>
-              {grp.rows.map((r, ri) => (
-                <tr key={ri}>
-                  <td className="px-1 py-0.5"><input data-cell={`${gi}-${ri}-product`} value={r.product} onChange={(e) => setCell(gi, ri, 'product', e.target.value)} className={cellCls} /></td>
-                  <td className="px-1 py-0.5"><input value={r.on_hand} onChange={(e) => setCell(gi, ri, 'on_hand', e.target.value)} className={cellCls} /></td>
-                  <td className="px-1 py-0.5"><input value={r.daily_usage} onChange={(e) => setCell(gi, ri, 'daily_usage', e.target.value)} className={cellCls} /></td>
-                  <td className="px-1 py-0.5"><input value={r.leadtime} onChange={(e) => setCell(gi, ri, 'leadtime', e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRow(gi) } }} className={cellCls} /></td>
-                  <td className="px-1">{grp.rows.length > 1 && <button onClick={() => removeRow(gi, ri)} className="text-gray-600 hover:text-red-400">×</button>}</td>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-t border-[#2a2d3e]/50">
+                  <td className="px-1 py-1"><input list="manual-loc-list" value={r.location} onChange={(e) => setRow(i, 'location', e.target.value)} className={cellCls} /></td>
+                  <td className="px-1 py-1"><input value={r.product} onChange={(e) => setRow(i, 'product', e.target.value)} className={cellCls} /></td>
+                  <td className="px-1 py-1"><input value={r.amount} onChange={(e) => setRow(i, 'amount', e.target.value)} className={cellCls} /></td>
+                  <td className="px-2"><button onClick={() => removeRow(i)} className="text-gray-600 hover:text-red-400">×</button></td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <button onClick={() => addRow(gi)} className="self-start text-xs font-mono text-[#00e5ff] hover:underline">+ Add product</button>
         </div>
-      ))}
+      )}
 
       <div className="flex items-center justify-between">
-        <Button size="sm" variant="secondary" onClick={addGroup}>+ Add Location</Button>
-        <div className="flex items-center gap-3">
-          <span className="text-xs font-mono text-gray-500">{totalProducts} product line{totalProducts !== 1 ? 's' : ''}</span>
-          <Button size="sm" onClick={confirm}>Continue →</Button>
-        </div>
+        <span className="text-xs font-mono text-gray-500">{rows.length} line{rows.length !== 1 ? 's' : ''}</span>
+        <Button size="sm" onClick={confirm} disabled={!rows.length}>Continue → Review</Button>
       </div>
     </div>
   )
