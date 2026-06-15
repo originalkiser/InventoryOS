@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { InverseToggle } from '@/components/shared/InverseToggle'
 import { Button } from '@/components/ui'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/authStore'
 import { TRANSFORM_OPTIONS } from '@/lib/columnTransform'
 import { TRANSFORM_CATALOG, describeTransform, type Transform, type TransformChainKind } from '@/lib/transforms'
 import { CONSTANT_SOURCE, COMPOSITE_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
@@ -70,20 +72,43 @@ function loadSavedMap(key: string): ColumnMapping[] | undefined {
   try { const v = JSON.parse(localStorage.getItem(`import.map.${key}`) || 'null'); if (Array.isArray(v)) return v } catch { /* ignore */ }
   return undefined
 }
+// Build the per-field mapping rows, pre-filling from a saved template where the
+// source still applies to this file (else auto-match by header name).
+function buildMappings(requiredFields: RequiredField[], headers: string[], saved?: ColumnMapping[]): ColumnMapping[] {
+  return requiredFields.map((f) => {
+    const fromTemplate = saved?.find(
+      (m) => m.fieldName === f.name && (m.sourceColumn === CONSTANT_SOURCE || m.sourceColumn === COMPOSITE_SOURCE || headers.includes(m.sourceColumn))
+    )
+    if (fromTemplate) return { ...fromTemplate }
+    const auto = headers.find((h) => norm(h) === norm(f.name))
+    return { fieldName: f.name, sourceColumn: auto ?? '', invert: false }
+  })
+}
 
 export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn, rememberKey }: ColumnMapperProps) {
-  const effectiveInitial = initialMappings ?? (rememberKey ? loadSavedMap(rememberKey) : undefined)
-  const [mappings, setMappings] = useState<ColumnMapping[]>(
-    requiredFields.map((f) => {
-      const fromTemplate = effectiveInitial?.find(
-        (m) => m.fieldName === f.name && (m.sourceColumn === CONSTANT_SOURCE || m.sourceColumn === COMPOSITE_SOURCE || headers.includes(m.sourceColumn))
-      )
-      if (fromTemplate) return { ...fromTemplate }
-      const auto = headers.find((h) => norm(h) === norm(f.name))
-      return { fieldName: f.name, sourceColumn: auto ?? '', invert: false }
-    })
-  )
+  const { profile } = useAuthStore()
+  // Memory precedence on load: explicit prop → local (this user's) → org-shared.
+  const localSaved = rememberKey ? loadSavedMap(rememberKey) : undefined
+  const effectiveInitial = initialMappings ?? localSaved
+  const [mappings, setMappings] = useState<ColumnMapping[]>(buildMappings(requiredFields, headers, effectiveInitial))
   const [newCol, setNewCol] = useState('')
+  // Once the user edits anything, don't let an async org-mapping load overwrite it.
+  const touched = useRef(false)
+
+  // Org-level fallback: if this user has no local memory (and no explicit
+  // mappings), pull a mapping another teammate saved for this import.
+  useEffect(() => {
+    if (!rememberKey || initialMappings || localSaved || !profile?.company_id) return
+    let cancelled = false
+    ;(supabase as any).from('app_settings').select('value').eq('company_id', profile.company_id).eq('key', `mapping.${rememberKey}`).maybeSingle()
+      .then(({ data }: any) => {
+        if (cancelled || touched.current) return
+        const org = data?.value
+        if (Array.isArray(org) && org.length) setMappings(buildMappings(requiredFields, headers, org as ColumnMapping[]))
+      })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rememberKey, profile?.company_id])
 
   // Sync newly-added required fields (e.g. a column added inline) into state
   // without disturbing existing selections.
@@ -101,6 +126,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
   }, [requiredFields, headers])
 
   function patch(fieldName: string, p: Partial<ColumnMapping>) {
+    touched.current = true
     setMappings((prev) => prev.map((m) => (m.fieldName === fieldName ? { ...m, ...p } : m)))
   }
 
@@ -112,7 +138,17 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
       alert(`Please map required fields: ${missing.map((f) => f.label).join(', ')}`)
       return
     }
-    if (rememberKey) { try { localStorage.setItem(`import.map.${rememberKey}`, JSON.stringify(mappings)) } catch { /* ignore */ } }
+    if (rememberKey) {
+      // Save both: local (this user's preference) and org-shared (so teammates /
+      // new modules get a head start). Local wins on next load.
+      try { localStorage.setItem(`import.map.${rememberKey}`, JSON.stringify(mappings)) } catch { /* ignore */ }
+      if (profile?.company_id) {
+        void (supabase as any).from('app_settings').upsert(
+          { company_id: profile.company_id, key: `mapping.${rememberKey}`, value: mappings, updated_at: new Date().toISOString() },
+          { onConflict: 'company_id,key' },
+        )
+      }
+    }
     onConfirm(mappings.filter((m) => m.sourceColumn))
   }
 
