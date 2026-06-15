@@ -1,0 +1,9 @@
+# Supabase CLI config.
+#
+# invite-user authenticates the caller itself (it reads the admin's JWT and
+# checks role inside), so platform-level JWT verification must be OFF. With it
+# ON, Supabase's gateway rejects the browser's CORS preflight (an OPTIONS
+# request with no Authorization header) and the client shows
+# "Failed to send a request to the Edge Function".
+[functions.invite-user]
+verify_jwt = false
