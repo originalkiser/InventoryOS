@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+﻿import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useOrderStore } from '@/stores/orderStore'
@@ -65,38 +65,38 @@ export function ProfilesTab() {
     toast.success('Profile deleted'); load()
   }
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-6">
       <Card>
-        <CardHeader><span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Save Current Setup as Profile</span></CardHeader>
+        <CardHeader><span className="text-xs font-mono text-inky uppercase tracking-wide">Save Current Setup as Profile</span></CardHeader>
         <CardBody className="flex items-end gap-2 flex-wrap">
           <div className="flex-1 min-w-[12rem]">
             <Input label="Profile Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Weekly POS import" />
           </div>
           <Button size="sm" loading={saving} onClick={saveProfile}>Save Profile</Button>
-          <p className="w-full text-xs font-mono text-gray-600">
+          <p className="w-full text-xs font-mono text-inky/70">
             Captures the current generation params, selected min-rule set, and file column mapping from the New Order tab.
           </p>
         </CardBody>
       </Card>
 
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">Saved Profiles ({profiles.length})</span>
+        <span className="text-xs font-mono text-inky uppercase tracking-wide">Saved Profiles ({profiles.length})</span>
         {loading ? (
-          <p className="text-xs font-mono text-gray-500">Loading…</p>
+          <p className="text-xs font-mono text-inky">Loading…</p>
         ) : profiles.length === 0 ? (
-          <p className="text-xs font-mono text-gray-600">No saved profiles yet.</p>
+          <p className="text-xs font-mono text-inky/70">No saved profiles yet.</p>
         ) : (
           <div className="flex flex-col gap-2">
             {profiles.map((p) => {
               const cfg = (p.config ?? {}) as ProfileConfig
               return (
-                <div key={p.id} className="flex items-center justify-between gap-3 px-4 py-3 border border-[#2a2d3e] rounded bg-[#161820]">
+                <div key={p.id} className="flex items-center justify-between gap-3 px-4 py-3 border border-navy/30 rounded bg-cream">
                   <div className="flex flex-col gap-0.5 min-w-0">
-                    <span className="text-xs font-mono text-white">{p.name}</span>
-                    <span className="text-[11px] font-mono text-gray-500">
+                    <span className="text-xs font-mono text-navy">{p.name}</span>
+                    <span className="text-[11px] font-mono text-inky">
                       {cfg.params?.orderMode ?? '—'} · {cfg.params?.targetDays ?? '—'}d · {cfg.selectedMinRuleIds?.length ?? 0} rules · {cfg.mapping?.length ?? 0} mapped cols · {format(new Date(p.created_at), 'MMM d, yyyy')}
                     </span>
                   </div>

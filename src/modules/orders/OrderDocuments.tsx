@@ -61,13 +61,13 @@ export function OrderDocuments({ companyId, sessionId, stage, uploadedBy }: Prop
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">
+        <span className="text-xs font-mono text-inky uppercase tracking-wide">
           {stage === 'start' ? 'Supporting Documents' : 'Export Documents'} ({docs.length})
         </span>
         <button
           onClick={() => inputRef.current?.click()}
           disabled={busy}
-          className="text-xs font-mono text-[#00e5ff] border border-[#00e5ff]/30 rounded px-2 py-1 hover:bg-[#00e5ff]/10 disabled:opacity-40"
+          className="text-xs font-mono text-inky border border-[#00e5ff]/30 rounded px-2 py-1 hover:bg-[#00e5ff]/10 disabled:opacity-40"
         >
           {busy ? 'Uploading…' : '+ Attach file'}
         </button>
@@ -76,10 +76,10 @@ export function OrderDocuments({ companyId, sessionId, stage, uploadedBy }: Prop
       {docs.length > 0 && (
         <div className="flex flex-col gap-1">
           {docs.map((d) => (
-            <div key={d.id} className="flex items-center justify-between gap-2 px-2 py-1 border border-[#2a2d3e] rounded bg-[#0f1117]">
-              <span className="text-xs font-mono text-gray-300 truncate">{d.file_name}</span>
+            <div key={d.id} className="flex items-center justify-between gap-2 px-2 py-1 border border-navy/30 rounded bg-cream">
+              <span className="text-xs font-mono text-navy truncate">{d.file_name}</span>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <span className="text-[10px] font-mono text-gray-600">{format(new Date(d.created_at), 'MMM d, h:mm a')}</span>
+                <span className="text-[10px] font-mono text-inky/70">{format(new Date(d.created_at), 'MMM d, h:mm a')}</span>
                 <button onClick={() => remove(d)} className="text-xs font-mono text-red-400 hover:text-red-300">×</button>
               </div>
             </div>

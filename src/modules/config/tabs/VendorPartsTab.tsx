@@ -75,7 +75,7 @@ export function VendorPartsTab() {
     ]
     for (const f of customFields) cols.push({ id: `cf_${f.field_key}`, header: f.label, accessorFn: (r: VendorPart) => (r.metadata as any)?.[f.field_key] ?? '', cell: (i: any) => i.getValue() || '—' })
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
-    cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as VendorPart)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> })
+    cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as VendorPart)} className="text-xs font-mono text-inky hover:underline">Edit</button> })
     return cols
   }, [customFields, vendors])
 
@@ -169,12 +169,12 @@ export function VendorPartsTab() {
 
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
-          <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File (per vendor)</h3>
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File (per vendor)</h3>
           <Combobox label="Vendor for this file *" options={vendorOptions} value={uploadVendorId}
             onChange={(v) => setUploadVendorId(v)} placeholder="Select or create vendor"
             allowCreate onCreateOption={createVendor} />
           <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label })} />
-          <p className="text-xs font-mono text-gray-600">Upload one file per vendor — each can map differently. Re-uploading a vendor's file updates its parts; other vendors are untouched.</p>
+          <p className="text-xs font-mono text-inky/70">Upload one file per vendor — each can map differently. Re-uploading a vendor's file updates its parts; other vendors are untouched.</p>
         </div>
         <DataSourceLinker configType="vendor_parts" />
       </div>

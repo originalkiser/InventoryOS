@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { InverseToggle } from '@/components/shared/InverseToggle'
 import { Button } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
@@ -23,23 +23,23 @@ function TransformChainEditor({ transforms = [], onChange }: { transforms?: Tran
   function remove(i: number) { onChange(transforms.filter((_, j) => j !== i)) }
   return (
     <div className="flex flex-wrap items-center gap-1 pl-1">
-      <span className="text-[10px] font-mono text-gray-600">transforms:</span>
+      <span className="text-[10px] font-mono text-inky/70">transforms:</span>
       {transforms.map((t, i) => (
-        <span key={i} className="inline-flex items-center gap-1 rounded border border-[#2a2d3e] bg-[#0f1117] px-1.5 py-0.5 text-[10px] font-mono text-gray-300">
+        <span key={i} className="inline-flex items-center gap-1 rounded border border-navy/30 bg-cream px-1.5 py-0.5 text-[10px] font-mono text-navy">
           {describeTransform(t)}
           {(t.kind === 'multiply' || t.kind === 'divide') && (
             <input type="number" value={(t as any).by} onChange={(e) => update(i, { by: Number(e.target.value) })}
-              className="w-12 border-b border-[#2a2d3e] bg-transparent text-[10px] text-[#00e5ff] focus:outline-none" />
+              className="w-12 border-b border-navy/30 bg-transparent text-[10px] text-inky focus:outline-none" />
           )}
           {(t.kind === 'parse_after' || t.kind === 'parse_before') && (
             <input value={(t as any).delimiter} onChange={(e) => update(i, { delimiter: e.target.value })}
-              className="w-8 border-b border-[#2a2d3e] bg-transparent text-center text-[10px] text-[#00e5ff] focus:outline-none" />
+              className="w-8 border-b border-navy/30 bg-transparent text-center text-[10px] text-inky focus:outline-none" />
           )}
-          <button onClick={() => remove(i)} className="text-gray-600 hover:text-red-400">×</button>
+          <button onClick={() => remove(i)} className="text-inky/70 hover:text-red-400">×</button>
         </span>
       ))}
       <select value="" onChange={(e) => { add(e.target.value); e.currentTarget.value = '' }}
-        className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-0.5 text-[10px] font-mono text-gray-400 focus:outline-none">
+        className="rounded border border-navy/30 bg-cream px-1 py-0.5 text-[10px] font-mono text-inky focus:outline-none">
         <option value="">+ transform</option>
         {TRANSFORM_CATALOG.map((c) => <option key={c.kind} value={c.kind}>{c.label}</option>)}
       </select>
@@ -163,24 +163,24 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-xs text-gray-400 font-mono">
-        Map each field to a file column, or pick <span className="text-white">Constant value</span> to set the same value
-        on every row. <span className="text-white">Convert</span> transforms the value (e.g. <span className="text-[#00e5ff]">Number</span> turns &quot;001&quot; into 1);
-        <span className="text-white"> Invert</span> flips the sign of numbers.
+      <p className="text-xs text-inky font-mono">
+        Map each field to a file column, or pick <span className="text-navy">Constant value</span> to set the same value
+        on every row. <span className="text-navy">Convert</span> transforms the value (e.g. <span className="text-inky">Number</span> turns &quot;001&quot; into 1);
+        <span className="text-navy"> Invert</span> flips the sign of numbers.
       </p>
 
       {previewRows && previewRows.length > 0 && (
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-mono uppercase tracking-wide text-gray-500">Preview ({previewRows.length} of file)</span>
-          <div className="overflow-auto rounded border border-[#2a2d3e] max-h-40">
+          <span className="text-[10px] font-mono uppercase tracking-wide text-inky">Preview ({previewRows.length} of file)</span>
+          <div className="overflow-auto rounded border border-navy/30 max-h-40">
             <table className="text-[11px] font-mono">
-              <thead className="bg-[#161820] text-gray-500 sticky top-0">
+              <thead className="bg-navy text-inky sticky top-0">
                 <tr>{headers.map((h) => <th key={h} className="px-2 py-1 text-left whitespace-nowrap">{h}</th>)}</tr>
               </thead>
               <tbody>
                 {previewRows.map((r, i) => (
                   <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>
-                    {headers.map((h) => <td key={h} className="px-2 py-1 whitespace-nowrap text-gray-300">{r[h] ?? ''}</td>)}
+                    {headers.map((h) => <td key={h} className="px-2 py-1 whitespace-nowrap text-navy">{r[h] ?? ''}</td>)}
                   </tr>
                 ))}
               </tbody>
@@ -197,14 +197,14 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
           return (
             <div key={field.name} className="flex flex-col gap-1">
             <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-3 items-center">
-              <div className="text-sm font-mono text-gray-300">
+              <div className="text-sm font-mono text-navy">
                 {field.label}
                 {field.required && <span className="text-red-400 ml-1">*</span>}
               </div>
               <select
                 value={mapping.sourceColumn}
                 onChange={(e) => patch(field.name, { sourceColumn: e.target.value })}
-                className="bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-[#00e5ff]"
+                className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-sm font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
               >
                 <option value="">— Not mapped —</option>
                 <option value={CONSTANT_SOURCE}>✎ Constant value…</option>
@@ -218,7 +218,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
                   value={mapping.constant ?? ''}
                   onChange={(e) => patch(field.name, { constant: e.target.value })}
                   placeholder="Value for all rows"
-                  className="bg-[#0f1117] border border-[#ffb300]/40 rounded px-2 py-1.5 text-xs font-mono text-[#ffb300] focus:outline-none focus:border-[#ffb300]"
+                  className="bg-cream border border-[#ffb300]/40 rounded px-2 py-1.5 text-xs font-mono text-orange-600 focus:outline-none focus:border-[#ffb300]"
                 />
               ) : isComposite ? (
                 <input
@@ -226,14 +226,14 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
                   onChange={(e) => patch(field.name, { template: e.target.value })}
                   placeholder="{location_code}-{city}"
                   title="Use {Header} tokens; literals are kept as-is"
-                  className="bg-[#0f1117] border border-[#00e5ff]/40 rounded px-2 py-1.5 text-xs font-mono text-[#00e5ff] focus:outline-none focus:border-[#00e5ff]"
+                  className="bg-cream border border-[#00e5ff]/40 rounded px-2 py-1.5 text-xs font-mono text-inky focus:outline-none focus:border-[#00e5ff]"
                 />
               ) : (
                 <select
                   value={mapping.transform ?? 'none'}
                   onChange={(e) => patch(field.name, { transform: e.target.value as TransformKind })}
                   title="Convert value on import"
-                  className="bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1.5 text-xs font-mono text-gray-300 focus:outline-none focus:border-[#00e5ff]"
+                  className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
                 >
                   {TRANSFORM_OPTIONS.map((t) => (
                     <option key={t.value} value={t.value}>{t.label}</option>
@@ -243,7 +243,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
               <InverseToggle inverted={mapping.invert} onChange={(v) => patch(field.name, { invert: v })} />
             </div>
             {isComposite ? (
-              <div className="pl-1 text-[10px] font-mono text-gray-600">Tokens: {headers.slice(0, 8).map((h) => `{${h}}`).join('  ')}{headers.length > 8 ? '  …' : ''}</div>
+              <div className="pl-1 text-[10px] font-mono text-inky/70">Tokens: {headers.slice(0, 8).map((h) => `{${h}}`).join('  ')}{headers.length > 8 ? '  …' : ''}</div>
             ) : !isConstant ? (
               <TransformChainEditor transforms={mapping.transforms} onChange={(t) => patch(field.name, { transforms: t })} />
             ) : null}
@@ -253,13 +253,13 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
       </div>
 
       {onAddColumn && (
-        <div className="flex items-end gap-2 border-t border-[#2a2d3e] pt-3">
+        <div className="flex items-end gap-2 border-t border-navy/30 pt-3">
           <input
             value={newCol}
             onChange={(e) => setNewCol(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') addColumn() }}
             placeholder="Add a new column (e.g. Area Manager)"
-            className="flex-1 bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]"
+            className="flex-1 bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
           />
           <Button size="sm" variant="secondary" onClick={addColumn} disabled={!newCol.trim()}>+ Add Column</Button>
         </div>

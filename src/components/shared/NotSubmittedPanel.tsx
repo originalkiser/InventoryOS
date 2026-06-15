@@ -54,7 +54,7 @@ export function NotSubmittedPanel({
     col.accessor('days_since', { header: 'Days Since Period Start', cell: (i) => `${i.getValue()}d` }),
     col.accessor('last_submitted', {
       header: 'Last Submitted',
-      cell: (i) => (i.getValue() ? format(new Date(i.getValue()), lastSubmittedFormat) : <span className="text-gray-600">Never</span>),
+      cell: (i) => (i.getValue() ? format(new Date(i.getValue()), lastSubmittedFormat) : <span className="text-inky/70">Never</span>),
     }),
   ], [lastSubmittedFormat])
 
@@ -99,13 +99,13 @@ export function NotSubmittedPanel({
       {/* Header stat + progress bar */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <span className="text-xs font-mono text-gray-400">
-            <span className={submitted === totalActive ? 'text-[#39ff14]' : 'text-[#ffb300]'}>{submitted}</span>
-            <span className="text-gray-500"> of {totalActive} shops submitted for {periodLabel}</span>
+          <span className="text-xs font-mono text-inky">
+            <span className={submitted === totalActive ? 'text-green-700' : 'text-orange-600'}>{submitted}</span>
+            <span className="text-inky"> of {totalActive} shops submitted for {periodLabel}</span>
           </span>
-          <span className="text-xs font-mono text-gray-500">{pct}%</span>
+          <span className="text-xs font-mono text-inky">{pct}%</span>
         </div>
-        <div className="h-2 w-full bg-[#0f1117] border border-[#2a2d3e] rounded overflow-hidden">
+        <div className="h-2 w-full bg-cream border border-navy/30 rounded overflow-hidden">
           <div
             className="h-full transition-all duration-300"
             style={{

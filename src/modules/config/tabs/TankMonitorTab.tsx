@@ -45,7 +45,7 @@ export function TankMonitorTab() {
     { id: 'inventory_time', header: 'Inventory Time', accessorFn: (r: TankMonitor) => r.inventory_time ?? r.reading_date, cell: (i: any) => { const v = i.getValue(); if (!v) return '—'; try { return format(new Date(v), 'MMM d, yyyy h:mm a') } catch { return String(v) } } },
     col.accessor('on_hand', { header: 'On Hand', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => i.getValue() ? format(new Date(i.getValue()), 'MMM d, yyyy') : '—' }),
-    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as TankMonitor)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
+    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as TankMonitor)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
 
   const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
@@ -100,8 +100,8 @@ export function TankMonitorTab() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-sm font-bold text-white uppercase tracking-wide">Tank Monitor</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Daily readings by location. Use transforms on import for gallons↔quarts or to parse the location number from a messy export.</p>
+        <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Tank Monitor</h2>
+        <p className="text-xs text-inky mt-0.5">Daily readings by location. Use transforms on import for gallons↔quarts or to parse the location number from a messy export.</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
@@ -109,7 +109,7 @@ export function TankMonitorTab() {
         actions={<Button size="sm" onClick={openAdd}>+ Add Reading</Button>} />
 
       <div className="flex flex-col gap-3 max-w-2xl">
-        <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
+        <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
         <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
       </div>
 

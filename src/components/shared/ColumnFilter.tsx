@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Column } from '@tanstack/react-table'
 
 // Excel-style column filter: a searchable checkbox list of the column's distinct
@@ -60,7 +60,7 @@ export function ColumnFilter<T>({ column }: { column: Column<T, unknown> }) {
         ref={btnRef}
         onClick={openMenu}
         title="Filter column"
-        className={['ml-1 align-middle', active ? 'text-[#00e5ff]' : 'text-gray-600 hover:text-gray-300'].join(' ')}
+        className={['ml-1 align-middle', active ? 'text-inky' : 'text-inky/70 hover:text-navy'].join(' ')}
       >
         <svg className="w-3 h-3 inline" fill={active ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
@@ -71,39 +71,39 @@ export function ColumnFilter<T>({ column }: { column: Column<T, unknown> }) {
         <div
           onClick={(e) => e.stopPropagation()}
           style={{ position: 'fixed', top: coords.top, left: coords.left }}
-          className="z-50 w-56 bg-[#161820] border border-[#2a2d3e] rounded shadow-xl flex flex-col"
+          className="z-50 w-56 bg-cream border border-navy/30 rounded shadow-xl flex flex-col"
         >
-          <div className="p-2 border-b border-[#2a2d3e]">
+          <div className="p-2 border-b border-navy/30">
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search values…"
-              className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#00e5ff]"
+              className="w-full bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff]"
             />
             <div className="flex gap-2 mt-1.5 text-[10px] font-mono">
               {query ? (
                 <>
-                  <button onClick={addShown} className="text-[#39ff14] hover:underline">Add shown</button>
-                  <button onClick={onlyShown} className="text-[#00e5ff] hover:underline">Only shown</button>
+                  <button onClick={addShown} className="text-green-700 hover:underline">Add shown</button>
+                  <button onClick={onlyShown} className="text-inky hover:underline">Only shown</button>
                 </>
               ) : (
-                <button onClick={() => column.setFilterValue(uniqueValues.map((v) => v.value))} className="text-gray-400 hover:text-gray-200">Select all</button>
+                <button onClick={() => column.setFilterValue(uniqueValues.map((v) => v.value))} className="text-inky hover:text-navy">Select all</button>
               )}
               {active && <button onClick={clear} className="text-red-400 hover:underline ml-auto">Clear</button>}
             </div>
           </div>
           <div className="max-h-56 overflow-auto py-1">
             {shown.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-gray-600 font-mono">No values</div>
+              <div className="px-3 py-2 text-xs text-inky/70 font-mono">No values</div>
             ) : shown.map((v) => (
-              <div key={v.value} className="group flex items-center gap-2 px-2 py-1 hover:bg-white/5">
+              <div key={v.value} className="group flex items-center gap-2 px-2 py-1 hover:bg-navy/5">
                 <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                  <input type="checkbox" checked={selected.includes(v.value)} onChange={() => toggle(v.value)} className="accent-[#00e5ff]" />
-                  <span className="text-xs font-mono text-gray-300 truncate">{v.value}</span>
-                  <span className="text-[10px] font-mono text-gray-600">{v.count}</span>
+                  <input type="checkbox" checked={selected.includes(v.value)} onChange={() => toggle(v.value)} className="accent-inky" />
+                  <span className="text-xs font-mono text-navy truncate">{v.value}</span>
+                  <span className="text-[10px] font-mono text-inky/70">{v.count}</span>
                 </label>
-                <button onClick={() => setOnly(v.value)} className="text-[10px] font-mono text-gray-600 hover:text-[#00e5ff] opacity-0 group-hover:opacity-100">only</button>
+                <button onClick={() => setOnly(v.value)} className="text-[10px] font-mono text-inky/70 hover:text-inky opacity-0 group-hover:opacity-100">only</button>
               </div>
             ))}
           </div>

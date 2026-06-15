@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+﻿import { useEffect, useState, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { Button, Input, Select, Toggle, Badge, Card, CardHeader, CardBody } from '@/components/ui'
@@ -132,12 +132,12 @@ export function MinRulesTab() {
 
   const sortedRules = useMemo(() => rules, [rules])
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-6">
       <Card>
-        <CardHeader><span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Add Minimum Order Rule</span></CardHeader>
+        <CardHeader><span className="text-xs font-mono text-inky uppercase tracking-wide">Add Minimum Order Rule</span></CardHeader>
         <CardBody className="flex flex-col gap-3">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Input label="Rule Name (optional)" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Case minimums" />
@@ -170,26 +170,26 @@ export function MinRulesTab() {
       </Card>
 
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">
+        <span className="text-xs font-mono text-inky uppercase tracking-wide">
           Rules ({rules.length}) · Precedence: Product/Vendor &gt; Field &gt; Location &gt; Global
         </span>
         {loading ? (
-          <p className="text-xs font-mono text-gray-500">Loading…</p>
+          <p className="text-xs font-mono text-inky">Loading…</p>
         ) : sortedRules.length === 0 ? (
-          <p className="text-xs font-mono text-gray-600">No rules yet. Orders will use calculated quantities.</p>
+          <p className="text-xs font-mono text-inky/70">No rules yet. Orders will use calculated quantities.</p>
         ) : (
           <div className="flex flex-col gap-2">
             {sortedRules.map((r) => {
               const a = (r.applies_to ?? {}) as unknown as AppliesTo
               return (
-                <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-3 border border-[#2a2d3e] rounded bg-[#161820]">
+                <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-3 border border-navy/30 rounded bg-cream">
                   <div className="flex flex-col gap-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge color={scopeColor[a.scope] ?? 'gray'}>{a.scope}</Badge>
-                      {r.name && <span className="text-xs font-mono text-white">{r.name}</span>}
-                      {!r.active && <span className="text-[10px] font-mono text-gray-600 uppercase">inactive</span>}
+                      {r.name && <span className="text-xs font-mono text-navy">{r.name}</span>}
+                      {!r.active && <span className="text-[10px] font-mono text-inky/70 uppercase">inactive</span>}
                     </div>
-                    <span className="text-xs font-mono text-gray-500">{rulePreview(r)}</span>
+                    <span className="text-xs font-mono text-inky">{rulePreview(r)}</span>
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
                     <Toggle checked={r.active} onChange={() => toggleActive(r)} size="sm" color="green" />

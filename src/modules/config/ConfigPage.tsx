@@ -14,8 +14,8 @@ export function ConfigPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-bold text-white tracking-wide uppercase">Configuration</h1>
-        <p className="text-xs text-gray-500 mt-0.5">Manage locations, products, vendors, and import settings</p>
+        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Configuration</h1>
+        <p className="text-xs text-inky mt-0.5">Manage locations, products, vendors, and import settings</p>
       </div>
 
       <Tabs defaultValue="locations">

@@ -38,13 +38,13 @@ export function WeeklyPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-lg font-bold text-white tracking-wide uppercase">Weekly Counts</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Track weekly count submissions across shops</p>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Weekly Counts</h1>
+          <p className="text-xs text-inky mt-0.5">Track weekly count submissions across shops</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => shiftWeek(-7)} className="px-2 py-1.5 border border-[#2a2d3e] rounded text-gray-400 hover:border-gray-500 font-mono text-xs">‹ Prev</button>
+          <button onClick={() => shiftWeek(-7)} className="px-2 py-1.5 border border-navy/30 rounded text-inky hover:border-gray-500 font-mono text-xs">‹ Prev</button>
           <div className="flex flex-col">
-            <span className="text-[10px] font-mono text-gray-500 uppercase tracking-wide">Week</span>
+            <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Week</span>
             <input
               type="date"
               value={selectedWeek}
@@ -52,14 +52,14 @@ export function WeeklyPage() {
                 if (!e.target.value) return
                 setSelectedWeek(format(startOfWeek(new Date(`${e.target.value}T00:00:00`), { weekStartsOn: 1 }), 'yyyy-MM-dd'))
               }}
-              className="bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]"
+              className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
             />
           </div>
-          <button onClick={() => shiftWeek(7)} className="px-2 py-1.5 border border-[#2a2d3e] rounded text-gray-400 hover:border-gray-500 font-mono text-xs">Next ›</button>
+          <button onClick={() => shiftWeek(7)} className="px-2 py-1.5 border border-navy/30 rounded text-inky hover:border-gray-500 font-mono text-xs">Next ›</button>
         </div>
       </div>
 
-      <p className="text-xs font-mono text-gray-500">Selected: <span className="text-[#00e5ff]">{label}</span></p>
+      <p className="text-xs font-mono text-inky">Selected: <span className="text-inky">{label}</span></p>
 
       <Tabs defaultValue="counts">
         <TabsList>
@@ -137,7 +137,7 @@ function WeeklyCountsTab() {
     col.accessor('abs_adjustment_value', { header: 'Abs Adj Value', cell: (i) => num(i.getValue()) }),
     col.accessor('ending_inventory_cost', {
       header: 'Ending Balance',
-      cell: (i) => <span className="text-white">{num(i.getValue())}</span>,
+      cell: (i) => <span className="text-navy">{num(i.getValue())}</span>,
     }),
   ], [])
 
@@ -153,7 +153,7 @@ function WeeklyCountsTab() {
     ending_inventory_cost: r.ending_inventory_cost ?? '',
   })), [rows])
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-6">
@@ -168,7 +168,7 @@ function WeeklyCountsTab() {
       </div>
 
       <div>
-        <h2 className="text-xs font-mono text-gray-400 uppercase tracking-wide mb-3">Results</h2>
+        <h2 className="text-xs font-mono text-inky uppercase tracking-wide mb-3">Results</h2>
         <DataTable
           table={table}
           globalFilter={globalFilter}
@@ -232,7 +232,7 @@ function WeeklyNotSubmittedTab() {
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, load])
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <NotSubmittedPanel

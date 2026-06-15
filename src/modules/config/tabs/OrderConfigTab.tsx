@@ -76,7 +76,7 @@ export function OrderConfigTab() {
       })
     }
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as LocationOrderConfig; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
-    cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as LocationOrderConfig)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> })
+    cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as LocationOrderConfig)} className="text-xs font-mono text-inky hover:underline">Edit</button> })
     return cols
   }, [customFields, loc, vendors])
 
@@ -164,11 +164,11 @@ export function OrderConfigTab() {
 
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
-          <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File (per vendor)</h3>
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File (per vendor)</h3>
           <Combobox label="Vendor for this file" options={[{ value: '', label: '— No vendor —' }, ...vendorOptions]} value={uploadVendorId}
             onChange={(v) => setUploadVendorId(v)} placeholder="Select vendor (optional)" />
           <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label })} />
-          <p className="text-xs font-mono text-gray-600">Tag the file with a vendor to keep each vendor's order config separate. Re-uploading a vendor's file updates only its rows.</p>
+          <p className="text-xs font-mono text-inky/70">Tag the file with a vendor to keep each vendor's order config separate. Re-uploading a vendor's file updates only its rows.</p>
         </div>
         <DataSourceLinker configType="location_order_configs" />
       </div>
@@ -190,7 +190,7 @@ export function OrderConfigTab() {
             ))}
           </div>
           {linkedFields.length > 0 && (
-            <p className="text-xs font-mono text-gray-600">Linked columns ({linkedFields.map((f) => f.label).join(', ')}) are pulled from the selected location automatically.</p>
+            <p className="text-xs font-mono text-inky/70">Linked columns ({linkedFields.map((f) => f.label).join(', ')}) are pulled from the selected location automatically.</p>
           )}
           <div className="flex justify-between gap-2 pt-2">
             <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>

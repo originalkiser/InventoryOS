@@ -51,8 +51,8 @@ function pct(v: number): string {
 function varColor(v: number): string {
   const a = Math.abs(v)
   if (a >= 0.15) return 'text-red-400'
-  if (a >= 0.05) return 'text-[#ffb300]'
-  return 'text-gray-400'
+  if (a >= 0.05) return 'text-orange-600'
+  return 'text-inky'
 }
 
 function flagColor(code: string): 'red' | 'amber' {
@@ -91,7 +91,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   const excludedCount = summaryRows.length - filteredSummary.length
 
   const summaryColumns = useMemo(() => [
-    { id: 'incl', header: '', enableSorting: false, enableColumnFilter: false, cell: (i: any) => { const r = i.row.original as SummaryResultRow; const inc = included(r); return <button onClick={() => toggleOverride(r)} title={inc ? 'Exclude this row' : 'Include this row'} className={inc ? 'text-[#39ff14]' : 'text-gray-600'}>{inc ? '✓' : '✕'}</button> } },
+    { id: 'incl', header: '', enableSorting: false, enableColumnFilter: false, cell: (i: any) => { const r = i.row.original as SummaryResultRow; const inc = included(r); return <button onClick={() => toggleOverride(r)} title={inc ? 'Exclude this row' : 'Include this row'} className={inc ? 'text-green-700' : 'text-inky/70'}>{inc ? '✓' : '✕'}</button> } },
     sc.accessor('location_label', { header: 'Location' }),
     sc.accessor('count_type', { header: 'Type', cell: (i) => i.getValue() ?? '—' }),
     sc.accessor('count_date', {
@@ -103,7 +103,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
     sc.accessor('abs_adjustment_value', { header: 'Abs Adj Value', cell: (i) => num(i.getValue()) }),
     sc.accessor('ending_inventory_cost', {
       header: 'Ending Balance',
-      cell: (i) => <span className="text-white">{num(i.getValue())}</span>,
+      cell: (i) => <span className="text-navy">{num(i.getValue())}</span>,
     }),
     sc.accessor('prev_month_ending', { header: 'Prev Month', cell: (i) => num(i.getValue()) }),
     sc.accessor('median', { header: `Median(${lookbackN})`, cell: (i) => num(i.getValue()) }),
@@ -120,7 +120,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
       enableSorting: false,
       cell: (i) => {
         const flags = i.getValue()
-        if (!flags.length) return <span className="text-gray-600">—</span>
+        if (!flags.length) return <span className="text-inky/70">—</span>
         return (
           <div className="flex flex-wrap gap-1">
             {flags.map((f) => (
@@ -140,11 +140,11 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
     pc.accessor('adjusted', { header: 'Adjusted', cell: (i) => num(i.getValue()) }),
     pc.accessor('ending_value', {
       header: 'Ending Value',
-      cell: (i) => <span className="text-white">{num(i.getValue())}</span>,
+      cell: (i) => <span className="text-navy">{num(i.getValue())}</span>,
     }),
     pc.accessor('batch_count', {
       header: 'Batches',
-      cell: (i) => <span className="text-gray-500">{i.getValue()}</span>,
+      cell: (i) => <span className="text-inky">{i.getValue()}</span>,
     }),
   ], [])
 
@@ -170,15 +170,15 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-mono text-gray-500 uppercase tracking-wide mr-1">View</span>
-        <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+        <span className="text-xs font-mono text-inky uppercase tracking-wide mr-1">View</span>
+        <div className="flex rounded border border-navy/30 overflow-hidden">
           {(['summary', 'product'] as const).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
               className={[
                 'px-3 py-1 text-xs font-mono transition-colors capitalize',
-                view === v ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300',
+                view === v ? 'bg-sky/20 text-navy font-bold' : 'text-inky hover:text-navy',
               ].join(' ')}
             >
               {v === 'summary' ? 'Summary' : 'Product Detail'}
@@ -188,18 +188,18 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
       </div>
 
       {view === 'summary' && distinctTypes.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded border border-[#2a2d3e] bg-[#0f1117] px-3 py-2">
-          <span className="text-xs font-mono uppercase tracking-wide text-gray-500">Allowable types:</span>
+        <div className="flex flex-wrap items-center gap-2 rounded border border-navy/30 bg-cream px-3 py-2">
+          <span className="text-xs font-mono uppercase tracking-wide text-inky">Allowable types:</span>
           {distinctTypes.map((t) => {
             const on = allowable.length === 0 || allowableSet.has(t)
             return (
               <button key={t} onClick={() => toggleType(t)}
-                className={['rounded border px-2 py-0.5 text-xs font-mono', on ? 'border-[#39ff14]/40 bg-[#39ff14]/10 text-[#39ff14]' : 'border-[#2a2d3e] text-gray-600'].join(' ')}>
+                className={['rounded border px-2 py-0.5 text-xs font-mono', on ? 'border-navy bg-navy/10 text-navy' : 'border-navy/30 text-inky/70'].join(' ')}>
                 {on ? '✓ ' : ''}{t}
               </button>
             )
           })}
-          {excludedCount > 0 && <span className="text-xs font-mono text-[#ffb300]">{excludedCount} row{excludedCount !== 1 ? 's' : ''} excluded</span>}
+          {excludedCount > 0 && <span className="text-xs font-mono text-orange-600">{excludedCount} row{excludedCount !== 1 ? 's' : ''} excluded</span>}
         </div>
       )}
 

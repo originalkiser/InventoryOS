@@ -44,24 +44,24 @@ export function ConfigUpload({ requiredFields, onImport, importing, allowReplace
   }
 
   return (
-    <div className="flex flex-col gap-3 border border-[#2a2d3e] rounded-lg p-4 bg-[#0f1117]">
+    <div className="flex flex-col gap-3 border border-navy/30 rounded-lg p-4 bg-cream">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">Mode</span>
-          <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">Mode</span>
+          <div className="flex rounded border border-navy/30 overflow-hidden">
             <button onClick={() => setMode('merge')}
-              className={['px-3 py-1 text-xs font-mono', mode === 'merge' ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+              className={['px-3 py-1 text-xs font-mono', mode === 'merge' ? 'bg-[#00e5ff]/10 text-inky' : 'text-inky hover:text-navy'].join(' ')}>
               Update changes only
             </button>
             {allowReplace && (
               <button onClick={() => setMode('replace')}
-                className={['px-3 py-1 text-xs font-mono', mode === 'replace' ? 'bg-red-500/15 text-red-400' : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+                className={['px-3 py-1 text-xs font-mono', mode === 'replace' ? 'bg-red-500/15 text-red-400' : 'text-inky hover:text-navy'].join(' ')}>
                 Replace all
               </button>
             )}
           </div>
         </div>
-        <button onClick={() => setParsed(null)} className="text-xs font-mono text-gray-500 hover:text-gray-300">Replace file</button>
+        <button onClick={() => setParsed(null)} className="text-xs font-mono text-inky hover:text-navy">Replace file</button>
       </div>
 
       {mode === 'replace' && (
@@ -71,7 +71,7 @@ export function ConfigUpload({ requiredFields, onImport, importing, allowReplace
       )}
 
       <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} rememberKey={rememberKey} previewRows={parsed.rows.slice(0, 5)} onConfirm={handleConfirm} onCancel={() => setParsed(null)} onAddColumn={onAddColumn} />
-      {importing && <p className="text-xs text-[#00e5ff] font-mono">Importing…</p>}
+      {importing && <p className="text-xs text-inky font-mono">Importing…</p>}
     </div>
   )
 }

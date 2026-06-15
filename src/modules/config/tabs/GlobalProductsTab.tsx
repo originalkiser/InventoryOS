@@ -40,7 +40,7 @@ export function GlobalProductsTab() {
     col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
-    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as GlobalProduct)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
+    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as GlobalProduct)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
   const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
 
@@ -91,7 +91,7 @@ export function GlobalProductsTab() {
       />
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
-          <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
           <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
         </div>
         <DataSourceLinker configType="global_products" />

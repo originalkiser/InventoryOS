@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Button, Input } from '@/components/ui'
@@ -31,15 +31,15 @@ export function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0f1117] flex items-center justify-center font-mono">
+    <div className="min-h-screen bg-cream flex items-center justify-center font-mono">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="text-2xl font-bold text-[#00e5ff] tracking-widest uppercase mb-1">
+          <div className="text-2xl font-bold text-inky tracking-widest uppercase mb-1">
             InventoryOS
           </div>
         </div>
-        <div className="bg-[#161820] border border-[#2a2d3e] rounded-lg p-6 flex flex-col gap-4">
-          <h2 className="text-sm font-semibold text-white uppercase tracking-wide">Set New Password</h2>
+        <div className="bg-cream border border-navy/30 rounded-lg p-6 flex flex-col gap-4">
+          <h2 className="text-sm font-semibold text-navy uppercase tracking-wide">Set New Password</h2>
           <Input
             label="New Password"
             type="password"

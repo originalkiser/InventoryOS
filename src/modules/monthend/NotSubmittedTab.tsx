@@ -53,7 +53,7 @@ export function NotSubmittedTab() {
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, load])
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   const periodLabel = format(new Date(countMonth), 'MMMM yyyy')
 

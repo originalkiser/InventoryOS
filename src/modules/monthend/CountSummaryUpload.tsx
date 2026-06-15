@@ -139,7 +139,7 @@ export function CountSummaryUpload({ locations, companyId, target, onImported }:
     <Card>
       <CardBody className="flex flex-col gap-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">{target.cardLabel}</span>
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">{target.cardLabel}</span>
           <ModeSwitch mode={mode} onChange={(m) => { setMode(m); setParsed(null); setSavedMappings(null) }} />
         </div>
 
@@ -160,11 +160,11 @@ export function CountSummaryUpload({ locations, companyId, target, onImported }:
                   </div>
                 )}
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">On import</span>
-                  <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+                  <span className="text-xs font-mono text-inky uppercase tracking-wide">On import</span>
+                  <div className="flex rounded border border-navy/30 overflow-hidden">
                     {([['additive', 'Additive'], ['update', 'Update changes'], ['replace', 'Replace all']] as [ImportMode, string][]).map(([v, l]) => (
                       <button key={v} onClick={() => setImportMode(v)}
-                        className={['px-3 py-1 text-xs font-mono', importMode === v ? (v === 'replace' ? 'bg-red-500/15 text-red-400' : 'bg-[#00e5ff]/10 text-[#00e5ff]') : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+                        className={['px-3 py-1 text-xs font-mono', importMode === v ? (v === 'replace' ? 'bg-red-500/15 text-red-400' : 'bg-[#00e5ff]/10 text-inky') : 'text-inky hover:text-navy'].join(' ')}>
                         {l}
                       </button>
                     ))}
@@ -180,7 +180,7 @@ export function CountSummaryUpload({ locations, companyId, target, onImported }:
                   onConfirm={importRows}
                   onCancel={() => setParsed(null)}
                 />
-                {importing && <p className="text-xs text-[#00e5ff] font-mono">Importing…</p>}
+                {importing && <p className="text-xs text-inky font-mono">Importing…</p>}
               </>
             )}
 
@@ -223,14 +223,14 @@ function ModeSwitch({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => voi
     { value: 'manual', label: 'Manual' },
   ]
   return (
-    <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+    <div className="flex rounded border border-navy/30 overflow-hidden">
       {opts.map((o) => (
         <button
           key={o.value}
           onClick={() => onChange(o.value)}
           className={[
             'px-3 py-1 text-xs font-mono transition-colors',
-            mode === o.value ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300',
+            mode === o.value ? 'bg-[#00e5ff]/10 text-inky' : 'text-inky hover:text-navy',
           ].join(' ')}
         >
           {o.label}

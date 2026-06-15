@@ -36,7 +36,7 @@ export function Toggle({ checked, onChange, label, size = 'md', color = 'cyan' }
           ].join(' ')}
         />
       </div>
-      {label && <span className="text-xs font-mono text-gray-400">{label}</span>}
+      {label && <span className="text-xs font-mono text-inky">{label}</span>}
     </label>
   )
 }

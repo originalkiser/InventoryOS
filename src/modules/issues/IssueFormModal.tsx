@@ -162,14 +162,14 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
         )}
 
         <div className={isResolved ? 'col-span-2' : 'col-span-2'}>
-          <label className="text-xs font-mono text-gray-400 uppercase tracking-wide block mb-1">
+          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">
             Resolution Notes
           </label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
-            className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-sm font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#00e5ff] resize-none"
+            className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff] resize-none"
           />
         </div>
       </div>

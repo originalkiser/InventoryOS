@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+﻿import { useEffect, useMemo, useState, useCallback } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -125,7 +125,7 @@ export function RecountsTab() {
       enableSorting: false,
       cell: (i) => {
         const p = (i.getValue() ?? []) as string[]
-        return p.length ? p.join(', ') : <span className="text-gray-600">—</span>
+        return p.length ? p.join(', ') : <span className="text-inky/70">—</span>
       },
     }),
     col.accessor('request_date', {
@@ -134,7 +134,7 @@ export function RecountsTab() {
     }),
     col.accessor('completed_count', {
       header: 'Completed',
-      cell: (i) => <span className="text-gray-300">{i.row.original.completed_count} / {i.row.original.populated_count || 0}</span>,
+      cell: (i) => <span className="text-navy">{i.row.original.completed_count} / {i.row.original.populated_count || 0}</span>,
     }),
     col.accessor('status', {
       header: 'Status',
@@ -144,7 +144,7 @@ export function RecountsTab() {
       id: 'edit',
       header: '',
       cell: (i) => (
-        <button onClick={() => setEditing(i.row.original)} className="text-xs font-mono text-[#00e5ff] hover:underline">
+        <button onClick={() => setEditing(i.row.original)} className="text-xs font-mono text-inky hover:underline">
           Edit
         </button>
       ),
@@ -162,7 +162,7 @@ export function RecountsTab() {
     completed: `${r.completed_count}/${r.populated_count}`,
   })), [filteredRows])
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-4">
@@ -297,15 +297,15 @@ function RecountSlideOver({
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/80" onClick={onClose} />
-      <div className="relative w-full max-w-lg h-full bg-[#161820] border-l border-[#2a2d3e] shadow-2xl overflow-y-auto">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#2a2d3e] sticky top-0 bg-[#161820] z-10">
+      <div className="relative w-full max-w-lg h-full bg-cream border-l border-navy/30 shadow-2xl overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-navy/30 sticky top-0 bg-navy z-10">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-mono font-semibold text-white uppercase tracking-wide">
+            <h2 className="text-sm font-mono font-semibold text-navy uppercase tracking-wide">
               {existing ? 'Edit Recount' : 'Add Recount'}
             </h2>
             <Badge color={statusColor(status)}>{status.replace('_', ' ')}</Badge>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
+          <button onClick={onClose} className="text-inky hover:text-navy">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -340,18 +340,18 @@ function RecountSlideOver({
           <Input label="Request Date" type="date" value={requestDate} onChange={(e) => setRequestDate(e.target.value)} />
 
           <div className="flex flex-col gap-2">
-            <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Completion Slots</span>
-            <p className="text-xs font-mono text-gray-600">Status becomes <span className="text-[#39ff14]">complete</span> when every filled slot is marked Yes.</p>
+            <span className="text-xs font-mono text-inky uppercase tracking-wide">Completion Slots</span>
+            <p className="text-xs font-mono text-inky/70">Status becomes <span className="text-green-700">complete</span> when every filled slot is marked Yes.</p>
             <div className="flex flex-col gap-1.5">
               {Array.from({ length: SLOTS }).map((_, i) => (
                 <div key={i} className="grid grid-cols-[1.5rem_auto_1fr] items-center gap-2">
-                  <span className="text-xs font-mono text-gray-600">{i + 1}</span>
+                  <span className="text-xs font-mono text-inky/70">{i + 1}</span>
                   <Toggle checked={flags[i]} onChange={(v) => setFlag(i, v)} size="sm" color="green" label={flags[i] ? 'Yes' : 'No'} />
                   <input
                     type="date"
                     value={dates[i] ?? ''}
                     onChange={(e) => setDate(i, e.target.value)}
-                    className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]"
+                    className="w-full bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
                   />
                 </div>
               ))}
@@ -359,7 +359,7 @@ function RecountSlideOver({
           </div>
         </div>
 
-        <div className="flex items-center justify-between px-6 py-4 border-t border-[#2a2d3e] sticky bottom-0 bg-[#161820]">
+        <div className="flex items-center justify-between px-6 py-4 border-t border-navy/30 sticky bottom-0 bg-cream">
           <div>
             {existing && (
               <button onClick={remove} className="text-xs font-mono text-red-400 hover:text-red-300 border border-red-500/30 rounded px-3 py-1.5 hover:bg-red-500/10">
@@ -404,12 +404,12 @@ function TagInput({
 
   return (
     <div className="flex flex-col gap-1">
-      {label && <label className="text-xs font-mono text-gray-400 uppercase tracking-wide">{label}</label>}
-      <div className="flex flex-wrap gap-1.5 p-2 bg-[#0f1117] border border-[#2a2d3e] rounded focus-within:border-[#00e5ff]">
+      {label && <label className="text-xs font-mono text-inky uppercase tracking-wide">{label}</label>}
+      <div className="flex flex-wrap gap-1.5 p-2 bg-cream border border-navy/30 rounded focus-within:border-[#00e5ff]">
         {value.map((tag) => (
-          <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono bg-[#00e5ff]/10 text-[#00e5ff] border border-[#00e5ff]/30 rounded">
+          <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono bg-[#00e5ff]/10 text-inky border border-[#00e5ff]/30 rounded">
             {tag}
-            <button onClick={() => onChange(value.filter((t) => t !== tag))} className="hover:text-white">×</button>
+            <button onClick={() => onChange(value.filter((t) => t !== tag))} className="hover:text-navy">×</button>
           </span>
         ))}
         <input
@@ -421,7 +421,7 @@ function TagInput({
           }}
           onBlur={commit}
           placeholder={value.length ? '' : placeholder}
-          className="flex-1 min-w-[8rem] bg-transparent text-sm font-mono text-white placeholder-gray-600 focus:outline-none"
+          className="flex-1 min-w-[8rem] bg-transparent text-sm font-mono text-navy placeholder-inky/50 focus:outline-none"
         />
       </div>
     </div>

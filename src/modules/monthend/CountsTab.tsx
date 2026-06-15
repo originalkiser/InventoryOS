@@ -133,15 +133,15 @@ export function CountsTab() {
   }))
 
   if (!companyId) {
-    return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+    return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   }
 
   const periodLabel = format(new Date(countMonth), 'MMMM yyyy')
 
   return (
     <div className="flex flex-col gap-6">
-      <p className="text-xs font-mono text-gray-500">
-        Period: <span className="text-[#00e5ff]">{periodLabel}</span>
+      <p className="text-xs font-mono text-inky">
+        Period: <span className="text-inky">{periodLabel}</span>
         {' · '}{counts.length} summary {counts.length === 1 ? 'row' : 'rows'}
         {' · '}{batches.length} product {batches.length === 1 ? 'batch' : 'batches'}
       </p>
@@ -166,7 +166,7 @@ export function CountsTab() {
       </div>
 
       <div>
-        <h2 className="text-xs font-mono text-gray-400 uppercase tracking-wide mb-3">Results — {periodLabel}</h2>
+        <h2 className="text-xs font-mono text-inky uppercase tracking-wide mb-3">Results — {periodLabel}</h2>
         <CountsResultsTable
           summaryRows={summaryRows}
           productRows={productRows}

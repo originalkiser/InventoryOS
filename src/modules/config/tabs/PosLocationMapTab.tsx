@@ -29,8 +29,8 @@ export function PosLocationMapTab() {
   const columns = useMemo(() => [
     col.accessor('pos_string', { header: 'POS String' }),
     { id: 'parsed', header: 'Parsed #', accessorFn: (r: PosLocationMap) => applyTransforms(r.pos_string, [{ kind: 'pos_location' }]), cell: (i: any) => i.getValue() || '—' },
-    { id: 'location', header: 'Location Code', accessorFn: (r: PosLocationMap) => r.location_id, cell: (i: any) => (i.getValue() ? <span className="text-[#00e5ff]">{loc.codeOf(i.getValue())}</span> : <Badge color="amber">Unmatched</Badge>) },
-    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
+    { id: 'location', header: 'Location Code', accessorFn: (r: PosLocationMap) => r.location_id, cell: (i: any) => (i.getValue() ? <span className="text-inky">{loc.codeOf(i.getValue())}</span> : <Badge color="amber">Unmatched</Badge>) },
+    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
 
   const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
@@ -75,8 +75,8 @@ export function PosLocationMapTab() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-sm font-bold text-white uppercase tracking-wide">POS Location Mapping</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Map POS strings like &quot;1 - Thomasville&quot; to internal locations. Imports auto-match on the leading number; {unmatched > 0 ? <span className="text-[#ffb300]">{unmatched} unmatched — map them below.</span> : 'all mapped.'}</p>
+        <h2 className="text-sm font-bold text-navy uppercase tracking-wide">POS Location Mapping</h2>
+        <p className="text-xs text-inky mt-0.5">Map POS strings like &quot;1 - Thomasville&quot; to internal locations. Imports auto-match on the leading number; {unmatched > 0 ? <span className="text-orange-600">{unmatched} unmatched — map them below.</span> : 'all mapped.'}</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
@@ -84,7 +84,7 @@ export function PosLocationMapTab() {
         actions={<Button size="sm" onClick={openAdd}>+ Add Mapping</Button>} />
 
       <div className="flex flex-col gap-3 max-w-2xl">
-        <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
+        <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
         <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
       </div>
 

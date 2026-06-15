@@ -78,29 +78,29 @@ export function InviteUserModal({ open, onClose, onInvited }: InviteUserModalPro
     <Modal open={open} onClose={handleClose} title="Invite User" size="md">
       {created ? (
         <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-2 text-[#39ff14]">
+          <div className="flex items-center gap-2 text-green-700">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <span className="text-sm font-mono font-semibold">User created</span>
           </div>
 
-          <p className="text-xs text-gray-400 font-mono">
-            Share these credentials with <span className="text-white">{created.email}</span>. They should change their password after first login.
+          <p className="text-xs text-inky font-mono">
+            Share these credentials with <span className="text-navy">{created.email}</span>. They should change their password after first login.
           </p>
 
-          <div className="bg-[#0f1117] border border-[#2a2d3e] rounded p-4 flex flex-col gap-2 font-mono text-sm">
+          <div className="bg-cream border border-navy/30 rounded p-4 flex flex-col gap-2 font-mono text-sm">
             <div className="flex justify-between">
-              <span className="text-gray-500">Email</span>
-              <span className="text-white">{created.email}</span>
+              <span className="text-inky">Email</span>
+              <span className="text-navy">{created.email}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-gray-500">Temp Password</span>
+              <span className="text-inky">Temp Password</span>
               <div className="flex items-center gap-2">
-                <span className="text-[#ffb300] tracking-wider">{created.tempPassword}</span>
+                <span className="text-orange-600 tracking-wider">{created.tempPassword}</span>
                 <button
                   onClick={() => { navigator.clipboard.writeText(created.tempPassword); toast.success('Copied') }}
-                  className="text-gray-500 hover:text-white transition-colors"
+                  className="text-inky hover:text-navy transition-colors"
                   title="Copy password"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -123,7 +123,7 @@ export function InviteUserModal({ open, onClose, onInvited }: InviteUserModalPro
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          <p className="text-xs text-gray-500 font-mono">
+          <p className="text-xs text-inky font-mono">
             A temporary password will be generated. Share it with the new user — they can change it after signing in.
           </p>
 

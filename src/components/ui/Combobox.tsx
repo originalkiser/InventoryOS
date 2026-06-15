@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+﻿import React, { useState, useRef, useEffect } from 'react'
 
 export interface ComboboxOption {
   value: string
@@ -69,34 +69,34 @@ export function Combobox({
   return (
     <div ref={ref} className="relative flex flex-col gap-1">
       {label && (
-        <label className="text-xs font-mono text-gray-400 uppercase tracking-wide">{label}</label>
+        <label className="text-xs font-mono text-inky uppercase tracking-wide">{label}</label>
       )}
       <div
         className={[
-          'w-full bg-[#0f1117] border rounded px-3 py-2 text-sm font-mono text-white cursor-pointer flex items-center justify-between',
+          'w-full bg-cream border rounded px-3 py-2 text-sm font-mono text-navy cursor-pointer flex items-center justify-between',
           error
             ? 'border-red-500'
-            : 'border-[#2a2d3e] focus-within:border-[#00e5ff]',
+            : 'border-navy/30 focus-within:border-[#00e5ff]',
         ].join(' ')}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className={value ? 'text-white' : 'text-gray-600'}>
+        <span className={value ? 'text-navy' : 'text-inky/70'}>
           {value ? selectedLabel : placeholder}
         </span>
-        <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-4 h-4 text-inky" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </div>
 
       {open && (
-        <div className="absolute top-full left-0 right-0 z-30 mt-1 bg-[#161820] border border-[#2a2d3e] rounded shadow-xl max-h-60 overflow-auto">
-          <div className="px-3 py-2 border-b border-[#2a2d3e]">
+        <div className="absolute top-full left-0 right-0 z-30 mt-1 bg-cream border border-navy/30 rounded shadow-xl max-h-60 overflow-auto">
+          <div className="px-3 py-2 border-b border-navy/30">
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Type to search..."
-              className="w-full bg-transparent text-sm font-mono text-white placeholder-gray-600 focus:outline-none"
+              className="w-full bg-transparent text-sm font-mono text-navy placeholder-inky/50 focus:outline-none"
             />
           </div>
           {filtered.map((opt) => (
@@ -108,8 +108,8 @@ export function Combobox({
                 setOpen(false)
               }}
               className={[
-                'px-3 py-2 text-sm font-mono cursor-pointer hover:bg-[#00e5ff]/10 hover:text-[#00e5ff]',
-                opt.value === value ? 'text-[#00e5ff] bg-[#00e5ff]/5' : 'text-gray-300',
+                'px-3 py-2 text-sm font-mono cursor-pointer hover:bg-[#00e5ff]/10 hover:text-inky',
+                opt.value === value ? 'text-inky bg-[#00e5ff]/5' : 'text-navy',
               ].join(' ')}
             >
               {opt.label}
@@ -118,19 +118,19 @@ export function Combobox({
           {showCreate && (
             <div
               onClick={handleCreate}
-              className="px-3 py-2 text-sm font-mono cursor-pointer text-[#39ff14] hover:bg-[#39ff14]/10 flex items-center gap-2"
+              className="px-3 py-2 text-sm font-mono cursor-pointer text-green-700 hover:bg-[#39ff14]/10 flex items-center gap-2"
             >
               {creating ? (
-                <span className="text-gray-400">Creating...</span>
+                <span className="text-inky">Creating...</span>
               ) : (
                 <>
-                  <span className="text-[#39ff14]">+</span> Create "{query}"
+                  <span className="text-green-700">+</span> Create "{query}"
                 </>
               )}
             </div>
           )}
           {filtered.length === 0 && !showCreate && (
-            <div className="px-3 py-2 text-xs text-gray-500 font-mono">No results</div>
+            <div className="px-3 py-2 text-xs text-inky font-mono">No results</div>
           )}
         </div>
       )}

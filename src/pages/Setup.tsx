@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Button, Input } from '@/components/ui'
@@ -93,35 +93,35 @@ export function SetupPage() {
 
   if (awaitingConfirmation) {
     return (
-      <div className="min-h-screen bg-[#0f1117] flex items-center justify-center font-mono">
+      <div className="min-h-screen bg-cream flex items-center justify-center font-mono">
         <div className="w-full max-w-sm">
           <div className="mb-8 text-center">
-            <div className="text-2xl font-bold text-[#00e5ff] tracking-widest uppercase mb-1">
+            <div className="text-2xl font-bold text-inky tracking-widest uppercase mb-1">
               InventoryOS
             </div>
           </div>
-          <div className="bg-[#161820] border border-[#2a2d3e] rounded-lg p-6 flex flex-col gap-4 text-center">
+          <div className="bg-cream border border-navy/30 rounded-lg p-6 flex flex-col gap-4 text-center">
             <div className="flex justify-center">
               <div className="w-12 h-12 rounded-full bg-[#00e5ff]/10 border border-[#00e5ff]/30 flex items-center justify-center">
-                <svg className="w-6 h-6 text-[#00e5ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-6 h-6 text-inky" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                     d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </div>
             </div>
-            <h2 className="text-sm font-semibold text-white uppercase tracking-wide">
+            <h2 className="text-sm font-semibold text-navy uppercase tracking-wide">
               Confirm your email
             </h2>
-            <p className="text-sm text-gray-400 font-mono leading-relaxed">
+            <p className="text-sm text-inky font-mono leading-relaxed">
               We sent a confirmation link to
               <br />
-              <span className="text-[#00e5ff]">{confirmedEmail}</span>
+              <span className="text-inky">{confirmedEmail}</span>
             </p>
-            <p className="text-xs text-gray-500 font-mono">
+            <p className="text-xs text-inky font-mono">
               Click the link in that email to activate your account. Your workspace will finish setting up automatically when you sign in.
             </p>
-            <div className="border-t border-[#2a2d3e] pt-3">
-              <Link to="/login" className="text-xs text-[#00e5ff] hover:underline">
+            <div className="border-t border-navy/30 pt-3">
+              <Link to="/login" className="text-xs text-inky hover:underline">
                 Go to sign in →
               </Link>
             </div>
@@ -132,34 +132,34 @@ export function SetupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0f1117] flex items-center justify-center font-mono">
+    <div className="min-h-screen bg-cream flex items-center justify-center font-mono">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="text-2xl font-bold text-[#00e5ff] tracking-widest uppercase mb-1">
+          <div className="text-2xl font-bold text-inky tracking-widest uppercase mb-1">
             InventoryOS
           </div>
-          <div className="text-xs text-gray-500 tracking-wide">Create your workspace</div>
+          <div className="text-xs text-inky tracking-wide">Create your workspace</div>
         </div>
 
-        <div className="bg-[#161820] border border-[#2a2d3e] rounded-lg p-6 flex flex-col gap-4">
-          <h2 className="text-sm font-semibold text-white uppercase tracking-wide">
+        <div className="bg-cream border border-navy/30 rounded-lg p-6 flex flex-col gap-4">
+          <h2 className="text-sm font-semibold text-navy uppercase tracking-wide">
             First-Time Setup
           </h2>
 
           {!RESTRICTIONS_CONFIGURED ? (
-            <div className="flex items-start gap-2 px-3 py-2.5 bg-[#ffb300]/10 border border-[#ffb300]/30 rounded text-xs font-mono text-[#ffb300]">
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-[#ffb300]/10 border border-[#ffb300]/30 rounded text-xs font-mono text-orange-600">
               <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
               </svg>
               <span>
                 No email restrictions configured — anyone can create a workspace.
-                Set <code className="text-white">VITE_SETUP_ALLOWED_DOMAINS</code> or{' '}
-                <code className="text-white">VITE_SETUP_ALLOWED_EMAILS</code> in your .env to restrict access.
+                Set <code className="text-navy">VITE_SETUP_ALLOWED_DOMAINS</code> or{' '}
+                <code className="text-navy">VITE_SETUP_ALLOWED_EMAILS</code> in your .env to restrict access.
               </span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 px-3 py-2 bg-[#39ff14]/10 border border-[#39ff14]/20 rounded text-xs font-mono text-[#39ff14]">
+            <div className="flex items-center gap-2 px-3 py-2 bg-[#39ff14]/10 border border-[#39ff14]/20 rounded text-xs font-mono text-green-700">
               <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
@@ -171,14 +171,14 @@ export function SetupPage() {
             </div>
           )}
 
-          <div className="border-t border-[#2a2d3e] pt-3">
-            <p className="text-xs text-[#00e5ff] font-mono uppercase tracking-wide mb-3">Workspace</p>
+          <div className="border-t border-navy/30 pt-3">
+            <p className="text-xs text-inky font-mono uppercase tracking-wide mb-3">Workspace</p>
             <Input label="Company / Workspace Name" value={companyName}
               onChange={(e) => setCompanyName(e.target.value)} placeholder="Acme Co." />
           </div>
 
-          <div className="border-t border-[#2a2d3e] pt-3 flex flex-col gap-3">
-            <p className="text-xs text-[#00e5ff] font-mono uppercase tracking-wide">Admin Account</p>
+          <div className="border-t border-navy/30 pt-3 flex flex-col gap-3">
+            <p className="text-xs text-inky font-mono uppercase tracking-wide">Admin Account</p>
             <Input label="Full Name" value={fullName}
               onChange={(e) => setFullName(e.target.value)} placeholder="Jane Smith" />
             <Input label="Email" type="email" value={email}
@@ -193,7 +193,7 @@ export function SetupPage() {
             Create Workspace
           </Button>
 
-          <Link to="/login" className="text-xs text-gray-500 hover:text-gray-300 transition-colors text-center">
+          <Link to="/login" className="text-xs text-inky hover:text-navy transition-colors text-center">
             Already have an account? Sign in
           </Link>
         </div>

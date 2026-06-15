@@ -8,8 +8,8 @@ export function OrdersPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-bold text-white tracking-wide uppercase">Orders</h1>
-        <p className="text-xs text-gray-500 mt-0.5">Inventory-driven order planning</p>
+        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Orders</h1>
+        <p className="text-xs text-inky mt-0.5">Inventory-driven order planning</p>
       </div>
 
       <Tabs defaultValue="config">

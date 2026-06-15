@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+﻿import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
@@ -50,7 +50,7 @@ function InlineText({ value, type, onSave }: { value: string | null; type?: 'tex
       onBlur={() => { if ((value ?? '') !== v) onSave(v) }}
       onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
       placeholder="—"
-      className="w-full min-w-[80px] rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-mono text-gray-200 placeholder-gray-600 hover:border-[#2a2d3e] focus:border-[#00e5ff] focus:bg-[#0f1117] focus:outline-none" />
+      className="w-full min-w-[80px] rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-mono text-navy placeholder-inky/50 hover:border-navy/30 focus:border-[#00e5ff] focus:bg-cream focus:outline-none" />
   )
 }
 
@@ -63,9 +63,9 @@ function InlineStatus({ value, onSave }: { value: string | null; onSave: (v: str
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute z-50 mt-1 w-40 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl">
+          <div className="absolute z-50 mt-1 w-40 rounded border border-navy/30 bg-cream py-1 shadow-xl">
             {CUSTOM_STATUS_OPTIONS.map((s) => (
-              <button key={s} onClick={() => { onSave(s); setOpen(false) }} className="flex w-full px-2 py-1 hover:bg-white/5">
+              <button key={s} onClick={() => { onSave(s); setOpen(false) }} className="flex w-full px-2 py-1 hover:bg-navy/5">
                 <Badge color={CUSTOM_STATUS_COLOR[s]}>{s}</Badge>
               </button>
             ))}
@@ -78,7 +78,7 @@ function InlineStatus({ value, onSave }: { value: string | null; onSave: (v: str
 
 function CustomCell({ type, value, onSave }: { type: IssueColumnType; value: string | null; onSave: (v: string | null) => void }) {
   if (type === 'status') return <InlineStatus value={value} onSave={onSave} />
-  if (type === 'checkbox') return <input type="checkbox" checked={value === 'true'} className="accent-[#00e5ff]" onChange={(e) => onSave(e.target.checked ? 'true' : '')} />
+  if (type === 'checkbox') return <input type="checkbox" checked={value === 'true'} className="accent-inky" onChange={(e) => onSave(e.target.checked ? 'true' : '')} />
   return <InlineText value={value} type={type === 'number' ? 'number' : type === 'date' ? 'date' : 'text'} onSave={(v) => onSave(v || null)} />
 }
 
@@ -91,10 +91,10 @@ function CustomColHeader({ col: c, onMove, onPin, onDelete }: {
   return (
     <span className="inline-flex items-center gap-1">
       <span className="truncate">{c.label}</span>
-      <span className="flex items-center gap-0.5 text-gray-600">
-        <button onClick={() => onMove(c.id, -1)} title="Move left" className="hover:text-gray-300">◀</button>
-        <button onClick={() => onMove(c.id, 1)} title="Move right" className="hover:text-gray-300">▶</button>
-        <button onClick={() => onPin(c.id)} title={c.pinned ? 'Unpin' : 'Pin to left'} className={c.pinned ? 'text-[#ffb300]' : 'hover:text-gray-300'}>📌</button>
+      <span className="flex items-center gap-0.5 text-inky/70">
+        <button onClick={() => onMove(c.id, -1)} title="Move left" className="hover:text-navy">◀</button>
+        <button onClick={() => onMove(c.id, 1)} title="Move right" className="hover:text-navy">▶</button>
+        <button onClick={() => onPin(c.id)} title={c.pinned ? 'Unpin' : 'Pin to left'} className={c.pinned ? 'text-orange-600' : 'hover:text-navy'}>📌</button>
         <button onClick={() => { if (confirm(`Delete column “${c.label}”?`)) onDelete(c.id) }} title="Delete column" className="hover:text-red-400">✕</button>
       </span>
     </span>
@@ -126,13 +126,13 @@ function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | u
       {open && rect && (
         <>
           <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
-          <div className="fixed z-[61] w-44 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
+          <div className="fixed z-[61] w-44 rounded border border-navy/30 bg-cream py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
             {statuses.map((s) => (
-              <button key={s.id} onClick={() => { onChange(s.id); setOpen(false) }} className="flex w-full px-2 py-1 hover:bg-white/5">
+              <button key={s.id} onClick={() => { onChange(s.id); setOpen(false) }} className="flex w-full px-2 py-1 hover:bg-navy/5">
                 <Badge color={statusColor(s.name)}>{s.name}</Badge>
               </button>
             ))}
-            <button onClick={addNew} className="flex w-full px-2 py-1 text-xs font-mono text-[#00e5ff] hover:bg-white/5">＋ add status…</button>
+            <button onClick={addNew} className="flex w-full px-2 py-1 text-xs font-mono text-inky hover:bg-navy/5">＋ add status…</button>
           </div>
         </>
       )}
@@ -253,7 +253,7 @@ export function IssuesPage() {
       { id: 'vendor', header: 'Vendor', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.vendor ?? '', cell: (i: any) => <InlineText value={i.row.original.vendor} onSave={(v) => updateVendor(i.row.original.id, v)} /> },
       ...customs,
       notesCol,
-      { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (<button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button>) },
+      { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (<button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-inky hover:underline">Edit</button>) },
     ]
   }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, statuses, addStatus])
 
@@ -293,8 +293,8 @@ export function IssuesPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-white tracking-wide uppercase">Issue Tracker</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Track and resolve location issues</p>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Issue Tracker</h1>
+          <p className="text-xs text-inky mt-0.5">Track and resolve location issues</p>
         </div>
       </div>
 

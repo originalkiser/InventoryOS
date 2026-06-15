@@ -105,8 +105,8 @@ export function SchedulePage() {
     <div className="flex flex-col gap-4 h-full">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-white tracking-wide uppercase">Schedule</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Events, checklists, and recurring tasks</p>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Schedule</h1>
+          <p className="text-xs text-inky mt-0.5">Events, checklists, and recurring tasks</p>
         </div>
         <Button size="sm" onClick={() => { setEditEvent(null); setSelectedSlot(new Date()); setModalOpen(true) }}>
           + Add Event
@@ -115,20 +115,24 @@ export function SchedulePage() {
 
       <div className="flex-1 min-h-0" style={{ minHeight: '600px' }}>
         <style>{`
-          .rbc-calendar { background: #0f1117; color: #9ca3af; font-family: 'JetBrains Mono', monospace; border-radius: 8px; border: 1px solid #2a2d3e; }
-          .rbc-header { background: #161820; border-color: #2a2d3e !important; padding: 8px 4px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
-          .rbc-month-view, .rbc-time-view, .rbc-agenda-view { border-color: #2a2d3e; }
-          .rbc-day-bg { border-color: #2a2d3e !important; }
-          .rbc-off-range-bg { background: #0a0c12; }
-          .rbc-today { background: rgba(0,229,255,0.05) !important; }
-          .rbc-date-cell { color: #6b7280; font-size: 11px; padding: 4px; }
-          .rbc-date-cell.rbc-current { color: #00e5ff; font-weight: 700; }
-          .rbc-toolbar { padding: 12px; border-bottom: 1px solid #2a2d3e; }
-          .rbc-toolbar button { color: #9ca3af; background: transparent; border: 1px solid #2a2d3e; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 4px 10px; cursor: pointer; transition: all 0.15s; }
-          .rbc-toolbar button:hover { border-color: #00e5ff; color: #00e5ff; }
-          .rbc-toolbar button.rbc-active { border-color: #00e5ff; color: #00e5ff; background: rgba(0,229,255,0.1); }
-          .rbc-toolbar-label { color: #e5e7eb; font-size: 13px; font-weight: 600; }
-          .rbc-show-more { color: #00e5ff; font-size: 10px; background: transparent; }
+          .rbc-calendar { background: #F2F1E6; color: #002745; font-family: 'DM Mono', monospace; border-radius: 8px; border: 1px solid rgba(0,39,69,0.2); }
+          .rbc-header { background: #002745; border-color: rgba(0,39,69,0.2) !important; padding: 8px 4px; font-size: 11px; color: #F2F1E6; text-transform: uppercase; letter-spacing: 0.07em; font-family: 'Chakra Petch', sans-serif; font-weight: 700; }
+          .rbc-month-view, .rbc-time-view, .rbc-agenda-view { border-color: rgba(0,39,69,0.15); }
+          .rbc-day-bg { border-color: rgba(0,39,69,0.1) !important; }
+          .rbc-off-range-bg { background: #ECEBD8; }
+          .rbc-today { background: rgba(183,224,222,0.25) !important; }
+          .rbc-date-cell { color: #4F7489; font-size: 11px; padding: 4px; font-family: 'DM Mono', monospace; }
+          .rbc-date-cell.rbc-current { color: #002745; font-weight: 700; }
+          .rbc-toolbar { padding: 12px; border-bottom: 1px solid rgba(0,39,69,0.15); background: #F2F1E6; }
+          .rbc-toolbar button { color: #002745; background: transparent; border: 1px solid rgba(0,39,69,0.3); border-radius: 4px; font-family: 'Chakra Petch', sans-serif; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 10px; cursor: pointer; transition: all 0.15s; }
+          .rbc-toolbar button:hover { border-color: #002745; background: rgba(0,39,69,0.05); }
+          .rbc-toolbar button.rbc-active { border-color: #002745; color: #F2F1E6; background: #002745; }
+          .rbc-toolbar-label { color: #002745; font-size: 13px; font-weight: 700; font-family: 'Chakra Petch', sans-serif; text-transform: uppercase; letter-spacing: 0.05em; }
+          .rbc-show-more { color: #4F7489; font-size: 10px; background: transparent; }
+          .rbc-event { border-radius: 3px; }
+          .rbc-agenda-view table { background: #F2F1E6; }
+          .rbc-agenda-date-cell, .rbc-agenda-time-cell { color: #4F7489; font-family: 'DM Mono', monospace; font-size: 11px; }
+          .rbc-agenda-event-cell { color: #002745; font-family: 'DM Mono', monospace; font-size: 12px; }
         `}</style>
         <Calendar
           localizer={localizer}

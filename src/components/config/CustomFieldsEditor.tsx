@@ -60,33 +60,33 @@ export function CustomFieldsEditor({ section, recommended, linkSections }: Props
 
       {recommended && recommended.length > 0 && (
         <button onClick={() => seedDefaults(recommended)}
-          className="self-start text-xs font-mono text-[#00e5ff] border border-[#00e5ff]/30 rounded px-2 py-1 hover:bg-[#00e5ff]/10">
+          className="self-start text-xs font-mono text-inky border border-[#00e5ff]/30 rounded px-2 py-1 hover:bg-[#00e5ff]/10">
           + Add recommended columns
         </button>
       )}
 
       {loading ? (
-        <p className="text-xs font-mono text-gray-500">Loading…</p>
+        <p className="text-xs font-mono text-inky">Loading…</p>
       ) : fields.length === 0 ? (
-        <p className="text-xs font-mono text-gray-600">No custom columns yet.</p>
+        <p className="text-xs font-mono text-inky/70">No custom columns yet.</p>
       ) : (
         <div className="flex flex-col gap-1.5">
           {fields.map((f, i) => (
-            <div key={f.id} className="flex items-center gap-2 px-3 py-2 border border-[#2a2d3e] rounded bg-[#0f1117]">
+            <div key={f.id} className="flex items-center gap-2 px-3 py-2 border border-navy/30 rounded bg-cream">
               <div className="flex flex-col">
-                <button onClick={() => move(f.id, -1)} disabled={i === 0} className="text-gray-600 hover:text-gray-300 disabled:opacity-20 leading-none text-[10px]">▲</button>
-                <button onClick={() => move(f.id, 1)} disabled={i === fields.length - 1} className="text-gray-600 hover:text-gray-300 disabled:opacity-20 leading-none text-[10px]">▼</button>
+                <button onClick={() => move(f.id, -1)} disabled={i === 0} className="text-inky/70 hover:text-navy disabled:opacity-20 leading-none text-[10px]">▲</button>
+                <button onClick={() => move(f.id, 1)} disabled={i === fields.length - 1} className="text-inky/70 hover:text-navy disabled:opacity-20 leading-none text-[10px]">▼</button>
               </div>
               <input
                 value={f.label}
                 onChange={(e) => updateField(f.id, { label: e.target.value })}
-                className="flex-1 bg-transparent border-b border-transparent hover:border-[#2a2d3e] focus:border-[#00e5ff] text-sm font-mono text-white focus:outline-none px-1"
+                className="flex-1 bg-transparent border-b border-transparent hover:border-navy/30 focus:border-[#00e5ff] text-sm font-mono text-navy focus:outline-none px-1"
               />
               <Badge color="gray">{f.field_type}</Badge>
               {f.linked_section && <Badge color="magenta">← {f.linked_section}</Badge>}
-              <span className="text-[10px] font-mono text-gray-600">{f.field_key}</span>
+              <span className="text-[10px] font-mono text-inky/70">{f.field_key}</span>
               <button onClick={() => updateField(f.id, { active: !f.active })}
-                className={['text-xs font-mono px-2 py-0.5 rounded border', f.active ? 'border-[#39ff14]/30 text-[#39ff14]' : 'border-gray-600 text-gray-500'].join(' ')}>
+                className={['text-xs font-mono px-2 py-0.5 rounded border', f.active ? 'border-[#39ff14]/30 text-green-700' : 'border-gray-600 text-inky'].join(' ')}>
                 {f.active ? 'on' : 'off'}
               </button>
               <button onClick={() => { if (confirm(`Remove column "${f.label}"? Existing values stay in the data but won't show.`)) removeField(f.id) }}
@@ -95,7 +95,7 @@ export function CustomFieldsEditor({ section, recommended, linkSections }: Props
           ))}
         </div>
       )}
-      <p className="text-xs font-mono text-gray-600">
+      <p className="text-xs font-mono text-inky/70">
         Columns map on upload and appear across InventoryOS. Same-named columns in other sections link by key.
       </p>
     </div>

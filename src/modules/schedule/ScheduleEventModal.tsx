@@ -223,11 +223,11 @@ export function ScheduleEventModal({
         </div>
 
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-mono text-gray-400 uppercase tracking-wide">Event Type</label>
+          <label className="text-xs font-mono text-inky uppercase tracking-wide">Event Type</label>
           <select
             value={eventType}
             onChange={(e) => setEventType(e.target.value)}
-            className="bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-[#00e5ff]"
+            className="bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
           >
             {EVENT_TYPES.map((t) => (
               <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
@@ -239,20 +239,20 @@ export function ScheduleEventModal({
         </div>
 
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-mono text-gray-400 uppercase tracking-wide">Recurrence</label>
+          <label className="text-xs font-mono text-inky uppercase tracking-wide">Recurrence</label>
           <select
             value={recurrence}
             onChange={(e) => setRecurrence(e.target.value)}
             disabled={isSeriesMember}
-            className="bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-[#00e5ff] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy focus:outline-none focus:border-[#00e5ff] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {RECURRENCE_OPTIONS.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
           </select>
           {willGenerateSeries && (
-            <p className="text-[10px] font-mono text-gray-500">Generates one task per {recurrence === 'daily' ? 'day' : recurrence === 'weekly' ? 'week' : 'month'} until the repeat-until date.</p>
+            <p className="text-[10px] font-mono text-inky">Generates one task per {recurrence === 'daily' ? 'day' : recurrence === 'weekly' ? 'week' : 'month'} until the repeat-until date.</p>
           )}
           {isSeriesMember && (
-            <p className="text-[10px] font-mono text-gray-500">Part of a recurring series — recurrence is locked. Use “Delete Series” to remove all.</p>
+            <p className="text-[10px] font-mono text-inky">Part of a recurring series — recurrence is locked. Use “Delete Series” to remove all.</p>
           )}
         </div>
 
@@ -282,24 +282,24 @@ export function ScheduleEventModal({
         </div>
 
         <div className="col-span-2">
-          <label className="text-xs font-mono text-gray-400 uppercase tracking-wide block mb-1">Notes</label>
+          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Notes</label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
-            className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-sm font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#00e5ff] resize-none"
+            className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff] resize-none"
           />
         </div>
 
         {isSeriesMember && (
-          <div className="col-span-2 flex flex-col gap-1 border-t border-[#2a2d3e] pt-3">
+          <div className="col-span-2 flex flex-col gap-1 border-t border-navy/30 pt-3">
             <Toggle
               checked={applyToSeries}
               onChange={setApplyToSeries}
               label="Apply changes to all occurrences"
               color="cyan"
             />
-            <p className="text-[10px] font-mono text-gray-500">
+            <p className="text-[10px] font-mono text-inky">
               {applyToSeries
                 ? 'Title, type, notes, and checklist flag update across the whole series. This occurrence keeps its own date and completion.'
                 : 'Off — changes apply to this occurrence only.'}

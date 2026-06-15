@@ -51,7 +51,7 @@ export function UsersPage() {
           <div className="flex gap-2">
             <button
               onClick={() => { setEditUser(u); setEditRole(u.role) }}
-              className="text-xs text-[#00e5ff] hover:underline font-mono"
+              className="text-xs text-inky hover:underline font-mono"
             >
               Edit
             </button>
@@ -115,8 +115,8 @@ export function UsersPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-white tracking-wide uppercase">User Management</h1>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">User Management</h1>
+          <p className="text-xs text-inky mt-0.5">
             {users.length} user{users.length !== 1 ? 's' : ''} in your workspace
           </p>
         </div>
@@ -146,7 +146,7 @@ export function UsersPage() {
       {/* Edit role modal */}
       <Modal open={!!editUser} onClose={() => setEditUser(null)} title="Edit User Role">
         <div className="flex flex-col gap-4">
-          <p className="text-sm text-gray-300 font-mono">
+          <p className="text-sm text-navy font-mono">
             {editUser?.full_name ?? editUser?.email}
           </p>
           <Select
@@ -168,10 +168,10 @@ export function UsersPage() {
       {/* Remove confirmation */}
       <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Remove User">
         <div className="flex flex-col gap-4">
-          <p className="text-sm text-gray-300 font-mono">
-            Remove <span className="text-white">{deleteConfirm?.full_name ?? deleteConfirm?.email}</span> from this workspace?
+          <p className="text-sm text-navy font-mono">
+            Remove <span className="text-navy">{deleteConfirm?.full_name ?? deleteConfirm?.email}</span> from this workspace?
           </p>
-          <p className="text-xs text-gray-500 font-mono">
+          <p className="text-xs text-inky font-mono">
             This removes their profile but does not delete their Supabase auth account.
           </p>
           <div className="flex justify-end gap-2">

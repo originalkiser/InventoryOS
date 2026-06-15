@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
 } from '@dnd-kit/core'
@@ -52,18 +52,18 @@ function ExpandableTextCell({ value, onSave, placeholder }: { value: string | nu
       <textarea autoFocus value={v} onChange={(e) => setV(e.target.value)}
         onBlur={() => { setEditing(false); if ((value ?? '') !== v) onSave(v) }}
         rows={3}
-        className="w-full resize-y rounded border border-[#00e5ff] bg-[#0f1117] px-1.5 py-1 text-xs font-mono text-gray-200 focus:outline-none" />
+        className="w-full resize-y rounded border border-[#00e5ff] bg-cream px-1.5 py-1 text-xs font-mono text-navy focus:outline-none" />
     )
   }
   const text = value ?? ''
   return (
     <div className="px-1.5 py-1">
       <div onClick={() => setEditing(true)}
-        className={['cursor-text whitespace-pre-wrap break-words text-xs font-mono', text ? 'text-gray-200' : 'text-gray-600', expanded ? '' : 'line-clamp-2'].join(' ')}>
+        className={['cursor-text whitespace-pre-wrap break-words text-xs font-mono', text ? 'text-navy' : 'text-inky/70', expanded ? '' : 'line-clamp-2'].join(' ')}>
         {text || placeholder || '—'}
       </div>
       {text.length > 60 && (
-        <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-[#00e5ff] hover:underline">{expanded ? 'less' : 'more'}</button>
+        <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-inky hover:underline">{expanded ? 'less' : 'more'}</button>
       )}
     </div>
   )
@@ -101,14 +101,14 @@ function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf, onAddO
         <>
           <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
           {/* fixed so the menu isn't clipped by the grid's overflow container */}
-          <div className="fixed z-[61] w-44 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
+          <div className="fixed z-[61] w-44 rounded border border-navy/30 bg-cream py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
             {options.map((s) => (
-              <button key={s} onClick={() => { onChange(s); setOpen(false) }} className="flex w-full items-center px-2 py-1 hover:bg-white/5">
+              <button key={s} onClick={() => { onChange(s); setOpen(false) }} className="flex w-full items-center px-2 py-1 hover:bg-navy/5">
                 <Badge color={color(s)}>{s}</Badge>
               </button>
             ))}
             {onAddOption && (
-              <button onClick={addCustom} className="flex w-full items-center px-2 py-1 text-xs font-mono text-[#00e5ff] hover:bg-white/5">＋ custom…</button>
+              <button onClick={addCustom} className="flex w-full items-center px-2 py-1 text-xs font-mono text-inky hover:bg-navy/5">＋ custom…</button>
             )}
           </div>
         </>
@@ -128,7 +128,7 @@ function EditableCell({ value, type, onSave, placeholder }: { value: string | nu
       onChange={(e) => setV(e.target.value)}
       onBlur={() => { if ((value ?? '') !== v) onSave(v) }}
       onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-      className="w-full bg-transparent px-2 py-1 text-xs font-mono text-gray-200 placeholder-gray-600 rounded border border-transparent hover:border-[#2a2d3e] focus:border-[#00e5ff] focus:bg-[#0f1117] focus:outline-none"
+      className="w-full bg-transparent px-2 py-1 text-xs font-mono text-navy placeholder-inky/50 rounded border border-transparent hover:border-navy/30 focus:border-[#00e5ff] focus:bg-cream focus:outline-none"
     />
   )
 }
@@ -157,14 +157,14 @@ function HeaderCell({ col, left, sortDir, onSort, onTogglePin, onResize }: {
   }
   return (
     <th ref={setNodeRef} style={style}
-      className={['relative select-none border-b border-r border-[#2a2d3e] bg-[#161820] px-1 py-2 text-left', isDragging ? 'opacity-60' : ''].join(' ')}>
+      className={['relative select-none border-b border-r border-navy/30 bg-cream px-1 py-2 text-left', isDragging ? 'opacity-60' : ''].join(' ')}>
       <div className="flex items-center gap-1">
-        <span {...attributes} {...listeners} className="cursor-grab text-gray-600 hover:text-gray-300" title="Drag to reorder">⋮⋮</span>
-        <button onClick={onSort} className="flex-1 truncate text-left text-[11px] font-mono uppercase tracking-wide text-gray-400 hover:text-white">
+        <span {...attributes} {...listeners} className="cursor-grab text-inky/70 hover:text-navy" title="Drag to reorder">⋮⋮</span>
+        <button onClick={onSort} className="flex-1 truncate text-left text-[11px] font-mono uppercase tracking-wide text-inky hover:text-navy">
           {col.label}{sortDir ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
         </button>
         <button onClick={onTogglePin} title={col.pinned ? 'Unpin' : 'Pin to left'}
-          className={['px-0.5 text-xs', col.pinned ? 'text-[#ffb300]' : 'text-gray-600 hover:text-gray-300'].join(' ')}>📌</button>
+          className={['px-0.5 text-xs', col.pinned ? 'text-orange-600' : 'text-inky/70 hover:text-navy'].join(' ')}>📌</button>
       </div>
       <span onMouseDown={startResize} className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-[#00e5ff]/40" />
     </th>
@@ -190,10 +190,10 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
     onReorder(projectId, arrayMove(tasks, ids.indexOf(active.id as string), ids.indexOf(over.id as string)))
   }
   return (
-    <div className="border-l-2 border-[#00e5ff]/30 bg-[#0d0f15] pl-6 pr-3 py-3">
-      <div className="overflow-hidden rounded border border-[#2a2d3e]">
+    <div className="border-l-2 border-[#00e5ff]/30 bg-sky/10 pl-6 pr-3 py-3">
+      <div className="overflow-hidden rounded border border-navy/30">
         <table className="w-full text-xs font-mono">
-          <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide">
+          <thead className="bg-navy text-inky uppercase tracking-wide">
             <tr>
               <th className="w-8" />
               <th className="w-8 px-2 py-1.5 text-left">✓</th>
@@ -210,14 +210,14 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
               <tbody>
                 {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} />)}
                 {tasks.length === 0 && (
-                  <tr><td colSpan={8} className="px-2 py-2 text-gray-600">No tasks yet.</td></tr>
+                  <tr><td colSpan={8} className="px-2 py-2 text-inky/70">No tasks yet.</td></tr>
                 )}
               </tbody>
             </SortableContext>
           </DndContext>
         </table>
       </div>
-      <button onClick={() => onAdd(projectId)} className="mt-2 text-xs font-mono text-[#00e5ff] hover:underline">+ Add task</button>
+      <button onClick={() => onAdd(projectId)} className="mt-2 text-xs font-mono text-inky hover:underline">+ Add task</button>
     </div>
   )
 }
@@ -226,10 +226,10 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus }: { 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
   return (
     <tr ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={['border-t border-[#2a2d3e]/50', isDragging ? 'opacity-60' : ''].join(' ')}>
-      <td {...attributes} {...listeners} className="cursor-grab px-1 text-center text-gray-600">⋮⋮</td>
+      className={['border-t border-navy/30/50', isDragging ? 'opacity-60' : ''].join(' ')}>
+      <td {...attributes} {...listeners} className="cursor-grab px-1 text-center text-inky/70">⋮⋮</td>
       <td className="px-2 text-center">
-        <input type="checkbox" checked={task.done} className="accent-[#39ff14]"
+        <input type="checkbox" checked={task.done} className="accent-inky"
           onChange={(e) => onUpdate(task.id, { done: e.target.checked, status: e.target.checked ? 'Complete' : task.status })} />
       </td>
       <td><EditableCell value={task.task_name} type="text" placeholder="Task name…" onSave={(v) => onUpdate(task.id, { task_name: v })} /></td>
@@ -237,7 +237,7 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus }: { 
       <td><EditableCell value={task.assignee} type="text" placeholder="—" onSave={(v) => onUpdate(task.id, { assignee: v })} /></td>
       <td><EditableCell value={task.due_date} type="date" onSave={(v) => onUpdate(task.id, { due_date: v || null })} /></td>
       <td className="min-w-[160px]"><ExpandableTextCell value={task.notes} placeholder="—" onSave={(v) => onUpdate(task.id, { notes: v || null })} /></td>
-      <td className="px-1 text-center"><button onClick={() => onDelete(task.id)} className="text-gray-600 hover:text-red-400">✕</button></td>
+      <td className="px-1 text-center"><button onClick={() => onDelete(task.id)} className="text-inky/70 hover:text-red-400">✕</button></td>
     </tr>
   )
 }
@@ -324,7 +324,7 @@ export function ProjectsModule() {
   function renderCell(p: Project, key: string) {
     const type = TYPE_OF[key]
     if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={addStatus} />
-    if (type === 'datetime') return <span className="px-2 text-xs font-mono text-gray-500">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
+    if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
     if (key === 'description') return <ExpandableTextCell value={p.description} placeholder="Description…" onSave={(v) => updateProject(p.id, { description: v || null })} />
     const dataKey = key === 'project_name' ? { 'data-name-input': p.id } : {}
     return (
@@ -336,14 +336,14 @@ export function ProjectsModule() {
     )
   }
 
-  if (!companyId) return <div className="py-8 text-xs font-mono text-gray-500">No workspace loaded.</div>
+  if (!companyId) return <div className="py-8 text-xs font-mono text-inky">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold uppercase tracking-wide text-white">Projects</h1>
-          <p className="mt-0.5 text-xs text-gray-500">Track projects and their sub-tasks</p>
+          <h1 className="text-lg font-bold uppercase tracking-wide text-navy">Projects</h1>
+          <p className="mt-0.5 text-xs text-inky">Track projects and their sub-tasks</p>
         </div>
         <Button size="sm" onClick={onNewProject}>+ New Project</Button>
       </div>
@@ -351,23 +351,23 @@ export function ProjectsModule() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects…"
-          className="w-56 rounded border border-[#2a2d3e] bg-[#0f1117] px-3 py-1.5 text-xs font-mono text-white placeholder-gray-600 focus:border-[#00e5ff] focus:outline-none" />
+          className="w-56 rounded border border-navy/30 bg-cream px-3 py-1.5 text-xs font-mono text-navy placeholder-inky/50 focus:border-[#00e5ff] focus:outline-none" />
         <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}
-          className="rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1.5 text-xs font-mono text-white focus:border-[#00e5ff] focus:outline-none">
+          className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none">
           <option value="none">Group: None</option>
           <option value="status">Group by Status</option>
           <option value="category">Group by Category</option>
         </select>
         <div className="relative">
           <button onClick={() => setColMenuOpen((o) => !o)}
-            className="rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1.5 text-xs font-mono text-gray-300 hover:text-white">Columns ▾</button>
+            className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-mono text-navy hover:text-navy">Columns ▾</button>
           {colMenuOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setColMenuOpen(false)} />
-              <div className="absolute z-50 mt-1 w-48 rounded border border-[#2a2d3e] bg-[#161820] p-2 shadow-xl">
+              <div className="absolute z-50 mt-1 w-48 rounded border border-navy/30 bg-cream p-2 shadow-xl">
                 {columns.map((c) => (
-                  <label key={c.key} className="flex cursor-pointer items-center gap-2 px-1 py-1 text-xs font-mono text-gray-300">
-                    <input type="checkbox" checked={c.visible} onChange={() => toggleVisible(c.key)} className="accent-[#00e5ff]" />
+                  <label key={c.key} className="flex cursor-pointer items-center gap-2 px-1 py-1 text-xs font-mono text-navy">
+                    <input type="checkbox" checked={c.visible} onChange={() => toggleVisible(c.key)} className="accent-inky" />
                     {c.label}
                   </label>
                 ))}
@@ -379,19 +379,19 @@ export function ProjectsModule() {
 
       {/* Grid */}
       {loading ? (
-        <div className="py-8 text-xs font-mono text-gray-500">Loading…</div>
+        <div className="py-8 text-xs font-mono text-inky">Loading…</div>
       ) : projects.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded border border-dashed border-[#2a2d3e] py-16">
-          <p className="text-sm font-mono text-gray-400">No projects yet</p>
+        <div className="flex flex-col items-center gap-3 rounded border border-dashed border-navy/30 py-16">
+          <p className="text-sm font-mono text-inky">No projects yet</p>
           <Button size="sm" onClick={onNewProject}>+ New Project</Button>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded border border-[#2a2d3e]">
+        <div className="overflow-x-auto rounded border border-navy/30">
           <table className="border-collapse text-xs font-mono" style={{ minWidth: '100%' }}>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onColumnDragEnd}>
               <thead>
                 <tr>
-                  <th className="sticky left-0 z-30 border-b border-r border-[#2a2d3e] bg-[#161820]" style={{ width: CTRL_W, minWidth: CTRL_W }} />
+                  <th className="sticky left-0 z-30 border-b border-r border-navy/30 bg-navy" style={{ width: CTRL_W, minWidth: CTRL_W }} />
                   <SortableContext items={ordered.map((c) => c.key)} strategy={horizontalListSortingStrategy}>
                     {ordered.map((c) => (
                       <HeaderCell key={c.key} col={c} left={c.pinned ? leftOffsets[c.key] : null}
@@ -400,7 +400,7 @@ export function ProjectsModule() {
                         onResize={(w) => setWidth(c.key, w)} />
                     ))}
                   </SortableContext>
-                  <th className="border-b border-[#2a2d3e] bg-[#161820] px-2" />
+                  <th className="border-b border-navy/30 bg-navy px-2" />
                 </tr>
               </thead>
             </DndContext>
@@ -429,7 +429,7 @@ function GroupBlock({ label, count, totalCols, children }: { label: string | nul
   if (label === null) return <>{children}</>
   return (
     <>
-      <tr><td colSpan={totalCols} className="sticky left-0 border-y border-[#2a2d3e] bg-[#0d0f15] px-3 py-1.5 text-xs font-mono uppercase tracking-wide text-gray-400">{label} <span className="text-gray-600">· {count}</span></td></tr>
+      <tr><td colSpan={totalCols} className="sticky left-0 border-y border-navy/30 bg-sky/10 px-3 py-1.5 text-xs font-mono uppercase tracking-wide text-inky">{label} <span className="text-inky/70">· {count}</span></td></tr>
       {children}
     </>
   )
@@ -456,22 +456,22 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
   const doneCount = tasks.filter((t) => t.done).length
   return (
     <>
-      <tr className="border-t border-[#2a2d3e]/50 hover:bg-white/[0.02]">
-        <td className="sticky left-0 z-10 border-r border-[#2a2d3e] bg-[#0f1117] text-center" style={{ width: CTRL_W, minWidth: CTRL_W }}>
-          <button onClick={onToggle} className="px-2 py-1 text-gray-500 hover:text-[#00e5ff]" title={expanded ? 'Collapse' : 'Expand'}>
+      <tr className="border-t border-navy/30/50 hover:bg-navy/5">
+        <td className="sticky left-0 z-10 border-r border-navy/30 bg-cream text-center" style={{ width: CTRL_W, minWidth: CTRL_W }}>
+          <button onClick={onToggle} className="px-2 py-1 text-inky hover:text-inky" title={expanded ? 'Collapse' : 'Expand'}>
             <span className={['inline-block transition-transform', expanded ? 'rotate-90' : ''].join(' ')}>▶</span>
           </button>
         </td>
         {ordered.map((c) => (
           <td key={c.key} style={{ width: c.width, minWidth: c.width, maxWidth: c.width, ...(c.pinned ? { position: 'sticky', left: leftOffsets[c.key], zIndex: 10 } : {}) }}
-            className={['border-r border-[#2a2d3e]/50 align-middle', c.pinned ? 'bg-[#0f1117]' : ''].join(' ')}>
+            className={['border-r border-navy/30/50 align-middle', c.pinned ? 'bg-cream' : ''].join(' ')}>
             {renderCell(project, c.key)}
           </td>
         ))}
         <td className="px-2 text-center">
           <div className="flex items-center gap-2">
-            {taskCount > 0 && <span className="text-[10px] text-gray-600">{doneCount}/{taskCount}</span>}
-            <button onClick={onDelete} className="text-gray-600 hover:text-red-400" title="Delete project">✕</button>
+            {taskCount > 0 && <span className="text-[10px] text-inky/70">{doneCount}/{taskCount}</span>}
+            <button onClick={onDelete} className="text-inky/70 hover:text-red-400" title="Delete project">✕</button>
           </div>
         </td>
       </tr>

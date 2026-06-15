@@ -86,11 +86,11 @@ export function DataSourceLinker({ configType, existingLink, onSaved }: DataSour
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4 border border-[#2a2d3e] rounded-lg bg-[#0f1117]">
+    <div className="flex flex-col gap-4 p-4 border border-navy/30 rounded-lg bg-cream">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Live Data Source</span>
+        <span className="text-xs font-mono text-inky uppercase tracking-wide">Live Data Source</span>
         {existingLink?.last_synced_at && (
-          <span className="text-xs font-mono text-gray-600">
+          <span className="text-xs font-mono text-inky/70">
             Last synced: {format(new Date(existingLink.last_synced_at), 'MMM d, h:mm a')}
           </span>
         )}

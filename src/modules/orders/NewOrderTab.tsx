@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+﻿import { useEffect, useRef, useState, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -223,7 +223,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     toast.success(`Pending orders loaded — ${idx.size} product/location lines`)
   }
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-6">
@@ -233,15 +233,15 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
         <div className="flex flex-col gap-4">
           <Card>
             <CardHeader className="flex items-center justify-between">
-              <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">
+              <span className="text-xs font-mono text-inky uppercase tracking-wide">
                 {mode === 'manual' ? 'Manual Order Entry' : mode === 'independent' ? 'Upload Inventory (standalone)' : 'Inventory Source'}
               </span>
               {/* Config mode lets you switch between an uploaded file and a live source. */}
               {mode === 'config' && (
-                <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+                <div className="flex rounded border border-navy/30 overflow-hidden">
                   {(['file', 'live'] as Source[]).map((s) => (
                     <button key={s} onClick={() => { setSource(s); setParsed(null) }}
-                      className={['px-3 py-1 text-xs font-mono capitalize', source === s ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+                      className={['px-3 py-1 text-xs font-mono capitalize', source === s ? 'bg-[#00e5ff]/10 text-inky' : 'text-inky hover:text-navy'].join(' ')}>
                       {s === 'live' ? 'Live Source' : s}
                     </button>
                   ))}
@@ -250,7 +250,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
             </CardHeader>
             <CardBody className="flex flex-col gap-4">
               {mode === 'independent' && (
-                <p className="text-xs font-mono text-gray-500">Standalone generator — works from just the uploaded file. The InventoryOS config (order configs, vendor parts, UoM) is used when present but isn&apos;t required.</p>
+                <p className="text-xs font-mono text-inky">Standalone generator — works from just the uploaded file. The InventoryOS config (order configs, vendor parts, UoM) is used when present but isn&apos;t required.</p>
               )}
 
               {mode === 'manual' ? (
@@ -295,13 +295,13 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
       {stage === 'export' && (
         <div className="flex flex-col gap-4">
           <Card>
-            <CardHeader><span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Export</span></CardHeader>
+            <CardHeader><span className="text-xs font-mono text-inky uppercase tracking-wide">Export</span></CardHeader>
             <CardBody className="flex flex-col gap-3">
               <Input label="Order Name" value={store.sessionName} onChange={(e) => store.setSessionName(e.target.value)} placeholder="e.g. Week 24 reorder" />
               <div className="flex items-end gap-4 flex-wrap">
                 <div className="w-40"><Select label="Format" options={[{ value: 'xlsx', label: 'Excel (.xlsx)' }, { value: 'csv', label: 'CSV (.csv)' }]} value={format} onChange={(e) => setFormat(e.target.value as 'csv' | 'xlsx')} /></div>
-                <div className="flex items-center gap-2 pb-2"><Toggle checked={excludeZeros} onChange={setExcludeZeros} size="sm" color="cyan" /><span className="text-xs font-mono text-gray-400">Exclude zero-qty lines</span></div>
-                <span className="text-xs font-mono text-[#00e5ff] pb-2">
+                <div className="flex items-center gap-2 pb-2"><Toggle checked={excludeZeros} onChange={setExcludeZeros} size="sm" color="cyan" /><span className="text-xs font-mono text-inky">Exclude zero-qty lines</span></div>
+                <span className="text-xs font-mono text-inky pb-2">
                   {store.lineItems.filter((l) => !excludeZeros || l.final_qty > 0).length} rows will export
                 </span>
               </div>
@@ -339,8 +339,8 @@ function StageBar({ stage, mode }: { stage: Stage; mode: OrderMode }) {
       {steps.map((s, i) => (
         <span key={s.key} className={[
           'px-3 py-1 text-xs font-mono rounded border',
-          i === idx ? 'border-[#00e5ff] text-[#00e5ff] bg-[#00e5ff]/10'
-            : i < idx ? 'border-[#39ff14]/30 text-[#39ff14]' : 'border-[#2a2d3e] text-gray-600',
+          i === idx ? 'border-[#00e5ff] text-inky bg-[#00e5ff]/10'
+            : i < idx ? 'border-[#39ff14]/30 text-green-700' : 'border-navy/30 text-inky/70',
         ].join(' ')}>{s.label}</span>
       ))}
     </div>
@@ -348,7 +348,7 @@ function StageBar({ stage, mode }: { stage: Stage; mode: OrderMode }) {
 }
 
 interface MRow { location: string; product: string; amount: string }
-const cellCls = 'w-full bg-[#161820] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]'
+const cellCls = 'w-full bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]'
 
 // Manual order = Location + Product + Order Amount. The entry row keeps the last
 // location so you can add the same/next product fast (Tab across, Enter on
@@ -395,33 +395,33 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
       <datalist id="manual-loc-list">
         {locations.map((l) => <option key={l.id} value={l.location_code}>{l.location_code} — {l.name}</option>)}
       </datalist>
-      <p className="text-xs font-mono text-gray-600">Enter a location, product, and order amount, then Enter (or +). The location is kept for the next product so you can order the same item across shops quickly. Rows below are editable.</p>
+      <p className="text-xs font-mono text-inky/70">Enter a location, product, and order amount, then Enter (or +). The location is kept for the next product so you can order the same item across shops quickly. Rows below are editable.</p>
 
       {/* Quick entry row */}
-      <div className="grid grid-cols-[1.4fr_1.4fr_0.8fr_auto] items-end gap-2 rounded border border-[#2a2d3e] bg-[#0f1117] p-3">
-        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-gray-500">Location</span>
+      <div className="grid grid-cols-[1.4fr_1.4fr_0.8fr_auto] items-end gap-2 rounded border border-navy/30 bg-cream p-3">
+        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Location</span>
           <input list="manual-loc-list" value={entry.location} onChange={(e) => setEntry({ ...entry, location: e.target.value })} placeholder="Code / name / free text" className={cellCls} /></label>
-        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-gray-500">Product</span>
+        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Product</span>
           <input ref={productRef} value={entry.product} onChange={(e) => setEntry({ ...entry, product: e.target.value })} className={cellCls} /></label>
-        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-gray-500">Order Amount</span>
+        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Order Amount</span>
           <input value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEntry() } }} className={cellCls} /></label>
         <Button size="sm" onClick={addEntry}>+ Add</Button>
       </div>
 
       {/* Accumulated, editable order table */}
       {rows.length > 0 && (
-        <div className="overflow-auto rounded border border-[#2a2d3e]">
+        <div className="overflow-auto rounded border border-navy/30">
           <table className="w-full text-xs font-mono">
-            <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide">
+            <thead className="bg-navy text-inky uppercase tracking-wide">
               <tr><th className="px-2 py-2 text-left">Location</th><th className="px-2 py-2 text-left">Product</th><th className="px-2 py-2 text-left">Order Amount</th><th /></tr>
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i} className="border-t border-[#2a2d3e]/50">
+                <tr key={i} className="border-t border-navy/30/50">
                   <td className="px-1 py-1"><input list="manual-loc-list" value={r.location} onChange={(e) => setRow(i, 'location', e.target.value)} className={cellCls} /></td>
                   <td className="px-1 py-1"><input value={r.product} onChange={(e) => setRow(i, 'product', e.target.value)} className={cellCls} /></td>
                   <td className="px-1 py-1"><input value={r.amount} onChange={(e) => setRow(i, 'amount', e.target.value)} className={cellCls} /></td>
-                  <td className="px-2"><button onClick={() => removeRow(i)} className="text-gray-600 hover:text-red-400">×</button></td>
+                  <td className="px-2"><button onClick={() => removeRow(i)} className="text-inky/70 hover:text-red-400">×</button></td>
                 </tr>
               ))}
             </tbody>
@@ -430,7 +430,7 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
       )}
 
       <div className="flex items-center justify-between">
-        <span className="text-xs font-mono text-gray-500">{rows.length} line{rows.length !== 1 ? 's' : ''}</span>
+        <span className="text-xs font-mono text-inky">{rows.length} line{rows.length !== 1 ? 's' : ''}</span>
         <Button size="sm" onClick={confirm} disabled={!rows.length}>Continue → Review</Button>
       </div>
     </div>
@@ -453,7 +453,7 @@ function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, pr
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader><span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Generation Parameters</span></CardHeader>
+        <CardHeader><span className="text-xs font-mono text-inky uppercase tracking-wide">Generation Parameters</span></CardHeader>
         <CardBody className="flex flex-col gap-3">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Select label="Order Mode" options={[{ value: 'min_max', label: 'Min / Max' }, { value: 'days_supply', label: 'Days Supply' }]}
@@ -474,17 +474,17 @@ function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, pr
       <PackRulesCard productIds={productIds} onChange={onPackRulesChange} />
 
       <Card>
-        <CardHeader><span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Minimum-Order Rule Set ({store.selectedMinRuleIds.length} selected)</span></CardHeader>
+        <CardHeader><span className="text-xs font-mono text-inky uppercase tracking-wide">Minimum-Order Rule Set ({store.selectedMinRuleIds.length} selected)</span></CardHeader>
         <CardBody className="flex flex-col gap-1.5">
           {minRules.length === 0 ? (
-            <p className="text-xs font-mono text-gray-600">No active rules. Add some in the Min Rules tab.</p>
+            <p className="text-xs font-mono text-inky/70">No active rules. Add some in the Min Rules tab.</p>
           ) : minRules.map((r) => {
             const checked = store.selectedMinRuleIds.includes(r.id)
             return (
               <label key={r.id} className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={checked} className="accent-[#00e5ff]"
+                <input type="checkbox" checked={checked} className="accent-inky"
                   onChange={() => store.setSelectedMinRuleIds(checked ? store.selectedMinRuleIds.filter((x) => x !== r.id) : [...store.selectedMinRuleIds, r.id])} />
-                <span className="text-xs font-mono text-gray-300">{r.name ?? (r.applies_to as any)?.scope ?? 'rule'}</span>
+                <span className="text-xs font-mono text-navy">{r.name ?? (r.applies_to as any)?.scope ?? 'rule'}</span>
               </label>
             )
           })}
@@ -518,17 +518,17 @@ function PendingOrdersCard({ count, onFile, onClear }: {
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
-        <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">
-          Pending Orders {count > 0 ? <span className="text-[#39ff14]">· {count} lines loaded</span> : <span className="text-gray-600">· optional</span>}
+        <span className="text-xs font-mono text-inky uppercase tracking-wide">
+          Pending Orders {count > 0 ? <span className="text-green-700">· {count} lines loaded</span> : <span className="text-inky/70">· optional</span>}
         </span>
         <div className="flex gap-2">
           {count > 0 && <button onClick={() => { onClear(); setParsed(null) }} className="text-xs font-mono text-red-400 hover:text-red-300">Clear</button>}
-          <button onClick={() => setOpen((v) => !v)} className="text-xs font-mono text-[#00e5ff] hover:underline">{open ? 'Hide' : 'Add file'}</button>
+          <button onClick={() => setOpen((v) => !v)} className="text-xs font-mono text-inky hover:underline">{open ? 'Hide' : 'Add file'}</button>
         </div>
       </CardHeader>
       {open && (
         <CardBody className="flex flex-col gap-3">
-          <p className="text-xs font-mono text-gray-600">Upload an already-placed/pending order file. Matching product+location qty is subtracted from each suggestion.</p>
+          <p className="text-xs font-mono text-inky/70">Upload an already-placed/pending order file. Matching product+location qty is subtracted from each suggestion.</p>
           {!parsed ? (
             <FileUploadZone onParsed={onParsed} />
           ) : (
@@ -586,21 +586,21 @@ function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChang
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
-        <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">
-          Pack Rules {activeCount > 0 ? <span className="text-[#39ff14]">· {activeCount} active</span> : <span className="text-gray-600">· optional</span>}
+        <span className="text-xs font-mono text-inky uppercase tracking-wide">
+          Pack Rules {activeCount > 0 ? <span className="text-green-700">· {activeCount} active</span> : <span className="text-inky/70">· optional</span>}
         </span>
-        <button onClick={() => setOpen((v) => !v)} className="text-xs font-mono text-[#00e5ff] hover:underline">{open ? 'Hide' : 'Detect packs'}</button>
+        <button onClick={() => setOpen((v) => !v)} className="text-xs font-mono text-inky hover:underline">{open ? 'Hide' : 'Detect packs'}</button>
       </CardHeader>
       {open && (
         <CardBody className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-mono text-gray-600">Detect common product-ID prefixes/suffixes and order them in packs. <span className="text-gray-500">Pack</span> = order whole packs; <span className="text-gray-500">Round</span> = order units rounded up to a pack multiple.</p>
+            <p className="text-xs font-mono text-inky/70">Detect common product-ID prefixes/suffixes and order them in packs. <span className="text-inky">Pack</span> = order whole packs; <span className="text-inky">Round</span> = order units rounded up to a pack multiple.</p>
             <Button size="sm" variant="secondary" onClick={detect}>Scan {productIds.length} products</Button>
           </div>
           {detected.length > 0 && (
-            <div className="overflow-auto rounded border border-[#2a2d3e]">
+            <div className="overflow-auto rounded border border-navy/30">
               <table className="w-full text-xs font-mono">
-                <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide">
+                <thead className="bg-navy text-inky uppercase tracking-wide">
                   <tr>
                     <th className="px-2 py-2 text-left">Use</th>
                     <th className="px-2 py-2 text-left">Pattern</th>
@@ -614,18 +614,18 @@ function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChang
                   {detected.map((d) => {
                     const c = cfg[d.key] ?? { size: '', mode: 'pack' as const, enabled: false }
                     return (
-                      <tr key={d.key} className="border-t border-[#2a2d3e]/50">
-                        <td className="px-2 py-1"><input type="checkbox" checked={c.enabled} className="accent-[#00e5ff]" onChange={(e) => update(d.key, { enabled: e.target.checked })} /></td>
-                        <td className="px-2 py-1 text-gray-200"><span className="text-[#ffb300] uppercase">{d.type}</span> “{d.text}”</td>
-                        <td className="px-2 py-1 text-right text-gray-400">{d.count}</td>
-                        <td className="px-2 py-1 text-gray-600">{d.examples.join(', ')}</td>
+                      <tr key={d.key} className="border-t border-navy/30/50">
+                        <td className="px-2 py-1"><input type="checkbox" checked={c.enabled} className="accent-inky" onChange={(e) => update(d.key, { enabled: e.target.checked })} /></td>
+                        <td className="px-2 py-1 text-navy"><span className="text-orange-600 uppercase">{d.type}</span> “{d.text}”</td>
+                        <td className="px-2 py-1 text-right text-inky">{d.count}</td>
+                        <td className="px-2 py-1 text-inky/70">{d.examples.join(', ')}</td>
                         <td className="px-2 py-1 text-right">
                           <input type="number" min={1} value={c.size} onChange={(e) => update(d.key, { size: e.target.value, enabled: true })}
-                            className="w-16 bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-right text-white focus:outline-none focus:border-[#00e5ff]" />
+                            className="w-16 bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-right text-navy focus:outline-none focus:border-[#00e5ff]" />
                         </td>
                         <td className="px-2 py-1">
                           <select value={c.mode} onChange={(e) => update(d.key, { mode: e.target.value as 'pack' | 'round' })}
-                            className="bg-[#0f1117] border border-[#2a2d3e] rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00e5ff]">
+                            className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]">
                             <option value="pack">Pack</option>
                             <option value="round">Round</option>
                           </select>
@@ -648,12 +648,12 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
   const ordered = store.lineItems.filter((l) => l.final_qty > 0).length
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-xs font-mono text-gray-500">
-        <span className="text-[#39ff14]">{ordered}</span> of {store.lineItems.length} lines have an order qty · edit any final qty below
+      <p className="text-xs font-mono text-inky">
+        <span className="text-green-700">{ordered}</span> of {store.lineItems.length} lines have an order qty · edit any final qty below
       </p>
-      <div className="overflow-auto rounded border border-[#2a2d3e] max-h-[28rem]">
+      <div className="overflow-auto rounded border border-navy/30 max-h-[28rem]">
         <table className="w-full text-xs font-mono">
-          <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide sticky top-0">
+          <thead className="bg-navy text-inky uppercase tracking-wide sticky top-0">
             <tr>
               <th className="px-3 py-2 text-left">Location</th>
               <th className="px-3 py-2 text-left">Product</th>
@@ -669,21 +669,21 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
           </thead>
           <tbody>
             {store.lineItems.map((l, i) => (
-              <tr key={i} className="border-t border-[#2a2d3e]/50 hover:bg-[#00e5ff]/5">
-                <td className="px-3 py-1.5 text-gray-300">{l.location_label}</td>
-                <td className="px-3 py-1.5 text-gray-300">{l.product_id}</td>
-                <td className="px-3 py-1.5 text-right text-gray-400">{l.on_hand ?? '—'}</td>
-                <td className="px-3 py-1.5 text-right text-gray-500">{l.days_on_hand != null ? l.days_on_hand.toFixed(1) : '—'}</td>
-                <td className="px-3 py-1.5 text-right text-gray-400">{l.suggested_qty}</td>
-                <td className="px-3 py-1.5 text-right text-gray-500">{l.pending_qty > 0 ? `−${l.pending_qty}` : '—'}</td>
+              <tr key={i} className="border-t border-navy/30/50 hover:bg-[#00e5ff]/5">
+                <td className="px-3 py-1.5 text-navy">{l.location_label}</td>
+                <td className="px-3 py-1.5 text-navy">{l.product_id}</td>
+                <td className="px-3 py-1.5 text-right text-inky">{l.on_hand ?? '—'}</td>
+                <td className="px-3 py-1.5 text-right text-inky">{l.days_on_hand != null ? l.days_on_hand.toFixed(1) : '—'}</td>
+                <td className="px-3 py-1.5 text-right text-inky">{l.suggested_qty}</td>
+                <td className="px-3 py-1.5 text-right text-inky">{l.pending_qty > 0 ? `−${l.pending_qty}` : '—'}</td>
                 <td className="px-3 py-1.5"><Badge color={l.trigger_reason.startsWith('below') || l.trigger_reason.startsWith('projected') ? 'amber' : 'gray'}>{TRIGGER_REASON_LABELS[l.trigger_reason] ?? l.trigger_reason}</Badge></td>
-                <td className="px-3 py-1.5 text-gray-500">{l.applied_min_rule ?? '—'}</td>
-                <td className="px-3 py-1.5 text-gray-500">{l.order_uom ? <span className="text-[#00e5ff]">{l.order_uom}</span> : (l.unit_of_measure ?? '—')}{l.package_type ? ` · ${l.package_type}` : ''}</td>
+                <td className="px-3 py-1.5 text-inky">{l.applied_min_rule ?? '—'}</td>
+                <td className="px-3 py-1.5 text-inky">{l.order_uom ? <span className="text-inky">{l.order_uom}</span> : (l.unit_of_measure ?? '—')}{l.package_type ? ` · ${l.package_type}` : ''}</td>
                 <td className="px-3 py-1.5 text-right">
                   <input type="number" min={0} value={l.final_qty}
                     onChange={(e) => store.updateFinalQty(i, Number(e.target.value))}
-                    className={['w-20 bg-[#0f1117] border rounded px-2 py-1 text-xs font-mono text-right focus:outline-none focus:border-[#00e5ff]',
-                      l.final_qty !== l.suggested_qty ? 'border-[#ffb300] text-[#ffb300]' : 'border-[#2a2d3e] text-white'].join(' ')} />
+                    className={['w-20 bg-cream border rounded px-2 py-1 text-xs font-mono text-right focus:outline-none focus:border-[#00e5ff]',
+                      l.final_qty !== l.suggested_qty ? 'border-[#ffb300] text-orange-600' : 'border-navy/30 text-navy'].join(' ')} />
                 </td>
               </tr>
             ))}

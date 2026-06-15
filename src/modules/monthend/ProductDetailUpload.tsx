@@ -103,8 +103,8 @@ export function ProductDetailUpload({
     <Card>
       <CardBody className="flex flex-col gap-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">
-            Product Detail <span className="text-[#ffb300]">· additive</span>
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">
+            Product Detail <span className="text-orange-600">· additive</span>
           </span>
           <ModeSwitch mode={mode} onChange={(m) => { setMode(m); setParsed(null) }} />
         </div>
@@ -122,7 +122,7 @@ export function ProductDetailUpload({
                 onConfirm={importBatch}
                 onCancel={() => setParsed(null)}
               />
-              {importing && <p className="text-xs text-[#00e5ff] font-mono">Importing batch…</p>}
+              {importing && <p className="text-xs text-inky font-mono">Importing batch…</p>}
             </>
           )
         )}
@@ -141,21 +141,21 @@ export function ProductDetailUpload({
 
         {/* Batches loaded this period */}
         <div className="flex flex-col gap-2">
-          <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">
             Batches Loaded This Period ({batches.length})
           </span>
           {batches.length === 0 ? (
-            <p className="text-xs text-gray-600 font-mono">No product batches uploaded for this period yet.</p>
+            <p className="text-xs text-inky/70 font-mono">No product batches uploaded for this period yet.</p>
           ) : (
             <div className="flex flex-col gap-1.5">
               {batches.map((b) => (
                 <div
                   key={b.id}
-                  className="flex items-center justify-between gap-3 px-3 py-2 border border-[#2a2d3e] rounded bg-[#0f1117]"
+                  className="flex items-center justify-between gap-3 px-3 py-2 border border-navy/30 rounded bg-cream"
                 >
                   <div className="flex flex-col">
-                    <span className="text-xs font-mono text-white">{b.file_name ?? 'Upload'}</span>
-                    <span className="text-[11px] font-mono text-gray-500">
+                    <span className="text-xs font-mono text-navy">{b.file_name ?? 'Upload'}</span>
+                    <span className="text-[11px] font-mono text-inky">
                       {b.row_count.toLocaleString()} rows
                       {' · '}{b.uploaded_by ? (userNames[b.uploaded_by] ?? 'Unknown') : 'Unknown'}
                       {' · '}{format(new Date(b.created_at), 'MMM d, h:mm a')}
@@ -184,14 +184,14 @@ function ModeSwitch({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => voi
     { value: 'manual', label: 'Manual' },
   ]
   return (
-    <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+    <div className="flex rounded border border-navy/30 overflow-hidden">
       {opts.map((o) => (
         <button
           key={o.value}
           onClick={() => onChange(o.value)}
           className={[
             'px-3 py-1 text-xs font-mono transition-colors',
-            mode === o.value ? 'bg-[#00e5ff]/10 text-[#00e5ff]' : 'text-gray-500 hover:text-gray-300',
+            mode === o.value ? 'bg-[#00e5ff]/10 text-inky' : 'text-inky hover:text-navy',
           ].join(' ')}
         >
           {o.label}

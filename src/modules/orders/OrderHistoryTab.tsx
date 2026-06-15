@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+﻿import { useEffect, useState, useCallback, useMemo } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -101,7 +101,7 @@ export function OrderHistoryTab() {
     col.accessor('exported_at', { header: 'Exported', cell: (i) => (i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—') }),
     col.display({
       id: 'open', header: '',
-      cell: (i) => <button onClick={() => setDetail(i.row.original)} className="text-xs font-mono text-[#00e5ff] hover:underline">Open</button>,
+      cell: (i) => <button onClick={() => setDetail(i.row.original)} className="text-xs font-mono text-inky hover:underline">Open</button>,
     }),
   ], [])
 
@@ -122,7 +122,7 @@ export function OrderHistoryTab() {
     else { toast.success(`Advanced to ${next}`); setDetail({ ...s, status: next as OrderSession['status'] }); load() }
   }
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-4">
@@ -211,10 +211,10 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
         <div className="flex flex-col gap-4">
           <Input label="Import name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. May vendor orders" />
           <div className="flex items-center gap-4">
-            <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Mode</span>
+            <span className="text-xs font-mono text-inky uppercase tracking-wide">Mode</span>
             {(['additive', 'replace'] as const).map((m) => (
-              <label key={m} className="flex cursor-pointer items-center gap-1.5 text-xs font-mono text-gray-300">
-                <input type="radio" checked={mode === m} onChange={() => setMode(m)} className="accent-[#00e5ff]" />
+              <label key={m} className="flex cursor-pointer items-center gap-1.5 text-xs font-mono text-navy">
+                <input type="radio" checked={mode === m} onChange={() => setMode(m)} className="accent-inky" />
                 {m === 'additive' ? 'Additive (append)' : 'Replace imported'}
               </label>
             ))}
@@ -295,7 +295,7 @@ function OrderDetailModal({
   return (
     <Modal open onClose={onClose} title={session.name ?? 'Order'} size="xl">
       <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-3 flex-wrap text-xs font-mono text-gray-400">
+        <div className="flex items-center gap-3 flex-wrap text-xs font-mono text-inky">
           <Badge color={STATUS_COLOR[session.status] ?? 'gray'}>{session.status}</Badge>
           <span>Created {format(new Date(session.created_at), 'MMM d, yyyy h:mm a')}</span>
           {session.exported_at && <span>· Exported {format(new Date(session.exported_at), 'MMM d, yyyy')}</span>}
@@ -307,9 +307,9 @@ function OrderDetailModal({
           {canAdvance && <Button size="sm" onClick={onAdvance}>Advance Status →</Button>}
         </div>
 
-        <div className="max-h-72 overflow-auto rounded border border-[#2a2d3e]">
+        <div className="max-h-72 overflow-auto rounded border border-navy/30">
           <table className="w-full text-xs font-mono">
-            <thead className="bg-[#161820] text-gray-500 uppercase tracking-wide">
+            <thead className="bg-navy text-inky uppercase tracking-wide">
               <tr>
                 <th className="px-3 py-2 text-left">Product</th>
                 <th className="px-3 py-2 text-left">Vendor Part</th>
@@ -320,16 +320,16 @@ function OrderDetailModal({
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-500">Loading…</td></tr>
+                <tr><td colSpan={5} className="px-3 py-6 text-center text-inky">Loading…</td></tr>
               ) : lines.length === 0 ? (
-                <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-600">No line items</td></tr>
+                <tr><td colSpan={5} className="px-3 py-6 text-center text-inky/70">No line items</td></tr>
               ) : lines.map((l) => (
-                <tr key={l.id} className="border-t border-[#2a2d3e]/50">
-                  <td className="px-3 py-1.5 text-gray-300">{l.product_id}</td>
-                  <td className="px-3 py-1.5 text-gray-500">{l.vendor_part_number ?? '—'}</td>
-                  <td className="px-3 py-1.5 text-right text-white">{l.final_qty ?? l.quantity ?? 0}</td>
-                  <td className="px-3 py-1.5 text-gray-500">{l.unit_of_measure ?? '—'}</td>
-                  <td className="px-3 py-1.5 text-gray-500">{l.trigger_reason ?? '—'}</td>
+                <tr key={l.id} className="border-t border-navy/30/50">
+                  <td className="px-3 py-1.5 text-navy">{l.product_id}</td>
+                  <td className="px-3 py-1.5 text-inky">{l.vendor_part_number ?? '—'}</td>
+                  <td className="px-3 py-1.5 text-right text-navy">{l.final_qty ?? l.quantity ?? 0}</td>
+                  <td className="px-3 py-1.5 text-inky">{l.unit_of_measure ?? '—'}</td>
+                  <td className="px-3 py-1.5 text-inky">{l.trigger_reason ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -337,12 +337,12 @@ function OrderDetailModal({
         </div>
 
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">Attached Documents ({docs.length})</span>
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">Attached Documents ({docs.length})</span>
           {docs.length === 0 ? (
-            <span className="text-xs font-mono text-gray-600">None</span>
+            <span className="text-xs font-mono text-inky/70">None</span>
           ) : docs.map((d) => (
-            <span key={d.id} className="text-xs font-mono text-gray-400">
-              <span className={d.stage === 'start' ? 'text-[#00e5ff]' : 'text-[#39ff14]'}>[{d.stage}]</span> {d.file_name}
+            <span key={d.id} className="text-xs font-mono text-inky">
+              <span className={d.stage === 'start' ? 'text-inky' : 'text-green-700'}>[{d.stage}]</span> {d.file_name}
             </span>
           ))}
         </div>

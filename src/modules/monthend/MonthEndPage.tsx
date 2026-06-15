@@ -51,8 +51,8 @@ export function MonthEndPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-lg font-bold text-white tracking-wide uppercase">Month End Inventory</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Upload counts, review recount flags, and reconcile by period</p>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Month End Inventory</h1>
+          <p className="text-xs text-inky mt-0.5">Upload counts, review recount flags, and reconcile by period</p>
         </div>
         <div className="flex items-end gap-2">
           <div className="w-40">

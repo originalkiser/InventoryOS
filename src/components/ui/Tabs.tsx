@@ -24,7 +24,7 @@ export function Tabs({ defaultValue, children, className = '' }: TabsProps) {
 
 export function TabsList({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={['flex gap-1 border-b border-[#2a2d3e] mb-4', className].join(' ')}>
+    <div className={['flex gap-1 border-b border-navy/30 mb-4', className].join(' ')}>
       {children}
     </div>
   )
@@ -37,10 +37,10 @@ export function TabsTrigger({ value, children }: { value: string; children: Reac
     <button
       onClick={() => setActive(value)}
       className={[
-        'px-4 py-2 text-xs font-mono font-medium uppercase tracking-wide transition-all border-b-2 -mb-px',
+        'px-4 py-2 text-xs font-heading font-bold uppercase tracking-wide transition-all border-b-2 -mb-px',
         isActive
-          ? 'border-[#00e5ff] text-[#00e5ff]'
-          : 'border-transparent text-gray-500 hover:text-gray-300',
+          ? 'border-navy text-navy'
+          : 'border-transparent text-inky hover:text-navy',
       ].join(' ')}
     >
       {children}

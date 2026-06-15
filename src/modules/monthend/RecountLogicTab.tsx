@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
@@ -178,7 +178,7 @@ export function RecountLogicTab() {
     }
   }
 
-  if (!companyId) return <div className="text-xs font-mono text-gray-500 py-8">No workspace loaded.</div>
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
     <div className="flex flex-col gap-6">
@@ -250,22 +250,22 @@ export function RecountLogicTab() {
       {/* Live preview */}
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <span className="text-xs font-mono text-gray-400 uppercase tracking-wide">Live Preview — {format(new Date(countMonth), 'MMMM yyyy')}</span>
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">Live Preview — {format(new Date(countMonth), 'MMMM yyyy')}</span>
           <span className="text-xs font-mono">
-            <span className="text-[#ffb300]">{flagged.length}</span>
-            <span className="text-gray-500"> of {totalShops} shops would flag</span>
+            <span className="text-orange-600">{flagged.length}</span>
+            <span className="text-inky"> of {totalShops} shops would flag</span>
           </span>
         </CardHeader>
         <CardBody>
           {!evalData ? (
-            <p className="text-xs font-mono text-gray-500">Loading period data…</p>
+            <p className="text-xs font-mono text-inky">Loading period data…</p>
           ) : flagged.length === 0 ? (
-            <p className="text-xs font-mono text-gray-600">No shops flag under the current rules.</p>
+            <p className="text-xs font-mono text-inky/70">No shops flag under the current rules.</p>
           ) : (
-            <div className="overflow-auto rounded border border-[#2a2d3e]">
+            <div className="overflow-auto rounded border border-navy/30">
               <table className="w-full text-xs font-mono">
                 <thead>
-                  <tr className="border-b border-[#2a2d3e] bg-[#161820] text-gray-500 uppercase tracking-wide">
+                  <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                     <th className="px-3 py-2 text-left">Location</th>
                     <th className="px-3 py-2 text-right">Ending</th>
                     <th className="px-3 py-2 text-right">Prev</th>
@@ -275,11 +275,11 @@ export function RecountLogicTab() {
                 </thead>
                 <tbody>
                   {flagged.map((e) => (
-                    <tr key={e.count.id} className="border-b border-[#2a2d3e]/50">
-                      <td className="px-3 py-2 text-gray-300">{locationLabel(e.locationId, evalData.locations)}</td>
-                      <td className="px-3 py-2 text-right text-white">{fmt(e.count.ending_inventory_cost)}</td>
-                      <td className="px-3 py-2 text-right text-gray-400">{fmt(e.prev)}</td>
-                      <td className="px-3 py-2 text-right text-gray-400">{fmt(e.median)}</td>
+                    <tr key={e.count.id} className="border-b border-navy/30/50">
+                      <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, evalData.locations)}</td>
+                      <td className="px-3 py-2 text-right text-navy">{fmt(e.count.ending_inventory_cost)}</td>
+                      <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
+                      <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
                           {e.flags.map((f) => (
@@ -333,12 +333,12 @@ function RuleCard({
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
-        <span className="text-xs font-mono text-white uppercase tracking-wide">{title}</span>
+        <span className="text-xs font-mono text-navy uppercase tracking-wide">{title}</span>
         <Toggle checked={enabled} onChange={onToggle} color="green" size="sm" label={enabled ? 'On' : 'Off'} />
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
         <div className={enabled ? '' : 'opacity-40 pointer-events-none'}>{children}</div>
-        <p className="text-xs font-mono text-gray-500 leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
+        <p className="text-xs font-mono text-inky leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
           {preview}
         </p>
       </CardBody>

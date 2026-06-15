@@ -52,7 +52,7 @@ export function ProductUsageTab() {
     col.accessor('on_hands', { header: 'On Hands', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('days_of_supply', { header: 'Days of Supply', cell: (i) => { const r = i.row.original as ProductUsage; return dosDisplay(i.getValue(), r.on_hands) } }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
-    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductUsage)} className="text-xs font-mono text-[#00e5ff] hover:underline">Edit</button> },
+    { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductUsage)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
 
   const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
@@ -100,14 +100,14 @@ export function ProductUsageTab() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-sm font-bold text-white uppercase tracking-wide">Product Usage</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Daily usage, on-hands, and days of supply by location. Use a Divide transform on Daily Usage to convert a period total to a daily figure.</p>
+        <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Product Usage</h2>
+        <p className="text-xs text-inky mt-0.5">Daily usage, on-hands, and days of supply by location. Use a Divide transform on Daily Usage to convert a period total to a daily figure.</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="product_usage.csv" exportData={data} loading={loading}
         actions={<>
-          <label className="flex items-center gap-2 text-xs font-mono text-gray-400">
+          <label className="flex items-center gap-2 text-xs font-mono text-inky">
             <Toggle checked={exclude} onChange={setExclude} size="sm" color="amber" />
             Exclude products not in order config
           </label>
@@ -116,7 +116,7 @@ export function ProductUsageTab() {
       />
 
       <div className="flex flex-col gap-3 max-w-2xl">
-        <h3 className="text-xs font-mono text-gray-400 uppercase tracking-wide">Upload File</h3>
+        <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
         <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
       </div>
 
@@ -128,7 +128,7 @@ export function ProductUsageTab() {
             <Input label="Daily Usage" type="number" step="0.01" value={form.daily_usage} onChange={(e) => setForm({ ...form, daily_usage: e.target.value })} />
             <Input label="On Hands" type="number" step="0.01" value={form.on_hands} onChange={(e) => setForm({ ...form, on_hands: e.target.value })} />
           </div>
-          <p className="text-xs font-mono text-gray-500">Days of Supply: <span className="text-[#00e5ff]">{dosDisplay(daysOfSupply(num(form.on_hands), num(form.daily_usage)), num(form.on_hands))}</span></p>
+          <p className="text-xs font-mono text-inky">Days of Supply: <span className="text-inky">{dosDisplay(daysOfSupply(num(form.on_hands), num(form.daily_usage)), num(form.on_hands))}</span></p>
           <div className="flex justify-between gap-2 pt-2">
             <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
             <div className="flex gap-2">
