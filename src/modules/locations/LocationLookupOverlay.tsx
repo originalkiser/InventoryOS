@@ -74,7 +74,7 @@ export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onTog
       {/* Floating trigger */}
       <button
         onClick={onToggle}
-        className="fixed bottom-4 right-4 z-[60] flex items-center gap-1.5 rounded-full border border-[#ffb300]/40 bg-[#161820] px-4 py-2 font-mono text-xs text-[#ffb300] shadow-lg hover:bg-[#ffb300]/10"
+        className="fixed bottom-[4.5rem] right-4 z-[60] flex items-center gap-1.5 rounded-full border border-[#ffb300]/40 bg-[#161820] px-4 py-2 font-mono text-xs text-[#ffb300] shadow-lg hover:bg-[#ffb300]/10"
         title="Location Lookup (Ctrl/Cmd+L)"
       >
         🔍 Lookup{open ? <span className={['text-[10px]', mode === 'docked' ? 'text-[#39ff14]' : 'text-[#00e5ff]'].join(' ')}>●</span> : null}

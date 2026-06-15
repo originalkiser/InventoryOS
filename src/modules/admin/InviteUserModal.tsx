@@ -84,7 +84,9 @@ export function InviteUserModal({ open, onClose, onInvited }: InviteUserModalPro
       setCreated({ email: email.trim(), tempPassword })
       onInvited()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to create user')
+      // Supabase errors are plain objects with a message, not Error instances.
+      const msg = (e as { message?: string })?.message || (typeof e === 'string' ? e : 'Failed to create user')
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
