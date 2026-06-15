@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import sbLogo from '@/assets/logo-cream.png'
 
 const NAV_ITEMS = [
   {
@@ -191,20 +192,12 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
         </button>
 
         {/* SB Logo mark */}
-        <div className={['mt-3 flex justify-center', collapsed ? 'px-0' : 'px-1'].join(' ')}>
-          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"
-            className={collapsed ? 'w-7 h-7' : 'w-10 h-10'}
-          >
-            {/* Outer ring */}
-            <circle cx="24" cy="24" r="22" stroke="#B7E0DE" strokeWidth="1.5" opacity="0.4" />
-            {/* S */}
-            <text x="8" y="32" fontFamily="'Chakra Petch', sans-serif" fontWeight="700" fontSize="18" fill="#B7E0DE" opacity="0.85">S</text>
-            {/* B */}
-            <text x="24" y="32" fontFamily="'Chakra Petch', sans-serif" fontWeight="700" fontSize="18" fill="#B7E0DE" opacity="0.85">B</text>
-          </svg>
-          {!collapsed && (
-            <span className="sr-only">Strickland Brothers</span>
-          )}
+        <div className="mt-3 flex justify-center">
+          <img
+            src={sbLogo}
+            alt="Strickland Brothers"
+            className={collapsed ? 'w-8 opacity-70' : 'w-full max-w-[120px] opacity-70'}
+          />
         </div>
       </div>
     </aside>
