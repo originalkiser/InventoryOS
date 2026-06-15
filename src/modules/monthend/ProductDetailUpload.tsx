@@ -5,7 +5,8 @@ import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Combobox, Card, CardBody } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { parseProductRows } from '@/lib/additiveProducts'
-import { PRODUCT_FIELDS, toNumber, resolveLocationId, locationOptions } from './countsShared'
+import { useLocations } from '@/hooks/useLocations'
+import { PRODUCT_FIELDS, toNumber, locationOptions } from './countsShared'
 import type { Location, ColumnMapping, ParsedUpload, CountUploadBatch } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -25,6 +26,7 @@ interface Props {
 export function ProductDetailUpload({
   locations, companyId, countMonth, uploadedBy, batches, userNames, onChanged,
 }: Props) {
+  const loc = useLocations()
   const [mode, setMode] = useState<Mode>('file')
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [fileName, setFileName] = useState('')
@@ -54,7 +56,7 @@ export function ProductDetailUpload({
       const productRows = parseProductRows(parsed.rows, mappings)
       let unresolved = 0
       const insertRows = productRows.map((p) => {
-        const locId = p.location_code ? resolveLocationId(p.location_code, locations) : null
+        const locId = p.location_code ? loc.resolveId(p.location_code) : null
         if (!locId && p.location_code) unresolved++
         return {
           company_id: companyId,
@@ -115,6 +117,8 @@ export function ProductDetailUpload({
               <ColumnMapper
                 headers={parsed.headers}
                 requiredFields={PRODUCT_FIELDS}
+                rememberKey="monthend.products"
+                previewRows={parsed.rows.slice(0, 5)}
                 onConfirm={importBatch}
                 onCancel={() => setParsed(null)}
               />

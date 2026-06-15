@@ -78,6 +78,15 @@ export function useProjects() {
     if (results.some((r: any) => r.error)) toast.error('Failed to save order')
   }
 
+  // Bump the parent project's last_update when any of its sub-tasks change
+  // (no per-task "last updated" column — the project row reflects it).
+  async function touchProject(projectId: string | null | undefined) {
+    if (!projectId) return
+    const now = new Date().toISOString()
+    setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, last_update: now } : p)))
+    await sb.from('projects').update({ last_update: now, updated_by: profile?.id ?? null }).eq('id', projectId)
+  }
+
   // --- Tasks -----------------------------------------------------------------
   async function addTask(projectId: string): Promise<ProjectTask | null> {
     if (!companyId) return null
@@ -88,21 +97,26 @@ export function useProjects() {
       .select().single()
     if (error || !data) { toast.error(error?.message ?? 'Could not add task'); return null }
     setTasks((prev) => [...prev, data as ProjectTask])
+    void touchProject(projectId)
     return data as ProjectTask
   }
 
   async function updateTask(id: string, patch: Partial<ProjectTask>) {
     const snapshot = tasks
+    const projectId = tasks.find((t) => t.id === id)?.project_id
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
     const { error } = await sb.from('project_tasks').update(patch).eq('id', id)
     if (error) { setTasks(snapshot); toast.error(error.message) }
+    else void touchProject(projectId)
   }
 
   async function deleteTask(id: string) {
     const snapshot = tasks
+    const projectId = tasks.find((t) => t.id === id)?.project_id
     setTasks((prev) => prev.filter((t) => t.id !== id))
     const { error } = await sb.from('project_tasks').delete().eq('id', id)
     if (error) { setTasks(snapshot); toast.error(error.message) }
+    else void touchProject(projectId)
   }
 
   async function reorderTasks(projectId: string, ordered: ProjectTask[]) {
@@ -110,6 +124,7 @@ export function useProjects() {
     const updates = ordered.map((t, i) => sb.from('project_tasks').update({ sort_order: i }).eq('id', t.id))
     const results = await Promise.all(updates)
     if (results.some((r: any) => r.error)) toast.error('Failed to save task order')
+    else void touchProject(projectId)
   }
 
   return {

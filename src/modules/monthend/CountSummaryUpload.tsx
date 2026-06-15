@@ -4,11 +4,13 @@ import { ColumnMapper } from '@/components/upload/ColumnMapper'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Select, Combobox, Card, CardBody } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
-import { SUMMARY_FIELDS, toNumber, resolveLocationId, locationOptions, type SummaryUploadTarget } from './countsShared'
+import { useLocations } from '@/hooks/useLocations'
+import { SUMMARY_FIELDS, toNumber, locationOptions, type SummaryUploadTarget } from './countsShared'
 import type { Location, ColumnMapping, ParsedUpload, CountMappingTemplate } from '@/types'
 import toast from 'react-hot-toast'
 
 type Mode = 'file' | 'live' | 'manual'
+type ImportMode = 'additive' | 'replace' | 'update'
 
 interface Props {
   locations: Location[]
@@ -21,7 +23,9 @@ interface Props {
 const NUMERIC = SUMMARY_FIELDS.filter((f) => f.numeric).map((f) => f.name)
 
 export function CountSummaryUpload({ locations, companyId, target, onImported }: Props) {
+  const loc = useLocations()
   const [mode, setMode] = useState<Mode>('file')
+  const [importMode, setImportMode] = useState<ImportMode>('additive')
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [importing, setImporting] = useState(false)
 
@@ -62,8 +66,8 @@ export function CountSummaryUpload({ locations, companyId, target, onImported }:
         upload_batch_id: batchId,
         ...target.buildExtraColumns(),
       }
-      // Location
-      const locId = locCol ? resolveLocationId(row[locCol] ?? '', locations) : null
+      // Location — POS-map + numeric aware resolution.
+      const locId = locCol ? loc.resolveId(row[locCol] ?? '') : null
       if (!locId && locCol && (row[locCol] ?? '').trim()) unresolved++
       out.location_id = locId
       // Count date (schema: not null) — default to period start if unmapped/invalid
@@ -87,7 +91,22 @@ export function CountSummaryUpload({ locations, companyId, target, onImported }:
       return out
     })
 
-    const { error } = await (supabase as any).from(target.table).insert(rows)
+    const sb = supabase as any
+    // Replace = wipe this period's rows; Update = wipe only the uploaded
+    // locations' rows for the period; Additive = just append.
+    if (importMode === 'replace' || importMode === 'update') {
+      const extra = target.buildExtraColumns()
+      let del = sb.from(target.table).delete().eq('company_id', companyId)
+      for (const [k, v] of Object.entries(extra)) if (k !== 'uploaded_at') del = del.eq(k, v)
+      const locIds = [...new Set(rows.map((r) => r.location_id).filter(Boolean))] as string[]
+      if (importMode === 'update') {
+        if (locIds.length) del = del.in('location_id', locIds)
+        else del = null
+      }
+      if (del) { const { error: delErr } = await del; if (delErr) { setImporting(false); toast.error(delErr.message); return } }
+    }
+
+    const { error } = await sb.from(target.table).insert(rows)
     setImporting(false)
     if (error) {
       toast.error(error.message)
@@ -140,11 +159,24 @@ export function CountSummaryUpload({ locations, companyId, target, onImported }:
                     />
                   </div>
                 )}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-gray-500 uppercase tracking-wide">On import</span>
+                  <div className="flex rounded border border-[#2a2d3e] overflow-hidden">
+                    {([['additive', 'Additive'], ['update', 'Update changes'], ['replace', 'Replace all']] as [ImportMode, string][]).map(([v, l]) => (
+                      <button key={v} onClick={() => setImportMode(v)}
+                        className={['px-3 py-1 text-xs font-mono', importMode === v ? (v === 'replace' ? 'bg-red-500/15 text-red-400' : 'bg-[#00e5ff]/10 text-[#00e5ff]') : 'text-gray-500 hover:text-gray-300'].join(' ')}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <ColumnMapper
                   key={templateId || 'auto'}
                   headers={parsed.headers}
                   requiredFields={SUMMARY_FIELDS}
                   initialMappings={activeTemplate?.mappings as ColumnMapping[] | undefined}
+                  rememberKey={`monthend.summary.${target.templateModule}`}
+                  previewRows={parsed.rows.slice(0, 5)}
                   onConfirm={importRows}
                   onCancel={() => setParsed(null)}
                 />

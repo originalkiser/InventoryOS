@@ -24,7 +24,10 @@ export function TopBar() {
     activeShops: 0,
   })
   const [checklistOpen, setChecklistOpen] = useState(false)
-  const [checklistItems, setChecklistItems] = useState<Array<{ id: string; title: string; completed: boolean }>>([])
+  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string }
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
+  const [openNote, setOpenNote] = useState<string | null>(null) // item id with notes expanded
+  const [noteDraft, setNoteDraft] = useState('')
 
   const companyId = profile?.company_id
 
@@ -40,6 +43,7 @@ export function TopBar() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_events', filter: `company_id=eq.${companyId}` }, () => { loadStats(); loadTodayChecklists() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'monthly_ending_balances', filter: `company_id=eq.${companyId}` }, loadStats)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'locations', filter: `company_id=eq.${companyId}` }, loadStats)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'project_tasks', filter: `company_id=eq.${companyId}` }, () => loadTodayChecklists())
       .subscribe()
 
     return () => { void supabase.removeChannel(channel) }
@@ -77,41 +81,53 @@ export function TopBar() {
           .reduce((sum: number, b: any) => sum + (b.ending_balance ?? 0), 0)
       : null
 
-    const todayItems = scheduleRes.data?.filter(
-      (e: any) => e.start_date === today && e.is_checklist && !e.completed
-    ) ?? []
-
-    setStats({
+    // Preserve todayChecklists (owned by loadTodayChecklists, which also counts
+    // project tasks) rather than clobbering it with the schedule-only count.
+    setStats((s) => ({
+      ...s,
       pendingIssues,
-      todayChecklists: todayItems.length,
       nextCountDays,
       lastEndingValue,
       activeShops: locationsRes.data?.length ?? 0,
-    })
+    }))
   }
 
   async function loadTodayChecklists() {
     if (!companyId) return
     const today = format(new Date(), 'yyyy-MM-dd')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase as any)
-      .from('schedule_events')
-      .select('id, title, completed')
-      .eq('company_id', companyId)
-      .eq('start_date', today)
-      .eq('is_checklist', true)
-    setChecklistItems(data ?? [])
+    const sb = supabase as any
+    // Schedule checklist items for today + incomplete project tasks due today/overdue.
+    const [ev, tk] = await Promise.all([
+      sb.from('schedule_events').select('id, title, completed, notes').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
+      sb.from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
+    ])
+    const items: ChecklistItem[] = [
+      ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '' })),
+      ...((tk.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.task_name || '(untitled task)', completed: false, kind: 'task' as const, notes: t.notes ?? '' })),
+    ]
+    setChecklistItems(items)
+    setStats((s) => ({ ...s, todayChecklists: items.filter((i) => !i.completed).length }))
   }
 
-  async function toggleChecklist(id: string, completed: boolean) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any).from('schedule_events').update({
-      completed: !completed,
-      completed_at: !completed ? new Date().toISOString() : null,
-      completed_by: profile?.id ?? null,
-    }).eq('id', id)
+  async function toggleChecklist(item: ChecklistItem) {
+    const sb = supabase as any
+    if (item.kind === 'event') {
+      await sb.from('schedule_events').update({
+        completed: !item.completed,
+        completed_at: !item.completed ? new Date().toISOString() : null,
+        completed_by: profile?.id ?? null,
+      }).eq('id', item.id)
+    } else {
+      await sb.from('project_tasks').update({ done: !item.completed }).eq('id', item.id)
+    }
     loadTodayChecklists()
-    loadStats()
+  }
+
+  async function saveNotes(item: ChecklistItem) {
+    const sb = supabase as any
+    const table = item.kind === 'event' ? 'schedule_events' : 'project_tasks'
+    await sb.from(table).update({ notes: noteDraft }).eq('id', item.id)
+    setChecklistItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, notes: noteDraft } : i)))
   }
 
   function formatCurrency(v: number) {
@@ -182,18 +198,37 @@ export function TopBar() {
           {checklistItems.length === 0 ? (
             <div className="px-4 py-3 text-xs text-gray-500 font-mono">No checklist items today</div>
           ) : (
-            <div className="divide-y divide-[#2a2d3e]">
+            <div className="divide-y divide-[#2a2d3e] max-h-80 overflow-auto">
               {checklistItems.map((item) => (
-                <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
-                  <input
-                    type="checkbox"
-                    checked={item.completed}
-                    onChange={() => toggleChecklist(item.id, item.completed)}
-                    className="accent-[#00e5ff]"
-                  />
-                  <span className={['text-xs font-mono', item.completed ? 'text-gray-600 line-through' : 'text-gray-300'].join(' ')}>
-                    {item.title}
-                  </span>
+                <div key={`${item.kind}-${item.id}`} className="px-4 py-2.5">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={item.completed}
+                      onChange={() => toggleChecklist(item)}
+                      className="accent-[#00e5ff]"
+                    />
+                    <button
+                      onClick={() => { setOpenNote((o) => (o === item.id ? null : item.id)); setNoteDraft(item.notes) }}
+                      className={['flex-1 text-left text-xs font-mono hover:text-white', item.completed ? 'text-gray-600 line-through' : 'text-gray-300'].join(' ')}
+                      title="Open to add notes"
+                    >
+                      {item.title}
+                      {item.kind === 'task' && <span className="ml-1.5 text-[10px] text-[#00e5ff]">· project</span>}
+                      {item.notes && <span className="ml-1 text-gray-600">✎</span>}
+                    </button>
+                  </div>
+                  {openNote === item.id && (
+                    <textarea
+                      autoFocus
+                      value={noteDraft}
+                      onChange={(e) => setNoteDraft(e.target.value)}
+                      onBlur={() => saveNotes(item)}
+                      rows={2}
+                      placeholder="Add a note…"
+                      className="mt-2 w-full resize-y rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-gray-200 placeholder-gray-600 focus:border-[#00e5ff] focus:outline-none"
+                    />
+                  )}
                 </div>
               ))}
             </div>
