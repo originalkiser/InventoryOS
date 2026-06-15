@@ -8,8 +8,6 @@ interface DataTableProps<T> {
   globalFilter: string
   onGlobalFilterChange: (v: string) => void
   exportFilename?: string
-  // Widened to unknown[] so callers can export a flattened/custom CSV shape
-  // independent of the table's row type.
   exportData?: unknown[]
   loading?: boolean
   actions?: React.ReactNode
@@ -39,16 +37,16 @@ export function DataTable<T>({
           <Button variant="secondary" size="sm">
             Columns
           </Button>
-          <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#161820] border border-[#2a2d3e] rounded shadow-xl z-20 min-w-[160px] py-1">
+          <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-cream border border-navy/40 rounded shadow-xl z-20 min-w-[160px] py-1">
             {table.getAllLeafColumns().map((col) => (
-              <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-white/5">
+              <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-navy/5">
                 <input
                   type="checkbox"
                   checked={col.getIsVisible()}
                   onChange={col.getToggleVisibilityHandler()}
-                  className="accent-[#00e5ff]"
+                  className="accent-inky"
                 />
-                <span className="text-xs font-mono text-gray-300">{String(col.columnDef.header ?? col.id)}</span>
+                <span className="text-xs font-body text-navy">{String(col.columnDef.header ?? col.id)}</span>
               </label>
             ))}
           </div>
@@ -66,11 +64,11 @@ export function DataTable<T>({
       </div>
 
       {/* Table */}
-      <div className="overflow-auto rounded border border-[#2a2d3e]">
-        <table className="w-full text-xs font-mono">
+      <div className="overflow-auto rounded border border-inky/20">
+        <table className="w-full text-xs font-body">
           <thead>
             {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className="border-b border-[#2a2d3e] bg-[#161820]">
+              <tr key={hg.id} className="border-b border-inky/20 bg-navy">
                 {hg.headers.map((header) => (
                   <th
                     key={header.id}
@@ -78,13 +76,13 @@ export function DataTable<T>({
                       ? { position: 'sticky', left: header.column.getStart('left'), zIndex: 20 }
                       : undefined}
                     className={[
-                      'px-3 py-2 text-left text-gray-500 uppercase tracking-wide whitespace-nowrap',
-                      header.column.getIsPinned() === 'left' ? 'bg-[#161820] border-r border-[#2a2d3e]' : '',
+                      'px-3 py-2 text-left text-cream font-heading text-sm uppercase tracking-wide whitespace-nowrap',
+                      header.column.getIsPinned() === 'left' ? 'bg-navy border-r-2 border-r-inky/40' : '',
                     ].join(' ')}
                   >
                     <span
                       onClick={header.column.getToggleSortingHandler()}
-                      className={header.column.getCanSort() ? 'cursor-pointer hover:text-gray-300' : ''}
+                      className={header.column.getCanSort() ? 'cursor-pointer hover:text-sky' : ''}
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       {header.column.getIsSorted() === 'asc' && ' ↑'}
@@ -99,21 +97,24 @@ export function DataTable<T>({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={100} className="px-3 py-8 text-center text-gray-500">
-                  Loading...
+                <td colSpan={100} className="px-3 py-8 text-center text-inky font-body italic">
+                  Loading
                 </td>
               </tr>
             ) : table.getRowModel().rows.length === 0 ? (
               <tr>
-                <td colSpan={100} className="px-3 py-8 text-center text-gray-600">
-                  No data
+                <td colSpan={100} className="px-3 py-8 text-center text-inky font-body italic">
+                  No entries yet. Add one to get started.
                 </td>
               </tr>
             ) : (
-              table.getRowModel().rows.map((row) => (
+              table.getRowModel().rows.map((row, i) => (
                 <tr
                   key={row.id}
-                  className="border-b border-[#2a2d3e]/50 hover:bg-[#00e5ff]/5 transition-colors"
+                  className={[
+                    'border-b border-inky/10 hover:bg-sky/20 transition-colors',
+                    i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8]',
+                  ].join(' ')}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td
@@ -122,8 +123,10 @@ export function DataTable<T>({
                         ? { position: 'sticky', left: cell.column.getStart('left'), zIndex: 10 }
                         : undefined}
                       className={[
-                        'px-3 py-2 text-gray-300',
-                        cell.column.getIsPinned() === 'left' ? 'bg-[#0f1117] border-r border-[#2a2d3e]' : '',
+                        'px-3 py-2 text-navy',
+                        cell.column.getIsPinned() === 'left'
+                          ? `${i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8]'} border-r-2 border-r-inky/20`
+                          : '',
                       ].join(' ')}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -137,7 +140,7 @@ export function DataTable<T>({
       </div>
 
       {/* Pagination */}
-      <div className="flex items-center justify-between text-xs font-mono text-gray-500">
+      <div className="flex items-center justify-between text-xs font-body text-inky">
         <span>
           {table.getFilteredRowModel().rows.length.toLocaleString()} rows
         </span>
@@ -145,7 +148,7 @@ export function DataTable<T>({
           <button
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
-            className="px-2 py-1 border border-[#2a2d3e] rounded disabled:opacity-30 hover:border-gray-500"
+            className="px-2 py-1 border border-navy/40 rounded disabled:opacity-30 hover:border-navy text-navy font-heading text-xs uppercase"
           >
             ‹ Prev
           </button>
@@ -155,7 +158,7 @@ export function DataTable<T>({
           <button
             onClick={() => table.nextPage()}
             disabled={!table.getCanNextPage()}
-            className="px-2 py-1 border border-[#2a2d3e] rounded disabled:opacity-30 hover:border-gray-500"
+            className="px-2 py-1 border border-navy/40 rounded disabled:opacity-30 hover:border-navy text-navy font-heading text-xs uppercase"
           >
             Next ›
           </button>

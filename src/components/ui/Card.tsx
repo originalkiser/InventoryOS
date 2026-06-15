@@ -3,26 +3,16 @@ import React from 'react'
 interface CardProps {
   children: React.ReactNode
   className?: string
-  glow?: 'cyan' | 'green' | 'amber' | 'magenta' | 'none'
   onClick?: () => void
 }
 
-const glowClasses = {
-  cyan: 'hover:shadow-[0_0_16px_rgba(0,229,255,0.15)] hover:border-[#00e5ff]/40',
-  green: 'hover:shadow-[0_0_16px_rgba(57,255,20,0.15)] hover:border-[#39ff14]/40',
-  amber: 'hover:shadow-[0_0_16px_rgba(255,179,0,0.15)] hover:border-[#ffb300]/40',
-  magenta: 'hover:shadow-[0_0_16px_rgba(255,0,255,0.15)] hover:border-[#ff00ff]/40',
-  none: '',
-}
-
-export function Card({ children, className = '', glow = 'none', onClick }: CardProps) {
+export function Card({ children, className = '', onClick }: CardProps) {
   return (
     <div
       onClick={onClick}
       className={[
-        'bg-[#161820] border border-[#2a2d3e] rounded-lg transition-all duration-200',
-        glow !== 'none' ? glowClasses[glow] : '',
-        onClick ? 'cursor-pointer' : '',
+        'bg-cream border border-navy/40 rounded-lg shadow-sm transition-all duration-200',
+        onClick ? 'cursor-pointer hover:border-navy' : '',
         className,
       ].join(' ')}
     >
@@ -33,7 +23,7 @@ export function Card({ children, className = '', glow = 'none', onClick }: CardP
 
 export function CardHeader({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={['px-5 py-4 border-b border-[#2a2d3e]', className].join(' ')}>
+    <div className={['px-5 py-4 border-b border-navy/20', className].join(' ')}>
       {children}
     </div>
   )

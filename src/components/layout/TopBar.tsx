@@ -26,7 +26,7 @@ export function TopBar() {
   const [checklistOpen, setChecklistOpen] = useState(false)
   type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string }
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
-  const [openNote, setOpenNote] = useState<string | null>(null) // item id with notes expanded
+  const [openNote, setOpenNote] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
 
   const companyId = profile?.company_id
@@ -36,7 +36,6 @@ export function TopBar() {
     loadStats()
     loadTodayChecklists()
 
-    // Real-time subscriptions
     const channel = supabase
       .channel('topbar')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'issues', filter: `company_id=eq.${companyId}` }, loadStats)
@@ -81,8 +80,6 @@ export function TopBar() {
           .reduce((sum: number, b: any) => sum + (b.ending_balance ?? 0), 0)
       : null
 
-    // Preserve todayChecklists (owned by loadTodayChecklists, which also counts
-    // project tasks) rather than clobbering it with the schedule-only count.
     setStats((s) => ({
       ...s,
       pendingIssues,
@@ -96,7 +93,6 @@ export function TopBar() {
     if (!companyId) return
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
-    // Schedule checklist items for today + incomplete project tasks due today/overdue.
     const [ev, tk] = await Promise.all([
       sb.from('schedule_events').select('id, title, completed, notes').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
       sb.from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
@@ -138,67 +134,77 @@ export function TopBar() {
     {
       label: 'Pending Issues',
       value: stats.pendingIssues,
-      color: stats.pendingIssues > 0 ? 'text-[#ff00ff]' : 'text-gray-500',
+      highlight: stats.pendingIssues > 0,
       onClick: () => navigate('/issues?tab=pending'),
     },
     {
       label: "Today's Checklist",
       value: stats.todayChecklists,
-      color: stats.todayChecklists > 0 ? 'text-[#ffb300]' : 'text-gray-500',
+      highlight: stats.todayChecklists > 0,
       onClick: () => setChecklistOpen((v) => !v),
     },
     {
       label: 'Next Count',
       value: stats.nextCountDays !== null ? `${stats.nextCountDays}d` : '—',
-      color: 'text-[#00e5ff]',
+      highlight: false,
       onClick: () => navigate('/schedule'),
     },
     {
       label: 'Last Ending Value',
       value: stats.lastEndingValue !== null ? formatCurrency(stats.lastEndingValue) : '—',
-      color: 'text-[#39ff14]',
+      highlight: false,
       onClick: () => navigate('/config'),
     },
     {
       label: 'Active Shops',
       value: stats.activeShops,
-      color: 'text-gray-300',
+      highlight: false,
       onClick: () => navigate('/config'),
     },
   ]
 
   return (
-    <header className="relative h-14 bg-[#161820] border-b border-[#2a2d3e] flex items-center px-4 gap-3 flex-shrink-0">
+    <header className="relative h-12 bg-navy border-b border-navy/40 flex items-center px-4 gap-4 flex-shrink-0">
+      {/* Wordmark */}
+      <span className="font-heading font-bold text-cream text-sm tracking-widest uppercase whitespace-nowrap">
+        Strickland Brothers
+      </span>
+
+      <div className="w-px h-5 bg-inky/40 flex-shrink-0" />
+
+      {/* Stat pills */}
       <div className="flex items-center gap-2 flex-wrap flex-1">
         {pills.map((pill) => (
           <button
             key={pill.label}
             onClick={pill.onClick}
-            className="flex items-center gap-1.5 px-3 py-1 bg-[#0f1117] border border-[#2a2d3e] rounded text-xs font-mono hover:border-gray-500 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1 bg-sky/10 border border-inky/30 rounded text-xs font-body hover:bg-sky/20 hover:border-sky/60 transition-all"
           >
-            <span className="text-gray-500">{pill.label}:</span>
-            <span className={['font-semibold', pill.color].join(' ')}>{pill.value}</span>
+            <span className="text-inky">{pill.label}:</span>
+            <span className={['font-medium', pill.highlight ? 'text-sky' : 'text-cream'].join(' ')}>
+              {pill.value}
+            </span>
           </button>
         ))}
       </div>
 
       {/* Checklist popover */}
       {checklistOpen && (
-        <div className="absolute top-full right-4 mt-2 w-72 bg-[#161820] border border-[#2a2d3e] rounded-lg shadow-xl z-30">
-          <div className="px-4 py-3 border-b border-[#2a2d3e] flex items-center justify-between">
-            <span className="text-xs font-mono font-semibold text-[#ffb300] uppercase tracking-wide">
+        <div className="absolute top-full right-4 mt-2 w-72 bg-cream border border-navy/40 rounded-lg shadow-xl z-30">
+          <div className="px-4 py-3 border-b border-navy/20 flex items-center justify-between">
+            <span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">
               Today's Checklist
             </span>
-            <button onClick={() => setChecklistOpen(false)} className="text-gray-500 hover:text-white">
+            <button onClick={() => setChecklistOpen(false)} className="text-inky hover:text-navy transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
           {checklistItems.length === 0 ? (
-            <div className="px-4 py-3 text-xs text-gray-500 font-mono">No checklist items today</div>
+            <div className="px-4 py-3 text-xs text-inky font-body italic">No checklist items today</div>
           ) : (
-            <div className="divide-y divide-[#2a2d3e] max-h-80 overflow-auto">
+            <div className="divide-y divide-navy/10 max-h-80 overflow-auto">
               {checklistItems.map((item) => (
                 <div key={`${item.kind}-${item.id}`} className="px-4 py-2.5">
                   <div className="flex items-center gap-3">
@@ -206,16 +212,16 @@ export function TopBar() {
                       type="checkbox"
                       checked={item.completed}
                       onChange={() => toggleChecklist(item)}
-                      className="accent-[#00e5ff]"
+                      className="accent-inky"
                     />
                     <button
                       onClick={() => { setOpenNote((o) => (o === item.id ? null : item.id)); setNoteDraft(item.notes) }}
-                      className={['flex-1 text-left text-xs font-mono hover:text-white', item.completed ? 'text-gray-600 line-through' : 'text-gray-300'].join(' ')}
+                      className={['flex-1 text-left text-xs font-body hover:text-navy', item.completed ? 'text-inky/40 line-through' : 'text-navy'].join(' ')}
                       title="Open to add notes"
                     >
                       {item.title}
-                      {item.kind === 'task' && <span className="ml-1.5 text-[10px] text-[#00e5ff]">· project</span>}
-                      {item.notes && <span className="ml-1 text-gray-600">✎</span>}
+                      {item.kind === 'task' && <span className="ml-1.5 text-[10px] text-inky">· project</span>}
+                      {item.notes && <span className="ml-1 text-inky/60">✎</span>}
                     </button>
                   </div>
                   {openNote === item.id && (
@@ -226,7 +232,7 @@ export function TopBar() {
                       onBlur={() => saveNotes(item)}
                       rows={2}
                       placeholder="Add a note…"
-                      className="mt-2 w-full resize-y rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-gray-200 placeholder-gray-600 focus:border-[#00e5ff] focus:outline-none"
+                      className="mt-2 w-full resize-y rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
                     />
                   )}
                 </div>

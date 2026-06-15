@@ -7,7 +7,6 @@ export type PanelMode = 'hidden' | 'docked' | 'floating'
 
 interface FloatingPanelProps {
   title: string
-  accent?: string
   mode: PanelMode
   width: number
   mobile: boolean
@@ -20,7 +19,7 @@ interface FloatingPanelProps {
 }
 
 export function FloatingPanel({
-  title, accent = '#ffb300', mode, width, mobile, prefix, headerActions, onModeChange, onWidthChange, onClose, children,
+  title, mode, width, mobile, prefix, headerActions, onModeChange, onWidthChange, onClose, children,
 }: FloatingPanelProps) {
   const docked = mode === 'docked' && !mobile
   const sizeKey = `${prefix}.size`
@@ -67,22 +66,22 @@ export function FloatingPanel({
     : { position: 'fixed', right, bottom, width, height: Math.min(height, window.innerHeight * 0.9), maxHeight: '92vh', zIndex: 55 }
 
   return (
-    <div style={style} className="flex flex-col overflow-hidden rounded-lg border border-[#2a2d3e] bg-[#161820] shadow-2xl">
+    <div style={style} className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream shadow-2xl">
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
-      <div onMouseDown={startMove} className={['flex items-center justify-between border-b border-[#2a2d3e] px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
-        <span className="text-xs font-mono font-semibold uppercase tracking-wide" style={{ color: accent }}>{title}</span>
+      <div onMouseDown={startMove} className={['flex items-center justify-between bg-navy border-b border-navy/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
+        <span className="text-xs font-heading font-bold text-cream uppercase tracking-wide">{title}</span>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
           {headerActions}
           {!mobile && (
             <>
-              <button onClick={() => onModeChange('floating')} title="Float on top (hover over content)"
-                className={['p-1 rounded text-sm', mode === 'floating' ? 'text-[#00e5ff]' : 'text-gray-500 hover:text-white'].join(' ')}>⬛</button>
+              <button onClick={() => onModeChange('floating')} title="Float on top"
+                className={['p-1 rounded text-sm transition-colors', mode === 'floating' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>⬛</button>
               <button onClick={() => onModeChange('docked')} title="Pin to right (push content)"
-                className={['p-1 rounded text-sm', mode === 'docked' ? 'text-[#ffb300]' : 'text-gray-500 hover:text-white'].join(' ')}>📌</button>
+                className={['p-1 rounded text-sm transition-colors', mode === 'docked' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>📌</button>
             </>
           )}
-          <button onClick={onClose} className="p-1 text-gray-500 hover:text-white" title="Hide">✕</button>
+          <button onClick={onClose} className="p-1 text-inky/50 hover:text-cream transition-colors" title="Hide">✕</button>
         </div>
       </div>
 

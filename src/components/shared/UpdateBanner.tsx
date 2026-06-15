@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-// How often to re-check for a new deploy while the tab stays open.
 const POLL_MS = 5 * 60 * 1000
 
-// Fetch the deployed build id from version.json (written at build time). Returns
-// null if it can't be read (e.g. in dev where the file isn't served).
 async function fetchDeployedBuildId(): Promise<string | null> {
   try {
     const res = await fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, {
@@ -18,8 +15,6 @@ async function fetchDeployedBuildId(): Promise<string | null> {
   }
 }
 
-// Wipe every Cache Storage entry so a stale service-worker/HTTP cache can't keep
-// serving the old bundle, then hard-reload with a cache-busting query param.
 async function forceUpdate() {
   try {
     if ('caches' in window) {
@@ -27,7 +22,7 @@ async function forceUpdate() {
       await Promise.all(keys.map((k) => caches.delete(k)))
     }
   } catch {
-    /* ignore — still reload below */
+    /* ignore */
   }
   const url = new URL(window.location.href)
   url.searchParams.set('_v', String(Date.now()))
@@ -43,14 +38,12 @@ export function UpdateBanner() {
 
     async function check() {
       const deployed = await fetchDeployedBuildId()
-      // Only flag an update when we can read a concrete, different id.
       if (!cancelled && deployed && deployed !== runningId) setAvailable(true)
     }
 
     check()
     const interval = window.setInterval(check, POLL_MS)
     const onFocus = () => check()
-    // visibilitychange catches backgrounded tabs that never fire 'focus'.
     const onVisible = () => { if (document.visibilityState === 'visible') check() }
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onVisible)
@@ -66,21 +59,20 @@ export function UpdateBanner() {
 
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[100] max-w-[92vw]">
-      <div className="flex items-center gap-3 rounded-lg border border-[#39ff14]/40 bg-[#161820] px-4 py-3 shadow-lg shadow-black/40">
-        <span className="text-[#39ff14] text-base leading-none">●</span>
-        <div className="font-mono text-xs text-gray-200">
-          <div className="font-semibold text-white">Update available</div>
-          <div className="text-gray-500">A newer version is ready.</div>
+      <div className="flex items-center gap-3 rounded-lg border-l-4 border-l-sky bg-navy px-4 py-3 shadow-lg">
+        <div className="font-body text-xs text-cream">
+          <div className="font-medium text-cream">Update available</div>
+          <div className="text-cream/60">A newer version is ready.</div>
         </div>
         <button
           onClick={forceUpdate}
-          className="ml-2 rounded border border-[#39ff14]/60 px-3 py-1.5 font-mono text-xs font-semibold text-[#39ff14] transition-colors hover:bg-[#39ff14]/10"
+          className="ml-2 rounded bg-inky px-3 py-1.5 font-heading text-xs font-bold uppercase tracking-wide text-cream transition-colors hover:bg-sky hover:text-navy"
         >
-          Update now
+          Update Now
         </button>
         <button
           onClick={() => setAvailable(false)}
-          className="rounded px-2 py-1.5 font-mono text-xs text-gray-500 transition-colors hover:text-gray-300"
+          className="rounded px-2 py-1.5 font-body text-xs text-cream/40 transition-colors hover:text-cream"
           aria-label="Dismiss"
         >
           ✕

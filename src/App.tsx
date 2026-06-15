@@ -24,8 +24,8 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   // Wait for the initial session check before deciding to redirect
   if (!isPlaceholder && !initialized) {
     return (
-      <div className="min-h-screen bg-[#0f1117] flex items-center justify-center">
-        <div className="text-[#00e5ff] font-mono text-xs tracking-widest animate-pulse">LOADING…</div>
+      <div className="min-h-screen bg-cream flex items-center justify-center">
+        <div className="text-inky font-body text-xs tracking-widest animate-pulse">Loading</div>
       </div>
     )
   }
@@ -41,16 +41,16 @@ function AuthProvider() {
 export default function App() {
   if (SUPABASE_MISSING) {
     return (
-      <div className="min-h-screen bg-[#0f1117] flex items-center justify-center font-mono p-8">
-        <div className="max-w-md w-full bg-[#161820] border border-red-500/40 rounded-lg p-6 flex flex-col gap-3">
-          <div className="text-red-400 text-sm font-semibold uppercase tracking-wide">Configuration Error</div>
-          <p className="text-gray-300 text-xs leading-relaxed">
+      <div className="min-h-screen bg-cream flex items-center justify-center font-body p-8">
+        <div className="max-w-md w-full bg-cream border border-[#C0392B]/40 rounded-xl p-6 flex flex-col gap-3 shadow-sm">
+          <div className="text-[#C0392B] text-sm font-heading font-bold uppercase tracking-wide">Configuration Error</div>
+          <p className="text-navy text-xs leading-relaxed font-body">
             Supabase environment variables are missing. The app was built without{' '}
-            <code className="text-[#00e5ff]">VITE_SUPABASE_URL</code> and{' '}
-            <code className="text-[#00e5ff]">VITE_SUPABASE_ANON_KEY</code>.
+            <code className="text-inky">VITE_SUPABASE_URL</code> and{' '}
+            <code className="text-inky">VITE_SUPABASE_ANON_KEY</code>.
           </p>
-          <p className="text-gray-500 text-xs leading-relaxed">
-            In GitHub Actions: go to <strong className="text-white">Settings → Secrets and variables → Actions</strong>{' '}
+          <p className="text-inky text-xs leading-relaxed font-body">
+            In GitHub Actions: go to <strong className="text-navy">Settings → Secrets and variables → Actions</strong>{' '}
             and add both secrets, then re-run the deployment workflow.
           </p>
         </div>

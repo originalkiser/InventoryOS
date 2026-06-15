@@ -10,11 +10,10 @@ import { useLocations } from '@/hooks/useLocations'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { Badge, Button } from '@/components/ui'
 
-type BadgeColor = 'cyan' | 'green' | 'magenta' | 'amber' | 'red' | 'gray'
-const COLORS: BadgeColor[] = ['cyan', 'green', 'magenta', 'amber', 'red', 'gray']
+type BadgeColor = 'navy' | 'inky' | 'sky' | 'red' | 'green' | 'orange'
+const COLORS: BadgeColor[] = ['navy', 'inky', 'sky', 'red', 'green', 'orange']
 
 type PillOp = '=' | '!=' | '<' | '>'
-// A pill is a live count chip: count of `source` rows where `column op value`.
 interface Pill { label: string; color: BadgeColor; source?: string; column?: string; op?: PillOp; value?: string }
 type Block =
   | { id: string; type: 'pills'; title: string; pills: Pill[] }
@@ -60,7 +59,6 @@ interface OverlayProps {
 export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onToggle, onWidthChange }: OverlayProps) {
   const open = mode !== 'hidden'
 
-  // Ctrl/Cmd+L toggles the overlay from anywhere.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') { e.preventDefault(); onToggle() }
@@ -74,10 +72,10 @@ export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onTog
       {/* Floating trigger */}
       <button
         onClick={onToggle}
-        className="fixed bottom-[4.5rem] right-4 z-[60] flex items-center gap-1.5 rounded-full border border-[#ffb300]/40 bg-[#161820] px-4 py-2 font-mono text-xs text-[#ffb300] shadow-lg hover:bg-[#ffb300]/10"
+        className="fixed bottom-[4.5rem] right-4 z-[60] flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-4 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
         title="Location Lookup (Ctrl/Cmd+L)"
       >
-        🔍 Lookup{open ? <span className={['text-[10px]', mode === 'docked' ? 'text-[#39ff14]' : 'text-[#00e5ff]'].join(' ')}>●</span> : null}
+        Lookup{open ? <span className="text-[10px] text-sky ml-1">●</span> : null}
       </button>
       {open && (
         <LookupPanel
@@ -100,15 +98,12 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
   const [editing, setEditing] = useState(false)
   const [configId, setConfigId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  // Clicking a pill filters the location mini-tables to matching rows.
   const [activeFilter, setActiveFilter] = useState<{ column: string; value: string; label: string } | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
   const right = pos?.right ?? 16
   const bottom = pos?.bottom ?? 16
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
-  // Float mode "stays on top" — it deliberately does NOT auto-close on outside
-  // click so a location's info can hover over content while you work.
 
   function startResize(e: React.MouseEvent) {
     e.preventDefault()
@@ -166,37 +161,36 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
 
   return (
     <div ref={panelRef} style={panelStyle}
-      className="flex flex-col overflow-hidden rounded-lg border border-[#2a2d3e] bg-[#161820] shadow-2xl">
-      {/* resize handle (top-left) */}
+      className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream shadow-2xl">
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
-      {/* header (drag to move) */}
-      <div onMouseDown={startMove} className={['flex items-center justify-between border-b border-[#2a2d3e] px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
-        <span className="text-xs font-mono font-semibold uppercase tracking-wide text-[#ffb300]">Location Lookup</span>
+      {/* header */}
+      <div onMouseDown={startMove} className={['flex items-center justify-between bg-navy border-b border-navy/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
+        <span className="text-xs font-heading font-bold text-cream uppercase tracking-wide">Location Lookup</span>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
           <button onClick={() => setEditing((v) => !v)} title="Edit view"
-            className={['p-1 rounded', editing ? 'text-[#00e5ff]' : 'text-gray-500 hover:text-white'].join(' ')}>✎</button>
+            className={['p-1 rounded transition-colors', editing ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>✎</button>
           {!mobile && (
             <>
-              <button onClick={() => onModeChange('floating')} title="Float on top (hover over content)"
-                className={['p-1 rounded text-sm', mode === 'floating' ? 'text-[#00e5ff]' : 'text-gray-500 hover:text-white'].join(' ')}>⬛</button>
+              <button onClick={() => onModeChange('floating')} title="Float on top"
+                className={['p-1 rounded text-sm transition-colors', mode === 'floating' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>⬛</button>
               <button onClick={() => onModeChange('docked')} title="Pin to right (push content)"
-                className={['p-1 rounded text-sm', mode === 'docked' ? 'text-[#ffb300]' : 'text-gray-500 hover:text-white'].join(' ')}>📌</button>
+                className={['p-1 rounded text-sm transition-colors', mode === 'docked' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>📌</button>
             </>
           )}
-          <button onClick={onClose} className="p-1 text-gray-500 hover:text-white" title="Hide">✕</button>
+          <button onClick={onClose} className="p-1 text-inky/50 hover:text-cream transition-colors" title="Hide">✕</button>
         </div>
       </div>
 
-      {/* search (pinned top) + active pill filter chip */}
+      {/* search + active filter chip */}
       {(view.showSearch || activeFilter) && (
-        <div className="flex items-center gap-2 border-b border-[#2a2d3e] p-2">
+        <div className="flex items-center gap-2 border-b border-navy/10 p-2">
           {view.showSearch && (
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search tables…"
-              className="flex-1 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white placeholder-gray-600 focus:border-[#00e5ff] focus:outline-none" />
+              className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none" />
           )}
           {activeFilter && (
-            <button onClick={() => setActiveFilter(null)} className="inline-flex items-center gap-1 rounded border border-[#ffb300]/40 bg-[#ffb300]/10 px-2 py-1 text-xs font-mono text-[#ffb300]">
+            <button onClick={() => setActiveFilter(null)} className="inline-flex items-center gap-1 rounded border border-inky/30 bg-inky/10 px-2 py-1 text-xs font-body text-inky hover:border-navy">
               {activeFilter.label} ✕
             </button>
           )}
@@ -216,7 +210,7 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
                     : <TableBlock block={b} editing={editing && configId === b.id} search={search} activeFilter={activeFilter} onChange={(p) => updateBlock(b.id, p)} />}
                 </BlockWrap>
               ))}
-              {view.blocks.length === 0 && <p className="py-6 text-center text-xs font-mono text-gray-600">No blocks. Add one below.</p>}
+              {view.blocks.length === 0 && <p className="py-6 text-center text-xs font-body italic text-inky">No blocks. Add one below.</p>}
             </div>
           </SortableContext>
         </DndContext>
@@ -224,11 +218,11 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
 
       {/* edit footer */}
       {editing && (
-        <div className="flex items-center justify-between gap-2 border-t border-[#2a2d3e] p-2">
+        <div className="flex items-center justify-between gap-2 border-t border-navy/20 p-2">
           <div className="flex items-center gap-2">
             <AddBlockMenu onAdd={addBlock} />
-            <label className="flex cursor-pointer items-center gap-1 text-xs font-mono text-gray-400">
-              <input type="checkbox" checked={view.showSearch} onChange={(e) => setView((v) => ({ ...v, showSearch: e.target.checked }))} className="accent-[#00e5ff]" />
+            <label className="flex cursor-pointer items-center gap-1 text-xs font-body text-inky">
+              <input type="checkbox" checked={view.showSearch} onChange={(e) => setView((v) => ({ ...v, showSearch: e.target.checked }))} className="accent-inky" />
               Search bar
             </label>
           </div>
@@ -243,13 +237,13 @@ function AddBlockMenu({ onAdd }: { onAdd: (t: 'pills' | 'table') => void }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} className="rounded border border-[#2a2d3e] px-2 py-1 text-xs font-mono text-gray-300 hover:text-white">+ Add Block</button>
+      <button onClick={() => setOpen((o) => !o)} className="rounded border border-navy/40 px-2 py-1 text-xs font-heading text-navy hover:bg-navy/5 uppercase">+ Add Block</button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full z-50 mb-1 w-36 rounded border border-[#2a2d3e] bg-[#161820] py-1 shadow-xl">
-            <button onClick={() => { onAdd('pills'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-mono text-gray-300 hover:bg-white/5">Pill Group</button>
-            <button onClick={() => { onAdd('table'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-mono text-gray-300 hover:bg-white/5">Mini Table</button>
+          <div className="absolute bottom-full z-50 mb-1 w-36 rounded border border-navy/40 bg-cream py-1 shadow-xl">
+            <button onClick={() => { onAdd('pills'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-body text-navy hover:bg-navy/5">Pill Group</button>
+            <button onClick={() => { onAdd('table'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-body text-navy hover:bg-navy/5">Mini Table</button>
           </div>
         </>
       )}
@@ -261,12 +255,12 @@ function BlockWrap({ id, editing, onConfig, onRemove, children }: { id: string; 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={['rounded border border-[#2a2d3e] bg-[#0f1117] p-2', isDragging ? 'opacity-60' : ''].join(' ')}>
+      className={['rounded border border-navy/20 bg-cream/60 p-2', isDragging ? 'opacity-60' : ''].join(' ')}>
       {editing && (
-        <div className="mb-1 flex items-center justify-end gap-1 text-gray-600">
+        <div className="mb-1 flex items-center justify-end gap-1 text-inky/50">
           <span {...attributes} {...listeners} className="mr-auto cursor-grab" title="Drag to reorder">⋮⋮</span>
-          <button onClick={onConfig} title="Configure" className="hover:text-gray-300">⚙</button>
-          <button onClick={onRemove} title="Remove" className="hover:text-red-400">🗑</button>
+          <button onClick={onConfig} title="Configure" className="hover:text-navy">⚙</button>
+          <button onClick={onRemove} title="Remove" className="hover:text-[#C0392B]">🗑</button>
         </div>
       )}
       {children}
@@ -274,7 +268,6 @@ function BlockWrap({ id, editing, onConfig, onRemove, children }: { id: string; 
   )
 }
 
-// Parse a filter value to its likely JS type for the count query.
 function parseVal(v: string): string | number | boolean {
   if (v === 'true') return true
   if (v === 'false') return false
@@ -306,22 +299,24 @@ function PillsBlock({ block, editing, onChange, onFilter }: {
     return () => { cancelled = true }
   }, [block.pills, companyId])
 
+  const inputCls = 'rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
+
   return (
     <div className="flex flex-col gap-2">
       {editing ? (
         <input value={block.title} onChange={(e) => onChange({ title: e.target.value })}
-          className="rounded border border-[#2a2d3e] bg-[#161820] px-2 py-1 text-xs font-mono text-white" />
-      ) : <div className="text-[11px] font-mono uppercase tracking-wide text-gray-500">{block.title}</div>}
+          className={inputCls} />
+      ) : <div className="text-[11px] font-heading uppercase tracking-wide text-inky">{block.title}</div>}
       <div className="flex flex-wrap gap-1.5">
         {block.pills.map((p, i) => (
           <span key={i} className="inline-flex items-center gap-1">
             <button onClick={() => { if (p.column && p.value != null) onFilter({ column: p.column, value: p.value, label: p.label }) }} title={p.column ? `${p.column} ${p.op} ${p.value}` : undefined}>
               <Badge color={p.color}>{p.label || '—'}: {counts[i] ?? '…'}</Badge>
             </button>
-            {editing && <button onClick={() => onChange({ pills: block.pills.filter((_, j) => j !== i) })} className="text-gray-600 hover:text-red-400">×</button>}
+            {editing && <button onClick={() => onChange({ pills: block.pills.filter((_, j) => j !== i) })} className="text-inky/40 hover:text-[#C0392B]">×</button>}
           </span>
         ))}
-        {block.pills.length === 0 && !editing && <span className="text-xs font-mono text-gray-600">No pills</span>}
+        {block.pills.length === 0 && !editing && <span className="text-xs font-body italic text-inky">No pills</span>}
       </div>
       {editing && <PillEditor onAdd={(pill) => onChange({ pills: [...block.pills, pill] })} />}
     </div>
@@ -331,14 +326,13 @@ function PillsBlock({ block, editing, onChange, onFilter }: {
 function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
   const { profile } = useAuthStore()
   const [label, setLabel] = useState('')
-  const [color, setColor] = useState<BadgeColor>('cyan')
+  const [color, setColor] = useState<BadgeColor>('inky')
   const [source, setSource] = useState('locations')
   const [column, setColumn] = useState('')
   const [op, setOp] = useState<PillOp>('=')
   const [value, setValue] = useState('')
   const [cols, setCols] = useState<string[]>([])
 
-  // Populate the column dropdown from the chosen table's actual columns.
   useEffect(() => {
     if (!profile?.company_id) return
     let cancelled = false
@@ -346,37 +340,39 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
       .then(({ data }: any) => { if (!cancelled) setCols(data?.[0] ? Object.keys(data[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []) })
     return () => { cancelled = true }
   }, [source, profile?.company_id])
+
+  const selectCls = 'rounded border border-navy/30 bg-cream px-1 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
+
   return (
-    <div className="flex flex-col gap-1 rounded border border-[#2a2d3e] p-2">
+    <div className="flex flex-col gap-1 rounded border border-navy/20 p-2">
       <div className="flex items-center gap-1">
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Pill label"
-          className="flex-1 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white" />
-        <select value={color} onChange={(e) => setColor(e.target.value as BadgeColor)} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+          className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none" />
+        <select value={color} onChange={(e) => setColor(e.target.value as BadgeColor)} className={selectCls}>
           {COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
       <div className="flex items-center gap-1">
-        <select value={source} onChange={(e) => { setSource(e.target.value); setColumn('') }} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+        <select value={source} onChange={(e) => { setSource(e.target.value); setColumn('') }} className={selectCls}>
           {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={column} onChange={(e) => setColumn(e.target.value)} className="w-28 rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+        <select value={column} onChange={(e) => setColumn(e.target.value)} className={`w-28 ${selectCls}`}>
           <option value="">column…</option>
           {cols.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
-        <select value={op} onChange={(e) => setOp(e.target.value as PillOp)} className="rounded border border-[#2a2d3e] bg-[#0f1117] px-1 py-1 text-xs font-mono text-white">
+        <select value={op} onChange={(e) => setOp(e.target.value as PillOp)} className={selectCls}>
           {(['=', '!=', '<', '>'] as PillOp[]).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
         <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="value"
-          className="w-20 rounded border border-[#2a2d3e] bg-[#0f1117] px-2 py-1 text-xs font-mono text-white" />
+          className="w-20 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none" />
         <button onClick={() => { if (label.trim()) { onAdd({ label: label.trim(), color, source, column: column.trim() || undefined, op, value }); setLabel(''); setColumn(''); setValue('') } }}
-          className="rounded border border-[#2a2d3e] px-2 py-1 text-xs font-mono text-[#00e5ff] hover:bg-white/5">+ pill</button>
+          className="rounded border border-inky/30 px-2 py-1 text-xs font-heading text-inky hover:border-navy hover:text-navy uppercase">+ pill</button>
       </div>
-      <p className="text-[10px] font-mono text-gray-600">Live count of {source} where column ⋄ value (e.g. active = false). Click a pill to filter the table below.</p>
+      <p className="text-[10px] font-body text-inky/60">Live count of {source} where column ⋄ value (e.g. active = false). Click a pill to filter the table below.</p>
     </div>
   )
 }
 
-// Value for a (possibly metadata-derived) column key.
 function cellVal(r: Record<string, any>, c: string): any {
   if (c.startsWith('meta:')) return (r.metadata as any)?.[c.slice(5)]
   return r[c]
@@ -403,18 +399,14 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
         if (cancelled) return
         const r = (data ?? []) as Record<string, any>[]
         setRows(r)
-        // Dynamic columns from the actual rows, with metadata jsonb keys expanded
-        // into individually-selectable meta:<key> columns (union across rows).
         const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
         const metaKeys = new Set<string>()
         for (const row of r) { const m = row.metadata; if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`) }
-        // Locations gain a derived POS String column (reverse of POS mapping).
         setAllCols([...base, ...metaKeys, ...(block.source === 'locations' ? ['__pos__'] : [])])
       })
     return () => { cancelled = true }
   }, [block.source, profile?.company_id])
 
-  // Value/label resolvers that also handle the derived POS column.
   const valueOf = (r: Record<string, any>, c: string) => (c === '__pos__' && isLocations ? loc.posStringFor(r.id) : cellVal(r, c))
   const labelFor = (c: string) => (c === '__pos__' ? 'POS String' : colLabel(c))
 
@@ -428,41 +420,46 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
   }, [rows, search, cols, activeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
   const shown = seeAll ? filtered : filtered.slice(0, 20)
 
+  const selectCls = 'rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
+
   return (
     <div className="flex flex-col gap-2">
       {editing ? (
         <div className="flex flex-col gap-2">
           <input value={block.title} onChange={(e) => onChange({ title: e.target.value })}
-            className="rounded border border-[#2a2d3e] bg-[#161820] px-2 py-1 text-xs font-mono text-white" />
-          <select value={block.source} onChange={(e) => onChange({ source: e.target.value, columns: [] })}
-            className="rounded border border-[#2a2d3e] bg-[#161820] px-2 py-1 text-xs font-mono text-white">
+            className="rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none" />
+          <select value={block.source} onChange={(e) => onChange({ source: e.target.value, columns: [] })} className={selectCls}>
             {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
           <div className="flex flex-wrap gap-2">
             {allCols.map((c) => (
-              <label key={c} className="flex cursor-pointer items-center gap-1 text-[11px] font-mono text-gray-400">
-                <input type="checkbox" checked={cols.includes(c)} className="accent-[#00e5ff]"
+              <label key={c} className="flex cursor-pointer items-center gap-1 text-[11px] font-body text-inky">
+                <input type="checkbox" checked={cols.includes(c)} className="accent-inky"
                   onChange={() => onChange({ columns: cols.includes(c) ? cols.filter((x) => x !== c) : [...cols, c] })} />
                 {labelFor(c)}
               </label>
             ))}
           </div>
         </div>
-      ) : <div className="text-[11px] font-mono uppercase tracking-wide text-gray-500">{block.title}</div>}
+      ) : <div className="text-[11px] font-heading uppercase tracking-wide text-inky">{block.title}</div>}
 
-      <div className="overflow-auto rounded border border-[#2a2d3e]">
-        <table className="w-full text-[11px] font-mono">
-          <thead className="bg-[#161820] text-gray-500"><tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left">{labelFor(c)}</th>)}</tr></thead>
+      <div className="overflow-auto rounded border border-inky/20">
+        <table className="w-full text-[11px] font-body">
+          <thead className="bg-navy">
+            <tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left text-cream font-heading uppercase tracking-wide">{labelFor(c)}</th>)}</tr>
+          </thead>
           <tbody>
             {shown.map((r, i) => (
-              <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>{cols.map((c) => <td key={c} className="px-2 py-1 text-gray-300">{String(valueOf(r, c) ?? '—') || '—'}</td>)}</tr>
+              <tr key={i} className={i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8]'}>
+                {cols.map((c) => <td key={c} className="px-2 py-1 text-navy">{String(valueOf(r, c) ?? '—') || '—'}</td>)}
+              </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan={Math.max(1, cols.length)} className="px-2 py-2 text-gray-600">No rows</td></tr>}
+            {shown.length === 0 && <tr><td colSpan={Math.max(1, cols.length)} className="px-2 py-2 text-inky italic font-body">No rows</td></tr>}
           </tbody>
         </table>
       </div>
       {filtered.length > 20 && (
-        <button onClick={() => setSeeAll((s) => !s)} className="self-start text-[11px] font-mono text-[#00e5ff] hover:underline">
+        <button onClick={() => setSeeAll((s) => !s)} className="self-start text-[11px] font-body text-inky hover:text-navy hover:underline">
           {seeAll ? 'Show less' : `See all ${filtered.length}`}
         </button>
       )}

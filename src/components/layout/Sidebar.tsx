@@ -102,20 +102,20 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   return (
     <aside
       className={[
-        'flex flex-col h-full bg-[#161820] border-r border-[#2a2d3e] transition-all duration-200',
+        'flex flex-col h-full bg-navy border-r border-navy/40 transition-all duration-200',
         collapsed ? 'w-14' : 'w-52',
       ].join(' ')}
     >
       {/* Logo */}
-      <div className="flex items-center justify-between px-3 h-14 border-b border-[#2a2d3e]">
+      <div className="flex items-center justify-between px-3 h-12 border-b border-navy/40">
         {!collapsed && (
-          <span className="text-xs font-mono font-bold text-[#00e5ff] tracking-widest uppercase">
-            InventoryOS
+          <span className="text-xs font-heading font-bold text-cream tracking-widest uppercase">
+            Strickland Brothers
           </span>
         )}
         <button
           onClick={onToggleCollapsed}
-          className="ml-auto text-gray-500 hover:text-white transition-colors"
+          className="ml-auto text-inky hover:text-cream transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             {collapsed ? (
@@ -135,10 +135,10 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
             to={item.to}
             className={({ isActive }) =>
               [
-                'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-mono transition-all duration-150',
+                'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-heading transition-all duration-150',
                 isActive
-                  ? 'bg-[#00e5ff]/10 text-[#00e5ff] border border-[#00e5ff]/20'
-                  : 'text-gray-500 hover:text-gray-200 hover:bg-white/5',
+                  ? 'bg-cream/10 text-cream border-b-2 border-sky'
+                  : 'text-inky hover:text-cream hover:bg-cream/5',
               ].join(' ')
             }
           >
@@ -153,10 +153,10 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
             to="/admin/users"
             className={({ isActive }) =>
               [
-                'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-mono transition-all duration-150',
+                'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-heading transition-all duration-150',
                 isActive
-                  ? 'bg-[#00e5ff]/10 text-[#00e5ff] border border-[#00e5ff]/20'
-                  : 'text-gray-500 hover:text-gray-200 hover:bg-white/5',
+                  ? 'bg-cream/10 text-cream border-b-2 border-sky'
+                  : 'text-inky hover:text-cream hover:bg-cream/5',
               ].join(' ')
             }
           >
@@ -172,16 +172,16 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-[#2a2d3e] p-3">
+      <div className="border-t border-navy/40 p-3">
         {!collapsed && profile && (
-          <div className="text-xs text-gray-500 font-mono truncate mb-2">
+          <div className="text-xs text-cream/60 font-body truncate mb-2">
             {profile.full_name ?? profile.email}
           </div>
         )}
         <button
           onClick={handleSignOut}
           title="Sign out"
-          className="flex items-center gap-2 text-gray-600 hover:text-red-400 transition-colors text-xs font-mono"
+          className="flex items-center gap-2 text-inky hover:text-[#C0392B] transition-colors text-xs font-body"
         >
           <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}

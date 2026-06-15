@@ -2,8 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('./assets/fonts/ChakraPetch-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('./assets/fonts/ChakraPetch-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'DM Mono';
+  src: url('./assets/fonts/DMMono-Light.ttf') format('truetype');
+  font-weight: 300;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'DM Mono';
+  src: url('./assets/fonts/DMMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'DM Mono';
+  src: url('./assets/fonts/DMMono-Medium__1_.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'DM Mono';
+  src: url('./assets/fonts/DMMono-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+}
+
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -12,9 +49,9 @@
 
 body {
   margin: 0;
-  background-color: #0f1117;
-  color: #e5e7eb;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  background-color: #F2F1E6;
+  color: #002745;
+  font-family: 'DM Mono', monospace;
 }
 
 /* Scrollbar styling */
@@ -23,23 +60,24 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f1117;
+  background: #F2F1E6;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a2d3e;
+  background: #4F7489;
   border-radius: 3px;
+  opacity: 0.4;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3d4157;
+  background: #002745;
 }
 
 /* Selection */
 ::selection {
-  background: rgba(0, 229, 255, 0.2);
-  color: #fff;
+  background: rgba(183, 224, 222, 0.4);
+  color: #002745;
 }
 
-/* Fix react-big-calendar dark theme overflow */
+/* Fix react-big-calendar theme */
 .rbc-calendar {
   height: 100% !important;
 }

@@ -45,7 +45,7 @@ export function AppShell() {
     : 0
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#0f1117] font-mono">
+    <div className="flex h-screen overflow-hidden bg-cream font-body">
       <Sidebar collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((v) => !v)} />
 
       <div className="flex flex-col flex-1 min-w-0 transition-[margin] duration-150" style={{ marginRight: pushWidth || undefined }}>

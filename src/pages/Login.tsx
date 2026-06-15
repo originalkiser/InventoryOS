@@ -39,8 +39,6 @@ export function LoginPage() {
     if (!resetEmail) return
     setResetSending(true)
     const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
-      // Include the app base path (e.g. /InventoryOS/) so the link resolves on
-      // GitHub Pages instead of 404-ing at the domain root.
       redirectTo: `${window.location.origin}${import.meta.env.BASE_URL}reset-password`,
     })
     if (error) {
@@ -53,19 +51,19 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0f1117] flex items-center justify-center font-mono">
+    <div className="min-h-screen bg-cream flex items-center justify-center font-body">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="text-2xl font-bold text-[#00e5ff] tracking-widest uppercase mb-1">
-            InventoryOS
+          <div className="text-2xl font-heading font-bold text-navy tracking-widest uppercase mb-1">
+            Strickland Brothers
           </div>
-          <div className="text-xs text-gray-500 tracking-wide">Real-time inventory management</div>
+          <div className="text-xs text-inky font-body tracking-wide">Inventory OS</div>
         </div>
 
-        <div className="bg-[#161820] border border-[#2a2d3e] rounded-lg p-6">
+        <div className="bg-cream border border-navy/40 rounded-xl p-6 shadow-sm">
           {resetMode ? (
             <div className="flex flex-col gap-4">
-              <h2 className="text-sm font-semibold text-white uppercase tracking-wide">
+              <h2 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">
                 Reset Password
               </h2>
               <Input
@@ -80,14 +78,14 @@ export function LoginPage() {
               </Button>
               <button
                 onClick={() => setResetMode(false)}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors text-center"
+                className="text-xs text-inky hover:text-navy transition-colors text-center font-body"
               >
-                Back to login
+                Back to sign in
               </button>
             </div>
           ) : (
             <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-              <h2 className="text-sm font-semibold text-white uppercase tracking-wide">Sign In</h2>
+              <h2 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Sign In</h2>
               <Input
                 label="Email"
                 type="email"
@@ -108,14 +106,14 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => setResetMode(true)}
-                className="text-xs text-gray-500 hover:text-[#00e5ff] transition-colors text-center"
+                className="text-xs text-inky hover:text-navy transition-colors text-center font-body"
               >
                 Forgot password?
               </button>
-              <div className="border-t border-[#2a2d3e] pt-3 text-center">
+              <div className="border-t border-navy/20 pt-3 text-center">
                 <Link
                   to="/setup"
-                  className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+                  className="text-xs text-inky/70 hover:text-navy transition-colors font-body"
                 >
                   New workspace? Set one up →
                 </Link>
