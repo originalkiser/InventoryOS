@@ -20,15 +20,38 @@ export function useConfigTab<T>(tableName: string) {
   const load = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
-    const { data: rows, error } = await (supabase as any)
-      .from(tableName)
-      .select('*')
-      .eq('company_id', profile.company_id)
-      .order('created_at', { ascending: false })
-    if (error) toast.error(`Failed to load ${tableName}`)
-    else setData((rows ?? []) as T[])
+    // Paginate past PostgREST's default 1000-row response cap so large tables
+    // (e.g. a 2,000+ row tank-monitor import) load fully.
+    const sb = supabase as any
+    const PAGE = 1000
+    const all: T[] = []
+    let from = 0
+    let err: { message: string } | null = null
+    for (;;) {
+      const { data: rows, error } = await sb.from(tableName).select('*')
+        .eq('company_id', profile.company_id).order('created_at', { ascending: false })
+        .range(from, from + PAGE - 1)
+      if (error) { err = error; break }
+      all.push(...((rows ?? []) as T[]))
+      if (!rows || rows.length < PAGE) break
+      from += PAGE
+    }
+    if (err) toast.error(`Failed to load ${tableName}`)
+    else setData(all)
     setLoading(false)
   }, [profile?.company_id, tableName])
+
+  // Insert/upsert in batches so large imports don't exceed request limits.
+  async function writeInBatches(rows: Record<string, unknown>[], op: 'insert' | 'upsert'): Promise<{ message: string } | null> {
+    const sb = supabase as any
+    const BATCH = 500
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const slice = rows.slice(i, i + BATCH)
+      const { error } = op === 'upsert' ? await sb.from(tableName).upsert(slice) : await sb.from(tableName).insert(slice)
+      if (error) return error
+    }
+    return null
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -53,7 +76,7 @@ export function useConfigTab<T>(tableName: string) {
   async function upsertBatch(rows: Partial<T>[]) {
     if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
     const payload = rows.map((r) => stamp(r as Record<string, unknown>, 'upload'))
-    const { error } = await (supabase as any).from(tableName).upsert(payload)
+    const error = await writeInBatches(payload, 'upsert')
     if (error) toast.error(error.message)
     else { toast.success(`Imported ${rows.length} rows`); await load() }
   }
@@ -67,7 +90,7 @@ export function useConfigTab<T>(tableName: string) {
     if (opts.mode === 'replace') {
       const { error: delErr } = await sb.from(tableName).delete().eq('company_id', profile.company_id)
       if (delErr) { toast.error(delErr.message); return }
-      const { error } = await sb.from(tableName).insert(rows.map((r) => stamp(r as Record<string, unknown>, source)))
+      const error = await writeInBatches(rows.map((r) => stamp(r as Record<string, unknown>, source)), 'insert')
       if (error) toast.error(error.message)
       else { toast.success(`Replaced with ${rows.length} rows`); await load() }
       return
@@ -86,7 +109,7 @@ export function useConfigTab<T>(tableName: string) {
       const id = keyOf ? existingByKey.get(keyOf(r)) : undefined
       return id ? { ...base, id } : base
     })
-    const { error } = await sb.from(tableName).upsert(payload)
+    const error = await writeInBatches(payload, 'upsert')
     if (error) toast.error(error.message)
     else {
       const updated = payload.filter((p: any) => p.id).length

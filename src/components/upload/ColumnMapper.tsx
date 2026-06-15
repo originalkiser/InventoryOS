@@ -65,6 +65,8 @@ interface ColumnMapperProps {
   // Optional: remember the confirmed mapping (incl. transforms) in localStorage
   // under this key and pre-fill it next time.
   rememberKey?: string
+  // Optional: a few sample rows to preview alongside the mapping.
+  previewRows?: Record<string, string>[]
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -85,7 +87,7 @@ function buildMappings(requiredFields: RequiredField[], headers: string[], saved
   })
 }
 
-export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn, rememberKey }: ColumnMapperProps) {
+export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn, rememberKey, previewRows }: ColumnMapperProps) {
   const { profile } = useAuthStore()
   // Memory precedence on load: explicit prop → local (this user's) → org-shared.
   const localSaved = rememberKey ? loadSavedMap(rememberKey) : undefined
@@ -166,6 +168,27 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
         on every row. <span className="text-white">Convert</span> transforms the value (e.g. <span className="text-[#00e5ff]">Number</span> turns &quot;001&quot; into 1);
         <span className="text-white"> Invert</span> flips the sign of numbers.
       </p>
+
+      {previewRows && previewRows.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-mono uppercase tracking-wide text-gray-500">Preview ({previewRows.length} of file)</span>
+          <div className="overflow-auto rounded border border-[#2a2d3e] max-h-40">
+            <table className="text-[11px] font-mono">
+              <thead className="bg-[#161820] text-gray-500 sticky top-0">
+                <tr>{headers.map((h) => <th key={h} className="px-2 py-1 text-left whitespace-nowrap">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {previewRows.map((r, i) => (
+                  <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>
+                    {headers.map((h) => <td key={h} className="px-2 py-1 whitespace-nowrap text-gray-300">{r[h] ?? ''}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3">
         {requiredFields.map((field) => {
           const mapping = mappings.find((m) => m.fieldName === field.name)!

@@ -37,11 +37,18 @@ export interface HeaderDetectionResult {
 }
 
 export function detectHeaderRow(rows: unknown[][]): HeaderDetectionResult {
-  for (let i = 0; i < Math.min(rows.length, 20); i++) {
-    const row = rows[i]
-    if (!isJunkRow(row) && isHeaderCandidate(row)) {
-      return { headerRowIndex: i, skippedRows: i }
-    }
+  // Among the first rows, pick the header CANDIDATE with the most filled cells —
+  // the real header row usually spans the most columns, so this skips short
+  // banner/title rows that would otherwise be chosen first.
+  const limit = Math.min(rows.length, 20)
+  let best = -1
+  let bestFilled = -1
+  for (let i = 0; i < limit; i++) {
+    const row = rows[i] ?? []
+    if (isJunkRow(row) || !isHeaderCandidate(row)) continue
+    const filled = row.filter((v) => !isEmptyCell(v)).length
+    if (filled > bestFilled) { bestFilled = filled; best = i }
   }
+  if (best >= 0) return { headerRowIndex: best, skippedRows: best }
   return { headerRowIndex: 0, skippedRows: 0 }
 }

@@ -46,45 +46,52 @@ function loadView(): ViewConfig {
 }
 
 // ---------------------------------------------------------------------------
+export type LookupMode = 'hidden' | 'docked' | 'floating'
+
 interface OverlayProps {
-  open: boolean
-  pinned: boolean
+  mode: LookupMode
   width: number
   mobile: boolean
-  onOpenChange: (o: boolean) => void
-  onPinnedChange: (p: boolean) => void
+  onModeChange: (m: LookupMode) => void
+  onToggle: () => void
   onWidthChange: (w: number) => void
 }
 
-export function LocationLookupOverlay(props: OverlayProps) {
-  const { open, pinned, width, mobile, onOpenChange, onPinnedChange, onWidthChange } = props
+export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onToggle, onWidthChange }: OverlayProps) {
+  const open = mode !== 'hidden'
 
   // Ctrl/Cmd+L toggles the overlay from anywhere.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') { e.preventDefault(); onOpenChange(!open) }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') { e.preventDefault(); onToggle() }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [open, onOpenChange])
+  }, [onToggle])
 
   return (
     <>
       {/* Floating trigger */}
       <button
-        onClick={() => onOpenChange(!open)}
+        onClick={onToggle}
         className="fixed bottom-4 right-4 z-[60] flex items-center gap-1.5 rounded-full border border-[#ffb300]/40 bg-[#161820] px-4 py-2 font-mono text-xs text-[#ffb300] shadow-lg hover:bg-[#ffb300]/10"
         title="Location Lookup (Ctrl/Cmd+L)"
       >
-        🔍 Lookup{pinned ? <span className="text-[10px] text-[#39ff14]">●</span> : null}
+        🔍 Lookup{open ? <span className={['text-[10px]', mode === 'docked' ? 'text-[#39ff14]' : 'text-[#00e5ff]'].join(' ')}>●</span> : null}
       </button>
-      {open && <LookupPanel {...props} mobile={mobile} onPinnedChange={onPinnedChange} onWidthChange={onWidthChange} width={width} pinned={pinned} onClose={() => onOpenChange(false)} />}
+      {open && (
+        <LookupPanel
+          mode={mode} width={width} mobile={mobile} onModeChange={onModeChange} onWidthChange={onWidthChange}
+          onClose={() => onModeChange('hidden')}
+        />
+      )}
     </>
   )
 }
 
 // ---------------------------------------------------------------------------
-function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onClose }: OverlayProps & { onClose: () => void }) {
+function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose }: Omit<OverlayProps, 'onToggle'> & { onClose: () => void }) {
+  const docked = mode === 'docked' && !mobile
   const [height, setHeight] = useState<number>(() => Number(localStorage.getItem(SIZE_KEY)) || Math.round(window.innerHeight * 0.6))
   const [pos, setPos] = useState<{ right: number; bottom: number } | null>(() => {
     try { return JSON.parse(localStorage.getItem(POS_KEY) || 'null') } catch { return null }
@@ -99,21 +106,9 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
 
   const right = pos?.right ?? 16
   const bottom = pos?.bottom ?? 16
-  // Pinned (non-mobile) docks the panel full-height on the right so it fills the
-  // pushed margin with no blank gutter; unpinned floats as a corner popout.
-  const docked = pinned && !mobile
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
-
-  // Unpinned: close when clicking outside the panel (and not the trigger).
-  useEffect(() => {
-    if (pinned || mobile) return
-    const handler = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose()
-    }
-    // Defer so the opening click doesn't immediately close it.
-    const t = setTimeout(() => document.addEventListener('mousedown', handler), 0)
-    return () => { clearTimeout(t); document.removeEventListener('mousedown', handler) }
-  }, [pinned, mobile, onClose])
+  // Float mode "stays on top" — it deliberately does NOT auto-close on outside
+  // click so a location's info can hover over content while you work.
 
   function startResize(e: React.MouseEvent) {
     e.preventDefault()
@@ -182,10 +177,14 @@ function LookupPanel({ pinned, width, mobile, onPinnedChange, onWidthChange, onC
           <button onClick={() => setEditing((v) => !v)} title="Edit view"
             className={['p-1 rounded', editing ? 'text-[#00e5ff]' : 'text-gray-500 hover:text-white'].join(' ')}>✎</button>
           {!mobile && (
-            <button onClick={() => onPinnedChange(!pinned)} title={pinned ? 'Unpin' : 'Pin (stay open + push content)'}
-              className={['p-1 rounded text-sm', pinned ? 'text-[#ffb300]' : 'text-gray-500 hover:text-white'].join(' ')}>📌</button>
+            <>
+              <button onClick={() => onModeChange('floating')} title="Float on top (hover over content)"
+                className={['p-1 rounded text-sm', mode === 'floating' ? 'text-[#00e5ff]' : 'text-gray-500 hover:text-white'].join(' ')}>⬛</button>
+              <button onClick={() => onModeChange('docked')} title="Pin to right (push content)"
+                className={['p-1 rounded text-sm', mode === 'docked' ? 'text-[#ffb300]' : 'text-gray-500 hover:text-white'].join(' ')}>📌</button>
+            </>
           )}
-          <button onClick={onClose} className="p-1 text-gray-500 hover:text-white" title="Close">✕</button>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-white" title="Hide">✕</button>
         </div>
       </div>
 

@@ -70,7 +70,7 @@ export function ConfigUpload({ requiredFields, onImport, importing, allowReplace
         </div>
       )}
 
-      <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} rememberKey={rememberKey} onConfirm={handleConfirm} onCancel={() => setParsed(null)} onAddColumn={onAddColumn} />
+      <ColumnMapper headers={parsed.headers} requiredFields={requiredFields} rememberKey={rememberKey} previewRows={parsed.rows.slice(0, 5)} onConfirm={handleConfirm} onCancel={() => setParsed(null)} onAddColumn={onAddColumn} />
       {importing && <p className="text-xs text-[#00e5ff] font-mono">Importing…</p>}
     </div>
   )

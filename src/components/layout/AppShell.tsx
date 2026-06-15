@@ -1,33 +1,33 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
-import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
+import { LocationLookupOverlay, type LookupMode } from '@/modules/locations/LocationLookupOverlay'
 import { InventoryLeftPanel } from '@/components/inventory/InventoryLeftPanel'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 
-const OPEN_KEY = 'locationLookup.open'
-const PIN_KEY = 'locationLookup.pinned'
+const MODE_KEY = 'locationLookup.mode'
 const WIDTH_KEY = 'locationLookup.width'
 
 export function AppShell() {
   const mobile = useMediaQuery('(max-width: 480px)')
-  const [pinned, setPinned] = useState(() => localStorage.getItem(PIN_KEY) === '1')
-  const [open, setOpen] = useState(() => pinned || localStorage.getItem(OPEN_KEY) === '1')
+  const [mode, setMode] = useState<LookupMode>(() => (localStorage.getItem(MODE_KEY) as LookupMode) || 'hidden')
   const [width, setWidth] = useState(() => Number(localStorage.getItem(WIDTH_KEY)) || 420)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // Remember which open mode to restore when the trigger re-opens it.
+  const lastOpen = useRef<Exclude<LookupMode, 'hidden'>>(mode === 'docked' ? 'docked' : 'floating')
   const location = useLocation()
 
-  function setOpenP(o: boolean) { setOpen(o); localStorage.setItem(OPEN_KEY, o ? '1' : '0') }
-  function setPinnedP(p: boolean) {
-    setPinned(p); localStorage.setItem(PIN_KEY, p ? '1' : '0')
-    if (p) setOpenP(true)
+  function setModeP(m: LookupMode) {
+    setMode(m); localStorage.setItem(MODE_KEY, m)
+    if (m !== 'hidden') lastOpen.current = m
   }
+  function toggle() { setModeP(mode === 'hidden' ? lastOpen.current : 'hidden') }
   function setWidthP(w: number) { setWidth(w); localStorage.setItem(WIDTH_KEY, String(w)) }
 
-  // Pinned (non-mobile) pushes the content left by the panel width.
-  const push = pinned && open && !mobile
+  // Only the docked mode pushes content; float hovers on top.
+  const push = mode === 'docked' && !mobile
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#0f1117] font-mono">
@@ -43,8 +43,8 @@ export function AppShell() {
       </div>
 
       <LocationLookupOverlay
-        open={open} pinned={pinned} width={width} mobile={mobile}
-        onOpenChange={setOpenP} onPinnedChange={setPinnedP} onWidthChange={setWidthP}
+        mode={mode} width={width} mobile={mobile}
+        onModeChange={setModeP} onToggle={toggle} onWidthChange={setWidthP}
       />
       <InventoryLeftPanel />
     </div>

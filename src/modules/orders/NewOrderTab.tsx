@@ -263,7 +263,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
               ) : !parsed ? (
                 <FileUploadZone onParsed={(r) => setParsed(r)} />
               ) : (
-                <ColumnMapper headers={parsed.headers} requiredFields={MAP_FIELDS} rememberKey="orders.inventory"
+                <ColumnMapper headers={parsed.headers} requiredFields={MAP_FIELDS} rememberKey="orders.inventory" previewRows={parsed.rows.slice(0, 5)}
                   initialMappings={store.mapping.length ? store.mapping : undefined}
                   onConfirm={(m) => { store.setInputRows(rowsFromFile(m)); setStage('params'); toast.success(`Loaded ${parsed.rows.length} rows`) }}
                   onCancel={() => setParsed(null)} />

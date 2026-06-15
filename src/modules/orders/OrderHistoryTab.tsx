@@ -219,7 +219,7 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
               </label>
             ))}
           </div>
-          <ColumnMapper headers={parsed.headers} requiredFields={FIELDS} rememberKey="orders.history" onConfirm={doImport} onCancel={() => setParsed(null)} />
+          <ColumnMapper headers={parsed.headers} requiredFields={FIELDS} rememberKey="orders.history" previewRows={parsed.rows.slice(0, 5)} onConfirm={doImport} onCancel={() => setParsed(null)} />
         </div>
       )}
     </Modal>
