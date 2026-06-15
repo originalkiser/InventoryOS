@@ -53,7 +53,15 @@ export function InviteUserModal({ open, onClose, onInvited }: InviteUserModalPro
       const { data, error } = await supabase.functions.invoke('invite-user', {
         body: { email: email.trim(), full_name: fullName.trim(), role, password: tempPassword },
       })
-      if (error) throw error
+      if (error) {
+        // On a non-2xx the real reason is in the response body, not error.message.
+        let msg = error.message
+        try {
+          const ctx = (error as { context?: Response }).context
+          if (ctx && typeof ctx.json === 'function') { const b = await ctx.json(); if (b?.error) msg = b.error }
+        } catch { /* keep generic message */ }
+        throw new Error(msg)
+      }
       if (data?.error) throw new Error(data.error)
 
       setCreated({ email: email.trim(), tempPassword })
