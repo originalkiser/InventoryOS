@@ -39,7 +39,9 @@ export function LoginPage() {
     if (!resetEmail) return
     setResetSending(true)
     const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
-      redirectTo: `${window.location.origin}/reset-password`,
+      // Include the app base path (e.g. /InventoryOS/) so the link resolves on
+      // GitHub Pages instead of 404-ing at the domain root.
+      redirectTo: `${window.location.origin}${import.meta.env.BASE_URL}reset-password`,
     })
     if (error) {
       toast.error(error.message)

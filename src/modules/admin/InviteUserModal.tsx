@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { createClient } from '@supabase/supabase-js'
 import { Modal, Button, Input, Select } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -9,15 +8,6 @@ interface InviteUserModalProps {
   open: boolean
   onClose: () => void
   onInvited: () => void
-}
-
-// Second client purely for signUp — keeps admin session untouched
-function makeTempClient() {
-  return createClient(
-    import.meta.env.VITE_SUPABASE_URL as string,
-    import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  )
 }
 
 function generatePassword(length = 16) {
@@ -57,34 +47,18 @@ export function InviteUserModal({ open, onClose, onInvited }: InviteUserModalPro
     setLoading(true)
     try {
       const tempPassword = generatePassword()
-      const tempClient = makeTempClient()
 
-      // Create the auth user using a throw-away client so admin stays signed in
-      const { data: authData, error: authErr } = await tempClient.auth.signUp({
-        email: email.trim(),
-        password: tempPassword,
+      // Create the user via the Edge Function (service-role, no confirmation
+      // email → no rate limit, and the user is created already-confirmed).
+      const { data, error } = await supabase.functions.invoke('invite-user', {
+        body: { email: email.trim(), full_name: fullName.trim(), role, password: tempPassword },
       })
-      if (authErr) throw authErr
-
-      const userId = authData.user?.id
-      if (!userId) throw new Error('User creation returned no ID. Email confirmation may be required — check your Supabase Auth settings.')
-
-      // Insert profile linked to this company
-      const { error: profileErr } = await (supabase as any)
-        .from('profiles')
-        .insert({
-          id: userId,
-          company_id: profile.company_id,
-          full_name: fullName.trim(),
-          email: email.trim(),
-          role,
-        })
-      if (profileErr) throw profileErr
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
 
       setCreated({ email: email.trim(), tempPassword })
       onInvited()
     } catch (e) {
-      // Supabase errors are plain objects with a message, not Error instances.
       const msg = (e as { message?: string })?.message || (typeof e === 'string' ? e : 'Failed to create user')
       toast.error(msg)
     } finally {
