@@ -193,7 +193,7 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
     <div className="border-l-2 border-[#00e5ff]/30 bg-sky/10 pl-6 pr-3 py-3">
       <div className="overflow-hidden rounded border border-navy/30">
         <table className="w-full text-xs font-mono">
-          <thead className="bg-navy text-inky uppercase tracking-wide">
+          <thead className="bg-[#002745] text-[#6A9AB2] uppercase tracking-wide">
             <tr>
               <th className="w-8" />
               <th className="w-8 px-2 py-1.5 text-left">✓</th>

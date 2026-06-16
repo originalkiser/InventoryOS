@@ -182,10 +182,10 @@ export function TopBar() {
           <button
             key={pill.label}
             onClick={pill.onClick}
-            className="flex items-center gap-1.5 px-3 py-1 bg-cream/10 border border-cream/20 rounded text-xs font-body hover:bg-cream/20 hover:border-cream/40 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all"
           >
-            <span className="text-cream/60">{pill.label}:</span>
-            <span className={['font-medium', pill.highlight ? 'text-sky' : 'text-cream'].join(' ')}>
+            <span className="text-[#F2F1E6]/60">{pill.label}:</span>
+            <span className={['font-medium', pill.highlight ? 'text-sky' : 'text-[#F2F1E6]'].join(' ')}>
               {pill.value}
             </span>
           </button>

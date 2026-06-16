@@ -15,19 +15,19 @@ interface BadgeProps {
 }
 
 const colorClasses: Record<Color, string> = {
-  navy:    'bg-navy text-cream',
-  inky:    'bg-inky text-cream',
-  sky:     'bg-sky text-navy',
-  onyx:    'bg-onyx text-cream',
-  cream:   'bg-cream text-navy border border-navy/20',
-  red:     'bg-[#C0392B] text-cream',
-  green:   'bg-[#2ECC71] text-navy',
-  orange:  'bg-[#E67E22] text-navy',
+  navy:    'bg-navy text-cream',                          // both flip together, contrast ok
+  inky:    'bg-inky text-[#F2F1E6]',                    // medium bg; hardcode light text
+  sky:     'bg-sky text-[#002745]',                      // sky never flips; hardcode dark text
+  onyx:    'bg-onyx text-[#F2F1E6]',                    // black bg; hardcode light text
+  cream:   'bg-cream text-navy border border-navy/20',   // both flip together, contrast ok
+  red:     'bg-[#C0392B] text-[#F2F1E6]',               // stable red; hardcode light text
+  green:   'bg-[#2ECC71] text-[#002745]',               // stable green; hardcode dark text
+  orange:  'bg-[#E67E22] text-[#002745]',               // stable orange; hardcode dark text
   // aliases
-  cyan:    'bg-sky text-navy',
-  amber:   'bg-[#E67E22] text-navy',
-  gray:    'bg-inky/70 text-cream',
-  magenta: 'bg-navy text-cream',
+  cyan:    'bg-sky text-[#002745]',                      // same as sky
+  amber:   'bg-[#E67E22] text-[#002745]',               // same as orange
+  gray:    'bg-inky/70 text-[#F2F1E6]',                 // medium bg; hardcode light text
+  magenta: 'bg-navy text-cream',                         // both flip together
 }
 
 export function Badge({ children, color = 'inky', className = '' }: BadgeProps) {

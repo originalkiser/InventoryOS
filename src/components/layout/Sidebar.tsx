@@ -111,7 +111,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
       <div className="flex items-center justify-between px-3 h-12 border-b border-[#002745]/40">
         <button
           onClick={onToggleCollapsed}
-          className="ml-auto text-inky hover:text-cream transition-colors"
+          className="ml-auto text-inky hover:text-[#F2F1E6] transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             {collapsed ? (
@@ -133,8 +133,8 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
               [
                 'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-heading transition-all duration-150',
                 isActive
-                  ? 'bg-cream/10 text-cream border-b-2 border-sky'
-                  : 'text-inky hover:text-cream hover:bg-cream/5',
+                  ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
+                  : 'text-inky hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
               ].join(' ')
             }
           >
@@ -151,8 +151,8 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
               [
                 'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-heading transition-all duration-150',
                 isActive
-                  ? 'bg-cream/10 text-cream border-b-2 border-sky'
-                  : 'text-inky hover:text-cream hover:bg-cream/5',
+                  ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
+                  : 'text-inky hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
               ].join(' ')
             }
           >
@@ -170,7 +170,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
       {/* Footer */}
       <div className="border-t border-navy/40 p-3">
         {!collapsed && profile && (
-          <div className="text-xs text-cream/60 font-body truncate mb-2">
+          <div className="text-xs text-[#F2F1E6]/60 font-body truncate mb-2">
             {profile.full_name ?? profile.email}
           </div>
         )}

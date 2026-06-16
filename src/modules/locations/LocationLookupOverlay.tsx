@@ -72,7 +72,7 @@ export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onTog
       {/* Floating trigger */}
       <button
         onClick={onToggle}
-        className="fixed bottom-[4.5rem] right-4 z-[60] flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-4 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
+        className="fixed bottom-[4.5rem] right-4 z-[60] flex items-center gap-1.5 rounded-full border border-[#002745]/40 bg-[#002745] px-4 py-2 font-heading text-xs text-[#F2F1E6] shadow-lg hover:bg-inky uppercase tracking-wide"
         title="Location Lookup (Ctrl/Cmd+L)"
       >
         Lookup{open ? <span className="text-[10px] text-sky ml-1">●</span> : null}
@@ -161,11 +161,11 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
 
   return (
     <div ref={panelRef} style={panelStyle}
-      className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream shadow-2xl">
+      className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:border-[#C4DAE6]/20 shadow-2xl">
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
       {/* header */}
-      <div onMouseDown={startMove} className={['flex items-center justify-between bg-navy border-b border-navy/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
+      <div onMouseDown={startMove} className={['flex items-center justify-between bg-[#002745] border-b border-[#002745]/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
         <span className="text-xs font-heading font-bold text-cream uppercase tracking-wide">Location Lookup</span>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
           <button onClick={() => setEditing((v) => !v)} title="Edit view"
@@ -445,12 +445,12 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
 
       <div className="overflow-auto rounded border border-inky/20">
         <table className="w-full text-[11px] font-body">
-          <thead className="bg-navy">
-            <tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left text-cream font-heading uppercase tracking-wide">{labelFor(c)}</th>)}</tr>
+          <thead className="bg-[#002745]">
+            <tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left text-[#F2F1E6] font-heading uppercase tracking-wide">{labelFor(c)}</th>)}</tr>
           </thead>
           <tbody>
             {shown.map((r, i) => (
-              <tr key={i} className={i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8]'}>
+              <tr key={i} className={i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'}>
                 {cols.map((c) => <td key={c} className="px-2 py-1 text-navy">{String(valueOf(r, c) ?? '—') || '—'}</td>)}
               </tr>
             ))}
