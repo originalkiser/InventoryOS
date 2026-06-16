@@ -344,6 +344,7 @@ export interface MonthlyCountProduct {
   count_month: string | null
   location_id: string | null
   product_id: string
+  category: string | null
   on_hand: number | null
   sold: number | null
   adjusted: number | null

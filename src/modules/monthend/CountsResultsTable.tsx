@@ -26,6 +26,7 @@ export interface SummaryResultRow {
 export interface ProductResultRow {
   location_label: string
   product_id: string
+  category: string
   on_hand: number
   sold: number
   adjusted: number
@@ -59,6 +60,71 @@ function flagColor(code: string): 'red' | 'amber' {
   return code.startsWith('variance') || code.startsWith('high') ? 'red' : 'amber'
 }
 
+// ---------------------------------------------------------------------------
+function CategoryDropdown({
+  categories,
+  selected,
+  onChange,
+}: {
+  categories: string[]
+  selected: string[]
+  onChange: (v: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  function toggle(cat: string) {
+    onChange(selected.includes(cat) ? selected.filter((c) => c !== cat) : [...selected, cat])
+  }
+  const allSelected = categories.length > 0 && selected.length === categories.length
+  const label =
+    selected.length === 0
+      ? 'none'
+      : `${selected.length} categor${selected.length === 1 ? 'y' : 'ies'}`
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 rounded border border-navy/30 px-2 py-0.5 text-xs font-mono text-navy hover:border-navy"
+      >
+        {label} <span className="text-inky/50 ml-0.5">▾</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute z-20 top-full mt-1 left-0 min-w-[200px] max-h-64 overflow-auto rounded border border-navy/30 bg-cream shadow-xl py-1">
+            {categories.length === 0 ? (
+              <p className="px-3 py-2 text-xs font-body italic text-inky/60">No categories in data yet</p>
+            ) : (
+              <>
+                <button
+                  onClick={() => onChange(allSelected ? [] : [...categories])}
+                  className="w-full px-3 py-1.5 text-left text-xs font-body text-inky hover:bg-navy/5"
+                >
+                  {allSelected ? '✓ All selected' : 'Select all'}
+                </button>
+                <div className="border-t border-navy/10 mt-1 pt-1">
+                  {categories.map((cat) => (
+                    <label key={cat} className="flex items-center gap-2 px-3 py-1.5 hover:bg-navy/5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(cat)}
+                        onChange={() => toggle(cat)}
+                        className="accent-inky"
+                      />
+                      <span className="text-xs font-body text-navy">{cat || '(Uncategorized)'}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 const sc = createColumnHelper<SummaryResultRow>()
 const pc = createColumnHelper<ProductResultRow>()
 
@@ -67,8 +133,7 @@ const rowKey = (r: SummaryResultRow) => `${r.location_id ?? ''}|${r.count_type ?
 export function CountsResultsTable({ summaryRows, productRows, lookbackN, loading }: Props) {
   const [view, setView] = useState<'summary' | 'product'>('summary')
 
-  // G1 — Allowable types: types present, which are allowable (empty = all),
-  // and per-row include/exclude overrides.
+  // ---- Summary: allowable type filter ----
   const distinctTypes = useMemo(() => Array.from(new Set(summaryRows.map((r) => r.count_type ?? '—'))).sort(), [summaryRows])
   const [allowable, setAllowable] = useAppSetting<string[]>('monthend.allowableTypes', [])
   const [overrides, setOverrides] = useState<Record<string, 'include' | 'exclude'>>({})
@@ -79,17 +144,36 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
     return allowable.length === 0 || allowableSet.has(r.count_type ?? '—')
   }
   function toggleType(t: string) {
-    // First interaction seeds from "all" so unticking one keeps the rest.
     const base = allowable.length === 0 ? distinctTypes : allowable
     setAllowable(base.includes(t) ? base.filter((x) => x !== t) : [...base, t])
   }
   function toggleOverride(r: SummaryResultRow) {
-    const k = rowKey(r); const next = included(r) ? 'exclude' : 'include'
+    const k = rowKey(r)
+    const next = included(r) ? 'exclude' : 'include'
     setOverrides((o) => ({ ...o, [k]: next }))
   }
   const filteredSummary = useMemo(() => summaryRows.filter(included), [summaryRows, allowable, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
   const excludedCount = summaryRows.length - filteredSummary.length
 
+  // ---- Product: zero on-hand filter + per-category exceptions ----
+  const [excludeZeroOH, setExcludeZeroOH] = useAppSetting<boolean>('monthend.excludeZeroOnHand', true)
+  const [includedZeroCats, setIncludedZeroCats] = useAppSetting<string[]>('monthend.includedZeroCategories', [])
+
+  const distinctCategories = useMemo(
+    () => Array.from(new Set(productRows.map((p) => p.category || ''))).filter(Boolean).sort(),
+    [productRows]
+  )
+
+  const filteredProducts = useMemo(() => {
+    if (!excludeZeroOH) return productRows
+    return productRows.filter(
+      (p) => (p.on_hand ?? 0) > 0 || includedZeroCats.includes(p.category ?? '')
+    )
+  }, [productRows, excludeZeroOH, includedZeroCats])
+
+  const zeroExcludedCount = productRows.length - filteredProducts.length
+
+  // ---- Columns ----
   const summaryColumns = useMemo(() => [
     { id: 'incl', header: '', enableSorting: false, enableColumnFilter: false, cell: (i: any) => { const r = i.row.original as SummaryResultRow; const inc = included(r); return <button onClick={() => toggleOverride(r)} title={inc ? 'Exclude this row' : 'Include this row'} className={inc ? 'text-green-700' : 'text-inky/70'}>{inc ? '✓' : '✕'}</button> } },
     sc.accessor('location_label', { header: 'Location' }),
@@ -135,6 +219,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   const productColumns = useMemo(() => [
     pc.accessor('location_label', { header: 'Location' }),
     pc.accessor('product_id', { header: 'Product' }),
+    pc.accessor('category', { header: 'Category', cell: (i) => i.getValue() || '—' }),
     pc.accessor('on_hand', { header: 'On Hand', cell: (i) => num(i.getValue()) }),
     pc.accessor('sold', { header: 'Sold', cell: (i) => num(i.getValue()) }),
     pc.accessor('adjusted', { header: 'Adjusted', cell: (i) => num(i.getValue()) }),
@@ -149,9 +234,9 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   ], [])
 
   const summaryTbl = useTable(filteredSummary, summaryColumns)
-  const productTbl = useTable(productRows, productColumns)
+  const productTbl = useTable(filteredProducts, productColumns)
 
-  // Flattened CSV export rows
+  // ---- CSV exports ----
   const summaryExport = useMemo(() => filteredSummary.map((r) => ({
     location: r.location_label,
     count_type: r.count_type ?? '',
@@ -167,8 +252,20 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
     flags: r.flags.map((f) => RECOUNT_FLAG_LABELS[f] ?? f).join(' | '),
   })), [filteredSummary])
 
+  const productExport = useMemo(() => filteredProducts.map((r) => ({
+    location: r.location_label,
+    product_id: r.product_id,
+    category: r.category,
+    on_hand: r.on_hand,
+    sold: r.sold,
+    adjusted: r.adjusted,
+    ending_value: r.ending_value,
+    batch_count: r.batch_count,
+  })), [filteredProducts])
+
   return (
     <div className="flex flex-col gap-3">
+      {/* View toggle */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-mono text-inky uppercase tracking-wide mr-1">View</span>
         <div className="flex rounded border border-navy/30 overflow-hidden">
@@ -187,6 +284,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
         </div>
       </div>
 
+      {/* Summary: allowable type filter */}
       {view === 'summary' && distinctTypes.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded border border-navy/30 bg-cream px-3 py-2">
           <span className="text-xs font-mono uppercase tracking-wide text-inky">Allowable types:</span>
@@ -203,6 +301,35 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
         </div>
       )}
 
+      {/* Product: zero on-hand filter banner */}
+      {view === 'product' && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-navy/20 bg-cream px-3 py-2">
+          <span className="text-xs font-mono text-inky">
+            {excludeZeroOH
+              ? <>0 on-hands excluded{zeroExcludedCount > 0 && <span className="text-orange-600"> · {zeroExcludedCount.toLocaleString()} hidden</span>}</>
+              : 'Showing all products'}
+          </span>
+          <button
+            onClick={() => setExcludeZeroOH(!excludeZeroOH)}
+            className="text-xs font-mono text-inky/60 hover:text-navy underline"
+          >
+            {excludeZeroOH ? 'show all' : 'hide zero on-hands'}
+          </button>
+          {excludeZeroOH && (
+            <>
+              <span className="text-navy/30 text-xs">·</span>
+              <span className="text-xs font-mono text-inky">include by category:</span>
+              <CategoryDropdown
+                categories={distinctCategories}
+                selected={includedZeroCats}
+                onChange={setIncludedZeroCats}
+              />
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Tables */}
       {view === 'summary' ? (
         <DataTable
           table={summaryTbl.table}
@@ -218,7 +345,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
           globalFilter={productTbl.globalFilter}
           onGlobalFilterChange={productTbl.setGlobalFilter}
           exportFilename="month_end_products.csv"
-          exportData={productRows}
+          exportData={productExport}
           loading={loading}
         />
       )}

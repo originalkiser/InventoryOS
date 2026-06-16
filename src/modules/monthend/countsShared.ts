@@ -24,6 +24,7 @@ export const SUMMARY_FIELDS: MapField[] = [
 export const PRODUCT_FIELDS: MapField[] = [
   { name: 'location', label: 'Location', required: true },
   { name: 'product_id', label: 'Product', required: true },
+  { name: 'category', label: 'Category' },
   { name: 'on_hand', label: 'On Hand', numeric: true },
   { name: 'sold', label: 'Sold', numeric: true },
   { name: 'adjusted', label: 'Adjusted', numeric: true },

@@ -13,6 +13,7 @@ export interface ParsedProductRow {
   location_id: string | null
   location_code: string | null // raw code from the file; resolved to location_id by caller
   product_id: string
+  category: string | null
   on_hand: number
   sold: number
   adjusted: number
@@ -60,6 +61,7 @@ export function parseProductRow(
     location_id: null,
     location_code: readString('location_code') || readString('location') || null,
     product_id: readString('product_id'),
+    category: readString('category') || null,
     on_hand: readNumber('on_hand'),
     sold: readNumber('sold'),
     adjusted: readNumber('adjusted'),

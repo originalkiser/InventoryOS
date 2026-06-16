@@ -64,6 +64,7 @@ export function ProductDetailUpload({
           count_month: countMonth,
           location_id: locId,
           product_id: p.product_id,
+          category: p.category || null,
           on_hand: p.on_hand,
           sold: p.sold,
           adjusted: p.adjusted,

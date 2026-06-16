@@ -3,13 +3,12 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
 import { computeMedian, evaluateRecountFlags } from '@/lib/recountEngine'
-import { aggregateProductBatches } from '@/lib/additiveProducts'
 import { locationLabel, monthlySummaryTarget } from './countsShared'
 import { CountSummaryUpload } from './CountSummaryUpload'
 import { ProductDetailUpload } from './ProductDetailUpload'
 import { CountsResultsTable, type SummaryResultRow, type ProductResultRow } from './CountsResultsTable'
 import type {
-  Location, MonthlyCount, MonthlyCountProduct, CountUploadBatch, RecountConfig, MonthlyEndingBalance,
+  Location, MonthlyCount, CountUploadBatch, RecountConfig, MonthlyEndingBalance,
 } from '@/types'
 import { format, subMonths } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -24,7 +23,7 @@ export function CountsTab() {
 
   const [locations, setLocations] = useState<Location[]>([])
   const [counts, setCounts] = useState<MonthlyCount[]>([])
-  const [products, setProducts] = useState<MonthlyCountProduct[]>([])
+  const [productRows, setProductRows] = useState<ProductResultRow[]>([])
   const [batches, setBatches] = useState<CountUploadBatch[]>([])
   const [balances, setBalances] = useState<MonthlyEndingBalance[]>([])
   const [userNames, setUserNames] = useState<Record<string, string>>({})
@@ -38,20 +37,36 @@ export function CountsTab() {
     const sb = supabase as any
     const lowerBound = format(subMonths(new Date(countMonth), lookbackN + 1), 'yyyy-MM-dd')
 
-    const [locRes, cfgRes, countRes, prodRes, batchRes, balRes, profRes] = await Promise.all([
+    const [locRes, cfgRes, countRes, aggProdRes, batchRes, balRes, profRes] = await Promise.all([
       sb.from('locations').select('*').eq('company_id', companyId).order('location_code'),
       sb.from('recount_config').select('*').eq('company_id', companyId).maybeSingle(),
       sb.from('monthly_counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
-      sb.from('monthly_count_products').select('*').eq('company_id', companyId).eq('count_month', countMonth),
+      // RPC does GROUP BY on the server — avoids shipping 256k+ raw rows to the client
+      sb.rpc('get_aggregated_monthly_products', { p_company_id: companyId, p_count_month: countMonth }),
       sb.from('count_upload_batches').select('*').eq('company_id', companyId).eq('module', 'monthly').eq('count_month', countMonth).order('created_at', { ascending: false }),
       sb.from('monthly_ending_balances').select('*').eq('company_id', companyId).gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
       sb.from('profiles').select('id, full_name').eq('company_id', companyId),
     ])
 
-    setLocations((locRes.data ?? []) as Location[])
+    const locs = (locRes.data ?? []) as Location[]
+    setLocations(locs)
     setRecountConfig((cfgRes.data ?? null) as RecountConfig | null)
     setCounts((countRes.data ?? []) as MonthlyCount[])
-    setProducts((prodRes.data ?? []) as MonthlyCountProduct[])
+    if (aggProdRes.error) {
+      toast.error('Product load failed — run the latest DB migration in Supabase')
+    }
+    setProductRows(
+      ((aggProdRes.data ?? []) as any[]).map((p) => ({
+        location_label: locationLabel(p.location_id, locs),
+        product_id: String(p.product_id ?? ''),
+        category: String(p.category ?? ''),
+        on_hand: Number(p.on_hand ?? 0),
+        sold: Number(p.sold ?? 0),
+        adjusted: Number(p.adjusted ?? 0),
+        ending_value: Number(p.ending_value ?? 0),
+        batch_count: Number(p.batch_count ?? 1),
+      }))
+    )
     setBatches((batchRes.data ?? []) as CountUploadBatch[])
     setBalances((balRes.data ?? []) as MonthlyEndingBalance[])
     const names: Record<string, string> = {}
@@ -121,16 +136,6 @@ export function CountsTab() {
     })
   })()
 
-  // ---- Derive aggregated product rows (additive across batches) ----
-  const productRows: ProductResultRow[] = aggregateProductBatches(products).map((p) => ({
-    location_label: locationLabel(p.location_id, locations),
-    product_id: p.product_id,
-    on_hand: p.on_hand,
-    sold: p.sold,
-    adjusted: p.adjusted,
-    ending_value: p.ending_value,
-    batch_count: p.batch_count,
-  }))
 
   if (!companyId) {
     return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
