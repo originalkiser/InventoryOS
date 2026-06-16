@@ -33,7 +33,7 @@ AS $$
     COUNT(*)::bigint                          AS batch_count
   FROM monthly_count_products
   WHERE company_id  = p_company_id
-    AND count_month = p_count_month
+    AND count_month = p_count_month::date
   GROUP BY location_id, product_id, NULLIF(TRIM(COALESCE(category, '')), '')
   ORDER BY product_id, location_id NULLS LAST;
 $$;
