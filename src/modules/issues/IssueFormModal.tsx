@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Modal, Button, Combobox, Input } from '@/components/ui'
+import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import type { Issue, Location, IssueCategory, IssueStatus } from '@/types'
+import type { Issue, Location, IssueCategory, IssueStatus, Profile } from '@/types'
 import type { ComboboxOption } from '@/components/ui'
 import toast from 'react-hot-toast'
 
@@ -18,6 +19,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   const [locations, setLocations] = useState<ComboboxOption[]>([])
   const [categories, setCategories] = useState<ComboboxOption[]>([])
   const [statuses, setStatuses] = useState<ComboboxOption[]>([])
+  const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
 
   const [title, setTitle] = useState(existing?.title ?? '')
   const [locationId, setLocationId] = useState(existing?.location_id ?? '')
@@ -27,6 +29,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   const [targetDate, setTargetDate] = useState(existing?.target_resolution_date ?? '')
   const [resolvedDate, setResolvedDate] = useState(existing?.resolved_date ?? '')
   const [vendor, setVendor] = useState(existing?.vendor ?? '')
+  const [assignee, setAssignee] = useState(existing?.assignee ?? '')
   const [notes, setNotes] = useState(existing?.resolution_notes ?? '')
   const [saving, setSaving] = useState(false)
 
@@ -48,18 +51,21 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
     setTargetDate(existing?.target_resolution_date ?? '')
     setResolvedDate(existing?.resolved_date ?? '')
     setVendor(existing?.vendor ?? '')
+    setAssignee(existing?.assignee ?? '')
     setNotes(existing?.resolution_notes ?? '')
   }, [existing])
 
   async function loadOptions() {
-    const [locs, cats, stats] = await Promise.all([
+    const [locs, cats, stats, profs] = await Promise.all([
       supabase.from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
       supabase.from('issue_categories').select('id, name').eq('company_id', companyId!),
       supabase.from('issue_statuses').select('id, name').eq('company_id', companyId!),
+      (supabase as any).from('profiles').select('id, full_name, email').eq('company_id', companyId!).order('full_name'),
     ])
     setLocations((locs.data ?? []).map((l: Location) => ({ value: l.id, label: l.name })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
+    setOrgProfiles((profs.data ?? []) as Profile[])
   }
 
   async function createCategory(name: string): Promise<ComboboxOption> {
@@ -105,6 +111,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
       target_resolution_date: targetDate || null,
       resolved_date: resolvedDate || null,
       vendor: vendor.trim() || null,
+      assignee: assignee.trim() || null,
       resolution_notes: notes || null,
     }
     // Only stamp the creator on insert — editing must not reassign it.
@@ -155,6 +162,13 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
 
         <Input label="Vendor" value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Vendor name" />
 
+        <AssigneeComboInput
+          label="Assignee"
+          value={assignee}
+          profiles={orgProfiles}
+          onChange={setAssignee}
+          placeholder="Unassigned"
+        />
 
         {isResolved && (
           <Input label="Resolved Date" type="date" value={resolvedDate}

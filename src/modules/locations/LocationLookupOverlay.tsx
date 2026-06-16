@@ -170,16 +170,16 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
         <span className="text-xs font-heading font-bold text-cream uppercase tracking-wide">Location Lookup</span>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
           <button onClick={() => setEditing((v) => !v)} title="Edit view"
-            className={['p-1 rounded transition-colors', editing ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>✎</button>
+            className={['p-1 rounded transition-colors', editing ? 'text-sky' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'].join(' ')}>✎</button>
           {!mobile && (
             <>
               <button onClick={() => onModeChange('floating')} title="Float on top"
-                className={['p-1 rounded text-sm transition-colors', mode === 'floating' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>⬛</button>
+                className={['p-1 rounded text-sm transition-colors', mode === 'floating' ? 'text-sky' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'].join(' ')}>⬛</button>
               <button onClick={() => onModeChange('docked')} title="Pin to right (push content)"
-                className={['p-1 rounded text-sm transition-colors', mode === 'docked' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>📌</button>
+                className={['p-1 rounded text-sm transition-colors', mode === 'docked' ? 'text-sky' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'].join(' ')}>📌</button>
             </>
           )}
-          <button onClick={onClose} className="p-1 text-inky/50 hover:text-cream transition-colors" title="Hide">✕</button>
+          <button onClick={onClose} className="p-1 text-[#F2F1E6]/50 hover:text-[#F2F1E6] transition-colors" title="Hide">✕</button>
         </div>
       </div>
 

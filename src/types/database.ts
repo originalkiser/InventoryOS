@@ -74,6 +74,7 @@ export interface Task {
   meeting_id: string | null
   project_id: string | null
   assignee_id: string | null
+  assignee_name: string | null
   is_public: boolean
   sort_order: number
   created_by: string | null
@@ -533,6 +534,7 @@ export interface Issue {
   resolved_date: string | null
   resolution_notes: string | null
   vendor: string | null
+  assignee: string | null
   created_by: string | null
   created_at: string
   updated_at: string

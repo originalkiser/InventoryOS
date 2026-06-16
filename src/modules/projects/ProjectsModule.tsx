@@ -12,7 +12,8 @@ import { Button, Badge } from '@/components/ui'
 import { useProjects } from '@/hooks/useProjects'
 import { useProjectColumns, type ColumnDef } from '@/hooks/useProjectColumns'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import type { Project, ProjectTask } from '@/types'
+import { supabase } from '@/lib/supabase'
+import type { Profile, Project, ProjectTask } from '@/types'
 
 type CellType = 'text' | 'date' | 'status' | 'datetime'
 
@@ -213,7 +214,33 @@ function HeaderCell({ col, left, sortDir, onSort, onTogglePin, onResize }: {
 }
 
 // ---------------------------------------------------------------------------
-function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, statusOptions, onAddStatus, subColWidths, onSubColResize }: {
+function AssigneeCell({ taskId, value, profiles, onSave }: {
+  taskId: string; value: string | null; profiles: Profile[]; onSave: (v: string) => void
+}) {
+  const [v, setV] = useState(value ?? '')
+  const listId = `assignee-${taskId}`
+  useEffect(() => { setV(value ?? '') }, [value])
+  return (
+    <>
+      <input
+        value={v}
+        list={listId}
+        placeholder="—"
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => { if ((value ?? '') !== v) onSave(v) }}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        className="w-full bg-transparent px-2 py-1 text-xs font-mono text-navy placeholder-inky/50 rounded border border-transparent hover:border-navy/30 focus:border-[#00e5ff] focus:bg-cream focus:outline-none"
+      />
+      <datalist id={listId}>
+        {profiles.map((p) => (
+          <option key={p.id} value={p.full_name ?? p.email ?? ''} />
+        ))}
+      </datalist>
+    </>
+  )
+}
+
+function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
   projectId: string
   tasks: ProjectTask[]
   onAdd: (projectId: string) => void
@@ -224,6 +251,7 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
   onAddStatus: (name: string) => void
   subColWidths: Record<string, number>
   onSubColResize: (key: string, w: number) => void
+  profiles: Profile[]
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
   function onDragEnd(e: DragEndEvent) {
@@ -251,7 +279,7 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
               <tbody>
-                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} />)}
+                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} profiles={profiles} />)}
                 {tasks.length === 0 && (
                   <tr><td colSpan={8} className="px-2 py-2 text-inky/70">No tasks yet.</td></tr>
                 )}
@@ -265,7 +293,7 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
   )
 }
 
-function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subColWidths }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void; statusOptions: string[]; onAddStatus: (name: string) => void; subColWidths: Record<string, number> }) {
+function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subColWidths, profiles }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void; statusOptions: string[]; onAddStatus: (name: string) => void; subColWidths: Record<string, number>; profiles: Profile[] }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
   function tdStyle(key: string): React.CSSProperties {
     const w = subColWidths[key] ?? SUBTASK_COL_DEFAULTS[key as keyof typeof SUBTASK_COL_DEFAULTS]
@@ -281,7 +309,7 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subC
       </td>
       <td style={tdStyle('task')}><EditableCell value={task.task_name} type="text" placeholder="Task name…" onSave={(v) => onUpdate(task.id, { task_name: v })} /></td>
       <td style={tdStyle('status')}><StatusPill value={task.status} onChange={(v) => onUpdate(task.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={onAddStatus} /></td>
-      <td style={tdStyle('assignee')}><EditableCell value={task.assignee} type="text" placeholder="—" onSave={(v) => onUpdate(task.id, { assignee: v })} /></td>
+      <td style={tdStyle('assignee')}><AssigneeCell taskId={task.id} value={task.assignee} profiles={profiles} onSave={(v) => onUpdate(task.id, { assignee: v || null })} /></td>
       <td style={tdStyle('due')}><EditableCell value={task.due_date} type="date" onSave={(v) => onUpdate(task.id, { due_date: v || null })} /></td>
       <td style={tdStyle('notes')}><ExpandableTextCell value={task.notes} placeholder="—" onSave={(v) => onUpdate(task.id, { notes: v || null })} /></td>
       <td style={{ width: 32, minWidth: 32 }} className="px-1 text-center"><button onClick={() => onDelete(task.id)} className="text-inky/70 hover:text-red-400">✕</button></td>
@@ -293,6 +321,13 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subC
 export function ProjectsModule() {
   const { projects, tasks, loading, companyId, addProject, updateProject, deleteProject, addTask, updateTask, deleteTask, reorderTasks } = useProjects()
   const { columns, setOrder, togglePin, toggleVisible, setWidth } = useProjectColumns(COLUMN_DEFS)
+
+  const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
+  useEffect(() => {
+    if (!companyId) return
+    ;(supabase as any).from('profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
+      .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
+  }, [companyId])
 
   const [subColWidths, setSubColWidthsState] = useState<Record<string, number>>(loadSubColWidths)
   function setSubColWidth(key: string, w: number) {
@@ -470,7 +505,7 @@ export function ProjectsModule() {
                       tasks={tasks.filter((t) => t.project_id === p.id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))}
                       onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks}
                       statusOptions={statusOptions} onAddStatus={addStatus}
-                      subColWidths={subColWidths} onSubColResize={setSubColWidth} />
+                      subColWidths={subColWidths} onSubColResize={setSubColWidth} profiles={orgProfiles} />
                   ))}
                 </GroupBlock>
               ))}
@@ -492,7 +527,7 @@ function GroupBlock({ label, count, totalCols, children }: { label: string | nul
   )
 }
 
-function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, statusOptions, onAddStatus, subColWidths, onSubColResize }: {
+function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
   project: Project
   ordered: { key: string; width: number; pinned: boolean }[]
   leftOffsets: Record<string, number>
@@ -507,6 +542,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
   onDeleteTask: (id: string) => void
   onReorderTask: (projectId: string, ordered: ProjectTask[]) => void
   statusOptions: string[]
+  profiles: Profile[]
   onAddStatus: (name: string) => void
   subColWidths: Record<string, number>
   onSubColResize: (key: string, w: number) => void
@@ -538,7 +574,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
         <tr>
           <td />
           <td colSpan={totalCols - 1} className="p-0">
-            <SubTasks projectId={project.id} tasks={tasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} onSubColResize={onSubColResize} />
+            <SubTasks projectId={project.id} tasks={tasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} onSubColResize={onSubColResize} profiles={profiles} />
           </td>
         </tr>
       )}

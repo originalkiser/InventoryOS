@@ -261,7 +261,22 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
               ) : source === 'live' ? (
                 <DataSourceLinker configType="orders" />
               ) : !parsed ? (
-                <FileUploadZone onParsed={(r) => setParsed(r)} />
+                <div className="flex flex-col gap-3">
+                  <div className="rounded border border-navy/20 bg-navy/5 px-4 py-3 flex flex-col gap-2">
+                    <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest">Expected columns in your file</p>
+                    <div className="grid grid-cols-2 gap-x-8 gap-y-1">
+                      {MAP_FIELDS.map((f) => (
+                        <div key={f.name} className="flex items-center gap-1.5 min-w-0">
+                          <span className={['text-[10px] font-mono flex-shrink-0 rounded px-1 py-0.5 leading-tight', f.required === true ? 'bg-navy/20 text-navy' : 'bg-inky/10 text-inky/50'].join(' ')}>
+                            {f.required === true ? 'REQ' : 'OPT'}
+                          </span>
+                          <span className="text-xs font-mono text-navy truncate">{f.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <FileUploadZone onParsed={(r) => setParsed(r)} />
+                </div>
               ) : (
                 <ColumnMapper headers={parsed.headers} requiredFields={MAP_FIELDS} rememberKey="orders.inventory" previewRows={parsed.rows.slice(0, 5)}
                   initialMappings={store.mapping.length ? store.mapping : undefined}

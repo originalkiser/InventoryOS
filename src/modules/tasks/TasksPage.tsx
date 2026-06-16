@@ -3,12 +3,12 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Badge, Button, Input, Modal } from '@/components/ui'
+import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
 import type { Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
 type SortKey = 'date' | 'source' | 'title'
-
 type TaskSource = 'project' | 'calendar' | 'meeting' | 'standalone'
 
 interface UnifiedTask {
@@ -21,9 +21,9 @@ interface UnifiedTask {
   source: TaskSource
   sourceLabel: string
   projectId?: string
-  // populated for standalone/meeting tasks only
   createdBy: string | null
   assigneeId: string | null
+  assigneeDisplay: string | null
   isPublic: boolean
 }
 
@@ -60,7 +60,9 @@ function sortTasks(tasks: UnifiedTask[], key: SortKey): UnifiedTask[] {
   })
 }
 
-const EMPTY_FORM = { title: '', notes: '', target_date: '', project_id: '', assignee_id: '', is_public: false }
+const EMPTY_FORM = {
+  title: '', notes: '', target_date: '', project_id: '', assignee_input: '', is_public: false,
+}
 
 export function TasksPage() {
   const { profile } = useAuthStore()
@@ -78,7 +80,8 @@ export function TasksPage() {
   const [showCompleted, setShowCompleted] = useAppSetting<boolean>('tasks.showCompleted', false)
 
   const [addOpen, setAddOpen] = useState(false)
-  const [editTask, setEditTask] = useState<Task | null>(null)
+  const [editTaskId, setEditTaskId] = useState<string | null>(null)
+  const [editSource, setEditSource] = useState<TaskSource | null>(null)
   const [form, setForm] = useState({ ...EMPTY_FORM })
   const [saving, setSaving] = useState(false)
 
@@ -112,7 +115,7 @@ export function TasksPage() {
   )
 
   const unified = useMemo<UnifiedTask[]>(() => {
-    const list: UnifiedTask[] = [
+    return [
       ...projectTasks.map((t) => ({
         key: `pt-${t.id}`,
         id: t.id,
@@ -125,6 +128,7 @@ export function TasksPage() {
         projectId: t.project_id,
         createdBy: null,
         assigneeId: null,
+        assigneeDisplay: t.assignee ?? null,
         isPublic: true,
       })),
       ...calendarTasks.map((t) => ({
@@ -138,6 +142,7 @@ export function TasksPage() {
         sourceLabel: 'Calendar',
         createdBy: null,
         assigneeId: null,
+        assigneeDisplay: null,
         isPublic: true,
       })),
       ...standaloneTasks.map((t) => ({
@@ -151,11 +156,11 @@ export function TasksPage() {
         sourceLabel: t.source === 'meeting' ? 'Meeting' : 'Task',
         createdBy: t.created_by,
         assigneeId: t.assignee_id,
+        assigneeDisplay: t.assignee_name ?? (t.assignee_id ? (profileById.get(t.assignee_id) ?? null) : null),
         isPublic: t.is_public,
       })),
     ]
-    return list
-  }, [projectTasks, calendarTasks, standaloneTasks, projectById])
+  }, [projectTasks, calendarTasks, standaloneTasks, projectById, profileById])
 
   const displayed = useMemo(() => {
     const filtered = showCompleted ? unified : unified.filter((t) => !t.completed)
@@ -170,8 +175,7 @@ export function TasksPage() {
     let error: { message: string } | null = null
     if (task.source === 'project') {
       ;({ error } = await sb.from('project_tasks').update({
-        done,
-        status: done ? 'Complete' : undefined,
+        done, status: done ? 'Complete' : undefined,
       }).eq('id', task.id))
     } else if (task.source === 'calendar') {
       ;({ error } = await sb.from('schedule_events').update({
@@ -198,47 +202,105 @@ export function TasksPage() {
   }
 
   function openAdd() {
-    setEditTask(null)
+    setEditTaskId(null)
+    setEditSource(null)
     setForm({ ...EMPTY_FORM })
     setAddOpen(true)
   }
 
-  function openEdit(task: Task) {
-    setEditTask(task)
-    setForm({
-      title: task.title,
-      notes: task.notes ?? '',
-      target_date: task.target_date ?? '',
-      project_id: task.project_id ?? '',
-      assignee_id: task.assignee_id ?? '',
-      is_public: task.is_public,
-    })
+  function openEdit(task: UnifiedTask) {
+    setEditTaskId(task.id)
+    setEditSource(task.source)
+
+    if (task.source === 'project') {
+      const pt = projectTasks.find((t) => t.id === task.id)
+      setForm({
+        title: pt?.task_name ?? task.title,
+        notes: pt?.notes ?? '',
+        target_date: pt?.due_date ?? '',
+        project_id: '',
+        assignee_input: pt?.assignee ?? '',
+        is_public: false,
+      })
+    } else if (task.source === 'calendar') {
+      const ct = calendarTasks.find((t) => t.id === task.id)
+      setForm({
+        title: ct?.title ?? task.title,
+        notes: ct?.notes ?? '',
+        target_date: ct?.start_date ?? '',
+        project_id: '',
+        assignee_input: '',
+        is_public: false,
+      })
+    } else {
+      const raw = standaloneTasks.find((t) => t.id === task.id)
+      if (!raw) return
+      const assigneeInput = raw.assignee_name
+        ?? (raw.assignee_id ? (profileById.get(raw.assignee_id) ?? '') : '')
+      setForm({
+        title: raw.title,
+        notes: raw.notes ?? '',
+        target_date: raw.target_date ?? '',
+        project_id: raw.project_id ?? '',
+        assignee_input: assigneeInput,
+        is_public: raw.is_public,
+      })
+    }
     setAddOpen(true)
   }
+
+  // For ownership check on standalone/meeting tasks
+  const editStandaloneTask = editTaskId && (editSource === 'standalone' || editSource === 'meeting' || editSource === null)
+    ? standaloneTasks.find((t) => t.id === editTaskId) ?? null
+    : null
+  const isEditOwner = !editStandaloneTask || editStandaloneTask.created_by === myId
+  const canDelete = !!editTaskId && (editSource === 'standalone' || editSource === 'meeting')
 
   async function onSave() {
     if (!companyId || !form.title.trim()) return
     setSaving(true)
-    const payload = {
-      company_id: companyId,
-      title: form.title.trim(),
-      notes: form.notes.trim() || null,
-      target_date: form.target_date || null,
-      project_id: form.project_id || null,
-      assignee_id: form.assignee_id || null,
-      is_public: form.is_public,
-      source: 'manual',
-      created_by: editTask ? undefined : myId,
-    }
     const sb = supabase as any
-    if (editTask) {
-      const { error } = await sb.from('tasks').update(payload).eq('id', editTask.id)
+
+    if (editSource === 'project' && editTaskId) {
+      const { error } = await sb.from('project_tasks').update({
+        task_name: form.title.trim(),
+        due_date: form.target_date || null,
+        notes: form.notes.trim() || null,
+        assignee: form.assignee_input.trim() || null,
+      }).eq('id', editTaskId)
+      if (error) { toast.error(error.message); setSaving(false); return }
+      toast.success('Task updated')
+    } else if (editSource === 'calendar' && editTaskId) {
+      const { error } = await sb.from('schedule_events').update({
+        title: form.title.trim(),
+        start_date: form.target_date || undefined,
+        notes: form.notes.trim() || null,
+      }).eq('id', editTaskId)
       if (error) { toast.error(error.message); setSaving(false); return }
       toast.success('Task updated')
     } else {
-      const { error } = await sb.from('tasks').insert({ ...payload, created_by: myId })
-      if (error) { toast.error(error.message); setSaving(false); return }
-      toast.success('Task added')
+      const matchedProfile = form.assignee_input.trim()
+        ? orgProfiles.find((p) => (p.full_name ?? p.email ?? '').toLowerCase() === form.assignee_input.trim().toLowerCase())
+        : undefined
+      const payload: Record<string, unknown> = {
+        company_id: companyId,
+        title: form.title.trim(),
+        notes: form.notes.trim() || null,
+        target_date: form.target_date || null,
+        project_id: form.project_id || null,
+        assignee_id: matchedProfile?.id ?? null,
+        assignee_name: matchedProfile ? null : (form.assignee_input.trim() || null),
+        is_public: form.is_public,
+      }
+      if (editTaskId) {
+        const { error } = await sb.from('tasks').update(payload).eq('id', editTaskId)
+        if (error) { toast.error(error.message); setSaving(false); return }
+        toast.success('Task updated')
+      } else {
+        const { error } = await sb.from('tasks').insert({ ...payload, source: 'manual', created_by: myId })
+        if (error) { toast.error(error.message); setSaving(false); return }
+        toast.success('Task added')
+      }
     }
     setSaving(false)
     setAddOpen(false)
@@ -246,8 +308,9 @@ export function TasksPage() {
   }
 
   async function onDelete() {
-    if (!editTask || !confirm('Delete this task?')) return
-    const { error } = await (supabase as any).from('tasks').delete().eq('id', editTask.id)
+    if (!canDelete || !editTaskId) return
+    if (!confirm('Delete this task?')) return
+    const { error } = await (supabase as any).from('tasks').delete().eq('id', editTaskId)
     if (error) { toast.error(error.message); return }
     toast.success('Task deleted')
     setAddOpen(false)
@@ -260,7 +323,10 @@ export function TasksPage() {
     { key: 'title', label: 'Title' },
   ]
 
-  const isEditOwner = !editTask || editTask.created_by === myId
+  const dateFieldLabel =
+    editSource === 'project' ? 'Due Date' :
+    editSource === 'calendar' ? 'Date' :
+    'Target Date'
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -314,10 +380,8 @@ export function TasksPage() {
         <ul className="flex flex-col divide-y divide-navy/10 rounded border border-navy/20 bg-cream">
           {displayed.map((task) => {
             const overdue = isOverdue(task.targetDate, task.completed)
-            const isEditable = task.source === 'standalone' || task.source === 'meeting'
-            const rawTask = standaloneTasks.find((t) => t.id === task.id)
             const isMine = task.createdBy === myId
-            const assigneeName = task.assigneeId ? profileById.get(task.assigneeId) : null
+            const isStandaloneOrMeeting = task.source === 'standalone' || task.source === 'meeting'
 
             return (
               <li key={task.key} className="flex items-center gap-3 px-4 py-3 hover:bg-navy/5 group">
@@ -336,10 +400,9 @@ export function TasksPage() {
                   )}
                 </div>
 
-                {/* Assignee */}
-                {assigneeName && (
+                {task.assigneeDisplay && (
                   <span className="text-[10px] font-mono text-inky/60 bg-navy/5 border border-navy/20 rounded px-1.5 py-0.5 flex-shrink-0">
-                    {assigneeName}
+                    {task.assigneeDisplay}
                   </span>
                 )}
 
@@ -348,7 +411,7 @@ export function TasksPage() {
                 </Badge>
 
                 {/* Visibility toggle — only for task creator on standalone/meeting tasks */}
-                {isEditable && isMine && (
+                {isStandaloneOrMeeting && isMine && (
                   <button
                     onClick={() => togglePublic(task)}
                     title={task.isPublic ? 'Visible to org — click to make private' : 'Private — click to share with org'}
@@ -375,25 +438,23 @@ export function TasksPage() {
                   <span className="text-xs font-mono text-inky/30 flex-shrink-0">No date</span>
                 )}
 
-                {isEditable && rawTask && (
-                  <button
-                    onClick={() => openEdit(rawTask)}
-                    className="text-xs font-mono text-inky/40 hover:text-navy opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                  >
-                    Edit
-                  </button>
-                )}
+                <button
+                  onClick={() => openEdit(task)}
+                  className="text-xs font-mono text-inky/40 hover:text-navy opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                >
+                  Edit
+                </button>
               </li>
             )
           })}
         </ul>
       )}
 
-      {/* Add / Edit standalone task modal */}
+      {/* Add / Edit task modal */}
       <Modal
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        title={editTask ? 'Edit Task' : 'Add Task'}
+        title={editTaskId ? 'Edit Task' : 'Add Task'}
         size="md"
       >
         <div className="flex flex-col gap-3">
@@ -404,36 +465,35 @@ export function TasksPage() {
             placeholder="What needs to be done?"
           />
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-mono text-inky uppercase tracking-wide">Assign to</label>
-            <select
-              value={form.assignee_id}
-              onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}
-              className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
-            >
-              <option value="">Unassigned</option>
-              {orgProfiles.map((p) => (
-                <option key={p.id} value={p.id}>{p.full_name ?? p.email}</option>
-              ))}
-            </select>
-          </div>
+          {/* Assignee — not shown for calendar tasks */}
+          {editSource !== 'calendar' && (
+            <AssigneeComboInput
+              label="Assign to"
+              value={form.assignee_input}
+              profiles={orgProfiles}
+              onChange={(name) => setForm({ ...form, assignee_input: name })}
+            />
+          )}
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-mono text-inky uppercase tracking-wide">Link to Project</label>
-            <select
-              value={form.project_id}
-              onChange={(e) => setForm({ ...form, project_id: e.target.value })}
-              className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
-            >
-              <option value="">No project</option>
-              {openProjects.map((p) => (
-                <option key={p.id} value={p.id}>{p.project_name}</option>
-              ))}
-            </select>
-          </div>
+          {/* Project link — only for new or standalone/meeting tasks */}
+          {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-mono text-inky uppercase tracking-wide">Link to Project</label>
+              <select
+                value={form.project_id}
+                onChange={(e) => setForm({ ...form, project_id: e.target.value })}
+                className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
+              >
+                <option value="">No project</option>
+                {openProjects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.project_name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <Input
-            label="Target Date"
+            label={dateFieldLabel}
             type="date"
             value={form.target_date}
             onChange={(e) => setForm({ ...form, target_date: e.target.value })}
@@ -450,8 +510,8 @@ export function TasksPage() {
             />
           </div>
 
-          {/* Visibility — only shown when editing your own task, or creating a new one */}
-          {isEditOwner && (
+          {/* Visibility — only for new/standalone/meeting tasks, creator only */}
+          {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && isEditOwner && (
             <label className="flex items-center gap-2 cursor-pointer pt-1">
               <input
                 type="checkbox"
@@ -465,11 +525,11 @@ export function TasksPage() {
           )}
 
           <div className="flex justify-between gap-2 pt-2">
-            <div>{editTask && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
+            <div>{canDelete && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" onClick={() => setAddOpen(false)}>Discard</Button>
               <Button size="sm" onClick={onSave} disabled={saving || !form.title.trim()}>
-                {saving ? 'Saving…' : editTask ? 'Save Changes' : 'Add Task'}
+                {saving ? 'Saving…' : editTaskId ? 'Save Changes' : 'Add Task'}
               </Button>
             </div>
           </div>
