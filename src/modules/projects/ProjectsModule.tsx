@@ -41,6 +41,47 @@ function colorForStatus(s: string): PillColor {
 }
 const CTRL_W = 64
 
+// Sub-task column widths — persisted independently of project columns.
+const SUBTASK_COL_DEFAULTS: Record<string, number> = {
+  task: 220, status: 120, assignee: 120, due: 110, notes: 200,
+}
+const SUBTASK_COLS = [
+  { key: 'task', label: 'Task' },
+  { key: 'status', label: 'Status' },
+  { key: 'assignee', label: 'Assignee' },
+  { key: 'due', label: 'Due' },
+  { key: 'notes', label: 'Notes' },
+] as const
+const SUBTASK_LS_KEY = 'projects.subtaskColWidths'
+
+function loadSubColWidths(): Record<string, number> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SUBTASK_LS_KEY) || 'null')
+    if (saved && typeof saved === 'object') return { ...SUBTASK_COL_DEFAULTS, ...saved }
+  } catch { /* ignore */ }
+  return SUBTASK_COL_DEFAULTS
+}
+
+function SubTaskHeaderCell({ colKey, label, width, onResize }: {
+  colKey: string; label: string; width: number; onResize: (key: string, w: number) => void
+}) {
+  function startResize(e: React.MouseEvent) {
+    e.preventDefault(); e.stopPropagation()
+    const startX = e.clientX, startW = width
+    const move = (ev: MouseEvent) => onResize(colKey, Math.max(60, startW + (ev.clientX - startX)))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  return (
+    <th style={{ width, minWidth: width, maxWidth: width }}
+      className="relative select-none px-2 py-1.5 text-left">
+      {label}
+      <span onMouseDown={startResize}
+        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-[#00e5ff]/40" />
+    </th>
+  )
+}
+
 // Wrapping, expand/collapse, click-to-edit text cell (Description / Notes).
 function ExpandableTextCell({ value, onSave, placeholder }: { value: string | null; onSave: (v: string) => void; placeholder?: string }) {
   const [editing, setEditing] = useState(false)
@@ -172,7 +213,7 @@ function HeaderCell({ col, left, sortDir, onSort, onTogglePin, onResize }: {
 }
 
 // ---------------------------------------------------------------------------
-function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, statusOptions, onAddStatus }: {
+function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, statusOptions, onAddStatus, subColWidths, onSubColResize }: {
   projectId: string
   tasks: ProjectTask[]
   onAdd: (projectId: string) => void
@@ -181,6 +222,8 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
   onReorder: (projectId: string, ordered: ProjectTask[]) => void
   statusOptions: string[]
   onAddStatus: (name: string) => void
+  subColWidths: Record<string, number>
+  onSubColResize: (key: string, w: number) => void
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
   function onDragEnd(e: DragEndEvent) {
@@ -191,24 +234,24 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
   }
   return (
     <div className="border-l-2 border-[#00e5ff]/30 bg-sky/10 pl-6 pr-3 py-3">
-      <div className="overflow-hidden rounded border border-navy/30">
-        <table className="w-full text-xs font-mono">
+      <div className="overflow-x-auto rounded border border-navy/30">
+        <table className="text-xs font-mono" style={{ tableLayout: 'fixed', minWidth: '100%' }}>
           <thead className="bg-[#002745] text-[#6A9AB2] uppercase tracking-wide">
             <tr>
-              <th className="w-8" />
-              <th className="w-8 px-2 py-1.5 text-left">✓</th>
-              <th className="px-2 py-1.5 text-left">Task</th>
-              <th className="w-32 px-2 py-1.5 text-left">Status</th>
-              <th className="w-32 px-2 py-1.5 text-left">Assignee</th>
-              <th className="w-32 px-2 py-1.5 text-left">Due</th>
-              <th className="px-2 py-1.5 text-left">Notes</th>
-              <th className="w-8" />
+              <th style={{ width: 28, minWidth: 28 }} />
+              <th style={{ width: 32, minWidth: 32 }} className="px-2 py-1.5 text-left">✓</th>
+              {SUBTASK_COLS.map((c) => (
+                <SubTaskHeaderCell key={c.key} colKey={c.key} label={c.label}
+                  width={subColWidths[c.key] ?? SUBTASK_COL_DEFAULTS[c.key]}
+                  onResize={onSubColResize} />
+              ))}
+              <th style={{ width: 32, minWidth: 32 }} />
             </tr>
           </thead>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
               <tbody>
-                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} />)}
+                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} />)}
                 {tasks.length === 0 && (
                   <tr><td colSpan={8} className="px-2 py-2 text-inky/70">No tasks yet.</td></tr>
                 )}
@@ -222,22 +265,26 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
   )
 }
 
-function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void; statusOptions: string[]; onAddStatus: (name: string) => void }) {
+function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subColWidths }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void; statusOptions: string[]; onAddStatus: (name: string) => void; subColWidths: Record<string, number> }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
+  function tdStyle(key: string): React.CSSProperties {
+    const w = subColWidths[key] ?? SUBTASK_COL_DEFAULTS[key as keyof typeof SUBTASK_COL_DEFAULTS]
+    return { width: w, minWidth: w, maxWidth: w, overflow: 'hidden' }
+  }
   return (
     <tr ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
       className={['border-t border-navy/30/50', isDragging ? 'opacity-60' : ''].join(' ')}>
-      <td {...attributes} {...listeners} className="cursor-grab px-1 text-center text-inky/70">⋮⋮</td>
-      <td className="px-2 text-center">
+      <td {...attributes} {...listeners} style={{ width: 28, minWidth: 28 }} className="cursor-grab px-1 text-center text-inky/70">⋮⋮</td>
+      <td style={{ width: 32, minWidth: 32 }} className="px-2 text-center">
         <input type="checkbox" checked={task.done} className="accent-inky"
           onChange={(e) => onUpdate(task.id, { done: e.target.checked, status: e.target.checked ? 'Complete' : task.status })} />
       </td>
-      <td><EditableCell value={task.task_name} type="text" placeholder="Task name…" onSave={(v) => onUpdate(task.id, { task_name: v })} /></td>
-      <td><StatusPill value={task.status} onChange={(v) => onUpdate(task.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={onAddStatus} /></td>
-      <td><EditableCell value={task.assignee} type="text" placeholder="—" onSave={(v) => onUpdate(task.id, { assignee: v })} /></td>
-      <td><EditableCell value={task.due_date} type="date" onSave={(v) => onUpdate(task.id, { due_date: v || null })} /></td>
-      <td className="min-w-[160px]"><ExpandableTextCell value={task.notes} placeholder="—" onSave={(v) => onUpdate(task.id, { notes: v || null })} /></td>
-      <td className="px-1 text-center"><button onClick={() => onDelete(task.id)} className="text-inky/70 hover:text-red-400">✕</button></td>
+      <td style={tdStyle('task')}><EditableCell value={task.task_name} type="text" placeholder="Task name…" onSave={(v) => onUpdate(task.id, { task_name: v })} /></td>
+      <td style={tdStyle('status')}><StatusPill value={task.status} onChange={(v) => onUpdate(task.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={onAddStatus} /></td>
+      <td style={tdStyle('assignee')}><EditableCell value={task.assignee} type="text" placeholder="—" onSave={(v) => onUpdate(task.id, { assignee: v })} /></td>
+      <td style={tdStyle('due')}><EditableCell value={task.due_date} type="date" onSave={(v) => onUpdate(task.id, { due_date: v || null })} /></td>
+      <td style={tdStyle('notes')}><ExpandableTextCell value={task.notes} placeholder="—" onSave={(v) => onUpdate(task.id, { notes: v || null })} /></td>
+      <td style={{ width: 32, minWidth: 32 }} className="px-1 text-center"><button onClick={() => onDelete(task.id)} className="text-inky/70 hover:text-red-400">✕</button></td>
     </tr>
   )
 }
@@ -246,6 +293,15 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus }: { 
 export function ProjectsModule() {
   const { projects, tasks, loading, companyId, addProject, updateProject, deleteProject, addTask, updateTask, deleteTask, reorderTasks } = useProjects()
   const { columns, setOrder, togglePin, toggleVisible, setWidth } = useProjectColumns(COLUMN_DEFS)
+
+  const [subColWidths, setSubColWidthsState] = useState<Record<string, number>>(loadSubColWidths)
+  function setSubColWidth(key: string, w: number) {
+    setSubColWidthsState((prev) => {
+      const next = { ...prev, [key]: Math.max(60, w) }
+      localStorage.setItem(SUBTASK_LS_KEY, JSON.stringify(next))
+      return next
+    })
+  }
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
@@ -413,7 +469,8 @@ export function ProjectsModule() {
                       renderCell={renderCell} onDelete={() => deleteProject(p.id)}
                       tasks={tasks.filter((t) => t.project_id === p.id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))}
                       onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks}
-                      statusOptions={statusOptions} onAddStatus={addStatus} />
+                      statusOptions={statusOptions} onAddStatus={addStatus}
+                      subColWidths={subColWidths} onSubColResize={setSubColWidth} />
                   ))}
                 </GroupBlock>
               ))}
@@ -435,7 +492,7 @@ function GroupBlock({ label, count, totalCols, children }: { label: string | nul
   )
 }
 
-function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, statusOptions, onAddStatus }: {
+function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, statusOptions, onAddStatus, subColWidths, onSubColResize }: {
   project: Project
   ordered: { key: string; width: number; pinned: boolean }[]
   leftOffsets: Record<string, number>
@@ -451,6 +508,8 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
   onReorderTask: (projectId: string, ordered: ProjectTask[]) => void
   statusOptions: string[]
   onAddStatus: (name: string) => void
+  subColWidths: Record<string, number>
+  onSubColResize: (key: string, w: number) => void
 }) {
   const taskCount = tasks.length
   const doneCount = tasks.filter((t) => t.done).length
@@ -479,7 +538,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
         <tr>
           <td />
           <td colSpan={totalCols - 1} className="p-0">
-            <SubTasks projectId={project.id} tasks={tasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} statusOptions={statusOptions} onAddStatus={onAddStatus} />
+            <SubTasks projectId={project.id} tasks={tasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} onSubColResize={onSubColResize} />
           </td>
         </tr>
       )}
