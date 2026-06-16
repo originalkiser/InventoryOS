@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { DataTable } from '@/components/shared/DataTable'
@@ -32,8 +32,8 @@ export function UomMappingsTab() {
   const COLUMNS = [
     col.accessor('from_unit', { header: 'From (on-hand)' }),
     col.accessor('to_unit', { header: 'To (order)' }),
-    col.accessor('factor', { header: 'Factor', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
+    col.accessor('factor', { header: 'Factor', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as UomMapping)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
   const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
@@ -78,7 +78,7 @@ export function UomMappingsTab() {
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Unit-of-Measure Conversions</h2>
-        <p className="text-xs text-inky mt-0.5">Factor to convert an on-hand unit into an order unit. E.g. EA → CS factor 0.0833 means 12 each = 1 case. Set a product&apos;s order unit on Global Products.</p>
+        <p className="text-xs text-inky mt-0.5">Factor to convert an on-hand unit into an order unit. E.g. EA â†’ CS factor 0.0833 means 12 each = 1 case. Set a product&apos;s order unit on Global Products.</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
@@ -86,7 +86,7 @@ export function UomMappingsTab() {
         actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>}
       />
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
           <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />

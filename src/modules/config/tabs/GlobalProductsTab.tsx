@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { DataTable } from '@/components/shared/DataTable'
@@ -35,12 +35,12 @@ export function GlobalProductsTab() {
 
   const COLUMNS = [
     col.accessor('product_id', { header: 'Product ID' }),
-    col.accessor('unit_of_measure', { header: 'On-Hand UoM', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('order_uom', { header: 'Order UoM', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
+    col.accessor('unit_of_measure', { header: 'On-Hand UoM', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('order_uom', { header: 'Order UoM', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as GlobalProduct)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
   const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)
@@ -90,7 +90,7 @@ export function GlobalProductsTab() {
         exportFilename="global_products.csv" exportData={data} loading={loading}
         actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Product</Button></>}
       />
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
           <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />

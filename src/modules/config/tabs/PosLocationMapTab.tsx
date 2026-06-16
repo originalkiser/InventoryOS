@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+﻿import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
@@ -30,7 +30,7 @@ export function PosLocationMapTab() {
 
   const columns = useMemo(() => [
     col.accessor('pos_string', { header: 'POS String' }),
-    { id: 'parsed', header: 'Parsed #', accessorFn: (r: PosLocationMap) => applyTransforms(r.pos_string, [{ kind: 'pos_location' }]), cell: (i: any) => i.getValue() || '—' },
+    { id: 'parsed', header: 'Parsed #', accessorFn: (r: PosLocationMap) => applyTransforms(r.pos_string, [{ kind: 'pos_location' }]), cell: (i: any) => i.getValue() || 'â€”' },
     { id: 'location', header: 'Location Code', accessorFn: (r: PosLocationMap) => r.location_id, cell: (i: any) => (i.getValue() ? <span className="text-inky">{loc.codeOf(i.getValue())}</span> : <Badge color="amber">Unmatched</Badge>) },
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
@@ -50,7 +50,7 @@ export function PosLocationMapTab() {
         else if (m.fieldName === 'location_code') code = v
         else if (m.fieldName === 'location') location_id = loc.resolveId(v)
       }
-      // Priority: explicit location_code (force match) → location → parsed leading number.
+      // Priority: explicit location_code (force match) â†’ location â†’ parsed leading number.
       if (!location_id && code) location_id = loc.resolveId(code)
       if (!location_id && pos_string) location_id = loc.resolveId(applyTransforms(pos_string, [{ kind: 'pos_location' }]))
       return { pos_string, location_id } as Partial<PosLocationMap>
@@ -78,14 +78,14 @@ export function PosLocationMapTab() {
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="text-sm font-bold text-navy uppercase tracking-wide">POS Location Mapping</h2>
-        <p className="text-xs text-inky mt-0.5">Map POS strings like &quot;1 - Thomasville&quot; to internal locations. Imports auto-match on the leading number; {unmatched > 0 ? <span className="text-orange-600">{unmatched} unmatched — map them below.</span> : 'all mapped.'}</p>
+        <p className="text-xs text-inky mt-0.5">Map POS strings like &quot;1 - Thomasville&quot; to internal locations. Imports auto-match on the leading number; {unmatched > 0 ? <span className="text-orange-600">{unmatched} unmatched â€” map them below.</span> : 'all mapped.'}</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="pos_location_map.csv" exportData={data} loading={loading}
         actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>} />
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
           <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />

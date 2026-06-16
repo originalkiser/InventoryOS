@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -112,9 +111,46 @@ const NAV_ITEMS = [
 interface SidebarProps {
   collapsed: boolean
   onToggleCollapsed: () => void
+  mobile: boolean
+  mobileOpen: boolean
+  onMobileClose: () => void
 }
 
-export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
+function NavContent({ showLabels, onNavClick }: { showLabels: boolean; onNavClick?: () => void }) {
+  const { profile } = useAuthStore()
+  const linkClass = ({ isActive }: { isActive: boolean }) =>
+    [
+      'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-heading transition-all duration-150',
+      isActive
+        ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
+        : 'text-inky hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+    ].join(' ')
+
+  return (
+    <nav className="flex-1 py-3 flex flex-col gap-0.5 overflow-y-auto">
+      {NAV_ITEMS.map((item) => (
+        <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavClick}>
+          <span className="flex-shrink-0">{item.icon}</span>
+          {showLabels && <span className="truncate">{item.label}</span>}
+        </NavLink>
+      ))}
+
+      {profile?.role === 'admin' && (
+        <NavLink to="/admin/users" className={linkClass} onClick={onNavClick}>
+          <span className="flex-shrink-0">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </span>
+          {showLabels && <span className="truncate">Users</span>}
+        </NavLink>
+      )}
+    </nav>
+  )
+}
+
+function SidebarFooter({ collapsed }: { collapsed: boolean }) {
   const { profile } = useAuthStore()
 
   async function handleSignOut() {
@@ -122,17 +158,80 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   }
 
   return (
+    <div className="border-t border-navy/40 p-3">
+      {!collapsed && profile && (
+        <div className="text-xs text-[#F2F1E6]/60 font-body truncate mb-2">
+          {profile.full_name ?? profile.email}
+        </div>
+      )}
+      <button
+        onClick={handleSignOut}
+        title="Sign out"
+        className="flex items-center gap-2 text-inky hover:text-[#C0392B] transition-colors text-xs font-body"
+      >
+        <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        </svg>
+        {!collapsed && 'Sign out'}
+      </button>
+      <div className="mt-3 flex justify-center">
+        <img
+          src={collapsed ? sbIcon : sbLogo}
+          alt="Strickland Brothers"
+          className={collapsed ? 'w-8 opacity-80' : 'w-full max-w-[120px] opacity-70'}
+        />
+      </div>
+    </div>
+  )
+}
+
+export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMobileClose }: SidebarProps) {
+  // Mobile: render as a fixed overlay drawer, or nothing when closed
+  if (mobile) {
+    if (!mobileOpen) return null
+    return (
+      <>
+        {/* Backdrop */}
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+        {/* Drawer */}
+        <aside className="fixed left-0 top-0 bottom-0 z-50 w-64 flex flex-col bg-[#002745] shadow-2xl">
+          <div className="flex items-center justify-between px-3 h-12 border-b border-white/10">
+            <img src={sbLogo} alt="Strickland Brothers" className="h-5 opacity-80" />
+            <button
+              onClick={onMobileClose}
+              className="text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-colors p-1"
+              aria-label="Close menu"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <NavContent showLabels onNavClick={onMobileClose} />
+          <SidebarFooter collapsed={false} />
+        </aside>
+      </>
+    )
+  }
+
+  // Desktop: in-flow sidebar, collapsible
+  return (
     <aside
       className={[
         'flex flex-col h-full bg-[#002745] border-r border-[#002745]/40 transition-all duration-200',
         collapsed ? 'w-14' : 'w-60',
       ].join(' ')}
     >
-      {/* Logo */}
       <div className="flex items-center justify-between px-3 h-12 border-b border-[#002745]/40">
         <button
           onClick={onToggleCollapsed}
           className="ml-auto text-inky hover:text-[#F2F1E6] transition-colors"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             {collapsed ? (
@@ -143,79 +242,8 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
           </svg>
         </button>
       </div>
-
-      {/* Nav */}
-      <nav className="flex-1 py-3 flex flex-col gap-0.5 overflow-y-auto">
-        {NAV_ITEMS.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              [
-                'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-heading transition-all duration-150',
-                isActive
-                  ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-                  : 'text-inky hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
-              ].join(' ')
-            }
-          >
-            <span className="flex-shrink-0">{item.icon}</span>
-            {!collapsed && <span className="truncate">{item.label}</span>}
-          </NavLink>
-        ))}
-
-        {/* Admin: Users — only visible to admins */}
-        {profile?.role === 'admin' && (
-          <NavLink
-            to="/admin/users"
-            className={({ isActive }) =>
-              [
-                'flex items-center gap-3 px-3 py-2.5 mx-1 rounded text-sm font-heading transition-all duration-150',
-                isActive
-                  ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-                  : 'text-inky hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
-              ].join(' ')
-            }
-          >
-            <span className="flex-shrink-0">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </span>
-            {!collapsed && <span className="truncate">Users</span>}
-          </NavLink>
-        )}
-      </nav>
-
-      {/* Footer */}
-      <div className="border-t border-navy/40 p-3">
-        {!collapsed && profile && (
-          <div className="text-xs text-[#F2F1E6]/60 font-body truncate mb-2">
-            {profile.full_name ?? profile.email}
-          </div>
-        )}
-        <button
-          onClick={handleSignOut}
-          title="Sign out"
-          className="flex items-center gap-2 text-inky hover:text-[#C0392B] transition-colors text-xs font-body"
-        >
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
-          {!collapsed && 'Sign out'}
-        </button>
-
-        {/* SB Logo mark */}
-        <div className="mt-3 flex justify-center">
-          <img
-            src={collapsed ? sbIcon : sbLogo}
-            alt="Strickland Brothers"
-            className={collapsed ? 'w-8 opacity-80' : 'w-full max-w-[120px] opacity-70'}
-          />
-        </div>
-      </div>
+      <NavContent showLabels={!collapsed} />
+      <SidebarFooter collapsed={collapsed} />
     </aside>
   )
 }

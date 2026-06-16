@@ -35,12 +35,12 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
       />
       <div
         className={[
-          'relative w-full mx-4 bg-cream border border-navy rounded-xl shadow-2xl',
+          'relative w-full mx-2 sm:mx-4 max-h-[90vh] flex flex-col bg-cream border border-navy rounded-xl shadow-2xl',
           sizeClasses[size],
         ].join(' ')}
       >
         {title && (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-navy/20">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-navy/20 flex-shrink-0">
             <h2 className="text-sm font-heading font-bold text-navy tracking-wide uppercase">
               {title}
             </h2>
@@ -54,7 +54,7 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
             </button>
           </div>
         )}
-        <div className="px-6 py-4">{children}</div>
+        <div className="px-4 sm:px-6 py-4 overflow-y-auto">{children}</div>
       </div>
     </div>
   )

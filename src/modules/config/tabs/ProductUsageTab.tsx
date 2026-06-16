@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { type ImportMode } from '../useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
@@ -32,7 +32,7 @@ export function daysOfSupply(onHands: number | null, dailyUsage: number | null):
 }
 
 function dosDisplay(d: number | null, onHands: number | null): string {
-  if (d == null) return onHands != null && onHands > 0 ? '∞' : '—'
+  if (d == null) return onHands != null && onHands > 0 ? 'âˆž' : 'â€”'
   return d.toFixed(1)
 }
 
@@ -86,7 +86,7 @@ function CategoryDropdown({
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1 rounded border border-navy/30 px-2 py-0.5 text-xs font-mono text-navy hover:border-navy"
       >
-        {label} <span className="text-inky/50 ml-0.5">▾</span>
+        {label} <span className="text-inky/50 ml-0.5">â–¾</span>
       </button>
       {open && (
         <>
@@ -100,7 +100,7 @@ function CategoryDropdown({
                   onClick={() => onChange(allSelected ? [] : [...categories])}
                   className="w-full px-3 py-1.5 text-left text-xs font-body text-inky hover:bg-navy/5"
                 >
-                  {allSelected ? '✓ All selected' : 'Select all'}
+                  {allSelected ? 'âœ“ All selected' : 'Select all'}
                 </button>
                 <div className="border-t border-navy/10 mt-1 pt-1">
                   {categories.map((cat) => (
@@ -163,7 +163,7 @@ export function ProductUsageTab() {
     const { data: rows, error } = await (supabase as any).rpc('get_product_usage', {
       p_company_id: profile.company_id,
     })
-    if (error) toast.error('Product usage load failed — run the latest DB migration')
+    if (error) toast.error('Product usage load failed â€” run the latest DB migration')
     else setData((rows ?? []) as ProductUsage[])
     setLoading(false)
   }, [profile?.company_id])
@@ -182,11 +182,11 @@ export function ProductUsageTab() {
   const columns = useMemo(() => [
     { id: 'location', header: 'Location', accessorFn: (r: ProductUsage) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
     col.accessor('product_id', { header: 'Product ID' }),
-    col.accessor('category', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('daily_usage', { header: 'Daily Usage', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('on_hands', { header: 'On Hands', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('category', { header: 'Category', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('daily_usage', { header: 'Daily Usage', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('on_hands', { header: 'On Hands', cell: (i) => i.getValue() ?? 'â€”' }),
     col.accessor('days_of_supply', { header: 'Days of Supply', cell: (i) => { const r = i.row.original as ProductUsage; return dosDisplay(i.getValue(), r.on_hands) } }),
-    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductUsage)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -307,7 +307,7 @@ export function ProductUsageTab() {
       <div className="flex flex-wrap items-center gap-2 rounded border border-navy/20 bg-cream px-3 py-2">
         <span className="text-xs font-mono text-inky">
           {excludeZeroOH
-            ? <>0 on-hands excluded{zeroExcludedCount > 0 && <span className="text-orange-600"> · {zeroExcludedCount.toLocaleString()} hidden</span>}</>
+            ? <>0 on-hands excluded{zeroExcludedCount > 0 && <span className="text-orange-600"> Â· {zeroExcludedCount.toLocaleString()} hidden</span>}</>
             : 'Showing all products'}
         </span>
         <button
@@ -318,7 +318,7 @@ export function ProductUsageTab() {
         </button>
         {excludeZeroOH && (
           <>
-            <span className="text-navy/30 text-xs">·</span>
+            <span className="text-navy/30 text-xs">Â·</span>
             <span className="text-xs font-mono text-inky">include by category:</span>
             <CategoryDropdown
               categories={distinctCategories}
@@ -346,7 +346,7 @@ export function ProductUsageTab() {
         </>}
       />
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
           <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />

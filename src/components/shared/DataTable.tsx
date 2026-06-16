@@ -30,7 +30,7 @@ export function DataTable<T>({
           placeholder="Search..."
           value={globalFilter}
           onChange={(e) => onGlobalFilterChange(e.target.value)}
-          className="w-52"
+          className="w-full sm:w-52"
         />
         {/* Column visibility */}
         <div className="relative group">

@@ -15,7 +15,12 @@ interface TopBarStats {
   activeShops: number
 }
 
-export function TopBar() {
+interface TopBarProps {
+  mobile: boolean
+  onMobileMenuOpen: () => void
+}
+
+export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   const navigate = useNavigate()
   const { profile } = useAuthStore()
   const { dark, toggle: toggleDark } = useDarkMode()
@@ -131,18 +136,22 @@ export function TopBar() {
   }
 
   function formatCurrency(v: number) {
+    if (mobile) {
+      if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`
+      if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`
+    }
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v)
   }
 
   const pills = [
     {
-      label: 'Pending Issues',
+      label: 'Issues',
       value: stats.pendingIssues,
       highlight: stats.pendingIssues > 0,
       onClick: () => navigate('/issues?tab=pending'),
     },
     {
-      label: "Today's Checklist",
+      label: 'Checklist',
       value: stats.todayChecklists,
       highlight: stats.todayChecklists > 0,
       onClick: () => setChecklistOpen((v) => !v),
@@ -154,13 +163,13 @@ export function TopBar() {
       onClick: () => navigate('/schedule'),
     },
     {
-      label: 'Last Ending Value',
+      label: 'Ending',
       value: stats.lastEndingValue !== null ? formatCurrency(stats.lastEndingValue) : '—',
       highlight: false,
       onClick: () => navigate('/config'),
     },
     {
-      label: 'Active Shops',
+      label: 'Shops',
       value: stats.activeShops,
       highlight: false,
       onClick: () => navigate('/config'),
@@ -168,23 +177,40 @@ export function TopBar() {
   ]
 
   return (
-    <header className="relative h-12 bg-[#002745] border-b border-[#002745]/40 flex items-center px-4 gap-4 flex-shrink-0">
-      {/* Wordmark */}
-      <span className="font-heading font-bold text-[#F2F1E6] text-sm tracking-widest uppercase whitespace-nowrap">
-        Strickland Brothers
-      </span>
+    <header className="relative h-12 bg-[#002745] border-b border-[#002745]/40 flex items-center px-3 gap-2 flex-shrink-0">
+      {/* Mobile hamburger */}
+      {mobile ? (
+        <button
+          onClick={onMobileMenuOpen}
+          className="flex-shrink-0 w-8 h-8 flex items-center justify-center text-[#F2F1E6]/70 hover:text-[#F2F1E6] transition-colors"
+          aria-label="Open navigation"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      ) : (
+        <>
+          <span className="font-heading font-bold text-[#F2F1E6] text-sm tracking-widest uppercase whitespace-nowrap">
+            Strickland Brothers
+          </span>
+          <div className="w-px h-5 bg-inky/40 flex-shrink-0" />
+        </>
+      )}
 
-      <div className="w-px h-5 bg-inky/40 flex-shrink-0" />
-
-      {/* Stat pills */}
-      <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+      {/* Stat pills — scrollable on mobile, wrapping on desktop */}
+      <div className={[
+        'flex items-center gap-1.5 flex-1 min-w-0',
+        mobile ? 'overflow-x-auto' : 'gap-2 flex-wrap',
+      ].join(' ')}>
         {pills.map((pill) => (
           <button
             key={pill.label}
             onClick={pill.onClick}
-            className="flex items-center gap-1.5 px-3 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all"
+            title={pill.label}
+            className="flex items-center gap-1 px-2 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all flex-shrink-0 whitespace-nowrap"
           >
-            <span className="text-[#F2F1E6]/60">{pill.label}:</span>
+            {!mobile && <span className="text-[#F2F1E6]/60">{pill.label}:</span>}
             <span className={['font-medium', pill.highlight ? 'text-sky' : 'text-[#F2F1E6]'].join(' ')}>
               {pill.value}
             </span>
@@ -196,12 +222,12 @@ export function TopBar() {
       <button
         onClick={() => setEndDayOpen(true)}
         title="End of day check-in"
-        className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 text-[10px] font-heading uppercase tracking-wide transition-all"
+        className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 text-[10px] font-heading uppercase tracking-wide transition-all"
       >
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
         </svg>
-        End Day
+        {!mobile && 'End Day'}
       </button>
 
       {/* Dark mode toggle */}
@@ -223,7 +249,7 @@ export function TopBar() {
 
       {/* Checklist popover */}
       {checklistOpen && (
-        <div className="absolute top-full right-4 mt-2 w-72 bg-cream border border-navy/40 rounded-lg shadow-xl z-30">
+        <div className="absolute top-full right-3 mt-2 w-72 max-w-[calc(100vw-1.5rem)] bg-cream border border-navy/40 rounded-lg shadow-xl z-30">
           <div className="px-4 py-3 border-b border-navy/20 flex items-center justify-between">
             <span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">
               Today's Checklist

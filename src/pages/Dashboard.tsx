@@ -175,7 +175,7 @@ export function DashboardPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card onClick={() => navigate('/config')} className="p-4 hover:border-navy cursor-pointer">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Active Shops</div>
           <div className="text-2xl font-heading font-bold text-navy">{stats.activeShops}</div>
@@ -225,9 +225,9 @@ export function DashboardPage() {
         </CardBody>
       </Card>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         {/* Inventory days-of-supply */}
-        <Card className="col-span-2">
+        <Card className="col-span-1 sm:col-span-2">
           <CardHeader className="flex items-center justify-between">
             <span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">Inventory · Days of Supply</span>
             <TileToggle view={invView} onChange={setInvView} />
