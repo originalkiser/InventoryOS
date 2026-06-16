@@ -162,12 +162,12 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
 
   return (
     <div ref={panelRef} style={panelStyle}
-      className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:border-[#C4DAE6]/20 shadow-2xl">
+      className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:bg-[#0e2638] dark:border-[#C4DAE6]/20 shadow-2xl">
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
       {/* header */}
-      <div onMouseDown={startMove} className={['flex items-center justify-between bg-[#002745] border-b border-[#002745]/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
-        <span className="text-xs font-heading font-bold text-cream uppercase tracking-wide">Location Lookup</span>
+      <div onMouseDown={startMove} className={['flex items-center justify-between bg-[#1a5c87] border-b border-[#1a5c87]/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
+        <span className="text-xs font-heading font-bold text-[#F2F1E6] uppercase tracking-wide">Location Lookup</span>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
           <button onClick={() => setEditing((v) => !v)} title="Edit view"
             className={['p-1 rounded transition-colors', editing ? 'text-sky' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'].join(' ')}>✎</button>
@@ -188,7 +188,7 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
         <div className="flex items-center gap-2 border-b border-navy/10 p-2">
           {view.showSearch && (
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search tables…"
-              className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none" />
+              className="flex-1 rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none" />
           )}
           {activeFilter && (
             <button onClick={() => setActiveFilter(null)} className="inline-flex items-center gap-1 rounded border border-inky/30 bg-inky/10 px-2 py-1 text-xs font-body text-inky hover:border-navy">
@@ -242,7 +242,7 @@ function AddBlockMenu({ onAdd }: { onAdd: (t: 'pills' | 'table') => void }) {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full z-50 mb-1 w-36 rounded border border-navy/40 bg-cream py-1 shadow-xl">
+          <div className="absolute bottom-full z-50 mb-1 w-36 rounded border border-navy/40 bg-cream dark:bg-[#0e2638] py-1 shadow-xl">
             <button onClick={() => { onAdd('pills'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-body text-navy hover:bg-navy/5">Pill Group</button>
             <button onClick={() => { onAdd('table'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-body text-navy hover:bg-navy/5">Mini Table</button>
           </div>
@@ -256,7 +256,7 @@ function BlockWrap({ id, editing, onConfig, onRemove, children }: { id: string; 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={['rounded border border-navy/20 bg-cream/60 p-2', isDragging ? 'opacity-60' : ''].join(' ')}>
+      className={['rounded border border-navy/20 bg-cream/60 dark:bg-[#0a2035]/60 p-2', isDragging ? 'opacity-60' : ''].join(' ')}>
       {editing && (
         <div className="mb-1 flex items-center justify-end gap-1 text-inky/50">
           <span {...attributes} {...listeners} className="mr-auto cursor-grab" title="Drag to reorder">⋮⋮</span>
@@ -300,7 +300,7 @@ function PillsBlock({ block, editing, onChange, onFilter }: {
     return () => { cancelled = true }
   }, [block.pills, companyId])
 
-  const inputCls = 'rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
+  const inputCls = 'rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
 
   return (
     <div className="flex flex-col gap-2">
@@ -356,13 +356,13 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
     return () => { cancelled = true }
   }, [source, column, profile?.company_id])
 
-  const selectCls = 'rounded border border-navy/30 bg-cream px-1 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
+  const selectCls = 'rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-1 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
 
   return (
     <div className="flex flex-col gap-1 rounded border border-navy/20 p-2">
       <div className="flex items-center gap-1">
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Pill label"
-          className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none" />
+          className="flex-1 rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none" />
         <select value={color} onChange={(e) => setColor(e.target.value as BadgeColor)} className={selectCls}>
           {COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
@@ -383,7 +383,7 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
           onChange={(e) => setValue(e.target.value)}
           placeholder="value"
           list={column ? listId : undefined}
-          className="w-24 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none"
+          className="w-24 rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none"
         />
         {column && distinctVals.length > 0 && (
           <datalist id={listId}>
@@ -473,14 +473,14 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
   }, [rows, search, cols, activeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
   const shown = seeAll ? filtered : filtered.slice(0, 20)
 
-  const selectCls = 'rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
+  const selectCls = 'rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
 
   return (
     <div className="flex flex-col gap-2">
       {editing ? (
         <div className="flex flex-col gap-2">
           <input value={block.title} onChange={(e) => onChange({ title: e.target.value })}
-            className="rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none" />
+            className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none" />
           <select value={block.source} onChange={(e) => onChange({ source: e.target.value, columns: [] })} className={selectCls}>
             {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
@@ -498,12 +498,12 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
 
       <div className="overflow-auto rounded border border-inky/20">
         <table className="w-full text-[11px] font-body">
-          <thead className="bg-[#002745]">
+          <thead className="bg-[#1a5c87]">
             <tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left text-[#F2F1E6] font-heading uppercase tracking-wide">{labelFor(c)}</th>)}</tr>
           </thead>
           <tbody>
             {shown.map((r, i) => (
-              <tr key={i} className={i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'}>
+              <tr key={i} className={i % 2 === 0 ? 'bg-cream dark:bg-[#0a2035]' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'}>
                 {cols.map((c) => <td key={c} className="px-2 py-1 text-navy">{String(valueOf(r, c) ?? '—') || '—'}</td>)}
               </tr>
             ))}
