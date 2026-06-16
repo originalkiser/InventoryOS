@@ -68,6 +68,7 @@ export interface ProductUsage {
   company_id: string
   location_id: string | null
   product_id: string
+  category: string | null
   daily_usage: number | null
   on_hands: number | null
   days_of_supply: number | null
