@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -12,24 +12,29 @@ import type { ComboboxOption } from '@/components/ui'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
-const SLOTS = 10
+type Status = 'open' | 'complete'
 
-type Status = 'open' | 'in_progress' | 'complete'
+const RECOUNT_TYPE_OPTIONS: ComboboxOption[] = [
+  { value: 'Oil Recount', label: 'Oil Recount' },
+  { value: 'Partial Recount Products', label: 'Partial Recount Products' },
+]
 
-function deriveStatus(flags: boolean[], dates: (string | null)[]): Status {
-  const populated = flags.map((f, i) => f || !!dates[i])
-  if (!populated.some(Boolean)) return 'open'
-  const allPopulatedYes = populated.every((p, i) => !p || flags[i])
-  return allPopulatedYes ? 'complete' : 'in_progress'
+function deriveStatus(flags: boolean[]): Status {
+  return flags[0] ? 'complete' : 'open'
 }
 
-const statusColor = (s: Status) => (s === 'complete' ? 'green' : s === 'in_progress' ? 'amber' : 'magenta')
+const statusColor = (s: Status) => (s === 'complete' ? 'green' : 'magenta')
+
+function fieldsOf(r: RecountRequest): Record<string, any> {
+  return (r.recount_fields ?? {}) as Record<string, any>
+}
 
 interface RecountRow extends RecountRequest {
   location_label: string
   status: Status
-  completed_count: number
-  populated_count: number
+  am_name: string
+  recount_reason: string
+  completed_date: string | null
 }
 
 const col = createColumnHelper<RecountRow>()
@@ -74,7 +79,6 @@ export function RecountsTab() {
 
   useEffect(() => { loadRequests() }, [loadRequests])
 
-  // Realtime — toast on edits by others, reload on any change
   useEffect(() => {
     if (!companyId) return
     const channel = supabase
@@ -92,23 +96,17 @@ export function RecountsTab() {
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, loadRequests, locations, myName])
 
-  // Distinct recount types for the filter + combobox
-  const typeOptions: ComboboxOption[] = useMemo(() => {
-    const set = new Set<string>()
-    for (const r of requests) if (r.recount_type) set.add(r.recount_type)
-    return Array.from(set).sort().map((t) => ({ value: t, label: t }))
-  }, [requests])
-
   const rows: RecountRow[] = useMemo(() => requests.map((r) => {
     const flags = (r.completed_flags ?? []) as boolean[]
     const dates = (r.completed_dates ?? []) as (string | null)[]
-    const populated = flags.map((f, i) => f || !!dates[i])
+    const f = fieldsOf(r)
     return {
       ...r,
       location_label: locationLabel(r.location_id, locations),
-      status: deriveStatus(flags, dates),
-      completed_count: flags.filter(Boolean).length,
-      populated_count: populated.filter(Boolean).length,
+      status: deriveStatus(flags),
+      am_name: f.am_name ?? '',
+      recount_reason: f.recount_reason ?? '',
+      completed_date: dates[0] ?? null,
     }
   }), [requests, locations])
 
@@ -120,25 +118,32 @@ export function RecountsTab() {
   const columns = useMemo(() => [
     col.accessor('location_label', { header: 'Location' }),
     col.accessor('recount_type', { header: 'Type', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('am_name', { header: 'AM', cell: (i) => i.getValue() || <span className="text-inky/50">—</span> }),
+    col.accessor('recount_reason', { header: 'Reason', cell: (i) => i.getValue() || <span className="text-inky/50">—</span> }),
     col.accessor('requested_products', {
       header: 'Products',
       enableSorting: false,
       cell: (i) => {
         const p = (i.getValue() ?? []) as string[]
-        return p.length ? p.join(', ') : <span className="text-inky/70">—</span>
+        return p.length
+          ? <span className="text-xs truncate max-w-[200px] block">{p.join(', ')}</span>
+          : <span className="text-inky/50">—</span>
       },
     }),
     col.accessor('request_date', {
       header: 'Requested',
       cell: (i) => (i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—'),
     }),
-    col.accessor('completed_count', {
+    col.accessor('completed_date', {
       header: 'Completed',
-      cell: (i) => <span className="text-navy">{i.row.original.completed_count} / {i.row.original.populated_count || 0}</span>,
+      cell: (i) => {
+        const d = i.getValue()
+        return d ? format(new Date(d), 'MMM d, yyyy') : <span className="text-inky/50">Pending</span>
+      },
     }),
     col.accessor('status', {
       header: 'Status',
-      cell: (i) => <Badge color={statusColor(i.getValue())}>{i.getValue().replace('_', ' ')}</Badge>,
+      cell: (i) => <Badge color={statusColor(i.getValue())}>{i.getValue()}</Badge>,
     }),
     col.display({
       id: 'edit',
@@ -156,10 +161,14 @@ export function RecountsTab() {
   const exportRows = useMemo(() => filteredRows.map((r) => ({
     location: r.location_label,
     recount_type: r.recount_type ?? '',
+    am: r.am_name,
+    rdo: (fieldsOf(r) as any).rdo_name ?? '',
+    recount_reason: r.recount_reason,
     products: (r.requested_products ?? []).join(' | '),
     request_date: r.request_date ?? '',
+    completed_date: r.completed_date ?? '',
+    notes: (fieldsOf(r) as any).completion_notes ?? '',
     status: r.status,
-    completed: `${r.completed_count}/${r.populated_count}`,
   })), [filteredRows])
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
@@ -167,12 +176,16 @@ export function RecountsTab() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-end gap-2 flex-wrap">
-        <div className="w-44">
+        <div className="w-52">
           <Select
             label="Filter — Type"
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
-            options={[{ value: '', label: 'All types' }, ...typeOptions.map((t) => ({ value: t.value, label: t.label }))]}
+            options={[
+              { value: '', label: 'All types' },
+              { value: 'Oil Recount', label: 'Oil Recount' },
+              { value: 'Partial Recount Products', label: 'Partial Recount Products' },
+            ]}
           />
         </div>
         <div className="w-40">
@@ -183,7 +196,6 @@ export function RecountsTab() {
             options={[
               { value: '', label: 'All statuses' },
               { value: 'open', label: 'Open' },
-              { value: 'in_progress', label: 'In progress' },
               { value: 'complete', label: 'Complete' },
             ]}
           />
@@ -206,7 +218,6 @@ export function RecountsTab() {
           countMonth={countMonth}
           editorName={myName}
           locations={locations}
-          typeOptions={typeOptions}
           existing={editing === 'new' ? null : editing}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); loadRequests() }}
@@ -220,41 +231,40 @@ export function RecountsTab() {
 // Slide-over editor
 // ---------------------------------------------------------------------------
 function RecountSlideOver({
-  companyId, countMonth, editorName, locations, typeOptions, existing, onClose, onSaved,
+  companyId, countMonth, editorName, locations, existing, onClose, onSaved,
 }: {
   companyId: string
   countMonth: string
   editorName: string
   locations: Location[]
-  typeOptions: ComboboxOption[]
   existing: RecountRequest | null
   onClose: () => void
   onSaved: () => void
 }) {
+  const f = existing ? fieldsOf(existing) : {}
+
   const [locationId, setLocationId] = useState(existing?.location_id ?? '')
   const [recountType, setRecountType] = useState(existing?.recount_type ?? '')
+  const [amName, setAmName] = useState(f.am_name ?? '')
+  const [rdoName, setRdoName] = useState(f.rdo_name ?? '')
+  const [recountReason, setRecountReason] = useState(f.recount_reason ?? '')
   const [products, setProducts] = useState<string[]>(existing?.requested_products ?? [])
   const [requestDate, setRequestDate] = useState(existing?.request_date ?? format(new Date(), 'yyyy-MM-dd'))
-  const [flags, setFlags] = useState<boolean[]>(padArr(existing?.completed_flags as boolean[] | null, false))
-  const [dates, setDates] = useState<(string | null)[]>(padArr(existing?.completed_dates as (string | null)[] | null, null))
+  const [completed, setCompleted] = useState((existing?.completed_flags as boolean[] | null)?.[0] ?? false)
+  const [completedDate, setCompletedDate] = useState(
+    (existing?.completed_dates as (string | null)[] | null)?.[0] ?? ''
+  )
+  const [completionNotes, setCompletionNotes] = useState(f.completion_notes ?? '')
   const [saving, setSaving] = useState(false)
 
-  const [types, setTypes] = useState<ComboboxOption[]>(typeOptions)
+  const status: Status = completed ? 'complete' : 'open'
+  const isPartial = recountType === 'Partial Recount Products'
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
-
-  const status = deriveStatus(flags, dates)
-
-  function setFlag(i: number, v: boolean) {
-    setFlags((prev) => prev.map((f, idx) => (idx === i ? v : f)))
-  }
-  function setDate(i: number, v: string) {
-    setDates((prev) => prev.map((d, idx) => (idx === i ? (v || null) : d)))
-  }
 
   async function save() {
     if (!locationId) { toast.error('Location is required'); return }
@@ -265,6 +275,11 @@ function RecountSlideOver({
       count_month: countMonth,
       source: (existing?.recount_fields as any)?.source ?? 'manual',
       updated_by_name: editorName,
+      am_name: amName.trim() || null,
+      rdo_name: rdoName.trim() || null,
+      recount_reason: recountReason.trim() || null,
+      completion_notes: completionNotes.trim() || null,
+      flags: (existing?.recount_fields as any)?.flags ?? undefined,
     }
     const payload = {
       company_id: companyId,
@@ -272,8 +287,8 @@ function RecountSlideOver({
       recount_type: recountType || null,
       requested_products: products,
       request_date: requestDate || null,
-      completed_flags: flags,
-      completed_dates: dates,
+      completed_flags: [completed],
+      completed_dates: [completedDate || null],
       recount_status: status,
       recount_fields,
       updated_at: new Date().toISOString(),
@@ -300,61 +315,113 @@ function RecountSlideOver({
       <div className="relative w-full max-w-lg h-full bg-cream border-l border-navy/30 shadow-2xl overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-navy/30 sticky top-0 bg-navy z-10">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-mono font-semibold text-navy uppercase tracking-wide">
+            <h2 className="text-sm font-mono font-semibold text-cream uppercase tracking-wide">
               {existing ? 'Edit Recount' : 'Add Recount'}
             </h2>
-            <Badge color={statusColor(status)}>{status.replace('_', ' ')}</Badge>
+            <Badge color={statusColor(status)}>{status}</Badge>
           </div>
-          <button onClick={onClose} className="text-inky hover:text-navy">
+          <button onClick={onClose} className="text-cream/70 hover:text-cream">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <div className="px-6 py-4 flex flex-col gap-4">
-          <Combobox
-            label="Location *"
-            options={locationOptions(locations)}
-            value={locationId}
-            onChange={(v) => setLocationId(v)}
-            placeholder="Select location"
-          />
+        <div className="px-6 py-5 flex flex-col gap-4">
+          {/* Request details */}
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest border-b border-navy/10 pb-1">Recount Details</p>
 
-          <Combobox
-            label="Recount Type"
-            options={types}
-            value={recountType}
-            onChange={(v) => setRecountType(v)}
-            placeholder="Select or type a new type"
-            allowCreate
-            onCreateOption={(label) => {
-              const opt = { value: label, label }
-              setTypes((prev) => [...prev, opt])
-              return opt
-            }}
-          />
+            <Combobox
+              label="Location *"
+              options={locationOptions(locations)}
+              value={locationId}
+              onChange={(v) => setLocationId(v)}
+              placeholder="Select location"
+            />
 
-          <TagInput label="Products Requested" value={products} onChange={setProducts} placeholder="Type a product and press Enter" />
+            <Combobox
+              label="Recount Type"
+              options={RECOUNT_TYPE_OPTIONS}
+              value={recountType}
+              onChange={(v) => setRecountType(v)}
+              placeholder="Oil Recount or Partial Recount Products"
+              allowCreate
+              onCreateOption={(label) => ({ value: label, label })}
+            />
 
-          <Input label="Request Date" type="date" value={requestDate} onChange={(e) => setRequestDate(e.target.value)} />
+            <Input
+              label="Recount Reason"
+              value={recountReason}
+              onChange={(e) => setRecountReason(e.target.value)}
+              placeholder="e.g. Unexpected ending balance"
+            />
 
+            <Input label="Request Date" type="date" value={requestDate} onChange={(e) => setRequestDate(e.target.value)} />
+          </div>
+
+          {/* Personnel */}
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest border-b border-navy/10 pb-1">Personnel</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Area Manager"
+                value={amName}
+                onChange={(e) => setAmName(e.target.value)}
+                placeholder="AM name"
+              />
+              <Input
+                label="RDO"
+                value={rdoName}
+                onChange={(e) => setRdoName(e.target.value)}
+                placeholder="RDO name"
+              />
+            </div>
+          </div>
+
+          {/* Products (shown for both types but required for Partial) */}
           <div className="flex flex-col gap-2">
-            <span className="text-xs font-mono text-inky uppercase tracking-wide">Completion Slots</span>
-            <p className="text-xs font-mono text-inky/70">Status becomes <span className="text-green-700">complete</span> when every filled slot is marked Yes.</p>
-            <div className="flex flex-col gap-1.5">
-              {Array.from({ length: SLOTS }).map((_, i) => (
-                <div key={i} className="grid grid-cols-[1.5rem_auto_1fr] items-center gap-2">
-                  <span className="text-xs font-mono text-inky/70">{i + 1}</span>
-                  <Toggle checked={flags[i]} onChange={(v) => setFlag(i, v)} size="sm" color="green" label={flags[i] ? 'Yes' : 'No'} />
-                  <input
+            <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest border-b border-navy/10 pb-1">
+              {isPartial ? 'Products to Recount' : 'Products (optional)'}
+            </p>
+            <TagInput
+              label={isPartial ? 'Product + Qty *' : 'Products'}
+              value={products}
+              onChange={setProducts}
+              placeholder={isPartial ? 'e.g. DSL-0W20BB (430)' : 'Product code or name'}
+            />
+            {isPartial && (
+              <p className="text-[10px] font-mono text-inky/50 leading-relaxed pl-2 border-l-2 border-[#00e5ff]/20">
+                Include quantity in parentheses: <span className="text-inky/80">DSL-0W20BB (430)</span>. Press Enter after each product.
+              </p>
+            )}
+          </div>
+
+          {/* AM Completion */}
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest border-b border-navy/10 pb-1">AM Completion</p>
+            <div className="flex items-center gap-3">
+              <Toggle checked={completed} onChange={setCompleted} size="sm" color="green" label={completed ? 'Complete' : 'Open'} />
+              {completed && (
+                <div className="flex-1">
+                  <Input
+                    label="Date Completed"
                     type="date"
-                    value={dates[i] ?? ''}
-                    onChange={(e) => setDate(i, e.target.value)}
-                    className="w-full bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
+                    value={completedDate}
+                    onChange={(e) => setCompletedDate(e.target.value)}
                   />
                 </div>
-              ))}
+              )}
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-mono text-inky uppercase tracking-wide">AM Notes</label>
+              <textarea
+                value={completionNotes}
+                onChange={(e) => setCompletionNotes(e.target.value)}
+                placeholder="Notes from the area manager…"
+                rows={3}
+                className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-xs font-mono text-navy placeholder-inky/40 focus:outline-none focus:border-[#00e5ff] resize-none"
+              />
             </div>
           </div>
         </div>
@@ -375,12 +442,6 @@ function RecountSlideOver({
       </div>
     </div>
   )
-}
-
-function padArr<T>(arr: T[] | null | undefined, fill: T): T[] {
-  const base = arr ? [...arr] : []
-  while (base.length < SLOTS) base.push(fill)
-  return base.slice(0, SLOTS)
 }
 
 // ---------------------------------------------------------------------------

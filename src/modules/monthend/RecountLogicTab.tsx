@@ -15,6 +15,16 @@ import toast from 'react-hot-toast'
 
 const DEFAULT_LOOKBACK = 6
 
+function flagsToReason(flags: string[]): string {
+  if (flags.includes('high_ending_balance')) return 'End balance too high'
+  if (flags.includes('low_ending_balance')) return 'End balance too low'
+  if (flags.includes('low_adjustments')) return 'Too few adjustments'
+  if (flags.includes('high_adjustments')) return 'Too many adjustments'
+  if (flags.includes('variance_vs_median')) return 'Unexpected ending balance'
+  if (flags.includes('variance_vs_last_month')) return 'Unexpected ending balance'
+  return flags.join(', ')
+}
+
 function numOrNull(s: string): number | null {
   const t = s.trim()
   if (t === '') return null
@@ -156,12 +166,17 @@ export function RecountLogicTab() {
         .map((e) => ({
           company_id: companyId,
           location_id: e.locationId,
-          recount_type: 'Auto — flagged',
+          recount_type: 'Oil Recount',
           requested_products: [],
           request_date: today,
-          recount_fields: { count_month: countMonth, source: 'auto', flags: e.flags },
-          completed_flags: Array(10).fill(false),
-          completed_dates: Array(10).fill(null),
+          recount_fields: {
+            count_month: countMonth,
+            source: 'auto',
+            flags: e.flags,
+            recount_reason: flagsToReason(e.flags),
+          },
+          completed_flags: [false],
+          completed_dates: [null],
           recount_status: 'open',
         }))
 
