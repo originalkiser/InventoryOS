@@ -55,6 +55,7 @@ export interface MeetingNote {
   vendor: string | null
   category: string | null
   notes: string | null
+  shared: boolean
   created_by: string | null
   created_at: string
   updated_at: string
@@ -72,6 +73,8 @@ export interface Task {
   source: string
   meeting_id: string | null
   project_id: string | null
+  assignee_id: string | null
+  is_public: boolean
   sort_order: number
   created_by: string | null
   created_at: string

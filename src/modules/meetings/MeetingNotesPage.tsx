@@ -9,7 +9,15 @@ import type { MeetingNote, Project, Task } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
-const EMPTY_FORM = { title: 'Untitled Meeting', meeting_date: '', meeting_time: '', vendor: '', category: '', notes: '' }
+const EMPTY_FORM = {
+  title: 'Untitled Meeting',
+  meeting_date: '',
+  meeting_time: '',
+  vendor: '',
+  category: '',
+  notes: '',
+  shared: false,
+}
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
 const col = createColumnHelper<MeetingNote>()
@@ -34,12 +42,14 @@ function formatDateTime(date: string | null, time: string | null): string {
 export function MeetingNotesPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
+  const myId = profile?.id ?? null
 
   const [meetings, setMeetings] = useState<MeetingNote[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
+  const [editCreatedBy, setEditCreatedBy] = useState<string | null>(null)
   const [form, setForm] = useState({ ...EMPTY_FORM })
   const [saving, setSaving] = useState(false)
 
@@ -68,21 +78,18 @@ export function MeetingNotesPage() {
     () => projects.filter((p) => p.status !== 'Complete' && p.status !== 'Cancelled'),
     [projects]
   )
-
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p.project_name])), [projects])
 
   async function loadMeetingTasks(meetingId: string) {
     const { data } = await (supabase as any)
-      .from('tasks')
-      .select('*')
-      .eq('meeting_id', meetingId)
-      .order('sort_order')
-      .order('created_at')
+      .from('tasks').select('*').eq('meeting_id', meetingId)
+      .order('sort_order').order('created_at')
     setMeetingTasks((data ?? []) as Task[])
   }
 
   function openNew() {
     setEditId(null)
+    setEditCreatedBy(myId)
     setForm({ ...EMPTY_FORM, meeting_date: format(new Date(), 'yyyy-MM-dd') })
     setMeetingTasks([])
     setTaskForm({ ...EMPTY_TASK })
@@ -91,6 +98,7 @@ export function MeetingNotesPage() {
 
   function openEdit(m: MeetingNote) {
     setEditId(m.id)
+    setEditCreatedBy(m.created_by)
     setForm({
       title: m.title,
       meeting_date: m.meeting_date ?? '',
@@ -98,11 +106,14 @@ export function MeetingNotesPage() {
       vendor: m.vendor ?? '',
       category: m.category ?? '',
       notes: m.notes ?? '',
+      shared: m.shared,
     })
     setTaskForm({ ...EMPTY_TASK })
     loadMeetingTasks(m.id)
     setModalOpen(true)
   }
+
+  const isOwner = !editId || editCreatedBy === myId
 
   async function onSave() {
     if (!companyId || !form.title.trim()) return
@@ -115,7 +126,8 @@ export function MeetingNotesPage() {
       vendor: form.vendor.trim() || null,
       category: form.category.trim() || null,
       notes: form.notes || null,
-      created_by: profile?.id ?? null,
+      shared: isOwner ? form.shared : undefined,
+      created_by: editId ? undefined : myId,
     }
     const sb = supabase as any
     if (editId) {
@@ -123,9 +135,10 @@ export function MeetingNotesPage() {
       if (error) { toast.error(error.message); setSaving(false); return }
       toast.success('Meeting saved')
     } else {
-      const { data, error } = await sb.from('meeting_notes').insert(payload).select().single()
+      const { data, error } = await sb.from('meeting_notes').insert({ ...payload, created_by: myId }).select().single()
       if (error) { toast.error(error.message); setSaving(false); return }
       setEditId(data.id)
+      setEditCreatedBy(myId)
       toast.success('Meeting created')
     }
     setSaving(false)
@@ -133,7 +146,7 @@ export function MeetingNotesPage() {
   }
 
   async function onDelete() {
-    if (!editId || !confirm('Delete this meeting and its tasks?')) return
+    if (!editId || !isOwner || !confirm('Delete this meeting and its tasks?')) return
     const { error } = await (supabase as any).from('meeting_notes').delete().eq('id', editId)
     if (error) { toast.error(error.message); return }
     toast.success('Meeting deleted')
@@ -143,8 +156,7 @@ export function MeetingNotesPage() {
   }
 
   async function addTask() {
-    if (!editId || !taskForm.title.trim()) return
-    if (!companyId) return
+    if (!editId || !taskForm.title.trim() || !companyId) return
     const { error } = await (supabase as any).from('tasks').insert({
       company_id: companyId,
       title: taskForm.title.trim(),
@@ -152,7 +164,7 @@ export function MeetingNotesPage() {
       project_id: taskForm.project_id || null,
       source: 'meeting',
       meeting_id: editId,
-      created_by: profile?.id ?? null,
+      created_by: myId,
     })
     if (error) { toast.error(error.message); return }
     setTaskForm({ ...EMPTY_TASK })
@@ -164,7 +176,7 @@ export function MeetingNotesPage() {
     const { error } = await (supabase as any).from('tasks').update({
       completed: done,
       completed_at: done ? new Date().toISOString() : null,
-      completed_by: done ? (profile?.id ?? null) : null,
+      completed_by: done ? myId : null,
     }).eq('id', task.id)
     if (error) { toast.error(error.message); return }
     if (editId) loadMeetingTasks(editId)
@@ -192,6 +204,14 @@ export function MeetingNotesPage() {
     }),
     col.accessor('vendor', { header: 'Vendor', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('category', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('shared', {
+      header: 'Visibility',
+      cell: (i) => (
+        <span className={['text-[10px] font-mono px-1.5 py-0.5 rounded', i.getValue() ? 'text-sky bg-sky/10' : 'text-inky/50 bg-navy/5'].join(' ')}>
+          {i.getValue() ? 'Shared' : 'Private'}
+        </span>
+      ),
+    }),
     col.accessor('notes', {
       header: 'Notes',
       cell: (i) => {
@@ -215,7 +235,7 @@ export function MeetingNotesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-heading font-bold text-navy uppercase tracking-wide">Meeting Notes</h1>
-          <p className="text-xs text-inky mt-0.5">Record meetings, notes, and action items by vendor or category.</p>
+          <p className="text-xs text-inky mt-0.5">Your meetings are private by default — share individual meetings with the org as needed.</p>
         </div>
       </div>
 
@@ -236,11 +256,36 @@ export function MeetingNotesPage() {
         size="xl"
       >
         <div className="flex flex-col gap-4">
-          <Input
-            label="Meeting Name *"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-          />
+          <div className="flex items-start gap-3">
+            <Input
+              label="Meeting Name *"
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              className="flex-1"
+            />
+            {/* Visibility toggle — only creator can change */}
+            <div className="flex flex-col gap-1 flex-shrink-0">
+              <label className="text-xs font-mono text-inky uppercase tracking-wide">Visibility</label>
+              <button
+                onClick={() => isOwner && setForm({ ...form, shared: !form.shared })}
+                disabled={!isOwner}
+                title={!isOwner ? 'Only the meeting creator can change visibility' : undefined}
+                className={[
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-mono transition-colors',
+                  form.shared
+                    ? 'border-sky/60 bg-sky/10 text-sky'
+                    : 'border-navy/30 bg-cream text-inky',
+                  !isOwner ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-navy',
+                ].join(' ')}
+              >
+                {form.shared ? (
+                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>Shared with org</>
+                ) : (
+                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>Private</>
+                )}
+              </button>
+            </div>
+          </div>
 
           <SectionHeader>Meeting Details</SectionHeader>
           <div className="grid grid-cols-2 gap-3">
@@ -284,7 +329,7 @@ export function MeetingNotesPage() {
           />
 
           <div className="flex items-center justify-between gap-2">
-            <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete Meeting</Button>}</div>
+            <div>{editId && isOwner && <Button variant="danger" size="sm" onClick={onDelete}>Delete Meeting</Button>}</div>
             <Button size="sm" onClick={onSave} disabled={saving || !form.title.trim()}>
               {saving ? 'Saving…' : editId ? 'Save Changes' : 'Create Meeting'}
             </Button>
@@ -293,7 +338,6 @@ export function MeetingNotesPage() {
           {editId ? (
             <div className="flex flex-col gap-3">
               <SectionHeader>Action Items</SectionHeader>
-
               {meetingTasks.length === 0 && (
                 <p className="text-xs font-body italic text-inky/50">No action items yet.</p>
               )}
@@ -310,7 +354,7 @@ export function MeetingNotesPage() {
                       {t.title}
                     </span>
                     {t.project_id && (
-                      <span className="text-[10px] font-mono text-inky/60 bg-navy/8 border border-navy/20 rounded px-1.5 py-0.5 flex-shrink-0">
+                      <span className="text-[10px] font-mono text-inky/60 bg-navy/5 border border-navy/20 rounded px-1.5 py-0.5 flex-shrink-0">
                         {projectById.get(t.project_id) ?? 'Project'}
                       </span>
                     )}
@@ -326,8 +370,6 @@ export function MeetingNotesPage() {
                   </li>
                 ))}
               </ul>
-
-              {/* Add action item inline */}
               <div className="flex items-center gap-2 pt-1">
                 <input
                   value={taskForm.title}
