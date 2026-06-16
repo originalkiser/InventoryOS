@@ -17,6 +17,8 @@ import { OrdersPage } from '@/modules/orders/OrdersPage'
 import { IssuesPage } from '@/modules/issues/IssuesPage'
 import { SchedulePage } from '@/modules/schedule/SchedulePage'
 import { ProjectsModule } from '@/modules/projects/ProjectsModule'
+import { MeetingNotesPage } from '@/modules/meetings/MeetingNotesPage'
+import { TasksPage } from '@/modules/tasks/TasksPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, initialized } = useAuthStore()
@@ -85,6 +87,8 @@ export default function App() {
           <Route path="issues" element={<IssuesPage />} />
           <Route path="projects" element={<ProjectsModule />} />
           <Route path="schedule" element={<SchedulePage />} />
+          <Route path="meetings" element={<MeetingNotesPage />} />
+          <Route path="tasks" element={<TasksPage />} />
           <Route path="admin/users" element={<UsersPage />} />
         </Route>
 

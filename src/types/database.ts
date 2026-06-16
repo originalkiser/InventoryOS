@@ -46,6 +46,37 @@ export interface Database {
   }
 }
 
+export interface MeetingNote {
+  id: string
+  company_id: string
+  title: string
+  meeting_date: string | null
+  meeting_time: string | null
+  vendor: string | null
+  category: string | null
+  notes: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Task {
+  id: string
+  company_id: string
+  title: string
+  notes: string | null
+  target_date: string | null
+  completed: boolean
+  completed_at: string | null
+  completed_by: string | null
+  source: string
+  meeting_id: string | null
+  sort_order: number
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface TankMonitor {
   id: string
   company_id: string
