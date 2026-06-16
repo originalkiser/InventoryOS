@@ -143,6 +143,35 @@ export function CountsTab() {
 
   const periodLabel = format(new Date(countMonth), 'MMMM yyyy')
 
+  async function clearSummaryCounts() {
+    const { error } = await (supabase as any)
+      .from('monthly_counts')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('count_month', countMonth)
+    if (error) toast.error(error.message)
+    else { toast.success('Count summaries cleared'); loadAll() }
+  }
+
+  async function clearProductCounts() {
+    const sb = supabase as any
+    // Delete product rows for this period directly
+    const { error: e1 } = await sb
+      .from('monthly_count_products')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('count_month', countMonth)
+    // Delete batch records for this period
+    const { error: e2 } = await sb
+      .from('count_upload_batches')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('module', 'monthly')
+      .eq('count_month', countMonth)
+    if (e1 || e2) toast.error('Failed to clear product counts')
+    else { toast.success('Product batches cleared'); loadAll() }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <p className="text-xs font-mono text-inky">
@@ -158,6 +187,7 @@ export function CountsTab() {
           target={monthlySummaryTarget(countMonth)}
           uploadedBy={profile?.id ?? null}
           onImported={loadAll}
+          onClear={clearSummaryCounts}
         />
         <ProductDetailUpload
           locations={locations}
@@ -167,6 +197,7 @@ export function CountsTab() {
           batches={batches}
           userNames={userNames}
           onChanged={loadAll}
+          onClear={clearProductCounts}
         />
       </div>
 

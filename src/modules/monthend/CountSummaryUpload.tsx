@@ -3,6 +3,7 @@ import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { ColumnMapper } from '@/components/upload/ColumnMapper'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Select, Combobox, Card, CardBody } from '@/components/ui'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { supabase } from '@/lib/supabase'
 import { useLocations } from '@/hooks/useLocations'
 import { SUMMARY_FIELDS, toNumber, locationOptions, type SummaryUploadTarget } from './countsShared'
@@ -18,11 +19,12 @@ interface Props {
   target: SummaryUploadTarget
   uploadedBy: string | null
   onImported: () => void
+  onClear?: () => Promise<void>
 }
 
 const NUMERIC = SUMMARY_FIELDS.filter((f) => f.numeric).map((f) => f.name)
 
-export function CountSummaryUpload({ locations, companyId, target, onImported }: Props) {
+export function CountSummaryUpload({ locations, companyId, target, onImported, onClear }: Props) {
   const loc = useLocations()
   const [mode, setMode] = useState<Mode>('file')
   const [importMode, setImportMode] = useState<ImportMode>('additive')
@@ -140,7 +142,16 @@ export function CountSummaryUpload({ locations, companyId, target, onImported }:
       <CardBody className="flex flex-col gap-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <span className="text-xs font-mono text-inky uppercase tracking-wide">{target.cardLabel}</span>
-          <ModeSwitch mode={mode} onChange={(m) => { setMode(m); setParsed(null); setSavedMappings(null) }} />
+          <div className="flex items-center gap-2">
+            {onClear && (
+              <ClearTableButton
+                clearAll={onClear}
+                label="Clear Period"
+                description="This will permanently delete all count summaries for the selected period. This cannot be undone."
+              />
+            )}
+            <ModeSwitch mode={mode} onChange={(m) => { setMode(m); setParsed(null); setSavedMappings(null) }} />
+          </div>
         </div>
 
         {mode === 'file' && (

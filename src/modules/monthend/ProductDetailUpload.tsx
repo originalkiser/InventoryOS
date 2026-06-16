@@ -3,6 +3,7 @@ import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { ColumnMapper } from '@/components/upload/ColumnMapper'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Combobox, Card, CardBody } from '@/components/ui'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { supabase } from '@/lib/supabase'
 import { parseProductRows } from '@/lib/additiveProducts'
 import { useLocations } from '@/hooks/useLocations'
@@ -21,10 +22,11 @@ interface Props {
   batches: CountUploadBatch[]
   userNames: Record<string, string>
   onChanged: () => void
+  onClear?: () => Promise<void>
 }
 
 export function ProductDetailUpload({
-  locations, companyId, countMonth, uploadedBy, batches, userNames, onChanged,
+  locations, companyId, countMonth, uploadedBy, batches, userNames, onChanged, onClear,
 }: Props) {
   const loc = useLocations()
   const [mode, setMode] = useState<Mode>('file')
@@ -107,7 +109,16 @@ export function ProductDetailUpload({
           <span className="text-xs font-mono text-inky uppercase tracking-wide">
             Product Detail <span className="text-orange-600">· additive</span>
           </span>
-          <ModeSwitch mode={mode} onChange={(m) => { setMode(m); setParsed(null) }} />
+          <div className="flex items-center gap-2">
+            {onClear && (
+              <ClearTableButton
+                clearAll={onClear}
+                label="Clear Period"
+                description="This will permanently delete all product detail batches for the selected period. This cannot be undone."
+              />
+            )}
+            <ModeSwitch mode={mode} onChange={(m) => { setMode(m); setParsed(null) }} />
+          </div>
         </div>
 
         {mode === 'file' && (

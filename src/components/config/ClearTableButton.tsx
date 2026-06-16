@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { Button, Modal } from '@/components/ui'
 
 interface Props {
   clearAll: () => Promise<void>
   label?: string
+  description?: React.ReactNode
 }
 
-export function ClearTableButton({ clearAll, label = 'Remove Data from Table' }: Props) {
+export function ClearTableButton({ clearAll, label = 'Remove Data from Table', description }: Props) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
 
@@ -20,10 +21,12 @@ export function ClearTableButton({ clearAll, label = 'Remove Data from Table' }:
   return (
     <>
       <Button size="sm" variant="danger" onClick={() => setOpen(true)}>{label}</Button>
-      <Modal open={open} onClose={() => setOpen(false)} title="Remove All Data" size="sm">
+      <Modal open={open} onClose={() => setOpen(false)} title="Remove Data" size="sm">
         <div className="flex flex-col gap-4">
           <p className="text-sm font-body text-navy">
-            This will permanently delete <strong>all rows</strong> in this table for your workspace. This cannot be undone.
+            {description ?? (
+              <>This will permanently delete <strong>all rows</strong> in this table for your workspace. This cannot be undone.</>
+            )}
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
