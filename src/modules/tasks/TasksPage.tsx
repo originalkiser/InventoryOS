@@ -154,6 +154,7 @@ export function TasksPage() {
         completed: t.completed,
         source: (t.source === 'meeting' ? 'meeting' : 'standalone') as TaskSource,
         sourceLabel: t.source === 'meeting' ? 'Meeting' : 'Task',
+        projectId: t.project_id ?? undefined,
         createdBy: t.created_by,
         assigneeId: t.assignee_id,
         assigneeDisplay: t.assignee_name ?? (t.assignee_id ? (profileById.get(t.assignee_id) ?? null) : null),
@@ -409,6 +410,12 @@ export function TasksPage() {
                 <Badge color={sourceColor(task.source)}>
                   <span className="text-[10px]">{task.sourceLabel}</span>
                 </Badge>
+
+                {task.projectId && task.source !== 'project' && (
+                  <Badge color="navy">
+                    <span className="text-[10px]">{projectById.get(task.projectId) ?? 'Project'}</span>
+                  </Badge>
+                )}
 
                 {/* Visibility toggle — only for task creator on standalone/meeting tasks */}
                 {isStandaloneOrMeeting && isMine && (

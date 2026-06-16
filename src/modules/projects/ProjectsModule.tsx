@@ -13,7 +13,7 @@ import { useProjects } from '@/hooks/useProjects'
 import { useProjectColumns, type ColumnDef } from '@/hooks/useProjectColumns'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { supabase } from '@/lib/supabase'
-import type { Profile, Project, ProjectTask } from '@/types'
+import type { Profile, Project, ProjectTask, Task } from '@/types'
 
 type CellType = 'text' | 'date' | 'status' | 'datetime'
 
@@ -240,13 +240,50 @@ function AssigneeCell({ taskId, value, profiles, onSave }: {
   )
 }
 
-function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
+function LinkedTaskRow({ task, subColWidths, onToggle }: {
+  task: Task
+  subColWidths: Record<string, number>
+  onToggle: (id: string, done: boolean) => void
+}) {
+  function tdStyle(key: string): React.CSSProperties {
+    const w = subColWidths[key] ?? SUBTASK_COL_DEFAULTS[key]
+    return { width: w, minWidth: w, maxWidth: w, overflow: 'hidden' }
+  }
+  return (
+    <tr className="border-t border-navy/30/50">
+      <td style={{ width: 28, minWidth: 28 }} />
+      <td style={{ width: 32, minWidth: 32 }} className="px-2 text-center">
+        <input type="checkbox" checked={task.completed} className="accent-inky"
+          onChange={(e) => onToggle(task.id, e.target.checked)} />
+      </td>
+      <td style={tdStyle('task')} className="px-2 py-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className={['text-xs font-mono truncate', task.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
+            {task.title}
+          </span>
+          <span className="flex-shrink-0 rounded px-1 py-0.5 text-[9px] font-mono bg-navy/10 text-inky/60 leading-none uppercase">mtg</span>
+        </div>
+      </td>
+      <td style={tdStyle('status')} className="px-2 py-1 text-xs font-mono text-inky/30">—</td>
+      <td style={tdStyle('assignee')} className="px-2 py-1 text-xs font-mono text-navy truncate">{task.assignee_name ?? '—'}</td>
+      <td style={tdStyle('due')} className="px-2 py-1 text-xs font-mono text-inky/60">
+        {task.target_date ? format(new Date(task.target_date + 'T00:00:00'), 'MMM d, yyyy') : '—'}
+      </td>
+      <td style={tdStyle('notes')} className="px-2 py-1 text-xs font-mono text-inky/60 truncate">{task.notes ?? ''}</td>
+      <td style={{ width: 32, minWidth: 32 }} />
+    </tr>
+  )
+}
+
+function SubTasks({ projectId, tasks, linkedTasks, onAdd, onUpdate, onDelete, onReorder, onToggleLinked, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
   projectId: string
   tasks: ProjectTask[]
+  linkedTasks: Task[]
   onAdd: (projectId: string) => void
   onUpdate: (id: string, patch: Partial<ProjectTask>) => void
   onDelete: (id: string) => void
   onReorder: (projectId: string, ordered: ProjectTask[]) => void
+  onToggleLinked: (id: string, done: boolean) => void
   statusOptions: string[]
   onAddStatus: (name: string) => void
   subColWidths: Record<string, number>
@@ -286,6 +323,18 @@ function SubTasks({ projectId, tasks, onAdd, onUpdate, onDelete, onReorder, stat
               </tbody>
             </SortableContext>
           </DndContext>
+          {linkedTasks.length > 0 && (
+            <tbody>
+              <tr>
+                <td colSpan={8} className="border-t-2 border-navy/20 bg-navy/5 px-3 py-1 text-[10px] font-mono uppercase tracking-widest text-inky/50">
+                  Linked from meetings
+                </td>
+              </tr>
+              {linkedTasks.map((t) => (
+                <LinkedTaskRow key={t.id} task={t} subColWidths={subColWidths} onToggle={onToggleLinked} />
+              ))}
+            </tbody>
+          )}
         </table>
       </div>
       <button onClick={() => onAdd(projectId)} className="mt-2 text-xs font-mono text-inky hover:underline">+ Add task</button>
@@ -328,6 +377,21 @@ export function ProjectsModule() {
     ;(supabase as any).from('profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
       .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
   }, [companyId])
+
+  const [linkedTasks, setLinkedTasks] = useState<Task[]>([])
+  useEffect(() => {
+    if (!companyId) return
+    ;(supabase as any).from('tasks').select('*').eq('company_id', companyId).not('project_id', 'is', null).order('created_at')
+      .then(({ data }: any) => setLinkedTasks((data ?? []) as Task[]))
+  }, [companyId])
+
+  async function toggleLinkedTask(id: string, done: boolean) {
+    setLinkedTasks((prev) => prev.map((t) => t.id === id ? { ...t, completed: done } : t))
+    await (supabase as any).from('tasks').update({
+      completed: done,
+      completed_at: done ? new Date().toISOString() : null,
+    }).eq('id', id)
+  }
 
   const [subColWidths, setSubColWidthsState] = useState<Record<string, number>>(loadSubColWidths)
   function setSubColWidth(key: string, w: number) {
@@ -503,7 +567,9 @@ export function ProjectsModule() {
                       expanded={expanded.has(p.id)} onToggle={() => toggleExpand(p.id)}
                       renderCell={renderCell} onDelete={() => deleteProject(p.id)}
                       tasks={tasks.filter((t) => t.project_id === p.id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))}
+                      linkedTasks={linkedTasks.filter((t) => t.project_id === p.id)}
                       onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks}
+                      onToggleLinked={toggleLinkedTask}
                       statusOptions={statusOptions} onAddStatus={addStatus}
                       subColWidths={subColWidths} onSubColResize={setSubColWidth} profiles={orgProfiles} />
                   ))}
@@ -527,7 +593,7 @@ function GroupBlock({ label, count, totalCols, children }: { label: string | nul
   )
 }
 
-function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
+function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, linkedTasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, onToggleLinked, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
   project: Project
   ordered: { key: string; width: number; pinned: boolean }[]
   leftOffsets: Record<string, number>
@@ -537,18 +603,20 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
   renderCell: (p: Project, key: string) => React.ReactNode
   onDelete: () => void
   tasks: ProjectTask[]
+  linkedTasks: Task[]
   onAddTask: (projectId: string) => void
   onUpdateTask: (id: string, patch: Partial<ProjectTask>) => void
   onDeleteTask: (id: string) => void
   onReorderTask: (projectId: string, ordered: ProjectTask[]) => void
+  onToggleLinked: (id: string, done: boolean) => void
   statusOptions: string[]
   profiles: Profile[]
   onAddStatus: (name: string) => void
   subColWidths: Record<string, number>
   onSubColResize: (key: string, w: number) => void
 }) {
-  const taskCount = tasks.length
-  const doneCount = tasks.filter((t) => t.done).length
+  const taskCount = tasks.length + linkedTasks.length
+  const doneCount = tasks.filter((t) => t.done).length + linkedTasks.filter((t) => t.completed).length
   return (
     <>
       <tr className="border-t border-navy/30/50 hover:bg-navy/5">
@@ -574,7 +642,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
         <tr>
           <td />
           <td colSpan={totalCols - 1} className="p-0">
-            <SubTasks projectId={project.id} tasks={tasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} onSubColResize={onSubColResize} profiles={profiles} />
+            <SubTasks projectId={project.id} tasks={tasks} linkedTasks={linkedTasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} onToggleLinked={onToggleLinked} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} onSubColResize={onSubColResize} profiles={profiles} />
           </td>
         </tr>
       )}
