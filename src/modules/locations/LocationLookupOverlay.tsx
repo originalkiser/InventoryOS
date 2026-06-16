@@ -25,6 +25,7 @@ const SOURCES = [
   { value: 'monthly_counts', label: 'Monthly Counts' },
   { value: 'order_sessions', label: 'Orders' },
   { value: 'issues', label: 'Issues' },
+  { value: 'tank_monitors', label: 'Tank Monitors' },
 ]
 const VIEW_KEY = 'locationLookup.view'
 const SIZE_KEY = 'locationLookup.size'
@@ -332,6 +333,8 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
   const [op, setOp] = useState<PillOp>('=')
   const [value, setValue] = useState('')
   const [cols, setCols] = useState<string[]>([])
+  const [distinctVals, setDistinctVals] = useState<string[]>([])
+  const listId = `pill-vals-${source}-${column}`
 
   useEffect(() => {
     if (!profile?.company_id) return
@@ -340,6 +343,18 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
       .then(({ data }: any) => { if (!cancelled) setCols(data?.[0] ? Object.keys(data[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []) })
     return () => { cancelled = true }
   }, [source, profile?.company_id])
+
+  useEffect(() => {
+    if (!profile?.company_id || !column) { setDistinctVals([]); return }
+    let cancelled = false
+    ;(supabase as any).from(source).select(column).eq('company_id', profile.company_id).limit(500)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        const vals = Array.from(new Set((data ?? []).map((r: any) => String(r[column] ?? '')).filter(Boolean))).sort() as string[]
+        setDistinctVals(vals)
+      })
+    return () => { cancelled = true }
+  }, [source, column, profile?.company_id])
 
   const selectCls = 'rounded border border-navy/30 bg-cream px-1 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
 
@@ -353,18 +368,28 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
         </select>
       </div>
       <div className="flex items-center gap-1">
-        <select value={source} onChange={(e) => { setSource(e.target.value); setColumn('') }} className={selectCls}>
+        <select value={source} onChange={(e) => { setSource(e.target.value); setColumn(''); setValue('') }} className={selectCls}>
           {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={column} onChange={(e) => setColumn(e.target.value)} className={`w-28 ${selectCls}`}>
+        <select value={column} onChange={(e) => { setColumn(e.target.value); setValue('') }} className={`w-28 ${selectCls}`}>
           <option value="">column…</option>
           {cols.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <select value={op} onChange={(e) => setOp(e.target.value as PillOp)} className={selectCls}>
           {(['=', '!=', '<', '>'] as PillOp[]).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
-        <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="value"
-          className="w-20 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none" />
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="value"
+          list={column ? listId : undefined}
+          className="w-24 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:outline-none"
+        />
+        {column && distinctVals.length > 0 && (
+          <datalist id={listId}>
+            {distinctVals.map((v) => <option key={v} value={v} />)}
+          </datalist>
+        )}
         <button onClick={() => { if (label.trim()) { onAdd({ label: label.trim(), color, source, column: column.trim() || undefined, op, value }); setLabel(''); setColumn(''); setValue('') } }}
           className="rounded border border-inky/30 px-2 py-1 text-xs font-heading text-inky hover:border-navy hover:text-navy uppercase">+ pill</button>
       </div>

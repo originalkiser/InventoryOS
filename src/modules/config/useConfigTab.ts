@@ -133,5 +133,13 @@ export function useConfigTab<T>(tableName: string) {
     else await load()
   }
 
-  return { data, loading, load, insert, update, upsertBatch, importRows, remove }
+  async function clearAll() {
+    if (!profile?.company_id) return
+    const { error } = await (supabase as any).from(tableName).delete().eq('company_id', profile.company_id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Table cleared')
+    await load()
+  }
+
+  return { data, loading, load, insert, update, upsertBatch, importRows, remove, clearAll }
 }

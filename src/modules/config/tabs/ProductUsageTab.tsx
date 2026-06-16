@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
@@ -169,6 +170,14 @@ export function ProductUsageTab() {
 
   useEffect(() => { loadRpc() }, [loadRpc])
 
+  async function clearAll() {
+    if (!profile?.company_id) return
+    const { error } = await (supabase as any).from('product_usage').delete().eq('company_id', profile.company_id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Table cleared')
+    await loadRpc()
+  }
+
   // ---- Columns ----
   const columns = useMemo(() => [
     { id: 'location', header: 'Location', accessorFn: (r: ProductUsage) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
@@ -328,6 +337,7 @@ export function ProductUsageTab() {
         exportData={displayData}
         loading={loading}
         actions={<>
+          <ClearTableButton clearAll={clearAll} />
           <label className="flex items-center gap-2 text-xs font-mono text-inky">
             <Toggle checked={exclude} onChange={setExclude} size="sm" color="amber" />
             Exclude products not in order config

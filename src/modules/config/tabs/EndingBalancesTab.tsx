@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
@@ -43,7 +44,7 @@ const col = createColumnHelper<MonthlyEndingBalance>()
 
 export function EndingBalancesTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, update, remove, importRows } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
   const { active: categories, addField } = useCustomFields('ending_balance')
   const loc = useLocations()
 
@@ -138,6 +139,7 @@ export function EndingBalancesTab() {
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="month_end_ending_balance.csv" exportData={data} loading={loading}
         actions={<>
+          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Categories</Button>
           <Button size="sm" onClick={openAdd}>+ Add Balance</Button>
         </>}

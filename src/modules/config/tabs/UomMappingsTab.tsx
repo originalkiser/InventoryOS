@@ -3,6 +3,7 @@ import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
@@ -22,7 +23,7 @@ const EMPTY = { from_unit: '', to_unit: '', factor: '' }
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
 
 export function UomMappingsTab() {
-  const { data, loading, insert, update, remove, importRows } = useConfigTab<UomMapping>('uom_mappings')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<UomMapping>('uom_mappings')
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -82,7 +83,7 @@ export function UomMappingsTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="uom_mappings.csv" exportData={data} loading={loading}
-        actions={<Button size="sm" onClick={openAdd}>+ Add Mapping</Button>}
+        actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>}
       />
 
       <div className="grid grid-cols-2 gap-6">

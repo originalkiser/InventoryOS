@@ -4,6 +4,7 @@ import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
@@ -26,7 +27,7 @@ const NUM = ['bulk_minimum', 'individual_minimum']
 const col = createColumnHelper<GlobalProduct>()
 
 export function GlobalProductsTab() {
-  const { data, loading, insert, update, remove, importRows } = useConfigTab<GlobalProduct>('global_products')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<GlobalProduct>('global_products')
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -87,7 +88,7 @@ export function GlobalProductsTab() {
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="global_products.csv" exportData={data} loading={loading}
-        actions={<Button size="sm" onClick={openAdd}>+ Add Product</Button>}
+        actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Product</Button></>}
       />
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">

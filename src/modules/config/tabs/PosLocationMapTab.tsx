@@ -4,6 +4,7 @@ import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Badge } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
@@ -20,7 +21,7 @@ const col = createColumnHelper<PosLocationMap>()
 const EMPTY = { pos_string: '', locationId: '' }
 
 export function PosLocationMapTab() {
-  const { data, loading, insert, update, remove, importRows } = useConfigTab<PosLocationMap>('pos_location_map')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<PosLocationMap>('pos_location_map')
   const loc = useLocations()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -82,7 +83,7 @@ export function PosLocationMapTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="pos_location_map.csv" exportData={data} loading={loading}
-        actions={<Button size="sm" onClick={openAdd}>+ Add Mapping</Button>} />
+        actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>} />
 
       <div className="grid grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">

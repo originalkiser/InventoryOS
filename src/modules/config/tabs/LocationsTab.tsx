@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
@@ -52,7 +53,7 @@ const col = createColumnHelper<Location>()
 
 export function LocationsTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, update, remove, importRows } = useConfigTab<Location>('locations')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<Location>('locations')
   const { active: customFields, addField } = useCustomFields('locations')
 
   const [addOpen, setAddOpen] = useState(false)
@@ -178,6 +179,7 @@ export function LocationsTab() {
         loading={loading}
         actions={
           <>
+            <ClearTableButton clearAll={clearAll} />
             <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
             <Button size="sm" onClick={openAdd}>+ Add Location</Button>
           </>

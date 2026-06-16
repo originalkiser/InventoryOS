@@ -8,6 +8,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
@@ -28,7 +29,7 @@ const col = createColumnHelper<LocationOrderConfig>()
 export function OrderConfigTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, update, remove, importRows } = useConfigTab<LocationOrderConfig>('location_order_configs')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<LocationOrderConfig>('location_order_configs')
   const { active: customFields, addField } = useCustomFields('order_config')
   const loc = useLocations()
 
@@ -157,6 +158,7 @@ export function OrderConfigTab() {
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="order_config.csv" exportData={data} loading={loading}
         actions={<>
+          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
           <Button size="sm" onClick={openAdd}>+ Add Config</Button>
         </>}

@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
@@ -31,7 +32,7 @@ const col = createColumnHelper<VendorPart>()
 export function VendorPartsTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, update, remove, importRows } = useConfigTab<VendorPart>('vendor_parts')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<VendorPart>('vendor_parts')
   const { active: customFields, addField } = useCustomFields('vendor_parts')
 
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -162,6 +163,7 @@ export function VendorPartsTab() {
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="vendor_parts.csv" exportData={data} loading={loading}
         actions={<>
+          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
           <Button size="sm" onClick={openAdd}>+ Add Part</Button>
         </>}
