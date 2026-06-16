@@ -5,14 +5,23 @@ import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import type { MeetingNote, Task } from '@/types'
+import type { MeetingNote, Project, Task } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
 const EMPTY_FORM = { title: 'Untitled Meeting', meeting_date: '', meeting_time: '', vendor: '', category: '', notes: '' }
-const EMPTY_TASK = { title: '', target_date: '' }
+const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
 const col = createColumnHelper<MeetingNote>()
+
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 pt-1">
+      <span className="text-[10px] font-mono text-inky/60 uppercase tracking-widest whitespace-nowrap">{children}</span>
+      <div className="flex-1 border-t border-navy/15" />
+    </div>
+  )
+}
 
 function formatDateTime(date: string | null, time: string | null): string {
   if (!date) return '—'
@@ -27,31 +36,40 @@ export function MeetingNotesPage() {
   const companyId = profile?.company_id ?? null
 
   const [meetings, setMeetings] = useState<MeetingNote[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState({ ...EMPTY_FORM })
   const [saving, setSaving] = useState(false)
 
-  // Tasks within the open meeting
   const [meetingTasks, setMeetingTasks] = useState<Task[]>([])
   const [taskForm, setTaskForm] = useState({ ...EMPTY_TASK })
 
   const load = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
-    const { data, error } = await (supabase as any)
-      .from('meeting_notes')
-      .select('*')
-      .eq('company_id', companyId)
-      .order('meeting_date', { ascending: false, nullsFirst: false })
-      .order('created_at', { ascending: false })
-    if (error) toast.error(error.message)
-    else setMeetings((data ?? []) as MeetingNote[])
+    const sb = supabase as any
+    const [meetRes, projRes] = await Promise.all([
+      sb.from('meeting_notes').select('*').eq('company_id', companyId)
+        .order('meeting_date', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false }),
+      sb.from('projects').select('id, project_name, status').eq('company_id', companyId).order('project_name'),
+    ])
+    if (meetRes.error) toast.error(meetRes.error.message)
+    else setMeetings((meetRes.data ?? []) as MeetingNote[])
+    setProjects((projRes.data ?? []) as Project[])
     setLoading(false)
   }, [companyId])
 
   useEffect(() => { load() }, [load])
+
+  const openProjects = useMemo(
+    () => projects.filter((p) => p.status !== 'Complete' && p.status !== 'Cancelled'),
+    [projects]
+  )
+
+  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p.project_name])), [projects])
 
   async function loadMeetingTasks(meetingId: string) {
     const { data } = await (supabase as any)
@@ -131,6 +149,7 @@ export function MeetingNotesPage() {
       company_id: companyId,
       title: taskForm.title.trim(),
       target_date: taskForm.target_date || null,
+      project_id: taskForm.project_id || null,
       source: 'meeting',
       meeting_id: editId,
       created_by: profile?.id ?? null,
@@ -217,15 +236,16 @@ export function MeetingNotesPage() {
         size="xl"
       >
         <div className="flex flex-col gap-4">
-          {/* Header fields */}
           <Input
             label="Meeting Name *"
             value={form.title}
             onChange={(e) => setForm({ ...form, title: e.target.value })}
           />
+
+          <SectionHeader>Meeting Details</SectionHeader>
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Date" type="date" value={form.meeting_date} onChange={(e) => setForm({ ...form, meeting_date: e.target.value })} />
-            <Input label="Time" type="time" value={form.meeting_time} onChange={(e) => setForm({ ...form, meeting_time: e.target.value })} />
+            <Input label="Meeting Date" type="date" value={form.meeting_date} onChange={(e) => setForm({ ...form, meeting_date: e.target.value })} />
+            <Input label="Meeting Time" type="time" value={form.meeting_time} onChange={(e) => setForm({ ...form, meeting_time: e.target.value })} />
             <div className="flex flex-col gap-1">
               <label className="text-xs font-mono text-inky uppercase tracking-wide">Vendor</label>
               <input
@@ -254,19 +274,15 @@ export function MeetingNotesPage() {
             </div>
           </div>
 
-          {/* Notes */}
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-mono text-inky uppercase tracking-wide">Notes</label>
-            <textarea
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              rows={8}
-              placeholder="Meeting notes, agenda items, decisions made…"
-              className="rounded border border-navy/30 bg-cream px-3 py-2 text-sm font-body text-navy placeholder-inky/40 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none resize-y"
-            />
-          </div>
+          <SectionHeader>Meeting Notes</SectionHeader>
+          <textarea
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            rows={8}
+            placeholder="Meeting notes, agenda items, decisions made…"
+            className="rounded border border-navy/30 bg-cream px-3 py-2 text-sm font-body text-navy placeholder-inky/40 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none resize-y"
+          />
 
-          {/* Save/Delete row */}
           <div className="flex items-center justify-between gap-2">
             <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete Meeting</Button>}</div>
             <Button size="sm" onClick={onSave} disabled={saving || !form.title.trim()}>
@@ -274,13 +290,12 @@ export function MeetingNotesPage() {
             </Button>
           </div>
 
-          {/* Tasks section — only shown after meeting is saved (has an id) */}
-          {editId && (
-            <div className="border-t border-navy/20 pt-4 flex flex-col gap-3">
-              <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Action Items</h3>
+          {editId ? (
+            <div className="flex flex-col gap-3">
+              <SectionHeader>Action Items</SectionHeader>
 
               {meetingTasks.length === 0 && (
-                <p className="text-xs font-body italic text-inky/50">No tasks yet.</p>
+                <p className="text-xs font-body italic text-inky/50">No action items yet.</p>
               )}
               <ul className="flex flex-col gap-1.5">
                 {meetingTasks.map((t) => (
@@ -294,6 +309,11 @@ export function MeetingNotesPage() {
                     <span className={['flex-1 text-sm font-body', t.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
                       {t.title}
                     </span>
+                    {t.project_id && (
+                      <span className="text-[10px] font-mono text-inky/60 bg-navy/8 border border-navy/20 rounded px-1.5 py-0.5 flex-shrink-0">
+                        {projectById.get(t.project_id) ?? 'Project'}
+                      </span>
+                    )}
                     {t.target_date && (
                       <span className="text-xs font-mono text-inky/50 flex-shrink-0">
                         {format(new Date(t.target_date + 'T00:00:00'), 'MMM d')}
@@ -307,7 +327,7 @@ export function MeetingNotesPage() {
                 ))}
               </ul>
 
-              {/* Add task inline */}
+              {/* Add action item inline */}
               <div className="flex items-center gap-2 pt-1">
                 <input
                   value={taskForm.title}
@@ -316,6 +336,16 @@ export function MeetingNotesPage() {
                   placeholder="New action item…"
                   className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy placeholder-inky/40 focus:border-sky focus:outline-none"
                 />
+                <select
+                  value={taskForm.project_id}
+                  onChange={(e) => setTaskForm({ ...taskForm, project_id: e.target.value })}
+                  className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none"
+                >
+                  <option value="">No project</option>
+                  {openProjects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.project_name}</option>
+                  ))}
+                </select>
                 <input
                   type="date"
                   value={taskForm.target_date}
@@ -331,8 +361,7 @@ export function MeetingNotesPage() {
                 </button>
               </div>
             </div>
-          )}
-          {!editId && (
+          ) : (
             <p className="text-xs font-body italic text-inky/50 border-t border-navy/10 pt-3">
               Save the meeting first to add action items.
             </p>

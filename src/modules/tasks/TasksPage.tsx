@@ -56,7 +56,7 @@ function sortTasks(tasks: UnifiedTask[], key: SortKey): UnifiedTask[] {
   })
 }
 
-const EMPTY_FORM = { title: '', notes: '', target_date: '' }
+const EMPTY_FORM = { title: '', notes: '', target_date: '', project_id: '' }
 
 export function TasksPage() {
   const { profile } = useAuthStore()
@@ -173,9 +173,14 @@ export function TasksPage() {
     setAddOpen(true)
   }
 
+  const openProjects = useMemo(
+    () => projects.filter((p) => p.status !== 'Complete' && p.status !== 'Cancelled'),
+    [projects]
+  )
+
   function openEdit(task: Task) {
     setEditTask(task)
-    setForm({ title: task.title, notes: task.notes ?? '', target_date: task.target_date ?? '' })
+    setForm({ title: task.title, notes: task.notes ?? '', target_date: task.target_date ?? '', project_id: task.project_id ?? '' })
     setAddOpen(true)
   }
 
@@ -187,6 +192,7 @@ export function TasksPage() {
       title: form.title.trim(),
       notes: form.notes.trim() || null,
       target_date: form.target_date || null,
+      project_id: form.project_id || null,
       source: 'manual',
       created_by: profile?.id ?? null,
     }
@@ -328,6 +334,19 @@ export function TasksPage() {
             onChange={(e) => setForm({ ...form, title: e.target.value })}
             placeholder="What needs to be done?"
           />
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-mono text-inky uppercase tracking-wide">Link to Project</label>
+            <select
+              value={form.project_id}
+              onChange={(e) => setForm({ ...form, project_id: e.target.value })}
+              className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
+            >
+              <option value="">No project</option>
+              {openProjects.map((p) => (
+                <option key={p.id} value={p.id}>{p.project_name}</option>
+              ))}
+            </select>
+          </div>
           <Input
             label="Target Date"
             type="date"

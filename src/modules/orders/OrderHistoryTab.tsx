@@ -168,19 +168,24 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
   const FIELDS = [
     { name: 'location', label: 'Location', required: true },
     { name: 'product', label: 'Product', required: true },
-    { name: 'quantity', label: 'Quantity', required: true },
+    { name: 'quantity', label: 'Quantity Ordered', required: true },
+    { name: 'order_date', label: 'Order Date', required: false },
+    { name: 'expected_delivery', label: 'Expected Delivery', required: false },
   ]
 
   async function doImport(maps: ColumnMapping[]) {
     const lines = parsed!.rows.map((row) => {
       let location_id: string | null = null, product = '', quantity = 0
+      let order_date: string | null = null, expected_delivery: string | null = null
       for (const m of maps) {
         const v = mappedValue(row, m)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
         else if (m.fieldName === 'product') product = v
         else if (m.fieldName === 'quantity') quantity = parseFloat(v.replace(/[$,]/g, '')) || 0
+        else if (m.fieldName === 'order_date') order_date = v || null
+        else if (m.fieldName === 'expected_delivery') expected_delivery = v || null
       }
-      return { location_id, product_id: product, quantity }
+      return { location_id, product_id: product, quantity, order_date, expected_delivery }
     }).filter((l) => l.product_id)
     if (!lines.length) { toast.error('No rows to import'); return }
     const msg = mode === 'replace'
@@ -197,7 +202,7 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
       .insert({ company_id: companyId, created_by: createdBy, name: name.trim() || `Imported orders ${new Date().toISOString().slice(0, 10)}`, status: 'fulfilled', source: 'import', source_mode: 'file' })
       .select().single()
     if (error || !sess) { toast.error(error?.message ?? 'Import failed'); return }
-    const liRows = lines.map((l) => ({ order_session_id: sess.id, company_id: companyId, location_id: l.location_id, product_id: l.product_id, quantity: l.quantity }))
+    const liRows = lines.map((l) => ({ order_session_id: sess.id, company_id: companyId, location_id: l.location_id, product_id: l.product_id, quantity: l.quantity, order_date: l.order_date, expected_delivery: l.expected_delivery }))
     const { error: liErr } = await sb.from('order_line_items').insert(liRows)
     if (liErr) { toast.error(liErr.message); return }
     toast.success(`Imported ${liRows.length} line(s)`); onDone()
@@ -206,7 +211,31 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
   return (
     <Modal open onClose={onClose} title="Import Order History" size="lg">
       {!parsed ? (
-        <FileUploadZone onParsed={setParsed} />
+        <div className="flex flex-col gap-4">
+          <div className="rounded border border-navy/20 bg-navy/5 px-4 py-3 flex flex-col gap-2">
+            <p className="text-xs font-mono text-inky uppercase tracking-wide">Expected columns in your file</p>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+              {[
+                { col: 'Location', note: 'Location name or code', required: true },
+                { col: 'Product', note: 'Product ID or name', required: true },
+                { col: 'Quantity Ordered', note: 'Numeric quantity', required: true },
+                { col: 'Order Date', note: 'Date the order was placed', required: false },
+                { col: 'Expected Delivery', note: 'Anticipated delivery date', required: false },
+              ].map(({ col, note, required }) => (
+                <div key={col} className="flex items-start gap-1.5">
+                  <span className={['text-[10px] font-mono mt-0.5 flex-shrink-0 rounded px-1', required ? 'bg-navy/20 text-navy' : 'bg-inky/10 text-inky/60'].join(' ')}>
+                    {required ? 'REQ' : 'OPT'}
+                  </span>
+                  <div>
+                    <span className="text-xs font-mono font-semibold text-navy">{col}</span>
+                    <span className="text-xs font-body text-inky/60 ml-1">— {note}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <FileUploadZone onParsed={setParsed} />
+        </div>
       ) : (
         <div className="flex flex-col gap-4">
           <Input label="Import name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. May vendor orders" />

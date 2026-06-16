@@ -71,6 +71,7 @@ export interface Task {
   completed_by: string | null
   source: string
   meeting_id: string | null
+  project_id: string | null
   sort_order: number
   created_by: string | null
   created_at: string
@@ -462,6 +463,8 @@ export interface OrderLineItem {
   trigger_reason: string | null
   manual_override: boolean
   notes: string | null
+  order_date: string | null
+  expected_delivery: string | null
   created_at: string
   updated_at: string
 }
