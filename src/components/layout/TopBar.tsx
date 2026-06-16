@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { useDarkMode } from '@/hooks/useDarkMode'
+import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format } from 'date-fns'
 import { differenceInDays } from 'date-fns'
 
@@ -16,6 +18,8 @@ interface TopBarStats {
 export function TopBar() {
   const navigate = useNavigate()
   const { profile } = useAuthStore()
+  const { dark, toggle: toggleDark } = useDarkMode()
+  const [endDayOpen, setEndDayOpen] = useState(false)
   const [stats, setStats] = useState<TopBarStats>({
     pendingIssues: 0,
     todayChecklists: 0,
@@ -164,16 +168,16 @@ export function TopBar() {
   ]
 
   return (
-    <header className="relative h-12 bg-navy border-b border-navy/40 flex items-center px-4 gap-4 flex-shrink-0">
+    <header className="relative h-12 bg-[#002745] border-b border-[#002745]/40 flex items-center px-4 gap-4 flex-shrink-0">
       {/* Wordmark */}
-      <span className="font-heading font-bold text-cream text-sm tracking-widest uppercase whitespace-nowrap">
+      <span className="font-heading font-bold text-[#F2F1E6] text-sm tracking-widest uppercase whitespace-nowrap">
         Strickland Brothers
       </span>
 
       <div className="w-px h-5 bg-inky/40 flex-shrink-0" />
 
       {/* Stat pills */}
-      <div className="flex items-center gap-2 flex-wrap flex-1">
+      <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
         {pills.map((pill) => (
           <button
             key={pill.label}
@@ -187,6 +191,35 @@ export function TopBar() {
           </button>
         ))}
       </div>
+
+      {/* End Day */}
+      <button
+        onClick={() => setEndDayOpen(true)}
+        title="End of day check-in"
+        className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 text-[10px] font-heading uppercase tracking-wide transition-all"
+      >
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        End Day
+      </button>
+
+      {/* Dark mode toggle */}
+      <button
+        onClick={toggleDark}
+        title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+        className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/10 transition-all"
+      >
+        {dark ? (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M17.657 17.657l-.707-.707M6.343 6.343l-.707-.707M12 7a5 5 0 100 10 5 5 0 000-10z" />
+          </svg>
+        ) : (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
+          </svg>
+        )}
+      </button>
 
       {/* Checklist popover */}
       {checklistOpen && (
@@ -241,6 +274,8 @@ export function TopBar() {
           )}
         </div>
       )}
+
+      <EndDayModal open={endDayOpen} onClose={() => setEndDayOpen(false)} />
     </header>
   )
 }

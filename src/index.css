@@ -39,8 +39,22 @@
   font-style: italic;
 }
 
+/* Brand colour tokens — light mode */
 :root {
+  --color-navy:  0 39 69;      /* #002745 */
+  --color-inky:  79 116 137;   /* #4F7489 */
+  --color-sky:   183 224 222;  /* #B7E0DE */
+  --color-cream: 242 241 230;  /* #F2F1E6 */
   color-scheme: light;
+}
+
+/* Dark mode — flip content colours; structural dark elements use literal hex */
+.dark {
+  --color-navy:  196 218 230;  /* #C4DAE6 — light blue-grey for text */
+  --color-cream: 10 24 38;     /* #0A1826 — very dark navy bg */
+  --color-inky:  106 154 178;  /* #6A9AB2 — mid-tone for secondary text */
+  /* sky stays the same (#B7E0DE) — works as accent on both backgrounds */
+  color-scheme: dark;
 }
 
 * {
@@ -49,8 +63,8 @@
 
 body {
   margin: 0;
-  background-color: #F2F1E6;
-  color: #002745;
+  background-color: rgb(var(--color-cream));
+  color: rgb(var(--color-navy));
   font-family: 'DM Mono', monospace;
 }
 
@@ -60,22 +74,47 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #F2F1E6;
+  background: rgb(var(--color-cream));
 }
 ::-webkit-scrollbar-thumb {
-  background: #4F7489;
+  background: rgb(var(--color-inky));
   border-radius: 3px;
-  opacity: 0.4;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #002745;
+  background: rgb(var(--color-navy));
 }
 
 /* Selection */
 ::selection {
   background: rgba(183, 224, 222, 0.4);
-  color: #002745;
+  color: rgb(var(--color-navy));
 }
+
+/* Dark-mode alternating table rows (DataTable hardcodes #ECEBD8) */
+.dark .rbc-calendar {
+  background: #0A1826 !important;
+  color: rgb(var(--color-navy)) !important;
+  border-color: rgba(196,218,230,0.15) !important;
+}
+.dark .rbc-header {
+  background: #001A30 !important;
+  border-color: rgba(196,218,230,0.15) !important;
+}
+.dark .rbc-toolbar {
+  background: #0A1826 !important;
+  border-color: rgba(196,218,230,0.1) !important;
+}
+.dark .rbc-toolbar button { color: rgb(var(--color-navy)) !important; border-color: rgba(196,218,230,0.3) !important; }
+.dark .rbc-toolbar button.rbc-active { background: rgba(196,218,230,0.15) !important; }
+.dark .rbc-toolbar-label { color: rgb(var(--color-navy)) !important; }
+.dark .rbc-month-view, .dark .rbc-time-view, .dark .rbc-agenda-view { border-color: rgba(196,218,230,0.1) !important; }
+.dark .rbc-day-bg { border-color: rgba(196,218,230,0.08) !important; }
+.dark .rbc-off-range-bg { background: #06111D !important; }
+.dark .rbc-today { background: rgba(183,224,222,0.08) !important; }
+.dark .rbc-date-cell { color: rgb(var(--color-inky)) !important; }
+.dark .rbc-agenda-view table { background: #0A1826 !important; }
+.dark .rbc-agenda-date-cell, .dark .rbc-agenda-time-cell { color: rgb(var(--color-inky)) !important; }
+.dark .rbc-agenda-event-cell { color: rgb(var(--color-navy)) !important; }
 
 /* Fix react-big-calendar theme */
 .rbc-calendar {

@@ -68,7 +68,7 @@ export function DataTable<T>({
         <table className="w-full text-xs font-body">
           <thead>
             {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className="border-b border-inky/20 bg-navy">
+              <tr key={hg.id} className="border-b border-inky/20 bg-[#002745]">
                 {hg.headers.map((header) => (
                   <th
                     key={header.id}
@@ -76,8 +76,8 @@ export function DataTable<T>({
                       ? { position: 'sticky', left: header.column.getStart('left'), zIndex: 20 }
                       : undefined}
                     className={[
-                      'px-3 py-2 text-left text-cream font-heading text-sm uppercase tracking-wide whitespace-nowrap',
-                      header.column.getIsPinned() === 'left' ? 'bg-navy border-r-2 border-r-inky/40' : '',
+                      'px-3 py-2 text-left text-[#F2F1E6] font-heading text-sm uppercase tracking-wide whitespace-nowrap',
+                      header.column.getIsPinned() === 'left' ? 'bg-[#002745] border-r-2 border-r-inky/40' : '',
                     ].join(' ')}
                   >
                     <span
@@ -113,7 +113,7 @@ export function DataTable<T>({
                   key={row.id}
                   className={[
                     'border-b border-inky/10 hover:bg-sky/20 transition-colors',
-                    i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8]',
+                    i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]',
                   ].join(' ')}
                 >
                   {row.getVisibleCells().map((cell) => (
@@ -125,7 +125,7 @@ export function DataTable<T>({
                       className={[
                         'px-3 py-2 text-navy',
                         cell.column.getIsPinned() === 'left'
-                          ? `${i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8]'} border-r-2 border-r-inky/20`
+                          ? `${i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'} border-r-2 border-r-inky/20`
                           : '',
                       ].join(' ')}
                     >

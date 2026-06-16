@@ -50,7 +50,7 @@ export function ConfigUpload({ requiredFields, onImport, importing, allowReplace
           <span className="text-xs font-mono text-inky uppercase tracking-wide">Mode</span>
           <div className="flex rounded border border-navy/30 overflow-hidden">
             <button onClick={() => setMode('merge')}
-              className={['px-3 py-1 text-xs font-mono', mode === 'merge' ? 'bg-[#00e5ff]/10 text-inky' : 'text-inky hover:text-navy'].join(' ')}>
+              className={['px-3 py-1 text-xs font-mono', mode === 'merge' ? 'bg-sky/20 text-navy font-bold' : 'text-inky hover:text-navy'].join(' ')}>
               Update changes only
             </button>
             {allowReplace && (

@@ -103,17 +103,12 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   return (
     <aside
       className={[
-        'flex flex-col h-full bg-navy border-r border-navy/40 transition-all duration-200',
+        'flex flex-col h-full bg-[#002745] border-r border-[#002745]/40 transition-all duration-200',
         collapsed ? 'w-14' : 'w-52',
       ].join(' ')}
     >
       {/* Logo */}
-      <div className="flex items-center justify-between px-3 h-12 border-b border-navy/40">
-        {!collapsed && (
-          <span className="text-xs font-heading font-bold text-cream tracking-widest uppercase">
-            Strickland Brothers
-          </span>
-        )}
+      <div className="flex items-center justify-between px-3 h-12 border-b border-[#002745]/40">
         <button
           onClick={onToggleCollapsed}
           className="ml-auto text-inky hover:text-cream transition-colors"

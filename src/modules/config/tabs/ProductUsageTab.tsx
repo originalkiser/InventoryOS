@@ -5,6 +5,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
@@ -115,9 +116,12 @@ export function ProductUsageTab() {
         </>}
       />
 
-      <div className="flex flex-col gap-3 max-w-2xl">
-        <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
-        <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
+      <div className="grid grid-cols-2 gap-6">
+        <div className="flex flex-col gap-3">
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
+          <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
+        </div>
+        <DataSourceLinker configType="product_usage" />
       </div>
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Product Usage' : 'Add Product Usage'} size="lg">

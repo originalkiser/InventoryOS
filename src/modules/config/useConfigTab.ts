@@ -41,14 +41,24 @@ export function useConfigTab<T>(tableName: string) {
     setLoading(false)
   }, [profile?.company_id, tableName])
 
-  // Insert/upsert in batches so large imports don't exceed request limits.
+  // Insert/upsert in batches — 4 concurrent at 2000 rows each for large imports.
   async function writeInBatches(rows: Record<string, unknown>[], op: 'insert' | 'upsert'): Promise<{ message: string } | null> {
     const sb = supabase as any
-    const BATCH = 500
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const slice = rows.slice(i, i + BATCH)
-      const { error } = op === 'upsert' ? await sb.from(tableName).upsert(slice) : await sb.from(tableName).insert(slice)
-      if (error) return error
+    const BATCH = 2000
+    const CONCURRENCY = 4
+    const batches: Record<string, unknown>[][] = []
+    for (let i = 0; i < rows.length; i += BATCH) batches.push(rows.slice(i, i + BATCH))
+
+    for (let i = 0; i < batches.length; i += CONCURRENCY) {
+      const group = batches.slice(i, i + CONCURRENCY)
+      const results = await Promise.all(
+        group.map((slice) =>
+          op === 'upsert' ? sb.from(tableName).upsert(slice) : sb.from(tableName).insert(slice)
+        )
+      )
+      for (const { error } of results) {
+        if (error) return error
+      }
     }
     return null
   }
@@ -78,7 +88,7 @@ export function useConfigTab<T>(tableName: string) {
     const payload = rows.map((r) => stamp(r as Record<string, unknown>, 'upload'))
     const error = await writeInBatches(payload, 'upsert')
     if (error) toast.error(error.message)
-    else { toast.success(`Imported ${rows.length} rows`); await load() }
+    else { toast.success(`Imported ${rows.length} rows`); load().catch(() => {}) }
   }
 
   // Merge (match existing by natural key, update or insert) or replace-all.
@@ -91,8 +101,9 @@ export function useConfigTab<T>(tableName: string) {
       const { error: delErr } = await sb.from(tableName).delete().eq('company_id', profile.company_id)
       if (delErr) { toast.error(delErr.message); return }
       const error = await writeInBatches(rows.map((r) => stamp(r as Record<string, unknown>, source)), 'insert')
-      if (error) toast.error(error.message)
-      else { toast.success(`Replaced with ${rows.length} rows`); await load() }
+      if (error) { toast.error(error.message); return }
+      toast.success(`Replaced with ${rows.length.toLocaleString()} rows`)
+      load().catch(() => {})
       return
     }
 
@@ -110,12 +121,10 @@ export function useConfigTab<T>(tableName: string) {
       return id ? { ...base, id } : base
     })
     const error = await writeInBatches(payload, 'upsert')
-    if (error) toast.error(error.message)
-    else {
-      const updated = payload.filter((p: any) => p.id).length
-      toast.success(`Imported ${rows.length} rows (${updated} updated, ${rows.length - updated} new)`)
-      await load()
-    }
+    if (error) { toast.error(error.message); return }
+    const updated = payload.filter((p: any) => p.id).length
+    toast.success(`Imported ${rows.length.toLocaleString()} rows (${updated.toLocaleString()} updated, ${(rows.length - updated).toLocaleString()} new)`)
+    load().catch(() => {})
   }
 
   async function remove(id: string) {

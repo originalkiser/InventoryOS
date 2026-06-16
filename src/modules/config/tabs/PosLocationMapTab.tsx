@@ -4,6 +4,7 @@ import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Badge } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
@@ -83,9 +84,12 @@ export function PosLocationMapTab() {
         exportFilename="pos_location_map.csv" exportData={data} loading={loading}
         actions={<Button size="sm" onClick={openAdd}>+ Add Mapping</Button>} />
 
-      <div className="flex flex-col gap-3 max-w-2xl">
-        <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
-        <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
+      <div className="grid grid-cols-2 gap-6">
+        <div className="flex flex-col gap-3">
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
+          <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
+        </div>
+        <DataSourceLinker configType="pos_location_map" />
       </div>
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Mapping' : 'Add Mapping'}>
