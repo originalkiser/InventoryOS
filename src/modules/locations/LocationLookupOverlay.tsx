@@ -404,6 +404,8 @@ function cellVal(r: Record<string, any>, c: string): any {
 }
 const colLabel = (c: string) => (c.startsWith('meta:') ? c.slice(5) : c)
 
+const PAGE = 1000
+
 function TableBlock({ block, editing, search, activeFilter, onChange }: {
   block: Extract<Block, { type: 'table' }>; editing: boolean; search: string
   activeFilter: { column: string; value: string; label: string } | null
@@ -416,21 +418,47 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
   const [seeAll, setSeeAll] = useState(false)
   const isLocations = block.source === 'locations'
 
+  // Derive allCols from a row sample
+  function deriveAllCols(r: Record<string, any>[], source: string) {
+    const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
+    const metaKeys = new Set<string>()
+    for (const row of r) {
+      const m = row.metadata
+      if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`)
+    }
+    return [...base, ...metaKeys, ...(source === 'locations' ? ['__pos__'] : [])]
+  }
+
+  // Locations: reuse the already-loaded data from useLocations (no limit, no extra round-trip)
   useEffect(() => {
-    if (!profile?.company_id) return
+    if (!isLocations) return
+    const r = loc.locations as unknown as Record<string, any>[]
+    setRows(r)
+    setAllCols(deriveAllCols(r, 'locations'))
+  }, [isLocations, loc.locations])
+
+  // Other sources: count then parallel-page fetch (no row cap)
+  useEffect(() => {
+    if (isLocations || !profile?.company_id) return
     let cancelled = false
-    ;(supabase as any).from(block.source).select('*').eq('company_id', profile.company_id).limit(100)
-      .then(({ data }: any) => {
-        if (cancelled) return
-        const r = (data ?? []) as Record<string, any>[]
-        setRows(r)
-        const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
-        const metaKeys = new Set<string>()
-        for (const row of r) { const m = row.metadata; if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`) }
-        setAllCols([...base, ...metaKeys, ...(block.source === 'locations' ? ['__pos__'] : [])])
-      })
+    const sb = supabase as any
+    ;(async () => {
+      const { count, error: countErr } = await sb
+        .from(block.source).select('*', { count: 'exact', head: true }).eq('company_id', profile.company_id)
+      if (countErr || !count || cancelled) return
+      const pageCount = Math.ceil(count / PAGE)
+      const results = await Promise.all(
+        Array.from({ length: pageCount }, (_, i) =>
+          sb.from(block.source).select('*').eq('company_id', profile.company_id).range(i * PAGE, (i + 1) * PAGE - 1)
+        )
+      )
+      if (cancelled) return
+      const r = results.flatMap((res: any) => (res.data ?? []) as Record<string, any>[])
+      setRows(r)
+      setAllCols(deriveAllCols(r, block.source))
+    })()
     return () => { cancelled = true }
-  }, [block.source, profile?.company_id])
+  }, [isLocations, block.source, profile?.company_id])
 
   const valueOf = (r: Record<string, any>, c: string) => (c === '__pos__' && isLocations ? loc.posStringFor(r.id) : cellVal(r, c))
   const labelFor = (c: string) => (c === '__pos__' ? 'POS String' : colLabel(c))
