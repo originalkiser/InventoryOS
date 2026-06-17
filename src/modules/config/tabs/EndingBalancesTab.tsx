@@ -9,10 +9,12 @@ import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
+import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { MonthlyEndingBalance, ColumnMapping } from '@/types'
+import type { ParseResult } from '@/lib/fileParser'
 import { format } from 'date-fns'
 
 const RECOMMENDED = [
@@ -40,6 +42,16 @@ function num(v: string): number | null {
   const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n
 }
 
+// Parse pivot column header "Aug-25" → "2025-08-01"
+const PIVOT_MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+function parsePivotMonth(header: string): string | null {
+  const match = /^([A-Za-z]{3})-(\d{2})$/.exec(header.trim())
+  if (!match) return null
+  const idx = PIVOT_MONTHS.indexOf(match[1].toLowerCase())
+  if (idx === -1) return null
+  return `${2000 + parseInt(match[2], 10)}-${String(idx + 1).padStart(2, '0')}-01`
+}
+
 const col = createColumnHelper<MonthlyEndingBalance>()
 
 export function EndingBalancesTab() {
@@ -52,6 +64,8 @@ export function EndingBalancesTab() {
   const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [pivotParsed, setPivotParsed] = useState<ParseResult | null>(null)
+  const [pivotImporting, setPivotImporting] = useState(false)
 
   const [form, setForm] = useState({ locationId: '', month: '', ending_balance: '' })
   const [catVals, setCatVals] = useState<Record<string, string>>({})
@@ -102,6 +116,30 @@ export function EndingBalancesTab() {
     setImporting(false)
   }
 
+  async function handlePivotImport() {
+    if (!pivotParsed) return
+    setPivotImporting(true)
+    const { headers, rows } = pivotParsed
+    const locationCol = headers[0]
+    const monthCols = headers.slice(1).filter((h) => parsePivotMonth(h) !== null)
+    const payload: Partial<MonthlyEndingBalance>[] = []
+    for (const row of rows) {
+      const locRaw = (row[locationCol] ?? '').trim()
+      if (!locRaw) continue
+      const location_id = loc.resolveId(locRaw)
+      for (const col of monthCols) {
+        const month = parsePivotMonth(col)
+        if (!month) continue
+        const ending_balance = num(row[col] ?? '')
+        if (ending_balance === null) continue
+        payload.push({ location_id, month, ending_balance, metadata: {} })
+      }
+    }
+    await importRows(payload, { mode: 'merge', source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.month}` })
+    setPivotParsed(null)
+    setPivotImporting(false)
+  }
+
   function resetForm() { setForm({ locationId: '', month: '', ending_balance: '' }); setCatVals({}) }
   function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
   function openEdit(r: MonthlyEndingBalance) {
@@ -147,10 +185,31 @@ export function EndingBalancesTab() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
-          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File (Tall Format)</h3>
           <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label, field_type: 'number' })} />
         </div>
         <DataSourceLinker configType="monthly_ending_balances" />
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div>
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Pivot / Wide Format Upload</h3>
+          <p className="text-[11px] font-mono text-inky/60 mt-0.5">
+            First column = Location code · Remaining columns = months in "Aug-25" format · Values = dollar amounts
+          </p>
+        </div>
+        {!pivotParsed ? (
+          <div className="max-w-lg">
+            <FileUploadZone onParsed={(r) => setPivotParsed(r)} label="Drop pivot CSV / Excel here, or click to browse" />
+          </div>
+        ) : (
+          <PivotPreview
+            parsed={pivotParsed}
+            importing={pivotImporting}
+            onImport={handlePivotImport}
+            onCancel={() => setPivotParsed(null)}
+          />
+        )}
       </div>
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Ending Balance' : 'Add Ending Balance'} size="lg">
@@ -176,6 +235,59 @@ export function EndingBalancesTab() {
       <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Ending-Balance Categories" size="lg">
         <CustomFieldsEditor section="ending_balance" recommended={RECOMMENDED} />
       </Modal>
+    </div>
+  )
+}
+
+function PivotPreview({
+  parsed, importing, onImport, onCancel,
+}: { parsed: ParseResult; importing: boolean; onImport: () => void; onCancel: () => void }) {
+  const locationCol = parsed.headers[0]
+  const monthCols = parsed.headers.slice(1).filter((h) => parsePivotMonth(h) !== null)
+  const unrecognized = parsed.headers.slice(1).filter((h) => parsePivotMonth(h) === null)
+  const locationCount = new Set(parsed.rows.map((r) => r[locationCol]).filter(Boolean)).size
+  const totalRows = locationCount * monthCols.length
+
+  if (monthCols.length === 0) {
+    return (
+      <div className="flex flex-col gap-3 max-w-lg">
+        <div className="rounded border border-red-500/30 bg-red-500/10 px-4 py-3">
+          <p className="text-xs font-mono text-red-400">
+            No month columns detected. Headers must be in "Aug-25" format (3-letter month + 2-digit year).
+          </p>
+          {unrecognized.length > 0 && (
+            <p className="text-[11px] font-mono text-red-400/70 mt-1">
+              Found: {unrecognized.slice(0, 6).join(', ')}{unrecognized.length > 6 ? ` +${unrecognized.length - 6} more` : ''}
+            </p>
+          )}
+        </div>
+        <Button size="sm" variant="secondary" onClick={onCancel}>Cancel</Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3 max-w-lg">
+      <div className="rounded border border-navy/20 bg-navy/5 px-4 py-3 flex flex-col gap-1.5">
+        <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest">Preview</p>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs font-mono text-inky">
+          <span className="text-inky/50">Months detected</span>
+          <span>{monthCols.length} ({monthCols[0]} → {monthCols[monthCols.length - 1]})</span>
+          <span className="text-inky/50">Locations</span>
+          <span>{locationCount}</span>
+          <span className="text-inky/50">Rows to upsert</span>
+          <span>~{totalRows}</span>
+        </div>
+        {unrecognized.length > 0 && (
+          <p className="text-[11px] font-mono text-inky/40 mt-1">
+            Skipping {unrecognized.length} unrecognized column{unrecognized.length > 1 ? 's' : ''}: {unrecognized.slice(0, 4).join(', ')}{unrecognized.length > 4 ? '…' : ''}
+          </p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={onImport} loading={importing}>Import {totalRows} Rows</Button>
+        <Button size="sm" variant="secondary" onClick={onCancel} disabled={importing}>Cancel</Button>
+      </div>
     </div>
   )
 }
