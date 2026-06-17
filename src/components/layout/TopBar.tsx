@@ -34,7 +34,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     activeShops: 0,
   })
   const [checklistOpen, setChecklistOpen] = useState(false)
-  const [showMineOnly, setShowMineOnly] = useState(false)
+  const [filterUserId, setFilterUserId] = useState('')
   type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string; assignedTo: string[] | null }
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
@@ -264,17 +264,16 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
               Today's Checklist
             </span>
             <div className="flex items-center gap-2 ml-auto">
-              <button
-                onClick={() => setShowMineOnly((v) => !v)}
-                className={[
-                  'text-[10px] font-mono px-2 py-0.5 rounded border transition-all',
-                  showMineOnly
-                    ? 'bg-[#00e5ff]/20 border-[#00e5ff]/60 text-navy'
-                    : 'border-navy/20 text-inky/60 hover:border-navy/40',
-                ].join(' ')}
+              <select
+                value={filterUserId}
+                onChange={(e) => setFilterUserId(e.target.value)}
+                className="text-[10px] font-mono border border-navy/20 rounded px-1.5 py-0.5 bg-cream text-inky focus:outline-none focus:border-[#00e5ff]/60 max-w-[110px] truncate"
               >
-                {showMineOnly ? 'Mine' : 'All'}
-              </button>
+                <option value="">All</option>
+                {orgProfiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.full_name ?? p.email}</option>
+                ))}
+              </select>
               <button onClick={() => setChecklistOpen(false)} className="text-inky hover:text-navy transition-colors">
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -283,13 +282,12 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
             </div>
           </div>
           {(() => {
-            const myId = profile?.id ?? ''
-            const visible = showMineOnly
-              ? checklistItems.filter((i) => !i.assignedTo || i.assignedTo.length === 0 || i.assignedTo.includes(myId))
+            const visible = filterUserId
+              ? checklistItems.filter((i) => i.assignedTo?.includes(filterUserId))
               : checklistItems
             return visible.length === 0 ? (
               <div className="px-4 py-3 text-xs text-inky font-body italic">
-                {showMineOnly ? 'No items assigned to you today' : 'No checklist items today'}
+                {filterUserId ? 'No items assigned to that person today' : 'No checklist items today'}
               </div>
             ) : (
               <div className="divide-y divide-navy/10 max-h-80 overflow-auto">
@@ -320,7 +318,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
                       {assigneeNames.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1 ml-6">
                           {assigneeNames.map((name) => (
-                            <span key={name} className="text-[10px] font-mono bg-[#00e5ff]/10 border border-[#00e5ff]/20 rounded px-1.5 py-0.5 text-inky">
+                            <span key={name} className="text-[10px] font-mono text-inky/60 bg-navy/5 border border-navy/20 rounded px-1.5 py-0.5">
                               {name}
                             </span>
                           ))}
