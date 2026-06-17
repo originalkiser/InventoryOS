@@ -210,7 +210,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
             title={pill.label}
             className="flex items-center gap-1 px-2 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all flex-shrink-0 whitespace-nowrap"
           >
-            {!mobile && <span className="text-[#F2F1E6]/60">{pill.label}:</span>}
+            <span className="text-[#F2F1E6]/60 text-[10px]">{pill.label}:</span>
             <span className={['font-medium', pill.highlight ? 'text-sky' : 'text-[#F2F1E6]'].join(' ')}>
               {pill.value}
             </span>

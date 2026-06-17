@@ -330,7 +330,7 @@ export function TasksPage() {
     'Target Date'
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-3 sm:p-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -385,72 +385,80 @@ export function TasksPage() {
             const isStandaloneOrMeeting = task.source === 'standalone' || task.source === 'meeting'
 
             return (
-              <li key={task.key} className="flex items-center gap-3 px-4 py-3 hover:bg-navy/5 group">
+              <li key={task.key} className="flex items-start gap-3 px-4 py-3 hover:bg-navy/5 group">
                 <input
                   type="checkbox"
                   checked={task.completed}
                   onChange={(e) => markComplete(task, e.target.checked)}
-                  className="accent-inky flex-shrink-0 w-4 h-4 cursor-pointer"
+                  className="accent-inky flex-shrink-0 w-4 h-4 cursor-pointer mt-0.5"
                 />
+
+                {/* Main content — two-line layout */}
                 <div className="flex-1 min-w-0">
-                  <span className={['text-sm font-body', task.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
-                    {task.title}
-                  </span>
+                  {/* Title + source badge */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={['text-sm font-body', task.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
+                      {task.title}
+                    </span>
+                    <Badge color={sourceColor(task.source)}>
+                      <span className="text-[10px]">{task.sourceLabel}</span>
+                    </Badge>
+                    {task.projectId && task.source !== 'project' && (
+                      <Badge color="navy">
+                        <span className="text-[10px]">{projectById.get(task.projectId) ?? 'Project'}</span>
+                      </Badge>
+                    )}
+                  </div>
+
                   {task.notes && (
                     <p className="text-xs text-inky/50 mt-0.5 truncate">{task.notes}</p>
                   )}
+
+                  {/* Metadata row — always visible */}
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    {task.assigneeDisplay && (
+                      <span className="text-[10px] font-mono text-inky/60 bg-navy/5 border border-navy/20 rounded px-1.5 py-0.5">
+                        {task.assigneeDisplay}
+                      </span>
+                    )}
+                    {task.targetDate ? (
+                      <span className={['text-[11px] font-mono', overdue ? 'text-[#C0392B] font-bold' : 'text-inky/60'].join(' ')}>
+                        {overdue ? '⚠ ' : ''}{dateLabel(task.targetDate)}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-mono text-inky/30">No date</span>
+                    )}
+                  </div>
                 </div>
 
-                {task.assigneeDisplay && (
-                  <span className="text-[10px] font-mono text-inky/60 bg-navy/5 border border-navy/20 rounded px-1.5 py-0.5 flex-shrink-0">
-                    {task.assigneeDisplay}
-                  </span>
-                )}
-
-                <Badge color={sourceColor(task.source)}>
-                  <span className="text-[10px]">{task.sourceLabel}</span>
-                </Badge>
-
-                {task.projectId && task.source !== 'project' && (
-                  <Badge color="navy">
-                    <span className="text-[10px]">{projectById.get(task.projectId) ?? 'Project'}</span>
-                  </Badge>
-                )}
-
-                {/* Visibility toggle — only for task creator on standalone/meeting tasks */}
-                {isStandaloneOrMeeting && isMine && (
+                {/* Trailing actions */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {/* Visibility toggle — only for task creator on standalone/meeting tasks */}
+                  {isStandaloneOrMeeting && isMine && (
+                    <button
+                      onClick={() => togglePublic(task)}
+                      title={task.isPublic ? 'Visible to org — click to make private' : 'Private — click to share with org'}
+                      className={['transition-colors', task.isPublic ? 'text-sky' : 'text-inky/30 hover:text-inky/60'].join(' ')}
+                    >
+                      {task.isPublic ? (
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                      )}
+                    </button>
+                  )}
                   <button
-                    onClick={() => togglePublic(task)}
-                    title={task.isPublic ? 'Visible to org — click to make private' : 'Private — click to share with org'}
-                    className={['flex-shrink-0 transition-colors', task.isPublic ? 'text-sky' : 'text-inky/30 hover:text-inky/60'].join(' ')}
+                    onClick={() => openEdit(task)}
+                    className="text-xs font-mono text-inky/40 hover:text-navy opacity-0 group-hover:opacity-100 sm:block transition-opacity"
                   >
-                    {task.isPublic ? (
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                      </svg>
-                    )}
+                    Edit
                   </button>
-                )}
-
-                {task.targetDate ? (
-                  <span className={['text-xs font-mono flex-shrink-0', overdue ? 'text-[#C0392B] font-bold' : 'text-inky/60'].join(' ')}>
-                    {overdue ? '⚠ ' : ''}{dateLabel(task.targetDate)}
-                  </span>
-                ) : (
-                  <span className="text-xs font-mono text-inky/30 flex-shrink-0">No date</span>
-                )}
-
-                <button
-                  onClick={() => openEdit(task)}
-                  className="text-xs font-mono text-inky/40 hover:text-navy opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                >
-                  Edit
-                </button>
+                </div>
               </li>
             )
           })}

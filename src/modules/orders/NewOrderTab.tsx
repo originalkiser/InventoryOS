@@ -365,12 +365,84 @@ function StageBar({ stage, mode }: { stage: Stage; mode: OrderMode }) {
 interface MRow { location: string; product: string; amount: string }
 const cellCls = 'w-full bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]'
 
-// Manual order = Location + Product + Order Amount. The entry row keeps the last
-// location so you can add the same/next product fast (Tab across, Enter on
-// Amount pushes the row). The accumulating table below is fully editable.
+// Checkbox dropdown for selecting one or many locations at once.
+function MultiLocPicker({ locations, selected, onChange }: {
+  locations: Location[]
+  selected: Location[]
+  onChange: (locs: Location[]) => void
+}) {
+  const [search, setSearch] = useState('')
+  const [open, setOpen] = useState(false)
+  const filtered = locations.filter((l) =>
+    !search || l.location_code.toLowerCase().includes(search.toLowerCase()) || l.name.toLowerCase().includes(search.toLowerCase())
+  )
+  function toggle(loc: Location) {
+    const already = selected.some((s) => s.id === loc.id)
+    onChange(already ? selected.filter((s) => s.id !== loc.id) : [...selected, loc])
+  }
+  function selectAll() { onChange(filtered) }
+  function clearAll() { onChange([]) }
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-mono uppercase text-inky">
+        Locations {selected.length > 0 ? <span className="text-navy">({selected.length} selected)</span> : ''}
+      </span>
+      {/* Selected chips */}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1">
+          {selected.map((l) => (
+            <span key={l.id} className="flex items-center gap-1 px-1.5 py-0.5 bg-navy/10 border border-navy/30 rounded text-[10px] font-mono text-navy">
+              {l.location_code}
+              <button onClick={() => toggle(l)} className="hover:text-red-400 leading-none">×</button>
+            </span>
+          ))}
+          <button onClick={clearAll} className="text-[10px] font-mono text-inky/50 hover:text-red-400 px-1">Clear all</button>
+        </div>
+      )}
+      {/* Search input + dropdown */}
+      <div className="relative">
+        <input
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setOpen(true) }}
+          onFocus={() => setOpen(true)}
+          placeholder={selected.length === 0 ? 'Search locations…' : 'Add more…'}
+          className={cellCls}
+        />
+        {open && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <div className="absolute z-50 top-full mt-1 left-0 right-0 max-h-52 overflow-y-auto bg-cream border border-navy/30 rounded shadow-xl">
+              <div className="flex gap-2 px-2 py-1.5 border-b border-navy/10">
+                <button onClick={selectAll} className="text-[10px] font-mono text-inky hover:text-navy">All</button>
+                <button onClick={clearAll} className="text-[10px] font-mono text-inky hover:text-navy">None</button>
+              </div>
+              {filtered.length === 0 ? (
+                <div className="px-3 py-2 text-xs font-mono text-inky/70">No matches</div>
+              ) : filtered.map((loc) => {
+                const active = selected.some((s) => s.id === loc.id)
+                return (
+                  <button key={loc.id} onClick={() => toggle(loc)}
+                    className={['flex items-center gap-2 w-full px-3 py-1.5 text-xs font-mono text-left hover:bg-navy/5', active ? 'bg-navy/5' : ''].join(' ')}>
+                    <input type="checkbox" readOnly checked={active} className="accent-inky flex-shrink-0" />
+                    <span className="text-navy">{loc.location_code}</span>
+                    <span className="text-inky/60 truncate">— {loc.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Manual order entry: select one or many locations, enter product + amount,
+// then + Add creates one row per location. The accumulating table is editable.
 function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfirm: (lines: GeneratedLineItem[]) => void }) {
   const [rows, setRows] = useState<MRow[]>([])
-  const [entry, setEntry] = useState<MRow>({ location: '', product: '', amount: '' })
+  const [selectedLocs, setSelectedLocs] = useState<Location[]>([])
+  const [entry, setEntry] = useState({ product: '', amount: '' })
   const productRef = useRef<HTMLInputElement>(null)
 
   function resolveLoc(locStr: string): { id: string | null; label: string } {
@@ -382,8 +454,10 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
 
   function addEntry() {
     if (!entry.product.trim() || !entry.amount.trim()) { toast.error('Enter a product and order amount'); return }
-    setRows((r) => [...r, { ...entry }])
-    setEntry((e) => ({ location: e.location, product: '', amount: '' })) // keep location
+    if (selectedLocs.length === 0) { toast.error('Select at least one location'); return }
+    const newRows: MRow[] = selectedLocs.map((l) => ({ location: l.location_code, product: entry.product, amount: entry.amount }))
+    setRows((r) => [...r, ...newRows])
+    setEntry({ product: '', amount: '' })
     productRef.current?.focus()
   }
   function setRow(i: number, key: keyof MRow, val: string) { setRows((r) => r.map((x, j) => (j === i ? { ...x, [key]: val } : x))) }
@@ -407,26 +481,25 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
 
   return (
     <div className="flex flex-col gap-4">
-      <datalist id="manual-loc-list">
-        {locations.map((l) => <option key={l.id} value={l.location_code}>{l.location_code} — {l.name}</option>)}
-      </datalist>
-      <p className="text-xs font-mono text-inky/70">Enter a location, product, and order amount, then Enter (or +). The location is kept for the next product so you can order the same item across shops quickly. Rows below are editable.</p>
+      <p className="text-xs font-mono text-inky/70">Select one or more locations, enter a product and amount, then + Add. Selecting multiple locations creates one row per location. Rows below are editable.</p>
 
-      {/* Quick entry row */}
-      <div className="grid grid-cols-[1.4fr_1.4fr_0.8fr_auto] items-end gap-2 rounded border border-navy/30 bg-cream p-3">
-        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Location</span>
-          <input list="manual-loc-list" value={entry.location} onChange={(e) => setEntry({ ...entry, location: e.target.value })} placeholder="Code / name / free text" className={cellCls} /></label>
-        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Product</span>
-          <input ref={productRef} value={entry.product} onChange={(e) => setEntry({ ...entry, product: e.target.value })} className={cellCls} /></label>
-        <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Order Amount</span>
-          <input value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEntry() } }} className={cellCls} /></label>
-        <Button size="sm" onClick={addEntry}>+ Add</Button>
+      {/* Quick entry form */}
+      <div className="flex flex-col gap-3 rounded border border-navy/30 bg-cream p-3">
+        <MultiLocPicker locations={locations} selected={selectedLocs} onChange={setSelectedLocs} />
+        <div className="grid grid-cols-[1fr_0.6fr_auto] gap-2 items-end">
+          <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Product</span>
+            <input ref={productRef} value={entry.product} onChange={(e) => setEntry({ ...entry, product: e.target.value }) } className={cellCls} /></label>
+          <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Order Amount</span>
+            <input value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEntry() } }} className={cellCls} /></label>
+          <Button size="sm" onClick={addEntry}>+ Add</Button>
+        </div>
       </div>
 
       {/* Accumulated, editable order table */}
       {rows.length > 0 && (
-        <div className="overflow-auto rounded border border-navy/30">
-          <table className="w-full text-xs font-mono">
+        <div className="overflow-x-auto rounded border border-navy/30">
+          <table className="min-w-full text-xs font-mono">
             <thead className="bg-navy text-inky uppercase tracking-wide">
               <tr><th className="px-2 py-2 text-left">Location</th><th className="px-2 py-2 text-left">Product</th><th className="px-2 py-2 text-left">Order Amount</th><th /></tr>
             </thead>
@@ -448,6 +521,10 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
         <span className="text-xs font-mono text-inky">{rows.length} line{rows.length !== 1 ? 's' : ''}</span>
         <Button size="sm" onClick={confirm} disabled={!rows.length}>Continue → Review</Button>
       </div>
+
+      <datalist id="manual-loc-list">
+        {locations.map((l) => <option key={l.id} value={l.location_code}>{l.location_code} — {l.name}</option>)}
+      </datalist>
     </div>
   )
 }

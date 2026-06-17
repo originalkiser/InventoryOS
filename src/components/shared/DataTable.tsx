@@ -1,6 +1,5 @@
 import { flexRender, type Table as TTable } from '@tanstack/react-table'
 import { Button, Input } from '@/components/ui'
-import { exportTableToCsv } from '@/hooks/useTable'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
 
 interface DataTableProps<T> {
@@ -8,9 +7,35 @@ interface DataTableProps<T> {
   globalFilter: string
   onGlobalFilterChange: (v: string) => void
   exportFilename?: string
+  /** @deprecated Export now uses visible table state. This prop is ignored. */
   exportData?: unknown[]
   loading?: boolean
   actions?: React.ReactNode
+}
+
+function exportFromTable<T>(table: TTable<T>, filename: string) {
+  const visibleCols = table.getVisibleLeafColumns().filter((c) => {
+    const h = String(c.columnDef.header ?? '')
+    return h !== ''
+  })
+  const headers = visibleCols.map((c) => String(c.columnDef.header ?? c.id))
+  const rows = table.getFilteredRowModel().rows.map((row) =>
+    visibleCols.map((col) => {
+      const val = row.getValue(col.id)
+      if (val == null) return ''
+      if (typeof val === 'object') return JSON.stringify(val)
+      return String(val)
+    })
+  )
+  const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
+  const csv = [headers, ...rows].map((r) => r.map(esc).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 export function DataTable<T>({
@@ -18,7 +43,6 @@ export function DataTable<T>({
   globalFilter,
   onGlobalFilterChange,
   exportFilename,
-  exportData,
   loading,
   actions,
 }: DataTableProps<T>) {
@@ -51,11 +75,11 @@ export function DataTable<T>({
             ))}
           </div>
         </div>
-        {exportFilename && exportData && (
+        {exportFilename && (
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => exportTableToCsv(exportData, exportFilename)}
+            onClick={() => exportFromTable(table, exportFilename)}
           >
             Export CSV
           </Button>
@@ -64,8 +88,8 @@ export function DataTable<T>({
       </div>
 
       {/* Table */}
-      <div className="overflow-auto rounded border border-inky/20">
-        <table className="w-full text-xs font-body">
+      <div className="overflow-x-auto rounded border border-inky/20">
+        <table className="min-w-full text-xs font-body">
           <thead>
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="border-b border-inky/20 bg-[#002745]">
@@ -123,7 +147,7 @@ export function DataTable<T>({
                         ? { position: 'sticky', left: cell.column.getStart('left'), zIndex: 10 }
                         : undefined}
                       className={[
-                        'px-3 py-2 text-navy',
+                        'px-3 py-2 text-navy whitespace-nowrap',
                         cell.column.getIsPinned() === 'left'
                           ? `${i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'} border-r-2 border-r-inky/20`
                           : '',

@@ -506,7 +506,7 @@ export function ProjectsModule() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects…"
-          className="w-56 rounded border border-navy/30 bg-cream px-3 py-1.5 text-xs font-mono text-navy placeholder-inky/50 focus:border-[#00e5ff] focus:outline-none" />
+          className="w-full sm:w-56 rounded border border-navy/30 bg-cream px-3 py-1.5 text-xs font-mono text-navy placeholder-inky/50 focus:border-[#00e5ff] focus:outline-none" />
         <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}
           className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none">
           <option value="none">Group: None</option>

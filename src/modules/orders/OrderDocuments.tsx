@@ -11,6 +11,19 @@ interface Props {
   uploadedBy: string | null
 }
 
+const SUGGESTIONS: Record<'start' | 'export', { label: string; hint: string }[]> = {
+  start: [
+    { label: 'Vendor price list', hint: 'CSV/Excel: Vendor Part #, Description, Unit Price' },
+    { label: 'Current inventory count', hint: 'CSV/Excel: Location, Product, On Hand Qty' },
+    { label: 'Pending / in-transit orders', hint: 'CSV/Excel: Location, Product, Qty Ordered' },
+  ],
+  export: [
+    { label: 'PO confirmation or approval email', hint: 'PDF / email export' },
+    { label: 'Vendor acknowledgment', hint: 'Signed PO, email reply, or portal screenshot' },
+    { label: 'Delivery schedule', hint: 'ETA dates per location or product' },
+  ],
+}
+
 // Document uploads available at both start and export stages (order_documents +
 // the 'order-documents' storage bucket). Path: <company_id>/<session|stage>/<file>.
 export function OrderDocuments({ companyId, sessionId, stage, uploadedBy }: Props) {
@@ -58,21 +71,43 @@ export function OrderDocuments({ companyId, sessionId, stage, uploadedBy }: Prop
     toast.success('Document removed'); load()
   }
 
+  const [suggestOpen, setSuggestOpen] = useState(false)
+
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-mono text-inky uppercase tracking-wide">
-          {stage === 'start' ? 'Supporting Documents' : 'Export Documents'} ({docs.length})
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">
+            {stage === 'start' ? 'Supporting Documents' : 'Export Documents'} ({docs.length})
+          </span>
+          <button
+            onClick={() => setSuggestOpen((v) => !v)}
+            className="text-[10px] font-mono text-inky/50 hover:text-inky border border-navy/20 rounded px-1.5 py-0.5"
+          >
+            {suggestOpen ? 'hide hints' : 'what to attach?'}
+          </button>
+        </div>
         <button
           onClick={() => inputRef.current?.click()}
           disabled={busy}
-          className="text-xs font-mono text-inky border border-[#00e5ff]/30 rounded px-2 py-1 hover:bg-[#00e5ff]/10 disabled:opacity-40"
+          className="text-xs font-mono text-inky border border-[#00e5ff]/30 rounded px-2 py-1 hover:bg-[#00e5ff]/10 disabled:opacity-40 flex-shrink-0"
         >
           {busy ? 'Uploading…' : '+ Attach file'}
         </button>
         <input ref={inputRef} type="file" className="hidden" onChange={onPick} />
       </div>
+
+      {suggestOpen && (
+        <div className="rounded border border-navy/20 bg-navy/5 px-3 py-2 flex flex-col gap-1.5">
+          <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest">Suggested for this stage</p>
+          {SUGGESTIONS[stage].map((s) => (
+            <div key={s.label} className="flex flex-col">
+              <span className="text-xs font-mono text-navy">{s.label}</span>
+              <span className="text-[10px] font-mono text-inky/60">{s.hint}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {docs.length > 0 && (
         <div className="flex flex-col gap-1">
           {docs.map((d) => (
