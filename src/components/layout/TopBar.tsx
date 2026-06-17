@@ -6,6 +6,7 @@ import { useDarkMode } from '@/hooks/useDarkMode'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format } from 'date-fns'
 import { differenceInDays } from 'date-fns'
+import type { Profile } from '@/types'
 
 interface TopBarStats {
   pendingIssues: number
@@ -33,12 +34,20 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     activeShops: 0,
   })
   const [checklistOpen, setChecklistOpen] = useState(false)
-  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string }
+  const [showMineOnly, setShowMineOnly] = useState(false)
+  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string; assignedTo: string[] | null }
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
+  const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   const [openNote, setOpenNote] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
 
   const companyId = profile?.company_id
+
+  useEffect(() => {
+    if (!companyId) return
+    ;(supabase as any).from('profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
+      .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
+  }, [companyId])
 
   useEffect(() => {
     if (!companyId) return
@@ -103,12 +112,12 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
     const [ev, tk] = await Promise.all([
-      sb.from('schedule_events').select('id, title, completed, notes').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
+      sb.from('schedule_events').select('id, title, completed, notes, assigned_to').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
       sb.from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
     ])
     const items: ChecklistItem[] = [
-      ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '' })),
-      ...((tk.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.task_name || '(untitled task)', completed: false, kind: 'task' as const, notes: t.notes ?? '' })),
+      ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '', assignedTo: e.assigned_to ?? null })),
+      ...((tk.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.task_name || '(untitled task)', completed: false, kind: 'task' as const, notes: t.notes ?? '', assignedTo: null })),
     ]
     setChecklistItems(items)
     setStats((s) => ({ ...s, todayChecklists: items.filter((i) => !i.completed).length }))
@@ -249,55 +258,91 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
 
       {/* Checklist popover */}
       {checklistOpen && (
-        <div className="absolute top-full right-3 mt-2 w-72 max-w-[calc(100vw-1.5rem)] bg-cream border border-navy/40 rounded-lg shadow-xl z-30">
-          <div className="px-4 py-3 border-b border-navy/20 flex items-center justify-between">
+        <div className="absolute top-full right-3 mt-2 w-80 max-w-[calc(100vw-1.5rem)] bg-cream border border-navy/40 rounded-lg shadow-xl z-30">
+          <div className="px-4 py-3 border-b border-navy/20 flex items-center justify-between gap-2">
             <span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">
               Today's Checklist
             </span>
-            <button onClick={() => setChecklistOpen(false)} className="text-inky hover:text-navy transition-colors">
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          {checklistItems.length === 0 ? (
-            <div className="px-4 py-3 text-xs text-inky font-body italic">No checklist items today</div>
-          ) : (
-            <div className="divide-y divide-navy/10 max-h-80 overflow-auto">
-              {checklistItems.map((item) => (
-                <div key={`${item.kind}-${item.id}`} className="px-4 py-2.5">
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={item.completed}
-                      onChange={() => toggleChecklist(item)}
-                      className="accent-inky"
-                    />
-                    <button
-                      onClick={() => { setOpenNote((o) => (o === item.id ? null : item.id)); setNoteDraft(item.notes) }}
-                      className={['flex-1 text-left text-xs font-body hover:text-navy', item.completed ? 'text-inky/40 line-through' : 'text-navy'].join(' ')}
-                      title="Open to add notes"
-                    >
-                      {item.title}
-                      {item.kind === 'task' && <span className="ml-1.5 text-[10px] text-inky">· project</span>}
-                      {item.notes && <span className="ml-1 text-inky/60">✎</span>}
-                    </button>
-                  </div>
-                  {openNote === item.id && (
-                    <textarea
-                      autoFocus
-                      value={noteDraft}
-                      onChange={(e) => setNoteDraft(e.target.value)}
-                      onBlur={() => saveNotes(item)}
-                      rows={2}
-                      placeholder="Add a note…"
-                      className="mt-2 w-full resize-y rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
-                    />
-                  )}
-                </div>
-              ))}
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                onClick={() => setShowMineOnly((v) => !v)}
+                className={[
+                  'text-[10px] font-mono px-2 py-0.5 rounded border transition-all',
+                  showMineOnly
+                    ? 'bg-[#00e5ff]/20 border-[#00e5ff]/60 text-navy'
+                    : 'border-navy/20 text-inky/60 hover:border-navy/40',
+                ].join(' ')}
+              >
+                {showMineOnly ? 'Mine' : 'All'}
+              </button>
+              <button onClick={() => setChecklistOpen(false)} className="text-inky hover:text-navy transition-colors">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
-          )}
+          </div>
+          {(() => {
+            const myId = profile?.id ?? ''
+            const visible = showMineOnly
+              ? checklistItems.filter((i) => !i.assignedTo || i.assignedTo.length === 0 || i.assignedTo.includes(myId))
+              : checklistItems
+            return visible.length === 0 ? (
+              <div className="px-4 py-3 text-xs text-inky font-body italic">
+                {showMineOnly ? 'No items assigned to you today' : 'No checklist items today'}
+              </div>
+            ) : (
+              <div className="divide-y divide-navy/10 max-h-80 overflow-auto">
+                {visible.map((item) => {
+                  const assigneeNames = (item.assignedTo ?? [])
+                    .map((id) => orgProfiles.find((p) => p.id === id))
+                    .filter(Boolean)
+                    .map((p) => p!.full_name ?? p!.email ?? '')
+                  return (
+                    <div key={`${item.kind}-${item.id}`} className="px-4 py-2.5">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={item.completed}
+                          onChange={() => toggleChecklist(item)}
+                          className="accent-inky"
+                        />
+                        <button
+                          onClick={() => { setOpenNote((o) => (o === item.id ? null : item.id)); setNoteDraft(item.notes) }}
+                          className={['flex-1 text-left text-xs font-body hover:text-navy', item.completed ? 'text-inky/40 line-through' : 'text-navy'].join(' ')}
+                          title="Open to add notes"
+                        >
+                          {item.title}
+                          {item.kind === 'task' && <span className="ml-1.5 text-[10px] text-inky">· project</span>}
+                          {item.notes && <span className="ml-1 text-inky/60">✎</span>}
+                        </button>
+                      </div>
+                      {assigneeNames.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1 ml-6">
+                          {assigneeNames.map((name) => (
+                            <span key={name} className="text-[10px] font-mono bg-[#00e5ff]/10 border border-[#00e5ff]/20 rounded px-1.5 py-0.5 text-inky">
+                              {name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {openNote === item.id && (
+                        <textarea
+                          autoFocus
+                          value={noteDraft}
+                          onChange={(e) => setNoteDraft(e.target.value)}
+                          onBlur={() => saveNotes(item)}
+                          rows={2}
+                          placeholder="Add a note…"
+                          className="mt-2 w-full resize-y rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
+                        />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })()}
         </div>
       )}
 

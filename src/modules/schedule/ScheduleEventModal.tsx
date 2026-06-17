@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Modal, Button, Input, Toggle } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import type { ScheduleEvent } from '@/types'
+import type { Profile, ScheduleEvent } from '@/types'
 import { format, parseISO, addDays, addWeeks, addMonths } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -32,6 +32,96 @@ function occurrenceDates(start: string, until: string | null, type: string): str
   return out
 }
 
+function ProfileMultiPicker({
+  profiles,
+  selected,
+  onChange,
+}: {
+  profiles: Profile[]
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const filtered = profiles.filter((p) =>
+    !search || (p.full_name ?? p.email ?? '').toLowerCase().includes(search.toLowerCase())
+  )
+
+  function toggle(id: string) {
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id])
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-mono text-inky uppercase tracking-wide">Assigned To</label>
+
+      {/* Selected chips */}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1">
+          {selected.map((id) => {
+            const p = profiles.find((x) => x.id === id)
+            return (
+              <span
+                key={id}
+                className="flex items-center gap-1 text-[10px] font-mono bg-[#00e5ff]/10 border border-[#00e5ff]/30 rounded px-1.5 py-0.5 text-navy"
+              >
+                {p?.full_name ?? p?.email ?? id}
+                <button
+                  type="button"
+                  onClick={() => toggle(id)}
+                  className="text-inky/50 hover:text-red-400 leading-none"
+                >
+                  ×
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-left text-xs font-mono border border-navy/30 rounded px-3 py-2 bg-cream text-inky hover:border-[#00e5ff]/60"
+      >
+        {open ? 'Close picker ↑' : `${selected.length ? 'Edit' : 'Assign'} people…`}
+      </button>
+
+      {open && (
+        <div className="border border-navy/30 rounded bg-cream shadow-sm flex flex-col max-h-44 overflow-hidden">
+          <input
+            autoFocus
+            placeholder="Search..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="border-b border-navy/20 px-3 py-1.5 text-xs font-mono bg-cream text-navy placeholder-inky/40 focus:outline-none"
+          />
+          <div className="overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="px-3 py-2 text-xs font-mono text-inky/50">No matches</p>
+            ) : (
+              filtered.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => toggle(p.id)}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#00e5ff]/5 text-left"
+                >
+                  <span className={`w-3 h-3 rounded border flex-shrink-0 flex items-center justify-center text-[8px] font-bold ${selected.includes(p.id) ? 'bg-[#00e5ff] border-[#00e5ff] text-navy' : 'border-navy/40'}`}>
+                    {selected.includes(p.id) ? '✓' : ''}
+                  </span>
+                  <span className="text-xs font-mono text-navy truncate">{p.full_name ?? p.email}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface ScheduleEventModalProps {
   open: boolean
   onClose: () => void
@@ -52,10 +142,18 @@ export function ScheduleEventModal({
   const [recurrence, setRecurrence] = useState('none')
   const [isChecklist, setIsChecklist] = useState(false)
   const [completed, setCompleted] = useState(false)
+  const [assignedTo, setAssignedTo] = useState<string[]>([])
   const [notes, setNotes] = useState('')
   const [applyToSeries, setApplyToSeries] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
+
+  useEffect(() => {
+    if (!profile?.company_id) return
+    ;(supabase as any).from('profiles').select('id, full_name, email').eq('company_id', profile.company_id).order('full_name')
+      .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
+  }, [profile?.company_id])
 
   useEffect(() => {
     setApplyToSeries(false)
@@ -68,6 +166,7 @@ export function ScheduleEventModal({
       setRecurrence((existing.recurrence as any)?.type ?? 'none')
       setIsChecklist(existing.is_checklist)
       setCompleted(existing.completed)
+      setAssignedTo(existing.assigned_to ?? [])
       setNotes(existing.notes ?? '')
     } else {
       setTitle('')
@@ -78,6 +177,7 @@ export function ScheduleEventModal({
       setRecurrence('none')
       setIsChecklist(false)
       setCompleted(false)
+      setAssignedTo([])
       setNotes('')
     }
   }, [existing, defaultDate, open])
@@ -102,6 +202,7 @@ export function ScheduleEventModal({
       title: title.trim(),
       event_type: resolvedEventType,
       is_checklist: isChecklist,
+      assigned_to: isChecklist && assignedTo.length ? assignedTo : null,
       notes: notes || null,
     }
 
@@ -280,6 +381,16 @@ export function ScheduleEventModal({
             />
           )}
         </div>
+
+        {isChecklist && (
+          <div className="col-span-2">
+            <ProfileMultiPicker
+              profiles={orgProfiles}
+              selected={assignedTo}
+              onChange={setAssignedTo}
+            />
+          </div>
+        )}
 
         <div className="col-span-2">
           <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Notes</label>
