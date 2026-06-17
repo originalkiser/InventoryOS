@@ -23,8 +23,14 @@ export function LoginPage() {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormData>({ resolver: zodResolver(schema) })
+
+  const emailValue = watch('email', '')
+  const showBranding =
+    emailValue.toLowerCase().endsWith('@sboilchange.com') ||
+    resetEmail.toLowerCase().endsWith('@sboilchange.com')
 
   async function onSubmit(data: FormData) {
     const { error } = await supabase.auth.signInWithPassword(data)
@@ -53,7 +59,10 @@ export function LoginPage() {
   return (
     <div className="min-h-screen bg-cream flex items-center justify-center font-body">
       <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
+        <div className={[
+          'text-center overflow-hidden transition-all duration-500',
+          showBranding ? 'max-h-20 opacity-100 mb-8' : 'max-h-0 opacity-0 mb-0',
+        ].join(' ')}>
           <div className="text-2xl font-heading font-bold text-navy tracking-widest uppercase mb-1">
             Strickland Brothers
           </div>
