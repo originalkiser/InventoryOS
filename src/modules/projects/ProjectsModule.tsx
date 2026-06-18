@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
 } from '@dnd-kit/core'
@@ -83,12 +83,25 @@ function SubTaskHeaderCell({ colKey, label, width, onResize }: {
   )
 }
 
-// Wrapping, expand/collapse, click-to-edit text cell (Description / Notes).
+// Wrapping, expand/collapse, click-to-edit text cell (Description / Vendor / Category / Notes).
+// "more/less" only appears when text is genuinely clipped — measured via DOM overflow so
+// it reacts correctly to column resizes without any length-based heuristics.
 function ExpandableTextCell({ value, onSave, placeholder }: { value: string | null; onSave: (v: string) => void; placeholder?: string }) {
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [canExpand, setCanExpand] = useState(false)
   const [v, setV] = useState(value ?? '')
+  const textRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => { setV(value ?? '') }, [value])
+
+  useLayoutEffect(() => {
+    if (expanded) return
+    const el = textRef.current
+    if (!el) return
+    setCanExpand(el.scrollHeight > el.clientHeight + 1)
+  })
+
   if (editing) {
     return (
       <textarea autoFocus value={v} onChange={(e) => setV(e.target.value)}
@@ -100,11 +113,11 @@ function ExpandableTextCell({ value, onSave, placeholder }: { value: string | nu
   const text = value ?? ''
   return (
     <div className="px-1.5 py-1">
-      <div onClick={() => setEditing(true)}
+      <div ref={textRef} onClick={() => setEditing(true)}
         className={['cursor-text whitespace-pre-wrap break-words text-xs font-mono', text ? 'text-navy' : 'text-inky/70', expanded ? '' : 'line-clamp-2'].join(' ')}>
         {text || placeholder || '—'}
       </div>
-      {text.length > 60 && (
+      {(canExpand || expanded) && (
         <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-inky hover:underline">{expanded ? 'less' : 'more'}</button>
       )}
     </div>

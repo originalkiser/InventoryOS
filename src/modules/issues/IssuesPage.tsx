@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
@@ -54,12 +54,29 @@ function InlineText({ value, type, onSave }: { value: string | null; type?: 'tex
   )
 }
 
-// Expandable text cell for long-form text columns (title, notes, resolution_notes).
+// Expandable text cell for long-form text columns.
+// Shows a "more/less" toggle only when the text is actually clipped by the column width —
+// detected via DOM overflow measurement so it responds to column resizes too.
 function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: string) => void }) {
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [canExpand, setCanExpand] = useState(false)
   const [v, setV] = useState(value ?? '')
+  const textRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => { setV(value ?? '') }, [value])
+
+  // Run after every render (no deps) so column resizes are caught immediately.
+  // When expanded, skip the check so canExpand is preserved for the "less" button.
+  // React bails out of re-render when setCanExpand receives the same value, so this
+  // settles after at most one extra render per change and doesn't loop.
+  useLayoutEffect(() => {
+    if (expanded) return
+    const el = textRef.current
+    if (!el) return
+    setCanExpand(el.scrollHeight > el.clientHeight + 1)
+  })
+
   const text = value ?? ''
   if (editing) {
     return (
@@ -72,12 +89,13 @@ function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: s
   return (
     <div className="px-1">
       <div
+        ref={textRef}
         onClick={() => setEditing(true)}
-        className={['cursor-text text-xs font-mono text-navy', text ? '' : 'text-inky/40', expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-1'].join(' ')}
+        className={['cursor-text text-xs font-mono', text ? 'text-navy' : 'text-inky/40', expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-1'].join(' ')}
       >
         {text || '—'}
       </div>
-      {text.length > 50 && (
+      {(canExpand || expanded) && (
         <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-inky hover:underline">
           {expanded ? 'less' : 'more'}
         </button>
