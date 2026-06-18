@@ -68,24 +68,12 @@ export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onTog
     return () => window.removeEventListener('keydown', handler)
   }, [onToggle])
 
-  return (
-    <>
-      {/* Floating trigger */}
-      <button
-        onClick={onToggle}
-        className="fixed bottom-[4.5rem] right-4 z-[60] flex items-center gap-1.5 rounded-full border border-[#002745]/40 bg-[#002745] px-4 py-2 font-heading text-xs text-[#F2F1E6] shadow-lg hover:bg-inky uppercase tracking-wide"
-        title="Location Lookup (Ctrl/Cmd+L)"
-      >
-        Lookup{open ? <span className="text-[10px] text-sky ml-1">●</span> : null}
-      </button>
-      {open && (
-        <LookupPanel
-          mode={mode} width={width} mobile={mobile} onModeChange={onModeChange} onWidthChange={onWidthChange}
-          onClose={() => onModeChange('hidden')}
-        />
-      )}
-    </>
-  )
+  return open ? (
+    <LookupPanel
+      mode={mode} width={width} mobile={mobile} onModeChange={onModeChange} onWidthChange={onWidthChange}
+      onClose={() => onModeChange('hidden')}
+    />
+  ) : null
 }
 
 // ---------------------------------------------------------------------------

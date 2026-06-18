@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -43,6 +44,8 @@ export function MeetingNotesPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const myId = profile?.id ?? null
+  const [searchParams, setSearchParams] = useSearchParams()
+  const quickTriggered = useRef(false)
 
   const [meetings, setMeetings] = useState<MeetingNote[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -87,14 +90,29 @@ export function MeetingNotesPage() {
     setMeetingTasks((data ?? []) as Task[])
   }
 
-  function openNew() {
+  function openNew(quick = false) {
     setEditId(null)
     setEditCreatedBy(myId)
-    setForm({ ...EMPTY_FORM, meeting_date: format(new Date(), 'yyyy-MM-dd') })
+    const now = new Date()
+    setForm({
+      ...EMPTY_FORM,
+      meeting_date: format(now, 'yyyy-MM-dd'),
+      meeting_time: quick ? format(now, 'HH:mm') : '',
+    })
     setMeetingTasks([])
     setTaskForm({ ...EMPTY_TASK })
     setModalOpen(true)
   }
+
+  // Auto-open a quick meeting if navigated to with ?quick=1
+  useEffect(() => {
+    if (searchParams.get('quick') === '1' && !quickTriggered.current) {
+      quickTriggered.current = true
+      setSearchParams({}, { replace: true })
+      openNew(true)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   function openEdit(m: MeetingNote) {
     setEditId(m.id)
@@ -246,7 +264,7 @@ export function MeetingNotesPage() {
         exportFilename="meeting_notes.csv"
         exportData={meetings}
         loading={loading}
-        actions={<Button size="sm" onClick={openNew}>+ New Meeting</Button>}
+        actions={<Button size="sm" onClick={() => openNew()}>+ New Meeting</Button>}
       />
 
       <Modal

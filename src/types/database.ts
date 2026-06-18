@@ -80,6 +80,7 @@ export interface Task {
   created_by: string | null
   created_at: string
   updated_at: string
+  deleted_at: string | null
 }
 
 export interface TankMonitor {
@@ -148,6 +149,7 @@ export interface Project {
   updated_by: string | null
   created_at: string
   updated_at: string
+  deleted_at: string | null
 }
 
 export interface ProjectTask {
@@ -539,6 +541,7 @@ export interface Issue {
   created_by: string | null
   created_at: string
   updated_at: string
+  deleted_at: string | null
 }
 
 export interface ScheduleEvent {

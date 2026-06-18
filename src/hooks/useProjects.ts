@@ -19,8 +19,11 @@ export function useProjects() {
   const load = useCallback(async () => {
     if (!companyId) return
     if (!loadedOnce.current) setLoading(true)
+    // Lazy purge projects deleted > 30 days ago
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    void sb.from('projects').delete().eq('company_id', companyId).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
     const [p, t] = await Promise.all([
-      sb.from('projects').select('*').eq('company_id', companyId).order('sort_order').order('created_at'),
+      sb.from('projects').select('*').eq('company_id', companyId).is('deleted_at', null).order('sort_order').order('created_at'),
       sb.from('project_tasks').select('*').eq('company_id', companyId).order('sort_order').order('created_at'),
     ])
     if (p.error) toast.error('Failed to load projects')
@@ -66,8 +69,23 @@ export function useProjects() {
   async function deleteProject(id: string) {
     const snapshot = projects
     setProjects((prev) => prev.filter((p) => p.id !== id))
-    const { error } = await sb.from('projects').delete().eq('id', id)
+    const { error } = await sb.from('projects').update({ deleted_at: new Date().toISOString() }).eq('id', id)
     if (error) { setProjects(snapshot); toast.error(error.message) }
+    else toast.success('Project moved to deleted items')
+  }
+
+  async function restoreProject(id: string) {
+    const { error } = await sb.from('projects').update({ deleted_at: null }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Project restored')
+    load()
+  }
+
+  async function hardDeleteProject(id: string) {
+    const { error } = await sb.from('projects').delete().eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Project permanently deleted')
+    load()
   }
 
   // Persist a reordered list of projects (sort_order = index).
@@ -128,8 +146,8 @@ export function useProjects() {
   }
 
   return {
-    projects, tasks, loading, companyId,
-    addProject, updateProject, deleteProject, reorderProjects,
+    projects, tasks, loading, companyId, load,
+    addProject, updateProject, deleteProject, restoreProject, hardDeleteProject, reorderProjects,
     addTask, updateTask, deleteTask, reorderTasks,
   }
 }

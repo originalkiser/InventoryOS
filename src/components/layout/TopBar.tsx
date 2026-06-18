@@ -160,7 +160,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       onClick: () => navigate('/issues?tab=pending'),
     },
     {
-      label: 'Checklist',
+      label: "Today's Tasks",
       value: stats.todayChecklists,
       highlight: stats.todayChecklists > 0,
       onClick: () => setChecklistOpen((v) => !v),
@@ -261,7 +261,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
         <div className="absolute top-full right-3 mt-2 w-80 max-w-[calc(100vw-1.5rem)] bg-cream border border-navy/40 rounded-lg shadow-xl z-30">
           <div className="px-4 py-3 border-b border-navy/20 flex items-center justify-between gap-2">
             <span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">
-              Today's Checklist
+              Today's Tasks
             </span>
             <div className="flex items-center gap-2 ml-auto">
               <select

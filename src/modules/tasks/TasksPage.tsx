@@ -8,7 +8,7 @@ import type { Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
-type SortKey = 'date' | 'source' | 'title'
+type SortKey = 'date' | 'source' | 'title' | 'completed'
 type TaskSource = 'project' | 'calendar' | 'meeting' | 'standalone'
 
 interface UnifiedTask {
@@ -18,6 +18,7 @@ interface UnifiedTask {
   notes: string | null
   targetDate: string | null
   completed: boolean
+  completedAt: string | null
   source: TaskSource
   sourceLabel: string
   projectId?: string
@@ -25,6 +26,7 @@ interface UnifiedTask {
   assigneeId: string | null
   assigneeDisplay: string | null
   isPublic: boolean
+  deletedAt: string | null
 }
 
 function sourceColor(s: TaskSource): 'navy' | 'sky' | 'orange' | 'inky' {
@@ -37,6 +39,11 @@ function sourceColor(s: TaskSource): 'navy' | 'sky' | 'orange' | 'inky' {
 function dateLabel(d: string | null): string {
   if (!d) return ''
   try { return format(parseISO(d), 'MMM d, yyyy') } catch { return d }
+}
+
+function completedLabel(d: string | null): string {
+  if (!d) return ''
+  try { return format(parseISO(d), 'MMM d, yyyy h:mm a') } catch { return d }
 }
 
 function isOverdue(d: string | null, completed: boolean): boolean {
@@ -56,12 +63,24 @@ function sortTasks(tasks: UnifiedTask[], key: SortKey): UnifiedTask[] {
       const order: TaskSource[] = ['project', 'calendar', 'meeting', 'standalone']
       return order.indexOf(a.source) - order.indexOf(b.source)
     }
+    if (key === 'completed') {
+      if (!a.completedAt && !b.completedAt) return 0
+      if (!a.completedAt) return 1
+      if (!b.completedAt) return -1
+      return b.completedAt < a.completedAt ? -1 : 1
+    }
     return a.title.localeCompare(b.title)
   })
 }
 
 const EMPTY_FORM = {
   title: '', notes: '', target_date: '', project_id: '', assignee_input: '', is_public: false,
+}
+
+// Purge deleted tasks older than 30 days (client-side lazy purge).
+async function purgeExpired(companyId: string) {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  await (supabase as any).from('tasks').delete().eq('company_id', companyId).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
 }
 
 export function TasksPage() {
@@ -74,10 +93,12 @@ export function TasksPage() {
   const [projectTasks, setProjectTasks] = useState<ProjectTask[]>([])
   const [calendarTasks, setCalendarTasks] = useState<ScheduleEvent[]>([])
   const [standaloneTasks, setStandaloneTasks] = useState<Task[]>([])
+  const [deletedTasks, setDeletedTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
 
   const [sort, setSort] = useAppSetting<SortKey>('tasks.sort', 'date')
   const [showCompleted, setShowCompleted] = useAppSetting<boolean>('tasks.showCompleted', false)
+  const [showDeleted, setShowDeleted] = useState(false)
 
   const [addOpen, setAddOpen] = useState(false)
   const [editTaskId, setEditTaskId] = useState<string | null>(null)
@@ -85,22 +106,31 @@ export function TasksPage() {
   const [form, setForm] = useState({ ...EMPTY_FORM })
   const [saving, setSaving] = useState(false)
 
+  // Assignee confirmation before checking off another user's task
+  const [pendingComplete, setPendingComplete] = useState<{ task: UnifiedTask; done: boolean } | null>(null)
+
+  // Delete confirmation modal
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; source: TaskSource; title: string } | null>(null)
+
   const loadAll = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
+    void purgeExpired(companyId)
     const sb = supabase as any
-    const [profRes, projRes, ptRes, ctRes, stRes] = await Promise.all([
+    const [profRes, projRes, ptRes, ctRes, stRes, delRes] = await Promise.all([
       sb.from('profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name'),
       sb.from('projects').select('id, project_name, status').eq('company_id', companyId),
       sb.from('project_tasks').select('*').eq('company_id', companyId).order('sort_order'),
       sb.from('schedule_events').select('*').eq('company_id', companyId).eq('is_checklist', true).order('start_date'),
-      sb.from('tasks').select('*').eq('company_id', companyId).order('sort_order').order('created_at'),
+      sb.from('tasks').select('*').eq('company_id', companyId).is('deleted_at', null).order('sort_order').order('created_at'),
+      sb.from('tasks').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
     ])
     setOrgProfiles((profRes.data ?? []) as Profile[])
     setProjects((projRes.data ?? []) as Project[])
     setProjectTasks((ptRes.data ?? []) as ProjectTask[])
     setCalendarTasks((ctRes.data ?? []) as ScheduleEvent[])
     setStandaloneTasks((stRes.data ?? []) as Task[])
+    setDeletedTasks((delRes.data ?? []) as Task[])
     setLoading(false)
   }, [companyId])
 
@@ -123,6 +153,7 @@ export function TasksPage() {
         notes: t.notes,
         targetDate: t.due_date,
         completed: t.done,
+        completedAt: null,
         source: 'project' as const,
         sourceLabel: projectById.get(t.project_id) ?? 'Project',
         projectId: t.project_id,
@@ -130,6 +161,7 @@ export function TasksPage() {
         assigneeId: null,
         assigneeDisplay: t.assignee ?? null,
         isPublic: true,
+        deletedAt: null,
       })),
       ...calendarTasks.map((t) => ({
         key: `cal-${t.id}`,
@@ -138,12 +170,14 @@ export function TasksPage() {
         notes: t.notes ?? null,
         targetDate: t.start_date,
         completed: t.completed,
+        completedAt: t.completed_at ?? null,
         source: 'calendar' as const,
         sourceLabel: 'Calendar',
         createdBy: null,
         assigneeId: null,
         assigneeDisplay: null,
         isPublic: true,
+        deletedAt: null,
       })),
       ...standaloneTasks.map((t) => ({
         key: `task-${t.id}`,
@@ -152,6 +186,7 @@ export function TasksPage() {
         notes: t.notes,
         targetDate: t.target_date,
         completed: t.completed,
+        completedAt: t.completed_at ?? null,
         source: (t.source === 'meeting' ? 'meeting' : 'standalone') as TaskSource,
         sourceLabel: t.source === 'meeting' ? 'Meeting' : 'Task',
         projectId: t.project_id ?? undefined,
@@ -159,6 +194,7 @@ export function TasksPage() {
         assigneeId: t.assignee_id,
         assigneeDisplay: t.assignee_name ?? (t.assignee_id ? (profileById.get(t.assignee_id) ?? null) : null),
         isPublic: t.is_public,
+        deletedAt: t.deleted_at ?? null,
       })),
     ]
   }, [projectTasks, calendarTasks, standaloneTasks, projectById, profileById])
@@ -170,6 +206,15 @@ export function TasksPage() {
 
   const completedCount = unified.filter((t) => t.completed).length
   const totalCount = unified.length
+
+  function handleCheckboxChange(task: UnifiedTask, done: boolean) {
+    // If marking complete and task is assigned to a different user, confirm first
+    if (done && task.assigneeId && task.assigneeId !== myId) {
+      setPendingComplete({ task, done })
+      return
+    }
+    void markComplete(task, done)
+  }
 
   async function markComplete(task: UnifiedTask, done: boolean) {
     const sb = supabase as any
@@ -250,7 +295,6 @@ export function TasksPage() {
     setAddOpen(true)
   }
 
-  // For ownership check on standalone/meeting tasks
   const editStandaloneTask = editTaskId && (editSource === 'standalone' || editSource === 'meeting' || editSource === null)
     ? standaloneTasks.find((t) => t.id === editTaskId) ?? null
     : null
@@ -308,13 +352,33 @@ export function TasksPage() {
     loadAll()
   }
 
-  async function onDelete() {
+  function onDeleteClick() {
     if (!canDelete || !editTaskId) return
-    if (!confirm('Delete this task?')) return
-    const { error } = await (supabase as any).from('tasks').delete().eq('id', editTaskId)
-    if (error) { toast.error(error.message); return }
-    toast.success('Task deleted')
+    const task = unified.find((t) => t.id === editTaskId)
     setAddOpen(false)
+    setDeleteTarget({ id: editTaskId, source: editSource ?? 'standalone', title: task?.title ?? 'this task' })
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    const { error } = await (supabase as any).from('tasks').update({ deleted_at: new Date().toISOString() }).eq('id', deleteTarget.id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Task moved to deleted items')
+    setDeleteTarget(null)
+    loadAll()
+  }
+
+  async function restoreTask(id: string) {
+    const { error } = await (supabase as any).from('tasks').update({ deleted_at: null }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Task restored')
+    loadAll()
+  }
+
+  async function hardDeleteTask(id: string) {
+    const { error } = await (supabase as any).from('tasks').delete().eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Task permanently deleted')
     loadAll()
   }
 
@@ -322,6 +386,7 @@ export function TasksPage() {
     { key: 'date', label: 'Due Date' },
     { key: 'source', label: 'Source' },
     { key: 'title', label: 'Title' },
+    { key: 'completed', label: 'Completed' },
   ]
 
   const dateFieldLabel =
@@ -368,7 +433,47 @@ export function TasksPage() {
           />
           Show completed
         </label>
+        {deletedTasks.length > 0 && (
+          <button
+            onClick={() => setShowDeleted((v) => !v)}
+            className="ml-auto text-xs font-mono text-inky/60 hover:text-navy underline decoration-dotted"
+          >
+            {showDeleted ? 'Hide deleted' : `Show deleted (${deletedTasks.length})`}
+          </button>
+        )}
       </div>
+
+      {/* Deleted tasks panel */}
+      {showDeleted && deletedTasks.length > 0 && (
+        <div className="rounded border border-red-200 bg-red-50/40">
+          <div className="px-4 py-2 border-b border-red-200">
+            <span className="text-xs font-mono text-red-600 uppercase tracking-wide font-bold">Deleted Tasks</span>
+            <span className="text-[10px] font-mono text-red-400 ml-2">— auto-purge after 30 days</span>
+          </div>
+          <ul className="divide-y divide-red-100">
+            {deletedTasks.map((t) => (
+              <li key={t.id} className="flex items-center gap-3 px-4 py-2.5">
+                <span className="flex-1 text-sm font-body text-inky/60 line-through">{t.title}</span>
+                <span className="text-[10px] font-mono text-inky/40">
+                  {t.deleted_at ? format(parseISO(t.deleted_at), 'MMM d, yyyy') : ''}
+                </span>
+                <button
+                  onClick={() => restoreTask(t.id)}
+                  className="text-xs font-mono text-sky hover:underline"
+                >
+                  Restore
+                </button>
+                <button
+                  onClick={() => { if (confirm('Permanently delete this task?')) hardDeleteTask(t.id) }}
+                  className="text-xs font-mono text-red-400 hover:underline"
+                >
+                  Delete Forever
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Task list */}
       {loading ? (
@@ -389,13 +494,11 @@ export function TasksPage() {
                 <input
                   type="checkbox"
                   checked={task.completed}
-                  onChange={(e) => markComplete(task, e.target.checked)}
+                  onChange={(e) => handleCheckboxChange(task, e.target.checked)}
                   className="accent-inky flex-shrink-0 w-4 h-4 cursor-pointer mt-0.5"
                 />
 
-                {/* Main content — two-line layout */}
                 <div className="flex-1 min-w-0">
-                  {/* Title + source badge */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={['text-sm font-body', task.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
                       {task.title}
@@ -414,14 +517,17 @@ export function TasksPage() {
                     <p className="text-xs text-inky/50 mt-0.5 truncate">{task.notes}</p>
                   )}
 
-                  {/* Metadata row — always visible */}
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     {task.assigneeDisplay && (
                       <span className="text-[10px] font-mono text-inky/60 bg-navy/5 border border-navy/20 rounded px-1.5 py-0.5">
                         {task.assigneeDisplay}
                       </span>
                     )}
-                    {task.targetDate ? (
+                    {task.completed && task.completedAt ? (
+                      <span className="text-[11px] font-mono text-green-600">
+                        ✓ {completedLabel(task.completedAt)}
+                      </span>
+                    ) : task.targetDate ? (
                       <span className={['text-[11px] font-mono', overdue ? 'text-[#C0392B] font-bold' : 'text-inky/60'].join(' ')}>
                         {overdue ? '⚠ ' : ''}{dateLabel(task.targetDate)}
                       </span>
@@ -431,9 +537,7 @@ export function TasksPage() {
                   </div>
                 </div>
 
-                {/* Trailing actions */}
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  {/* Visibility toggle — only for task creator on standalone/meeting tasks */}
                   {isStandaloneOrMeeting && isMine && (
                     <button
                       onClick={() => togglePublic(task)}
@@ -480,7 +584,6 @@ export function TasksPage() {
             placeholder="What needs to be done?"
           />
 
-          {/* Assignee — not shown for calendar tasks */}
           {editSource !== 'calendar' && (
             <AssigneeComboInput
               label="Assign to"
@@ -490,7 +593,6 @@ export function TasksPage() {
             />
           )}
 
-          {/* Project link — only for new or standalone/meeting tasks */}
           {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && (
             <div className="flex flex-col gap-1">
               <label className="text-xs font-mono text-inky uppercase tracking-wide">Link to Project</label>
@@ -525,7 +627,6 @@ export function TasksPage() {
             />
           </div>
 
-          {/* Visibility — only for new/standalone/meeting tasks, creator only */}
           {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && isEditOwner && (
             <label className="flex items-center gap-2 cursor-pointer pt-1">
               <input
@@ -540,7 +641,7 @@ export function TasksPage() {
           )}
 
           <div className="flex justify-between gap-2 pt-2">
-            <div>{canDelete && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
+            <div>{canDelete && <Button variant="danger" size="sm" onClick={onDeleteClick}>Delete</Button>}</div>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" onClick={() => setAddOpen(false)}>Discard</Button>
               <Button size="sm" onClick={onSave} disabled={saving || !form.title.trim()}>
@@ -550,6 +651,44 @@ export function TasksPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Assignee confirmation */}
+      {pendingComplete && (
+        <Modal
+          open
+          onClose={() => setPendingComplete(null)}
+          title="Mark Complete?"
+          size="sm"
+        >
+          <div className="flex flex-col gap-4">
+            <p className="text-sm font-body text-navy">
+              This task is assigned to <span className="font-bold">{pendingComplete.task.assigneeDisplay}</span>. Mark it as complete anyway?
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setPendingComplete(null)}>Cancel</Button>
+              <Button size="sm" onClick={() => { void markComplete(pendingComplete.task, pendingComplete.done); setPendingComplete(null) }}>
+                Yes, Mark Complete
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete confirmation */}
+      {deleteTarget && (
+        <Modal open onClose={() => setDeleteTarget(null)} title="Delete Task?" size="sm">
+          <div className="flex flex-col gap-4">
+            <p className="text-sm font-body text-navy">
+              Delete <span className="font-bold">"{deleteTarget.title}"</span>?
+            </p>
+            <p className="text-xs font-mono text-inky/70">The task will be kept for 30 days and can be restored before that.</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+              <Button variant="danger" size="sm" onClick={confirmDelete}>Delete</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

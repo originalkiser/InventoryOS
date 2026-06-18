@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import { useIssueColumns } from '@/hooks/useIssueColumns'
-import { Button, Badge, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Button, Badge, Modal, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { IssueFormModal } from './IssueFormModal'
 import { AddIssueColumnModal } from './AddIssueColumnModal'
 import type { Issue, IssueColumnType, IssueTrackerColumn } from '@/types'
@@ -51,6 +51,38 @@ function InlineText({ value, type, onSave }: { value: string | null; type?: 'tex
       onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
       placeholder="—"
       className="w-full min-w-[80px] rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-mono text-navy placeholder-inky/50 hover:border-navy/30 focus:border-[#00e5ff] focus:bg-cream focus:outline-none" />
+  )
+}
+
+// Expandable text cell for long-form text columns (title, notes, resolution_notes).
+function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [v, setV] = useState(value ?? '')
+  useEffect(() => { setV(value ?? '') }, [value])
+  const text = value ?? ''
+  if (editing) {
+    return (
+      <textarea autoFocus value={v} onChange={(e) => setV(e.target.value)}
+        onBlur={() => { setEditing(false); if ((value ?? '') !== v) onSave(v) }}
+        rows={3}
+        className="w-full resize-y rounded border border-[#00e5ff] bg-cream px-1.5 py-1 text-xs font-mono text-navy focus:outline-none" />
+    )
+  }
+  return (
+    <div className="px-1">
+      <div
+        onClick={() => setEditing(true)}
+        className={['cursor-text text-xs font-mono text-navy', text ? '' : 'text-inky/40', expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-1'].join(' ')}
+      >
+        {text || '—'}
+      </div>
+      {text.length > 50 && (
+        <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-inky hover:underline">
+          {expanded ? 'less' : 'more'}
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -141,7 +173,7 @@ function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | u
 }
 
 const BASE_BEFORE = [
-  col.accessor('title', { header: 'Title', cell: (i) => i.getValue() ?? '—' }),
+  col.accessor('title', { header: 'Title', enableColumnFilter: false, cell: (i) => <ExpandableText value={i.getValue() ?? ''} onSave={() => {}} /> }),
   col.accessor('location_name', { header: 'Location', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('category_name', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
 ]
@@ -169,11 +201,14 @@ export function IssuesPage() {
   const defaultTab = searchParams.get('tab') === 'pending' ? 'pending' : 'all'
 
   const [issues, setIssues] = useState<IssueRow[]>([])
+  const [deletedIssues, setDeletedIssues] = useState<IssueRow[]>([])
+  const [showDeleted, setShowDeleted] = useState(false)
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [editIssue, setEditIssue] = useState<IssueRow | null>(null)
   const [addColOpen, setAddColOpen] = useState(false)
   const [statuses, setStatuses] = useState<StatusOpt[]>([])
+  const [deleteTarget, setDeleteTarget] = useState<IssueRow | null>(null)
 
   const issueCols = useIssueColumns()
 
@@ -182,16 +217,21 @@ export function IssuesPage() {
   const loadIssues = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
-    const { data, error } = await supabase
-      .from('issues')
-      .select(`*, locations(name), issue_categories(name), issue_statuses(name)`)
-      .eq('company_id', profile.company_id)
-      .order('created_at', { ascending: false })
-    if (error) toast.error('Failed to load issues')
+    // Purge issues older than 30 days
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    void (supabase as any).from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
+
+    const [liveRes, delRes] = await Promise.all([
+      supabase.from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false }),
+      (supabase as any).from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+    ])
+    if (liveRes.error) toast.error('Failed to load issues')
     else {
-      setIssues((data ?? []).map((r: any) => ({
+      const map = (data: any[]) => (data ?? []).map((r: any) => ({
         ...r, location_name: r.locations?.name, category_name: r.issue_categories?.name, status_name: r.issue_statuses?.name,
-      })))
+      }))
+      setIssues(map(liveRes.data ?? []))
+      setDeletedIssues(map(delRes.data ?? []))
     }
     setLoading(false)
   }, [profile?.company_id])
@@ -244,11 +284,11 @@ export function IssuesPage() {
     }
     const issueNotesCol = {
       id: 'issue_notes', header: 'Issue Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.issue_notes ?? '',
-      cell: (i: any) => <InlineText value={i.row.original.issue_notes} onSave={(v) => updateIssue(i.row.original.id, { issue_notes: v || null })} />,
+      cell: (i: any) => <ExpandableText value={i.row.original.issue_notes} onSave={(v) => updateIssue(i.row.original.id, { issue_notes: v || null })} />,
     }
     const notesCol = {
       id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
-      cell: (i: any) => <InlineText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
+      cell: (i: any) => <ExpandableText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
     }
     // Only add the built-in Issue Notes column if the user hasn't already created
     // a custom column with that name via "+ Add Column".
@@ -261,7 +301,12 @@ export function IssuesPage() {
       ...customs,
       ...(hasCustomIssueNotes ? [] : [issueNotesCol]),
       notesCol,
-      { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (<button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-inky hover:underline">Edit</button>) },
+      { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (
+        <div className="flex items-center gap-2">
+          <button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-inky hover:underline">Edit</button>
+          <button onClick={() => setDeleteTarget(i.row.original as IssueRow)} className="text-xs font-mono text-red-400 hover:underline">Delete</button>
+        </div>
+      )},
     ]
   }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, statuses, addStatus])
 
@@ -289,6 +334,28 @@ export function IssuesPage() {
     return () => { void supabase.removeChannel(channel) }
   }, [profile?.company_id, loadIssues])
 
+  async function softDeleteIssue(id: string) {
+    const { error } = await (supabase as any).from('issues').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Issue moved to deleted items')
+    setDeleteTarget(null)
+    loadIssues()
+  }
+
+  async function restoreIssue(id: string) {
+    const { error } = await (supabase as any).from('issues').update({ deleted_at: null }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Issue restored')
+    loadIssues()
+  }
+
+  async function hardDeleteIssue(id: string) {
+    const { error } = await (supabase as any).from('issues').delete().eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Issue permanently deleted')
+    loadIssues()
+  }
+
   const onNew = () => { setEditIssue(null); setModalOpen(true) }
   const actions = (
     <>
@@ -304,7 +371,37 @@ export function IssuesPage() {
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Issue Tracker</h1>
           <p className="text-xs text-inky mt-0.5">Track and resolve location issues</p>
         </div>
+        {deletedIssues.length > 0 && (
+          <button
+            onClick={() => setShowDeleted((v) => !v)}
+            className="text-xs font-mono text-inky/60 hover:text-navy underline decoration-dotted"
+          >
+            {showDeleted ? 'Hide deleted' : `Show deleted (${deletedIssues.length})`}
+          </button>
+        )}
       </div>
+
+      {/* Deleted issues panel */}
+      {showDeleted && deletedIssues.length > 0 && (
+        <div className="rounded border border-red-200 bg-red-50/40">
+          <div className="px-4 py-2 border-b border-red-200">
+            <span className="text-xs font-mono text-red-600 uppercase tracking-wide font-bold">Deleted Issues</span>
+            <span className="text-[10px] font-mono text-red-400 ml-2">— auto-purge after 30 days</span>
+          </div>
+          <ul className="divide-y divide-red-100">
+            {deletedIssues.map((issue) => (
+              <li key={issue.id} className="flex items-center gap-3 px-4 py-2.5">
+                <span className="flex-1 text-sm font-body text-inky/60 line-through">{issue.title ?? '(untitled)'}</span>
+                <span className="text-[10px] font-mono text-inky/40">
+                  {issue.deleted_at ? format(new Date(issue.deleted_at), 'MMM d, yyyy') : ''}
+                </span>
+                <button onClick={() => restoreIssue(issue.id)} className="text-xs font-mono text-sky hover:underline">Restore</button>
+                <button onClick={() => { if (confirm('Permanently delete this issue?')) hardDeleteIssue(issue.id) }} className="text-xs font-mono text-red-400 hover:underline">Delete Forever</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <Tabs defaultValue={defaultTab}>
         <TabsList>
@@ -325,6 +422,22 @@ export function IssuesPage() {
 
       <IssueFormModal open={modalOpen} onClose={() => { setModalOpen(false); setEditIssue(null) }} existing={editIssue} onSaved={loadIssues} />
       <AddIssueColumnModal open={addColOpen} onClose={() => setAddColOpen(false)} existingColumns={customColumns} onAdd={issueCols.addColumn} />
+
+      {/* Delete confirmation */}
+      {deleteTarget && (
+        <Modal open onClose={() => setDeleteTarget(null)} title="Delete Issue?">
+          <div className="flex flex-col gap-4">
+            <p className="text-sm font-body text-navy">
+              Delete <span className="font-bold">"{deleteTarget.title ?? 'this issue'}"</span>?
+            </p>
+            <p className="text-xs font-mono text-inky/70">The issue will be kept for 30 days and can be restored before that.</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+              <Button variant="danger" size="sm" onClick={() => softDeleteIssue(deleteTarget.id)}>Delete</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

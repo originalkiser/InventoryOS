@@ -24,24 +24,13 @@ export function InventoryOverlay({ mode, width, mobile, onModeChange, onToggle, 
     return () => window.removeEventListener('keydown', handler)
   }, [onToggle])
 
-  return (
-    <>
-      <button
-        onClick={onToggle}
-        className="fixed bottom-4 right-4 z-[60] flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-4 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-        title="Inventory — all locations (Ctrl/Cmd+I)"
-      >
-        Inventory{open ? <span className="text-[10px] text-sky ml-1">●</span> : null}
-      </button>
-      {open && (
-        <FloatingPanel
-          title="Inventory · All Locations" prefix="inventory"
-          mode={mode} width={width} mobile={mobile}
-          onModeChange={onModeChange} onWidthChange={onWidthChange} onClose={() => onModeChange('hidden')}
-        >
-          <InventoryView maxHeight="100%" />
-        </FloatingPanel>
-      )}
-    </>
-  )
+  return open ? (
+    <FloatingPanel
+      title="Inventory · All Locations" prefix="inventory"
+      mode={mode} width={width} mobile={mobile}
+      onModeChange={onModeChange} onWidthChange={onWidthChange} onClose={() => onModeChange('hidden')}
+    >
+      <InventoryView maxHeight="100%" />
+    </FloatingPanel>
+  ) : null
 }

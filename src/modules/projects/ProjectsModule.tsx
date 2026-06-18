@@ -8,7 +8,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { format } from 'date-fns'
-import { Button, Badge } from '@/components/ui'
+import { Button, Badge, Modal } from '@/components/ui'
 import { useProjects } from '@/hooks/useProjects'
 import { useProjectColumns, type ColumnDef } from '@/hooks/useProjectColumns'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -368,7 +368,7 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subC
 
 // ---------------------------------------------------------------------------
 export function ProjectsModule() {
-  const { projects, tasks, loading, companyId, addProject, updateProject, deleteProject, addTask, updateTask, deleteTask, reorderTasks } = useProjects()
+  const { projects, tasks, loading, companyId, load: reloadProjects, addProject, updateProject, deleteProject, restoreProject, hardDeleteProject, addTask, updateTask, deleteTask, reorderTasks } = useProjects()
   const { columns, setOrder, togglePin, toggleVisible, setWidth } = useProjectColumns(COLUMN_DEFS)
 
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
@@ -384,6 +384,12 @@ export function ProjectsModule() {
     ;(supabase as any).from('tasks').select('*').eq('company_id', companyId).not('project_id', 'is', null).order('created_at')
       .then(({ data }: any) => setLinkedTasks((data ?? []) as Task[]))
   }, [companyId])
+
+  useEffect(() => {
+    if (!companyId) return
+    ;(supabase as any).from('projects').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
+      .then(({ data }: any) => setDeletedProjects((data ?? []) as Project[]))
+  }, [companyId, projects])
 
   async function toggleLinkedTask(id: string, done: boolean) {
     setLinkedTasks((prev) => prev.map((t) => t.id === id ? { ...t, completed: done } : t))
@@ -408,6 +414,9 @@ export function ProjectsModule() {
   const [groupBy, setGroupBy] = useState<'none' | 'status' | 'category'>('none')
   const [colMenuOpen, setColMenuOpen] = useState(false)
   const focusName = useRef<string | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<Project | null>(null)
+  const [deletedProjects, setDeletedProjects] = useState<Project[]>([])
+  const [showDeleted, setShowDeleted] = useState(false)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   // Custom statuses (shared by projects + sub-tasks), persisted per company.
@@ -480,7 +489,7 @@ export function ProjectsModule() {
     const type = TYPE_OF[key]
     if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={addStatus} />
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
-    if (key === 'description') return <ExpandableTextCell value={p.description} placeholder="Description…" onSave={(v) => updateProject(p.id, { description: v || null })} />
+    if (type === 'text' && key !== 'project_name') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'description' ? 'Description…' : '—'} onSave={(v) => updateProject(p.id, { [key]: v || null } as Partial<Project>)} />
     const dataKey = key === 'project_name' ? { 'data-name-input': p.id } : {}
     return (
       <span {...dataKey as any}>
@@ -500,8 +509,37 @@ export function ProjectsModule() {
           <h1 className="text-lg font-bold uppercase tracking-wide text-navy">Projects</h1>
           <p className="mt-0.5 text-xs text-inky">Track projects and their sub-tasks</p>
         </div>
-        <Button size="sm" onClick={onNewProject}>+ New Project</Button>
+        <div className="flex items-center gap-3">
+          {deletedProjects.length > 0 && (
+            <button onClick={() => setShowDeleted((v) => !v)} className="text-xs font-mono text-inky/60 hover:text-navy underline decoration-dotted">
+              {showDeleted ? 'Hide deleted' : `Show deleted (${deletedProjects.length})`}
+            </button>
+          )}
+          <Button size="sm" onClick={onNewProject}>+ New Project</Button>
+        </div>
       </div>
+
+      {/* Deleted projects panel */}
+      {showDeleted && deletedProjects.length > 0 && (
+        <div className="rounded border border-red-200 bg-red-50/40">
+          <div className="px-4 py-2 border-b border-red-200">
+            <span className="text-xs font-mono text-red-600 uppercase tracking-wide font-bold">Deleted Projects</span>
+            <span className="text-[10px] font-mono text-red-400 ml-2">— auto-purge after 30 days</span>
+          </div>
+          <ul className="divide-y divide-red-100">
+            {deletedProjects.map((p) => (
+              <li key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+                <span className="flex-1 text-sm font-body text-inky/60 line-through">{p.project_name || '(untitled)'}</span>
+                <span className="text-[10px] font-mono text-inky/40">
+                  {p.deleted_at ? format(new Date(p.deleted_at), 'MMM d, yyyy') : ''}
+                </span>
+                <button onClick={() => restoreProject(p.id)} className="text-xs font-mono text-sky hover:underline">Restore</button>
+                <button onClick={() => { if (confirm('Permanently delete this project and all its data?')) hardDeleteProject(p.id) }} className="text-xs font-mono text-red-400 hover:underline">Delete Forever</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
@@ -565,7 +603,7 @@ export function ProjectsModule() {
                   {g.items.map((p) => (
                     <ProjectRowFragment key={p.id} project={p} ordered={ordered} leftOffsets={leftOffsets} totalCols={totalCols}
                       expanded={expanded.has(p.id)} onToggle={() => toggleExpand(p.id)}
-                      renderCell={renderCell} onDelete={() => deleteProject(p.id)}
+                      renderCell={renderCell} onDelete={() => setDeleteConfirm(p)}
                       tasks={tasks.filter((t) => t.project_id === p.id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))}
                       linkedTasks={linkedTasks.filter((t) => t.project_id === p.id)}
                       onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks}
@@ -578,6 +616,22 @@ export function ProjectsModule() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Project delete confirmation */}
+      {deleteConfirm && (
+        <Modal open onClose={() => setDeleteConfirm(null)} title="Delete Project?">
+          <div className="flex flex-col gap-4">
+            <p className="text-sm font-body text-navy">
+              Delete <span className="font-bold">"{deleteConfirm.project_name || 'this project'}"</span>?
+            </p>
+            <p className="text-xs font-mono text-inky/70">The project will be kept for 30 days and can be restored before that.</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+              <Button variant="danger" size="sm" onClick={() => { deleteProject(deleteConfirm.id); setDeleteConfirm(null) }}>Delete</Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )
