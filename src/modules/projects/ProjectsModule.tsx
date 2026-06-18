@@ -86,14 +86,15 @@ function SubTaskHeaderCell({ colKey, label, width, onResize }: {
 // Wrapping, expand/collapse, click-to-edit text cell (Description / Vendor / Category / Notes).
 // "more/less" only appears when text is genuinely clipped — measured via DOM overflow so
 // it reacts correctly to column resizes without any length-based heuristics.
-function ExpandableTextCell({ value, onSave, placeholder }: { value: string | null; onSave: (v: string) => void; placeholder?: string }) {
-  const [editing, setEditing] = useState(false)
+function ExpandableTextCell({ value, onSave, placeholder, autoEdit = false }: { value: string | null; onSave: (v: string) => void; placeholder?: string; autoEdit?: boolean }) {
+  const [editing, setEditing] = useState(autoEdit)
   const [expanded, setExpanded] = useState(false)
   const [canExpand, setCanExpand] = useState(false)
   const [v, setV] = useState(value ?? '')
   const textRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { setV(value ?? '') }, [value])
+  useEffect(() => { if (autoEdit) setEditing(true) }, [autoEdit])
 
   useLayoutEffect(() => {
     if (expanded) return
@@ -426,7 +427,7 @@ export function ProjectsModule() {
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null)
   const [groupBy, setGroupBy] = useState<'none' | 'status' | 'category'>('none')
   const [colMenuOpen, setColMenuOpen] = useState(false)
-  const focusName = useRef<string | null>(null)
+  const [autoEditId, setAutoEditId] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<Project | null>(null)
   const [deletedProjects, setDeletedProjects] = useState<Project[]>([])
   const [showDeleted, setShowDeleted] = useState(false)
@@ -488,28 +489,17 @@ export function ProjectsModule() {
   }
   async function onNewProject() {
     const p = await addProject()
-    if (p) { focusName.current = p.id; setExpanded((prev) => new Set(prev)) }
+    if (p) { setAutoEditId(p.id); setExpanded((prev) => new Set(prev)) }
   }
-  // Focus the name input of a freshly-created project.
-  useEffect(() => {
-    if (!focusName.current) return
-    const el = document.querySelector<HTMLInputElement>(`[data-name-input="${focusName.current}"]`)
-    el?.focus()
-    focusName.current = null
-  })
 
   function renderCell(p: Project, key: string) {
     const type = TYPE_OF[key]
     if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={addStatus} />
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
-    if (type === 'text' && key !== 'project_name') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'description' ? 'Description…' : '—'} onSave={(v) => updateProject(p.id, { [key]: v || null } as Partial<Project>)} />
-    const dataKey = key === 'project_name' ? { 'data-name-input': p.id } : {}
+    if (type === 'text') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'project_name' ? 'Project name…' : key === 'description' ? 'Description…' : '—'} autoEdit={key === 'project_name' && p.id === autoEditId} onSave={(v) => { if (key === 'project_name') setAutoEditId(null); updateProject(p.id, { [key]: v || null } as Partial<Project>) }} />
     return (
-      <span {...dataKey as any}>
-        <EditableCell value={(p as any)[key] ?? ''} type={type}
-          placeholder={key === 'project_name' ? 'Project name…' : '—'}
-          onSave={(v) => updateProject(p.id, { [key]: v || null } as Partial<Project>)} />
-      </span>
+      <EditableCell value={(p as any)[key] ?? ''} type={type} placeholder="—"
+        onSave={(v) => updateProject(p.id, { [key]: v || null } as Partial<Project>)} />
     )
   }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
@@ -22,6 +22,36 @@ const EMPTY_FORM = {
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
 const col = createColumnHelper<MeetingNote>()
+
+function ExpandableDisplay({ value, clamp = 1 }: { value: string | null; clamp?: 1 | 2 }) {
+  const [expanded, setExpanded] = useState(false)
+  const [canExpand, setCanExpand] = useState(false)
+  const textRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (expanded) return
+    const el = textRef.current
+    if (!el) return
+    setCanExpand(el.scrollHeight > el.clientHeight + 1)
+  })
+
+  const text = value ?? ''
+  return (
+    <div className="whitespace-normal">
+      <div
+        ref={textRef}
+        className={['text-xs font-mono', text ? 'text-navy' : 'text-inky/40', expanded ? 'whitespace-pre-wrap break-words' : clamp === 2 ? 'line-clamp-2' : 'line-clamp-1'].join(' ')}
+      >
+        {text || '—'}
+      </div>
+      {(canExpand || expanded) && (
+        <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-inky hover:underline">
+          {expanded ? 'less' : 'more'}
+        </button>
+      )}
+    </div>
+  )
+}
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
@@ -215,13 +245,13 @@ export function MeetingNotesPage() {
   )
 
   const columns = useMemo(() => [
-    col.accessor('title', { header: 'Meeting' }),
+    col.accessor('title', { header: 'Meeting', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue()} /> }),
     col.accessor('meeting_date', {
       header: 'Date',
       cell: (i) => formatDateTime(i.getValue(), (i.row.original as MeetingNote).meeting_time),
     }),
-    col.accessor('vendor', { header: 'Vendor', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('category', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('vendor', { header: 'Vendor', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} /> }),
+    col.accessor('category', { header: 'Category', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} /> }),
     col.accessor('shared', {
       header: 'Visibility',
       cell: (i) => (
@@ -230,13 +260,7 @@ export function MeetingNotesPage() {
         </span>
       ),
     }),
-    col.accessor('notes', {
-      header: 'Notes',
-      cell: (i) => {
-        const n = i.getValue()
-        return n ? <span className="text-inky/70">{n.slice(0, 60)}{n.length > 60 ? '…' : ''}</span> : '—'
-      },
-    }),
+    col.accessor('notes', { header: 'Notes', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} /> }),
     {
       id: 'edit', header: '', enableColumnFilter: false, enableSorting: false,
       cell: (i: any) => (
