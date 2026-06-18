@@ -242,16 +242,24 @@ export function IssuesPage() {
       id: 'status', header: 'Status', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.status_name ?? '',
       cell: (i: any) => <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onAdd={addStatus} onChange={(sid) => updateIssue(i.row.original.id, { status_id: sid }, { status_name: statuses.find((s) => s.id === sid)?.name })} />,
     }
+    const issueNotesCol = {
+      id: 'issue_notes', header: 'Issue Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.issue_notes ?? '',
+      cell: (i: any) => <InlineText value={i.row.original.issue_notes} onSave={(v) => updateIssue(i.row.original.id, { issue_notes: v || null })} />,
+    }
     const notesCol = {
       id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
       cell: (i: any) => <InlineText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
     }
+    // Only add the built-in Issue Notes column if the user hasn't already created
+    // a custom column with that name via "+ Add Column".
+    const hasCustomIssueNotes = customColumns.some((c) => c.label.toLowerCase() === 'issue notes')
     return [
       ...BASE_BEFORE,
       statusCol,
       ...BASE_AFTER,
       { id: 'vendor', header: 'Vendor', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.vendor ?? '', cell: (i: any) => <InlineText value={i.row.original.vendor} onSave={(v) => updateVendor(i.row.original.id, v)} /> },
       ...customs,
+      ...(hasCustomIssueNotes ? [] : [issueNotesCol]),
       notesCol,
       { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (<button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-inky hover:underline">Edit</button>) },
     ]

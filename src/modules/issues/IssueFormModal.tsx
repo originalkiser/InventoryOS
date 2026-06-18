@@ -30,6 +30,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   const [resolvedDate, setResolvedDate] = useState(existing?.resolved_date ?? '')
   const [vendor, setVendor] = useState(existing?.vendor ?? '')
   const [assignee, setAssignee] = useState(existing?.assignee ?? '')
+  const [issueNotes, setIssueNotes] = useState(existing?.issue_notes ?? '')
   const [notes, setNotes] = useState(existing?.resolution_notes ?? '')
   const [saving, setSaving] = useState(false)
 
@@ -52,6 +53,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
     setResolvedDate(existing?.resolved_date ?? '')
     setVendor(existing?.vendor ?? '')
     setAssignee(existing?.assignee ?? '')
+    setIssueNotes(existing?.issue_notes ?? '')
     setNotes(existing?.resolution_notes ?? '')
   }, [existing])
 
@@ -112,6 +114,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
       resolved_date: resolvedDate || null,
       vendor: vendor.trim() || null,
       assignee: assignee.trim() || null,
+      issue_notes: issueNotes.trim() || null,
       resolution_notes: notes || null,
     }
     // Only stamp the creator on insert — editing must not reassign it.
@@ -175,7 +178,20 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
             onChange={(e) => setResolvedDate(e.target.value)} />
         )}
 
-        <div className={isResolved ? 'col-span-2' : 'col-span-2'}>
+        <div className="col-span-2">
+          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">
+            Issue Notes
+          </label>
+          <textarea
+            value={issueNotes}
+            onChange={(e) => setIssueNotes(e.target.value)}
+            rows={3}
+            placeholder="Details, observations, context..."
+            className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff] resize-none"
+          />
+        </div>
+
+        <div className="col-span-2">
           <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">
             Resolution Notes
           </label>

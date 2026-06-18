@@ -532,6 +532,7 @@ export interface Issue {
   start_date: string | null
   target_resolution_date: string | null
   resolved_date: string | null
+  issue_notes: string | null
   resolution_notes: string | null
   vendor: string | null
   assignee: string | null
