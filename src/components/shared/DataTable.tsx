@@ -162,20 +162,22 @@ export function DataTable<T>({
                     i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]',
                   ].join(' ')}
                 >
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getVisibleCells().map((cell) => {
+                    const noClip = (cell.column.columnDef.meta as any)?.noClip
+                    return (
                     <td
                       key={cell.id}
                       style={{
                         width: cell.column.getSize(),
                         maxWidth: cell.column.getSize(),
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        ...(noClip ? {} : { overflow: 'hidden', textOverflow: 'ellipsis' }),
                         ...(cell.column.getIsPinned() === 'left'
                           ? { position: 'sticky', left: cell.column.getStart('left'), zIndex: 10 }
                           : {}),
                       }}
                       className={[
-                        'px-3 py-2 text-navy whitespace-nowrap',
+                        'px-3 py-2 text-navy',
+                        noClip ? '' : 'whitespace-nowrap',
                         cell.column.getIsPinned() === 'left'
                           ? `${i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'} border-r-2 border-r-inky/20`
                           : '',
@@ -183,7 +185,8 @@ export function DataTable<T>({
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
-                  ))}
+                    )
+                  })}
                 </tr>
               ))
             )}

@@ -58,17 +58,15 @@ export function AppShell() {
 
       <div className="flex flex-col flex-1 min-w-0 relative transition-[margin] duration-150" style={{ marginRight: pushWidth || undefined }}>
         <TopBar mobile={mobile} onMobileMenuOpen={() => setMobileNavOpen((v) => !v)} />
-        <main className="flex-1 overflow-auto p-3 sm:p-6 pb-20">
+        <main className="flex-1 overflow-auto p-3 sm:p-6">
           <ErrorBoundary key={location.pathname}>
             <Outlet />
           </ErrorBoundary>
         </main>
-        {/* Gradient barrier — scoped to content column only (not sidebar).
-            Sits at z-[59] so content scrolls behind it; buttons at z-[60] sit on top. */}
-        <div
-          className="absolute bottom-0 left-0 right-0 z-[59] pointer-events-none"
-          style={{ height: '72px', background: 'linear-gradient(to top, #F2F1E6 45%, rgba(242,241,230,0))' }}
-        />
+        {/* Invisible structural spacer — reserves the same height as the floating
+            button row so <main> (flex-1) physically ends above it.
+            No background, no border; purely a layout constraint. */}
+        <div className="flex-shrink-0 h-16" />
       </div>
 
       {/* Floating action buttons — bottom-right, horizontal row */}

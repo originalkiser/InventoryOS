@@ -87,7 +87,7 @@ function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: s
     )
   }
   return (
-    <div className="px-1">
+    <div className="px-1 whitespace-normal">
       <div
         ref={textRef}
         onClick={() => setEditing(true)}
@@ -191,7 +191,7 @@ function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | u
 }
 
 const BASE_BEFORE = [
-  col.accessor('title', { header: 'Title', enableColumnFilter: false, cell: (i) => <ExpandableText value={i.getValue() ?? ''} onSave={() => {}} /> }),
+  col.accessor('title', { header: 'Title', enableColumnFilter: false, meta: { noClip: true }, cell: (i) => <ExpandableText value={i.getValue() ?? ''} onSave={() => {}} /> }),
   col.accessor('location_name', { header: 'Location', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('category_name', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
 ]
@@ -301,11 +301,11 @@ export function IssuesPage() {
       cell: (i: any) => <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onAdd={addStatus} onChange={(sid) => updateIssue(i.row.original.id, { status_id: sid }, { status_name: statuses.find((s) => s.id === sid)?.name })} />,
     }
     const issueNotesCol = {
-      id: 'issue_notes', header: 'Issue Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.issue_notes ?? '',
+      id: 'issue_notes', header: 'Issue Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true }, accessorFn: (r: IssueRow) => r.issue_notes ?? '',
       cell: (i: any) => <ExpandableText value={i.row.original.issue_notes} onSave={(v) => updateIssue(i.row.original.id, { issue_notes: v || null })} />,
     }
     const notesCol = {
-      id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
+      id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true }, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
       cell: (i: any) => <ExpandableText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
     }
     // Only add the built-in Issue Notes column if the user hasn't already created
