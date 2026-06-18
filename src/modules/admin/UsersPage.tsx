@@ -94,14 +94,55 @@ export function UsersPage() {
     const sb = supabase as any
     const newName = editName.trim() || null
     const oldName = editUser.full_name ?? null
+    const isSelf = editUser.id === myProfile?.id
 
-    const { error } = await sb
+    // For the logged-in user: update Supabase Auth metadata first. Some projects
+    // have a trigger that syncs auth.users → profiles; doing this first ensures
+    // that trigger fires with the new name before we overwrite via PostgREST.
+    if (isSelf) {
+      await sb.auth.updateUser({ data: { full_name: newName } })
+    }
+
+    // Use .select() so we can detect a silent RLS block — Supabase returns HTTP
+    // 200 with no error but 0 rows when a policy filters out the target row.
+    const { data: updated, error } = await sb
       .from('profiles')
       .update({ role: editRole, full_name: newName })
       .eq('id', editUser.id)
+      .select('id, full_name, role')
 
     if (error) {
       toast.error(error.message)
+      setEditLoading(false)
+      return
+    }
+
+    if (!updated || updated.length === 0) {
+      // RLS silently blocked the write. Log the fix SQL to the console.
+      console.warn(
+        '[UsersPage] Profile update blocked by RLS. Run this in your Supabase SQL editor:\n\n' +
+        'CREATE POLICY "admins_update_company_profiles" ON profiles\n' +
+        'FOR UPDATE TO authenticated\n' +
+        'USING (\n' +
+        '  auth.uid() = id OR\n' +
+        '  EXISTS (\n' +
+        '    SELECT 1 FROM profiles p\n' +
+        '    WHERE p.id = auth.uid()\n' +
+        '      AND p.company_id = profiles.company_id\n' +
+        '      AND p.role = \'admin\'\n' +
+        '  )\n' +
+        ')\n' +
+        'WITH CHECK (\n' +
+        '  auth.uid() = id OR\n' +
+        '  EXISTS (\n' +
+        '    SELECT 1 FROM profiles p\n' +
+        '    WHERE p.id = auth.uid()\n' +
+        '      AND p.company_id = profiles.company_id\n' +
+        '      AND p.role = \'admin\'\n' +
+        '  )\n' +
+        ');'
+      )
+      toast.error('Update blocked by a database policy — see the browser console for the SQL fix.')
       setEditLoading(false)
       return
     }
@@ -110,18 +151,15 @@ export function UsersPage() {
     // only when the name actually changed and there was an old name to match on.
     if (newName && oldName && newName !== oldName && myProfile?.company_id) {
       await Promise.all([
-        // standalone tasks where assignee_name was the free-text name (no profile FK)
         sb.from('tasks')
           .update({ assignee_name: newName })
           .eq('company_id', myProfile.company_id)
           .eq('assignee_name', oldName)
           .is('assignee_id', null),
-        // project tasks (always free-text)
         sb.from('project_tasks')
           .update({ assignee: newName })
           .eq('company_id', myProfile.company_id)
           .eq('assignee', oldName),
-        // issues (always free-text)
         sb.from('issues')
           .update({ assignee: newName })
           .eq('company_id', myProfile.company_id)
@@ -129,10 +167,9 @@ export function UsersPage() {
       ])
     }
 
-    // If editing the current user, refresh the auth store and Supabase auth metadata
-    if (editUser.id === myProfile?.id) {
-      await sb.auth.updateUser({ data: { full_name: newName } })
-      setProfile({ ...myProfile, full_name: newName, role: editRole })
+    // Refresh the Zustand store so the sidebar and any cached name updates immediately.
+    if (isSelf) {
+      setProfile({ ...myProfile!, full_name: newName, role: editRole })
     }
 
     toast.success('User updated')
