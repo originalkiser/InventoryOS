@@ -89,30 +89,52 @@ export function DataTable<T>({
 
       {/* Table */}
       <div className="overflow-x-auto rounded border border-inky/20">
-        <table className="min-w-full text-xs font-body">
+        <table
+          className="text-xs font-body table-fixed"
+          style={{ width: table.getTotalSize() }}
+        >
           <thead>
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="border-b border-inky/20 bg-[#002745]">
                 {hg.headers.map((header) => (
                   <th
                     key={header.id}
-                    style={header.column.getIsPinned() === 'left'
-                      ? { position: 'sticky', left: header.column.getStart('left'), zIndex: 20 }
-                      : undefined}
+                    style={{
+                      width: header.getSize(),
+                      ...(header.column.getIsPinned() === 'left'
+                        ? { position: 'sticky', left: header.column.getStart('left'), zIndex: 20 }
+                        : { position: 'relative' }),
+                    }}
                     className={[
-                      'px-3 py-2 text-left text-[#F2F1E6] font-heading text-sm uppercase tracking-wide whitespace-nowrap',
+                      'px-3 py-2 text-left text-[#F2F1E6] font-heading text-sm uppercase tracking-wide overflow-hidden',
                       header.column.getIsPinned() === 'left' ? 'bg-[#002745] border-r-2 border-r-inky/40' : '',
                     ].join(' ')}
                   >
                     <span
                       onClick={header.column.getToggleSortingHandler()}
-                      className={header.column.getCanSort() ? 'cursor-pointer hover:text-sky' : ''}
+                      className={[
+                        'block truncate',
+                        header.column.getCanSort() ? 'cursor-pointer hover:text-sky' : '',
+                      ].join(' ')}
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       {header.column.getIsSorted() === 'asc' && ' ↑'}
                       {header.column.getIsSorted() === 'desc' && ' ↓'}
                     </span>
                     {header.column.getCanFilter() && <ColumnFilter column={header.column} />}
+                    {/* Resize handle */}
+                    {header.column.getCanResize() && (
+                      <div
+                        onMouseDown={header.getResizeHandler()}
+                        onTouchStart={header.getResizeHandler()}
+                        className={[
+                          'absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none',
+                          header.column.getIsResizing()
+                            ? 'bg-[#00e5ff]'
+                            : 'bg-[#F2F1E6]/10 hover:bg-[#00e5ff]/60',
+                        ].join(' ')}
+                      />
+                    )}
                   </th>
                 ))}
               </tr>
@@ -143,9 +165,15 @@ export function DataTable<T>({
                   {row.getVisibleCells().map((cell) => (
                     <td
                       key={cell.id}
-                      style={cell.column.getIsPinned() === 'left'
-                        ? { position: 'sticky', left: cell.column.getStart('left'), zIndex: 10 }
-                        : undefined}
+                      style={{
+                        width: cell.column.getSize(),
+                        maxWidth: cell.column.getSize(),
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        ...(cell.column.getIsPinned() === 'left'
+                          ? { position: 'sticky', left: cell.column.getStart('left'), zIndex: 10 }
+                          : {}),
+                      }}
                       className={[
                         'px-3 py-2 text-navy whitespace-nowrap',
                         cell.column.getIsPinned() === 'left'

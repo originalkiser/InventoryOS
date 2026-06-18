@@ -13,6 +13,7 @@ import {
   type ColumnFiltersState,
   type ColumnOrderState,
   type ColumnPinningState,
+  type ColumnSizingState,
   type FilterFn,
 } from '@tanstack/react-table'
 
@@ -31,18 +32,21 @@ export function useTable<T>(data: T[], columns: ColumnDef<T, any>[]) {
   // are unaffected (no column is pinned/reordered).
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([])
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>({ left: [], right: [] })
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, globalFilter, columnVisibility, columnFilters, columnOrder, columnPinning },
+    columnResizeMode: 'onChange',
+    state: { sorting, globalFilter, columnVisibility, columnFilters, columnOrder, columnPinning, columnSizing },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnFiltersChange: setColumnFilters,
     onColumnOrderChange: setColumnOrder,
     onColumnPinningChange: setColumnPinning,
-    defaultColumn: { filterFn: multiSelectFilter },
+    onColumnSizingChange: setColumnSizing,
+    defaultColumn: { filterFn: multiSelectFilter, minSize: 40, maxSize: 800 },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
