@@ -7,6 +7,8 @@ import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import { useIssueColumns } from '@/hooks/useIssueColumns'
 import { Button, Badge, Modal, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { LinksCell } from '@/components/shared/LinksCell'
+import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
 import { IssueFormModal } from './IssueFormModal'
 import { AddIssueColumnModal } from './AddIssueColumnModal'
 import type { Issue, IssueColumnType, IssueTrackerColumn } from '@/types'
@@ -209,7 +211,8 @@ function IssuesTable({ table, filter, onFilterChange, issues, loading, actions }
 }) {
   return (
     <DataTable table={table} globalFilter={filter} onGlobalFilterChange={onFilterChange}
-      exportFilename="issues.csv" exportData={issues} loading={loading} actions={actions} />
+      exportFilename="issues.csv" exportData={issues} loading={loading} actions={actions}
+      attachmentEntityType="issue" />
   )
 }
 
@@ -253,6 +256,12 @@ export function IssuesPage() {
     }
     setLoading(false)
   }, [profile?.company_id])
+
+  const updateLinks = useCallback(async (id: string, links: string[]) => {
+    setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, helpful_links: links } : i)))
+    const { error } = await (supabase as any).from('issues').update({ helpful_links: links }).eq('id', id)
+    if (error) { toast.error(error.message); loadIssues() }
+  }, [loadIssues])
 
   // Optimistic inline vendor edit on the issues row.
   const updateVendor = useCallback(async (id: string, val: string) => {
@@ -308,6 +317,16 @@ export function IssuesPage() {
       id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true }, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
       cell: (i: any) => <ExpandableText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
     }
+    const linksCol = {
+      id: 'helpful_links', header: 'Helpful Links', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
+      accessorFn: (r: IssueRow) => r.helpful_links?.join(' ') ?? '',
+      cell: (i: any) => <LinksCell links={i.row.original.helpful_links ?? []} onSave={(links) => updateLinks(i.row.original.id, links)} />,
+    }
+    const attachmentsCol = {
+      id: 'attachments', header: '📎', enableColumnFilter: false, enableSorting: false,
+      cell: (i: any) => <AttachmentsCell entityType="issue" entityId={i.row.original.id} companyId={profile?.company_id ?? ''} />,
+    }
+
     // Only add the built-in Issue Notes column if the user hasn't already created
     // a custom column with that name via "+ Add Column".
     const hasCustomIssueNotes = customColumns.some((c) => c.label.toLowerCase() === 'issue notes')
@@ -319,6 +338,8 @@ export function IssuesPage() {
       ...customs,
       ...(hasCustomIssueNotes ? [] : [issueNotesCol]),
       notesCol,
+      linksCol,
+      attachmentsCol,
       { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (
         <div className="flex items-center gap-2">
           <button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-inky hover:underline">Edit</button>
@@ -326,7 +347,7 @@ export function IssuesPage() {
         </div>
       )},
     ]
-  }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, statuses, addStatus])
+  }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, updateLinks, statuses, addStatus, profile?.company_id])
 
   const allTable = useTable(issues, columns)
   const pendingTable = useTable(issues.filter((i) => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('pending') || s.includes('open') }), columns)

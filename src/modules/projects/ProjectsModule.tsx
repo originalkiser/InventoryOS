@@ -9,13 +9,15 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { format } from 'date-fns'
 import { Button, Badge, Modal } from '@/components/ui'
+import { LinksCell } from '@/components/shared/LinksCell'
+import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
 import { useProjects } from '@/hooks/useProjects'
 import { useProjectColumns, type ColumnDef } from '@/hooks/useProjectColumns'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { supabase } from '@/lib/supabase'
 import type { Profile, Project, ProjectTask, Task } from '@/types'
 
-type CellType = 'text' | 'date' | 'status' | 'datetime'
+type CellType = 'text' | 'date' | 'status' | 'datetime' | 'links' | 'attachments'
 
 const COLUMN_DEFS: (ColumnDef & { type: CellType })[] = [
   { key: 'project_name', label: 'Project Name', defaultWidth: 220, type: 'text' },
@@ -26,6 +28,8 @@ const COLUMN_DEFS: (ColumnDef & { type: CellType })[] = [
   { key: 'description', label: 'Description', defaultWidth: 280, type: 'text' },
   { key: 'vendor', label: 'Vendor', defaultWidth: 150, type: 'text' },
   { key: 'category', label: 'Category', defaultWidth: 150, type: 'text' },
+  { key: 'helpful_links', label: 'Helpful Links', defaultWidth: 220, type: 'links' },
+  { key: 'attachments', label: '📎', defaultWidth: 80, type: 'attachments' },
 ]
 const TYPE_OF = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.type])) as Record<string, CellType>
 
@@ -496,6 +500,8 @@ export function ProjectsModule() {
     const type = TYPE_OF[key]
     if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={addStatus} />
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
+    if (type === 'links') return <LinksCell links={p.helpful_links ?? []} onSave={(links) => updateProject(p.id, { helpful_links: links })} />
+    if (type === 'attachments') return <AttachmentsCell entityType="project" entityId={p.id} companyId={companyId!} />
     if (type === 'text') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'project_name' ? 'Project name…' : key === 'description' ? 'Description…' : '—'} autoEdit={key === 'project_name' && p.id === autoEditId} onSave={(v) => { if (key === 'project_name') setAutoEditId(null); updateProject(p.id, { [key]: v || null } as Partial<Project>) }} />
     return (
       <EditableCell value={(p as any)[key] ?? ''} type={type} placeholder="—"

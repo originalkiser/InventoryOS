@@ -145,6 +145,7 @@ export interface Project {
   description: string | null
   vendor: string | null
   category: string | null
+  helpful_links: string[]
   sort_order: number
   updated_by: string | null
   created_at: string
@@ -538,10 +539,24 @@ export interface Issue {
   resolution_notes: string | null
   vendor: string | null
   assignee: string | null
+  helpful_links: string[]
   created_by: string | null
   created_at: string
   updated_at: string
   deleted_at: string | null
+}
+
+export interface Attachment {
+  id: string
+  entity_type: 'issue' | 'project'
+  entity_id: string
+  company_id: string
+  file_name: string
+  storage_path: string
+  file_size: number | null
+  content_type: string | null
+  uploaded_by: string | null
+  created_at: string
 }
 
 export interface ScheduleEvent {
