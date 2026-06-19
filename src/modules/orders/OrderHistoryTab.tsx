@@ -24,9 +24,7 @@ interface SessionRow extends OrderSession {
 const STATUS_COLOR: Record<string, 'cyan' | 'green' | 'amber' | 'magenta' | 'gray'> = {
   draft: 'gray', generated: 'magenta', exported: 'cyan', pending: 'amber', fulfilled: 'green',
 }
-const NEXT_STATUS: Record<string, string | null> = {
-  exported: 'pending', pending: 'fulfilled', fulfilled: null,
-}
+const STATUS_OPTIONS = ['draft', 'generated', 'exported', 'pending', 'fulfilled']
 
 const col = createColumnHelper<SessionRow>()
 
@@ -96,14 +94,17 @@ export function OrderHistoryTab() {
     col.accessor('created_at', { header: 'Created', cell: (i) => format(new Date(i.getValue()), 'MMM d, yyyy h:mm a') }),
     col.accessor('location_count', { header: 'Locations' }),
     col.accessor('line_count', { header: 'Lines' }),
-    col.accessor('status', { header: 'Status', cell: (i) => <Badge color={STATUS_COLOR[i.getValue()] ?? 'gray'}>{i.getValue()}</Badge> }),
+    col.accessor('status', {
+      header: 'Status',
+      cell: (i) => <InlineStatusCell session={i.row.original} myName={myName} onUpdate={load} />,
+    }),
     col.accessor('source', { header: 'Source', cell: (i) => <Badge color={i.getValue() === 'import' ? 'amber' : 'gray'}>{i.getValue() === 'import' ? 'imported' : 'app'}</Badge> }),
     col.accessor('exported_at', { header: 'Exported', cell: (i) => (i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—') }),
     col.display({
       id: 'open', header: '',
       cell: (i) => <button onClick={() => setDetail(i.row.original)} className="text-xs font-mono text-inky hover:underline">Open</button>,
     }),
-  ], [])
+  ], [myName, load])
 
   const { table, globalFilter, setGlobalFilter } = useTable(filtered, columns)
 
@@ -112,14 +113,12 @@ export function OrderHistoryTab() {
     status: r.status, exported_at: r.exported_at ?? '',
   })), [filtered])
 
-  async function advanceStatus(s: OrderSession) {
-    const next = NEXT_STATUS[s.status]
-    if (!next) return
+  async function updateStatus(s: OrderSession, newStatus: string) {
     const gp = { ...((s.generation_params as Record<string, unknown>) ?? {}), _updated_by_name: myName }
     const { error } = await (supabase as any).from('order_sessions')
-      .update({ status: next, generation_params: gp, updated_at: new Date().toISOString() }).eq('id', s.id)
+      .update({ status: newStatus, generation_params: gp, updated_at: new Date().toISOString() }).eq('id', s.id)
     if (error) toast.error(error.message)
-    else { toast.success(`Advanced to ${next}`); setDetail({ ...s, status: next as OrderSession['status'] }); load() }
+    else { toast.success(`Status → ${newStatus}`); load() }
   }
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
@@ -143,9 +142,9 @@ export function OrderHistoryTab() {
         <OrderDetailModal
           session={detail}
           companyId={companyId}
+          myName={myName}
           onClose={() => setDetail(null)}
-          onAdvance={() => advanceStatus(detail)}
-          canAdvance={!!NEXT_STATUS[detail.status]}
+          onStatusChange={(newStatus) => updateStatus(detail, newStatus)}
           onDuplicate={(lis) => {
             orderStore.reset()
             orderStore.setLineItems(lis)
@@ -255,16 +254,54 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
   )
 }
 
+function InlineStatusCell({ session, myName, onUpdate }: { session: SessionRow; myName: string; onUpdate: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  async function handleChange(newStatus: string) {
+    if (newStatus === session.status) { setEditing(false); return }
+    setSaving(true)
+    const gp = { ...((session.generation_params as Record<string, unknown>) ?? {}), _updated_by_name: myName }
+    const { error } = await (supabase as any).from('order_sessions')
+      .update({ status: newStatus, generation_params: gp, updated_at: new Date().toISOString() }).eq('id', session.id)
+    setSaving(false)
+    setEditing(false)
+    if (error) { toast.error(error.message); return }
+    toast.success(`Status → ${newStatus}`)
+    onUpdate()
+  }
+
+  if (saving) return <Badge color={STATUS_COLOR[session.status] ?? 'gray'}><span className="opacity-60 animate-pulse">{session.status}</span></Badge>
+  if (editing) {
+    return (
+      <select autoFocus defaultValue={session.status}
+        onChange={(e) => handleChange(e.target.value)}
+        onBlur={() => setEditing(false)}
+        className="bg-cream border border-navy/30 rounded px-1 py-0.5 text-xs font-mono text-navy focus:outline-none focus:border-sky"
+      >
+        {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+    )
+  }
+  return (
+    <button onClick={() => setEditing(true)} title="Click to change status">
+      <Badge color={STATUS_COLOR[session.status] ?? 'gray'}>{session.status}</Badge>
+    </button>
+  )
+}
+
 function OrderDetailModal({
-  session, companyId, onClose, onAdvance, canAdvance, onDuplicate,
+  session, companyId, myName, onClose, onStatusChange, onDuplicate,
 }: {
   session: OrderSession
   companyId: string
+  myName: string
   onClose: () => void
-  onAdvance: () => void
-  canAdvance: boolean
+  onStatusChange: (newStatus: string) => void
   onDuplicate: (lineItems: GeneratedLineItem[]) => void
 }) {
+  const [localStatus, setLocalStatus] = useState<string>(session.status)
+  const [savingStatus, setSavingStatus] = useState(false)
   const [lines, setLines] = useState<OrderLineItem[]>([])
   const [docs, setDocs] = useState<OrderDocument[]>([])
   const [loading, setLoading] = useState(true)
@@ -281,6 +318,13 @@ function OrderDetailModal({
       setLoading(false)
     })()
   }, [session.id, companyId])
+
+  async function handleStatusChange(newStatus: string) {
+    setSavingStatus(true)
+    onStatusChange(newStatus)
+    setLocalStatus(newStatus)
+    setSavingStatus(false)
+  }
 
   function reDownload() {
     const asGen = lines.map((l) => ({
@@ -314,6 +358,7 @@ function OrderDetailModal({
       trigger_reason: l.trigger_reason ?? 'days_supply',
       category: null,
       raw_location: l.location_id ?? '',
+      daily_usage: null,
       days_on_hand: null,
       pending_qty: 0,
       order_uom: null,
@@ -325,7 +370,18 @@ function OrderDetailModal({
     <Modal open onClose={onClose} title={session.name ?? 'Order'} size="xl">
       <div className="flex flex-col gap-4">
         <div className="flex items-center gap-3 flex-wrap text-xs font-mono text-inky">
-          <Badge color={STATUS_COLOR[session.status] ?? 'gray'}>{session.status}</Badge>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono uppercase tracking-wide text-inky/60">Status</span>
+            <select
+              value={localStatus}
+              onChange={(e) => handleStatusChange(e.target.value)}
+              disabled={savingStatus}
+              className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky disabled:opacity-60"
+            >
+              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <Badge color={STATUS_COLOR[localStatus] ?? 'gray'}>{localStatus}</Badge>
+          </div>
           <span>Created {format(new Date(session.created_at), 'MMM d, yyyy h:mm a')}</span>
           {session.exported_at && <span>· Exported {format(new Date(session.exported_at), 'MMM d, yyyy')}</span>}
         </div>
@@ -333,7 +389,6 @@ function OrderDetailModal({
         <div className="flex gap-2 flex-wrap">
           <Button size="sm" variant="secondary" onClick={reDownload}>Re-download CSV</Button>
           <Button size="sm" variant="secondary" onClick={duplicate}>Duplicate to New Order</Button>
-          {canAdvance && <Button size="sm" onClick={onAdvance}>Advance Status →</Button>}
         </div>
 
         <div className="max-h-72 overflow-auto rounded border border-navy/30">

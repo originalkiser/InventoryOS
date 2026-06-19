@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -13,16 +13,15 @@ import {
   buildPendingIndex, autoPendingColMap, detectPrefixSuffixPatterns,
   TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig, type PrefixSuffixRule, type GeneratedLineItem,
 } from '@/lib/orderEngine'
+import { CONSTANT_SOURCE } from '@/types'
 import type {
   Location, LocationOrderConfig, ProductIdMapping, GlobalProduct, VendorPart, OrderMinRule,
   UomMapping, ParsedUpload, ColumnMapping,
 } from '@/types'
 import toast from 'react-hot-toast'
 
-type Stage = 'start' | 'params' | 'review' | 'export'
+type Stage = 'start' | 'map' | 'params' | 'review' | 'export'
 type Source = 'manual' | 'file' | 'live'
-// Config-based (uses InventoryOS config), Manual (grouped entry), or Independent
-// (standalone — uploaded file only; config is optional). All share one engine.
 export type OrderMode = 'config' | 'manual' | 'independent'
 
 const MAP_FIELDS = [
@@ -39,7 +38,6 @@ const MAP_FIELDS = [
 ]
 const NUMERIC_FIELDS = ['on_hand', 'daily_usage', 'leadtime', 'cost', 'min_on_hand', 'max_on_hand']
 
-// Map (location|product → already-ordered qty) for pending subtraction.
 type PendingIndex = Map<string, number>
 
 function toNum(raw: string): number | string {
@@ -61,19 +59,15 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
   const [minRules, setMinRules] = useState<OrderMinRule[]>([])
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
 
-  // Pending-order subtraction (optional)
   const [pending, setPending] = useState<PendingIndex | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
 
-  // Prefix/suffix pack rules detected from the uploaded product IDs (optional)
   const [packRules, setPackRules] = useState<PrefixSuffixRule[]>([])
 
-  // Export options
   const [format, setFormat] = useState<'csv' | 'xlsx'>('xlsx')
   const [excludeZeros, setExcludeZeros] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  // Load config + min rules
   const loadConfig = useCallback(async () => {
     if (!companyId) return
     const sb = supabase as any
@@ -94,14 +88,11 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
       globalProducts,
       vendorParts: (vp.data ?? []) as VendorPart[],
     })
-
-    // UoM conversion config: factor table + per-product order units.
     const uomMappings = ((um.data ?? []) as UomMapping[]).map((u) => ({ fromUnit: u.from_unit, toUnit: u.to_unit, factor: Number(u.factor) }))
     const productRules = globalProducts
       .filter((p) => p.order_uom)
       .map((p) => ({ productId: p.product_id, onHandUom: p.unit_of_measure ?? undefined, orderUom: p.order_uom ?? undefined }))
     setUomConfig(uomMappings.length || productRules.length ? { uomMappings, productRules } : null)
-
     const rules = (mr.data ?? []) as OrderMinRule[]
     setMinRules(rules)
     if (store.selectedMinRuleIds.length === 0) store.setSelectedMinRuleIds(rules.map((r) => r.id))
@@ -109,8 +100,6 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
 
   useEffect(() => { loadConfig() }, [loadConfig])
 
-  // Independent mode mirrors the standalone order-generator: days-supply by
-  // default and config is optional.
   useEffect(() => {
     if (mode === 'independent') store.setParams({ orderMode: 'days_supply' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -122,9 +111,10 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     return parsed.rows.map((row) => {
       const obj: Record<string, unknown> = {}
       for (const m of mappings) {
-        const raw = row[m.sourceColumn] ?? ''
+        // CONSTANT_SOURCE: use the literal constant value, not a column lookup
+        const raw = m.sourceColumn === CONSTANT_SOURCE ? (m.constant ?? '') : (row[m.sourceColumn] ?? '')
         if (NUMERIC_FIELDS.includes(m.fieldName)) {
-          const v = toNum(raw)
+          const v = toNum(String(raw))
           obj[m.fieldName] = typeof v === 'number' && m.invert ? -v : v
         } else obj[m.fieldName] = raw
       }
@@ -136,8 +126,6 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     if (!config) { toast.error('Config not loaded'); return }
     const rows = store.inputRows
     if (!rows.length) { toast.error('No inventory rows to generate from'); return }
-    // pending (a Map) and uom config are threaded in here rather than living in
-    // the persisted store params. Detected pack rules merge into the UoM config.
     const uom: UomConfig | null = packRules.length
       ? { ...(uomConfig ?? {}), prefixSuffixRules: packRules }
       : uomConfig
@@ -155,7 +143,6 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     const { headers, rows } = buildExport(store.lineItems as unknown as Array<Record<string, unknown>>, DEFAULT_EXPORT_COLUMNS, { excludeZeros })
     const baseName = store.sessionName.trim() || `order_${new Date().toISOString().slice(0, 10)}`
 
-    // Download
     if (format === 'xlsx') {
       const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
       const wb = XLSX.utils.book_new()
@@ -168,7 +155,6 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
       const a = document.createElement('a'); a.href = url; a.download = `${baseName}.csv`; a.click(); URL.revokeObjectURL(url)
     }
 
-    // Persist session + line items
     const sb = supabase as any
     const { data: sess, error: sErr } = await sb.from('order_sessions').insert({
       company_id: companyId,
@@ -229,6 +215,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     <div className="flex flex-col gap-6">
       <StageBar stage={stage} mode={mode} />
 
+      {/* ── 1 · Source ── */}
       {stage === 'start' && (
         <div className="flex flex-col gap-4">
           <Card>
@@ -236,12 +223,11 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
               <span className="text-xs font-mono text-inky uppercase tracking-wide">
                 {mode === 'manual' ? 'Manual Order Entry' : mode === 'independent' ? 'Upload Inventory (standalone)' : 'Inventory Source'}
               </span>
-              {/* Config mode lets you switch between an uploaded file and a live source. */}
               {mode === 'config' && (
                 <div className="flex rounded border border-navy/30 overflow-hidden">
                   {(['file', 'live'] as Source[]).map((s) => (
                     <button key={s} onClick={() => { setSource(s); setParsed(null) }}
-                      className={['px-3 py-1 text-xs font-mono capitalize', source === s ? 'bg-[#00e5ff]/10 text-inky' : 'text-inky hover:text-navy'].join(' ')}>
+                      className={['px-3 py-1 text-xs font-mono capitalize', source === s ? 'bg-sky/10 text-inky' : 'text-inky hover:text-navy'].join(' ')}>
                       {s === 'live' ? 'Live Source' : s}
                     </button>
                   ))}
@@ -260,7 +246,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
                 />
               ) : source === 'live' ? (
                 <DataSourceLinker configType="orders" />
-              ) : !parsed ? (
+              ) : (
                 <div className="flex flex-col gap-3">
                   <div className="rounded border border-navy/20 bg-navy/5 px-4 py-3 flex flex-col gap-2">
                     <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest">Expected columns in your file</p>
@@ -275,13 +261,8 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
                       ))}
                     </div>
                   </div>
-                  <FileUploadZone onParsed={(r) => setParsed(r)} />
+                  <FileUploadZone onParsed={(r) => { setParsed(r); setStage('map') }} />
                 </div>
-              ) : (
-                <ColumnMapper headers={parsed.headers} requiredFields={MAP_FIELDS} rememberKey="orders.inventory" previewRows={parsed.rows.slice(0, 5)}
-                  initialMappings={store.mapping.length ? store.mapping : undefined}
-                  onConfirm={(m) => { store.setInputRows(rowsFromFile(m)); setStage('params'); toast.success(`Loaded ${parsed.rows.length} rows`) }}
-                  onCancel={() => setParsed(null)} />
               )}
             </CardBody>
           </Card>
@@ -290,6 +271,42 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
         </div>
       )}
 
+      {/* ── 2 · Map ── */}
+      {stage === 'map' && parsed && (
+        <div className="flex flex-col gap-3">
+          <div className="rounded border border-navy/20 bg-navy/5 px-4 py-3">
+            <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest mb-2">
+              File Preview — {Math.min(5, parsed.rows.length)} of {parsed.rows.length} rows
+            </p>
+            <div className="overflow-auto rounded border border-navy/30 max-h-36">
+              <table className="text-[11px] font-mono">
+                <thead className="bg-navy text-inky sticky top-0">
+                  <tr>{parsed.headers.map((h) => <th key={h} className="px-2 py-1 text-left whitespace-nowrap">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {parsed.rows.slice(0, 5).map((r, i) => (
+                    <tr key={i} className={i % 2 ? 'bg-white/[0.02]' : ''}>
+                      {parsed.headers.map((h) => <td key={h} className="px-2 py-1 whitespace-nowrap text-navy">{r[h] ?? ''}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <ColumnMapper
+            headers={parsed.headers}
+            requiredFields={MAP_FIELDS}
+            rememberKey="orders.inventory"
+            previewRows={parsed.rows.slice(0, 5)}
+            initialMappings={store.mapping.length ? store.mapping : undefined}
+            onConfirm={(m) => { store.setInputRows(rowsFromFile(m)); setStage('params'); toast.success(`Loaded ${parsed.rows.length} rows`) }}
+            onCancel={() => { setParsed(null); setStage('start') }}
+          />
+        </div>
+      )}
+
+      {/* ── 3 · Params ── */}
       {stage === 'params' && (
         <ParamsStage
           minRules={minRules}
@@ -298,15 +315,17 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
           onClearPending={() => { setPending(null); setPendingCount(0) }}
           productIds={store.inputRows.map((r) => String(r.product ?? ''))}
           onPackRulesChange={setPackRules}
-          onBack={() => setStage('start')}
+          onBack={() => setStage(source === 'file' ? 'map' : 'start')}
           onGenerate={generate}
         />
       )}
 
+      {/* ── 4 · Review ── */}
       {stage === 'review' && (
         <ReviewStage onBack={() => setStage(mode === 'manual' ? 'start' : 'params')} onContinue={() => setStage('export')} />
       )}
 
+      {/* ── 5 · Export ── */}
       {stage === 'export' && (
         <div className="flex flex-col gap-4">
           <Card>
@@ -344,9 +363,10 @@ function StageBar({ stage, mode }: { stage: Stage; mode: OrderMode }) {
     ? [{ key: 'start', label: '1 · Entry' }, { key: 'review', label: '2 · Order' }, { key: 'export', label: '3 · Export' }]
     : [
         { key: 'start', label: '1 · Source' },
-        { key: 'params', label: '2 · Params' },
-        { key: 'review', label: '3 · Generate' },
-        { key: 'export', label: '4 · Export' },
+        { key: 'map', label: '2 · Map' },
+        { key: 'params', label: '3 · Params' },
+        { key: 'review', label: '4 · Review' },
+        { key: 'export', label: '5 · Export' },
       ]
   const idx = steps.findIndex((s) => s.key === stage)
   return (
@@ -354,18 +374,18 @@ function StageBar({ stage, mode }: { stage: Stage; mode: OrderMode }) {
       {steps.map((s, i) => (
         <span key={s.key} className={[
           'px-3 py-1 text-xs font-mono rounded border',
-          i === idx ? 'border-[#00e5ff] text-inky bg-[#00e5ff]/10'
-            : i < idx ? 'border-[#39ff14]/30 text-green-700' : 'border-navy/30 text-inky/70',
+          i === idx ? 'border-sky text-inky bg-sky/10'
+            : i < idx ? 'border-green-500/30 text-green-700' : 'border-navy/30 text-inky/70',
         ].join(' ')}>{s.label}</span>
       ))}
     </div>
   )
 }
 
+// ---------------------------------------------------------------------------
 interface MRow { location: string; product: string; amount: string }
-const cellCls = 'w-full bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]'
+const cellCls = 'w-full bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
-// Checkbox dropdown for selecting one or many locations at once.
 function MultiLocPicker({ locations, selected, onChange }: {
   locations: Location[]
   selected: Location[]
@@ -387,7 +407,6 @@ function MultiLocPicker({ locations, selected, onChange }: {
       <span className="text-[10px] font-mono uppercase text-inky">
         Locations {selected.length > 0 ? <span className="text-navy">({selected.length} selected)</span> : ''}
       </span>
-      {/* Selected chips */}
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-1">
           {selected.map((l) => (
@@ -399,7 +418,6 @@ function MultiLocPicker({ locations, selected, onChange }: {
           <button onClick={clearAll} className="text-[10px] font-mono text-inky/50 hover:text-red-400 px-1">Clear all</button>
         </div>
       )}
-      {/* Search input + dropdown */}
       <div className="relative">
         <input
           value={search}
@@ -437,8 +455,6 @@ function MultiLocPicker({ locations, selected, onChange }: {
   )
 }
 
-// Manual order entry: select one or many locations, enter product + amount,
-// then + Add creates one row per location. The accumulating table is editable.
 function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfirm: (lines: GeneratedLineItem[]) => void }) {
   const [rows, setRows] = useState<MRow[]>([])
   const [selectedLocs, setSelectedLocs] = useState<Location[]>([])
@@ -473,7 +489,7 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
         location_id: id, location_label: label, product_id: r.product.trim(), vendor_part_number: null,
         on_hand: null, suggested_qty: amt, final_qty: amt, unit_of_measure: null, package_type: null,
         bulk_minimum: null, individual_minimum: null, applied_min_rule: null, trigger_reason: 'manual',
-        category: null, raw_location: r.location.trim(), days_on_hand: null, pending_qty: 0, order_uom: null,
+        category: null, raw_location: r.location.trim(), daily_usage: null, days_on_hand: null, pending_qty: 0, order_uom: null,
       }
     })
     onConfirm(lines)
@@ -483,12 +499,11 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
     <div className="flex flex-col gap-4">
       <p className="text-xs font-mono text-inky/70">Select one or more locations, enter a product and amount, then + Add. Selecting multiple locations creates one row per location. Rows below are editable.</p>
 
-      {/* Quick entry form */}
       <div className="flex flex-col gap-3 rounded border border-navy/30 bg-cream p-3">
         <MultiLocPicker locations={locations} selected={selectedLocs} onChange={setSelectedLocs} />
         <div className="grid grid-cols-[1fr_0.6fr_auto] gap-2 items-end">
           <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Product</span>
-            <input ref={productRef} value={entry.product} onChange={(e) => setEntry({ ...entry, product: e.target.value }) } className={cellCls} /></label>
+            <input ref={productRef} value={entry.product} onChange={(e) => setEntry({ ...entry, product: e.target.value })} className={cellCls} /></label>
           <label className="flex flex-col gap-1"><span className="text-[10px] font-mono uppercase text-inky">Order Amount</span>
             <input value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEntry() } }} className={cellCls} /></label>
@@ -496,7 +511,6 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
         </div>
       </div>
 
-      {/* Accumulated, editable order table */}
       {rows.length > 0 && (
         <div className="overflow-x-auto rounded border border-navy/30">
           <table className="min-w-full text-xs font-mono">
@@ -505,7 +519,7 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i} className="border-t border-navy/30/50">
+                <tr key={i} className="border-t border-navy/10">
                   <td className="px-1 py-1"><input list="manual-loc-list" value={r.location} onChange={(e) => setRow(i, 'location', e.target.value)} className={cellCls} /></td>
                   <td className="px-1 py-1"><input value={r.product} onChange={(e) => setRow(i, 'product', e.target.value)} className={cellCls} /></td>
                   <td className="px-1 py-1"><input value={r.amount} onChange={(e) => setRow(i, 'amount', e.target.value)} className={cellCls} /></td>
@@ -529,6 +543,7 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
   )
 }
 
+// ---------------------------------------------------------------------------
 function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, productIds, onPackRulesChange, onBack, onGenerate }: {
   minRules: OrderMinRule[]
   pendingCount: number
@@ -542,17 +557,71 @@ function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, pr
   const store = useOrderStore()
   const p = store.params
   const usageGlobal = p.usageAdjustment?.global ?? null
+
+  const formulaLines = p.orderMode === 'days_supply'
+    ? ['Order = ⌈ max(0, (daily_usage × (lead_time + target_days)) − on_hand) ⌉']
+    : ['Order = when on_hand ≤ trigger → fill to capacity', '(min/max model — requires order_trigger and capacity configured per product)']
+
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader><span className="text-xs font-mono text-inky uppercase tracking-wide">Generation Parameters</span></CardHeader>
-        <CardBody className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Select label="Order Mode" options={[{ value: 'min_max', label: 'Min / Max' }, { value: 'days_supply', label: 'Days Supply' }]}
-              value={p.orderMode} onChange={(e) => store.setParams({ orderMode: e.target.value as 'min_max' | 'days_supply' })} />
-            <Input label="Target Days" value={String(p.targetDays)} onChange={(e) => store.setParams({ targetDays: Number(e.target.value) || 0 })} />
-            <Select label="Zero-Usage Fill" options={[{ value: 'none', label: 'None' }, { value: 'min', label: 'To Trigger' }, { value: 'max', label: 'To Capacity' }]}
-              value={p.zeroUsageFill} onChange={(e) => store.setParams({ zeroUsageFill: e.target.value as 'none' | 'min' | 'max' })} />
+        <CardBody className="flex flex-col gap-4">
+          {/* Order mode toggle */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Order Mode</span>
+            <div className="flex rounded border border-navy/30 overflow-hidden w-fit">
+              {(['days_supply', 'min_max'] as const).map((m) => (
+                <button key={m} onClick={() => store.setParams({ orderMode: m })}
+                  className={['px-3 py-1.5 text-xs font-mono transition-colors',
+                    p.orderMode === m ? 'bg-navy text-cream' : 'text-inky hover:text-navy'].join(' ')}>
+                  {m === 'days_supply' ? 'Days Supply' : 'Min / Max'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Target days slider */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Target Days of Supply</span>
+              <span className="px-2 py-0.5 bg-navy text-cream text-[10px] font-mono rounded-full">{p.targetDays}</span>
+            </div>
+            <input
+              type="range" min={1} max={90} step={1}
+              value={p.targetDays}
+              onChange={(e) => store.setParams({ targetDays: Number(e.target.value) })}
+              className="w-full max-w-xs accent-navy"
+            />
+            <div className="flex justify-between max-w-xs text-[10px] font-mono text-inky/40">
+              <span>1</span><span>30</span><span>60</span><span>90</span>
+            </div>
+          </div>
+
+          {/* Zero-usage fill button group */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Zero-Usage Fill</span>
+            <div className="flex rounded border border-navy/30 overflow-hidden w-fit">
+              {([['none', 'No Order'], ['min', 'Fill to Min'], ['max', 'Fill to Max']] as const).map(([val, label]) => (
+                <button key={val} onClick={() => store.setParams({ zeroUsageFill: val })}
+                  className={['px-3 py-1.5 text-xs font-mono border-r last:border-r-0 border-navy/30 transition-colors',
+                    p.zeroUsageFill === val ? 'bg-navy text-cream' : 'text-inky hover:text-navy'].join(' ')}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Formula preview */}
+          <div className="rounded border border-navy/20 bg-navy/5 px-3 py-2 flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-inky/50 uppercase tracking-widest">Formula preview</span>
+            {formulaLines.map((line, i) => (
+              <p key={i} className="text-xs font-mono text-inky/70">{line}</p>
+            ))}
+          </div>
+
+          {/* Advanced overrides */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Input label="Usage Adjust %" value={usageGlobal?.toString() ?? ''} placeholder="e.g. 10 = +10%"
               onChange={(e) => { const t = e.target.value.trim(); store.setParams({ usageAdjustment: t === '' ? null : { global: Number(t) || 0 } }) }} />
             <Input label="Trigger Override" value={p.triggerOverride?.toString() ?? ''} onChange={(e) => store.setParams({ triggerOverride: e.target.value.trim() === '' ? null : Number(e.target.value) })} placeholder="optional" />
@@ -591,6 +660,7 @@ function ParamsStage({ minRules, pendingCount, onPendingFile, onClearPending, pr
   )
 }
 
+// ---------------------------------------------------------------------------
 function PendingOrdersCard({ count, onFile, onClear }: {
   count: number
   onFile: (p: ParsedUpload, mapping: { location: string; product: string; qty: string }) => void
@@ -642,6 +712,7 @@ function PendingOrdersCard({ count, onFile, onClear }: {
   )
 }
 
+// ---------------------------------------------------------------------------
 type DetectedPattern = ReturnType<typeof detectPrefixSuffixPatterns>[number]
 type PackCfg = { size: string; mode: 'pack' | 'round'; enabled: boolean }
 
@@ -651,14 +722,11 @@ function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChang
   const [cfg, setCfg] = useState<Record<string, PackCfg>>({})
 
   function detect() {
-    // Only prefix/suffix patterns are usable as pack rules (the engine matches
-    // startsWith/endsWith); 'both' combos are informational only.
     const pats = detectPrefixSuffixPatterns(productIds.filter(Boolean)).filter((p) => p.type === 'prefix' || p.type === 'suffix')
     setDetected(pats)
     if (pats.length === 0) toast('No common prefixes/suffixes found', { icon: '🔍' })
   }
 
-  // Emit the active rule set whenever the config changes.
   useEffect(() => {
     const rules: PrefixSuffixRule[] = detected
       .filter((d) => cfg[d.key]?.enabled && Number(cfg[d.key]?.size) > 0)
@@ -686,7 +754,7 @@ function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChang
       {open && (
         <CardBody className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-mono text-inky/70">Detect common product-ID prefixes/suffixes and order them in packs. <span className="text-inky">Pack</span> = order whole packs; <span className="text-inky">Round</span> = order units rounded up to a pack multiple.</p>
+            <p className="text-xs font-mono text-inky/70">Detect common product-ID prefixes/suffixes and order them in packs. <span className="text-inky">Pack</span> = order whole packs; <span className="text-inky">Round</span> = round up to a pack multiple.</p>
             <Button size="sm" variant="secondary" onClick={detect}>Scan {productIds.length} products</Button>
           </div>
           {detected.length > 0 && (
@@ -706,18 +774,18 @@ function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChang
                   {detected.map((d) => {
                     const c = cfg[d.key] ?? { size: '', mode: 'pack' as const, enabled: false }
                     return (
-                      <tr key={d.key} className="border-t border-navy/30/50">
+                      <tr key={d.key} className="border-t border-navy/10">
                         <td className="px-2 py-1"><input type="checkbox" checked={c.enabled} className="accent-inky" onChange={(e) => update(d.key, { enabled: e.target.checked })} /></td>
-                        <td className="px-2 py-1 text-navy"><span className="text-orange-600 uppercase">{d.type}</span> “{d.text}”</td>
+                        <td className="px-2 py-1 text-navy"><span className="text-orange-600 uppercase">{d.type}</span> &ldquo;{d.text}&rdquo;</td>
                         <td className="px-2 py-1 text-right text-inky">{d.count}</td>
                         <td className="px-2 py-1 text-inky/70">{d.examples.join(', ')}</td>
                         <td className="px-2 py-1 text-right">
                           <input type="number" min={1} value={c.size} onChange={(e) => update(d.key, { size: e.target.value, enabled: true })}
-                            className="w-16 bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-right text-navy focus:outline-none focus:border-[#00e5ff]" />
+                            className="w-16 bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-right text-navy focus:outline-none focus:border-sky" />
                         </td>
                         <td className="px-2 py-1">
                           <select value={c.mode} onChange={(e) => update(d.key, { mode: e.target.value as 'pack' | 'round' })}
-                            className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]">
+                            className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky">
                             <option value="pack">Pack</option>
                             <option value="round">Round</option>
                           </select>
@@ -735,14 +803,150 @@ function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChang
   )
 }
 
+// ---------------------------------------------------------------------------
+function NavigatorCard({
+  title, item, pos, total, groupQty, onGroupQtyChange, onPrev, onNext, onApply, highlight,
+}: {
+  title: string
+  item: (GeneratedLineItem & { _origIdx: number }) | null
+  pos: number
+  total: number
+  groupQty: string
+  onGroupQtyChange: (v: string) => void
+  onPrev: () => void
+  onNext: () => void
+  onApply: () => void
+  highlight: boolean
+}) {
+  const btnCls = 'px-2 py-0.5 text-[10px] font-mono border border-navy/30 rounded hover:bg-navy/5 disabled:opacity-30 disabled:cursor-not-allowed'
+  return (
+    <div className={['rounded border overflow-hidden', highlight ? 'border-sky' : 'border-navy/30'].join(' ')}>
+      <div className="bg-navy px-3 py-1.5 flex items-center justify-between">
+        <span className="text-[10px] font-mono text-cream uppercase tracking-widest">{title}</span>
+        {total > 0 && <span className="text-[10px] font-mono text-cream/50">{pos + 1} / {total}</span>}
+      </div>
+      <div className="bg-cream px-3 py-2 flex flex-col gap-1.5">
+        {item ? (
+          <>
+            <div className="flex items-start justify-between gap-2 min-h-[2.5rem]">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-mono text-navy font-bold truncate" title={item.product_id}>{item.product_id}</p>
+                <p className="text-[10px] font-mono text-inky/60 truncate">{item.location_label}</p>
+              </div>
+              <span className="text-sm font-mono font-bold text-navy flex-shrink-0">{item.final_qty}</span>
+            </div>
+            <div className="flex items-center gap-1 flex-wrap">
+              <button onClick={onPrev} disabled={pos === 0} className={btnCls}>‹ Prev</button>
+              <button onClick={onNext} disabled={pos >= total - 1} className={btnCls}>Next ›</button>
+              <input
+                type="number" min={0}
+                value={groupQty}
+                onChange={(e) => onGroupQtyChange(e.target.value)}
+                placeholder="Set all…"
+                className="w-20 bg-cream border border-navy/30 rounded px-1.5 py-0.5 text-[10px] font-mono text-navy focus:outline-none focus:border-sky"
+              />
+              <button
+                onClick={onApply}
+                disabled={!groupQty}
+                className="px-2 py-0.5 text-[10px] font-mono bg-navy text-cream rounded hover:bg-navy/80 disabled:opacity-30 disabled:cursor-not-allowed"
+              >Apply</button>
+            </div>
+          </>
+        ) : (
+          <p className="text-[10px] font-mono text-inky/40 py-2 text-center">No items</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
   const store = useOrderStore()
+
+  const [mostPos, setMostPos] = useState(0)
+  const [leastPos, setLeastPos] = useState(0)
+  const [activeNav, setActiveNav] = useState<'most' | 'least' | null>(null)
+  const [mostGroupQty, setMostGroupQty] = useState('')
+  const [leastGroupQty, setLeastGroupQty] = useState('')
+  const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
+
+  type IndexedLine = GeneratedLineItem & { _origIdx: number }
+
+  const sortedDesc = useMemo<IndexedLine[]>(() =>
+    store.lineItems.map((l, i) => ({ ...l, _origIdx: i })).sort((a, b) => b.final_qty - a.final_qty),
+    [store.lineItems]
+  )
+  const sortedAsc = useMemo<IndexedLine[]>(() =>
+    store.lineItems.map((l, i) => ({ ...l, _origIdx: i })).filter((l) => l.final_qty > 0).sort((a, b) => a.final_qty - b.final_qty),
+    [store.lineItems]
+  )
+
+  const mostItem = sortedDesc[mostPos] ?? null
+  const leastItem = sortedAsc[leastPos] ?? null
+  const highlightIdx = activeNav === 'most' ? mostItem?._origIdx : activeNav === 'least' ? leastItem?._origIdx : undefined
+
+  // Scroll to the navigated row
+  useEffect(() => {
+    if (highlightIdx == null) return
+    rowRefs.current.get(highlightIdx)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [highlightIdx, mostPos, leastPos])
+
+  // Clamp positions when lineItems change
+  useEffect(() => {
+    setMostPos((p) => Math.min(p, Math.max(0, sortedDesc.length - 1)))
+    setLeastPos((p) => Math.min(p, Math.max(0, sortedAsc.length - 1)))
+  }, [sortedDesc.length, sortedAsc.length])
+
+  function applyGroupUpdate(item: IndexedLine | null, qty: string) {
+    if (!item || !qty) return
+    const n = Number(qty)
+    if (isNaN(n) || n < 0) return
+    let count = 0
+    store.lineItems.forEach((l, i) => {
+      if (l.product_id === item.product_id) { store.updateFinalQty(i, n); count++ }
+    })
+    toast.success(`Set ${count} row${count !== 1 ? 's' : ''} of ${item.product_id} to ${n}`)
+  }
+
   const ordered = store.lineItems.filter((l) => l.final_qty > 0).length
+
   return (
     <div className="flex flex-col gap-4">
+      {/* Navigator panels */}
+      {store.lineItems.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          <NavigatorCard
+            title="Most Ordered"
+            item={mostItem}
+            pos={mostPos}
+            total={sortedDesc.length}
+            groupQty={mostGroupQty}
+            onGroupQtyChange={setMostGroupQty}
+            highlight={activeNav === 'most'}
+            onPrev={() => { setMostPos((p) => Math.max(0, p - 1)); setActiveNav('most') }}
+            onNext={() => { setMostPos((p) => Math.min(sortedDesc.length - 1, p + 1)); setActiveNav('most') }}
+            onApply={() => { applyGroupUpdate(mostItem, mostGroupQty); setMostGroupQty('') }}
+          />
+          <NavigatorCard
+            title="Least Ordered"
+            item={leastItem}
+            pos={leastPos}
+            total={sortedAsc.length}
+            groupQty={leastGroupQty}
+            onGroupQtyChange={setLeastGroupQty}
+            highlight={activeNav === 'least'}
+            onPrev={() => { setLeastPos((p) => Math.max(0, p - 1)); setActiveNav('least') }}
+            onNext={() => { setLeastPos((p) => Math.min(sortedAsc.length - 1, p + 1)); setActiveNav('least') }}
+            onApply={() => { applyGroupUpdate(leastItem, leastGroupQty); setLeastGroupQty('') }}
+          />
+        </div>
+      )}
+
       <p className="text-xs font-mono text-inky">
         <span className="text-green-700">{ordered}</span> of {store.lineItems.length} lines have an order qty · edit any final qty below
       </p>
+
       <div className="overflow-auto rounded border border-navy/30 max-h-[28rem]">
         <table className="w-full text-xs font-mono">
           <thead className="bg-navy text-inky uppercase tracking-wide sticky top-0">
@@ -750,6 +954,7 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
               <th className="px-3 py-2 text-left">Location</th>
               <th className="px-3 py-2 text-left">Product</th>
               <th className="px-3 py-2 text-right">On Hand</th>
+              <th className="px-3 py-2 text-right">Daily Usage</th>
               <th className="px-3 py-2 text-right">Days OH</th>
               <th className="px-3 py-2 text-right">Suggested</th>
               <th className="px-3 py-2 text-right">Pending</th>
@@ -757,31 +962,56 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
               <th className="px-3 py-2 text-left">Min Rule</th>
               <th className="px-3 py-2 text-left">UoM</th>
               <th className="px-3 py-2 text-right">Final Qty</th>
+              <th className="px-3 py-2 text-right">Days After</th>
             </tr>
           </thead>
           <tbody>
-            {store.lineItems.map((l, i) => (
-              <tr key={i} className="border-t border-navy/30/50 hover:bg-[#00e5ff]/5">
-                <td className="px-3 py-1.5 text-navy">{l.location_label}</td>
-                <td className="px-3 py-1.5 text-navy">{l.product_id}</td>
-                <td className="px-3 py-1.5 text-right text-inky">{l.on_hand ?? '—'}</td>
-                <td className="px-3 py-1.5 text-right text-inky">{l.days_on_hand != null ? l.days_on_hand.toFixed(1) : '—'}</td>
-                <td className="px-3 py-1.5 text-right text-inky">{l.suggested_qty}</td>
-                <td className="px-3 py-1.5 text-right text-inky">{l.pending_qty > 0 ? `−${l.pending_qty}` : '—'}</td>
-                <td className="px-3 py-1.5"><Badge color={l.trigger_reason.startsWith('below') || l.trigger_reason.startsWith('projected') ? 'amber' : 'gray'}>{TRIGGER_REASON_LABELS[l.trigger_reason] ?? l.trigger_reason}</Badge></td>
-                <td className="px-3 py-1.5 text-inky">{l.applied_min_rule ?? '—'}</td>
-                <td className="px-3 py-1.5 text-inky">{l.order_uom ? <span className="text-inky">{l.order_uom}</span> : (l.unit_of_measure ?? '—')}{l.package_type ? ` · ${l.package_type}` : ''}</td>
-                <td className="px-3 py-1.5 text-right">
-                  <input type="number" min={0} value={l.final_qty}
-                    onChange={(e) => store.updateFinalQty(i, Number(e.target.value))}
-                    className={['w-20 bg-cream border rounded px-2 py-1 text-xs font-mono text-right focus:outline-none focus:border-[#00e5ff]',
-                      l.final_qty !== l.suggested_qty ? 'border-[#ffb300] text-orange-600' : 'border-navy/30 text-navy'].join(' ')} />
-                </td>
-              </tr>
-            ))}
+            {store.lineItems.map((l, i) => {
+              const isHighlighted = highlightIdx === i
+              // Recompute live from current final_qty
+              const daysAfter = l.daily_usage && l.daily_usage > 0
+                ? ((l.on_hand ?? 0) + l.final_qty) / l.daily_usage
+                : null
+              return (
+                <tr
+                  key={i}
+                  ref={(el) => { if (el) rowRefs.current.set(i, el); else rowRefs.current.delete(i) }}
+                  className={[
+                    'border-t border-navy/10 hover:bg-sky/5',
+                    isHighlighted ? 'ring-2 ring-inset ring-sky bg-sky/10' : '',
+                  ].join(' ')}
+                >
+                  <td className="px-3 py-1.5 text-navy">{l.location_label}</td>
+                  <td className="px-3 py-1.5 text-navy">{l.product_id}</td>
+                  <td className="px-3 py-1.5 text-right text-inky">{l.on_hand ?? '—'}</td>
+                  <td className="px-3 py-1.5 text-right text-inky">{l.daily_usage != null ? l.daily_usage.toFixed(2) : '—'}</td>
+                  <td className="px-3 py-1.5 text-right text-inky">{l.days_on_hand != null ? l.days_on_hand.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-1.5 text-right text-inky">{l.suggested_qty}</td>
+                  <td className="px-3 py-1.5 text-right text-inky">{l.pending_qty > 0 ? `−${l.pending_qty}` : '—'}</td>
+                  <td className="px-3 py-1.5">
+                    <Badge color={l.trigger_reason.startsWith('below') || l.trigger_reason.startsWith('projected') ? 'amber' : 'gray'}>
+                      {TRIGGER_REASON_LABELS[l.trigger_reason] ?? l.trigger_reason}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-1.5 text-inky">{l.applied_min_rule ?? '—'}</td>
+                  <td className="px-3 py-1.5 text-inky">
+                    {l.order_uom ? <span>{l.order_uom}</span> : (l.unit_of_measure ?? '—')}
+                    {l.package_type ? ` · ${l.package_type}` : ''}
+                  </td>
+                  <td className="px-3 py-1.5 text-right">
+                    <input type="number" min={0} value={l.final_qty}
+                      onChange={(e) => store.updateFinalQty(i, Number(e.target.value))}
+                      className={['w-20 bg-cream border rounded px-2 py-1 text-xs font-mono text-right focus:outline-none focus:border-sky',
+                        l.final_qty !== l.suggested_qty ? 'border-amber-400 text-orange-600' : 'border-navy/30 text-navy'].join(' ')} />
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-inky">{daysAfter != null ? daysAfter.toFixed(1) : '—'}</td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
+
       <div className="flex justify-between">
         <Button variant="secondary" onClick={onBack}>← Back</Button>
         <Button onClick={onContinue}>Continue to Export →</Button>

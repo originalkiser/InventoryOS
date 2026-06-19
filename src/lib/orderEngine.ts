@@ -99,6 +99,7 @@ export interface GeneratedLineItem {
   trigger_reason: string
   category: string | null
   raw_location: string
+  daily_usage: number | null // parsed daily usage rate (usage × multiplier, pre-conversion)
   days_on_hand: number | null // calc.js calcDaysOnHand (on_hand / daily_usage)
   pending_qty: number // already-on-order qty subtracted from this line
   order_uom: string | null // resolved order unit (when a UoM conversion applies)
@@ -195,13 +196,17 @@ export function getUomConversion(row: InventoryRow, uom: UomConfig | null | unde
 
   // Prefix/suffix pack-size path (fallback when no named UoM applies)
   if (!rule?.onHandUom && !rule?.orderUom) {
+    // Use toUpperCase for both sides — detected pattern texts are always uppercase
+    // (generated from `up.toUpperCase().slice(...)` in detectPrefixSuffixPatterns),
+    // but productId comes from the raw file and may be mixed-case.
+    const pidUpper = productId.toUpperCase()
     const ps = (uom.prefixSuffixRules || []).find((r) => {
-      const t = (r.text || '').trim()
+      const t = (r.text || '').trim().toUpperCase()
       if (!t || !r.purchaseSize) return false
       const excl = r.exclusions || { products: [], categories: [] }
       if (excl.products?.includes(productId)) return false
       if (row.category && excl.categories?.includes(row.category)) return false
-      return r.matchType === 'prefix' ? productId.startsWith(t) : productId.endsWith(t)
+      return r.matchType === 'prefix' ? pidUpper.startsWith(t) : pidUpper.endsWith(t)
     })
     if (ps) {
       const packSize = Number(ps.purchaseSize)
@@ -266,7 +271,21 @@ export function applyOnHandConstraints(
   return { order, minC, maxC }
 }
 
-/** calc.js detectPrefixSuffixPatterns — find common product-id prefixes/suffixes for pack rules. */
+/**
+ * calc.js detectPrefixSuffixPatterns — find common product-id prefixes/suffixes for pack rules.
+ *
+ * Unit test examples:
+ *   Input:  ['5W20CS','10W40CS','5W30CS','QTSYN','QTSYN5W20']
+ *   Prefix: 'QT' (count 2, startsWith)  Suffix: 'CS' (count 3, endsWith)
+ *
+ *   Input:  ['AB-001','AB-002','AB-003','CD-001']
+ *   Prefix: 'AB' (count 3)  — 'CD' count 1 < minCount, suppressed
+ *
+ *   Input:  ['PROD1PK','PROD2PK','PROD3PK']
+ *   Suffix: 'PK' (count 3, endsWith)  Prefix: none (all start with digits after 'PROD' — only alpha tested)
+ *
+ * Note: matching in getUomConversion is case-insensitive (both sides toUpperCase).
+ */
 export function detectPrefixSuffixPatterns(
   productIds: string[], ignoredKeys: Set<string> = new Set()
 ): Array<{ type: 'prefix' | 'suffix' | 'both'; text: string; count: number; examples: string[]; key: string; prefix?: string; suffix?: string }> {
@@ -322,8 +341,20 @@ export function detectPrefixSuffixPatterns(
 
 // ---------------------------------------------------------------------------
 // generateOrder — produce line items from inventory + InventoryOS config.
-// Min/max model: order_trigger = min (reorder point), capacity = max (target),
-// order_limit = max-order cap. Preserves calc.js computeSuggested(min_max) math.
+//
+// Parameter guide & safe defaults:
+//   orderMode:      'days_supply' (preferred) | 'min_max'
+//                   days_supply = ceil(max(0, usage*(lead+targetDays) - onHand) * factor)
+//                   min_max     = order to capacity when onHand ≤ trigger (needs config rows)
+//   targetDays:     14  — number of days of stock to cover beyond lead time
+//   zeroUsageFill:  'none'  — KEEP THIS AS 'none'. Any other value causes lines with
+//                   no daily_usage to fill to min/max capacity, inflating the order.
+//   uom.onHandToOrderFactor: applied ONCE inside calcOrder. Never apply it again
+//                   before rounding — double-application is the main inflation source.
+//
+// Numeric safety: on_hand, daily_usage, and leadtime are run through toNum() which
+// converts '' / null / undefined → NaN. NaN propagates into calcOrder → returns null
+// → suggested = 0 → line is skipped. This is the correct silent-skip behaviour.
 // ---------------------------------------------------------------------------
 export function generateOrder(
   inventoryRows: InventoryRow[],
@@ -449,6 +480,7 @@ export function generateOrder(
       trigger_reason: reason,
       category: row.category ?? null,
       raw_location: rawLoc,
+      daily_usage: isNaN(rawUsage) ? null : rawUsage,
       days_on_hand: calcDaysOnHand(rawUsage, onHand),
       pending_qty,
       order_uom: uomConv.hasConversion ? uomConv.orderUom : null,

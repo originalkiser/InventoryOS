@@ -1,11 +1,10 @@
-﻿import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { InverseToggle } from '@/components/shared/InverseToggle'
 import { Button } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { TRANSFORM_OPTIONS } from '@/lib/columnTransform'
 import { TRANSFORM_CATALOG, describeTransform, type Transform, type TransformChainKind } from '@/lib/transforms'
-import { CONSTANT_SOURCE, COMPOSITE_SOURCE, type ColumnMapping, type TransformKind } from '@/types'
+import { CONSTANT_SOURCE, COMPOSITE_SOURCE, type ColumnMapping } from '@/types'
 
 function defaultTransform(kind: TransformChainKind): Transform {
   switch (kind) {
@@ -22,8 +21,8 @@ function TransformChainEditor({ transforms = [], onChange }: { transforms?: Tran
   function update(i: number, patch: any) { onChange(transforms.map((t, j) => (j === i ? { ...t, ...patch } : t))) }
   function remove(i: number) { onChange(transforms.filter((_, j) => j !== i)) }
   return (
-    <div className="flex flex-wrap items-center gap-1 pl-1">
-      <span className="text-[10px] font-mono text-inky/70">transforms:</span>
+    <div className="flex flex-wrap items-center gap-1 pl-1 mt-1">
+      <span className="text-[10px] font-mono text-inky/50">transforms:</span>
       {transforms.map((t, i) => (
         <span key={i} className="inline-flex items-center gap-1 rounded border border-navy/30 bg-cream px-1.5 py-0.5 text-[10px] font-mono text-navy">
           {describeTransform(t)}
@@ -58,14 +57,9 @@ interface ColumnMapperProps {
   requiredFields: RequiredField[]
   onConfirm: (mappings: ColumnMapping[]) => void
   onCancel?: () => void
-  // Optional saved-template mappings; pre-fill any whose sourceColumn exists in the file.
   initialMappings?: ColumnMapping[]
-  // Optional: allow adding a brand-new (custom) column inline during mapping.
   onAddColumn?: (label: string) => void | Promise<void>
-  // Optional: remember the confirmed mapping (incl. transforms) in localStorage
-  // under this key and pre-fill it next time.
   rememberKey?: string
-  // Optional: a few sample rows to preview alongside the mapping.
   previewRows?: Record<string, string>[]
 }
 
@@ -74,8 +68,6 @@ function loadSavedMap(key: string): ColumnMapping[] | undefined {
   try { const v = JSON.parse(localStorage.getItem(`import.map.${key}`) || 'null'); if (Array.isArray(v)) return v } catch { /* ignore */ }
   return undefined
 }
-// Build the per-field mapping rows, pre-filling from a saved template where the
-// source still applies to this file (else auto-match by header name).
 function buildMappings(requiredFields: RequiredField[], headers: string[], saved?: ColumnMapping[]): ColumnMapping[] {
   return requiredFields.map((f) => {
     const fromTemplate = saved?.find(
@@ -89,16 +81,12 @@ function buildMappings(requiredFields: RequiredField[], headers: string[], saved
 
 export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn, rememberKey, previewRows }: ColumnMapperProps) {
   const { profile } = useAuthStore()
-  // Memory precedence on load: explicit prop → local (this user's) → org-shared.
   const localSaved = rememberKey ? loadSavedMap(rememberKey) : undefined
   const effectiveInitial = initialMappings ?? localSaved
   const [mappings, setMappings] = useState<ColumnMapping[]>(buildMappings(requiredFields, headers, effectiveInitial))
   const [newCol, setNewCol] = useState('')
-  // Once the user edits anything, don't let an async org-mapping load overwrite it.
   const touched = useRef(false)
 
-  // Org-level fallback: if this user has no local memory (and no explicit
-  // mappings), pull a mapping another teammate saved for this import.
   useEffect(() => {
     if (!rememberKey || initialMappings || localSaved || !profile?.company_id) return
     let cancelled = false
@@ -112,8 +100,6 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rememberKey, profile?.company_id])
 
-  // Sync newly-added required fields (e.g. a column added inline) into state
-  // without disturbing existing selections.
   useEffect(() => {
     setMappings((prev) => {
       const have = new Set(prev.map((m) => m.fieldName))
@@ -141,8 +127,6 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
       return
     }
     if (rememberKey) {
-      // Save both: local (this user's preference) and org-shared (so teammates /
-      // new modules get a head start). Local wins on next load.
       try { localStorage.setItem(`import.map.${rememberKey}`, JSON.stringify(mappings)) } catch { /* ignore */ }
       if (profile?.company_id) {
         void (supabase as any).from('app_settings').upsert(
@@ -164,8 +148,8 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-inky font-mono">
-        Map each field to a file column, or pick <span className="text-navy">Constant value</span> to set the same value
-        on every row. <span className="text-navy">Convert</span> transforms the value (e.g. <span className="text-inky">Number</span> turns &quot;001&quot; into 1);
+        Map each field to a file column, or pick <span className="text-navy">Constant value</span> to set the same value on every row.
+        Use <span className="text-navy">transforms</span> to reshape values (e.g. strip currency symbols, multiply).
         <span className="text-navy"> Invert</span> flips the sign of numbers.
       </p>
 
@@ -189,64 +173,75 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
-        {requiredFields.map((field) => {
+      <div className="flex flex-col">
+        {requiredFields.map((field, rowIdx) => {
           const mapping = mappings.find((m) => m.fieldName === field.name)!
           const isConstant = mapping.sourceColumn === CONSTANT_SOURCE
           const isComposite = mapping.sourceColumn === COMPOSITE_SOURCE
           return (
-            <div key={field.name} className="flex flex-col gap-1">
-            <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-3 items-center">
-              <div className="text-sm font-mono text-navy">
-                {field.label}
-                {field.required && <span className="text-red-400 ml-1">*</span>}
-              </div>
-              <select
-                value={mapping.sourceColumn}
-                onChange={(e) => patch(field.name, { sourceColumn: e.target.value })}
-                className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-sm font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
-              >
-                <option value="">— Not mapped —</option>
-                <option value={CONSTANT_SOURCE}>✎ Constant value…</option>
-                <option value={COMPOSITE_SOURCE}>⊕ Composite (template)…</option>
-                {headers.map((h) => (
-                  <option key={h} value={h}>{h}</option>
-                ))}
-              </select>
-              {isConstant ? (
-                <input
-                  value={mapping.constant ?? ''}
-                  onChange={(e) => patch(field.name, { constant: e.target.value })}
-                  placeholder="Value for all rows"
-                  className="bg-cream border border-[#ffb300]/40 rounded px-2 py-1.5 text-xs font-mono text-orange-600 focus:outline-none focus:border-[#ffb300]"
-                />
-              ) : isComposite ? (
-                <input
-                  value={mapping.template ?? ''}
-                  onChange={(e) => patch(field.name, { template: e.target.value })}
-                  placeholder="{location_code}-{city}"
-                  title="Use {Header} tokens; literals are kept as-is"
-                  className="bg-cream border border-[#00e5ff]/40 rounded px-2 py-1.5 text-xs font-mono text-inky focus:outline-none focus:border-[#00e5ff]"
-                />
-              ) : (
+            <div
+              key={field.name}
+              className={[
+                'flex flex-col gap-0.5 px-2 py-2.5 border-b border-navy/10 last:border-0',
+                rowIdx % 2 === 1 ? 'bg-navy/[0.02]' : '',
+              ].join(' ')}
+            >
+              {/* Main row: label | source select | invert toggle */}
+              <div className="grid grid-cols-[180px_1fr_auto] gap-3 items-center">
+                <div className="text-sm font-mono text-navy flex items-center gap-1">
+                  {field.label}
+                  {field.required && <span className="text-red-400">*</span>}
+                </div>
                 <select
-                  value={mapping.transform ?? 'none'}
-                  onChange={(e) => patch(field.name, { transform: e.target.value as TransformKind })}
-                  title="Convert value on import"
-                  className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
+                  value={mapping.sourceColumn}
+                  onChange={(e) => patch(field.name, { sourceColumn: e.target.value, constant: undefined, template: undefined })}
+                  className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-sm font-mono text-navy focus:outline-none focus:border-sky"
                 >
-                  {TRANSFORM_OPTIONS.map((t) => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
+                  <option value="">— Not mapped —</option>
+                  <option value={CONSTANT_SOURCE}>✎ Constant value…</option>
+                  <option value={COMPOSITE_SOURCE}>⊕ Composite (template)…</option>
+                  {headers.map((h) => (
+                    <option key={h} value={h}>{h}</option>
                   ))}
                 </select>
+                <InverseToggle inverted={mapping.invert} onChange={(v) => patch(field.name, { invert: v })} />
+              </div>
+
+              {/* Constant value input + preview */}
+              {isConstant && (
+                <div className="pl-[192px] flex flex-col gap-0.5">
+                  <input
+                    value={mapping.constant ?? ''}
+                    onChange={(e) => patch(field.name, { constant: e.target.value })}
+                    placeholder="Value for all rows"
+                    className="bg-cream border border-amber-400/40 rounded px-2 py-1 text-xs font-mono text-orange-600 focus:outline-none focus:border-amber-400"
+                  />
+                  {mapping.constant && (
+                    <span className="text-[10px] font-mono text-orange-500">→ &quot;{mapping.constant}&quot; applied to every row</span>
+                  )}
+                </div>
               )}
-              <InverseToggle inverted={mapping.invert} onChange={(v) => patch(field.name, { invert: v })} />
-            </div>
-            {isComposite ? (
-              <div className="pl-1 text-[10px] font-mono text-inky/70">Tokens: {headers.slice(0, 8).map((h) => `{${h}}`).join('  ')}{headers.length > 8 ? '  …' : ''}</div>
-            ) : !isConstant ? (
-              <TransformChainEditor transforms={mapping.transforms} onChange={(t) => patch(field.name, { transforms: t })} />
-            ) : null}
+
+              {/* Composite template input + token hints */}
+              {isComposite && (
+                <div className="pl-[192px] flex flex-col gap-0.5">
+                  <input
+                    value={mapping.template ?? ''}
+                    onChange={(e) => patch(field.name, { template: e.target.value })}
+                    placeholder="{location_code}-{city}"
+                    title="Use {Header} tokens; literals are kept as-is"
+                    className="bg-cream border border-sky/40 rounded px-2 py-1 text-xs font-mono text-inky focus:outline-none focus:border-sky"
+                  />
+                  <div className="text-[10px] font-mono text-inky/50">
+                    Tokens: {headers.slice(0, 8).map((h) => `{${h}}`).join('  ')}{headers.length > 8 ? '  …' : ''}
+                  </div>
+                </div>
+              )}
+
+              {/* Transform chain — shown for regular column mappings */}
+              {!isConstant && !isComposite && (
+                <TransformChainEditor transforms={mapping.transforms} onChange={(t) => patch(field.name, { transforms: t })} />
+              )}
             </div>
           )
         })}
@@ -259,7 +254,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
             onChange={(e) => setNewCol(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') addColumn() }}
             placeholder="Add a new column (e.g. Area Manager)"
-            className="flex-1 bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
+            className="flex-1 bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky"
           />
           <Button size="sm" variant="secondary" onClick={addColumn} disabled={!newCol.trim()}>+ Add Column</Button>
         </div>

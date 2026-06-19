@@ -6,7 +6,7 @@ export type SourceMode = 'manual' | 'file' | 'live'
 
 const DEFAULT_PARAMS: GenerationParams = {
   targetDays: 14,
-  orderMode: 'min_max',
+  orderMode: 'days_supply',
   zeroUsageFill: 'none',
   triggerOverride: null,
   limitOverride: null,
