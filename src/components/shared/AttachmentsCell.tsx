@@ -120,8 +120,8 @@ export function AttachmentsCell({ entityType, entityId, companyId }: Props) {
         className="flex items-center gap-1 px-2 py-1 text-xs font-mono text-inky/60 hover:text-navy transition-colors"
         title="Attachments"
       >
-        <span>📎</span>
-        {files.length > 0 && <span className="text-[10px]">{files.length}</span>}
+        <span>Upload File</span>
+        {files.length > 0 && <span className="text-[10px]">({files.length})</span>}
       </button>
 
       {open && rect && (

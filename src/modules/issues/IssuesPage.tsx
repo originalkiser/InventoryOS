@@ -323,7 +323,7 @@ export function IssuesPage() {
       cell: (i: any) => <LinksCell links={i.row.original.helpful_links ?? []} onSave={(links) => updateLinks(i.row.original.id, links)} />,
     }
     const attachmentsCol = {
-      id: 'attachments', header: '📎', enableColumnFilter: false, enableSorting: false,
+      id: 'attachments', header: 'Attachments', enableColumnFilter: false, enableSorting: false,
       cell: (i: any) => <AttachmentsCell entityType="issue" entityId={i.row.original.id} companyId={profile?.company_id ?? ''} />,
     }
 

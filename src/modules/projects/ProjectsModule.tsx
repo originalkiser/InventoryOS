@@ -29,7 +29,7 @@ const COLUMN_DEFS: (ColumnDef & { type: CellType })[] = [
   { key: 'vendor', label: 'Vendor', defaultWidth: 150, type: 'text' },
   { key: 'category', label: 'Category', defaultWidth: 150, type: 'text' },
   { key: 'helpful_links', label: 'Helpful Links', defaultWidth: 220, type: 'links' },
-  { key: 'attachments', label: '📎', defaultWidth: 80, type: 'attachments' },
+  { key: 'attachments', label: 'Attachments', defaultWidth: 120, type: 'attachments' },
 ]
 const TYPE_OF = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.type])) as Record<string, CellType>
 
