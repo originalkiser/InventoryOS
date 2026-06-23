@@ -32,11 +32,12 @@ CREATE TABLE IF NOT EXISTS inventory.issue_department_exclusions (
 );
 
 -- RLS for new tables
+-- Note: platform.user_profiles.id IS the auth user UUID (same as auth.uid())
 ALTER TABLE inventory.issue_shares ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "issue_shares_manage" ON inventory.issue_shares
   USING (issue_id IN (SELECT id FROM inventory.issues WHERE created_by = auth.uid()));
 CREATE POLICY "issue_shares_read" ON inventory.issue_shares FOR SELECT
-  USING (user_profile_id = (SELECT id FROM platform.user_profiles WHERE user_id = auth.uid()));
+  USING (user_profile_id = auth.uid());
 
 ALTER TABLE inventory.issue_participants ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "issue_participants_read" ON inventory.issue_participants FOR SELECT USING (true);
@@ -53,26 +54,39 @@ DROP POLICY IF EXISTS "issues_select" ON inventory.issues;
 
 CREATE POLICY "issues_select" ON inventory.issues FOR SELECT
   USING (
+    -- Author always sees their own
     created_by = auth.uid()
+
+    -- Department: same department, not excluded
     OR (
       visibility = 'department'
-      AND (SELECT department FROM platform.user_profiles WHERE user_id = auth.uid())
-        = (SELECT department FROM platform.user_profiles WHERE user_id = created_by)
-      AND (SELECT id FROM platform.user_profiles WHERE user_id = auth.uid()) NOT IN (
-        SELECT user_profile_id FROM inventory.issue_department_exclusions WHERE issue_id = inventory.issues.id
+      AND (SELECT department FROM platform.user_profiles WHERE id = auth.uid())
+        = (SELECT department FROM platform.user_profiles WHERE id = created_by)
+      AND auth.uid() NOT IN (
+        SELECT user_profile_id FROM inventory.issue_department_exclusions
+        WHERE issue_id = inventory.issues.id
       )
     )
+
+    -- Attendees: user is a tagged participant
     OR (
       visibility = 'attendees'
-      AND (SELECT id FROM platform.user_profiles WHERE user_id = auth.uid()) IN (
-        SELECT user_profile_id FROM inventory.issue_participants WHERE issue_id = inventory.issues.id
+      AND auth.uid() IN (
+        SELECT user_profile_id FROM inventory.issue_participants
+        WHERE issue_id = inventory.issues.id
       )
     )
+
+    -- Specific users: user has an explicit share row
     OR (
       visibility = 'specific_users'
-      AND (SELECT id FROM platform.user_profiles WHERE user_id = auth.uid()) IN (
-        SELECT user_profile_id FROM inventory.issue_shares WHERE issue_id = inventory.issues.id
+      AND auth.uid() IN (
+        SELECT user_profile_id FROM inventory.issue_shares
+        WHERE issue_id = inventory.issues.id
       )
     )
-    OR (SELECT role FROM platform.user_profiles WHERE user_id = auth.uid()) IN ('administrator', 'developer')
+
+    -- Admins and developers see everything
+    OR (SELECT role FROM platform.user_profiles WHERE id = auth.uid())
+      IN ('administrator', 'developer')
   );
