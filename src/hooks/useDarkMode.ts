@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const KEY = 'InventoryOS:darkMode'
+const KEY = 'SBNet:darkMode'
 
 export function useDarkMode() {
   const [dark, setDark] = useState(() => {

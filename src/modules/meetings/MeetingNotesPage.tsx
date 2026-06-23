@@ -10,6 +10,15 @@ import type { MeetingNote, Project, Task } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
+type Visibility = 'private' | 'department' | 'attendees' | 'specific_users'
+
+const VISIBILITY_OPTIONS: { value: Visibility; label: string; icon: string; desc: string }[] = [
+  { value: 'private', label: 'Private', icon: '🔒', desc: 'Only visible to me' },
+  { value: 'department', label: 'Department', icon: '🏢', desc: 'Visible to my department' },
+  { value: 'attendees', label: 'Attendees', icon: '🤝', desc: 'Visible to internal attendees' },
+  { value: 'specific_users', label: 'Specific Users', icon: '👥', desc: 'I choose who can see this' },
+]
+
 const EMPTY_FORM = {
   title: 'Untitled Meeting',
   meeting_date: '',
@@ -17,7 +26,7 @@ const EMPTY_FORM = {
   vendor: '',
   category: '',
   notes: '',
-  shared: false,
+  visibility: 'private' as Visibility,
 }
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
@@ -147,6 +156,8 @@ export function MeetingNotesPage() {
   function openEdit(m: MeetingNote) {
     setEditId(m.id)
     setEditCreatedBy(m.created_by)
+    // Migrate legacy boolean shared field to new visibility model
+    const visibility: Visibility = (m as any).visibility ?? (m.shared ? 'department' : 'private')
     setForm({
       title: m.title,
       meeting_date: m.meeting_date ?? '',
@@ -154,7 +165,7 @@ export function MeetingNotesPage() {
       vendor: m.vendor ?? '',
       category: m.category ?? '',
       notes: m.notes ?? '',
-      shared: m.shared,
+      visibility,
     })
     setTaskForm({ ...EMPTY_TASK })
     loadMeetingTasks(m.id)
@@ -174,7 +185,8 @@ export function MeetingNotesPage() {
       vendor: form.vendor.trim() || null,
       category: form.category.trim() || null,
       notes: form.notes || null,
-      shared: isOwner ? form.shared : undefined,
+      visibility: isOwner ? form.visibility : undefined,
+      shared: isOwner ? form.visibility !== 'private' : undefined,
       created_by: editId ? undefined : myId,
     }
     const sb = supabase as any
@@ -254,11 +266,15 @@ export function MeetingNotesPage() {
     col.accessor('category', { header: 'Category', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} /> }),
     col.accessor('shared', {
       header: 'Visibility',
-      cell: (i) => (
-        <span className={['text-[10px] font-mono px-1.5 py-0.5 rounded', i.getValue() ? 'text-sky bg-sky/10' : 'text-inky/50 bg-navy/5'].join(' ')}>
-          {i.getValue() ? 'Shared' : 'Private'}
-        </span>
-      ),
+      cell: (i) => {
+        const vis: Visibility = (i.row.original as any).visibility ?? (i.getValue() ? 'department' : 'private')
+        const opt = VISIBILITY_OPTIONS.find((o) => o.value === vis)
+        return (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded text-inky/70 bg-navy/5 whitespace-nowrap">
+            {opt?.icon} {opt?.label ?? 'Private'}
+          </span>
+        )
+      },
     }),
     col.accessor('notes', { header: 'Notes', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} /> }),
     {
@@ -305,27 +321,27 @@ export function MeetingNotesPage() {
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               className="flex-1"
             />
-            {/* Visibility toggle — only creator can change */}
+            {/* Visibility selector — four-option, only creator can change */}
             <div className="flex flex-col gap-1 flex-shrink-0">
               <label className="text-xs font-mono text-inky uppercase tracking-wide">Visibility</label>
-              <button
-                onClick={() => isOwner && setForm({ ...form, shared: !form.shared })}
-                disabled={!isOwner}
-                title={!isOwner ? 'Only the meeting creator can change visibility' : undefined}
-                className={[
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-mono transition-colors',
-                  form.shared
-                    ? 'border-sky/60 bg-sky/10 text-sky'
-                    : 'border-navy/30 bg-cream text-inky',
-                  !isOwner ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-navy',
-                ].join(' ')}
-              >
-                {form.shared ? (
-                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>Shared with org</>
-                ) : (
-                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>Private</>
-                )}
-              </button>
+              <div className={['flex flex-col gap-1', !isOwner ? 'opacity-50 pointer-events-none' : ''].join(' ')}>
+                {VISIBILITY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setForm({ ...form, visibility: opt.value })}
+                    title={!isOwner ? 'Only the meeting creator can change visibility' : opt.desc}
+                    className={[
+                      'flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs font-mono transition-colors text-left',
+                      form.visibility === opt.value
+                        ? 'border-sky/60 bg-sky/10 text-navy'
+                        : 'border-navy/20 bg-cream text-inky hover:border-navy/40',
+                    ].join(' ')}
+                  >
+                    <span>{opt.icon}</span>
+                    <span>{opt.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 

@@ -9,6 +9,10 @@ import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { SetupPage } from '@/pages/Setup'
 import { UsersPage } from '@/modules/admin/UsersPage'
+import { FeatureRequestsPage } from '@/modules/feature-requests/FeatureRequestsPage'
+import { FeatureRequestForm } from '@/modules/feature-requests/FeatureRequestForm'
+import { ManageRequestsPage } from '@/modules/feature-requests/ManageRequestsPage'
+import { isAdminOrDeveloper } from '@/lib/roles'
 import { DashboardPage } from '@/pages/Dashboard'
 import { ConfigPage } from '@/modules/config/ConfigPage'
 import { MonthEndPage } from '@/modules/monthend/MonthEndPage'
@@ -25,7 +29,6 @@ import { OrderHistoryPage } from '@/pages/OrderHistory'
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, initialized } = useAuthStore()
   const isPlaceholder = import.meta.env.VITE_SUPABASE_URL?.includes('placeholder')
-  // Wait for the initial session check before deciding to redirect
   if (!isPlaceholder && !initialized) {
     return (
       <div className="min-h-screen bg-cream flex items-center justify-center">
@@ -34,6 +37,12 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     )
   }
   if (!isPlaceholder && session === null) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+function RequireAdminOrDev({ children }: { children: React.ReactNode }) {
+  const { profile } = useAuthStore()
+  if (!isAdminOrDeveloper(profile?.role)) return <Navigate to="/dashboard" replace />
   return <>{children}</>
 }
 
@@ -91,9 +100,12 @@ export default function App() {
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="meetings" element={<MeetingNotesPage />} />
           <Route path="tasks" element={<TasksPage />} />
-          <Route path="admin/users" element={<UsersPage />} />
+          <Route path="admin/users" element={<RequireAdminOrDev><UsersPage /></RequireAdminOrDev>} />
           <Route path="order-config" element={<OrderConfigPage />} />
           <Route path="order-history" element={<OrderHistoryPage />} />
+          <Route path="feature-requests" element={<FeatureRequestsPage />} />
+          <Route path="feature-requests/new" element={<FeatureRequestForm />} />
+          <Route path="feature-requests/manage" element={<RequireAdminOrDev><ManageRequestsPage /></RequireAdminOrDev>} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
