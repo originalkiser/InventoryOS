@@ -67,6 +67,11 @@ export function NotSubmittedTab() {
       lastSubmittedByLoc={lastSubmitted}
       reminderTitle={`Month-end counts outstanding — ${periodLabel}`}
       exportPrefix="monthend_not_submitted"
+      metaColumns={[
+        { key: 'market', header: 'Market' },
+        { key: 'area_manager', header: 'Area Manager' },
+        { key: 'regional_director', header: 'Director' },
+      ]}
       loading={loading}
     />
   )

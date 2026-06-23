@@ -8,10 +8,16 @@ import type { Location } from '@/types'
 import { differenceInDays, format } from 'date-fns'
 import toast from 'react-hot-toast'
 
+interface MetaColumn {
+  key: string
+  header: string
+}
+
 interface NotSubmittedRow {
   location_code: string
   name: string
   region: string
+  _meta: Record<string, string>
   days_since: number
   last_submitted: string // ISO date or ''
 }
@@ -26,6 +32,7 @@ interface Props {
   reminderTitle: string
   exportPrefix: string // CSV filename prefix, e.g. "monthend_not_submitted"
   lastSubmittedFormat?: string // date-fns format for the "Last Submitted" column
+  metaColumns?: MetaColumn[]
   loading?: boolean
 }
 
@@ -33,30 +40,49 @@ const col = createColumnHelper<NotSubmittedRow>()
 
 export function NotSubmittedPanel({
   companyId, periodStartISO, periodLabel, missing, totalActive, lastSubmittedByLoc,
-  reminderTitle, exportPrefix, lastSubmittedFormat = 'MMM yyyy', loading,
+  reminderTitle, exportPrefix, lastSubmittedFormat = 'MMM yyyy', metaColumns, loading,
 }: Props) {
   const submitted = totalActive - missing.length
   const pct = totalActive > 0 ? Math.round((submitted / totalActive) * 100) : 0
   const daysSince = Math.max(0, differenceInDays(new Date(), new Date(periodStartISO)))
 
-  const rows: NotSubmittedRow[] = useMemo(() => missing.map((l) => ({
-    location_code: l.location_code,
-    name: l.name,
-    region: l.region ?? '',
-    days_since: daysSince,
-    last_submitted: lastSubmittedByLoc[l.id] ?? '',
-  })), [missing, lastSubmittedByLoc, daysSince])
+  const rows: NotSubmittedRow[] = useMemo(() => missing.map((l) => {
+    const meta = (l.metadata ?? {}) as Record<string, unknown>
+    const metaVals: Record<string, string> = {}
+    for (const mc of (metaColumns ?? [])) {
+      metaVals[mc.key] = meta[mc.key] != null ? String(meta[mc.key]) : ''
+    }
+    return {
+      location_code: l.location_code,
+      name: l.name,
+      region: l.region ?? '',
+      _meta: metaVals,
+      days_since: daysSince,
+      last_submitted: lastSubmittedByLoc[l.id] ?? '',
+    }
+  }), [missing, lastSubmittedByLoc, daysSince, metaColumns])
 
-  const columns = useMemo(() => [
-    col.accessor('location_code', { header: 'Code' }),
-    col.accessor('name', { header: 'Name' }),
-    col.accessor('region', { header: 'Region', cell: (i) => i.getValue() || '—' }),
-    col.accessor('days_since', { header: 'Days Since Period Start', cell: (i) => `${i.getValue()}d` }),
-    col.accessor('last_submitted', {
+  const columns = useMemo(() => {
+    const cols: any[] = [
+      col.accessor('location_code', { header: 'Code' }),
+      col.accessor('name', { header: 'Name' }),
+      col.accessor('region', { header: 'Region', cell: (i: any) => i.getValue() || '—' }),
+    ]
+    for (const mc of (metaColumns ?? [])) {
+      cols.push({
+        id: `meta_${mc.key}`,
+        header: mc.header,
+        accessorFn: (row: NotSubmittedRow) => row._meta[mc.key] ?? '',
+        cell: (i: any) => i.getValue() || '—',
+      })
+    }
+    cols.push(col.accessor('days_since', { header: 'Days Since Period Start', cell: (i: any) => `${i.getValue()}d` }))
+    cols.push(col.accessor('last_submitted', {
       header: 'Last Submitted',
-      cell: (i) => (i.getValue() ? format(new Date(i.getValue()), lastSubmittedFormat) : <span className="text-inky/70">Never</span>),
-    }),
-  ], [lastSubmittedFormat])
+      cell: (i: any) => (i.getValue() ? format(new Date(i.getValue()), lastSubmittedFormat) : <span className="text-inky/70">Never</span>),
+    }))
+    return cols
+  }, [lastSubmittedFormat, metaColumns])
 
   const { table, globalFilter, setGlobalFilter } = useTable(rows, columns)
 
@@ -86,13 +112,13 @@ export function NotSubmittedPanel({
     else toast.success('Reminder added to schedule')
   }
 
-  const exportRows = rows.map((r) => ({
-    code: r.location_code,
-    name: r.name,
-    region: r.region,
-    days_since_period_start: r.days_since,
-    last_submitted: r.last_submitted ? format(new Date(r.last_submitted), 'yyyy-MM') : 'Never',
-  }))
+  const exportRows = rows.map((r) => {
+    const base: Record<string, unknown> = { code: r.location_code, name: r.name, region: r.region }
+    for (const mc of (metaColumns ?? [])) base[mc.header.toLowerCase().replace(/\s+/g, '_')] = r._meta[mc.key] ?? ''
+    base.days_since_period_start = r.days_since
+    base.last_submitted = r.last_submitted ? format(new Date(r.last_submitted), 'yyyy-MM') : 'Never'
+    return base
+  })
 
   return (
     <div className="flex flex-col gap-4">
