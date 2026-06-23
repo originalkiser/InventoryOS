@@ -386,10 +386,12 @@ function UtilityNav({
   order,
   showLabels,
   onNavClick,
+  hideLabel,
 }: {
   order: string[]
   showLabels: boolean
   onNavClick?: () => void
+  hideLabel?: boolean
 }) {
   const orderedItems = order
     .map((k) => UTILITY_ITEMS.find((i) => i.key === k))
@@ -399,8 +401,8 @@ function UtilityNav({
   const items = [...orderedItems, ...missing]
 
   return (
-    <div className="border-t border-[#F2F1E6]/8 pt-1 pb-1">
-      {showLabels && (
+    <div className="pt-1 pb-1">
+      {showLabels && !hideLabel && (
         <div className="px-3 pt-1 pb-0.5 text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest">
           Quick Access
         </div>
@@ -514,7 +516,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
 
         {/* Appearance */}
         <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-          <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/80 uppercase tracking-widest mb-3">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
             Appearance
           </div>
           <div className="flex items-center justify-between">
@@ -538,7 +540,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
 
         {/* Outlook Sync (placeholder for Phase 9) */}
         <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-          <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/80 uppercase tracking-widest mb-3">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
             Integrations
           </div>
           <div className="flex items-center justify-between opacity-40 cursor-not-allowed" title="Available after Microsoft login is configured">
@@ -555,7 +557,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
         {/* Admin link */}
         {isAdminOrDeveloper(profile?.role) && (
           <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-            <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/80 uppercase tracking-widest mb-3">
+            <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
               Administration
             </div>
             <NavLink
@@ -592,9 +594,11 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
 function CollapsedNav({
   onProfileOpen,
   onNavClick,
+  onToggleCollapsed,
 }: {
   onProfileOpen: () => void
   onNavClick?: () => void
+  onToggleCollapsed?: () => void
 }) {
   const { profile } = useAuthStore()
   const allItems = Object.values(SECTION_ITEMS).flat()
@@ -627,6 +631,21 @@ function CollapsedNav({
           </NavLink>
         ))}
       </div>
+      {/* Expand/collapse toggle — above quick access */}
+      {onToggleCollapsed && (
+        <div className="flex items-center justify-center py-1.5 border-t border-[#F2F1E6]/8">
+          <button
+            onClick={onToggleCollapsed}
+            title="Expand sidebar"
+            className="flex items-center justify-center w-8 h-8 rounded text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       <div className="border-t border-[#F2F1E6]/8 py-1">
         {UTILITY_ITEMS.map((item) =>
           item.to ? (
@@ -735,19 +754,8 @@ function ExpandedSidebar({
     <>
       {/* Header */}
       {showHeader && (
-        <div className="flex items-center justify-between px-3 h-12 border-b border-[#F2F1E6]/8 flex-shrink-0">
+        <div className="flex items-center px-3 h-12 border-b border-[#F2F1E6]/8 flex-shrink-0">
           <span className="text-xs font-heading text-[#F2F1E6]/60 tracking-widest uppercase">SB Net</span>
-          {onToggleCollapsed && (
-            <button
-              onClick={onToggleCollapsed}
-              className="text-[#4F7489] hover:text-[#F2F1E6] transition-colors"
-              aria-label="Collapse sidebar"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-              </svg>
-            </button>
-          )}
         </div>
       )}
 
@@ -784,8 +792,24 @@ function ExpandedSidebar({
         </DndContext>
       </div>
 
+      {/* Collapse toggle — above quick access */}
+      {onToggleCollapsed && (
+        <div className="flex items-center justify-between px-3 py-1.5 border-t border-[#F2F1E6]/8">
+          <span className="text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest">Quick Access</span>
+          <button
+            onClick={onToggleCollapsed}
+            title="Collapse sidebar"
+            className="flex items-center gap-1 text-[#4F7489] hover:text-[#F2F1E6] transition-colors px-1.5 py-1 rounded hover:bg-[#F2F1E6]/5"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* Utility nav */}
-      <UtilityNav order={utilityNavOrder} showLabels onNavClick={onNavClick} />
+      <UtilityNav order={utilityNavOrder} showLabels onNavClick={onNavClick} hideLabel />
 
       {/* Profile button */}
       <ProfileButton onOpen={() => setProfileOpen(true)} collapsed={false} />
@@ -850,7 +874,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMo
               <img src={sbIcon} alt="SB" className="w-6 opacity-70" />
             </button>
           </div>
-          <CollapsedNav onProfileOpen={() => setProfileOpen(true)} />
+          <CollapsedNav onProfileOpen={() => setProfileOpen(true)} onToggleCollapsed={onToggleCollapsed} />
           {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} />}
         </>
       ) : (

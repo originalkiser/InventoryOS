@@ -1,5 +1,6 @@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { useAuthStore } from '@/stores/authStore'
+import { isAdminOrDeveloper } from '@/lib/roles'
 import { LocationsTab } from './tabs/LocationsTab'
 import { VendorPartsTab } from './tabs/VendorPartsTab'
 import { OrderConfigTab } from './tabs/OrderConfigTab'
@@ -13,7 +14,7 @@ import { EndingBalancesTab } from './tabs/EndingBalancesTab'
 
 export function ConfigPage() {
   const { profile } = useAuthStore()
-  const isAdmin = profile?.role === 'admin'
+  const isAdmin = isAdminOrDeveloper(profile?.role)
 
   return (
     <div className="flex flex-col gap-6">
