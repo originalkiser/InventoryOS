@@ -120,3 +120,23 @@ body {
 .rbc-calendar {
   height: 100% !important;
 }
+
+/* OutlierOS animations */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.live-pulse { animation: live-pulse 2s ease-in-out infinite; }
+
+@keyframes row-flash {
+  0% { background-color: rgba(183,224,222,0.35); }
+  100% { background-color: transparent; }
+}
+.row-flash { animation: row-flash 1.5s ease-out forwards; }
+
+.sticky-table th:first-child,
+.sticky-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
