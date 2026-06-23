@@ -23,6 +23,7 @@ import { SchedulePage } from '@/modules/schedule/SchedulePage'
 import { ProjectsModule } from '@/modules/projects/ProjectsModule'
 import { MeetingNotesPage } from '@/modules/meetings/MeetingNotesPage'
 import { TasksPage } from '@/modules/tasks/TasksPage'
+import { OutlierPage } from '@/modules/operations/OutlierPage'
 import { OutlierDeptPage } from '@/modules/operations/OutlierDeptPage'
 import { OrderConfigPage } from '@/pages/OrderConfig'
 import { OrderHistoryPage } from '@/pages/OrderHistory'
@@ -107,6 +108,7 @@ export default function App() {
           <Route path="feature-requests" element={<FeatureRequestsPage />} />
           <Route path="feature-requests/new" element={<FeatureRequestForm />} />
           <Route path="feature-requests/manage" element={<RequireAdminOrDev><ManageRequestsPage /></RequireAdminOrDev>} />
+          <Route path="operations/outlier" element={<OutlierPage />} />
           <Route path="operations/outlier/:deptId" element={<OutlierDeptPage />} />
         </Route>
 

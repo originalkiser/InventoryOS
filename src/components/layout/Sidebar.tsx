@@ -76,7 +76,9 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'projects', label: 'Projects', to: '/projects' },
     { key: 'config', label: 'Configuration', to: '/config' },
   ],
-  operations: [],
+  operations: [
+    { key: 'outlier', label: 'OutlierOS', to: '/operations/outlier' },
+  ],
   finance: [{ key: 'finance-soon', label: 'Coming Soon', to: null }],
   accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
   marketing: [{ key: 'marketing-soon', label: 'Coming Soon', to: null }],
