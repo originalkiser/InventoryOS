@@ -110,17 +110,12 @@ function ManageUserModal({
 
     if (isSelf) await sb.auth.updateUser({ data: { full_name: newName } })
 
-    const { data: updated, error } = await sb
+    const { error } = await sb
       .schema('platform').from('user_profiles')
       .update({ role: roleToSave, full_name: newName })
       .eq('id', user.id)
-      .select('id, full_name, role')
 
     if (error) { toast.error(error.message); setSaving(false); return }
-    if (!updated || updated.length === 0) {
-      toast.error('Update blocked — check database RLS policies.')
-      setSaving(false); return
-    }
 
     const allKeys = [...DEPT_OPTIONS.map((d) => d.key), ...MODULE_OPTIONS.map((m) => m.key)]
     await sb.schema('core').from('user_feature_access').upsert(

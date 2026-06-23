@@ -79,7 +79,7 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'config', label: 'Configuration', to: '/config' },
   ],
   operations: [
-    { key: 'outlier', label: 'OutlierOS', to: '/operations/outlier' },
+    { key: 'outlier', label: 'Outlier Reporting', to: '/operations/outlier' },
     { key: 'outlier-am', label: 'AM Dashboard', to: '/operations/outlier/am-dashboard' },
     { key: 'outlier-leadership', label: 'Leadership', to: '/operations/outlier/leadership' },
   ],
@@ -267,6 +267,105 @@ function FavoritesSection({
   )
 }
 
+function OutlierExpandableItem({
+  item,
+  showLabel,
+  isFavorite,
+  onToggleFavorite,
+  onNavClick,
+}: {
+  item: NavItem
+  showLabel: boolean
+  isFavorite?: boolean
+  onToggleFavorite?: (key: string) => void
+  onNavClick?: () => void
+}) {
+  const { setNodeRef, transform, transition, isDragging } = useSortable({ id: item.key })
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  }
+  const [expanded, setExpanded] = useState(false)
+  const [reports, setReports] = useState<{ id: string; name: string; slug: string }[]>([])
+
+  useEffect(() => {
+    ;(supabase as any).schema('outlier').from('reports')
+      .select('id, name, slug')
+      .order('sort_order')
+      .then(({ data }: any) => setReports(data ?? []))
+  }, [])
+
+  const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
+
+  return (
+    <div ref={setNodeRef} style={style} className="group/row">
+      <div className="flex items-center gap-1">
+        <NavLink
+          to={item.to!}
+          onClick={onNavClick}
+          className={({ isActive }) =>
+            [
+              base,
+              'flex-1 min-w-0',
+              isActive
+                ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
+                : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+            ].join(' ')
+          }
+        >
+          {ICONS.outlier}
+          {showLabel && <span className="truncate flex-1">{item.label}</span>}
+          {showLabel && onToggleFavorite && (
+            <StarButton
+              active={!!isFavorite}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleFavorite(item.key) }}
+            />
+          )}
+        </NavLink>
+        {showLabel && reports.length > 0 && (
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="flex-shrink-0 mr-1 p-1 rounded text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
+            title={expanded ? 'Collapse reports' : 'Expand reports'}
+          >
+            <svg
+              className={['w-3 h-3 transition-transform duration-150', expanded ? 'rotate-90' : ''].join(' ')}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        )}
+      </div>
+      {showLabel && expanded && (
+        <div className="ml-5 border-l border-[#F2F1E6]/10 mb-0.5">
+          {reports.map(r => (
+            <NavLink
+              key={r.id}
+              to={`/operations/outlier/report/${r.slug}`}
+              onClick={onNavClick}
+              className={({ isActive }) =>
+                [
+                  'flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs font-heading transition-all duration-100',
+                  isActive
+                    ? 'text-[#F2F1E6] bg-[#F2F1E6]/8'
+                    : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                ].join(' ')
+              }
+            >
+              <svg className="w-3 h-3 flex-shrink-0 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span className="truncate">{r.name}</span>
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SortableSection({
   sectionKey,
   collapsed,
@@ -321,9 +420,13 @@ function SortableSection({
     return (
       <div ref={setNodeRef} style={style} className="py-0.5">
         {items.map((item) => (
-          <div key={item.key} className="group/row">
-            <NavItemLink item={item} showLabel={false} onNavClick={onNavClick} />
-          </div>
+          item.key === 'outlier' ? (
+            <OutlierExpandableItem key={item.key} item={item} showLabel={false} onNavClick={onNavClick} />
+          ) : (
+            <div key={item.key} className="group/row">
+              <NavItemLink item={item} showLabel={false} onNavClick={onNavClick} />
+            </div>
+          )
         ))}
       </div>
     )
@@ -372,14 +475,25 @@ function SortableSection({
         >
           <SortableContext items={items.map((i) => i.key)} strategy={verticalListSortingStrategy}>
             {items.map((item) => (
-              <SortableNavItem
-                key={item.key}
-                item={item}
-                showLabel
-                isFavorite={favorites.includes(item.key)}
-                onToggleFavorite={onToggleFavorite}
-                onNavClick={onNavClick}
-              />
+              item.key === 'outlier' ? (
+                <OutlierExpandableItem
+                  key={item.key}
+                  item={item}
+                  showLabel
+                  isFavorite={favorites.includes(item.key)}
+                  onToggleFavorite={onToggleFavorite}
+                  onNavClick={onNavClick}
+                />
+              ) : (
+                <SortableNavItem
+                  key={item.key}
+                  item={item}
+                  showLabel
+                  isFavorite={favorites.includes(item.key)}
+                  onToggleFavorite={onToggleFavorite}
+                  onNavClick={onNavClick}
+                />
+              )
             ))}
           </SortableContext>
         </DndContext>
