@@ -66,7 +66,7 @@ export function LoginPage() {
           <div className="text-2xl font-heading font-bold text-navy tracking-widest uppercase mb-1">
             Strickland Brothers
           </div>
-          <div className="text-xs text-inky font-body tracking-wide">Inventory OS</div>
+          <div className="text-xs text-inky font-body tracking-wide">SB Net</div>
         </div>
 
         <div className="bg-cream border border-navy/40 rounded-xl p-6 shadow-sm">
