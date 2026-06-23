@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Button, Combobox, Input } from '@/components/ui'
 import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
+import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import type { Issue, Location, IssueCategory, IssueStatus, Profile } from '@/types'
@@ -34,6 +35,10 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   const [notes, setNotes] = useState(existing?.resolution_notes ?? '')
   const [saving, setSaving] = useState(false)
 
+  const [visibility, setVisibility] = useState<VisibilityValue>((existing as any)?.visibility ?? 'department')
+  const [participants, setParticipants] = useState<SlimUser[]>([])
+  const [specificUsers, setSpecificUsers] = useState<SlimUser[]>([])
+
   const companyId = profile?.company_id
 
   const isResolved = statuses.find((s) => s.value === statusId)?.label?.toLowerCase().includes('resolved')
@@ -55,6 +60,9 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
     setAssignee(existing?.assignee ?? '')
     setIssueNotes(existing?.issue_notes ?? '')
     setNotes(existing?.resolution_notes ?? '')
+    setVisibility((existing as any)?.visibility ?? 'department')
+    setParticipants([])
+    setSpecificUsers([])
   }, [existing])
 
   async function loadOptions() {
@@ -116,6 +124,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
       assignee: assignee.trim() || null,
       issue_notes: issueNotes.trim() || null,
       resolution_notes: notes || null,
+      visibility: visibility,
     }
     // Only stamp the creator on insert — editing must not reassign it.
     if (!existing?.id) payload.created_by = profile?.id ?? null
@@ -200,6 +209,20 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
             className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff] resize-none"
+          />
+        </div>
+
+        <div className="col-span-2">
+          <VisibilitySelector
+            value={visibility}
+            onChange={setVisibility}
+            participants={participants}
+            onParticipantsChange={setParticipants}
+            specificUsers={specificUsers}
+            onSpecificUsersChange={setSpecificUsers}
+            allUsers={orgProfiles.map((p) => ({ id: p.id, full_name: p.full_name, email: p.email ?? '' }))}
+            departmentName={(profile as any)?.department ?? null}
+            label="Issue Visibility"
           />
         </div>
       </div>

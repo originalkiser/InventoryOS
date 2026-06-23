@@ -192,8 +192,7 @@ function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | u
   )
 }
 
-const BASE_BEFORE = [
-  col.accessor('title', { header: 'Title', enableColumnFilter: false, meta: { noClip: true }, cell: (i) => <ExpandableText value={i.getValue() ?? ''} onSave={() => {}} /> }),
+const BASE_LOCATION_CAT = [
   col.accessor('location_name', { header: 'Location', cell: (i) => i.getValue() ?? '—' }),
   col.accessor('category_name', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
 ]
@@ -334,11 +333,43 @@ export function IssuesPage() {
       cell: (i: any) => <AttachmentsCell entityType="issue" entityId={i.row.original.id} companyId={profile?.company_id ?? ''} />,
     }
 
+    const titleCol = col.accessor('title', {
+      header: 'Title',
+      enableColumnFilter: false,
+      meta: { noClip: true },
+      cell: (i) => (
+        <div className="flex items-center gap-1.5 group/title">
+          <ExpandableText value={i.getValue() ?? ''} onSave={() => {}} />
+          <button
+            onClick={(e) => { e.stopPropagation(); openEdit(i.row.original as IssueRow) }}
+            title="Edit issue"
+            className="opacity-0 group-hover/title:opacity-100 transition-opacity flex-shrink-0 p-0.5 rounded hover:bg-navy/10 text-inky/60 hover:text-navy"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+        </div>
+      ),
+    })
+
+    const actionsCol = {
+      id: 'actions',
+      header: '',
+      enableColumnFilter: false,
+      enableSorting: false,
+      cell: (i: any) => (
+        <button onClick={() => setDeleteTarget(i.row.original as IssueRow)} className="text-xs font-mono text-red-400 hover:underline">Delete</button>
+      ),
+    }
+
     // Only add the built-in Issue Notes column if the user hasn't already created
     // a custom column with that name via "+ Add Column".
     const hasCustomIssueNotes = customColumns.some((c) => c.label.toLowerCase() === 'issue notes')
     return [
-      ...BASE_BEFORE,
+      titleCol,
+      ...BASE_LOCATION_CAT,
       statusCol,
       ...BASE_AFTER,
       { id: 'vendor', header: 'Vendor', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.vendor ?? '', cell: (i: any) => <InlineText value={i.row.original.vendor} onSave={(v) => updateVendor(i.row.original.id, v)} /> },
@@ -347,12 +378,7 @@ export function IssuesPage() {
       notesCol,
       linksCol,
       attachmentsCol,
-      { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => (
-        <div className="flex items-center gap-2">
-          <button onClick={() => openEdit(i.row.original as IssueRow)} className="text-xs font-mono text-inky hover:underline">Edit</button>
-          <button onClick={() => setDeleteTarget(i.row.original as IssueRow)} className="text-xs font-mono text-red-400 hover:underline">Delete</button>
-        </div>
-      )},
+      actionsCol,
     ]
   }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, updateLinks, statuses, addStatus, profile?.company_id])
 

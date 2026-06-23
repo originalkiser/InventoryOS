@@ -98,10 +98,10 @@ const SECTION_META: Record<string, { label: string; emoji: string }> = {
 
 const UTILITY_ITEMS: NavItem[] = [
   { key: 'calendar', label: 'Calendar', to: '/schedule' },
+  { key: 'tasks', label: 'Tasks', to: '/tasks' },
   { key: 'issues', label: 'Issues', to: '/issues' },
   { key: 'meetings', label: 'Meeting Notes', to: '/meetings' },
   { key: 'feature-requests', label: 'Feature Requests', to: '/feature-requests' },
-  { key: 'tasks', label: 'Tasks', to: '/tasks' },
 ]
 
 // ── Sub-components ─────────────────────────────────────────────────────────

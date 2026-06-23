@@ -4,19 +4,18 @@ import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
+import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import type { MeetingNote, Project, Task } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
-type Visibility = 'private' | 'department' | 'attendees' | 'specific_users'
-
-const VISIBILITY_OPTIONS: { value: Visibility; label: string; icon: string; desc: string }[] = [
-  { value: 'private', label: 'Private', icon: '🔒', desc: 'Only visible to me' },
-  { value: 'department', label: 'Department', icon: '🏢', desc: 'Visible to my department' },
-  { value: 'attendees', label: 'Attendees', icon: '🤝', desc: 'Visible to internal attendees' },
-  { value: 'specific_users', label: 'Specific Users', icon: '👥', desc: 'I choose who can see this' },
+const VISIBILITY_OPTIONS: { value: VisibilityValue; label: string; icon: string }[] = [
+  { value: 'private', label: 'Private', icon: '🔒' },
+  { value: 'department', label: 'Department', icon: '🏢' },
+  { value: 'attendees', label: 'Attendees', icon: '🤝' },
+  { value: 'specific_users', label: 'Specific Users', icon: '👥' },
 ]
 
 const EMPTY_FORM = {
@@ -26,7 +25,7 @@ const EMPTY_FORM = {
   vendor: '',
   category: '',
   notes: '',
-  visibility: 'private' as Visibility,
+  visibility: 'private' as VisibilityValue,
 }
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
@@ -98,19 +97,28 @@ export function MeetingNotesPage() {
   const [meetingTasks, setMeetingTasks] = useState<Task[]>([])
   const [taskForm, setTaskForm] = useState({ ...EMPTY_TASK })
 
+  const [participants, setParticipants] = useState<SlimUser[]>([])
+  const [specificUsers, setSpecificUsers] = useState<SlimUser[]>([])
+  const [allUsers, setAllUsers] = useState<SlimUser[]>([])
+
   const load = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
     const sb = supabase as any
-    const [meetRes, projRes] = await Promise.all([
+    const [meetRes, projRes, usersRes] = await Promise.all([
       sb.schema('inventory').from('meeting_notes').select('*').eq('company_id', companyId)
         .order('meeting_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false }),
       sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).order('project_name'),
+      sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name'),
     ])
     if (meetRes.error) toast.error(meetRes.error.message)
     else setMeetings((meetRes.data ?? []) as MeetingNote[])
     setProjects((projRes.data ?? []) as Project[])
+    setAllUsers(
+      ((usersRes.data ?? []) as { id: string; full_name: string | null; email: string | null }[])
+        .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email ?? '' }))
+    )
     setLoading(false)
   }, [companyId])
 
@@ -140,6 +148,8 @@ export function MeetingNotesPage() {
     })
     setMeetingTasks([])
     setTaskForm({ ...EMPTY_TASK })
+    setParticipants([])
+    setSpecificUsers([])
     setModalOpen(true)
   }
 
@@ -156,8 +166,10 @@ export function MeetingNotesPage() {
   function openEdit(m: MeetingNote) {
     setEditId(m.id)
     setEditCreatedBy(m.created_by)
+    setParticipants([])
+    setSpecificUsers([])
     // Migrate legacy boolean shared field to new visibility model
-    const visibility: Visibility = (m as any).visibility ?? (m.shared ? 'department' : 'private')
+    const visibility: VisibilityValue = (m as any).visibility ?? (m.shared ? 'department' : 'private')
     setForm({
       title: m.title,
       meeting_date: m.meeting_date ?? '',
@@ -267,7 +279,7 @@ export function MeetingNotesPage() {
     col.accessor('shared', {
       header: 'Visibility',
       cell: (i) => {
-        const vis: Visibility = (i.row.original as any).visibility ?? (i.getValue() ? 'department' : 'private')
+        const vis: VisibilityValue = (i.row.original as any).visibility ?? (i.getValue() ? 'department' : 'private')
         const opt = VISIBILITY_OPTIONS.find((o) => o.value === vis)
         return (
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded text-inky/70 bg-navy/5 whitespace-nowrap">
@@ -322,26 +334,19 @@ export function MeetingNotesPage() {
               className="flex-1"
             />
             {/* Visibility selector — four-option, only creator can change */}
-            <div className="flex flex-col gap-1 flex-shrink-0">
-              <label className="text-xs font-mono text-inky uppercase tracking-wide">Visibility</label>
-              <div className={['flex flex-col gap-1', !isOwner ? 'opacity-50 pointer-events-none' : ''].join(' ')}>
-                {VISIBILITY_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setForm({ ...form, visibility: opt.value })}
-                    title={!isOwner ? 'Only the meeting creator can change visibility' : opt.desc}
-                    className={[
-                      'flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs font-mono transition-colors text-left',
-                      form.visibility === opt.value
-                        ? 'border-sky/60 bg-sky/10 text-navy'
-                        : 'border-navy/20 bg-cream text-inky hover:border-navy/40',
-                    ].join(' ')}
-                  >
-                    <span>{opt.icon}</span>
-                    <span>{opt.label}</span>
-                  </button>
-                ))}
-              </div>
+            <div className="flex-shrink-0">
+              <VisibilitySelector
+                value={form.visibility}
+                onChange={(v) => setForm({ ...form, visibility: v })}
+                participants={participants}
+                onParticipantsChange={setParticipants}
+                specificUsers={specificUsers}
+                onSpecificUsersChange={setSpecificUsers}
+                allUsers={allUsers}
+                departmentName={(profile as any)?.department ?? null}
+                label="Visibility"
+                disabled={!isOwner}
+              />
             </div>
           </div>
 
