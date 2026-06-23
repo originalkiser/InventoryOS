@@ -86,7 +86,7 @@ export function useAuth() {
         setProfile(prof)
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'unknown error'
+      const msg = (e as any)?.message ?? (e as any)?.error_description ?? JSON.stringify(e)
       console.error('Workspace setup/repair failed:', e)
       toast.error(`Workspace setup incomplete: ${msg}`)
       if (prof) setProfile(prof) // set what we have so the shell isn't fully dead
