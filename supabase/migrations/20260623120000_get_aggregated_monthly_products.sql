@@ -1,5 +1,7 @@
 -- Aggregate count_products by (location_id, product_id) for a given company + period.
 -- Called via supabase.rpc('get_aggregated_monthly_products', {...}).
+-- count_month is a date column; parameter accepts text and casts to date so the
+-- JS caller can pass an ISO string (e.g. "2025-11-01") without a type mismatch.
 CREATE OR REPLACE FUNCTION public.get_aggregated_monthly_products(
   p_company_id uuid,
   p_count_month text
@@ -29,7 +31,7 @@ AS $$
     COUNT(DISTINCT cp.upload_batch_id)::bigint AS batch_count
   FROM inventory.count_products cp
   WHERE cp.company_id = p_company_id
-    AND cp.count_month = p_count_month
+    AND cp.count_month = p_count_month::date
   GROUP BY cp.location_id, cp.product_id
 $$;
 
