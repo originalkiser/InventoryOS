@@ -242,14 +242,21 @@ export function IssuesPage() {
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
     void (supabase as any).schema('inventory').from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
 
-    const [liveRes, delRes] = await Promise.all([
-      (supabase as any).schema('inventory').from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false }),
-      (supabase as any).schema('inventory').from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+    const [liveRes, delRes, locRes] = await Promise.all([
+      (supabase as any).schema('inventory').from('issues').select(`*, issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false }),
+      (supabase as any).schema('inventory').from('issues').select(`*, issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      (supabase as any).schema('core').from('locations').select('id, name').eq('company_id', profile.company_id),
     ])
     if (liveRes.error) toast.error('Failed to load issues')
     else {
+      const locMap: Record<string, string> = Object.fromEntries(
+        (locRes.data ?? []).map((l: any) => [l.id, l.name])
+      )
       const map = (data: any[]) => (data ?? []).map((r: any) => ({
-        ...r, location_name: r.locations?.name, category_name: r.issue_categories?.name, status_name: r.issue_statuses?.name,
+        ...r,
+        location_name: locMap[r.location_id] ?? r.locations?.name,
+        category_name: r.issue_categories?.name,
+        status_name: r.issue_statuses?.name,
       }))
       setIssues(map(liveRes.data ?? []))
       setDeletedIssues(map(delRes.data ?? []))
