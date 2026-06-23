@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 
-export const DEFAULT_SECTION_ORDER = ['inventory', 'operations', 'finance', 'accounting']
+export const DEFAULT_SECTION_ORDER = ['inventory', 'operations', 'finance', 'accounting', 'marketing']
 export const DEFAULT_UTILITY_ORDER = ['calendar', 'issues', 'meetings', 'feature-requests', 'tasks']
 
 interface SidebarPrefs {
@@ -15,7 +15,7 @@ interface SidebarPrefs {
 
 const DEFAULT_PREFS: SidebarPrefs = {
   sectionOrder: DEFAULT_SECTION_ORDER,
-  sectionCollapsed: { operations: true, finance: true, accounting: true },
+  sectionCollapsed: { operations: true, finance: true, accounting: true, marketing: true },
   itemOrder: {},
   favorites: [],
   utilityNavOrder: DEFAULT_UTILITY_ORDER,
@@ -48,8 +48,10 @@ export function useSidebarPrefs() {
       .then(({ data }: any) => {
         if (!data) return
         setPrefs({
-          sectionOrder: data.section_order?.length ? data.section_order : DEFAULT_SECTION_ORDER,
-          sectionCollapsed: data.section_collapsed ?? { operations: true, finance: true, accounting: true },
+          sectionOrder: data.section_order?.length
+            ? [...new Set([...data.section_order, ...DEFAULT_SECTION_ORDER])]
+            : DEFAULT_SECTION_ORDER,
+          sectionCollapsed: { marketing: true, ...data.section_collapsed },
           itemOrder: data.item_order ?? {},
           favorites: data.favorites ?? [],
           utilityNavOrder: data.utility_nav_order?.length ? data.utility_nav_order : DEFAULT_UTILITY_ORDER,

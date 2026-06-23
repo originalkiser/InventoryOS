@@ -69,8 +69,11 @@ export function AppShell() {
         <div className="flex-shrink-0 h-16" />
       </div>
 
-      {/* Floating action buttons — bottom-right, horizontal row */}
-      <div className="fixed bottom-4 right-4 z-[60] flex items-center gap-2">
+      {/* Floating action buttons — bottom-left, anchored next to sidebar */}
+      <div
+        className="fixed bottom-4 z-[60] flex items-center gap-2 transition-[left] duration-200"
+        style={{ left: mobile ? '1rem' : sidebarCollapsed ? '4.25rem' : '16.75rem' }}
+      >
         <button
           onClick={() => navigate('/meetings?quick=1')}
           className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"

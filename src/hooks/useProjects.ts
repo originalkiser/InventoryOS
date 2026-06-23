@@ -47,11 +47,11 @@ export function useProjects() {
   }, [companyId, load])
 
   // --- Projects --------------------------------------------------------------
-  async function addProject(): Promise<Project | null> {
+  async function addProject(initialData?: Partial<Project>): Promise<Project | null> {
     if (!companyId) { toast.error('No workspace loaded'); return null }
     const maxOrder = projects.reduce((m, p) => Math.max(m, p.sort_order ?? 0), 0)
     const { data, error } = await sb.schema('inventory').from('projects')
-      .insert({ company_id: companyId, project_name: '', status: 'Not Started', sort_order: maxOrder + 1, updated_by: profile?.id ?? null })
+      .insert({ company_id: companyId, project_name: '', status: 'Not Started', sort_order: maxOrder + 1, updated_by: profile?.id ?? null, ...initialData })
       .select().single()
     if (error || !data) { toast.error(error?.message ?? 'Could not add project'); return null }
     setProjects((prev) => [...prev, data as Project])

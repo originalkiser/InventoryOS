@@ -79,6 +79,7 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
   operations: [],
   finance: [{ key: 'finance-soon', label: 'Coming Soon', to: null }],
   accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
+  marketing: [{ key: 'marketing-soon', label: 'Coming Soon', to: null }],
 }
 
 const SECTION_META: Record<string, { label: string; emoji: string }> = {
@@ -86,6 +87,7 @@ const SECTION_META: Record<string, { label: string; emoji: string }> = {
   operations: { label: 'Operations', emoji: '🏢' },
   finance: { label: 'Finance', emoji: '💰' },
   accounting: { label: 'Accounting', emoji: '📊' },
+  marketing: { label: 'Marketing', emoji: '📣' },
 }
 
 const UTILITY_ITEMS: NavItem[] = [
@@ -512,7 +514,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
 
         {/* Appearance */}
         <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-          <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/50 uppercase tracking-widest mb-3">
+          <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/80 uppercase tracking-widest mb-3">
             Appearance
           </div>
           <div className="flex items-center justify-between">
@@ -536,13 +538,13 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
 
         {/* Outlook Sync (placeholder for Phase 9) */}
         <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-          <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/50 uppercase tracking-widest mb-3">
+          <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/80 uppercase tracking-widest mb-3">
             Integrations
           </div>
           <div className="flex items-center justify-between opacity-40 cursor-not-allowed" title="Available after Microsoft login is configured">
             <div>
               <div className="text-sm font-body text-navy dark:text-cream">Outlook Calendar Sync</div>
-              <div className="text-[10px] font-mono text-inky dark:text-[#F2F1E6]/50 mt-0.5 leading-relaxed">
+              <div className="text-[10px] font-mono text-inky dark:text-[#F2F1E6]/70 mt-0.5 leading-relaxed">
                 Sync your Outlook calendar to SB Net
               </div>
             </div>
@@ -553,7 +555,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
         {/* Admin link */}
         {isAdminOrDeveloper(profile?.role) && (
           <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-            <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/50 uppercase tracking-widest mb-3">
+            <div className="text-[10px] font-heading text-inky dark:text-[#F2F1E6]/80 uppercase tracking-widest mb-3">
               Administration
             </div>
             <NavLink

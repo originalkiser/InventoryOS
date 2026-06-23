@@ -1,4 +1,4 @@
-﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
 import {
   DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
 } from '@dnd-kit/core'
@@ -385,6 +385,134 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subC
 }
 
 // ---------------------------------------------------------------------------
+type Visibility = 'private' | 'department' | 'attendees' | 'specific_users'
+const VISIBILITY_OPTS = [
+  { value: 'private' as Visibility, label: 'Private', icon: '🔒', desc: 'Only visible to me' },
+  { value: 'department' as Visibility, label: 'Department', icon: '🏢', desc: 'Visible to my department' },
+  { value: 'attendees' as Visibility, label: 'Team Members', icon: '🤝', desc: 'Visible to anyone assigned' },
+  { value: 'specific_users' as Visibility, label: 'Specific Users', icon: '👥', desc: 'I choose who can see this' },
+]
+
+function NewProjectModal({
+  open,
+  onClose,
+  onSave,
+}: {
+  open: boolean
+  onClose: () => void
+  onSave: (data: Partial<Project>) => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [status, setStatus] = useState('Not Started')
+  const [startDate, setStartDate] = useState('')
+  const [targetEnd, setTargetEnd] = useState('')
+  const [description, setDescription] = useState('')
+  const [vendor, setVendor] = useState('')
+  const [category, setCategory] = useState('')
+  const [visibility, setVisibility] = useState<Visibility>('private')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setName(''); setStatus('Not Started'); setStartDate(''); setTargetEnd('')
+      setDescription(''); setVendor(''); setCategory(''); setVisibility('private')
+    }
+  }, [open])
+
+  async function handleSave() {
+    if (!name.trim()) return
+    setSaving(true)
+    await onSave({
+      project_name: name.trim(),
+      status,
+      start_date: startDate || null,
+      target_end_date: targetEnd || null,
+      description: description || null,
+      vendor: vendor || null,
+      category: category || null,
+      visibility,
+    })
+    setSaving(false)
+    onClose()
+  }
+
+  const field = (label: string, el: React.ReactNode) => (
+    <div className="flex flex-col gap-1">
+      <label className="text-[10px] font-heading text-inky uppercase tracking-wide">{label}</label>
+      {el}
+    </div>
+  )
+  const inp = (value: string, onChange: (v: string) => void, type = 'text', placeholder = '') => (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="rounded border border-navy/20 bg-cream dark:bg-navy/30 px-3 py-2 text-xs font-body text-navy dark:text-cream placeholder-inky/40 focus:border-sky focus:outline-none"
+    />
+  )
+
+  return (
+    <Modal open={open} onClose={onClose} title="New Project">
+      <div className="flex flex-col gap-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            {field('Project Name *', inp(name, setName, 'text', 'Project name…'))}
+          </div>
+
+          {field('Status', (
+            <select value={status} onChange={(e) => setStatus(e.target.value)}
+              className="rounded border border-navy/20 bg-cream dark:bg-navy/30 px-3 py-2 text-xs font-body text-navy dark:text-cream focus:border-sky focus:outline-none">
+              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          ))}
+
+          {field('Category', inp(category, setCategory, 'text', 'e.g. IT, Facilities…'))}
+          {field('Start Date', inp(startDate, setStartDate, 'date'))}
+          {field('Target End Date', inp(targetEnd, setTargetEnd, 'date'))}
+
+          <div className="col-span-2">
+            {field('Vendor', inp(vendor, setVendor, 'text', 'Vendor name…'))}
+          </div>
+          <div className="col-span-2">
+            {field('Description', (
+              <textarea value={description} onChange={(e) => setDescription(e.target.value)}
+                rows={3} placeholder="Project description…"
+                className="rounded border border-navy/20 bg-cream dark:bg-navy/30 px-3 py-2 text-xs font-body text-navy dark:text-cream placeholder-inky/40 focus:border-sky focus:outline-none resize-none" />
+            ))}
+          </div>
+        </div>
+
+        {/* Visibility */}
+        <div className="flex flex-col gap-2">
+          <label className="text-[10px] font-heading text-inky uppercase tracking-wide">Visibility</label>
+          <div className="grid grid-cols-2 gap-2">
+            {VISIBILITY_OPTS.map((opt) => (
+              <button key={opt.value} type="button" onClick={() => setVisibility(opt.value)}
+                className={['flex items-start gap-2 rounded border px-3 py-2 text-left transition-colors', visibility === opt.value ? 'border-sky bg-sky/10' : 'border-navy/20 bg-cream dark:bg-navy/20 hover:border-navy/40'].join(' ')}>
+                <span className="text-sm leading-none mt-0.5">{opt.icon}</span>
+                <div>
+                  <div className="text-xs font-heading text-navy dark:text-cream">{opt.label}</div>
+                  <div className="text-[10px] font-mono text-inky/60 leading-tight mt-0.5">{opt.desc}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 rounded border border-navy/20 text-xs font-mono text-inky hover:border-navy/40">Cancel</button>
+          <button onClick={handleSave} disabled={!name.trim() || saving}
+            className="px-4 py-2 rounded bg-navy text-cream text-xs font-heading uppercase tracking-wide hover:bg-inky disabled:opacity-40 transition-colors">
+            {saving ? 'Creating…' : 'Create Project'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ---------------------------------------------------------------------------
 export function ProjectsModule() {
   const { projects, tasks, loading, companyId, load: reloadProjects, addProject, updateProject, deleteProject, restoreProject, hardDeleteProject, addTask, updateTask, deleteTask, reorderTasks } = useProjects()
   const { columns, setOrder, togglePin, toggleVisible, setWidth } = useProjectColumns(COLUMN_DEFS)
@@ -432,6 +560,7 @@ export function ProjectsModule() {
   const [groupBy, setGroupBy] = useState<'none' | 'status' | 'category'>('none')
   const [colMenuOpen, setColMenuOpen] = useState(false)
   const [autoEditId, setAutoEditId] = useState<string | null>(null)
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<Project | null>(null)
   const [deletedProjects, setDeletedProjects] = useState<Project[]>([])
   const [showDeleted, setShowDeleted] = useState(false)
@@ -491,9 +620,13 @@ export function ProjectsModule() {
     const keys = ordered.map((c) => c.key)
     setOrder(arrayMove(keys, keys.indexOf(active.id as string), keys.indexOf(over.id as string)))
   }
-  async function onNewProject() {
-    const p = await addProject()
-    if (p) { setAutoEditId(p.id); setExpanded((prev) => new Set(prev)) }
+  function onNewProject() {
+    setNewProjectOpen(true)
+  }
+
+  async function handleCreateProject(data: Partial<Project>) {
+    const p = await addProject(data)
+    if (p) setExpanded((prev) => new Set([...prev, p.id]))
   }
 
   function renderCell(p: Project, key: string) {
@@ -628,6 +761,8 @@ export function ProjectsModule() {
       )}
 
       {/* Project delete confirmation */}
+      <NewProjectModal open={newProjectOpen} onClose={() => setNewProjectOpen(false)} onSave={handleCreateProject} />
+
       {deleteConfirm && (
         <Modal open onClose={() => setDeleteConfirm(null)} title="Delete Project?">
           <div className="flex flex-col gap-4">

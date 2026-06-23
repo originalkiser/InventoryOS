@@ -151,6 +151,7 @@ export interface Project {
   created_at: string
   updated_at: string
   deleted_at: string | null
+  visibility: string | null
 }
 
 export interface ProjectTask {

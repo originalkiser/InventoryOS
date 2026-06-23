@@ -144,15 +144,26 @@ export function ScheduleEventModal({
   const [completed, setCompleted] = useState(false)
   const [assignedTo, setAssignedTo] = useState<string[]>([])
   const [notes, setNotes] = useState('')
+  const [visibility, setVisibility] = useState<'private' | 'department' | 'attendees' | 'specific_users'>('private')
   const [applyToSeries, setApplyToSeries] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
+  const [userDepts, setUserDepts] = useState<string[]>([])
 
   useEffect(() => {
     if (!profile?.company_id) return
     ;(supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', profile.company_id).order('full_name')
       .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
+    // Load this user's department access for the visibility selector
+    ;(supabase as any).schema('core').from('user_feature_access')
+      .select('feature_key').eq('user_id', profile.id).eq('enabled', true)
+      .then(({ data }: any) => {
+        const depts = (data ?? []).map((r: any) => r.feature_key as string)
+          .filter((k: string) => k.startsWith('dept:'))
+          .map((k: string) => k.replace('dept:', '').charAt(0).toUpperCase() + k.replace('dept:', '').slice(1))
+        setUserDepts(depts)
+      })
   }, [profile?.company_id])
 
   useEffect(() => {
@@ -168,6 +179,7 @@ export function ScheduleEventModal({
       setCompleted(existing.completed)
       setAssignedTo(existing.assigned_to ?? [])
       setNotes(existing.notes ?? '')
+      setVisibility((existing as any).visibility ?? 'private')
     } else {
       setTitle('')
       setEventType('other')
@@ -179,6 +191,7 @@ export function ScheduleEventModal({
       setCompleted(false)
       setAssignedTo([])
       setNotes('')
+      setVisibility('private')
     }
   }, [existing, defaultDate, open])
 
@@ -204,6 +217,7 @@ export function ScheduleEventModal({
       is_checklist: isChecklist,
       assigned_to: isChecklist && assignedTo.length ? assignedTo : null,
       notes: notes || null,
+      visibility,
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -391,6 +405,37 @@ export function ScheduleEventModal({
             />
           </div>
         )}
+
+        {/* Visibility */}
+        <div className="col-span-2 flex flex-col gap-2">
+          <label className="text-xs font-mono text-inky uppercase tracking-wide">Visibility</label>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { value: 'private' as const, label: 'Private', icon: '🔒', desc: 'Only visible to me' },
+              { value: 'department' as const, label: 'Department', icon: '🏢', desc: userDepts.length ? userDepts.join(', ') : 'Visible to my department' },
+              { value: 'attendees' as const, label: 'Attendees', icon: '🤝', desc: 'Visible to assigned people' },
+              { value: 'specific_users' as const, label: 'Specific Users', icon: '👥', desc: 'I choose who can see this' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setVisibility(opt.value)}
+                className={[
+                  'flex items-start gap-2 rounded border px-3 py-2 text-left transition-colors',
+                  visibility === opt.value
+                    ? 'border-sky bg-sky/10 text-navy'
+                    : 'border-navy/20 bg-cream text-inky hover:border-navy/40',
+                ].join(' ')}
+              >
+                <span className="text-sm leading-none mt-0.5">{opt.icon}</span>
+                <div>
+                  <div className="text-xs font-heading text-navy">{opt.label}</div>
+                  <div className="text-[10px] font-mono text-inky/60 leading-tight mt-0.5">{opt.desc}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="col-span-2">
           <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Notes</label>

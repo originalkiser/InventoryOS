@@ -25,6 +25,7 @@ const DEPT_OPTIONS = [
   { key: 'dept:operations', label: 'Operations' },
   { key: 'dept:finance', label: 'Finance' },
   { key: 'dept:accounting', label: 'Accounting' },
+  { key: 'dept:marketing', label: 'Marketing' },
 ]
 
 const MODULE_OPTIONS = [
@@ -91,8 +92,15 @@ export function UsersPage() {
   function toggleAccess(key: string) {
     setEditAccess((prev) => {
       const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
+      if (next.has(key)) {
+        next.delete(key)
+        // deselecting a dept → also deselect its modules
+        MODULE_OPTIONS.filter((m) => m.dept === key).forEach((m) => next.delete(m.key))
+      } else {
+        next.add(key)
+        // selecting a dept → auto-select all its modules
+        MODULE_OPTIONS.filter((m) => m.dept === key).forEach((m) => next.add(m.key))
+      }
       return next
     })
   }
@@ -194,13 +202,13 @@ export function UsersPage() {
         <div className="rounded border border-navy/15 overflow-hidden">
           <table className="w-full text-xs font-body">
             <thead>
-              <tr className="border-b border-navy/10 bg-navy/5">
+              <tr className="border-b border-navy/10 dark:border-[#F2F1E6]/10 bg-navy/5 dark:bg-[#F2F1E6]/5">
                 {['Name', 'Email', 'Role', 'Joined', 'Actions'].map((h) => (
                   <th key={h} className="text-left px-4 py-2.5 font-heading text-[10px] text-inky uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy/8">
+            <tbody className="divide-y divide-navy/8 dark:divide-[#F2F1E6]/8">
               {filtered.map((u) => {
                 const editable = canEdit(u)
                 return (
@@ -211,7 +219,7 @@ export function UsersPage() {
                     </td>
                     <td className="px-4 py-2.5 text-inky dark:text-[#F2F1E6]/70">{u.email}</td>
                     <td className="px-4 py-2.5"><RoleBadge role={u.role} /></td>
-                    <td className="px-4 py-2.5 text-inky/60 font-mono">
+                    <td className="px-4 py-2.5 text-inky/60 dark:text-[#F2F1E6]/50 font-mono">
                       {u.created_at ? format(new Date(u.created_at), 'MMM d, yyyy') : '—'}
                     </td>
                     <td className="px-4 py-2.5">
