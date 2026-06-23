@@ -57,11 +57,11 @@ CREATE POLICY "issues_select" ON inventory.issues FOR SELECT
     -- Author always sees their own
     created_by = auth.uid()
 
-    -- Department: same department, not excluded
+    -- Department: same company_id as the issue, not explicitly excluded
     OR (
       visibility = 'department'
-      AND (SELECT department FROM platform.user_profiles WHERE id = auth.uid())
-        = (SELECT department FROM platform.user_profiles WHERE id = created_by)
+      AND (SELECT company_id FROM platform.user_profiles WHERE id = auth.uid())
+        = company_id
       AND auth.uid() NOT IN (
         SELECT user_profile_id FROM inventory.issue_department_exclusions
         WHERE issue_id = inventory.issues.id
