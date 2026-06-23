@@ -30,7 +30,7 @@ export function useCustomFields(section: CustomFieldSection) {
     if (!companyId) { setFields([]); setLoading(false); return }
     setLoading(true)
     const { data } = await (supabase as any)
-      .from('custom_field_definitions')
+      .schema('inventory').from('field_definitions')
       .select('*')
       .eq('company_id', companyId)
       .eq('section', section)
@@ -45,7 +45,7 @@ export function useCustomFields(section: CustomFieldSection) {
     if (!companyId) return
     const ch = supabase
       .channel(`custom-fields-${section}-${instanceId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'custom_field_definitions', filter: `company_id=eq.${companyId}` }, () => reload())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'field_definitions', filter: `company_id=eq.${companyId}` }, () => reload())
       .subscribe()
     return () => { void supabase.removeChannel(ch) }
   }, [companyId, section, reload, instanceId])
@@ -58,7 +58,7 @@ export function useCustomFields(section: CustomFieldSection) {
     if (!field_key) { toast.error('Enter a column name'); return }
     if (fields.some((x) => x.field_key === field_key)) { toast.error('A column with that name already exists'); return }
     const position = (fields.reduce((m, x) => Math.max(m, x.position), 0)) + 1
-    const { error } = await (supabase as any).from('custom_field_definitions').insert({
+    const { error } = await (supabase as any).schema('inventory').from('field_definitions').insert({
       company_id: companyId,
       section,
       field_key,
@@ -74,13 +74,13 @@ export function useCustomFields(section: CustomFieldSection) {
   }
 
   async function updateField(id: string, patch: Partial<CustomFieldDefinition>) {
-    const { error } = await (supabase as any).from('custom_field_definitions').update(patch).eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('field_definitions').update(patch).eq('id', id)
     if (error) toast.error(error.message)
     else reload()
   }
 
   async function removeField(id: string) {
-    const { error } = await (supabase as any).from('custom_field_definitions').delete().eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('field_definitions').delete().eq('id', id)
     if (error) toast.error(error.message)
     else { toast.success('Column removed'); reload() }
   }
@@ -93,8 +93,8 @@ export function useCustomFields(section: CustomFieldSection) {
     const a = sorted[idx], b = sorted[swap]
     const sb = supabase as any
     await Promise.all([
-      sb.from('custom_field_definitions').update({ position: b.position }).eq('id', a.id),
-      sb.from('custom_field_definitions').update({ position: a.position }).eq('id', b.id),
+      sb.schema('inventory').from('field_definitions').update({ position: b.position }).eq('id', a.id),
+      sb.schema('inventory').from('field_definitions').update({ position: a.position }).eq('id', b.id),
     ])
     reload()
   }
@@ -112,7 +112,7 @@ export function useCustomFields(section: CustomFieldSection) {
         field_type: d.field_type ?? 'text', position: ++pos, active: true,
       }))
     if (!rows.length) { toast('All recommended columns already exist', { icon: 'ℹ️' }); return }
-    const { error } = await (supabase as any).from('custom_field_definitions').insert(rows)
+    const { error } = await (supabase as any).schema('inventory').from('field_definitions').insert(rows)
     if (error) toast.error(error.message)
     else { toast.success(`Added ${rows.length} columns`); reload() }
   }

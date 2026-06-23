@@ -72,13 +72,13 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     if (!companyId) return
     const sb = supabase as any
     const [loc, cfg, pm, gp, vp, mr, um] = await Promise.all([
-      sb.from('locations').select('*').eq('company_id', companyId),
-      sb.from('location_order_configs').select('*').eq('company_id', companyId).eq('active', true),
-      sb.from('product_id_mappings').select('*').eq('company_id', companyId),
-      sb.from('global_products').select('*').eq('company_id', companyId),
-      sb.from('vendor_parts').select('*').eq('company_id', companyId),
-      sb.from('order_min_rules').select('*').eq('company_id', companyId).eq('active', true),
-      sb.from('uom_mappings').select('*').eq('company_id', companyId),
+      sb.schema('core').from('locations').select('*').eq('company_id', companyId),
+      sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('active', true),
+      sb.schema('inventory').from('product_id_mappings').select('*').eq('company_id', companyId),
+      sb.schema('core').from('global_products').select('*').eq('company_id', companyId),
+      sb.schema('core').from('vendor_parts').select('*').eq('company_id', companyId),
+      sb.schema('inventory').from('order_min_rules').select('*').eq('company_id', companyId).eq('active', true),
+      sb.schema('core').from('uom_mappings').select('*').eq('company_id', companyId),
     ])
     const globalProducts = (gp.data ?? []) as GlobalProduct[]
     setConfig({
@@ -156,7 +156,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     }
 
     const sb = supabase as any
-    const { data: sess, error: sErr } = await sb.from('order_sessions').insert({
+    const { data: sess, error: sErr } = await sb.schema('inventory').from('order_sessions').insert({
       company_id: companyId,
       created_by: profile?.id ?? null,
       name: baseName,
@@ -184,7 +184,7 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
       trigger_reason: li.trigger_reason,
       manual_override: li.final_qty !== li.suggested_qty,
     }))
-    const { error: lErr } = await sb.from('order_line_items').insert(lineRows)
+    const { error: lErr } = await sb.schema('inventory').from('order_line_items').insert(lineRows)
     setSaving(false)
     if (lErr) { toast.error(lErr.message); return }
 

@@ -32,7 +32,7 @@ export function MonthEndPage() {
     let cancelled = false
     ;(async () => {
       const { data } = await (supabase as any)
-        .from('monthly_counts')
+        .schema('inventory').from('counts')
         .select('count_month')
         .eq('company_id', profile.company_id)
         .not('count_month', 'is', null)

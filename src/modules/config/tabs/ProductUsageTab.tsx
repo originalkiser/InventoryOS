@@ -53,7 +53,7 @@ async function writeInBatches(rows: Record<string, unknown>[]): Promise<string |
   for (let i = 0; i < rows.length; i += BATCH) batches.push(rows.slice(i, i + BATCH))
   for (let i = 0; i < batches.length; i += CONCURRENCY) {
     const results = await Promise.all(
-      batches.slice(i, i + CONCURRENCY).map((slice) => sb.from('product_usage').upsert(slice))
+      batches.slice(i, i + CONCURRENCY).map((slice) => sb.schema('inventory').from('product_usage').upsert(slice))
     )
     for (const { error } of results) { if (error) return error.message }
   }
@@ -172,7 +172,7 @@ export function ProductUsageTab() {
 
   async function clearAll() {
     if (!profile?.company_id) return
-    const { error } = await (supabase as any).from('product_usage').delete().eq('company_id', profile.company_id)
+    const { error } = await (supabase as any).schema('inventory').from('product_usage').delete().eq('company_id', profile.company_id)
     if (error) { toast.error(error.message); return }
     toast.success('Table cleared')
     await loadRpc()
@@ -225,9 +225,9 @@ export function ProductUsageTab() {
     const sb = supabase as any
     let error: { message: string } | null
     if (editId) {
-      ;({ error } = await sb.from('product_usage').update(payload).eq('id', editId))
+      ;({ error } = await sb.schema('inventory').from('product_usage').update(payload).eq('id', editId))
     } else {
-      ;({ error } = await sb.from('product_usage').insert(payload))
+      ;({ error } = await sb.schema('inventory').from('product_usage').insert(payload))
     }
     if (error) { toast.error(error.message); return }
     toast.success(editId ? 'Updated' : 'Saved')
@@ -238,7 +238,7 @@ export function ProductUsageTab() {
   async function onDelete() {
     if (!editId) return
     if (!confirm('Delete this product-usage row?')) return
-    const { error } = await (supabase as any).from('product_usage').delete().eq('id', editId)
+    const { error } = await (supabase as any).schema('inventory').from('product_usage').delete().eq('id', editId)
     if (error) { toast.error(error.message); return }
     toast.success('Deleted')
     resetForm(); setAddOpen(false); setEditId(null)
@@ -267,7 +267,7 @@ export function ProductUsageTab() {
     }).filter((r) => r.product_id)
 
     if (mode === 'replace') {
-      const { error: delErr } = await sb.from('product_usage').delete().eq('company_id', profile.company_id)
+      const { error: delErr } = await sb.schema('inventory').from('product_usage').delete().eq('company_id', profile.company_id)
       if (delErr) { toast.error(delErr.message); setImporting(false); return }
       const stamped = payload.map((r) => ({ ...r, company_id: profile.company_id, updated_by: profile.id ?? null, last_change_source: 'upload' }))
       const err = await writeInBatches(stamped)

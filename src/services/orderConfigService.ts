@@ -32,7 +32,7 @@ export async function parseXLSXToOrderConfig(file: File): Promise<OrderConfigRow
 }
 
 export async function diffOrderConfig(incoming: OrderConfigRow[]): Promise<ImportDiffRow[]> {
-  const { data: existing } = await (supabase as any).from('order_config').select('*')
+  const { data: existing } = await (supabase as any).schema('inventory').from('order_config').select('*')
   const existingMap = new Map<string, OrderConfigRow>(
     ((existing ?? []) as OrderConfigRow[]).map((r) => [r.product_name.toLowerCase(), r])
   )
@@ -68,7 +68,7 @@ export async function applyOrderConfigImport(diff: ImportDiffRow[]): Promise<Imp
     if (item.status === 'unchanged') { result.skipped++; continue }
 
     if (item.status === 'removed') {
-      await (supabase as any).from('order_config').update({ is_active: false }).eq('product_name', item.row.product_name)
+      await (supabase as any).schema('inventory').from('order_config').update({ is_active: false }).eq('product_name', item.row.product_name)
       continue
     }
 
@@ -81,11 +81,11 @@ export async function applyOrderConfigImport(diff: ImportDiffRow[]): Promise<Imp
     }
 
     if (item.status === 'new') {
-      const { error } = await (supabase as any).from('order_config').insert(row)
+      const { error } = await (supabase as any).schema('inventory').from('order_config').insert(row)
       if (error) result.errors.push(`${item.row.product_name}: ${error.message}`)
       else result.added++
     } else {
-      const { error } = await (supabase as any).from('order_config').update(row).eq('product_name', item.row.product_name)
+      const { error } = await (supabase as any).schema('inventory').from('order_config').update(row).eq('product_name', item.row.product_name)
       if (error) result.errors.push(`${item.row.product_name}: ${error.message}`)
       else result.updated++
     }
@@ -95,7 +95,7 @@ export async function applyOrderConfigImport(diff: ImportDiffRow[]): Promise<Imp
 }
 
 export async function getUOMThresholds(): Promise<UOMThreshold[]> {
-  const { data, error } = await (supabase as any).from('uom_thresholds').select('*').order('uom')
+  const { data, error } = await (supabase as any).schema('inventory').from('uom_thresholds').select('*').order('uom')
   if (error) throw new Error(error.message)
   return (data ?? []) as UOMThreshold[]
 }
@@ -108,7 +108,7 @@ export async function saveUOMThreshold(threshold: UOMThreshold): Promise<void> {
 }
 
 export async function getOrderConfig(filters?: { uom?: string; activeOnly?: boolean }): Promise<OrderConfigRow[]> {
-  let q = (supabase as any).from('order_config').select('*')
+  let q = (supabase as any).schema('inventory').from('order_config').select('*')
   if (filters?.uom) q = q.eq('uom', filters.uom)
   if (filters?.activeOnly !== false) q = q.eq('is_active', true)
   const { data, error } = await q.order('product_name')

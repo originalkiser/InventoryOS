@@ -23,9 +23,9 @@ export function NotSubmittedTab() {
     setLoading(true)
     const sb = supabase as any
     const [locRes, countRes, priorRes] = await Promise.all([
-      sb.from('locations').select('*').eq('company_id', companyId).eq('active', true).order('location_code'),
-      sb.from('monthly_counts').select('location_id').eq('company_id', companyId).eq('count_month', countMonth),
-      sb.from('monthly_counts').select('location_id, count_month').eq('company_id', companyId)
+      sb.schema('core').from('locations').select('*').eq('company_id', companyId).eq('active', true).order('location_code'),
+      sb.schema('inventory').from('counts').select('location_id').eq('company_id', companyId).eq('count_month', countMonth),
+      sb.schema('inventory').from('counts').select('location_id, count_month').eq('company_id', companyId)
         .lt('count_month', countMonth).order('count_month', { ascending: false }),
     ])
 
@@ -48,7 +48,7 @@ export function NotSubmittedTab() {
     if (!companyId) return
     const channel = supabase
       .channel('monthend-notsubmitted-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'monthly_counts', filter: `company_id=eq.${companyId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'counts', filter: `company_id=eq.${companyId}` }, () => load())
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, load])

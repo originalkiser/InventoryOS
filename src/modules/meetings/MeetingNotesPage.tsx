@@ -94,10 +94,10 @@ export function MeetingNotesPage() {
     setLoading(true)
     const sb = supabase as any
     const [meetRes, projRes] = await Promise.all([
-      sb.from('meeting_notes').select('*').eq('company_id', companyId)
+      sb.schema('inventory').from('meeting_notes').select('*').eq('company_id', companyId)
         .order('meeting_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false }),
-      sb.from('projects').select('id, project_name, status').eq('company_id', companyId).order('project_name'),
+      sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).order('project_name'),
     ])
     if (meetRes.error) toast.error(meetRes.error.message)
     else setMeetings((meetRes.data ?? []) as MeetingNote[])
@@ -115,7 +115,7 @@ export function MeetingNotesPage() {
 
   async function loadMeetingTasks(meetingId: string) {
     const { data } = await (supabase as any)
-      .from('tasks').select('*').eq('meeting_id', meetingId)
+      .schema('inventory').from('tasks').select('*').eq('meeting_id', meetingId)
       .order('sort_order').order('created_at')
     setMeetingTasks((data ?? []) as Task[])
   }
@@ -179,11 +179,11 @@ export function MeetingNotesPage() {
     }
     const sb = supabase as any
     if (editId) {
-      const { error } = await sb.from('meeting_notes').update(payload).eq('id', editId)
+      const { error } = await sb.schema('inventory').from('meeting_notes').update(payload).eq('id', editId)
       if (error) { toast.error(error.message); setSaving(false); return }
       toast.success('Meeting saved')
     } else {
-      const { data, error } = await sb.from('meeting_notes').insert({ ...payload, created_by: myId }).select().single()
+      const { data, error } = await sb.schema('inventory').from('meeting_notes').insert({ ...payload, created_by: myId }).select().single()
       if (error) { toast.error(error.message); setSaving(false); return }
       setEditId(data.id)
       setEditCreatedBy(myId)
@@ -195,7 +195,7 @@ export function MeetingNotesPage() {
 
   async function onDelete() {
     if (!editId || !isOwner || !confirm('Delete this meeting and its tasks?')) return
-    const { error } = await (supabase as any).from('meeting_notes').delete().eq('id', editId)
+    const { error } = await (supabase as any).schema('inventory').from('meeting_notes').delete().eq('id', editId)
     if (error) { toast.error(error.message); return }
     toast.success('Meeting deleted')
     setModalOpen(false)
@@ -205,7 +205,7 @@ export function MeetingNotesPage() {
 
   async function addTask() {
     if (!editId || !taskForm.title.trim() || !companyId) return
-    const { error } = await (supabase as any).from('tasks').insert({
+    const { error } = await (supabase as any).schema('inventory').from('tasks').insert({
       company_id: companyId,
       title: taskForm.title.trim(),
       target_date: taskForm.target_date || null,
@@ -221,7 +221,7 @@ export function MeetingNotesPage() {
 
   async function toggleTask(task: Task) {
     const done = !task.completed
-    const { error } = await (supabase as any).from('tasks').update({
+    const { error } = await (supabase as any).schema('inventory').from('tasks').update({
       completed: done,
       completed_at: done ? new Date().toISOString() : null,
       completed_by: done ? myId : null,
@@ -231,7 +231,7 @@ export function MeetingNotesPage() {
   }
 
   async function deleteTask(taskId: string) {
-    await (supabase as any).from('tasks').delete().eq('id', taskId)
+    await (supabase as any).schema('inventory').from('tasks').delete().eq('id', taskId)
     if (editId) loadMeetingTasks(editId)
   }
 

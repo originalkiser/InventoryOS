@@ -29,7 +29,7 @@ export async function runDailyMonthEndPull(): Promise<MonthEndPullResult> {
   const dateStr = today.toISOString().slice(0, 10)
 
   const { data: locations } = await (supabase as any)
-    .from('locations')
+    .schema('core').from('locations')
     .select('location_id')
     .eq('is_active', true)
   const shopIds = ((locations ?? []) as { location_id: string }[]).map((l) => l.location_id)
@@ -42,7 +42,7 @@ export async function runDailyMonthEndPull(): Promise<MonthEndPullResult> {
     const items = await fetchDroptopOnHands(shopIds, today)
 
     for (const item of items) {
-      const { error } = await (supabase as any).from('month_end_snapshots').upsert(
+      const { error } = await (supabase as any).schema('inventory').from('count_snapshots').upsert(
         {
           snapshot_date: dateStr,
           location_id: item.shopId,
@@ -63,7 +63,7 @@ export async function runDailyMonthEndPull(): Promise<MonthEndPullResult> {
     errorMsg = err instanceof Error ? err.message : String(err)
   }
 
-  await (supabase as any).from('month_end_pull_log').insert({
+  await (supabase as any).schema('inventory').from('pull_log').insert({
     pull_date: dateStr,
     pulled_at: new Date().toISOString(),
     locations_pulled: shopIds.length,

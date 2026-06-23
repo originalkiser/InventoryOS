@@ -73,7 +73,7 @@ export async function syncLocationsFromMonday(): Promise<SyncResult> {
 
   try {
     const items = await getMondayBoardItems(boardId)
-    const { data: existing } = await (supabase as any).from('locations').select('location_id')
+    const { data: existing } = await (supabase as any).schema('core').from('locations').select('location_id')
     const existingIds = new Set(((existing ?? []) as { location_id: string }[]).map((r) => r.location_id))
     const incomingIds = new Set<string>()
 
@@ -83,7 +83,7 @@ export async function syncLocationsFromMonday(): Promise<SyncResult> {
       incomingIds.add(loc.location_id)
 
       const isNew = !existingIds.has(loc.location_id)
-      const { error } = await (supabase as any).from('locations').upsert(loc, { onConflict: 'location_id' })
+      const { error } = await (supabase as any).schema('core').from('locations').upsert(loc, { onConflict: 'location_id' })
       if (error) result.errors.push(`${loc.location_id}: ${error.message}`)
       else if (isNew) result.added++
       else result.updated++
@@ -91,7 +91,7 @@ export async function syncLocationsFromMonday(): Promise<SyncResult> {
 
     for (const id of existingIds) {
       if (!incomingIds.has(id)) {
-        await (supabase as any).from('locations').update({ is_active: false }).eq('location_id', id)
+        await (supabase as any).schema('core').from('locations').update({ is_active: false }).eq('location_id', id)
         result.deactivated++
       }
     }
@@ -107,7 +107,7 @@ export async function syncLocationsFromMonday(): Promise<SyncResult> {
 }
 
 async function writeSyncLog(result: SyncResult, status: LocationSyncLog['status'], error_message: string | null) {
-  await (supabase as any).from('locations_sync_log').insert({
+  await (supabase as any).schema('core').from('location_sync_log').insert({
     synced_at: new Date().toISOString(),
     records_updated: result.updated,
     records_added: result.added,

@@ -33,7 +33,7 @@ export function OrderDocuments({ companyId, sessionId, stage, uploadedBy }: Prop
 
   const load = useCallback(async () => {
     const sb = supabase as any
-    let q = sb.from('order_documents').select('*').eq('company_id', companyId).eq('stage', stage)
+    let q = sb.schema('inventory').from('order_documents').select('*').eq('company_id', companyId).eq('stage', stage)
     q = sessionId ? q.eq('order_session_id', sessionId) : q.is('order_session_id', null)
     const { data } = await q.order('created_at', { ascending: false })
     setDocs((data ?? []) as OrderDocument[])
@@ -51,7 +51,7 @@ export function OrderDocuments({ companyId, sessionId, stage, uploadedBy }: Prop
     const sb = supabase as any
     const { error: upErr } = await sb.storage.from('order-documents').upload(path, file)
     if (upErr) { setBusy(false); toast.error(upErr.message); return }
-    const { error: rowErr } = await sb.from('order_documents').insert({
+    const { error: rowErr } = await sb.schema('inventory').from('order_documents').insert({
       company_id: companyId,
       order_session_id: sessionId,
       stage,
@@ -67,7 +67,7 @@ export function OrderDocuments({ companyId, sessionId, stage, uploadedBy }: Prop
   async function remove(doc: OrderDocument) {
     const sb = supabase as any
     await sb.storage.from('order-documents').remove([doc.storage_path])
-    await sb.from('order_documents').delete().eq('id', doc.id)
+    await sb.schema('inventory').from('order_documents').delete().eq('id', doc.id)
     toast.success('Document removed'); load()
   }
 

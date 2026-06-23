@@ -40,7 +40,7 @@ export function ProductDetailUpload({
     try {
       // 1. Create the batch row (non-destructive — kept separate from other batches)
       const { data: batch, error: batchErr } = await (supabase as any)
-        .from('count_upload_batches')
+        .schema('inventory').from('count_batches')
         .insert({
           company_id: companyId,
           module: 'monthly',
@@ -75,7 +75,7 @@ export function ProductDetailUpload({
       })
 
       const { error: rowsErr } = await (supabase as any)
-        .from('monthly_count_products')
+        .schema('inventory').from('count_products')
         .insert(insertRows)
       if (rowsErr) throw rowsErr
 
@@ -93,8 +93,8 @@ export function ProductDetailUpload({
   async function removeBatch(batch: CountUploadBatch) {
     if (!confirm(`Remove batch "${batch.file_name ?? 'Upload'}"? Its ${batch.row_count} rows will be deleted and totals recomputed.`)) return
     const sb = supabase as any
-    const { error: e1 } = await sb.from('monthly_count_products').delete().eq('upload_batch_id', batch.id)
-    const { error: e2 } = await sb.from('count_upload_batches').delete().eq('id', batch.id)
+    const { error: e1 } = await sb.schema('inventory').from('count_products').delete().eq('upload_batch_id', batch.id)
+    const { error: e2 } = await sb.schema('inventory').from('count_batches').delete().eq('id', batch.id)
     if (e1 || e2) toast.error('Failed to remove batch')
     else {
       toast.success('Batch removed — totals recomputed')
@@ -245,7 +245,7 @@ function ManualProductForm({
     setSaving(true)
     const sb = supabase as any
     const { data: batch, error: batchErr } = await sb
-      .from('count_upload_batches')
+      .schema('inventory').from('count_batches')
       .insert({
         company_id: companyId,
         module: 'monthly',
@@ -259,7 +259,7 @@ function ManualProductForm({
       .single()
     if (batchErr) { setSaving(false); toast.error(batchErr.message); return }
 
-    const { error } = await sb.from('monthly_count_products').insert({
+    const { error } = await sb.schema('inventory').from('count_products').insert({
       company_id: companyId,
       upload_batch_id: batch.id,
       count_month: countMonth,

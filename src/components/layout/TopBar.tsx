@@ -45,7 +45,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
 
   useEffect(() => {
     if (!companyId) return
-    ;(supabase as any).from('profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
+    ;(supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
       .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
   }, [companyId])
 
@@ -56,11 +56,11 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
 
     const channel = supabase
       .channel('topbar')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'issues', filter: `company_id=eq.${companyId}` }, loadStats)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_events', filter: `company_id=eq.${companyId}` }, () => { loadStats(); loadTodayChecklists() })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'monthly_ending_balances', filter: `company_id=eq.${companyId}` }, loadStats)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'locations', filter: `company_id=eq.${companyId}` }, loadStats)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'project_tasks', filter: `company_id=eq.${companyId}` }, () => loadTodayChecklists())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'issues', filter: `company_id=eq.${companyId}` }, loadStats)
+      .on('postgres_changes', { event: '*', schema: 'platform', table: 'schedule_events', filter: `company_id=eq.${companyId}` }, () => { loadStats(); loadTodayChecklists() })
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'ending_balances', filter: `company_id=eq.${companyId}` }, loadStats)
+      .on('postgres_changes', { event: '*', schema: 'core', table: 'locations', filter: `company_id=eq.${companyId}` }, loadStats)
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'project_tasks', filter: `company_id=eq.${companyId}` }, () => loadTodayChecklists())
       .subscribe()
 
     return () => { void supabase.removeChannel(channel) }
@@ -73,10 +73,10 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = supabase as any
     const [issuesRes, scheduleRes, balancesRes, locationsRes] = await Promise.all([
-      sb.from('issues').select('id, status_id, issue_statuses!inner(name)').eq('company_id', companyId),
-      sb.from('schedule_events').select('*').eq('company_id', companyId).gte('start_date', today).order('start_date'),
-      sb.from('monthly_ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false }),
-      sb.from('locations').select('id').eq('company_id', companyId).eq('active', true),
+      sb.schema('inventory').from('issues').select('id, status_id, issue_statuses!inner(name)').eq('company_id', companyId),
+      sb.schema('platform').from('schedule_events').select('*').eq('company_id', companyId).gte('start_date', today).order('start_date'),
+      sb.schema('inventory').from('ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false }),
+      sb.schema('core').from('locations').select('id').eq('company_id', companyId).eq('active', true),
     ])
 
     const pendingIssues = issuesRes.data?.filter((i: any) =>
@@ -112,8 +112,8 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
     const [ev, tk] = await Promise.all([
-      sb.from('schedule_events').select('id, title, completed, notes, assigned_to').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
-      sb.from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
+      sb.schema('platform').from('schedule_events').select('id, title, completed, notes, assigned_to').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
+      sb.schema('inventory').from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
     ])
     const items: ChecklistItem[] = [
       ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '', assignedTo: e.assigned_to ?? null })),
@@ -126,21 +126,23 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   async function toggleChecklist(item: ChecklistItem) {
     const sb = supabase as any
     if (item.kind === 'event') {
-      await sb.from('schedule_events').update({
+      await sb.schema('platform').from('schedule_events').update({
         completed: !item.completed,
         completed_at: !item.completed ? new Date().toISOString() : null,
         completed_by: profile?.id ?? null,
       }).eq('id', item.id)
     } else {
-      await sb.from('project_tasks').update({ done: !item.completed }).eq('id', item.id)
+      await sb.schema('inventory').from('project_tasks').update({ done: !item.completed }).eq('id', item.id)
     }
     loadTodayChecklists()
   }
 
   async function saveNotes(item: ChecklistItem) {
     const sb = supabase as any
-    const table = item.kind === 'event' ? 'schedule_events' : 'project_tasks'
-    await sb.from(table).update({ notes: noteDraft }).eq('id', item.id)
+    const query = item.kind === 'event'
+      ? sb.schema('platform').from('schedule_events')
+      : sb.schema('inventory').from('project_tasks')
+    await query.update({ notes: noteDraft }).eq('id', item.id)
     setChecklistItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, notes: noteDraft } : i)))
   }
 

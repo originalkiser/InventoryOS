@@ -38,7 +38,7 @@ export function useAuth() {
   async function loadProfile(user: User) {
     const sb = supabase as any
     const { data: prof } = await sb
-      .from('profiles')
+      .schema('platform').from('user_profiles')
       .select('*')
       .eq('id', user.id)
       .maybeSingle()
@@ -66,9 +66,9 @@ export function useAuth() {
         // Repair an existing company-less profile. Client-generated id avoids the
         // RLS read-back problem (can't SELECT the new company before it's linked).
         const newCompanyId = crypto.randomUUID()
-        const { error: cErr } = await sb.from('companies').insert({ id: newCompanyId, name: companyName })
+        const { error: cErr } = await sb.schema('platform').from('companies').insert({ id: newCompanyId, name: companyName })
         if (cErr) throw cErr
-        const { error: uErr } = await sb.from('profiles')
+        const { error: uErr } = await sb.schema('platform').from('user_profiles')
           .update({ company_id: newCompanyId, full_name: fullName, email: user.email })
           .eq('id', user.id)
         if (uErr) throw uErr
@@ -78,7 +78,7 @@ export function useAuth() {
       }
 
       await supabase.auth.updateUser({ data: { pending_company: null, full_name: fullName } })
-      const { data: fresh } = await sb.from('profiles').select('*').eq('id', user.id).single()
+      const { data: fresh } = await sb.schema('platform').from('user_profiles').select('*').eq('id', user.id).single()
       if (fresh) {
         setProfile(fresh)
         toast.success('Workspace ready')

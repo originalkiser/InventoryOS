@@ -19,8 +19,8 @@ export function useIssueColumns() {
   const load = useCallback(async () => {
     if (!companyId) return
     const [c, v] = await Promise.all([
-      sb.from('issue_tracker_columns').select('*').eq('company_id', companyId).order('sort_order'),
-      sb.from('issue_custom_values').select('*').eq('company_id', companyId),
+      sb.schema('inventory').from('issue_tracker_columns').select('*').eq('company_id', companyId).order('sort_order'),
+      sb.schema('inventory').from('issue_custom_values').select('*').eq('company_id', companyId),
     ])
     setColumns((c.data ?? []) as IssueTrackerColumn[])
     const map: Record<string, string | null> = {}
@@ -34,8 +34,8 @@ export function useIssueColumns() {
     if (!companyId) return
     const ch = supabase
       .channel('issue-cols-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'issue_tracker_columns', filter: `company_id=eq.${companyId}` }, () => load())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'issue_custom_values', filter: `company_id=eq.${companyId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'issue_tracker_columns', filter: `company_id=eq.${companyId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'issue_custom_values', filter: `company_id=eq.${companyId}` }, () => load())
       .subscribe()
     return () => { void supabase.removeChannel(ch) }
   }, [companyId, load])
@@ -47,20 +47,20 @@ export function useIssueColumns() {
     // Position: sort_order just after the chosen column, else at the end.
     const after = columns.find((c) => c.id === afterColumnId)
     const base = after ? after.sort_order : (columns.reduce((m, c) => Math.max(m, c.sort_order), 0))
-    const { error } = await sb.from('issue_tracker_columns').insert({ company_id: companyId, label, type, sort_order: base + 1 })
+    const { error } = await sb.schema('inventory').from('issue_tracker_columns').insert({ company_id: companyId, label, type, sort_order: base + 1 })
     if (error) toast.error(error.message)
     else { toast.success('Column added'); await load() }
   }
 
   async function removeColumn(id: string) {
-    const { error } = await sb.from('issue_tracker_columns').delete().eq('id', id)
+    const { error } = await sb.schema('inventory').from('issue_tracker_columns').delete().eq('id', id)
     if (error) toast.error(error.message); else await load()
   }
 
   async function togglePin(id: string) {
     const col = columns.find((c) => c.id === id); if (!col) return
     setColumns((prev) => prev.map((c) => (c.id === id ? { ...c, pinned: !c.pinned } : c)))
-    const { error } = await sb.from('issue_tracker_columns').update({ pinned: !col.pinned }).eq('id', id)
+    const { error } = await sb.schema('inventory').from('issue_tracker_columns').update({ pinned: !col.pinned }).eq('id', id)
     if (error) { toast.error(error.message); await load() }
   }
 
@@ -73,8 +73,8 @@ export function useIssueColumns() {
     const a = sorted[i], b = sorted[j]
     setColumns((prev) => prev.map((c) => c.id === a.id ? { ...c, sort_order: b.sort_order } : c.id === b.id ? { ...c, sort_order: a.sort_order } : c))
     const r = await Promise.all([
-      sb.from('issue_tracker_columns').update({ sort_order: b.sort_order }).eq('id', a.id),
-      sb.from('issue_tracker_columns').update({ sort_order: a.sort_order }).eq('id', b.id),
+      sb.schema('inventory').from('issue_tracker_columns').update({ sort_order: b.sort_order }).eq('id', a.id),
+      sb.schema('inventory').from('issue_tracker_columns').update({ sort_order: a.sort_order }).eq('id', b.id),
     ])
     if (r.some((x: any) => x.error)) { toast.error('Failed to reorder'); await load() }
   }
@@ -84,7 +84,7 @@ export function useIssueColumns() {
     const k = key(issueId, columnId)
     const snapshot = values
     setValues((prev) => ({ ...prev, [k]: value }))
-    const { error } = await sb.from('issue_custom_values')
+    const { error } = await sb.schema('inventory').from('issue_custom_values')
       .upsert({ company_id: companyId, issue_id: issueId, column_id: columnId, value }, { onConflict: 'issue_id,column_id' })
     if (error) { setValues(snapshot); toast.error(error.message) }
   }

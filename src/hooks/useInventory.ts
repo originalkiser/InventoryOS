@@ -36,8 +36,8 @@ export function useInventory() {
     if (!companyId) return
     setLoading(true)
     const [pu, oc] = await Promise.all([
-      sb.from('product_usage').select('*').eq('company_id', companyId),
-      sb.from('location_order_configs').select('location_id, product_id').eq('company_id', companyId),
+      sb.schema('inventory').from('product_usage').select('*').eq('company_id', companyId),
+      sb.schema('inventory').from('location_order_config').select('location_id, product_id').eq('company_id', companyId),
     ])
     setUsage((pu.data ?? []) as ProductUsage[])
     setOrderKeys(new Set(((oc.data ?? []) as any[]).map((r) => `${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}`)))

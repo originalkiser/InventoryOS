@@ -15,14 +15,14 @@ export function useAppSetting<T>(key: string, def: T): [T, (v: T) => void, boole
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
-    sb.from('app_settings').select('value').eq('company_id', companyId).eq('key', key).maybeSingle()
+    sb.schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', key).maybeSingle()
       .then(({ data }: any) => { if (!cancelled) { if (data?.value != null) setValue(data.value as T); setLoaded(true) } })
     return () => { cancelled = true }
   }, [companyId, key])
 
   const save = useCallback((v: T) => {
     setValue(v)
-    if (companyId) void sb.from('app_settings').upsert({ company_id: companyId, key, value: v, updated_at: new Date().toISOString() }, { onConflict: 'company_id,key' })
+    if (companyId) void sb.schema('platform').from('app_settings').upsert({ company_id: companyId, key, value: v, updated_at: new Date().toISOString() }, { onConflict: 'company_id,key' })
   }, [companyId, key])
 
   return [value, save, loaded]

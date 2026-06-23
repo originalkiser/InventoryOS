@@ -16,8 +16,8 @@ export function useLocations() {
   const reload = useCallback(async () => {
     if (!companyId) { setLocations([]); setPosMaps([]); return }
     const [loc, pos] = await Promise.all([
-      (supabase as any).from('locations').select('*').eq('company_id', companyId).order('location_code'),
-      (supabase as any).from('pos_location_map').select('*').eq('company_id', companyId),
+      (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code'),
+      (supabase as any).schema('core').from('pos_location_map').select('*').eq('company_id', companyId),
     ])
     setLocations((loc.data ?? []) as Location[])
     setPosMaps((pos.data ?? []) as PosLocationMap[])

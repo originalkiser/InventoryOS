@@ -48,14 +48,14 @@ export function useProjectColumns(defs: ColumnDef[]) {
   // Pull the cross-device layout from Supabase once we have a user.
   useEffect(() => {
     if (!companyId || !userId) return
-    sb.from('projects_column_config').select('config').eq('company_id', companyId).eq('user_id', userId).maybeSingle()
+    sb.schema('inventory').from('project_column_config').select('config').eq('company_id', companyId).eq('user_id', userId).maybeSingle()
       .then(({ data }: any) => { if (data?.config) setColumns(reconcile(defsRef.current, data.config)) })
   }, [companyId, userId])
 
   const persist = useCallback((next: ProjectColumnConfigEntry[]) => {
     localStorage.setItem(LS_KEY, JSON.stringify(next))
     if (companyId && userId) {
-      void sb.from('projects_column_config')
+      void sb.schema('inventory').from('project_column_config')
         .upsert({ company_id: companyId, user_id: userId, config: next, updated_at: new Date().toISOString() }, { onConflict: 'company_id,user_id' })
     }
   }, [companyId, userId])

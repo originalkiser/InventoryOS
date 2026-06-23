@@ -32,7 +32,7 @@ const col = createColumnHelper<VendorPart>()
 export function VendorPartsTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<VendorPart>('vendor_parts')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<VendorPart>('vendor_parts', 'core')
   const { active: customFields, addField } = useCustomFields('vendor_parts')
 
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -47,7 +47,7 @@ export function VendorPartsTab() {
 
   const loadVendors = useCallback(async () => {
     if (!companyId) return
-    const { data: v } = await (supabase as any).from('vendors').select('*').eq('company_id', companyId).order('name')
+    const { data: v } = await (supabase as any).schema('core').from('vendors').select('*').eq('company_id', companyId).order('name')
     setVendors((v ?? []) as Vendor[])
   }, [companyId])
   useEffect(() => { loadVendors() }, [loadVendors])
@@ -56,7 +56,7 @@ export function VendorPartsTab() {
   const vendorOptions: ComboboxOption[] = vendors.map((v) => ({ value: v.id, label: v.name }))
 
   async function createVendor(name: string): Promise<ComboboxOption> {
-    const { data: v, error } = await (supabase as any).from('vendors').insert({ company_id: companyId, name: name.trim(), vendor_code: slugCode(name) }).select().single()
+    const { data: v, error } = await (supabase as any).schema('core').from('vendors').insert({ company_id: companyId, name: name.trim(), vendor_code: slugCode(name) }).select().single()
     if (error) { toast.error(error.message); throw error }
     await loadVendors()
     toast.success(`Vendor "${name.trim()}" added`)

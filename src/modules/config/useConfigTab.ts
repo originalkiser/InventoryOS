@@ -27,7 +27,7 @@ function cacheKey(companyId: string, tableName: string) {
 
 const PAGE = 1000
 
-export function useConfigTab<T>(tableName: string) {
+export function useConfigTab<T>(tableName: string, schemaName = 'public') {
   const { profile } = useAuthStore()
   const [data, setData] = useState<T[]>([])
   const [loading, setLoading] = useState(true)
@@ -49,10 +49,10 @@ export function useConfigTab<T>(tableName: string) {
     }
 
     const sb = supabase as any
+    const tbl = () => sb.schema(schemaName).from(tableName)
 
     // Count first so we know exactly how many pages to fire in parallel
-    const { count, error: countErr } = await sb
-      .from(tableName)
+    const { count, error: countErr } = await tbl()
       .select('*', { count: 'exact', head: true })
       .eq('company_id', profile.company_id)
 
@@ -70,7 +70,7 @@ export function useConfigTab<T>(tableName: string) {
     const pageCount = Math.ceil(count / PAGE)
     const results = await Promise.all(
       Array.from({ length: pageCount }, (_, i) =>
-        sb.from(tableName).select('*')
+        tbl().select('*')
           .eq('company_id', profile.company_id)
           .order('created_at', { ascending: false })
           .range(i * PAGE, (i + 1) * PAGE - 1)
@@ -87,7 +87,7 @@ export function useConfigTab<T>(tableName: string) {
     tabCache.set(key, { data: all, ts: Date.now() })
     setData(all)
     setLoading(false)
-  }, [profile?.company_id, tableName])
+  }, [profile?.company_id, tableName, schemaName])
 
   // Insert/upsert in batches — 4 concurrent at 2000 rows each for large imports.
   async function writeInBatches(rows: Record<string, unknown>[], op: 'insert' | 'upsert'): Promise<{ message: string } | null> {
@@ -101,7 +101,7 @@ export function useConfigTab<T>(tableName: string) {
       const group = batches.slice(i, i + CONCURRENCY)
       const results = await Promise.all(
         group.map((slice) =>
-          op === 'upsert' ? sb.from(tableName).upsert(slice) : sb.from(tableName).insert(slice)
+          op === 'upsert' ? sb.schema(schemaName).from(tableName).upsert(slice) : sb.schema(schemaName).from(tableName).insert(slice)
         )
       )
       for (const { error } of results) {
@@ -123,13 +123,13 @@ export function useConfigTab<T>(tableName: string) {
 
   async function insert(row: Partial<T> & { company_id?: string }) {
     if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
-    const { error } = await (supabase as any).from(tableName).insert(stamp(row as Record<string, unknown>, 'manual'))
+    const { error } = await (supabase as any).schema(schemaName).from(tableName).insert(stamp(row as Record<string, unknown>, 'manual'))
     if (error) toast.error(error.message)
     else { toast.success('Saved'); invalidate(); await load() }
   }
 
   async function update(id: string, patch: Partial<T>) {
-    const { error } = await (supabase as any).from(tableName).update(stamp(patch as Record<string, unknown>, 'manual')).eq('id', id)
+    const { error } = await (supabase as any).schema(schemaName).from(tableName).update(stamp(patch as Record<string, unknown>, 'manual')).eq('id', id)
     if (error) toast.error(error.message)
     else { toast.success('Updated'); invalidate(); await load() }
   }
@@ -150,7 +150,7 @@ export function useConfigTab<T>(tableName: string) {
     const source = opts.source ?? 'upload'
 
     if (opts.mode === 'replace') {
-      const { error: delErr } = await sb.from(tableName).delete().eq('company_id', profile.company_id)
+      const { error: delErr } = await sb.schema(schemaName).from(tableName).delete().eq('company_id', profile.company_id)
       if (delErr) { toast.error(delErr.message); return }
       const error = await writeInBatches(rows.map((r) => stamp(r as Record<string, unknown>, source)), 'insert')
       if (error) { toast.error(error.message); return }
@@ -180,14 +180,14 @@ export function useConfigTab<T>(tableName: string) {
   }
 
   async function remove(id: string) {
-    const { error } = await (supabase as any).from(tableName).delete().eq('id', id)
+    const { error } = await (supabase as any).schema(schemaName).from(tableName).delete().eq('id', id)
     if (error) toast.error(error.message)
     else { invalidate(); await load() }
   }
 
   async function clearAll() {
     if (!profile?.company_id) return
-    const { error } = await (supabase as any).from(tableName).delete().eq('company_id', profile.company_id)
+    const { error } = await (supabase as any).schema(schemaName).from(tableName).delete().eq('company_id', profile.company_id)
     if (error) { toast.error(error.message); return }
     toast.success('Table cleared')
     invalidate()

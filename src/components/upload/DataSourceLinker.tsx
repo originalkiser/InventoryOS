@@ -72,9 +72,9 @@ export function DataSourceLinker({ configType, existingLink, onSaved }: DataSour
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sb = supabase as any
       if (existingLink?.id) {
-        await sb.from('data_source_links').update(payload).eq('id', existingLink.id)
+        await sb.schema('inventory').from('data_source_links').update(payload).eq('id', existingLink.id)
       } else {
-        await sb.from('data_source_links').insert(payload)
+        await sb.schema('inventory').from('data_source_links').insert(payload)
       }
       toast.success('Data source saved')
       onSaved?.()

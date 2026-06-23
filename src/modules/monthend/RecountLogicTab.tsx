@@ -64,7 +64,7 @@ export function RecountLogicTab() {
     if (!companyId) return
     ;(async () => {
       const { data } = await (supabase as any)
-        .from('recount_config').select('*').eq('company_id', companyId).maybeSingle()
+        .schema('inventory').from('recount_config').select('*').eq('company_id', companyId).maybeSingle()
       const c = data as RecountConfig | null
       if (!c) return
       setConfigId(c.id)
@@ -118,10 +118,10 @@ export function RecountLogicTab() {
     const sb = supabase as any
     let savedId = configId
     if (configId) {
-      const { error } = await sb.from('recount_config').update(payload).eq('id', configId)
+      const { error } = await sb.schema('inventory').from('recount_config').update(payload).eq('id', configId)
       if (error) { toast.error(error.message); return null }
     } else {
-      const { data, error } = await sb.from('recount_config').insert(payload).select().single()
+      const { data, error } = await sb.schema('inventory').from('recount_config').insert(payload).select().single()
       if (error) { toast.error(error.message); return null }
       savedId = data.id
       setConfigId(data.id)
@@ -153,7 +153,7 @@ export function RecountLogicTab() {
       // Skip locations that already have an auto recount for this period
       const sb = supabase as any
       const { data: existing } = await sb
-        .from('recount_requests')
+        .schema('inventory').from('recount_requests')
         .select('location_id, recount_fields')
         .eq('company_id', companyId)
         .filter('recount_fields->>count_month', 'eq', countMonth)
@@ -185,7 +185,7 @@ export function RecountLogicTab() {
         return
       }
 
-      const { error } = await sb.from('recount_requests').insert(rows)
+      const { error } = await sb.schema('inventory').from('recount_requests').insert(rows)
       if (error) toast.error(error.message)
       else toast.success(`Generated ${rows.length} recount${rows.length === 1 ? '' : 's'} → see Recounts tab`)
     } finally {

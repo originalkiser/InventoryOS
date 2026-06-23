@@ -151,7 +151,7 @@ export function ScheduleEventModal({
 
   useEffect(() => {
     if (!profile?.company_id) return
-    ;(supabase as any).from('profiles').select('id, full_name, email').eq('company_id', profile.company_id).order('full_name')
+    ;(supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', profile.company_id).order('full_name')
       .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
   }, [profile?.company_id])
 
@@ -233,11 +233,11 @@ export function ScheduleEventModal({
       // Converting an existing standalone event into a series: drop the original.
       let error: { message: string } | null = null
       if (existing?.id) {
-        const del = await sb.from('schedule_events').delete().eq('id', existing.id)
+        const del = await sb.schema('platform').from('schedule_events').delete().eq('id', existing.id)
         error = del.error
       }
       if (!error) {
-        const ins = await sb.from('schedule_events').insert(rows)
+        const ins = await sb.schema('platform').from('schedule_events').insert(rows)
         error = ins.error
       }
 
@@ -255,11 +255,11 @@ export function ScheduleEventModal({
     // series. Per-occurrence fields (dates, completion) stay row-specific.
     if (isSeriesMember && applyToSeries && existing?.series_id) {
       const shared = { ...base }
-      const seriesUpdate = await sb.from('schedule_events').update(shared).eq('series_id', existing.series_id)
+      const seriesUpdate = await sb.schema('platform').from('schedule_events').update(shared).eq('series_id', existing.series_id)
       let error = seriesUpdate.error
       if (!error) {
         // This occurrence still gets its own date/completion changes.
-        const own = await sb.from('schedule_events').update({
+        const own = await sb.schema('platform').from('schedule_events').update({
           start_date: startDate,
           end_date: endDate || null,
           completed,
@@ -287,8 +287,8 @@ export function ScheduleEventModal({
     }
 
     const { error } = existing?.id
-      ? await sb.from('schedule_events').update(payload).eq('id', existing.id)
-      : await sb.from('schedule_events').insert(payload)
+      ? await sb.schema('platform').from('schedule_events').update(payload).eq('id', existing.id)
+      : await sb.schema('platform').from('schedule_events').insert(payload)
 
     if (error) toast.error(error.message)
     else { toast.success('Saved'); onSaved(); onClose() }
@@ -299,7 +299,7 @@ export function ScheduleEventModal({
     if (!existing?.id) return
     setDeleting(true)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase as any).from('schedule_events').delete().eq('id', existing.id)
+    const { error } = await (supabase as any).schema('platform').from('schedule_events').delete().eq('id', existing.id)
     if (error) toast.error(error.message)
     else { toast.success('Deleted'); onSaved(); onClose() }
     setDeleting(false)
@@ -310,7 +310,7 @@ export function ScheduleEventModal({
     if (!confirm('Delete every occurrence in this recurring series?')) return
     setDeleting(true)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase as any).from('schedule_events').delete().eq('series_id', existing.series_id)
+    const { error } = await (supabase as any).schema('platform').from('schedule_events').delete().eq('series_id', existing.series_id)
     if (error) toast.error(error.message)
     else { toast.success('Series deleted'); onSaved(); onClose() }
     setDeleting(false)

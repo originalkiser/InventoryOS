@@ -78,7 +78,8 @@ export function locationLabel(locationId: string | null, locations: Location[]):
 // the identical mappable fields, ColumnMapper, and template system.
 // ---------------------------------------------------------------------------
 export interface SummaryUploadTarget {
-  table: 'monthly_counts' | 'weekly_counts'
+  table: 'monthly_counts' | 'weekly_counts' | 'counts'
+  schema: string
   templateModule: 'monthly_summary' | 'weekly'
   dataSourceConfigType: string
   // ISO timestamp used for count_date when the file doesn't map one
@@ -91,7 +92,8 @@ export interface SummaryUploadTarget {
 
 export function monthlySummaryTarget(countMonth: string): SummaryUploadTarget {
   return {
-    table: 'monthly_counts',
+    table: 'counts',
+    schema: 'inventory',
     templateModule: 'monthly_summary',
     dataSourceConfigType: 'monthly_counts',
     defaultCountDateISO: `${countMonth}T12:00:00.000Z`,
@@ -104,6 +106,7 @@ export function monthlySummaryTarget(countMonth: string): SummaryUploadTarget {
 export function weeklySummaryTarget(weekStart: string): SummaryUploadTarget {
   return {
     table: 'weekly_counts',
+    schema: 'inventory',
     templateModule: 'weekly',
     dataSourceConfigType: 'weekly_counts',
     defaultCountDateISO: `${weekStart}T12:00:00.000Z`,

@@ -214,12 +214,12 @@ export async function completeSetup(
   // until the profile is linked — so we can't read back an auto-generated id here.
   const companyId = crypto.randomUUID()
   const { error: companyErr } = await (supabase as any)
-    .from('companies')
+    .schema('platform').from('companies')
     .insert({ id: companyId, name: companyName })
   if (companyErr) throw companyErr
 
   const { error: profileErr } = await (supabase as any)
-    .from('profiles')
+    .schema('platform').from('user_profiles')
     .insert({
       id: userId,
       company_id: companyId,

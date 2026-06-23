@@ -40,7 +40,7 @@ export function SchedulePage() {
     loadEvents()
     const channel = supabase
       .channel('schedule-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_events', filter: `company_id=eq.${profile.company_id}` },
+      .on('postgres_changes', { event: '*', schema: 'platform', table: 'schedule_events', filter: `company_id=eq.${profile.company_id}` },
         () => loadEvents()
       )
       .subscribe()
@@ -49,8 +49,8 @@ export function SchedulePage() {
 
   async function loadEvents() {
     if (!profile?.company_id) return
-    const { data, error } = await supabase
-      .from('schedule_events')
+    const { data, error } = await (supabase as any)
+      .schema('platform').from('schedule_events')
       .select('*')
       .eq('company_id', profile.company_id)
       .order('start_date')

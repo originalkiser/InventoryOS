@@ -392,26 +392,26 @@ export function ProjectsModule() {
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   useEffect(() => {
     if (!companyId) return
-    ;(supabase as any).from('profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
+    ;(supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
       .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
   }, [companyId])
 
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([])
   useEffect(() => {
     if (!companyId) return
-    ;(supabase as any).from('tasks').select('*').eq('company_id', companyId).not('project_id', 'is', null).order('created_at')
+    ;(supabase as any).schema('inventory').from('tasks').select('*').eq('company_id', companyId).not('project_id', 'is', null).order('created_at')
       .then(({ data }: any) => setLinkedTasks((data ?? []) as Task[]))
   }, [companyId])
 
   useEffect(() => {
     if (!companyId) return
-    ;(supabase as any).from('projects').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
+    ;(supabase as any).schema('inventory').from('projects').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
       .then(({ data }: any) => setDeletedProjects((data ?? []) as Project[]))
   }, [companyId, projects])
 
   async function toggleLinkedTask(id: string, done: boolean) {
     setLinkedTasks((prev) => prev.map((t) => t.id === id ? { ...t, completed: done } : t))
-    await (supabase as any).from('tasks').update({
+    await (supabase as any).schema('inventory').from('tasks').update({
       completed: done,
       completed_at: done ? new Date().toISOString() : null,
     }).eq('id', id)

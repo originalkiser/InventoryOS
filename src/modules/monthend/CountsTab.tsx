@@ -38,14 +38,14 @@ export function CountsTab() {
     const lowerBound = format(subMonths(new Date(countMonth), lookbackN + 1), 'yyyy-MM-dd')
 
     const [locRes, cfgRes, countRes, aggProdRes, batchRes, balRes, profRes] = await Promise.all([
-      sb.from('locations').select('*').eq('company_id', companyId).order('location_code'),
-      sb.from('recount_config').select('*').eq('company_id', companyId).maybeSingle(),
-      sb.from('monthly_counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
+      sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code'),
+      sb.schema('inventory').from('recount_config').select('*').eq('company_id', companyId).maybeSingle(),
+      sb.schema('inventory').from('counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
       // RPC does GROUP BY on the server — avoids shipping 256k+ raw rows to the client
       sb.rpc('get_aggregated_monthly_products', { p_company_id: companyId, p_count_month: countMonth }),
-      sb.from('count_upload_batches').select('*').eq('company_id', companyId).eq('module', 'monthly').eq('count_month', countMonth).order('created_at', { ascending: false }),
-      sb.from('monthly_ending_balances').select('*').eq('company_id', companyId).gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
-      sb.from('profiles').select('id, full_name').eq('company_id', companyId),
+      sb.schema('inventory').from('count_batches').select('*').eq('company_id', companyId).eq('module', 'monthly').eq('count_month', countMonth).order('created_at', { ascending: false }),
+      sb.schema('inventory').from('ending_balances').select('*').eq('company_id', companyId).gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
+      sb.schema('platform').from('user_profiles').select('id, full_name').eq('company_id', companyId),
     ])
 
     const locs = (locRes.data ?? []) as Location[]
@@ -84,11 +84,11 @@ export function CountsTab() {
     if (!companyId) return
     const channel = supabase
       .channel('monthend-counts-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'monthly_counts', filter: `company_id=eq.${companyId}` },
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'counts', filter: `company_id=eq.${companyId}` },
         () => { toast('Counts updated', { icon: '📊' }); loadAll() })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'monthly_count_products', filter: `company_id=eq.${companyId}` },
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'count_products', filter: `company_id=eq.${companyId}` },
         () => { loadAll() })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'count_upload_batches', filter: `company_id=eq.${companyId}` },
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'count_batches', filter: `company_id=eq.${companyId}` },
         () => { toast('Batches updated', { icon: '📦' }); loadAll() })
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
@@ -145,7 +145,7 @@ export function CountsTab() {
 
   async function clearSummaryCounts() {
     const { error } = await (supabase as any)
-      .from('monthly_counts')
+      .schema('inventory').from('counts')
       .delete()
       .eq('company_id', companyId)
       .eq('count_month', countMonth)
@@ -157,13 +157,13 @@ export function CountsTab() {
     const sb = supabase as any
     // Delete product rows for this period directly
     const { error: e1 } = await sb
-      .from('monthly_count_products')
+      .schema('inventory').from('count_products')
       .delete()
       .eq('company_id', companyId)
       .eq('count_month', countMonth)
     // Delete batch records for this period
     const { error: e2 } = await sb
-      .from('count_upload_batches')
+      .schema('inventory').from('count_batches')
       .delete()
       .eq('company_id', companyId)
       .eq('module', 'monthly')

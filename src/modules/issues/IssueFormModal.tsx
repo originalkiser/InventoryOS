@@ -59,10 +59,10 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
 
   async function loadOptions() {
     const [locs, cats, stats, profs] = await Promise.all([
-      supabase.from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
-      supabase.from('issue_categories').select('id, name').eq('company_id', companyId!),
-      supabase.from('issue_statuses').select('id, name').eq('company_id', companyId!),
-      (supabase as any).from('profiles').select('id, full_name, email').eq('company_id', companyId!).order('full_name'),
+      (supabase as any).schema('core').from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
+      (supabase as any).schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
+      (supabase as any).schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
+      (supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).order('full_name'),
     ])
     setLocations((locs.data ?? []).map((l: Location) => ({ value: l.id, label: l.name })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
@@ -73,7 +73,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   async function createCategory(name: string): Promise<ComboboxOption> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
-      .from('issue_categories')
+      .schema('inventory').from('issue_categories')
       .insert({ company_id: companyId!, name })
       .select()
       .single()
@@ -86,7 +86,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   async function createStatus(name: string): Promise<ComboboxOption> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
-      .from('issue_statuses')
+      .schema('inventory').from('issue_statuses')
       .insert({ company_id: companyId!, name })
       .select()
       .single()
@@ -123,8 +123,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = supabase as any
     const { error } = existing?.id
-      ? await sb.from('issues').update(payload).eq('id', existing.id)
-      : await sb.from('issues').insert(payload)
+      ? await sb.schema('inventory').from('issues').update(payload).eq('id', existing.id)
+      : await sb.schema('inventory').from('issues').insert(payload)
 
     if (error) toast.error(error.message)
     else {

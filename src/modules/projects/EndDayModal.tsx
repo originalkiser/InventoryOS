@@ -40,7 +40,7 @@ export function EndDayModal({ open, onClose }: EndDayModalProps) {
     setToggled({})
     const sb = supabase as any
     const { data, error } = await sb
-      .from('project_tasks')
+      .schema('inventory').from('project_tasks')
       .select('id, task_name, times_pushed, done, due_date, projects!inner(project_name)')
       .eq('company_id', profile.company_id)
       .eq('done', false)
@@ -81,11 +81,11 @@ export function EndDayModal({ open, onClose }: EndDayModalProps) {
 
     const ops: Promise<any>[] = []
     if (doneIds.length) {
-      ops.push(sb.from('project_tasks').update({ done: true, status: 'Complete' }).in('id', doneIds))
+      ops.push(sb.schema('inventory').from('project_tasks').update({ done: true, status: 'Complete' }).in('id', doneIds))
     }
     for (const t of pushTasks) {
       ops.push(
-        sb.from('project_tasks').update({
+        sb.schema('inventory').from('project_tasks').update({
           due_date: tomorrow,
           times_pushed: (t.times_pushed ?? 0) + 1,
         }).eq('id', t.id)

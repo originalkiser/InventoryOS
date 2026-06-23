@@ -29,7 +29,7 @@ const col = createColumnHelper<LocationOrderConfig>()
 export function OrderConfigTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<LocationOrderConfig>('location_order_configs')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<LocationOrderConfig>('location_order_config', 'inventory')
   const { active: customFields, addField } = useCustomFields('order_config')
   const loc = useLocations()
 
@@ -42,7 +42,7 @@ export function OrderConfigTab() {
 
   const loadVendors = useCallback(async () => {
     if (!companyId) return
-    const { data: v } = await (supabase as any).from('vendors').select('*').eq('company_id', companyId).order('name')
+    const { data: v } = await (supabase as any).schema('core').from('vendors').select('*').eq('company_id', companyId).order('name')
     setVendors((v ?? []) as Vendor[])
   }, [companyId])
   useEffect(() => { loadVendors() }, [loadVendors])

@@ -99,8 +99,8 @@ function WeeklyCountsTab() {
     setLoading(true)
     const sb = supabase as any
     const [locRes, countRes] = await Promise.all([
-      sb.from('locations').select('*').eq('company_id', companyId).order('location_code'),
-      sb.from('weekly_counts').select('*').eq('company_id', companyId)
+      sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code'),
+      sb.schema('inventory').from('weekly_counts').select('*').eq('company_id', companyId)
         .gte('count_date', startISO).lt('count_date', endExclusiveISO).order('count_date', { ascending: false }),
     ])
     setLocations((locRes.data ?? []) as Location[])
@@ -114,7 +114,7 @@ function WeeklyCountsTab() {
     if (!companyId) return
     const channel = supabase
       .channel('weekly-counts-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_counts', filter: `company_id=eq.${companyId}` },
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'weekly_counts', filter: `company_id=eq.${companyId}` },
         () => { toast('Weekly counts updated', { icon: '📊' }); load() })
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
@@ -201,10 +201,10 @@ function WeeklyNotSubmittedTab() {
     setLoading(true)
     const sb = supabase as any
     const [locRes, weekRes, priorRes] = await Promise.all([
-      sb.from('locations').select('*').eq('company_id', companyId).eq('active', true).order('location_code'),
-      sb.from('weekly_counts').select('location_id').eq('company_id', companyId)
+      sb.schema('core').from('locations').select('*').eq('company_id', companyId).eq('active', true).order('location_code'),
+      sb.schema('inventory').from('weekly_counts').select('location_id').eq('company_id', companyId)
         .gte('count_date', startISO).lt('count_date', endExclusiveISO),
-      sb.from('weekly_counts').select('location_id, count_date').eq('company_id', companyId)
+      sb.schema('inventory').from('weekly_counts').select('location_id, count_date').eq('company_id', companyId)
         .lt('count_date', startISO).order('count_date', { ascending: false }),
     ])
 
@@ -227,7 +227,7 @@ function WeeklyNotSubmittedTab() {
     if (!companyId) return
     const channel = supabase
       .channel('weekly-notsubmitted-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_counts', filter: `company_id=eq.${companyId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'weekly_counts', filter: `company_id=eq.${companyId}` }, () => load())
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, load])

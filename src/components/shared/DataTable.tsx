@@ -191,7 +191,7 @@ export function DataTable<T>({
           const ids = exportRows.map((r) => (r.original as any)?.id).filter(Boolean)
           if (ids.length) {
             const { data: atts } = await (supabase as any)
-              .from('attachments')
+              .schema('platform').from('attachments')
               .select('*')
               .in('entity_id', ids)
 

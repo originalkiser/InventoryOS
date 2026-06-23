@@ -79,7 +79,7 @@ export function UsersPage() {
     if (!myProfile?.company_id) return
     setLoading(true)
     const { data, error } = await (supabase as any)
-      .from('profiles')
+      .schema('platform').from('user_profiles')
       .select('*')
       .eq('company_id', myProfile.company_id)
       .order('created_at')
@@ -106,7 +106,7 @@ export function UsersPage() {
     // Use .select() so we can detect a silent RLS block — Supabase returns HTTP
     // 200 with no error but 0 rows when a policy filters out the target row.
     const { data: updated, error } = await sb
-      .from('profiles')
+      .schema('platform').from('user_profiles')
       .update({ role: editRole, full_name: newName })
       .eq('id', editUser.id)
       .select('id, full_name, role')
@@ -151,16 +151,16 @@ export function UsersPage() {
     // only when the name actually changed and there was an old name to match on.
     if (newName && oldName && newName !== oldName && myProfile?.company_id) {
       await Promise.all([
-        sb.from('tasks')
+        sb.schema('inventory').from('tasks')
           .update({ assignee_name: newName })
           .eq('company_id', myProfile.company_id)
           .eq('assignee_name', oldName)
           .is('assignee_id', null),
-        sb.from('project_tasks')
+        sb.schema('inventory').from('project_tasks')
           .update({ assignee: newName })
           .eq('company_id', myProfile.company_id)
           .eq('assignee', oldName),
-        sb.from('issues')
+        sb.schema('inventory').from('issues')
           .update({ assignee: newName })
           .eq('company_id', myProfile.company_id)
           .eq('assignee', oldName),
@@ -181,7 +181,7 @@ export function UsersPage() {
   async function removeUser() {
     if (!deleteConfirm) return
     const { error } = await (supabase as any)
-      .from('profiles')
+      .schema('platform').from('user_profiles')
       .delete()
       .eq('id', deleteConfirm.id)
     if (error) toast.error(error.message)

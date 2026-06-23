@@ -36,7 +36,7 @@ export function AttachmentsCell({ entityType, entityId, companyId }: Props) {
   useEffect(() => {
     if (!open) return
     ;(supabase as any)
-      .from('attachments')
+      .schema('platform').from('attachments')
       .select('*')
       .eq('entity_id', entityId)
       .order('created_at')
@@ -61,7 +61,7 @@ export function AttachmentsCell({ entityType, entityId, companyId }: Props) {
       const { error: storErr } = await supabase.storage.from('attachments').upload(storagePath, file)
       if (storErr) throw storErr
 
-      const { error: dbErr } = await (supabase as any).from('attachments').insert({
+      const { error: dbErr } = await (supabase as any).schema('platform').from('attachments').insert({
         entity_type: entityType,
         entity_id: entityId,
         company_id: companyId,
@@ -75,7 +75,7 @@ export function AttachmentsCell({ entityType, entityId, companyId }: Props) {
         throw dbErr
       }
 
-      const { data } = await (supabase as any).from('attachments').select('*').eq('entity_id', entityId).order('created_at')
+      const { data } = await (supabase as any).schema('platform').from('attachments').select('*').eq('entity_id', entityId).order('created_at')
       setFiles(data ?? [])
       toast.success(`${file.name} uploaded`)
     } catch (err) {
@@ -102,7 +102,7 @@ export function AttachmentsCell({ entityType, entityId, companyId }: Props) {
     setDeletingId(att.id)
     try {
       await supabase.storage.from('attachments').remove([att.storage_path])
-      await (supabase as any).from('attachments').delete().eq('id', att.id)
+      await (supabase as any).schema('platform').from('attachments').delete().eq('id', att.id)
       setFiles((prev) => prev.filter((f) => f.id !== att.id))
       toast.success('File removed')
     } catch (err) {

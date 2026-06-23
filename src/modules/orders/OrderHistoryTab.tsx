@@ -46,8 +46,8 @@ export function OrderHistoryTab() {
     setLoading(true)
     const sb = supabase as any
     const [sessRes, liRes] = await Promise.all([
-      sb.from('order_sessions').select('*').eq('company_id', companyId).order('created_at', { ascending: false }),
-      sb.from('order_line_items').select('order_session_id, location_id').eq('company_id', companyId),
+      sb.schema('inventory').from('order_sessions').select('*').eq('company_id', companyId).order('created_at', { ascending: false }),
+      sb.schema('inventory').from('order_line_items').select('order_session_id, location_id').eq('company_id', companyId),
     ])
     setSessions((sessRes.data ?? []) as OrderSession[])
     const counts: Record<string, { lines: number; locs: Set<string> }> = {}
@@ -69,14 +69,14 @@ export function OrderHistoryTab() {
     if (!companyId) return
     const channel = supabase
       .channel('orders-history-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_sessions', filter: `company_id=eq.${companyId}` },
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'order_sessions', filter: `company_id=eq.${companyId}` },
         (payload) => {
           const row: any = payload.new ?? payload.old
           const editor = row?.generation_params?._updated_by_name
           if (editor && editor !== myName) toast(`Order "${row.name ?? 'untitled'}" updated by ${editor}`, { icon: '🧾' })
           load()
         })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items', filter: `company_id=eq.${companyId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'order_line_items', filter: `company_id=eq.${companyId}` }, () => load())
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, load, myName])
@@ -115,7 +115,7 @@ export function OrderHistoryTab() {
 
   async function updateStatus(s: OrderSession, newStatus: string) {
     const gp = { ...((s.generation_params as Record<string, unknown>) ?? {}), _updated_by_name: myName }
-    const { error } = await (supabase as any).from('order_sessions')
+    const { error } = await (supabase as any).schema('inventory').from('order_sessions')
       .update({ status: newStatus, generation_params: gp, updated_at: new Date().toISOString() }).eq('id', s.id)
     if (error) toast.error(error.message)
     else { toast.success(`Status → ${newStatus}`); load() }
@@ -194,15 +194,15 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
 
     const sb = supabase as any
     if (mode === 'replace') {
-      const { error: delErr } = await sb.from('order_sessions').delete().eq('company_id', companyId).eq('source', 'import')
+      const { error: delErr } = await sb.schema('inventory').from('order_sessions').delete().eq('company_id', companyId).eq('source', 'import')
       if (delErr) { toast.error(delErr.message); return }
     }
-    const { data: sess, error } = await sb.from('order_sessions')
+    const { data: sess, error } = await sb.schema('inventory').from('order_sessions')
       .insert({ company_id: companyId, created_by: createdBy, name: name.trim() || `Imported orders ${new Date().toISOString().slice(0, 10)}`, status: 'fulfilled', source: 'import', source_mode: 'file' })
       .select().single()
     if (error || !sess) { toast.error(error?.message ?? 'Import failed'); return }
     const liRows = lines.map((l) => ({ order_session_id: sess.id, company_id: companyId, location_id: l.location_id, product_id: l.product_id, quantity: l.quantity, order_date: l.order_date, expected_delivery: l.expected_delivery }))
-    const { error: liErr } = await sb.from('order_line_items').insert(liRows)
+    const { error: liErr } = await sb.schema('inventory').from('order_line_items').insert(liRows)
     if (liErr) { toast.error(liErr.message); return }
     toast.success(`Imported ${liRows.length} line(s)`); onDone()
   }
@@ -262,7 +262,7 @@ function InlineStatusCell({ session, myName, onUpdate }: { session: SessionRow; 
     if (newStatus === session.status) { setEditing(false); return }
     setSaving(true)
     const gp = { ...((session.generation_params as Record<string, unknown>) ?? {}), _updated_by_name: myName }
-    const { error } = await (supabase as any).from('order_sessions')
+    const { error } = await (supabase as any).schema('inventory').from('order_sessions')
       .update({ status: newStatus, generation_params: gp, updated_at: new Date().toISOString() }).eq('id', session.id)
     setSaving(false)
     setEditing(false)
@@ -310,8 +310,8 @@ function OrderDetailModal({
     ;(async () => {
       const sb = supabase as any
       const [liRes, docRes] = await Promise.all([
-        sb.from('order_line_items').select('*').eq('order_session_id', session.id).order('created_at'),
-        sb.from('order_documents').select('*').eq('order_session_id', session.id).order('created_at'),
+        sb.schema('inventory').from('order_line_items').select('*').eq('order_session_id', session.id).order('created_at'),
+        sb.schema('inventory').from('order_documents').select('*').eq('order_session_id', session.id).order('created_at'),
       ])
       setLines((liRes.data ?? []) as OrderLineItem[])
       setDocs((docRes.data ?? []) as OrderDocument[])

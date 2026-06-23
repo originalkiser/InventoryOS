@@ -28,7 +28,7 @@ export async function getEndingBalanceHistory(
 ): Promise<number[]> {
   if (!locationId || lookbackN <= 0) return []
   const { data, error } = await (supabase as any)
-    .from('monthly_ending_balances')
+    .schema('inventory').from('ending_balances')
     .select('ending_balance, month')
     .eq('location_id', locationId)
     .lt('month', month)

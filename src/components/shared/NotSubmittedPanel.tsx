@@ -73,7 +73,7 @@ export function NotSubmittedPanel({
     const today = format(new Date(), 'yyyy-MM-dd')
     const notes = `Shops not submitted for ${periodLabel} (${missing.length}):\n` +
       missing.map((l) => `• ${l.location_code} — ${l.name}`).join('\n')
-    const { error } = await (supabase as any).from('schedule_events').insert({
+    const { error } = await (supabase as any).schema('platform').from('schedule_events').insert({
       company_id: companyId,
       title: reminderTitle,
       event_type: 'reminder',

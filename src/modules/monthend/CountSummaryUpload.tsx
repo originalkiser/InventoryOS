@@ -42,7 +42,7 @@ export function CountSummaryUpload({ locations, companyId, target, onImported, o
 
   async function loadTemplates() {
     const { data } = await (supabase as any)
-      .from('count_mapping_templates')
+      .schema('inventory').from('count_templates')
       .select('*')
       .eq('company_id', companyId)
       .eq('module', target.templateModule)
@@ -98,7 +98,7 @@ export function CountSummaryUpload({ locations, companyId, target, onImported, o
     // locations' rows for the period; Additive = just append.
     if (importMode === 'replace' || importMode === 'update') {
       const extra = target.buildExtraColumns()
-      let del = sb.from(target.table).delete().eq('company_id', companyId)
+      let del = sb.schema(target.schema).from(target.table).delete().eq('company_id', companyId)
       for (const [k, v] of Object.entries(extra)) if (k !== 'uploaded_at') del = del.eq(k, v)
       const locIds = [...new Set(rows.map((r) => r.location_id).filter(Boolean))] as string[]
       if (importMode === 'update') {
@@ -108,7 +108,7 @@ export function CountSummaryUpload({ locations, companyId, target, onImported, o
       if (del) { const { error: delErr } = await del; if (delErr) { setImporting(false); toast.error(delErr.message); return } }
     }
 
-    const { error } = await sb.from(target.table).insert(rows)
+    const { error } = await sb.schema(target.schema).from(target.table).insert(rows)
     setImporting(false)
     if (error) {
       toast.error(error.message)
@@ -123,7 +123,7 @@ export function CountSummaryUpload({ locations, companyId, target, onImported, o
 
   async function saveTemplate() {
     if (!savedMappings || !templateName.trim()) return
-    const { error } = await (supabase as any).from('count_mapping_templates').insert({
+    const { error } = await (supabase as any).schema('inventory').from('count_templates').insert({
       company_id: companyId,
       module: target.templateModule,
       name: templateName.trim(),
@@ -281,7 +281,7 @@ function ManualSummaryForm({
     if (!locationId) { toast.error('Location is required'); return }
     if (!endingCost.trim()) { toast.error('Ending inventory cost is required'); return }
     setSaving(true)
-    const { error } = await (supabase as any).from(target.table).insert({
+    const { error } = await (supabase as any).schema(target.schema).from(target.table).insert({
       company_id: companyId,
       location_id: locationId,
       count_date: target.defaultCountDateISO,

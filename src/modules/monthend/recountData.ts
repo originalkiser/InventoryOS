@@ -24,9 +24,9 @@ export async function fetchPeriodEvalData(
   const lowerBound = format(subMonths(new Date(countMonth), HISTORY_WINDOW_MONTHS), 'yyyy-MM-dd')
 
   const [locRes, countRes, balRes] = await Promise.all([
-    sb.from('locations').select('*').eq('company_id', companyId).order('location_code'),
-    sb.from('monthly_counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
-    sb.from('monthly_ending_balances').select('*').eq('company_id', companyId)
+    sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code'),
+    sb.schema('inventory').from('counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
+    sb.schema('inventory').from('ending_balances').select('*').eq('company_id', companyId)
       .gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
   ])
 

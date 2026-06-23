@@ -90,7 +90,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
   useEffect(() => {
     if (!rememberKey || initialMappings || localSaved || !profile?.company_id) return
     let cancelled = false
-    ;(supabase as any).from('app_settings').select('value').eq('company_id', profile.company_id).eq('key', `mapping.${rememberKey}`).maybeSingle()
+    ;(supabase as any).schema('platform').from('app_settings').select('value').eq('company_id', profile.company_id).eq('key', `mapping.${rememberKey}`).maybeSingle()
       .then(({ data }: any) => {
         if (cancelled || touched.current) return
         const org = data?.value
@@ -129,7 +129,7 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
     if (rememberKey) {
       try { localStorage.setItem(`import.map.${rememberKey}`, JSON.stringify(mappings)) } catch { /* ignore */ }
       if (profile?.company_id) {
-        void (supabase as any).from('app_settings').upsert(
+        void (supabase as any).schema('platform').from('app_settings').upsert(
           { company_id: profile.company_id, key: `mapping.${rememberKey}`, value: mappings, updated_at: new Date().toISOString() },
           { onConflict: 'company_id,key' },
         )

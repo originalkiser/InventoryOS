@@ -103,12 +103,13 @@ export function DashboardPage() {
     const weekEnd = format(endOfWeek(new Date()), 'yyyy-MM-dd')
     const monthStart = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), 'yyyy-MM-dd')
 
+    const sb = supabase as any
     const [issuesRes, eventsRes, ordersRes, locsRes, monthCountsRes] = await Promise.all([
-      supabase.from('issues').select('id, issue_categories(name), issue_statuses(name)').eq('company_id', cid),
-      supabase.from('schedule_events').select('id, title, start_date, event_type').eq('company_id', cid).gte('start_date', today).lte('start_date', weekEnd).order('start_date').limit(10),
-      supabase.from('order_sessions').select('id, status, created_at').eq('company_id', cid).order('created_at', { ascending: false }).limit(5),
-      supabase.from('locations').select('id, active').eq('company_id', cid),
-      supabase.from('monthly_counts').select('location_id').eq('company_id', cid).gte('count_date', monthStart),
+      sb.schema('inventory').from('issues').select('id, issue_categories(name), issue_statuses(name)').eq('company_id', cid),
+      sb.schema('platform').from('schedule_events').select('id, title, start_date, event_type').eq('company_id', cid).gte('start_date', today).lte('start_date', weekEnd).order('start_date').limit(10),
+      sb.schema('inventory').from('order_sessions').select('id, status, created_at').eq('company_id', cid).order('created_at', { ascending: false }).limit(5),
+      sb.schema('core').from('locations').select('id, active').eq('company_id', cid),
+      sb.schema('inventory').from('counts').select('location_id').eq('company_id', cid).gte('count_date', monthStart),
     ])
 
     const openIssues = (issuesRes.data ?? []).filter((i: any) => {

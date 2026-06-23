@@ -59,7 +59,7 @@ export function RecountsTab() {
     setLoading(true)
     const sb = supabase as any
     const { data, error } = await sb
-      .from('recount_requests')
+      .schema('inventory').from('recount_requests')
       .select('*')
       .eq('company_id', companyId)
       .filter('recount_fields->>count_month', 'eq', countMonth)
@@ -72,7 +72,7 @@ export function RecountsTab() {
   useEffect(() => {
     if (!companyId) return
     ;(async () => {
-      const { data } = await (supabase as any).from('locations').select('*').eq('company_id', companyId).order('location_code')
+      const { data } = await (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code')
       setLocations((data ?? []) as Location[])
     })()
   }, [companyId])
@@ -83,7 +83,7 @@ export function RecountsTab() {
     if (!companyId) return
     const channel = supabase
       .channel('recounts-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'recount_requests', filter: `company_id=eq.${companyId}` },
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'recount_requests', filter: `company_id=eq.${companyId}` },
         (payload) => {
           const row: any = payload.new ?? payload.old
           const editor = row?.recount_fields?.updated_by_name
@@ -294,8 +294,8 @@ function RecountSlideOver({
       updated_at: new Date().toISOString(),
     }
     const { error } = existing
-      ? await sb.from('recount_requests').update(payload).eq('id', existing.id)
-      : await sb.from('recount_requests').insert(payload)
+      ? await sb.schema('inventory').from('recount_requests').update(payload).eq('id', existing.id)
+      : await sb.schema('inventory').from('recount_requests').insert(payload)
     setSaving(false)
     if (error) toast.error(error.message)
     else { toast.success(existing ? 'Recount updated' : 'Recount added'); onSaved() }
@@ -304,7 +304,7 @@ function RecountSlideOver({
   async function remove() {
     if (!existing) return
     if (!confirm('Delete this recount request?')) return
-    const { error } = await (supabase as any).from('recount_requests').delete().eq('id', existing.id)
+    const { error } = await (supabase as any).schema('inventory').from('recount_requests').delete().eq('id', existing.id)
     if (error) toast.error(error.message)
     else { toast.success('Recount deleted'); onSaved() }
   }

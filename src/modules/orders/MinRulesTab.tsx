@@ -72,7 +72,7 @@ export function MinRulesTab() {
   const load = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
-    const { data } = await (supabase as any).from('order_min_rules').select('*').eq('company_id', companyId).order('created_at', { ascending: false })
+    const { data } = await (supabase as any).schema('inventory').from('order_min_rules').select('*').eq('company_id', companyId).order('created_at', { ascending: false })
     setRules((data ?? []) as OrderMinRule[])
     setLoading(false)
   }, [companyId])
@@ -103,7 +103,7 @@ export function MinRulesTab() {
     }
 
     setSaving(true)
-    const { error } = await (supabase as any).from('order_min_rules').insert({
+    const { error } = await (supabase as any).schema('inventory').from('order_min_rules').insert({
       company_id: companyId,
       name: name.trim() || null,
       applies_to,
@@ -120,13 +120,13 @@ export function MinRulesTab() {
   }
 
   async function toggleActive(rule: OrderMinRule) {
-    await (supabase as any).from('order_min_rules').update({ active: !rule.active }).eq('id', rule.id)
+    await (supabase as any).schema('inventory').from('order_min_rules').update({ active: !rule.active }).eq('id', rule.id)
     load()
   }
 
   async function removeRule(rule: OrderMinRule) {
     if (!confirm('Delete this rule?')) return
-    await (supabase as any).from('order_min_rules').delete().eq('id', rule.id)
+    await (supabase as any).schema('inventory').from('order_min_rules').delete().eq('id', rule.id)
     toast.success('Rule deleted'); load()
   }
 

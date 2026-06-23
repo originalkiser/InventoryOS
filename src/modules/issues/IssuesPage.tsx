@@ -240,11 +240,11 @@ export function IssuesPage() {
     setLoading(true)
     // Purge issues older than 30 days
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    void (supabase as any).from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
+    void (supabase as any).schema('inventory').from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
 
     const [liveRes, delRes] = await Promise.all([
-      supabase.from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false }),
-      (supabase as any).from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      (supabase as any).schema('inventory').from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false }),
+      (supabase as any).schema('inventory').from('issues').select(`*, locations(name), issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
     ])
     if (liveRes.error) toast.error('Failed to load issues')
     else {
@@ -259,7 +259,7 @@ export function IssuesPage() {
 
   const updateLinks = useCallback(async (id: string, links: string[]) => {
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, helpful_links: links } : i)))
-    const { error } = await (supabase as any).from('issues').update({ helpful_links: links }).eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('issues').update({ helpful_links: links }).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
@@ -267,7 +267,7 @@ export function IssuesPage() {
   const updateVendor = useCallback(async (id: string, val: string) => {
     const next = val || null
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, vendor: next } : i)))
-    const { error } = await (supabase as any).from('issues').update({ vendor: next }).eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('issues').update({ vendor: next }).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
@@ -275,21 +275,21 @@ export function IssuesPage() {
   // localPatch carries derived display fields like status_name).
   const updateIssue = useCallback(async (id: string, dbPatch: Record<string, unknown>, localPatch: Partial<IssueRow> = {}) => {
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbPatch, ...localPatch } : i)))
-    const { error } = await (supabase as any).from('issues').update(dbPatch).eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('issues').update(dbPatch).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
   // Load the company's issue statuses for the inline dropdown.
   useEffect(() => {
     if (!profile?.company_id) return
-    ;(supabase as any).from('issue_statuses').select('id, name').eq('company_id', profile.company_id)
+    ;(supabase as any).schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id)
       .then(({ data }: any) => setStatuses((data ?? []) as StatusOpt[]))
   }, [profile?.company_id])
 
   // Create a new status inline (no full dialog) and add it to the dropdown.
   const addStatus = useCallback(async (name: string): Promise<string | null> => {
     if (!profile?.company_id) return null
-    const { data, error } = await (supabase as any).from('issue_statuses').insert({ company_id: profile.company_id, name }).select().single()
+    const { data, error } = await (supabase as any).schema('inventory').from('issue_statuses').insert({ company_id: profile.company_id, name }).select().single()
     if (error || !data) { toast.error(error?.message ?? 'Could not add status'); return null }
     setStatuses((prev) => [...prev, { id: data.id, name: data.name }])
     return data.id as string
@@ -368,13 +368,13 @@ export function IssuesPage() {
     loadIssues()
     const channel = supabase
       .channel('issues-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'issues', filter: `company_id=eq.${profile.company_id}` }, () => loadIssues())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'issues', filter: `company_id=eq.${profile.company_id}` }, () => loadIssues())
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [profile?.company_id, loadIssues])
 
   async function softDeleteIssue(id: string) {
-    const { error } = await (supabase as any).from('issues').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('issues').update({ deleted_at: new Date().toISOString() }).eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Issue moved to deleted items')
     setDeleteTarget(null)
@@ -382,14 +382,14 @@ export function IssuesPage() {
   }
 
   async function restoreIssue(id: string) {
-    const { error } = await (supabase as any).from('issues').update({ deleted_at: null }).eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('issues').update({ deleted_at: null }).eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Issue restored')
     loadIssues()
   }
 
   async function hardDeleteIssue(id: string) {
-    const { error } = await (supabase as any).from('issues').delete().eq('id', id)
+    const { error } = await (supabase as any).schema('inventory').from('issues').delete().eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Issue permanently deleted')
     loadIssues()

@@ -28,7 +28,7 @@ export function ProfilesTab() {
   const load = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
-    const { data } = await (supabase as any).from('order_profiles').select('*').eq('company_id', companyId).order('created_at', { ascending: false })
+    const { data } = await (supabase as any).schema('inventory').from('order_profiles').select('*').eq('company_id', companyId).order('created_at', { ascending: false })
     setProfiles((data ?? []) as OrderProfile[])
     setLoading(false)
   }, [companyId])
@@ -39,7 +39,7 @@ export function ProfilesTab() {
     if (!companyId || !name.trim()) { toast.error('Name is required'); return }
     setSaving(true)
     const config: ProfileConfig = { params, selectedMinRuleIds, mapping }
-    const { error } = await (supabase as any).from('order_profiles').upsert({
+    const { error } = await (supabase as any).schema('inventory').from('order_profiles').upsert({
       company_id: companyId,
       name: name.trim(),
       scope: 'order',
@@ -61,7 +61,7 @@ export function ProfilesTab() {
 
   async function removeProfile(p: OrderProfile) {
     if (!confirm(`Delete profile "${p.name}"?`)) return
-    await (supabase as any).from('order_profiles').delete().eq('id', p.id)
+    await (supabase as any).schema('inventory').from('order_profiles').delete().eq('id', p.id)
     toast.success('Profile deleted'); load()
   }
 
