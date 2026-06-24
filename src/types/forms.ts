@@ -47,6 +47,8 @@ export interface FormDefinition {
   title: string
   description: string | null
   department: string
+  category: string | null
+  visibility: 'private' | 'org' | 'departments' | 'public'
   created_by: string | null
   share_token: string
   is_published: boolean
@@ -121,6 +123,89 @@ export interface ScoreStreak {
   streak_count: number
   last_submission_id: string | null
   updated_at: string
+}
+
+export interface FormDepartmentShare {
+  id: string
+  form_id: string
+  department: string
+  created_by: string | null
+  created_at: string
+}
+
+export interface SubmissionAccessRule {
+  id: string
+  form_id: string
+  principal_type: 'user' | 'department' | 'role' | 'org'
+  principal_value: string | null
+  can_read: boolean
+  can_write: boolean
+  created_by: string | null
+  created_at: string
+}
+
+export interface SubmissionColumn {
+  id: string
+  form_id: string
+  label: string
+  column_type: 'text' | 'number' | 'date' | 'status' | 'checkbox' | 'select' | 'user'
+  options: { label: string; color?: string }[]
+  sort_order: number
+  created_by: string | null
+  created_at: string
+}
+
+export interface SubmissionColumnValue {
+  id: string
+  submission_id: string
+  column_id: string
+  value: string | null
+  updated_by: string | null
+  updated_at: string
+}
+
+export interface ResponseOverride {
+  id: string
+  response_id: string
+  submission_id: string
+  field_id: string
+  original_value_text: string | null
+  original_value_array: string[] | null
+  original_value_option_id: string | null
+  override_value_text: string | null
+  override_value_array: string[] | null
+  override_value_option_id: string | null
+  overridden_by: string | null
+  overridden_at: string
+  override_note: string | null
+}
+
+export interface AssignmentRule {
+  id: string
+  form_id: string
+  rule_name: string
+  rule_type: 'interval' | 'set_dates' | 'file_import'
+  interval_unit: 'day' | 'week' | 'month' | 'quarter' | 'year' | null
+  interval_value: number | null
+  interval_start_date: string | null
+  set_dates: string[] | null
+  assign_to_type: 'users' | 'locations' | 'department' | null
+  assign_to_users: string[] | null
+  assign_to_locations: string[] | null
+  assign_to_department: string | null
+  due_offset_days: number
+  is_active: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AssignmentRuleLog {
+  id: string
+  rule_id: string
+  assignment_id: string | null
+  fired_at: string
+  due_date: string | null
 }
 
 // Draft type used in the builder (before DB save)

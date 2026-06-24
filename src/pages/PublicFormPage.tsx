@@ -14,7 +14,7 @@ export function PublicFormPage() {
   const { shareToken } = useParams<{ shareToken: string }>()
   const [searchParams] = useSearchParams()
   const assignmentId = searchParams.get('assignment')
-  const { session } = useAuthStore()
+  const { session, profile } = useAuthStore()
 
   const [form, setForm] = useState<FormDefinition | null>(null)
   const [fields, setFields] = useState<FormField[]>([])
@@ -165,7 +165,33 @@ export function PublicFormPage() {
 
   return (
     <div className="min-h-screen py-8 px-4" style={{ background: colors.background }}>
-      <div className="max-w-xl mx-auto">
+      <div className="max-w-xl mx-auto flex flex-col gap-3">
+        {/* Identity banner */}
+        {session ? (
+          <div className="flex items-center justify-between rounded border border-white/20 bg-white/10 px-3 py-2 backdrop-blur-sm">
+            <span className="text-xs font-mono" style={{ color: colors.text ?? '#F2F1E6' }}>
+              Submitting as <strong>{profile?.full_name ?? session.user.email}</strong>
+              {profile?.full_name && <span className="opacity-60 ml-1">({session.user.email})</span>}
+            </span>
+            <button
+              onClick={async () => { await supabase.auth.signOut(); window.location.reload() }}
+              className="text-[10px] font-mono opacity-60 hover:opacity-100 underline"
+              style={{ color: colors.text ?? '#F2F1E6' }}>
+              Sign out
+            </button>
+          </div>
+        ) : !form.requires_login ? (
+          <div className="rounded border border-white/20 bg-white/10 px-3 py-2 backdrop-blur-sm">
+            <span className="text-xs font-mono opacity-70" style={{ color: colors.text ?? '#F2F1E6' }}>
+              Submitting anonymously.{' '}
+              <a href="/login" className="underline hover:opacity-100" style={{ color: colors.text ?? '#F2F1E6' }}>
+                Sign in
+              </a>
+              {' '}to have your name recorded.
+            </span>
+          </div>
+        ) : null}
+
         <FormCanvas
           form={form}
           fields={fields}
@@ -177,4 +203,5 @@ export function PublicFormPage() {
       </div>
     </div>
   )
+
 }
