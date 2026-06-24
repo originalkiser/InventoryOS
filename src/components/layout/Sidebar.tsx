@@ -652,7 +652,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
         onClick={onClose}
         aria-hidden="true"
       />
-      <div className="fixed right-0 top-0 bottom-0 z-50 w-80 bg-[#F2F1E6] dark:bg-[#002745] shadow-2xl border-l border-navy/20 dark:border-[#F2F1E6]/10 flex flex-col">
+      <div className="profile-panel fixed right-0 top-0 bottom-0 z-50 w-80 bg-[#F2F1E6] dark:bg-[#002745] shadow-2xl border-l border-navy/20 dark:border-[#F2F1E6]/10 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-navy/10 dark:border-[#F2F1E6]/10">
           <span className="text-xs font-heading text-navy dark:text-[#F2F1E6] uppercase tracking-widest">Profile</span>

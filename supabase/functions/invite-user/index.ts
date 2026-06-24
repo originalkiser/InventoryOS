@@ -36,10 +36,10 @@ Deno.serve(async (req) => {
     const { data: who, error: whoErr } = await caller.auth.getUser()
     if (whoErr || !who.user) return json({ error: 'Not authenticated' })
 
-    const { data: me, error: meErr } = await caller
-      .from('profiles').select('company_id, role, email').eq('id', who.user.id).single()
+    const { data: me, error: meErr } = await (caller as any)
+      .schema('platform').from('user_profiles').select('company_id, role, email').eq('id', who.user.id).single()
     if (meErr || !me) return json({ error: 'Your profile was not found' })
-    if (me.role !== 'admin') return json({ error: 'Only admins can invite users' })
+    if (me.role !== 'admin' && me.role !== 'developer') return json({ error: 'Only admins can invite users' })
 
     // 2) Validate the payload.
     const body = await req.json().catch(() => ({}))
@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
     })
     if (createErr || !created.user) return json({ error: createErr?.message ?? 'Could not create the user' })
 
-    const { error: profErr } = await admin.from('profiles').insert({
+    const { error: profErr } = await (admin as any).schema('platform').from('user_profiles').insert({
       id: created.user.id,
       company_id: me.company_id,
       full_name: fullName,

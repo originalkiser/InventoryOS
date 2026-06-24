@@ -5,6 +5,7 @@ import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/compo
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { isAdminOrDeveloper } from '@/lib/roles'
 import type { Issue, Location, IssueCategory, IssueStatus, Profile } from '@/types'
 import type { ComboboxOption } from '@/components/ui'
 import toast from 'react-hot-toast'
@@ -222,6 +223,11 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
             onSpecificUsersChange={setSpecificUsers}
             allUsers={orgProfiles.map((p) => ({ id: p.id, full_name: p.full_name, email: p.email ?? '' }))}
             departmentName={(profile as any)?.department ?? null}
+            departments={
+              isAdminOrDeveloper(profile?.role)
+                ? [...new Set(orgProfiles.map((p) => (p as any).department).filter(Boolean) as string[])]
+                : (profile as any)?.department ? [(profile as any).department] : undefined
+            }
             label="Issue Visibility"
           />
         </div>

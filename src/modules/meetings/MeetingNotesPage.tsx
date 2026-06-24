@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { isAdminOrDeveloper } from '@/lib/roles'
 import { DataTable } from '@/components/shared/DataTable'
 import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
@@ -361,6 +362,11 @@ export function MeetingNotesPage() {
                 onSpecificUsersChange={setSpecificUsers}
                 allUsers={allUsers}
                 departmentName={(profile as any)?.department ?? null}
+                departments={
+                  isAdminOrDeveloper(profile?.role)
+                    ? [...new Set(allUsers.map((u) => (u as any).department).filter(Boolean) as string[])]
+                    : (profile as any)?.department ? [(profile as any).department] : undefined
+                }
                 label="Visibility"
                 disabled={!isOwner}
               />

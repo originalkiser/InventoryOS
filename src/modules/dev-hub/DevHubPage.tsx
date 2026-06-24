@@ -21,7 +21,7 @@ function ConfigField({ label, value, onChange, type = 'text', readOnly = false }
 }) {
   return (
     <div className="flex items-center gap-2">
-      <label className="text-[10px] font-mono text-inky/60 w-36 shrink-0">{label}</label>
+      <label className="text-[10px] font-mono text-inky/60 dark:text-cream/50 w-36 shrink-0">{label}</label>
       <input
         type={type}
         value={value}
@@ -89,7 +89,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
   const configKeys = Object.keys(conn.config)
 
   return (
-    <div className="border border-navy/20 rounded-lg p-4 flex flex-col gap-3 bg-cream dark:bg-navy/10">
+    <div className="border border-navy/20 dark:border-cream/10 rounded-lg p-4 flex flex-col gap-3 bg-cream dark:bg-navy/30">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -102,17 +102,17 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
               <div className="text-[10px] font-mono text-red-600 mt-0.5">{conn.last_test_message}</div>
             )}
             {conn.last_tested_at && (
-              <div className="text-[10px] font-mono text-inky/40 mt-0.5">
+              <div className="text-[10px] font-mono text-inky/40 dark:text-cream/30 mt-0.5">
                 Last tested: {new Date(conn.last_tested_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
               </div>
             )}
           </div>
         </div>
         <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-          label === 'CONFIGURED' ? 'bg-green-100 text-green-700' :
-          label === 'NEEDS ATTENTION' ? 'bg-amber-100 text-amber-700' :
-          label === 'READONLY' ? 'bg-sky/30 text-inky' :
-          'bg-navy/10 text-inky'
+          label === 'CONFIGURED' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300' :
+          label === 'NEEDS ATTENTION' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' :
+          label === 'READONLY' ? 'bg-sky/20 dark:bg-sky/10 text-navy dark:text-sky' :
+          'bg-navy/10 dark:bg-cream/10 text-inky dark:text-cream/60'
         }`}>
           {label}
         </span>
@@ -138,7 +138,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
       )}
 
       {conn.connection_type === 'readonly_status' && !editing && (
-        <div className="text-[10px] font-mono text-inky/50">
+        <div className="text-[10px] font-mono text-inky/50 dark:text-cream/40">
           Status is read-only — data is fetched server-side via Edge Function.
         </div>
       )}
@@ -158,7 +158,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
                 </button>
                 <button
                   onClick={() => setEditing(false)}
-                  className="text-xs font-mono px-3 py-1 rounded border border-navy/30 text-inky hover:text-navy transition-colors"
+                  className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream transition-colors"
                 >
                   Cancel
                 </button>
@@ -166,7 +166,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             ) : (
               <button
                 onClick={() => setEditing(true)}
-                className="text-xs font-mono px-3 py-1 rounded border border-navy/30 text-inky hover:text-navy transition-colors"
+                className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream transition-colors"
               >
                 {conn.is_configured ? 'Edit' : 'Configure'}
               </button>
@@ -176,7 +176,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             <button
               onClick={handleTest}
               disabled={testing}
-              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 text-inky hover:text-navy disabled:opacity-40 transition-colors"
+              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream disabled:opacity-40 transition-colors"
             >
               {testing ? 'Testing…' : 'Test Connection'}
             </button>
@@ -185,7 +185,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             <button
               onClick={handleTest}
               disabled={testing}
-              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 text-inky hover:text-navy disabled:opacity-40 transition-colors"
+              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream disabled:opacity-40 transition-colors"
             >
               {testing ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -214,22 +214,22 @@ export function DevHubPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Developer Hub</h1>
-        <p className="text-xs text-inky mt-0.5">External integrations, connection config, and platform diagnostics</p>
+        <h1 className="text-lg font-bold text-navy dark:text-cream tracking-wide uppercase">Developer Hub</h1>
+        <p className="text-xs text-inky dark:text-cream/60 mt-0.5">External integrations, connection config, and platform diagnostics</p>
       </div>
 
       <section className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-heading text-navy uppercase tracking-widest">Data Connections</h2>
+          <h2 className="text-sm font-heading text-navy dark:text-cream uppercase tracking-widest">Data Connections</h2>
           {!isAdmin && (
-            <span className="text-[10px] font-mono text-inky/50">View-only — admin/developer access required to configure</span>
+            <span className="text-[10px] font-mono text-inky/50 dark:text-cream/40">View-only — admin/developer access required to configure</span>
           )}
         </div>
 
         {loading ? (
-          <div className="text-xs font-mono text-inky/40 animate-pulse py-8 text-center">Loading connections…</div>
+          <div className="text-xs font-mono text-inky/40 dark:text-cream/30 animate-pulse py-8 text-center">Loading connections…</div>
         ) : connections.length === 0 ? (
-          <div className="text-xs font-mono text-inky/40 py-8 text-center">No connections found. Run migration 20260624000800 to seed them.</div>
+          <div className="text-xs font-mono text-inky/40 dark:text-cream/30 py-8 text-center">No connections found. Run migration 20260624000800 to seed them.</div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {connections.map((conn) => (

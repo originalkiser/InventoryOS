@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 export type VisibilityValue = 'private' | 'department' | 'attendees' | 'specific_users'
 
@@ -24,6 +24,10 @@ interface Props {
   onSpecificUsersChange: (users: SlimUser[]) => void
   allUsers: SlimUser[]
   departmentName?: string | null
+  /** Available departments for this user (admin = all, others = own only).
+   *  If provided and length === 1, auto-selects department visibility. */
+  departments?: string[]
+  onDepartmentChange?: (dept: string) => void
   label?: string
   disabled?: boolean
 }
@@ -76,9 +80,28 @@ export function VisibilitySelector({
   specificUsers, onSpecificUsersChange,
   allUsers,
   departmentName,
+  departments,
+  onDepartmentChange,
   label = 'Visibility',
   disabled = false,
 }: Props) {
+  const [selectedDept, setSelectedDept] = useState<string>(
+    departmentName ?? departments?.[0] ?? ''
+  )
+
+  // Auto-select department visibility when only one dept is available
+  useEffect(() => {
+    if (departments?.length === 1 && value === 'private') {
+      onChange('department')
+      setSelectedDept(departments[0])
+      onDepartmentChange?.(departments[0])
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [departments?.length])
+
+  // Resolve the display dept name: prefer selectedDept, fall back to departmentName
+  const effectiveDeptName = selectedDept || departmentName
+
   return (
     <div className={['flex flex-col gap-2', disabled ? 'opacity-50 pointer-events-none' : ''].join(' ')}>
       {label && (
@@ -111,9 +134,27 @@ export function VisibilitySelector({
       )}
 
       {value === 'department' && (
-        <p className="text-[10px] font-mono text-inky/60">
-          Visible to all members of {departmentName ? <strong>{departmentName}</strong> : 'your department'}.
-        </p>
+        <div className="flex flex-col gap-1.5">
+          {departments && departments.length > 1 ? (
+            <select
+              value={selectedDept}
+              onChange={(e) => {
+                setSelectedDept(e.target.value)
+                onDepartmentChange?.(e.target.value)
+              }}
+              className="rounded border border-navy/20 bg-cream text-xs font-mono text-navy px-2 py-1 focus:border-sky focus:outline-none"
+            >
+              <option value="">Select department…</option>
+              {departments.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-[10px] font-mono text-inky/60">
+              Visible to all members of {effectiveDeptName ? <strong>{effectiveDeptName}</strong> : 'your department'}.
+            </p>
+          )}
+        </div>
       )}
 
       {value === 'attendees' && (

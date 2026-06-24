@@ -1,10 +1,11 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { X, Upload, ClipboardPaste, FileSpreadsheet } from 'lucide-react'
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/authStore'
+import { isAdminOrDeveloper } from '@/lib/roles'
 import { Report, ParsedRow, Week } from '../../types'
-import { parseLocation, parseEmployeeRow } from './locationParser'
 import { detectPivot } from './pivotDetector'
 import PastePreview from './PastePreview'
 import XlsxMapper from './XlsxMapper'
@@ -15,24 +16,37 @@ interface Props {
   currentWeek: Week | null
   existingEntries: { row_key: string }[]
   onClose: () => void
-  onCommit: (rows: ParsedRow[], weekId: string) => Promise<void>
+  onCommit: (rows: ParsedRow[], weekId: string, submittedByOverride?: string | null) => Promise<void>
 }
 
 export default function PasteModal({ report, currentWeek, existingEntries, onClose, onCommit }: Props) {
+  const { profile } = useAuthStore()
   const [rawText, setRawText] = useState('')
   const [parsedRows, setParsedRows] = useState<ParsedRow[] | null>(null)
   const [xlsxData, setXlsxData] = useState<{ headers: string[]; rows: string[][] } | null>(null)
   const [pivotInfo, setPivotInfo] = useState<{ isPivot: boolean; shopCount: number; employeeCount: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [committing, setCommitting] = useState(false)
+  const [submittedByOverride, setSubmittedByOverride] = useState<string>('')
+  const [orgUsers, setOrgUsers] = useState<{ id: string; full_name: string | null; email: string }[]>([])
   const csvRef = useRef<HTMLInputElement>(null)
   const xlsxRef = useRef<HTMLInputElement>(null)
+
+  const canOverride = isAdminOrDeveloper(profile?.role)
+
+  useEffect(() => {
+    if (!canOverride) return
+    ;(supabase as any).schema('platform').from('user_profiles')
+      .select('id, full_name, email')
+      .is('deleted_at', null)
+      .order('full_name')
+      .then(({ data }: { data: any[] }) => { if (data) setOrgUsers(data) })
+  }, [canOverride])
 
   const dataColumns = report.columns.filter(c => c.type !== 'location' && c.type !== 'employee')
   const defaultDueDate = toDateString(getThisWeekFriday())
 
-  // supabase is imported for type inference on channel ref only
-  void supabase
+  void dataColumns
 
   function parseText(text: string) {
     setError(null)
@@ -43,30 +57,13 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
       return
     }
 
-    const dataRows = result.data.slice(1)
     const pivot = detectPivot(result.data)
     setPivotInfo(pivot)
 
-    const rows: ParsedRow[] = dataRows.map((row, i) => {
-      const firstCell = row[0]?.trim() ?? ''
-      const isTotal = /^(grand\s+)?total$/i.test(firstCell)
-      let parsed: ParsedRow
-
-      if (report.is_employee_report && row[1]) {
-        const emp = parseEmployeeRow(firstCell, row[1])
-        parsed = { row_key: emp.rowKey, row_label: emp.rowLabel, row_type: isTotal ? 'total' : 'data', data: {}, matched: emp.matched, originalText: row.join('\t') }
-      } else {
-        const loc = parseLocation(firstCell)
-        parsed = { row_key: isTotal ? `total-${i}` : loc.rowKey, row_label: isTotal ? firstCell : loc.rowLabel, row_type: isTotal ? 'total' : 'data', data: {}, matched: isTotal || loc.matched, originalText: row.join('\t') }
-      }
-
-      const startCol = report.is_employee_report ? 2 : 1
-      dataColumns.forEach((col, ci) => { parsed.data[col.key] = row[startCol + ci]?.trim() ?? '' })
-      parsed.data['due_date'] = defaultDueDate
-      return parsed
-    })
-
-    setParsedRows(rows)
+    // Route through the column mapper so headers can be remapped
+    const headers = result.data[0].map(h => String(h ?? '').trim())
+    const dataRows = result.data.slice(1).map(row => row.map(v => String(v ?? '').trim()))
+    setXlsxData({ headers, rows: dataRows })
   }
 
   function handlePaste() {
@@ -126,10 +123,11 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
     if (!parsedRows || !currentWeek) return
     setCommitting(true)
     try {
-      await onCommit(parsedRows, currentWeek.id)
+      await onCommit(parsedRows, currentWeek.id, submittedByOverride || null)
       onClose()
-    } catch {
-      setError('Failed to save data. Please try again.')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(`Failed to save data: ${msg}`)
     } finally {
       setCommitting(false)
     }
@@ -187,6 +185,24 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
 
             {error && (
               <p className="font-mono text-sb-red text-[12px] bg-sb-red/10 border border-sb-red/30 rounded px-3 py-2">{error}</p>
+            )}
+
+            {canOverride && (
+              <div>
+                <label className="font-brand font-bold text-[11px] text-sb-inky tracking-widest uppercase mb-1.5 block">
+                  Submitted By (Override)
+                </label>
+                <select
+                  value={submittedByOverride}
+                  onChange={e => setSubmittedByOverride(e.target.value)}
+                  className="bg-sb-inky/20 text-sb-cream font-mono text-[12px] px-3 py-1.5 rounded border border-sb-inky/40 focus:outline-none focus:border-sb-sky"
+                >
+                  <option value="">— use my account —</option>
+                  {orgUsers.map(u => (
+                    <option key={u.id} value={u.id}>{u.full_name ?? u.email}</option>
+                  ))}
+                </select>
+              </div>
             )}
 
             <div className="flex flex-wrap items-center gap-3">

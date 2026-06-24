@@ -79,8 +79,27 @@ export function LocationsPage() {
       col.accessor('location_code', { id: 'location_code', header: 'Code' }),
       col.accessor('name', { id: 'name', header: 'Name' }),
       col.accessor('region', { id: 'region', header: 'Region', cell: (i) => i.getValue() ?? '—' }),
+      {
+        id: 'market',
+        header: 'Market',
+        accessorFn: (r: Location) => (r.metadata as any)?.market ?? '',
+        cell: (i: any) => i.getValue() || '—',
+      },
+      {
+        id: 'area_manager',
+        header: 'Area Manager',
+        accessorFn: (r: Location) => (r.metadata as any)?.area_manager ?? '',
+        cell: (i: any) => i.getValue() || '—',
+      },
+      {
+        id: 'director',
+        header: 'Director',
+        accessorFn: (r: Location) => (r.metadata as any)?.director ?? '',
+        cell: (i: any) => i.getValue() || '—',
+      },
     ]
     for (const f of customFields) {
+      if (['market', 'area_manager', 'director'].includes(f.field_key)) continue
       cols.push({
         id: `cf_${f.field_key}`,
         header: f.label,

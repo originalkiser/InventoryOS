@@ -140,3 +140,11 @@ body {
   left: 0;
   z-index: 1;
 }
+
+/* Profile panel — time inputs need explicit color-scheme in dark mode so
+   Chrome/Edge render the picker value text in light color, not system black. */
+.dark .profile-panel input[type="time"] {
+  color-scheme: dark;
+  color: #F2F1E6 !important;
+  background-color: #0D3555 !important;
+}

@@ -82,6 +82,8 @@ export default function ReportTable({
         <thead>
           <tr className="border-b border-sb-inky/40">
             <Th label={isEmployeeReport ? 'EMPLOYEE' : 'SHOP'} sortKey="row_label" current={sortKey} dir={sortDir} onSort={handleSort} sticky />
+            <Th label="AREA MANAGER" sortKey="area_manager" current={sortKey} dir={sortDir} onSort={handleSort} />
+            <Th label="DIRECTOR" sortKey="director" current={sortKey} dir={sortDir} onSort={handleSort} />
             {dataColumns.map(col => (
               <Th key={col.key} label={col.label} sortKey={col.key} current={sortKey} dir={sortDir} onSort={handleSort} />
             ))}
@@ -124,6 +126,20 @@ export default function ReportTable({
                       {entry.row_label}
                     </span>
                   </div>
+                </td>
+
+                {/* Area Manager */}
+                <td className="px-3 py-2.5">
+                  <span className="font-mono text-[12px] text-sb-cream/70">
+                    {String(entry.data['area_manager'] ?? entry.data['Area Manager'] ?? '—')}
+                  </span>
+                </td>
+
+                {/* Director */}
+                <td className="px-3 py-2.5">
+                  <span className="font-mono text-[12px] text-sb-cream/70">
+                    {String(entry.data['director'] ?? entry.data['Director'] ?? entry.data['Regional Director'] ?? '—')}
+                  </span>
                 </td>
 
                 {/* Data columns */}

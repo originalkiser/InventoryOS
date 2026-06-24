@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams } from 'react-router-dom'
-import { ClipboardPaste } from 'lucide-react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { ClipboardPaste, ArrowLeft } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
@@ -13,6 +13,7 @@ import toast from 'react-hot-toast'
 
 export default function ReportViewPage() {
   const { slug } = useParams<{ slug: string }>()
+  const navigate = useNavigate()
   const { profile } = useAuthStore()
   const { weekStartStr, weekEndStr } = useWeek()
 
@@ -130,7 +131,7 @@ export default function ReportViewPage() {
     return () => { supabase.removeChannel(channel) }
   }, [report?.id, currentWeek?.id])
 
-  async function handleCommit(rows: ParsedRow[], weekId: string) {
+  async function handleCommit(rows: ParsedRow[], weekId: string, submittedByOverride?: string | null) {
     if (!report) return
 
     // Ensure week exists
@@ -174,6 +175,7 @@ export default function ReportViewPage() {
       week_id: wId,
       parsed_row_count: rows.length,
       submitted_by: profile?.id,
+      ...(submittedByOverride ? { submitted_by_override: submittedByOverride } : {}),
     })
 
     toast.success(`${rows.length} rows imported`)
@@ -227,6 +229,17 @@ export default function ReportViewPage() {
 
   return (
     <div>
+      {/* Back button */}
+      <div className="px-6 pt-4">
+        <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-1.5 text-[11px] font-mono text-sb-inky hover:text-sb-cream transition-colors"
+        >
+          <ArrowLeft size={13} />
+          Back
+        </button>
+      </div>
+
       {/* Report header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-sb-inky/30">
         <div>
