@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab } from '@/modules/config/useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
+import { useColumnVisibility } from '@/hooks/useColumnVisibility'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import type { Location } from '@/types'
@@ -59,7 +60,8 @@ export function LocationsPage() {
     return cols
   }, [customFields])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter, columnVisibility } = useTable(data, columns)
+  useColumnVisibility('locations', table, columnVisibility)
 
   const allColumns = table.getAllLeafColumns().filter((c) => c.id !== 'location_code' && c.id !== 'name')
 
