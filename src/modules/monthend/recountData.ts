@@ -96,6 +96,8 @@ export type DraftThresholds = Pick<
   | 'variance_to_median_pct'
   | 'variance_to_last_month_pct'
   | 'median_months_lookback'
+  | 'var_med_threshold_type'
+  | 'var_last_threshold_type'
 >
 
 /** Build a RecountConfig-compatible object from draft thresholds (only the threshold fields are read downstream). */

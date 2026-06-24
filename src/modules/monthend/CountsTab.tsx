@@ -10,7 +10,7 @@ import { CountsResultsTable, type SummaryResultRow, type ProductResultRow } from
 import type {
   Location, MonthlyCount, CountUploadBatch, RecountConfig, MonthlyEndingBalance,
 } from '@/types'
-import { format, subMonths } from 'date-fns'
+import { format, subMonths, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
 const DEFAULT_LOOKBACK = 6
@@ -141,7 +141,7 @@ export function CountsTab() {
     return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   }
 
-  const periodLabel = format(new Date(countMonth), 'MMMM yyyy')
+  const periodLabel = format(parseISO(countMonth), 'MMMM yyyy')
 
   async function clearSummaryCounts() {
     const { error } = await (supabase as any)

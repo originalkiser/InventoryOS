@@ -5,7 +5,7 @@ import { useMonthEndStore } from '@/stores/monthEndStore'
 import { getMissingShops } from '@/lib/recountEngine'
 import { NotSubmittedPanel } from '@/components/shared/NotSubmittedPanel'
 import type { Location } from '@/types'
-import { format } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 
 export function NotSubmittedTab() {
   const { profile } = useAuthStore()
@@ -55,7 +55,7 @@ export function NotSubmittedTab() {
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
-  const periodLabel = format(new Date(countMonth), 'MMMM yyyy')
+  const periodLabel = format(parseISO(countMonth), 'MMMM yyyy')
 
   return (
     <NotSubmittedPanel

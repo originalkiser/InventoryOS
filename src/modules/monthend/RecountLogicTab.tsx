@@ -10,7 +10,7 @@ import {
 } from './recountData'
 import { locationLabel } from './countsShared'
 import type { RecountConfig } from '@/types'
-import { format } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
 const DEFAULT_LOOKBACK = 6
@@ -112,7 +112,9 @@ export function RecountLogicTab() {
     variance_to_median_pct: varMedEnabled ? numOrNull(varMed) : null,
     variance_to_last_month_pct: varLastEnabled ? numOrNull(varLast) : null,
     median_months_lookback: lookbackN,
-  }), [adjEnabled, balEnabled, varMedEnabled, varLastEnabled, lowAdj, highAdj, lowBal, highBal, varMed, varLast, lookbackN])
+    var_med_threshold_type: varMedThresholdType,
+    var_last_threshold_type: varLastThresholdType,
+  }), [adjEnabled, balEnabled, varMedEnabled, varLastEnabled, lowAdj, highAdj, lowBal, highBal, varMed, varLast, lookbackN, varMedThresholdType, varLastThresholdType])
 
   // Live evaluation against the draft rules
   const evaluated = useMemo(() => {
@@ -321,7 +323,7 @@ export function RecountLogicTab() {
       {/* Live preview */}
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <span className="text-xs font-mono text-inky uppercase tracking-wide">Live Preview — {format(new Date(countMonth), 'MMMM yyyy')}</span>
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">Live Preview — {format(parseISO(countMonth), 'MMMM yyyy')}</span>
           <span className="text-xs font-mono">
             <span className="text-orange-600">{flagged.length}</span>
             <span className="text-inky"> of {totalShops} shops would flag</span>
@@ -338,6 +340,7 @@ export function RecountLogicTab() {
                 <thead>
                   <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                     <th className="px-3 py-2 text-left">Location</th>
+                    <th className="px-3 py-2 text-right">Adj Count</th>
                     <th className="px-3 py-2 text-right">Ending</th>
                     <th className="px-3 py-2 text-right">Prev</th>
                     <th className="px-3 py-2 text-right">Median</th>
@@ -348,6 +351,7 @@ export function RecountLogicTab() {
                   {flagged.map((e) => (
                     <tr key={e.count.id} className="border-b border-navy/30/50">
                       <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, evalData.locations)}</td>
+                      <td className="px-3 py-2 text-right text-inky">{e.count.total_adjustments ?? '—'}</td>
                       <td className="px-3 py-2 text-right text-navy">{fmt(e.count.ending_inventory_cost)}</td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
