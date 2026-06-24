@@ -121,7 +121,6 @@ function ManageUserModal({
     await sb.schema('core').from('user_feature_access').upsert(
       allKeys.map((key) => ({
         user_id: user.id,
-        company_id: myProfile.company_id,
         feature_key: key,
         enabled: editAccess.has(key),
       })),

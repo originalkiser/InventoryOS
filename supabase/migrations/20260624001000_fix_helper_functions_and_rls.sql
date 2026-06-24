@@ -89,6 +89,8 @@ END
 $$;
 
 -- core.user_feature_access — allow admins to upsert/manage all
+-- Note: table has no company_id column; scope by checking the target user_id
+-- belongs to the same company as the acting admin via platform.user_profiles.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -102,12 +104,20 @@ BEGIN
         ON core.user_feature_access
         FOR ALL
         USING (
-          company_id = get_my_company_id()
-          AND (SELECT role FROM platform.user_profiles WHERE id = auth.uid()) IN ('admin', 'developer')
+          (SELECT role FROM platform.user_profiles WHERE id = auth.uid()) IN ('admin', 'developer')
+          AND EXISTS (
+            SELECT 1 FROM platform.user_profiles up
+            WHERE up.id = core.user_feature_access.user_id
+              AND up.company_id = get_my_company_id()
+          )
         )
         WITH CHECK (
-          company_id = get_my_company_id()
-          AND (SELECT role FROM platform.user_profiles WHERE id = auth.uid()) IN ('admin', 'developer')
+          (SELECT role FROM platform.user_profiles WHERE id = auth.uid()) IN ('admin', 'developer')
+          AND EXISTS (
+            SELECT 1 FROM platform.user_profiles up
+            WHERE up.id = core.user_feature_access.user_id
+              AND up.company_id = get_my_company_id()
+          )
         )
     $pol$;
   END IF;
