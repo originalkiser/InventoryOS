@@ -253,6 +253,14 @@ export interface Profile {
   avatar_url: string | null
   created_at: string
   updated_at: string
+  // Work schedule preferences
+  work_start_time: string | null
+  work_end_time: string | null
+  eod_review_time: string | null
+  eod_review_enabled: boolean | null
+  task_popups_enabled: boolean | null
+  popup_timezone: string | null
+  browser_notifications_enabled: boolean | null
 }
 
 export interface Location {

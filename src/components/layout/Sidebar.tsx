@@ -584,11 +584,52 @@ function ProfileButton({ onOpen, collapsed }: { onOpen: () => void; collapsed: b
   )
 }
 
+const TIMEZONES = [
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Phoenix',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+]
+
 // ── Profile Panel (slide-out drawer) ──────────────────────────────────────
 
 function ProfilePanel({ onClose }: { onClose: () => void }) {
-  const { profile } = useAuthStore()
+  const { profile, setProfile } = useAuthStore()
   const { dark, toggle } = useDarkMode()
+
+  // Schedule state — initialized from profile
+  const [workStart, setWorkStart] = useState(profile?.work_start_time?.slice(0, 5) ?? '08:00')
+  const [workEnd, setWorkEnd] = useState(profile?.work_end_time?.slice(0, 5) ?? '17:00')
+  const [eodEnabled, setEodEnabled] = useState(profile?.eod_review_enabled ?? true)
+  const [eodTime, setEodTime] = useState(profile?.eod_review_time?.slice(0, 5) ?? '16:45')
+  const [taskPopups, setTaskPopups] = useState(profile?.task_popups_enabled ?? true)
+  const [timezone, setTimezone] = useState(profile?.popup_timezone ?? 'America/Chicago')
+  const [schedSaving, setSchedSaving] = useState(false)
+  const [schedSaved, setSchedSaved] = useState(false)
+
+  async function saveSchedule() {
+    if (!profile?.id) return
+    setSchedSaving(true)
+    const updates = {
+      work_start_time: workStart,
+      work_end_time: workEnd,
+      eod_review_enabled: eodEnabled,
+      eod_review_time: eodTime,
+      task_popups_enabled: taskPopups,
+      popup_timezone: timezone,
+      updated_at: new Date().toISOString(),
+    }
+    const { data, error } = await (supabase as any).schema('platform').from('user_profiles')
+      .update(updates).eq('id', profile.id).select().single()
+    setSchedSaving(false)
+    if (error) { console.error(error); return }
+    setProfile({ ...profile, ...data })
+    setSchedSaved(true)
+    setTimeout(() => setSchedSaved(false), 2000)
+  }
 
   const initials = (profile?.full_name ?? profile?.email ?? '?')
     .split(' ')
@@ -658,6 +699,66 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
               ].join(' ')} />
             </button>
           </div>
+        </div>
+
+        {/* Daily Schedule */}
+        <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
+            Daily Schedule
+          </div>
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-mono text-navy dark:text-cream whitespace-nowrap">Work Start</label>
+              <input type="time" value={workStart} onChange={(e) => setWorkStart(e.target.value)}
+                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-mono text-navy dark:text-cream whitespace-nowrap">Work End</label>
+              <input type="time" value={workEnd} onChange={(e) => setWorkEnd(e.target.value)}
+                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-mono text-navy dark:text-cream">Timezone</label>
+              <select value={timezone} onChange={(e) => setTimezone(e.target.value)}
+                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none max-w-[160px]">
+                {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz.replace('America/', '').replace('Pacific/', '')}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono text-navy dark:text-cream">Task Popups</span>
+              <button onClick={() => setTaskPopups((v) => !v)}
+                className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', taskPopups ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', taskPopups ? 'translate-x-4.5' : 'translate-x-1'].join(' ')} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* End of Day Review */}
+        <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
+            End of Day Review
+          </div>
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono text-navy dark:text-cream">Enable EOD Prompt</span>
+              <button onClick={() => setEodEnabled((v) => !v)}
+                className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', eodEnabled ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', eodEnabled ? 'translate-x-4.5' : 'translate-x-1'].join(' ')} />
+              </button>
+            </div>
+            {eodEnabled && (
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-mono text-navy dark:text-cream whitespace-nowrap">Prompt at</label>
+                <input type="time" value={eodTime} onChange={(e) => setEodTime(e.target.value)}
+                  className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+              </div>
+            )}
+          </div>
+          <button onClick={saveSchedule} disabled={schedSaving}
+            className={['mt-3 w-full text-xs font-mono rounded px-3 py-1.5 transition-colors', schedSaved ? 'bg-green-600 text-white' : 'bg-navy dark:bg-[#4F7489] text-cream hover:bg-inky disabled:opacity-40'].join(' ')}>
+            {schedSaving ? 'Saving…' : schedSaved ? '✓ Saved' : 'Save Schedule'}
+          </button>
         </div>
 
         {/* Outlook Sync (placeholder for Phase 9) */}
