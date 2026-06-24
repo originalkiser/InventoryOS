@@ -53,7 +53,7 @@ export function CountsTab() {
     setRecountConfig((cfgRes.data ?? null) as RecountConfig | null)
     setCounts((countRes.data ?? []) as MonthlyCount[])
     if (aggProdRes.error) {
-      toast.error('Product load failed — run the latest DB migration in Supabase')
+      toast.error(`Product load failed: ${aggProdRes.error.message}`)
     }
     setProductRows(
       ((aggProdRes.data ?? []) as any[]).map((p) => ({
