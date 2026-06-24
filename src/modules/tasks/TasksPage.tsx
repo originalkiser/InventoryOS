@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Badge, Button, Input, Modal } from '@/components/ui'
 import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
+import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import type { Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -544,10 +545,20 @@ export function TasksPage() {
                     />
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap group/title">
                         <span className={['text-sm font-body', task.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
                           {task.title}
                         </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openEdit(task) }}
+                          title="Edit task"
+                          className="opacity-0 group-hover/title:opacity-100 transition-opacity p-0.5 rounded hover:bg-navy/10 text-inky/60 hover:text-navy flex-shrink-0"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
                         <Badge color={sourceColor(task.source)}>
                           <span className="text-[10px]">{task.sourceLabel}</span>
                         </Badge>
@@ -601,12 +612,6 @@ export function TasksPage() {
                           )}
                         </button>
                       )}
-                      <button
-                        onClick={() => openEdit(task)}
-                        className="text-xs font-mono text-inky/40 hover:text-navy opacity-0 group-hover:opacity-100 sm:block transition-opacity"
-                      >
-                        Edit
-                      </button>
                     </div>
                   </li>
                 )
@@ -665,12 +670,11 @@ export function TasksPage() {
 
           <div className="flex flex-col gap-1">
             <label className="text-xs font-mono text-inky uppercase tracking-wide">Notes</label>
-            <textarea
+            <RichTextEditor
               value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              rows={3}
+              onChange={(html) => setForm({ ...form, notes: html })}
               placeholder="Optional notes…"
-              className="rounded border border-navy/30 bg-cream px-3 py-2 text-sm font-body text-navy placeholder-inky/40 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none resize-none"
+              minHeight={100}
             />
           </div>
 

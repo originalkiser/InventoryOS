@@ -26,6 +26,11 @@ import { TasksPage } from '@/modules/tasks/TasksPage'
 import { OutlierShell } from '@/modules/operations/outlier/OutlierShell'
 import { OrderConfigPage } from '@/pages/OrderConfig'
 import { OrderHistoryPage } from '@/pages/OrderHistory'
+import { FormsListPage } from '@/modules/forms/FormsListPage'
+import { FormBuilderPage } from '@/modules/forms/FormBuilderPage'
+import { FormResultsPage } from '@/modules/forms/FormResultsPage'
+import { FormAssignmentsPage } from '@/modules/forms/FormAssignmentsPage'
+import { PublicFormPage } from '@/pages/PublicFormPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, initialized } = useAuthStore()
@@ -108,7 +113,15 @@ export default function App() {
           <Route path="feature-requests/new" element={<FeatureRequestForm />} />
           <Route path="feature-requests/manage" element={<RequireAdminOrDev><ManageRequestsPage /></RequireAdminOrDev>} />
           <Route path="operations/outlier/*" element={<OutlierShell />} />
+          <Route path="forms" element={<FormsListPage />} />
+          <Route path="forms/new" element={<FormBuilderPage />} />
+          <Route path="forms/:formId/edit" element={<FormBuilderPage />} />
+          <Route path="forms/:formId/results" element={<FormResultsPage />} />
+          <Route path="forms/:formId/assignments" element={<FormAssignmentsPage />} />
         </Route>
+
+        {/* Public form — no auth required */}
+        <Route path="/f/:shareToken" element={<PublicFormPage />} />
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

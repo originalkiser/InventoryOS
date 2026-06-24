@@ -419,6 +419,11 @@ export interface RecountConfig {
   variance_to_median_pct: number | null
   variance_to_last_month_pct: number | null
   median_months_lookback: number | null
+  threshold_type: 'percentage' | 'dollar'
+  threshold_value: number
+  comparison_method: 'mean' | 'median'
+  eligible_count_types: string[]
+  completion_max_adjustment: number | null
   created_at: string
   updated_at: string
 }

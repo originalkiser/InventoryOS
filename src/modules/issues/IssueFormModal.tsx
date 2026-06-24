@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Modal, Button, Combobox, Input } from '@/components/ui'
 import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
 import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
+import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import type { Issue, Location, IssueCategory, IssueStatus, Profile } from '@/types'
@@ -122,7 +123,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
       resolved_date: resolvedDate || null,
       vendor: vendor.trim() || null,
       assignee: assignee.trim() || null,
-      issue_notes: issueNotes.trim() || null,
+      issue_notes: issueNotes || null,
       resolution_notes: notes || null,
       visibility: visibility,
     }
@@ -191,12 +192,11 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
           <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">
             Issue Notes
           </label>
-          <textarea
+          <RichTextEditor
             value={issueNotes}
-            onChange={(e) => setIssueNotes(e.target.value)}
-            rows={3}
-            placeholder="Details, observations, context..."
-            className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff] resize-none"
+            onChange={setIssueNotes}
+            placeholder="Details, observations, context…"
+            minHeight={100}
           />
         </div>
 
@@ -204,11 +204,11 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
           <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">
             Resolution Notes
           </label>
-          <textarea
+          <RichTextEditor
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={3}
-            className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff] resize-none"
+            onChange={setNotes}
+            placeholder="Resolution details…"
+            minHeight={100}
           />
         </div>
 

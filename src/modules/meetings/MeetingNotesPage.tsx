@@ -5,11 +5,14 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
+import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import type { MeetingNote, Project, Task } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
+
+interface MeetingLink { label: string; url: string }
 
 const VISIBILITY_OPTIONS: { value: VisibilityValue; label: string; icon: string }[] = [
   { value: 'private', label: 'Private', icon: '🔒' },
@@ -26,6 +29,7 @@ const EMPTY_FORM = {
   category: '',
   notes: '',
   visibility: 'private' as VisibilityValue,
+  links: [] as MeetingLink[],
 }
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
@@ -163,12 +167,11 @@ export function MeetingNotesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  function openEdit(m: MeetingNote) {
+  const openEdit = useCallback((m: MeetingNote) => {
     setEditId(m.id)
     setEditCreatedBy(m.created_by)
     setParticipants([])
     setSpecificUsers([])
-    // Migrate legacy boolean shared field to new visibility model
     const visibility: VisibilityValue = (m as any).visibility ?? (m.shared ? 'department' : 'private')
     setForm({
       title: m.title,
@@ -178,11 +181,13 @@ export function MeetingNotesPage() {
       category: m.category ?? '',
       notes: m.notes ?? '',
       visibility,
+      links: ((m as any).links ?? []) as MeetingLink[],
     })
     setTaskForm({ ...EMPTY_TASK })
     loadMeetingTasks(m.id)
     setModalOpen(true)
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const isOwner = !editId || editCreatedBy === myId
 
@@ -197,6 +202,7 @@ export function MeetingNotesPage() {
       vendor: form.vendor.trim() || null,
       category: form.category.trim() || null,
       notes: form.notes || null,
+      links: form.links,
       visibility: isOwner ? form.visibility : undefined,
       shared: isOwner ? form.visibility !== 'private' : undefined,
       created_by: editId ? undefined : myId,
@@ -269,7 +275,25 @@ export function MeetingNotesPage() {
   )
 
   const columns = useMemo(() => [
-    col.accessor('title', { header: 'Meeting', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue()} /> }),
+    col.accessor('title', {
+      header: 'Meeting',
+      meta: { noClip: true },
+      cell: (i) => (
+        <div className="flex items-center gap-1.5 group/title">
+          <ExpandableDisplay value={i.getValue()} />
+          <button
+            onClick={(e) => { e.stopPropagation(); openEdit(i.row.original as MeetingNote) }}
+            title="Edit meeting"
+            className="opacity-0 group-hover/title:opacity-100 transition-opacity flex-shrink-0 p-0.5 rounded hover:bg-navy/10 text-inky/60 hover:text-navy"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+        </div>
+      ),
+    }),
     col.accessor('meeting_date', {
       header: 'Date',
       cell: (i) => formatDateTime(i.getValue(), (i.row.original as MeetingNote).meeting_time),
@@ -289,14 +313,7 @@ export function MeetingNotesPage() {
       },
     }),
     col.accessor('notes', { header: 'Notes', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} /> }),
-    {
-      id: 'edit', header: '', enableColumnFilter: false, enableSorting: false,
-      cell: (i: any) => (
-        <button onClick={() => openEdit(i.row.original as MeetingNote)}
-          className="text-xs font-mono text-inky hover:underline">Open</button>
-      ),
-    },
-  ], []) // eslint-disable-line react-hooks/exhaustive-deps
+  ], [openEdit]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const { table, globalFilter, setGlobalFilter } = useTable(meetings, columns)
 
@@ -383,13 +400,53 @@ export function MeetingNotesPage() {
           </div>
 
           <SectionHeader>Meeting Notes</SectionHeader>
-          <textarea
+          <RichTextEditor
             value={form.notes}
-            onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            rows={8}
+            onChange={(html) => setForm({ ...form, notes: html })}
             placeholder="Meeting notes, agenda items, decisions made…"
-            className="rounded border border-navy/30 bg-cream px-3 py-2 text-sm font-body text-navy placeholder-inky/40 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none resize-y"
+            minHeight={200}
+            disabled={!isOwner}
           />
+
+          {/* Links */}
+          <SectionHeader>Links</SectionHeader>
+          <div className="flex flex-col gap-2">
+            {form.links.map((link, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  value={link.label}
+                  onChange={(e) => {
+                    const next = [...form.links]
+                    next[i] = { ...next[i], label: e.target.value }
+                    setForm({ ...form, links: next })
+                  }}
+                  placeholder="Label (optional)"
+                  className="w-32 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy placeholder-inky/40 focus:border-sky focus:outline-none"
+                />
+                <input
+                  value={link.url}
+                  onChange={(e) => {
+                    const next = [...form.links]
+                    next[i] = { ...next[i], url: e.target.value }
+                    setForm({ ...form, links: next })
+                  }}
+                  placeholder="https://…"
+                  className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy placeholder-inky/40 focus:border-sky focus:outline-none"
+                />
+                <button
+                  onClick={() => setForm({ ...form, links: form.links.filter((_, idx) => idx !== i) })}
+                  className="text-inky/40 hover:text-[#C0392B] text-xs flex-shrink-0"
+                >✕</button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, links: [...form.links, { label: '', url: '' }] })}
+              className="self-start text-xs font-mono text-inky hover:text-navy border border-navy/20 rounded px-2 py-1"
+            >
+              + Add Link
+            </button>
+          </div>
 
           <div className="flex items-center justify-between gap-2">
             <div>{editId && isOwner && <Button variant="danger" size="sm" onClick={onDelete}>Delete Meeting</Button>}</div>

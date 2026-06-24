@@ -55,6 +55,14 @@ export function RecountLogicTab() {
   const [varLast, setVarLast] = useState('')
   const [lookback, setLookback] = useState(String(DEFAULT_LOOKBACK))
 
+  // New config toggles (Change 4)
+  const [thresholdType, setThresholdType] = useState<'percentage' | 'dollar'>('percentage')
+  const [compMethod, setCompMethod] = useState<'median' | 'mean'>('median')
+  const [eligibleCountTypes, setEligibleCountTypes] = useState<string[]>([])
+  const [countTypeInput, setCountTypeInput] = useState('')
+  const [completionMaxAdjEnabled, setCompletionMaxAdjEnabled] = useState(false)
+  const [completionMaxAdj, setCompletionMaxAdj] = useState('')
+
   const [evalData, setEvalData] = useState<PeriodEvalData | null>(null)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -79,6 +87,12 @@ export function RecountLogicTab() {
       setVarMed(c.variance_to_median_pct?.toString() ?? '')
       setVarLast(c.variance_to_last_month_pct?.toString() ?? '')
       setLookback((c.median_months_lookback ?? DEFAULT_LOOKBACK).toString())
+      setThresholdType((c as any).threshold_type ?? 'percentage')
+      setCompMethod((c as any).comparison_method ?? 'median')
+      setEligibleCountTypes((c as any).eligible_count_types ?? [])
+      const maxAdj = (c as any).completion_max_adjustment
+      setCompletionMaxAdjEnabled(maxAdj != null)
+      setCompletionMaxAdj(maxAdj?.toString() ?? '')
     })()
   }, [companyId])
 
@@ -114,7 +128,14 @@ export function RecountLogicTab() {
 
   async function saveLogic(): Promise<string | null> {
     if (!companyId) return null
-    const payload = { company_id: companyId, ...draft }
+    const payload = {
+      company_id: companyId,
+      ...draft,
+      threshold_type: thresholdType,
+      comparison_method: compMethod,
+      eligible_count_types: eligibleCountTypes,
+      completion_max_adjustment: completionMaxAdjEnabled ? (numOrNull(completionMaxAdj) ?? null) : null,
+    }
     const sb = supabase as any
     let savedId = configId
     if (configId) {
@@ -244,6 +265,104 @@ export function RecountLogicTab() {
           <Input label="Variance %" value={varLast} onChange={(e) => setVarLast(e.target.value)} placeholder="e.g. 20" />
         </RuleCard>
       </div>
+
+      {/* Global settings card */}
+      <Card>
+        <CardHeader>
+          <span className="text-xs font-mono text-inky uppercase tracking-wide">Global Settings</span>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Threshold type */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-mono text-inky uppercase tracking-wide">Variance Threshold Type</span>
+              <div className="flex gap-1">
+                {(['percentage', 'dollar'] as const).map((t) => (
+                  <button key={t} onClick={() => setThresholdType(t)}
+                    className={['flex-1 px-3 py-1.5 rounded border text-xs font-mono transition-colors', thresholdType === t ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy/60'].join(' ')}>
+                    {t === 'percentage' ? '% Percentage' : '$ Dollar Amount'}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] font-mono text-inky/60 leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
+                {thresholdType === 'percentage'
+                  ? 'Variance is measured as a percentage of the comparison value.'
+                  : 'Variance is measured as an absolute dollar difference.'}
+              </p>
+            </div>
+
+            {/* Comparison method */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-mono text-inky uppercase tracking-wide">Comparison Method</span>
+              <div className="flex gap-1">
+                {(['median', 'mean'] as const).map((m) => (
+                  <button key={m} onClick={() => setCompMethod(m)}
+                    className={['flex-1 px-3 py-1.5 rounded border text-xs font-mono transition-colors capitalize', compMethod === m ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy/60'].join(' ')}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] font-mono text-inky/60 leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
+                {compMethod === 'median'
+                  ? 'Uses the median of historical values — more robust to outliers.'
+                  : 'Uses the mean (average) of historical values.'}
+              </p>
+            </div>
+
+            {/* Eligible count types */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-mono text-inky uppercase tracking-wide">Eligible Count Types</span>
+              <div className="flex gap-2">
+                <input
+                  value={countTypeInput}
+                  onChange={(e) => setCountTypeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ',') {
+                      e.preventDefault()
+                      const t = countTypeInput.trim().replace(/,$/, '')
+                      if (t && !eligibleCountTypes.includes(t)) setEligibleCountTypes((p) => [...p, t])
+                      setCountTypeInput('')
+                    }
+                  }}
+                  placeholder="Type and press Enter…"
+                  className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy placeholder-inky/40 focus:border-[#00e5ff] focus:outline-none"
+                />
+              </div>
+              {eligibleCountTypes.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {eligibleCountTypes.map((ct) => (
+                    <span key={ct} className="flex items-center gap-1 px-2 py-0.5 rounded bg-navy/10 text-xs font-mono text-navy">
+                      {ct}
+                      <button onClick={() => setEligibleCountTypes((p) => p.filter((x) => x !== ct))} className="text-inky/40 hover:text-red-500 text-[10px]">✕</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] font-mono text-inky/60 border-l-2 border-[#00e5ff]/30 pl-2">
+                {eligibleCountTypes.length === 0
+                  ? 'Leave blank to apply rules to all count types.'
+                  : `Rules only apply to: ${eligibleCountTypes.join(', ')}.`}
+              </p>
+            </div>
+
+            {/* Completion max adjustment */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <Toggle checked={completionMaxAdjEnabled} onChange={setCompletionMaxAdjEnabled} size="sm" label="Max Adjustment Threshold" />
+              </div>
+              <div className={completionMaxAdjEnabled ? '' : 'opacity-40 pointer-events-none'}>
+                <Input
+                  label="Max Adjustments (for completion check)"
+                  value={completionMaxAdj}
+                  onChange={(e) => setCompletionMaxAdj(e.target.value)}
+                  placeholder="e.g. 5"
+                  hint="Shops with more than this many adjustments may need review even if otherwise passing."
+                />
+              </div>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
 
       <Card>
         <CardBody className="flex items-end justify-between flex-wrap gap-4">

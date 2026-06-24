@@ -9,6 +9,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { format } from 'date-fns'
 import { Button, Badge, Modal } from '@/components/ui'
+import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { LinksCell } from '@/components/shared/LinksCell'
 import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
 import { useProjects } from '@/hooks/useProjects'
@@ -90,7 +91,7 @@ function SubTaskHeaderCell({ colKey, label, width, onResize }: {
 // Wrapping, expand/collapse, click-to-edit text cell (Description / Vendor / Category / Notes).
 // "more/less" only appears when text is genuinely clipped — measured via DOM overflow so
 // it reacts correctly to column resizes without any length-based heuristics.
-function ExpandableTextCell({ value, onSave, placeholder, autoEdit = false }: { value: string | null; onSave: (v: string) => void; placeholder?: string; autoEdit?: boolean }) {
+function ExpandableTextCell({ value, onSave, placeholder, autoEdit = false, showPencil = false }: { value: string | null; onSave: (v: string) => void; placeholder?: string; autoEdit?: boolean; showPencil?: boolean }) {
   const [editing, setEditing] = useState(autoEdit)
   const [expanded, setExpanded] = useState(false)
   const [canExpand, setCanExpand] = useState(false)
@@ -117,10 +118,24 @@ function ExpandableTextCell({ value, onSave, placeholder, autoEdit = false }: { 
   }
   const text = value ?? ''
   return (
-    <div className="px-1.5 py-1">
-      <div ref={textRef} onClick={() => setEditing(true)}
-        className={['cursor-text whitespace-pre-wrap break-words text-xs font-mono', text ? 'text-navy' : 'text-inky/70', expanded ? '' : 'line-clamp-2'].join(' ')}>
-        {text || placeholder || '—'}
+    <div className="px-1.5 py-1 group/cell">
+      <div className={['flex items-center gap-1', showPencil ? 'group/title' : ''].join(' ')}>
+        <div ref={textRef} onClick={() => setEditing(true)}
+          className={['cursor-text whitespace-pre-wrap break-words text-xs font-mono flex-1', text ? 'text-navy' : 'text-inky/70', expanded ? '' : 'line-clamp-2'].join(' ')}>
+          {text || placeholder || '—'}
+        </div>
+        {showPencil && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditing(true) }}
+            title="Edit"
+            className="opacity-0 group-hover/title:opacity-100 transition-opacity p-0.5 rounded hover:bg-navy/10 text-inky/60 hover:text-navy flex-shrink-0"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+        )}
       </div>
       {(canExpand || expanded) && (
         <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-inky hover:underline">{expanded ? 'less' : 'more'}</button>
@@ -476,9 +491,12 @@ function NewProjectModal({
           </div>
           <div className="col-span-2">
             {field('Description', (
-              <textarea value={description} onChange={(e) => setDescription(e.target.value)}
-                rows={3} placeholder="Project description…"
-                className="rounded border border-navy/20 bg-cream dark:bg-navy/30 px-3 py-2 text-xs font-body text-navy dark:text-cream placeholder-inky/40 focus:border-sky focus:outline-none resize-none" />
+              <RichTextEditor
+                value={description}
+                onChange={setDescription}
+                placeholder="Project description…"
+                minHeight={80}
+              />
             ))}
           </div>
         </div>
@@ -635,7 +653,7 @@ export function ProjectsModule() {
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
     if (type === 'links') return <LinksCell links={p.helpful_links ?? []} onSave={(links) => updateProject(p.id, { helpful_links: links })} />
     if (type === 'attachments') return <AttachmentsCell entityType="project" entityId={p.id} companyId={companyId!} />
-    if (type === 'text') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'project_name' ? 'Project name…' : key === 'description' ? 'Description…' : '—'} autoEdit={key === 'project_name' && p.id === autoEditId} onSave={(v) => { if (key === 'project_name') setAutoEditId(null); updateProject(p.id, { [key]: v || null } as Partial<Project>) }} />
+    if (type === 'text') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'project_name' ? 'Project name…' : key === 'description' ? 'Description…' : '—'} autoEdit={key === 'project_name' && p.id === autoEditId} showPencil={key === 'project_name'} onSave={(v) => { if (key === 'project_name') setAutoEditId(null); updateProject(p.id, { [key]: v || null } as Partial<Project>) }} />
     return (
       <EditableCell value={(p as any)[key] ?? ''} type={type} placeholder="—"
         onSave={(v) => updateProject(p.id, { [key]: v || null } as Partial<Project>)} />

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { Button, Input } from '@/components/ui'
+import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import toast from 'react-hot-toast'
 
 const DEPARTMENTS = ['Inventory', 'Operations', 'Finance', 'Accounting', 'All Departments']
@@ -47,7 +48,8 @@ export function FeatureRequestForm() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!title.trim() || !description.trim() || departments.length === 0) return
+    const descText = description.replace(/<[^>]+>/g, '').trim()
+    if (!title.trim() || !descText || departments.length === 0) return
     if (!profile) return
     setSaving(true)
     try {
@@ -129,13 +131,11 @@ export function FeatureRequestForm() {
 
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-mono text-inky uppercase tracking-wide">Description *</label>
-          <textarea
+          <RichTextEditor
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={6}
-            required
+            onChange={setDescription}
             placeholder="Explain the feature, the problem it solves, and any current workaround…"
-            className="rounded border border-navy/30 bg-cream px-3 py-2 text-sm font-body text-navy placeholder-inky/40 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none resize-y"
+            minHeight={160}
           />
         </div>
 
@@ -203,7 +203,7 @@ export function FeatureRequestForm() {
           </button>
           <Button
             type="submit"
-            disabled={saving || !title.trim() || !description.trim() || departments.length === 0}
+            disabled={saving || !title.trim() || !description.replace(/<[^>]+>/g, '').trim() || departments.length === 0}
           >
             {saving ? 'Submitting…' : 'Submit Request'}
           </Button>

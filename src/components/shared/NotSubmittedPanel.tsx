@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { DataTable } from '@/components/shared/DataTable'
@@ -14,6 +14,7 @@ interface MetaColumn {
 }
 
 interface NotSubmittedRow {
+  location_id: string
   location_code: string
   name: string
   region: string
@@ -42,17 +43,21 @@ export function NotSubmittedPanel({
   companyId, periodStartISO, periodLabel, missing, totalActive, lastSubmittedByLoc,
   reminderTitle, exportPrefix, lastSubmittedFormat = 'MMM yyyy', metaColumns, loading,
 }: Props) {
-  const submitted = totalActive - missing.length
+  const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
+  const [marking, setMarking] = useState<Set<string>>(new Set())
+
+  const submitted = totalActive - missing.length + confirmed.size
   const pct = totalActive > 0 ? Math.round((submitted / totalActive) * 100) : 0
   const daysSince = Math.max(0, differenceInDays(new Date(), new Date(periodStartISO)))
 
-  const rows: NotSubmittedRow[] = useMemo(() => missing.map((l) => {
+  const allRows: NotSubmittedRow[] = useMemo(() => missing.map((l) => {
     const meta = (l.metadata ?? {}) as Record<string, unknown>
     const metaVals: Record<string, string> = {}
     for (const mc of (metaColumns ?? [])) {
       metaVals[mc.key] = meta[mc.key] != null ? String(meta[mc.key]) : ''
     }
     return {
+      location_id: l.id,
       location_code: l.location_code,
       name: l.name,
       region: l.region ?? '',
@@ -61,6 +66,21 @@ export function NotSubmittedPanel({
       last_submitted: lastSubmittedByLoc[l.id] ?? '',
     }
   }), [missing, lastSubmittedByLoc, daysSince, metaColumns])
+
+  const rows = useMemo(() => allRows.filter((r) => !confirmed.has(r.location_id)), [allRows, confirmed])
+  const confirmedRows = useMemo(() => allRows.filter((r) => confirmed.has(r.location_id)), [allRows, confirmed])
+
+  async function markCounted(locationId: string, locationCode: string) {
+    setMarking((p) => new Set([...p, locationId]))
+    const { error } = await (supabase as any).schema('inventory').from('manual_count_entries').upsert(
+      { company_id: companyId, location_id: locationId, count_period: periodStartISO },
+      { onConflict: 'company_id,location_id,count_period' },
+    )
+    setMarking((p) => { const n = new Set(p); n.delete(locationId); return n })
+    if (error) { toast.error(error.message); return }
+    setConfirmed((p) => new Set([...p, locationId]))
+    toast.success(`${locationCode} marked as manually counted`)
+  }
 
   const columns = useMemo(() => {
     const cols: any[] = [
@@ -81,16 +101,36 @@ export function NotSubmittedPanel({
       header: 'Last Submitted',
       cell: (i: any) => (i.getValue() ? format(new Date(i.getValue()), lastSubmittedFormat) : <span className="text-inky/70">Never</span>),
     }))
+    cols.push({
+      id: 'mark_counted',
+      header: '',
+      accessorFn: (row: NotSubmittedRow) => row.location_id,
+      cell: (i: any) => {
+        const locId = i.getValue() as string
+        const locCode = i.row.original.location_code as string
+        const busy = marking.has(locId)
+        return (
+          <button
+            onClick={() => markCounted(locId, locCode)}
+            disabled={busy}
+            className="text-[10px] font-mono px-2 py-0.5 rounded border border-navy/20 text-inky hover:border-navy/50 hover:text-navy transition-colors disabled:opacity-40"
+          >
+            {busy ? '…' : 'Mark Counted'}
+          </button>
+        )
+      },
+    })
     return cols
-  }, [lastSubmittedFormat, metaColumns])
+  }, [lastSubmittedFormat, metaColumns, marking])
 
   const { table, globalFilter, setGlobalFilter } = useTable(rows, columns)
 
   function copyList() {
-    if (!missing.length) { toast('Nothing to copy — all shops submitted', { icon: '✅' }); return }
-    const text = missing.map((l) => `${l.location_code} — ${l.name}`).join('\n')
+    const pending = missing.filter((l) => !confirmed.has(l.id))
+    if (!pending.length) { toast('Nothing to copy — all shops submitted or confirmed', { icon: '✅' }); return }
+    const text = pending.map((l) => `${l.location_code} — ${l.name}`).join('\n')
     navigator.clipboard.writeText(text)
-      .then(() => toast.success(`Copied ${missing.length} shop${missing.length === 1 ? '' : 's'}`))
+      .then(() => toast.success(`Copied ${pending.length} shop${pending.length === 1 ? '' : 's'}`))
       .catch(() => toast.error('Clipboard not available'))
   }
 
@@ -156,6 +196,26 @@ export function NotSubmittedPanel({
           </>
         }
       />
+
+      {confirmedRows.length > 0 && (
+        <div className="rounded border border-green-200 bg-green-50/40">
+          <div className="px-4 py-2 border-b border-green-200 flex items-center justify-between">
+            <span className="text-xs font-mono text-green-700 uppercase tracking-wide font-bold">
+              Manually Confirmed ({confirmedRows.length})
+            </span>
+            <span className="text-[10px] font-mono text-green-500">Counted this session — entry saved to database</span>
+          </div>
+          <ul className="divide-y divide-green-100">
+            {confirmedRows.map((r) => (
+              <li key={r.location_id} className="flex items-center gap-3 px-4 py-2">
+                <span className="text-xs font-mono text-green-700">{r.location_code}</span>
+                <span className="flex-1 text-xs font-body text-green-600">{r.name}</span>
+                <span className="text-[10px] font-mono text-green-500">✓ Marked counted</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
