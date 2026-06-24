@@ -235,7 +235,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       sb.schema('inventory').from('issues').select('id, status_id, issue_statuses!inner(name)').eq('company_id', companyId),
       sb.schema('platform').from('schedule_events').select('*').eq('company_id', companyId).gte('start_date', today).order('start_date'),
       sb.schema('inventory').from('ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false }),
-      sb.schema('core').from('locations').select('id').eq('company_id', companyId).eq('active', true),
+      sb.schema('core').from('locations').select('id').eq('company_id', companyId).or('active.eq.true,active.is.null'),
       sb.schema('inventory').from('order_sessions').select('id').eq('company_id', companyId).eq('status', 'pending').catch(() => ({ data: [] })),
       sb.schema('inventory').from('project_tasks').select('id, due_date').eq('company_id', companyId).eq('done', false).lt('due_date', today).catch(() => ({ data: [] })),
       sb.schema('forms').from('assignments').select('id').eq('company_id', companyId).lte('due_date', today).eq('completed', false).catch(() => ({ data: [] })),

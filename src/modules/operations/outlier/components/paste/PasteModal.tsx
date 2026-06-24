@@ -10,6 +10,7 @@ import { detectPivot } from './pivotDetector'
 import PastePreview from './PastePreview'
 import XlsxMapper from './XlsxMapper'
 import { toDateString, getThisWeekFriday } from '../../lib/weekUtils'
+import toast from 'react-hot-toast'
 
 interface Props {
   report: Report
@@ -135,6 +136,7 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[Outlier Push] error:', err)
       setError(`Failed to save data: ${msg}`)
+      toast.error(`Import failed: ${msg}`)
     } finally {
       setCommitting(false)
     }
@@ -174,6 +176,7 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
             onBack={() => { setParsedRows(null); setXlsxData(null) }}
             onCommit={handleCommit}
             committing={committing}
+            error={error}
           />
         ) : (
           /* Step: input */

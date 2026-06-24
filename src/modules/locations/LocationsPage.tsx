@@ -17,7 +17,7 @@ import { format, parseISO } from 'date-fns'
 
 const col = createColumnHelper<Location>()
 
-const PINNED = ['location_code', 'name']
+const PINNED: string[] = []
 
 // Drag-to-reorder row inside the Columns popover
 function SortableColRow({

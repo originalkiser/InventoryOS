@@ -86,7 +86,7 @@ export function AppShell() {
         </button>
         <button
           onClick={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')}
-          className="flex items-center gap-1.5 rounded-full border border-[#002745]/40 bg-[#002745] px-3 py-2 font-heading text-xs text-[#F2F1E6] shadow-lg hover:bg-inky uppercase tracking-wide"
+          className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
           title="Location Lookup (Ctrl/Cmd+L)"
         >
           {lookupMode !== 'hidden' && <span className="text-[10px] text-sky">●</span>}

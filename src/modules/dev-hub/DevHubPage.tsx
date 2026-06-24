@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { getAllConnections, saveConnectionConfig, testConnection, type DataConnection } from '@/lib/dataConnections'
+import { useEffect, useRef, useState } from 'react'
+import { getAllConnections, saveConnectionConfig, saveConnectionTestResult, testConnection, CONNECTION_KEYS, type DataConnection } from '@/lib/dataConnections'
 import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import toast from 'react-hot-toast'
@@ -21,13 +21,13 @@ function ConfigField({ label, value, onChange, type = 'text', readOnly = false }
 }) {
   return (
     <div className="flex items-center gap-2">
-      <label className="text-[10px] font-mono text-inky/60 dark:text-cream/50 w-36 shrink-0">{label}</label>
+      <label className="text-[10px] font-mono text-inky/60 dark:text-[#C4DAE6]/50 w-36 shrink-0">{label}</label>
       <input
         type={type}
         value={value}
         readOnly={readOnly}
         onChange={(e) => onChange?.(e.target.value)}
-        className="flex-1 text-xs font-mono rounded border border-navy/20 dark:border-cream/20 bg-cream dark:bg-[#002745] text-navy dark:text-cream px-2 py-1 focus:border-sky focus:outline-none read-only:opacity-50"
+        className="flex-1 text-xs font-mono rounded border border-navy/20 dark:border-[#C4DAE6]/20 bg-cream dark:bg-[#002745] text-navy dark:text-[#C4DAE6] px-2 py-1 focus:border-sky focus:outline-none read-only:opacity-50"
       />
     </div>
   )
@@ -73,6 +73,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
     setTesting(true)
     try {
       const result = await testConnection(conn.connection_key)
+      await saveConnectionTestResult(conn.connection_key, result.success, result.message)
       if (result.success) {
         toast.success(`Test passed: ${result.message}`)
       } else {
@@ -95,14 +96,14 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} />
           <div>
-            <div className="text-sm font-heading text-navy dark:text-cream uppercase tracking-wide">
+            <div className="text-sm font-heading text-navy dark:text-[#C4DAE6] uppercase tracking-wide">
               {conn.connection_name}
             </div>
             {conn.last_test_status === 'failed' && conn.last_test_message && (
               <div className="text-[10px] font-mono text-red-600 dark:text-red-400 mt-0.5">{conn.last_test_message}</div>
             )}
             {conn.last_tested_at && (
-              <div className="text-[10px] font-mono text-inky/50 dark:text-cream/40 mt-0.5">
+              <div className="text-[10px] font-mono text-inky/50 dark:text-[#C4DAE6]/40 mt-0.5">
                 Last tested: {new Date(conn.last_tested_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
               </div>
             )}
@@ -112,7 +113,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
           label === 'CONFIGURED'      ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300' :
           label === 'NEEDS ATTENTION' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' :
           label === 'READONLY'        ? 'bg-sky/20 dark:bg-sky/10 text-navy dark:text-sky' :
-                                        'bg-navy/10 dark:bg-cream/10 text-inky dark:text-cream/60'
+                                        'bg-navy/10 dark:bg-[#C4DAE6]/10 text-inky dark:text-[#C4DAE6]/60'
         }`}>
           {label}
         </span>
@@ -120,7 +121,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
 
       {/* Edit form */}
       {editing && configKeys.length > 0 && (
-        <div className="flex flex-col gap-2 pt-2 border-t border-navy/10 dark:border-cream/10">
+        <div className="flex flex-col gap-2 pt-2 border-t border-navy/10 dark:border-[#C4DAE6]/10">
           {configKeys.map((k) => (
             <ConfigField
               key={k}
@@ -130,7 +131,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             />
           ))}
           {conn.vault_secret_names.length > 0 && (
-            <p className="text-[10px] font-mono text-inky/50 dark:text-cream/40 mt-1">
+            <p className="text-[10px] font-mono text-inky/50 dark:text-[#C4DAE6]/40 mt-1">
               Secrets ({conn.vault_secret_names.join(', ')}) are managed in Supabase Vault — not editable here.
             </p>
           )}
@@ -138,7 +139,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
       )}
 
       {conn.connection_type === 'readonly_status' && !editing && (
-        <div className="text-[10px] font-mono text-inky/50 dark:text-cream/40">
+        <div className="text-[10px] font-mono text-inky/50 dark:text-[#C4DAE6]/40">
           Status is read-only — data is fetched server-side via Edge Function.
         </div>
       )}
@@ -158,7 +159,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
                 </button>
                 <button
                   onClick={() => setEditing(false)}
-                  className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream transition-colors"
+                  className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-[#C4DAE6]/20 text-inky dark:text-[#C4DAE6]/70 hover:text-navy dark:hover:text-[#C4DAE6] transition-colors"
                 >
                   Cancel
                 </button>
@@ -166,7 +167,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             ) : (
               <button
                 onClick={() => setEditing(true)}
-                className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream transition-colors"
+                className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-[#C4DAE6]/20 text-inky dark:text-[#C4DAE6]/70 hover:text-navy dark:hover:text-[#C4DAE6] transition-colors"
               >
                 {conn.is_configured ? 'Edit' : 'Configure'}
               </button>
@@ -176,7 +177,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             <button
               onClick={handleTest}
               disabled={testing}
-              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream disabled:opacity-40 transition-colors"
+              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-[#C4DAE6]/20 text-inky dark:text-[#C4DAE6]/70 hover:text-navy dark:hover:text-[#C4DAE6] disabled:opacity-40 transition-colors"
             >
               {testing ? 'Testing…' : 'Test Connection'}
             </button>
@@ -185,7 +186,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             <button
               onClick={handleTest}
               disabled={testing}
-              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-cream/20 text-inky dark:text-cream/70 hover:text-navy dark:hover:text-cream disabled:opacity-40 transition-colors"
+              className="text-xs font-mono px-3 py-1 rounded border border-navy/30 dark:border-[#C4DAE6]/20 text-inky dark:text-[#C4DAE6]/70 hover:text-navy dark:hover:text-[#C4DAE6] disabled:opacity-40 transition-colors"
             >
               {testing ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -201,6 +202,7 @@ export function DevHubPage() {
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const [connections, setConnections] = useState<DataConnection[]>([])
   const [loading, setLoading] = useState(true)
+  const hourlyRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   async function load() {
     setLoading(true)
@@ -209,27 +211,43 @@ export function DevHubPage() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  async function runSupabaseStatusCheck() {
+    const result = await testConnection(CONNECTION_KEYS.supabaseStatus)
+    await saveConnectionTestResult(CONNECTION_KEYS.supabaseStatus, result.success, result.message)
+    const fresh = await getAllConnections()
+    setConnections(fresh)
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  // Hourly Supabase project status check (runs immediately on load, then every hour)
+  useEffect(() => {
+    runSupabaseStatusCheck()
+    hourlyRef.current = setInterval(runSupabaseStatusCheck, 3_600_000)
+    return () => { if (hourlyRef.current) clearInterval(hourlyRef.current) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-bold text-navy dark:text-cream tracking-wide uppercase">Developer Hub</h1>
-        <p className="text-xs text-inky dark:text-cream/60 mt-0.5">External integrations, connection config, and platform diagnostics</p>
+        <h1 className="text-lg font-bold text-navy dark:text-[#C4DAE6] tracking-wide uppercase">Developer Hub</h1>
+        <p className="text-xs text-inky dark:text-[#C4DAE6]/60 mt-0.5">External integrations, connection config, and platform diagnostics</p>
       </div>
 
       <section className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-heading text-navy dark:text-cream uppercase tracking-widest">Data Connections</h2>
+          <h2 className="text-sm font-heading text-navy dark:text-[#C4DAE6] uppercase tracking-widest">Data Connections</h2>
           {!isAdmin && (
-            <span className="text-[10px] font-mono text-inky/50 dark:text-cream/40">View-only — admin/developer access required to configure</span>
+            <span className="text-[10px] font-mono text-inky/50 dark:text-[#C4DAE6]/40">View-only — admin/developer access required to configure</span>
           )}
         </div>
 
         {loading ? (
-          <div className="text-xs font-mono text-inky/40 dark:text-cream/30 animate-pulse py-8 text-center">Loading connections…</div>
+          <div className="text-xs font-mono text-inky/40 dark:text-[#C4DAE6]/30 animate-pulse py-8 text-center">Loading connections…</div>
         ) : connections.length === 0 ? (
-          <div className="text-xs font-mono text-inky/40 dark:text-cream/30 py-8 text-center">No connections found. Run migration 20260624000800 to seed them.</div>
+          <div className="text-xs font-mono text-inky/40 dark:text-[#C4DAE6]/30 py-8 text-center">No connections found. Run migration 20260624000800 to seed them.</div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {connections.map((conn) => (

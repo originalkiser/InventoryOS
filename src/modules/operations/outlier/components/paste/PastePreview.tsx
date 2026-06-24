@@ -9,9 +9,10 @@ interface Props {
   onBack: () => void
   onCommit: () => void
   committing: boolean
+  error?: string | null
 }
 
-export default function PastePreview({ rows, columns, existingKeys, pivotInfo, onBack, onCommit, committing }: Props) {
+export default function PastePreview({ rows, columns, existingKeys, pivotInfo, onBack, onCommit, committing, error }: Props) {
   const dataColumns = columns.filter(c => c.type !== 'location' && c.type !== 'employee' && c.key !== 'due_date')
   const newCount = rows.filter(r => !existingKeys.has(r.row_key)).length
   const updateCount = rows.filter(r => existingKeys.has(r.row_key)).length
@@ -91,6 +92,11 @@ export default function PastePreview({ rows, columns, existingKeys, pivotInfo, o
       </div>
 
       {/* Actions */}
+      {error && (
+        <div className="px-5 py-2 bg-sb-red/10 border-t border-sb-red/30">
+          <p className="font-mono text-sb-red text-[12px]">{error}</p>
+        </div>
+      )}
       <div className="flex items-center justify-between px-5 py-3 border-t border-sb-inky/30">
         <button
           onClick={onBack}

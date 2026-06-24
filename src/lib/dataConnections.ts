@@ -60,6 +60,26 @@ export async function saveConnectionConfig(
     .eq('connection_key', key)
 }
 
+export async function saveConnectionTestResult(
+  key: string,
+  success: boolean,
+  message: string,
+): Promise<void> {
+  try {
+    await (supabase as any)
+      .schema('platform')
+      .from('data_connections')
+      .update({
+        last_test_status: success ? 'success' : 'failed',
+        last_test_message: message,
+        last_tested_at: new Date().toISOString(),
+      })
+      .eq('connection_key', key)
+  } catch {
+    // non-fatal
+  }
+}
+
 export async function testConnection(key: string): Promise<{ success: boolean; message: string }> {
   try {
     // supabase_status has its own dedicated edge function
