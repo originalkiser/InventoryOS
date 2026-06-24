@@ -432,6 +432,8 @@ export interface RecountConfig {
   comparison_method: 'mean' | 'median'
   eligible_count_types: string[]
   completion_max_adjustment: number | null
+  var_med_threshold_type?: 'percentage' | 'dollar'
+  var_last_threshold_type?: 'percentage' | 'dollar'
   created_at: string
   updated_at: string
 }

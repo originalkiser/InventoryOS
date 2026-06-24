@@ -90,18 +90,22 @@ export function evaluateRecountFlags(
     flags.push('high_ending_balance')
   }
 
-  // Variance vs median (pct stored as whole number, e.g. 15 = 15%)
+  // Variance vs median
   if (isSet(config.variance_to_median_pct) && median !== 0) {
-    if (Math.abs(varVsMedian) * 100 > config.variance_to_median_pct) {
-      flags.push('variance_vs_median')
-    }
+    const medDollar = config.var_med_threshold_type === 'dollar'
+    const exceeds = medDollar
+      ? Math.abs(ending - median) > config.variance_to_median_pct
+      : Math.abs(varVsMedian) * 100 > config.variance_to_median_pct
+    if (exceeds) flags.push('variance_vs_median')
   }
 
   // Variance vs last month
   if (isSet(config.variance_to_last_month_pct) && prevMonthBalance && prevMonthBalance !== 0) {
-    if (Math.abs(varVsLastMonth) * 100 > config.variance_to_last_month_pct) {
-      flags.push('variance_vs_last_month')
-    }
+    const lastDollar = config.var_last_threshold_type === 'dollar'
+    const exceeds = lastDollar
+      ? Math.abs(ending - prevMonthBalance) > config.variance_to_last_month_pct
+      : Math.abs(varVsLastMonth) * 100 > config.variance_to_last_month_pct
+    if (exceeds) flags.push('variance_vs_last_month')
   }
 
   return { flags, varVsLastMonth, varVsMedian }

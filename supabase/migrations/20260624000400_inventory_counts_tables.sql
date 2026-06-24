@@ -106,36 +106,43 @@ DROP POLICY IF EXISTS "count_batches_delete" ON inventory.count_batches;
 CREATE POLICY "count_batches_delete" ON inventory.count_batches FOR DELETE
   USING (company_id = (SELECT company_id FROM platform.user_profiles WHERE id = auth.uid()));
 
--- ── Migrate existing data from public schema (idempotent via ON CONFLICT DO NOTHING) ──
-INSERT INTO inventory.counts (
-  id, company_id, location_id, count_date, count_month,
-  count_type, total_adjustments, adjustment_value, abs_adjustment_value,
-  ending_inventory_cost, upload_batch_id, uploaded_at, created_at, updated_at
-)
-SELECT
-  id, company_id, location_id,
-  COALESCE(count_date, created_at)  AS count_date,
-  count_month,
-  count_type, total_adjustments, adjustment_value,
-  abs_adjustment_value,
-  ending_inventory_cost,
-  upload_batch_id,
-  COALESCE(uploaded_at, created_at) AS uploaded_at,
-  created_at, updated_at
-FROM public.monthly_counts
-ON CONFLICT (id) DO NOTHING;
+-- ── Migrate existing data from public schema (only if legacy tables exist) ──────
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'monthly_counts') THEN
+    INSERT INTO inventory.counts (
+      id, company_id, location_id, count_date, count_month,
+      count_type, total_adjustments, adjustment_value, abs_adjustment_value,
+      ending_inventory_cost, upload_batch_id, uploaded_at, created_at, updated_at
+    )
+    SELECT
+      id, company_id, location_id,
+      COALESCE(count_date, created_at)  AS count_date,
+      count_month,
+      count_type, total_adjustments, adjustment_value,
+      abs_adjustment_value,
+      ending_inventory_cost,
+      upload_batch_id,
+      COALESCE(uploaded_at, created_at) AS uploaded_at,
+      created_at, updated_at
+    FROM public.monthly_counts
+    ON CONFLICT (id) DO NOTHING;
+  END IF;
 
-INSERT INTO inventory.count_products (
-  id, company_id, upload_batch_id, location_id, product_id,
-  category, on_hand, sold, adjusted, ending_value, count_month,
-  created_at, updated_at
-)
-SELECT
-  id, company_id, upload_batch_id, location_id, product_id,
-  category, on_hand, sold, adjusted, ending_value, count_month,
-  created_at, updated_at
-FROM public.monthly_count_products
-ON CONFLICT (id) DO NOTHING;
+  IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'monthly_count_products') THEN
+    INSERT INTO inventory.count_products (
+      id, company_id, upload_batch_id, location_id, product_id,
+      category, on_hand, sold, adjusted, ending_value, count_month,
+      created_at, updated_at
+    )
+    SELECT
+      id, company_id, upload_batch_id, location_id, product_id,
+      category, on_hand, sold, adjusted, ending_value, count_month,
+      created_at, updated_at
+    FROM public.monthly_count_products
+    ON CONFLICT (id) DO NOTHING;
+  END IF;
+END $$;
 
 -- ── Refresh the aggregation RPC to ensure correct schema path ──────────────
 CREATE OR REPLACE FUNCTION public.get_aggregated_monthly_products(
