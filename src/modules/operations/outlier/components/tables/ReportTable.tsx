@@ -49,8 +49,9 @@ export default function ReportTable({
 
   const sorted = [...entries].sort((a, b) => {
     if (!sortKey || !sortDir) return 0
-    const av = a.data[sortKey] ?? a[sortKey as keyof ReportEntry] ?? ''
-    const bv = b.data[sortKey] ?? b[sortKey as keyof ReportEntry] ?? ''
+    // Check top-level typed columns first, then fall back to data bag
+    const av = (a as any)[sortKey] ?? a.data[sortKey] ?? ''
+    const bv = (b as any)[sortKey] ?? b.data[sortKey] ?? ''
     const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true })
     return sortDir === 'asc' ? cmp : -cmp
   })
@@ -82,8 +83,12 @@ export default function ReportTable({
         <thead>
           <tr className="border-b border-sb-inky/40">
             <Th label={isEmployeeReport ? 'EMPLOYEE' : 'SHOP'} sortKey="row_label" current={sortKey} dir={sortDir} onSort={handleSort} sticky />
-            <Th label="AREA MANAGER" sortKey="area_manager" current={sortKey} dir={sortDir} onSort={handleSort} />
-            <Th label="DIRECTOR" sortKey="director" current={sortKey} dir={sortDir} onSort={handleSort} />
+            {!isEmployeeReport && (
+              <>
+                <Th label="AREA MANAGER" sortKey="area_manager_name" current={sortKey} dir={sortDir} onSort={handleSort} />
+                <Th label="RDO" sortKey="rdo_name" current={sortKey} dir={sortDir} onSort={handleSort} />
+              </>
+            )}
             {dataColumns.map(col => (
               <Th key={col.key} label={col.label} sortKey={col.key} current={sortKey} dir={sortDir} onSort={handleSort} />
             ))}
@@ -128,19 +133,21 @@ export default function ReportTable({
                   </div>
                 </td>
 
-                {/* Area Manager */}
-                <td className="px-3 py-2.5">
-                  <span className="font-mono text-[12px] text-sb-cream/70">
-                    {String(entry.data['area_manager'] ?? entry.data['Area Manager'] ?? '—')}
-                  </span>
-                </td>
-
-                {/* Director */}
-                <td className="px-3 py-2.5">
-                  <span className="font-mono text-[12px] text-sb-cream/70">
-                    {String(entry.data['director'] ?? entry.data['Director'] ?? entry.data['Regional Director'] ?? '—')}
-                  </span>
-                </td>
+                {/* Area Manager / RDO — only for shop reports, from enriched columns */}
+                {!isEmployeeReport && (
+                  <>
+                    <td className="px-3 py-2.5">
+                      <span className="font-mono text-[12px] text-sb-cream/70">
+                        {entry.area_manager_name ?? '—'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="font-mono text-[12px] text-sb-cream/70">
+                        {entry.rdo_name ?? '—'}
+                      </span>
+                    </td>
+                  </>
+                )}
 
                 {/* Data columns */}
                 {dataColumns.map(col => (

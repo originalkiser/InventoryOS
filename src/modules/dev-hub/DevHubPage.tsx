@@ -27,7 +27,7 @@ function ConfigField({ label, value, onChange, type = 'text', readOnly = false }
         value={value}
         readOnly={readOnly}
         onChange={(e) => onChange?.(e.target.value)}
-        className="flex-1 text-xs font-mono rounded border border-navy/20 bg-cream dark:bg-navy/20 text-navy dark:text-cream px-2 py-1 focus:border-sky focus:outline-none read-only:opacity-50"
+        className="flex-1 text-xs font-mono rounded border border-navy/20 dark:border-cream/20 bg-cream dark:bg-[#002745] text-navy dark:text-cream px-2 py-1 focus:border-sky focus:outline-none read-only:opacity-50"
       />
     </div>
   )
@@ -89,7 +89,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
   const configKeys = Object.keys(conn.config)
 
   return (
-    <div className="border border-navy/20 dark:border-cream/10 rounded-lg p-4 flex flex-col gap-3 bg-cream dark:bg-navy/30">
+    <div className="border border-navy/20 dark:border-[#4F7489]/40 rounded-lg p-4 flex flex-col gap-3 bg-cream dark:bg-[#0D3555]">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -99,20 +99,20 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
               {conn.connection_name}
             </div>
             {conn.last_test_status === 'failed' && conn.last_test_message && (
-              <div className="text-[10px] font-mono text-red-600 mt-0.5">{conn.last_test_message}</div>
+              <div className="text-[10px] font-mono text-red-600 dark:text-red-400 mt-0.5">{conn.last_test_message}</div>
             )}
             {conn.last_tested_at && (
-              <div className="text-[10px] font-mono text-inky/40 dark:text-cream/30 mt-0.5">
+              <div className="text-[10px] font-mono text-inky/50 dark:text-cream/40 mt-0.5">
                 Last tested: {new Date(conn.last_tested_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
               </div>
             )}
           </div>
         </div>
-        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-          label === 'CONFIGURED' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300' :
+        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
+          label === 'CONFIGURED'      ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300' :
           label === 'NEEDS ATTENTION' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' :
-          label === 'READONLY' ? 'bg-sky/20 dark:bg-sky/10 text-navy dark:text-sky' :
-          'bg-navy/10 dark:bg-cream/10 text-inky dark:text-cream/60'
+          label === 'READONLY'        ? 'bg-sky/20 dark:bg-sky/10 text-navy dark:text-sky' :
+                                        'bg-navy/10 dark:bg-cream/10 text-inky dark:text-cream/60'
         }`}>
           {label}
         </span>
@@ -120,7 +120,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
 
       {/* Edit form */}
       {editing && configKeys.length > 0 && (
-        <div className="flex flex-col gap-2 pt-2 border-t border-navy/10">
+        <div className="flex flex-col gap-2 pt-2 border-t border-navy/10 dark:border-cream/10">
           {configKeys.map((k) => (
             <ConfigField
               key={k}
@@ -130,7 +130,7 @@ function ConnectionCard({ conn, isAdmin, onRefresh }: {
             />
           ))}
           {conn.vault_secret_names.length > 0 && (
-            <p className="text-[10px] font-mono text-inky/50 mt-1">
+            <p className="text-[10px] font-mono text-inky/50 dark:text-cream/40 mt-1">
               Secrets ({conn.vault_secret_names.join(', ')}) are managed in Supabase Vault — not editable here.
             </p>
           )}

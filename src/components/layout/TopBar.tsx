@@ -384,7 +384,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     .map((key) => ({ key, ...ALL_PILLS[key] }))
 
   return (
-    <header className="relative h-12 bg-[#002745] border-b border-[#002745]/40 flex items-center px-3 gap-2 flex-shrink-0">
+    <header className="relative min-h-[3rem] bg-[#002745] border-b border-[#002745]/40 flex items-center px-3 gap-2 flex-shrink-0 flex-wrap py-1.5">
       {/* Mobile hamburger */}
       {mobile ? (
         <button
@@ -407,15 +407,15 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
 
       {/* Stat pills — scrollable on mobile, wrapping on desktop */}
       <div className={[
-        'flex items-center gap-1.5 flex-1 min-w-0',
-        mobile ? 'overflow-x-auto' : 'gap-2 flex-wrap',
+        'flex items-center gap-2 flex-1 min-w-0',
+        mobile ? 'overflow-x-auto flex-nowrap' : 'flex-wrap',
       ].join(' ')}>
         {visiblePills.map((pill) => (
           <button
             key={pill.key}
             onClick={pill.onClick}
             title={pill.label}
-            className="flex items-center gap-1 px-2 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all flex-shrink-0 whitespace-nowrap"
+            className="flex items-center gap-1 px-2 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all flex-shrink-0 whitespace-nowrap min-w-[100px]"
           >
             <span className="text-[#F2F1E6]/60 text-[10px]">{pill.label}:</span>
             <span className={['font-medium', pill.accent ?? (pill.highlight ? 'text-sky' : 'text-[#F2F1E6]')].join(' ')}>

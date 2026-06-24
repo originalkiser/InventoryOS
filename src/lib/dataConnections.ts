@@ -62,10 +62,14 @@ export async function saveConnectionConfig(
 
 export async function testConnection(key: string): Promise<{ success: boolean; message: string }> {
   try {
-    const { data, error } = await (supabase as any).functions.invoke('test-connection', {
-      body: { connection_key: key },
-    })
-    if (error) return { success: false, message: error.message }
+    // supabase_status has its own dedicated edge function
+    const fnName = key === 'supabase_status' ? 'supabase-project-status' : 'test-connection'
+    const body = key === 'supabase_status' ? undefined : { connection_key: key }
+    const { data, error } = await (supabase as any).functions.invoke(fnName, body ? { body } : undefined)
+    if (error) return { success: false, message: error.message ?? String(error) }
+    if (!data) return { success: false, message: 'No response from function' }
+    // supabase-project-status returns { status: 'healthy', ... }
+    if (data.status === 'healthy') return { success: true, message: `Supabase project is reachable (checked ${data.checked_at ?? 'now'})` }
     return data as { success: boolean; message: string }
   } catch (err) {
     return { success: false, message: err instanceof Error ? err.message : 'Unknown error' }

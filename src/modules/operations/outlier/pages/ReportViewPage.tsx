@@ -164,10 +164,22 @@ export default function ReportViewPage() {
       updated_at: new Date().toISOString(),
     }))
 
+    console.log('[Outlier Push] upserting', upsertData.length, 'entries to outlier.report_entries')
     const { error } = await sb.schema('outlier').from('report_entries')
       .upsert(upsertData, { onConflict: 'report_id,week_id,row_key' })
 
-    if (error) throw error
+    if (error) {
+      console.error('[Outlier Push] upsert error:', error)
+      throw new Error(`${error.message} (code: ${error.code ?? 'n/a'}, hint: ${error.hint ?? 'n/a'})`)
+    }
+    console.log('[Outlier Push] upsert succeeded')
+
+    // Fetch the IDs of the upserted entries (needed for enrichment)
+    const { data: pushedEntries } = await sb.schema('outlier').from('report_entries')
+      .select('id, row_key')
+      .eq('report_id', report.id)
+      .eq('week_id', wId)
+      .in('row_key', rows.map(r => r.row_key))
 
     // Log paste
     await sb.schema('outlier').from('paste_logs').insert({
@@ -179,6 +191,58 @@ export default function ReportViewPage() {
     })
 
     toast.success(`${rows.length} rows imported`)
+    await loadData()
+
+    // Enrich AM/RDO in background — don't block the success toast
+    if (pushedEntries?.length) {
+      enrichReportEntries(pushedEntries.map((e: any) => e.id)).catch(() => {})
+    }
+  }
+
+  async function enrichReportEntries(entryIds: string[]) {
+    if (!entryIds.length) return
+
+    // Fetch entries that don't yet have location_id resolved
+    const { data: entries } = await sb.schema('outlier').from('report_entries')
+      .select('id, row_key, row_label, location_id')
+      .in('id', entryIds)
+      .is('location_id', null)
+
+    if (!entries?.length) return
+
+    // Fetch all active locations with metadata once
+    const { data: locations } = await sb.schema('core').from('locations')
+      .select('id, location_code, name, metadata')
+      .eq('company_id', profile?.company_id)
+      .eq('active', true)
+
+    if (!locations?.length) return
+
+    for (const entry of entries) {
+      // Try to match by numeric location code (strip non-digits for comparison)
+      const codeDigits = entry.row_key?.replace(/\D/g, '') ?? ''
+      const location = locations.find((loc: any) => {
+        const locDigits = String(loc.location_code ?? '').replace(/\D/g, '')
+        return locDigits && locDigits === codeDigits
+      }) ?? locations.find((loc: any) => {
+        // Fallback: case-insensitive name match
+        const name = String(loc.name ?? '').toLowerCase()
+        const label = String(entry.row_label ?? '').toLowerCase()
+        return name === label || name.includes(label) || label.includes(name)
+      })
+
+      if (!location) continue
+
+      const meta = (location.metadata as any) ?? {}
+      const amName: string | null = meta.area_manager ?? meta['Area Manager'] ?? null
+      const rdoName: string | null = meta.director ?? meta['Director'] ?? meta.rdo ?? meta['Regional Director'] ?? null
+
+      await sb.schema('outlier').from('report_entries')
+        .update({ location_id: location.id, area_manager_name: amName, rdo_name: rdoName })
+        .eq('id', entry.id)
+    }
+
+    // Refresh display after enrichment
     await loadData()
   }
 
@@ -256,6 +320,15 @@ export default function ReportViewPage() {
               <span className="w-2 h-2 rounded-full bg-sb-sky live-pulse" />
               <span className="font-mono text-[10px] text-sb-sky tracking-widest">LIVE</span>
             </div>
+          )}
+          {entries.length > 0 && (
+            <button
+              onClick={() => enrichReportEntries(entries.map((e) => e.id))}
+              className="flex items-center gap-1.5 font-mono text-[11px] text-sb-inky hover:text-sb-cream border border-sb-inky/40 hover:border-sb-inky px-2 py-1.5 rounded transition"
+              title="Re-run AM/RDO lookup from location data"
+            >
+              ↺ Re-enrich
+            </button>
           )}
           {canPaste && (
             <button

@@ -120,13 +120,20 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
   }
 
   async function handleCommit() {
-    if (!parsedRows || !currentWeek) return
+    if (!parsedRows) return
+    // currentWeek may be null — onCommit in ReportViewPage creates the week when needed
     setCommitting(true)
     try {
-      await onCommit(parsedRows, currentWeek.id, submittedByOverride || null)
+      console.log('[Outlier Push] starting commit', {
+        rows: parsedRows.length,
+        weekId: currentWeek?.id ?? '(new week)',
+        reportId: report.id,
+      })
+      await onCommit(parsedRows, currentWeek?.id ?? '', submittedByOverride || null)
       onClose()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      console.error('[Outlier Push] error:', err)
       setError(`Failed to save data: ${msg}`)
     } finally {
       setCommitting(false)

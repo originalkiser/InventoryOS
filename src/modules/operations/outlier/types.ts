@@ -72,6 +72,9 @@ export interface ReportEntry {
   due_date: string | null
   is_complete: boolean
   submitted_by: string | null
+  location_id: string | null
+  area_manager_name: string | null
+  rdo_name: string | null
   created_at: string
   updated_at: string
 }
