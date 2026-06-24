@@ -53,7 +53,7 @@ const col = createColumnHelper<Location>()
 
 export function LocationsTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<Location>('locations')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<Location>('locations', 'core')
   const { active: customFields, addField } = useCustomFields('locations')
 
   const [addOpen, setAddOpen] = useState(false)

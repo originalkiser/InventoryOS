@@ -161,6 +161,84 @@ function OptionBuilder({ options, onChange }: { options: FieldOption[]; onChange
   )
 }
 
+// ── Dropdown Location Seeder ──────────────────────────────────────────────────
+
+function LocationSeeder({ companyId, onSeed }: {
+  companyId: string
+  onSeed: (labels: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [locs, setLocs] = useState<{ location_code: string; name: string; region: string | null }[]>([])
+  const [loadingLocs, setLoadingLocs] = useState(false)
+
+  async function load() {
+    if (locs.length > 0) return
+    setLoadingLocs(true)
+    const { data } = await (sb as any).schema('core').from('locations')
+      .select('location_code, name, region')
+      .eq('company_id', companyId)
+      .eq('active', true)
+      .order('location_code')
+    setLocs(data ?? [])
+    setLoadingLocs(false)
+  }
+
+  function toggle() {
+    if (!open) load()
+    setOpen((v) => !v)
+  }
+
+  function seed(filter?: string) {
+    const filtered = filter ? locs.filter((l) => l.region === filter) : locs
+    onSeed(filtered.map((l) => l.location_code))
+    setOpen(false)
+  }
+
+  const regions = [...new Set(locs.map((l) => l.region).filter(Boolean) as string[])].sort()
+
+  return (
+    <div className="relative">
+      <button
+        onClick={toggle}
+        className="text-xs font-mono border border-navy/20 rounded px-2 py-1 text-inky hover:text-navy hover:border-navy/40 transition-colors"
+      >
+        ↓ Seed from Locations
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute top-full left-0 mt-1 z-20 bg-cream border border-navy/20 rounded shadow-lg min-w-[200px]">
+            {loadingLocs ? (
+              <p className="p-3 text-xs font-mono text-inky">Loading…</p>
+            ) : locs.length === 0 ? (
+              <p className="p-3 text-xs font-mono text-inky/60">No active locations found.</p>
+            ) : (
+              <div className="flex flex-col py-1 max-h-64 overflow-y-auto">
+                <button onClick={() => seed()}
+                  className="text-left px-3 py-1.5 text-xs font-mono text-navy hover:bg-navy/5">
+                  All Locations ({locs.length})
+                </button>
+                {regions.length > 0 && (
+                  <>
+                    <div className="mx-3 my-1 border-t border-navy/10" />
+                    <div className="px-3 pb-0.5 text-[10px] font-mono text-inky/50 uppercase tracking-wide">By Region</div>
+                    {regions.map((r) => (
+                      <button key={r} onClick={() => seed(r)}
+                        className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy">
+                        {r} ({locs.filter((l) => l.region === r).length})
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Conditional Logic Modal ───────────────────────────────────────────────────
 
 function ConditionalLogicModal({
@@ -438,7 +516,21 @@ function FieldCard({
             {/* Options */}
             {hasOptions && (
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Options (label + score)</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Options (label + score)</label>
+                  {field.field_type === 'dropdown' && (
+                    <LocationSeeder
+                      companyId={useAuthStore.getState().profile?.company_id ?? ''}
+                      onSeed={(codes) => {
+                        const existing = new Set(field.options.map((o) => o.label))
+                        const newOpts = codes
+                          .filter((c) => !existing.has(c))
+                          .map((c) => ({ id: crypto.randomUUID(), label: c, score: 0 }))
+                        onUpdate({ options: [...field.options, ...newOpts] })
+                      }}
+                    />
+                  )}
+                </div>
                 <OptionBuilder options={field.options} onChange={(o) => onUpdate({ options: o })} />
               </div>
             )}

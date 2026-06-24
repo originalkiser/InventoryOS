@@ -53,6 +53,7 @@ const ICONS: Record<string, JSX.Element> = {
   tasks: <Icon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />,
   forms: <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />,
   users: <Icon d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />,
+  locations: <Icon d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" d2="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />,
   drag: (
     <svg className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" fill="currentColor" viewBox="0 0 24 24">
       <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" />
@@ -103,6 +104,7 @@ const UTILITY_ITEMS: NavItem[] = [
   { key: 'issues', label: 'Issues', to: '/issues' },
   { key: 'meetings', label: 'Meeting Notes', to: '/meetings' },
   { key: 'forms', label: 'Forms', to: '/forms' },
+  { key: 'locations', label: 'Locations', to: '/config' },
   { key: 'feature-requests', label: 'Feature Requests', to: '/feature-requests' },
 ]
 
@@ -645,10 +647,10 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
         onClick={onClose}
         aria-hidden="true"
       />
-      <div className="fixed right-0 top-0 bottom-0 z-50 w-80 bg-cream dark:bg-navy shadow-2xl border-l border-navy/20 dark:border-[#F2F1E6]/10 flex flex-col">
+      <div className="fixed right-0 top-0 bottom-0 z-50 w-80 bg-[#F2F1E6] dark:bg-[#002745] shadow-2xl border-l border-navy/20 dark:border-[#F2F1E6]/10 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-          <span className="text-xs font-heading text-navy dark:text-cream uppercase tracking-widest">Profile</span>
+          <span className="text-xs font-heading text-navy dark:text-[#F2F1E6] uppercase tracking-widest">Profile</span>
           <button
             onClick={onClose}
             className="text-inky hover:text-navy dark:text-[#F2F1E6]/60 dark:hover:text-[#F2F1E6] transition-colors p-1"
@@ -665,7 +667,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             {initials}
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-heading text-navy dark:text-cream truncate">
+            <div className="text-sm font-heading text-navy dark:text-[#F2F1E6] truncate">
               {profile?.full_name ?? '—'}
             </div>
             <div className="text-xs font-mono text-inky dark:text-[#F2F1E6]/60 truncate">
@@ -683,7 +685,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             Appearance
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-sm font-body text-navy dark:text-cream">
+            <span className="text-sm font-body text-navy dark:text-[#F2F1E6]">
               {dark ? 'Dark mode' : 'Light mode'}
             </span>
             <button
@@ -695,7 +697,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             >
               <span className={[
                 'inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200',
-                dark ? 'translate-x-4.5' : 'translate-x-1',
+                dark ? 'translate-x-[18px]' : 'translate-x-0.5',
               ].join(' ')} />
             </button>
           </div>
@@ -708,27 +710,27 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between gap-2">
-              <label className="text-xs font-mono text-navy dark:text-cream whitespace-nowrap">Work Start</label>
+              <label className="text-xs font-mono text-navy dark:text-[#F2F1E6] whitespace-nowrap">Work Start</label>
               <input type="time" value={workStart} onChange={(e) => setWorkStart(e.target.value)}
-                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#F2F1E6]/8 text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
             </div>
             <div className="flex items-center justify-between gap-2">
-              <label className="text-xs font-mono text-navy dark:text-cream whitespace-nowrap">Work End</label>
+              <label className="text-xs font-mono text-navy dark:text-[#F2F1E6] whitespace-nowrap">Work End</label>
               <input type="time" value={workEnd} onChange={(e) => setWorkEnd(e.target.value)}
-                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#F2F1E6]/8 text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
             </div>
             <div className="flex items-center justify-between gap-2">
-              <label className="text-xs font-mono text-navy dark:text-cream">Timezone</label>
+              <label className="text-xs font-mono text-navy dark:text-[#F2F1E6]">Timezone</label>
               <select value={timezone} onChange={(e) => setTimezone(e.target.value)}
                 className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none max-w-[160px]">
                 {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz.replace('America/', '').replace('Pacific/', '')}</option>)}
               </select>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-mono text-navy dark:text-cream">Task Popups</span>
+              <span className="text-xs font-mono text-navy dark:text-[#F2F1E6]">Task Popups</span>
               <button onClick={() => setTaskPopups((v) => !v)}
                 className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', taskPopups ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
-                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', taskPopups ? 'translate-x-4.5' : 'translate-x-1'].join(' ')} />
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', taskPopups ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
               </button>
             </div>
           </div>
@@ -741,17 +743,17 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-mono text-navy dark:text-cream">Enable EOD Prompt</span>
+              <span className="text-xs font-mono text-navy dark:text-[#F2F1E6]">Enable EOD Prompt</span>
               <button onClick={() => setEodEnabled((v) => !v)}
                 className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', eodEnabled ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
-                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', eodEnabled ? 'translate-x-4.5' : 'translate-x-1'].join(' ')} />
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', eodEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
               </button>
             </div>
             {eodEnabled && (
               <div className="flex items-center justify-between gap-2">
-                <label className="text-xs font-mono text-navy dark:text-cream whitespace-nowrap">Prompt at</label>
+                <label className="text-xs font-mono text-navy dark:text-[#F2F1E6] whitespace-nowrap">Prompt at</label>
                 <input type="time" value={eodTime} onChange={(e) => setEodTime(e.target.value)}
-                  className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-cream dark:bg-navy/40 text-navy dark:text-cream px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+                  className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#F2F1E6]/8 text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
               </div>
             )}
           </div>
@@ -786,7 +788,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             <NavLink
               to="/admin/users"
               onClick={onClose}
-              className="flex items-center gap-2 text-sm font-body text-navy dark:text-cream hover:text-inky dark:hover:text-[#F2F1E6]/80 transition-colors"
+              className="flex items-center gap-2 text-sm font-body text-navy dark:text-[#F2F1E6] hover:text-inky dark:hover:text-[#F2F1E6]/80 transition-colors"
             >
               {ICONS.users}
               User Management
