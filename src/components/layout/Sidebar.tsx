@@ -717,12 +717,14 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-mono text-navy dark:text-[#F2F1E6] whitespace-nowrap">Work Start</label>
               <input type="time" value={workStart} onChange={(e) => setWorkStart(e.target.value)}
-                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#F2F1E6]/8 text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+                style={{ colorScheme: dark ? 'dark' : 'light' }}
+                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
             </div>
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-mono text-navy dark:text-[#F2F1E6] whitespace-nowrap">Work End</label>
               <input type="time" value={workEnd} onChange={(e) => setWorkEnd(e.target.value)}
-                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#F2F1E6]/8 text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+                style={{ colorScheme: dark ? 'dark' : 'light' }}
+                className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
             </div>
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-mono text-navy dark:text-[#F2F1E6]">Timezone</label>
@@ -758,7 +760,8 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
               <div className="flex items-center justify-between gap-2">
                 <label className="text-xs font-mono text-navy dark:text-[#F2F1E6] whitespace-nowrap">Prompt at</label>
                 <input type="time" value={eodTime} onChange={(e) => setEodTime(e.target.value)}
-                  className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#F2F1E6]/8 text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
+                  style={{ colorScheme: dark ? 'dark' : 'light' }}
+                  className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
               </div>
             )}
           </div>
@@ -797,6 +800,16 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             >
               {ICONS.users}
               User Management
+            </NavLink>
+            <NavLink
+              to="/dev-hub"
+              onClick={onClose}
+              className="flex items-center gap-2 mt-2 text-sm font-body text-navy dark:text-[#F2F1E6] hover:text-inky dark:hover:text-[#F2F1E6]/80 transition-colors"
+            >
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+              </svg>
+              Developer Hub
             </NavLink>
           </div>
         )}

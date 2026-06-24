@@ -9,7 +9,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { Badge, Button } from '@/components/ui'
-import { LocationSyncPanel } from '@/components/integrations/LocationSyncPanel'
 
 type BadgeColor = 'navy' | 'inky' | 'sky' | 'red' | 'green' | 'orange'
 const COLORS: BadgeColor[] = ['navy', 'inky', 'sky', 'red', 'green', 'orange']
@@ -189,9 +188,6 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
 
       {/* blocks */}
       <div className="flex-1 overflow-auto p-3">
-        <div className="mb-3">
-          <LocationSyncPanel />
-        </div>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={view.blocks.map((b) => b.id)} strategy={verticalListSortingStrategy}>
             <div className="flex flex-col gap-3">

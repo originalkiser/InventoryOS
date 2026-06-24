@@ -1,4 +1,5 @@
 ﻿import { useMemo, useState, useCallback } from 'react'
+import { LocationDataSourceConfig } from '@/modules/locations/LocationDataSourceConfig'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
@@ -193,6 +194,10 @@ export function LocationsTab() {
         </div>
 
         <DataSourceLinker configType="locations" />
+      </div>
+
+      <div className="border-t border-navy/10 pt-4">
+        <LocationDataSourceConfig />
       </div>
 
       {/* Add / Edit location */}

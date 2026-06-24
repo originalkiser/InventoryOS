@@ -17,6 +17,7 @@ import { DashboardPage } from '@/pages/Dashboard'
 import { ConfigPage } from '@/modules/config/ConfigPage'
 import { GlobalConfigPage } from '@/modules/config/GlobalConfigPage'
 import { LocationsPage } from '@/modules/locations/LocationsPage'
+import { DevHubPage } from '@/modules/dev-hub/DevHubPage'
 import { MonthEndPage } from '@/modules/monthend/MonthEndPage'
 import { WeeklyPage } from '@/modules/weekly/WeeklyPage'
 import { OrdersPage } from '@/modules/orders/OrdersPage'
@@ -101,6 +102,7 @@ export default function App() {
           <Route path="config" element={<ConfigPage />} />
           <Route path="global-config" element={<GlobalConfigPage />} />
           <Route path="locations" element={<LocationsPage />} />
+          <Route path="dev-hub" element={<RequireAdminOrDev><DevHubPage /></RequireAdminOrDev>} />
           <Route path="monthend" element={<MonthEndPage />} />
           <Route path="month-end" element={<Navigate to="/monthend" replace />} />
           <Route path="weekly" element={<WeeklyPage />} />

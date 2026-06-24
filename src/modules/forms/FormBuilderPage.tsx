@@ -163,23 +163,37 @@ function OptionBuilder({ options, onChange }: { options: FieldOption[]; onChange
 
 // ── Dropdown Location Seeder ──────────────────────────────────────────────────
 
+function numericCode(code: string) {
+  const n = parseInt(code.replace(/\D/g, ''), 10)
+  return isNaN(n) ? Infinity : n
+}
+
 function LocationSeeder({ companyId, onSeed }: {
   companyId: string
   onSeed: (labels: string[]) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [locs, setLocs] = useState<{ location_code: string; name: string; region: string | null }[]>([])
+  const [locs, setLocs] = useState<{ location_code: string; name: string; region: string | null; market: string | null; location_type: string | null }[]>([])
   const [loadingLocs, setLoadingLocs] = useState(false)
 
   async function load() {
     if (locs.length > 0) return
     setLoadingLocs(true)
     const { data } = await (sb as any).schema('core').from('locations')
-      .select('location_code, name, region')
+      .select('location_code, name, region, metadata')
       .eq('company_id', companyId)
       .eq('active', true)
-      .order('location_code')
-    setLocs(data ?? [])
+    const raw = (data ?? []) as any[]
+    const mapped = raw.map((r) => ({
+      location_code: r.location_code,
+      name: r.name,
+      region: r.region ?? null,
+      market: r.metadata?.market ?? null,
+      location_type: r.metadata?.location_type ?? null,
+    }))
+    // Numeric ascending sort — strips non-digits for comparison, displays original code
+    mapped.sort((a, b) => numericCode(a.location_code) - numericCode(b.location_code))
+    setLocs(mapped)
     setLoadingLocs(false)
   }
 
@@ -188,13 +202,13 @@ function LocationSeeder({ companyId, onSeed }: {
     setOpen((v) => !v)
   }
 
-  function seed(filter?: string) {
-    const filtered = filter ? locs.filter((l) => l.region === filter) : locs
+  function seed(filtered: typeof locs) {
     onSeed(filtered.map((l) => l.location_code))
     setOpen(false)
   }
 
   const regions = [...new Set(locs.map((l) => l.region).filter(Boolean) as string[])].sort()
+  const markets = [...new Set(locs.map((l) => l.market).filter(Boolean) as string[])].sort()
 
   return (
     <div className="relative">
@@ -207,27 +221,67 @@ function LocationSeeder({ companyId, onSeed }: {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute top-full left-0 mt-1 z-20 bg-cream border border-navy/20 rounded shadow-lg min-w-[200px]">
+          <div className="absolute top-full left-0 mt-1 z-20 bg-cream border border-navy/20 rounded shadow-lg min-w-[220px]">
             {loadingLocs ? (
               <p className="p-3 text-xs font-mono text-inky">Loading…</p>
             ) : locs.length === 0 ? (
               <p className="p-3 text-xs font-mono text-inky/60">No active locations found.</p>
             ) : (
-              <div className="flex flex-col py-1 max-h-64 overflow-y-auto">
-                <button onClick={() => seed()}
+              <div className="flex flex-col py-1 max-h-72 overflow-y-auto">
+                <button onClick={() => seed(locs)}
                   className="text-left px-3 py-1.5 text-xs font-mono text-navy hover:bg-navy/5">
                   All Locations ({locs.length})
                 </button>
+
+                {/* Corporate / Franchise */}
+                {locs.some((l) => l.location_type) && (
+                  <>
+                    <div className="mx-3 my-1 border-t border-navy/10" />
+                    <div className="px-3 pb-0.5 text-[10px] font-mono text-inky/50 uppercase tracking-wide">By Type</div>
+                    {(['corporate', 'franchise'] as const).map((type) => {
+                      const filtered = locs.filter((l) => l.location_type === type)
+                      if (filtered.length === 0) return null
+                      return (
+                        <button key={type} onClick={() => seed(filtered)}
+                          className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy capitalize">
+                          {type} ({filtered.length})
+                        </button>
+                      )
+                    })}
+                  </>
+                )}
+
+                {/* By Region */}
                 {regions.length > 0 && (
                   <>
                     <div className="mx-3 my-1 border-t border-navy/10" />
                     <div className="px-3 pb-0.5 text-[10px] font-mono text-inky/50 uppercase tracking-wide">By Region</div>
-                    {regions.map((r) => (
-                      <button key={r} onClick={() => seed(r)}
-                        className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy">
-                        {r} ({locs.filter((l) => l.region === r).length})
-                      </button>
-                    ))}
+                    {regions.map((r) => {
+                      const filtered = locs.filter((l) => l.region === r)
+                      return (
+                        <button key={r} onClick={() => seed(filtered)}
+                          className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy">
+                          {r} ({filtered.length})
+                        </button>
+                      )
+                    })}
+                  </>
+                )}
+
+                {/* By Market */}
+                {markets.length > 0 && (
+                  <>
+                    <div className="mx-3 my-1 border-t border-navy/10" />
+                    <div className="px-3 pb-0.5 text-[10px] font-mono text-inky/50 uppercase tracking-wide">By Market</div>
+                    {markets.map((m) => {
+                      const filtered = locs.filter((l) => l.market === m)
+                      return (
+                        <button key={m} onClick={() => seed(filtered)}
+                          className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy">
+                          {m} ({filtered.length})
+                        </button>
+                      )
+                    })}
                   </>
                 )}
               </div>

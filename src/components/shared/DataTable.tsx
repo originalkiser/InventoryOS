@@ -18,6 +18,8 @@ interface DataTableProps<T> {
   actions?: React.ReactNode
   /** When set, adds "Export with Files (ZIP)" option that bundles attachments */
   attachmentEntityType?: 'issue' | 'project'
+  /** Suppress the built-in column visibility dropdown (use when the caller provides its own) */
+  hideColumnControl?: boolean
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -102,6 +104,7 @@ export function DataTable<T>({
   loading,
   actions,
   attachmentEntityType,
+  hideColumnControl,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -240,22 +243,24 @@ export function DataTable<T>({
         />
 
         {/* Column visibility — exclude the internal select column */}
-        <div className="relative group">
-          <Button variant="secondary" size="sm">Columns</Button>
-          <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-cream border border-navy/40 rounded shadow-xl z-20 min-w-[160px] py-1">
-            {table.getAllLeafColumns().filter((c) => c.id !== 'select').map((col) => (
-              <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-navy/5">
-                <input
-                  type="checkbox"
-                  checked={col.getIsVisible()}
-                  onChange={col.getToggleVisibilityHandler()}
-                  className="accent-inky"
-                />
-                <span className="text-xs font-body text-navy">{String(col.columnDef.header ?? col.id)}</span>
-              </label>
-            ))}
+        {!hideColumnControl && (
+          <div className="relative group">
+            <Button variant="secondary" size="sm">Columns</Button>
+            <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-cream border border-navy/40 rounded shadow-xl z-20 min-w-[160px] py-1">
+              {table.getAllLeafColumns().filter((c) => c.id !== 'select').map((col) => (
+                <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-navy/5">
+                  <input
+                    type="checkbox"
+                    checked={col.getIsVisible()}
+                    onChange={col.getToggleVisibilityHandler()}
+                    className="accent-inky"
+                  />
+                  <span className="text-xs font-body text-navy">{String(col.columnDef.header ?? col.id)}</span>
+                </label>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Export button + dropdown */}
         {exportFilename && (
