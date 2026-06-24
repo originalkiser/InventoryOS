@@ -937,11 +937,6 @@ function ExpandedSidebar({
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
 
-  const visibleSectionOrder = useMemo(
-    () => sectionOrder.filter((k) => k !== 'global-config' || isAdmin),
-    [sectionOrder, isAdmin]
-  )
-
   const {
     sectionOrder,
     sectionCollapsed,
@@ -952,6 +947,11 @@ function ExpandedSidebar({
     toggleSection,
     toggleFavorite,
   } = useSidebarPrefs()
+
+  const visibleSectionOrder = useMemo(
+    () => sectionOrder.filter((k) => k !== 'global-config' || isAdmin),
+    [sectionOrder, isAdmin]
+  )
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
