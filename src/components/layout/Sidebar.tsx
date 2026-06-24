@@ -81,6 +81,9 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'projects', label: 'Projects', to: '/projects' },
     { key: 'config', label: 'Inventory Config', to: '/config' },
   ],
+  'global-config': [
+    { key: 'global-config', label: 'Global Config', to: '/global-config' },
+  ],
   operations: [
     { key: 'outlier', label: 'Outlier Reporting', to: '/operations/outlier' },
     { key: 'outlier-am', label: 'AM Dashboard', to: '/operations/outlier/am-dashboard' },
@@ -93,6 +96,7 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
 
 const SECTION_META: Record<string, { label: string; emoji: string }> = {
   inventory: { label: 'Inventory', emoji: '📦' },
+  'global-config': { label: 'Configuration', emoji: '⚙️' },
   operations: { label: 'Operations', emoji: '🏢' },
   finance: { label: 'Finance', emoji: '💰' },
   accounting: { label: 'Accounting', emoji: '📊' },
@@ -827,7 +831,10 @@ function CollapsedNav({
   onToggleCollapsed?: () => void
 }) {
   const { profile } = useAuthStore()
-  const allItems = Object.values(SECTION_ITEMS).flat()
+  const isAdmin = isAdminOrDeveloper(profile?.role)
+  const allItems = Object.entries(SECTION_ITEMS)
+    .filter(([k]) => k !== 'global-config' || isAdmin)
+    .flatMap(([, items]) => items)
   const initials = (profile?.full_name ?? profile?.email ?? '?')
     .split(' ')
     .map((w) => w[0])
@@ -930,11 +937,10 @@ function ExpandedSidebar({
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
 
-  const inventoryItems = useMemo(() => {
-    const base = SECTION_ITEMS.inventory
-    if (!isAdmin) return base
-    return [...base, { key: 'global-config', label: 'Global Config', to: '/global-config' }]
-  }, [isAdmin])
+  const visibleSectionOrder = useMemo(
+    () => sectionOrder.filter((k) => k !== 'global-config' || isAdmin),
+    [sectionOrder, isAdmin]
+  )
 
   const {
     sectionOrder,
@@ -985,8 +991,8 @@ function ExpandedSidebar({
           collisionDetection={closestCenter}
           onDragEnd={handleSectionDragEnd}
         >
-          <SortableContext items={sectionOrder} strategy={verticalListSortingStrategy}>
-            {sectionOrder.map((sectionKey) => (
+          <SortableContext items={visibleSectionOrder} strategy={verticalListSortingStrategy}>
+            {visibleSectionOrder.map((sectionKey) => (
               <SortableSection
                 key={sectionKey}
                 sectionKey={sectionKey}
@@ -997,7 +1003,7 @@ function ExpandedSidebar({
                 onToggleCollapse={() => toggleSection(sectionKey)}
                 onNavClick={onNavClick}
                 itemOrder={itemOrder[sectionKey] ?? []}
-                overrideItems={sectionKey === 'inventory' ? inventoryItems : undefined}
+                overrideItems={undefined}
               />
             ))}
           </SortableContext>
