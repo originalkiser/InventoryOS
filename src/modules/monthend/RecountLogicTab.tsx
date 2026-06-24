@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
@@ -66,6 +66,9 @@ export function RecountLogicTab() {
   const [evalData, setEvalData] = useState<PeriodEvalData | null>(null)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'pending' | 'saved'>('idle')
+  const hasLoadedRef = useRef(false)
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
   // Load existing config
   useEffect(() => {
@@ -90,8 +93,29 @@ export function RecountLogicTab() {
       const legacyTT = (c as any).threshold_type ?? 'percentage'
       setVarMedThresholdType((c as any).var_med_threshold_type ?? legacyTT)
       setVarLastThresholdType((c as any).var_last_threshold_type ?? legacyTT)
+      hasLoadedRef.current = true
     })()
   }, [companyId])
+
+  // Auto-save debounced at 1.5s after any threshold change
+  useEffect(() => {
+    if (!hasLoadedRef.current || !companyId) return
+    setAutoSaveStatus('pending')
+    clearTimeout(autoSaveTimerRef.current)
+    autoSaveTimerRef.current = setTimeout(async () => {
+      const id = await saveLogic()
+      if (id) {
+        setAutoSaveStatus('saved')
+        setTimeout(() => setAutoSaveStatus('idle'), 2000)
+      } else {
+        setAutoSaveStatus('idle')
+      }
+    }, 1500)
+    return () => clearTimeout(autoSaveTimerRef.current)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adjEnabled, balEnabled, varMedEnabled, varLastEnabled,
+      lowAdj, highAdj, lowBal, highBal, varMed, varLast,
+      lookback, varMedThresholdType, varLastThresholdType])
 
   // Load period data for the live preview (once per period)
   useEffect(() => {
@@ -313,8 +337,13 @@ export function RecountLogicTab() {
               hint={`Median over trailing ${lookbackN} months`}
             />
           </div>
-          <div className="flex gap-2">
-            <Button variant="secondary" loading={saving} onClick={handleSave}>Save Logic</Button>
+          <div className="flex items-center gap-3">
+            {autoSaveStatus === 'pending' && (
+              <span className="text-[10px] font-mono text-inky/50 animate-pulse">Auto-saving…</span>
+            )}
+            {autoSaveStatus === 'saved' && (
+              <span className="text-[10px] font-mono text-green-600">✓ Saved</span>
+            )}
             <Button loading={generating} onClick={handleApplyGenerate}>Apply &amp; Generate Recounts</Button>
           </div>
         </CardBody>
