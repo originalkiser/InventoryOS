@@ -246,7 +246,7 @@ export function IssuesPage() {
       (supabase as any).schema('inventory').from('issues').select(`*, issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
       (supabase as any).schema('core').from('locations').select('id, name').eq('company_id', profile.company_id),
     ])
-    if (liveRes.error) toast.error('Failed to load issues')
+    if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
     else {
       const locMap: Record<string, string> = Object.fromEntries(
         (locRes.data ?? []).map((l: any) => [l.id, l.name])

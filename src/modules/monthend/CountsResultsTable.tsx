@@ -133,26 +133,43 @@ const rowKey = (r: SummaryResultRow) => `${r.location_id ?? ''}|${r.count_type ?
 export function CountsResultsTable({ summaryRows, productRows, lookbackN, loading }: Props) {
   const [view, setView] = useState<'summary' | 'product'>('summary')
 
-  // ---- Summary: allowable type filter ----
+  // ---- Summary: allowable type rules (per-type: include / exclude / allow_if_over) ----
   const distinctTypes = useMemo(() => Array.from(new Set(summaryRows.map((r) => r.count_type ?? '—'))).sort(), [summaryRows])
-  const [allowable, setAllowable] = useAppSetting<string[]>('monthend.allowableTypes', [])
+
+  type TypeRuleMode = 'include' | 'exclude' | 'allow_if_over'
+  interface TypeRule { mode: TypeRuleMode; threshold: number | null }
+  const [typeRules, setTypeRules] = useAppSetting<Record<string, TypeRule>>('monthend.allowableTypeRules', {})
   const [overrides, setOverrides] = useState<Record<string, 'include' | 'exclude'>>({})
-  const allowableSet = useMemo(() => new Set(allowable), [allowable])
+  const [rulePopover, setRulePopover] = useState<string | null>(null)
+  const [thresholdDraft, setThresholdDraft] = useState<Record<string, string>>({})
+
+  function getRule(t: string): TypeRule {
+    return typeRules[t] ?? { mode: 'include', threshold: null }
+  }
+
+  function setRule(t: string, rule: TypeRule) {
+    setTypeRules({ ...typeRules, [t]: rule })
+    setRulePopover(null)
+  }
+
   function included(r: SummaryResultRow): boolean {
     const ov = overrides[rowKey(r)]
     if (ov) return ov === 'include'
-    return allowable.length === 0 || allowableSet.has(r.count_type ?? '—')
+    const rule = getRule(r.count_type ?? '—')
+    if (rule.mode === 'exclude') return false
+    if (rule.mode === 'allow_if_over') {
+      return rule.threshold == null || (r.total_adjustments ?? 0) > rule.threshold
+    }
+    return true
   }
-  function toggleType(t: string) {
-    const base = allowable.length === 0 ? distinctTypes : allowable
-    setAllowable(base.includes(t) ? base.filter((x) => x !== t) : [...base, t])
-  }
+
   function toggleOverride(r: SummaryResultRow) {
     const k = rowKey(r)
     const next = included(r) ? 'exclude' : 'include'
     setOverrides((o) => ({ ...o, [k]: next }))
   }
-  const filteredSummary = useMemo(() => summaryRows.filter(included), [summaryRows, allowable, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredSummary = useMemo(() => summaryRows.filter(included), [summaryRows, typeRules, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
   const excludedCount = summaryRows.length - filteredSummary.length
 
   // ---- Product: zero on-hand filter + per-category exceptions ----
@@ -214,7 +231,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
         )
       },
     }),
-  ], [lookbackN, allowable, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
+  ], [lookbackN, typeRules, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const productColumns = useMemo(() => [
     pc.accessor('location_label', { header: 'Location' }),
@@ -289,12 +306,69 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
         <div className="flex flex-wrap items-center gap-2 rounded border border-navy/30 bg-cream px-3 py-2">
           <span className="text-xs font-mono uppercase tracking-wide text-inky">Allowable types:</span>
           {distinctTypes.map((t) => {
-            const on = allowable.length === 0 || allowableSet.has(t)
+            const rule = getRule(t)
+            const chipColor =
+              rule.mode === 'exclude' ? 'border-red-300 bg-red-50 text-red-600' :
+              rule.mode === 'allow_if_over' ? 'border-amber-400 bg-amber-50 text-amber-700' :
+              'border-navy bg-navy/10 text-navy'
+            const chipLabel =
+              rule.mode === 'exclude' ? `✕ ${t}` :
+              rule.mode === 'allow_if_over' ? `≥${rule.threshold ?? '?'} adj · ${t}` :
+              `✓ ${t}`
             return (
-              <button key={t} onClick={() => toggleType(t)}
-                className={['rounded border px-2 py-0.5 text-xs font-mono', on ? 'border-navy bg-navy/10 text-navy' : 'border-navy/30 text-inky/70'].join(' ')}>
-                {on ? '✓ ' : ''}{t}
-              </button>
+              <div key={t} className="relative">
+                <button
+                  onClick={() => {
+                    setRulePopover(rulePopover === t ? null : t)
+                    setThresholdDraft((d) => ({ ...d, [t]: String(getRule(t).threshold ?? '') }))
+                  }}
+                  className={['rounded border px-2 py-0.5 text-xs font-mono transition-colors', chipColor].join(' ')}>
+                  {chipLabel}
+                </button>
+                {rulePopover === t && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setRulePopover(null)} />
+                    <div className="absolute z-50 top-full mt-1 left-0 min-w-[220px] rounded border border-navy/30 bg-cream shadow-xl p-3 flex flex-col gap-2">
+                      <p className="text-[10px] font-mono text-inky uppercase tracking-wide mb-1">{t}</p>
+                      <button
+                        onClick={() => setRule(t, { mode: 'include', threshold: null })}
+                        className={['flex items-center gap-2 text-xs font-mono px-2 py-1.5 rounded border transition-colors', rule.mode === 'include' ? 'border-navy bg-navy/10 text-navy' : 'border-navy/20 text-inky hover:border-navy/40'].join(' ')}>
+                        <span className="text-green-600">✓</span> Include (always allowed)
+                      </button>
+                      <button
+                        onClick={() => setRule(t, { mode: 'exclude', threshold: null })}
+                        className={['flex items-center gap-2 text-xs font-mono px-2 py-1.5 rounded border transition-colors', rule.mode === 'exclude' ? 'border-red-400 bg-red-50 text-red-600' : 'border-navy/20 text-inky hover:border-navy/40'].join(' ')}>
+                        <span className="text-red-500">✕</span> Don't allow
+                      </button>
+                      <div className={['flex flex-col gap-1.5 rounded border px-2 py-2 transition-colors', rule.mode === 'allow_if_over' ? 'border-amber-400 bg-amber-50' : 'border-navy/20'].join(' ')}>
+                        <button
+                          onClick={() => setRule(t, { mode: 'allow_if_over', threshold: Number(thresholdDraft[t]) || null })}
+                          className="flex items-center gap-2 text-xs font-mono text-left">
+                          <span className={rule.mode === 'allow_if_over' ? 'text-amber-600' : 'text-inky/40'}>◎</span>
+                          <span className={rule.mode === 'allow_if_over' ? 'text-amber-700' : 'text-inky'}>Allow if over X adjustments</span>
+                        </button>
+                        <div className="flex items-center gap-1.5 pl-5">
+                          <span className="text-[10px] font-mono text-inky">Threshold:</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={thresholdDraft[t] ?? ''}
+                            onChange={(e) => setThresholdDraft((d) => ({ ...d, [t]: e.target.value }))}
+                            onClick={(e) => e.stopPropagation()}
+                            placeholder="e.g. 5"
+                            className="w-16 rounded border border-navy/30 bg-cream px-1.5 py-0.5 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none"
+                          />
+                          <button
+                            onClick={() => setRule(t, { mode: 'allow_if_over', threshold: Number(thresholdDraft[t]) || null })}
+                            className="text-[10px] font-mono border border-navy/20 rounded px-1.5 py-0.5 text-inky hover:border-navy/40">
+                            Set
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             )
           })}
           {excludedCount > 0 && <span className="text-xs font-mono text-orange-600">{excludedCount} row{excludedCount !== 1 ? 's' : ''} excluded</span>}
