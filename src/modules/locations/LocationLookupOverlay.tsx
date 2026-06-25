@@ -390,9 +390,34 @@ function cellVal(r: Record<string, any>, c: string): any {
   if (c.startsWith('meta:')) return (r.metadata as any)?.[c.slice(5)]
   return r[c]
 }
-const colLabel = (c: string) => (c.startsWith('meta:') ? c.slice(5) : c)
+
+// Map internal column keys to readable header labels
+const COL_LABELS: Record<string, string> = {
+  location_code: 'Code',
+  name: 'Name',
+  region: 'Region',
+  active: 'Active',
+  updated_at: 'Updated',
+  __pos__: 'POS String',
+  'meta:area_manager': 'Area Manager',
+  'meta:regional_director': 'Regional Director',
+  'meta:market': 'Market',
+  'meta:delivery_day': 'Delivery Day',
+}
+
+function colLabel(c: string): string {
+  if (COL_LABELS[c]) return COL_LABELS[c]
+  if (c.startsWith('meta:')) {
+    return c.slice(5).replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
+  }
+  return c.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
+}
+
+// Contextual filter hierarchy for locations
+const LOC_FILTER_HIERARCHY = ['region', 'meta:market', 'meta:area_manager', 'meta:regional_director']
 
 const PAGE = 1000
+const PAGE_SIZES = [50, 100, 150, 200] as const
 
 function TableBlock({ block, editing, search, activeFilter, onChange }: {
   block: Extract<Block, { type: 'table' }>; editing: boolean; search: string
@@ -403,10 +428,15 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
   const loc = useLocations()
   const [rows, setRows] = useState<Record<string, any>[]>([])
   const [allCols, setAllCols] = useState<string[]>([])
-  const [seeAll, setSeeAll] = useState(false)
+  const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(
+    block.source === 'locations' ? { col: 'location_code', dir: 'asc' } : null
+  )
+  // Contextual dropdown filters for locations
+  const [dropFilters, setDropFilters] = useState<Record<string, string>>({})
+  const [pageSize, setPageSize] = useState<number | 'all'>(50)
+  const [page, setPage] = useState(0)
   const isLocations = block.source === 'locations'
 
-  // Derive allCols from a row sample
   function deriveAllCols(r: Record<string, any>[], source: string) {
     const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
     const metaKeys = new Set<string>()
@@ -417,7 +447,6 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
     return [...base, ...metaKeys, ...(source === 'locations' ? ['__pos__'] : [])]
   }
 
-  // Locations: reuse the already-loaded data from useLocations (no limit, no extra round-trip)
   useEffect(() => {
     if (!isLocations) return
     const r = loc.locations as unknown as Record<string, any>[]
@@ -425,7 +454,6 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
     setAllCols(deriveAllCols(r, 'locations'))
   }, [isLocations, loc.locations])
 
-  // Other sources: count then parallel-page fetch (no row cap)
   useEffect(() => {
     if (isLocations || !profile?.company_id) return
     let cancelled = false
@@ -448,18 +476,83 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
     return () => { cancelled = true }
   }, [isLocations, block.source, profile?.company_id])
 
-  const valueOf = (r: Record<string, any>, c: string) => (c === '__pos__' && isLocations ? loc.posStringFor(r.id) : cellVal(r, c))
-  const labelFor = (c: string) => (c === '__pos__' ? 'POS String' : colLabel(c))
+  const valueOf = (r: Record<string, any>, c: string) =>
+    c === '__pos__' && isLocations ? loc.posStringFor(r.id) : cellVal(r, c)
 
   const cols = block.columns.length ? block.columns : allCols.slice(0, 4)
+
+  // Which filter fields from the hierarchy actually exist in this dataset
+  const filterFields = useMemo(
+    () => LOC_FILTER_HIERARCHY.filter((f) => allCols.includes(f)),
+    [allCols]
+  )
+
+  // For a given hierarchy field, rows that pass ALL filters ABOVE it (for counting options)
+  function rowsAbove(fieldIdx: number, allRows: Record<string, any>[]): Record<string, any>[] {
+    let r = allRows
+    for (let i = 0; i < fieldIdx; i++) {
+      const f = filterFields[i]
+      const v = dropFilters[f]
+      if (v) r = r.filter((row) => String(valueOf(row, f) ?? '') === v)
+    }
+    return r
+  }
+
+  // Base filtered rows (search + activeFilter + dropdown filters)
   const filtered = useMemo(() => {
     let r = rows
     const q = search.trim().toLowerCase()
     if (q) r = r.filter((row) => cols.some((c) => String(valueOf(row, c) ?? '').toLowerCase().includes(q)))
-    if (activeFilter) r = r.filter((row) => String(valueOf(row, activeFilter.column) ?? '').toLowerCase() === activeFilter.value.toLowerCase())
+    if (activeFilter) r = r.filter((row) =>
+      String(valueOf(row, activeFilter.column) ?? '').toLowerCase() === activeFilter.value.toLowerCase()
+    )
+    for (const [field, val] of Object.entries(dropFilters)) {
+      if (val) r = r.filter((row) => String(valueOf(row, field) ?? '') === val)
+    }
     return r
-  }, [rows, search, cols, activeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
-  const shown = seeAll ? filtered : filtered.slice(0, 20)
+  }, [rows, search, cols, activeFilter, dropFilters]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sorted rows
+  const sortedFiltered = useMemo(() => {
+    if (!sort) return filtered
+    return [...filtered].sort((a, b) => {
+      const av = valueOf(a, sort.col)
+      const bv = valueOf(b, sort.col)
+      // Numeric sort for location_code
+      if (sort.col === 'location_code') {
+        const an = parseInt(String(av ?? ''), 10)
+        const bn = parseInt(String(bv ?? ''), 10)
+        if (!isNaN(an) && !isNaN(bn)) return sort.dir === 'asc' ? an - bn : bn - an
+      }
+      const cmp = String(av ?? '').localeCompare(String(bv ?? ''), undefined, { numeric: true })
+      return sort.dir === 'asc' ? cmp : -cmp
+    })
+  }, [filtered, sort]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function toggleSort(col: string) {
+    setSort((prev) => {
+      if (prev?.col !== col) return { col, dir: 'asc' }
+      if (prev.dir === 'asc') return { col, dir: 'desc' }
+      return null
+    })
+    setPage(0)
+  }
+
+  function setDropFilter(field: string, val: string, fieldIdx: number) {
+    setDropFilters((prev) => {
+      const next: Record<string, string> = {}
+      // Keep filters above this level, clear this and below
+      for (let i = 0; i < fieldIdx; i++) next[filterFields[i]] = prev[filterFields[i]] ?? ''
+      next[field] = val
+      return next
+    })
+    setPage(0)
+  }
+
+  const totalPages = pageSize === 'all' ? 1 : Math.ceil(sortedFiltered.length / pageSize)
+  const shown = pageSize === 'all'
+    ? sortedFiltered
+    : sortedFiltered.slice(page * pageSize, (page + 1) * pageSize)
 
   const selectCls = 'rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none'
 
@@ -477,33 +570,108 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
               <label key={c} className="flex cursor-pointer items-center gap-1 text-[11px] font-body text-inky">
                 <input type="checkbox" checked={cols.includes(c)} className="accent-inky"
                   onChange={() => onChange({ columns: cols.includes(c) ? cols.filter((x) => x !== c) : [...cols, c] })} />
-                {labelFor(c)}
+                {colLabel(c)}
               </label>
             ))}
           </div>
         </div>
       ) : <div className="text-[11px] font-heading uppercase tracking-wide text-inky">{block.title}</div>}
 
+      {/* Contextual filter dropdowns — locations source only */}
+      {!editing && isLocations && filterFields.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {filterFields.map((field, fi) => {
+            const above = rowsAbove(fi, rows)
+            const opts = Array.from(
+              new Map(above.map((r) => {
+                const v = String(valueOf(r, field) ?? '')
+                return [v, v]
+              })).keys()
+            ).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+
+            // Count how many rows in `above` match each option
+            const countFor = (v: string) => above.filter((r) => String(valueOf(r, field) ?? '') === v).length
+
+            return (
+              <select
+                key={field}
+                value={dropFilters[field] ?? ''}
+                onChange={(e) => setDropFilter(field, e.target.value, fi)}
+                className={`${selectCls} max-w-[140px]`}
+              >
+                <option value="">All {colLabel(field)}s</option>
+                {opts.map((v) => (
+                  <option key={v} value={v}>{v} ({countFor(v)})</option>
+                ))}
+              </select>
+            )
+          })}
+          {Object.values(dropFilters).some(Boolean) && (
+            <button
+              onClick={() => { setDropFilters({}); setPage(0) }}
+              className="text-[11px] font-body text-inky/60 hover:text-navy underline self-center"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="overflow-auto rounded border border-inky/20">
         <table className="w-full text-[11px] font-body">
-          <thead className="bg-[#1a5c87]">
-            <tr>{cols.map((c) => <th key={c} className="px-2 py-1 text-left text-[#F2F1E6] font-heading uppercase tracking-wide">{labelFor(c)}</th>)}</tr>
+          <thead className="bg-[#1a5c87] sticky top-0">
+            <tr>
+              {cols.map((c) => {
+                const isSorted = sort?.col === c
+                return (
+                  <th
+                    key={c}
+                    onClick={() => toggleSort(c)}
+                    className="px-2 py-1 text-left text-[#F2F1E6] font-heading uppercase tracking-wide cursor-pointer select-none hover:bg-[#1a5c87]/80 whitespace-nowrap"
+                  >
+                    {colLabel(c)}
+                    {isSorted ? (sort!.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+                  </th>
+                )
+              })}
+            </tr>
           </thead>
           <tbody>
             {shown.map((r, i) => (
               <tr key={i} className={i % 2 === 0 ? 'bg-cream dark:bg-[#0a2035]' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'}>
-                {cols.map((c) => <td key={c} className="px-2 py-1 text-navy">{String(valueOf(r, c) ?? '—') || '—'}</td>)}
+                {cols.map((c) => <td key={c} className="px-2 py-1 text-navy whitespace-nowrap">{String(valueOf(r, c) ?? '') || '—'}</td>)}
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan={Math.max(1, cols.length)} className="px-2 py-2 text-inky italic font-body">No rows</td></tr>}
+            {shown.length === 0 && (
+              <tr><td colSpan={Math.max(1, cols.length)} className="px-2 py-2 text-inky italic font-body">No rows</td></tr>
+            )}
           </tbody>
         </table>
       </div>
-      {filtered.length > 20 && (
-        <button onClick={() => setSeeAll((s) => !s)} className="self-start text-[11px] font-body text-inky hover:text-navy hover:underline">
-          {seeAll ? 'Show less' : `See all ${filtered.length}`}
-        </button>
-      )}
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between text-[11px] font-body text-inky flex-wrap gap-1">
+        <span>{sortedFiltered.length.toLocaleString()} rows</span>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <select
+            value={pageSize}
+            onChange={(e) => { setPageSize(e.target.value === 'all' ? 'all' : Number(e.target.value)); setPage(0) }}
+            className={`${selectCls} py-0.5`}
+          >
+            {PAGE_SIZES.map((n) => <option key={n} value={n}>{n} / page</option>)}
+            <option value="all">All</option>
+          </select>
+          {pageSize !== 'all' && totalPages > 1 && (
+            <>
+              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}
+                className="px-1.5 py-0.5 border border-navy/30 rounded disabled:opacity-30 hover:border-navy text-navy">‹</button>
+              <span>{page + 1} / {totalPages}</span>
+              <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
+                className="px-1.5 py-0.5 border border-navy/30 rounded disabled:opacity-30 hover:border-navy text-navy">›</button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

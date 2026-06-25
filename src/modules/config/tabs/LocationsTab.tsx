@@ -1,6 +1,6 @@
 ﻿import { useMemo, useState, useCallback } from 'react'
 import { LocationDataSourceConfig } from '@/modules/locations/LocationDataSourceConfig'
-import { createColumnHelper } from '@tanstack/react-table'
+import { createColumnHelper, type SortingFn } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useAuthStore } from '@/stores/authStore'
@@ -14,6 +14,13 @@ import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { Location, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
+
+const numericSort: SortingFn<Location> = (a, b, colId) => {
+  const av = parseInt(String(a.getValue(colId) ?? ''), 10)
+  const bv = parseInt(String(b.getValue(colId) ?? ''), 10)
+  if (!isNaN(av) && !isNaN(bv)) return av - bv
+  return String(a.getValue(colId)).localeCompare(String(b.getValue(colId)))
+}
 
 // Code / Name / Region are real columns; the rest are recommended custom columns.
 const RECOMMENDED = [
@@ -86,7 +93,7 @@ export function LocationsTab() {
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      col.accessor('location_code', { header: 'Code' }),
+      col.accessor('location_code', { header: 'Code', sortingFn: numericSort }),
       col.accessor('name', { header: 'Name' }),
       col.accessor('region', { header: 'Region', cell: (i) => i.getValue() ?? '—' }),
     ]
@@ -116,7 +123,9 @@ export function LocationsTab() {
     return cols
   }, [customFields, openEdit])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, {
+    initialSorting: [{ id: 'location_code', desc: false }],
+  })
 
   function buildMetadata(values: Record<string, string>) {
     const meta: Record<string, unknown> = {}

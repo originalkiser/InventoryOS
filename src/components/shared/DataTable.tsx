@@ -332,7 +332,7 @@ export function DataTable<T>({
           className="text-xs font-body table-fixed"
           style={{ width: table.getTotalSize() + SEL_W }}
         >
-          <thead>
+          <thead className="sticky top-0 z-20">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="border-b border-inky/20 bg-[#002745]">
                 {/* Select-all checkbox */}
@@ -456,14 +456,28 @@ export function DataTable<T>({
       </div>
 
       {/* Pagination + row count */}
-      <div className="flex items-center justify-between text-xs font-body text-inky">
+      <div className="flex items-center justify-between text-xs font-body text-inky flex-wrap gap-2">
         <span>
           {filteredRows.length.toLocaleString()} rows
           {selectedCount > 0 && (
             <span className="text-sky ml-2">· {selectedCount} selected</span>
           )}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={table.getState().pagination.pageSize >= 999999 ? 'all' : table.getState().pagination.pageSize}
+            onChange={(e) => {
+              const v = e.target.value
+              table.setPageSize(v === 'all' ? 999999 : Number(v))
+              table.setPageIndex(0)
+            }}
+            className="border border-navy/40 rounded px-2 py-1 text-xs font-body text-navy bg-cream focus:outline-none focus:border-navy"
+          >
+            {[50, 100, 150, 200].map((n) => (
+              <option key={n} value={n}>{n} per page</option>
+            ))}
+            <option value="all">All</option>
+          </select>
           <button
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
@@ -472,7 +486,7 @@ export function DataTable<T>({
             ‹ Prev
           </button>
           <span>
-            Page {table.getState().pagination.pageIndex + 1} / {table.getPageCount()}
+            Page {table.getState().pagination.pageIndex + 1} / {table.getPageCount() || 1}
           </span>
           <button
             onClick={() => table.nextPage()}

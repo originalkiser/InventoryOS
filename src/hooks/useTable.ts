@@ -23,8 +23,8 @@ const multiSelectFilter: FilterFn<any> = (row, columnId, value: string[]) => {
   return value.includes(String(row.getValue(columnId) ?? ''))
 }
 
-export function useTable<T>(data: T[], columns: ColumnDef<T, any>[]) {
-  const [sorting, setSorting] = useState<SortingState>([])
+export function useTable<T>(data: T[], columns: ColumnDef<T, any>[], options?: { initialSorting?: SortingState }) {
+  const [sorting, setSorting] = useState<SortingState>(options?.initialSorting ?? [])
   const [globalFilter, setGlobalFilter] = useState('')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
