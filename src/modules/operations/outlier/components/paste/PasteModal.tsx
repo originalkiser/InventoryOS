@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { X, Upload, ClipboardPaste, FileSpreadsheet } from 'lucide-react'
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
-import { Report, ParsedRow, Week } from '../../types'
+import { Report, ParsedRow, Week, ColumnDef } from '../../types'
 import { detectPivot } from './pivotDetector'
 import PastePreview from './PastePreview'
 import XlsxMapper from './XlsxMapper'
@@ -14,9 +14,12 @@ interface Props {
   existingEntries: { row_key: string }[]
   onClose: () => void
   onCommit: (rows: ParsedRow[], weekId: string, submittedByOverride?: string | null) => Promise<void>
+  onAddColumns?: (newCols: ColumnDef[]) => Promise<ColumnDef[]>
 }
 
-export default function PasteModal({ report, currentWeek, existingEntries, onClose, onCommit }: Props) {
+export default function PasteModal({ report, currentWeek, existingEntries, onClose, onCommit, onAddColumns }: Props) {
+  // Local copy of columns so XlsxMapper immediately sees newly-added columns
+  const [localColumns, setLocalColumns] = useState<ColumnDef[]>(report.columns)
   const [rawText, setRawText] = useState('')
   const [parsedRows, setParsedRows] = useState<ParsedRow[] | null>(null)
   const [xlsxData, setXlsxData] = useState<{ headers: string[]; rows: string[][] } | null>(null)
@@ -97,6 +100,12 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
     e.target.value = ''
   }
 
+  async function handleAddColumns(newCols: ColumnDef[]) {
+    if (!onAddColumns) return
+    const merged = await onAddColumns(newCols)
+    setLocalColumns(merged)
+  }
+
   async function handleCommit() {
     if (!parsedRows) return
     // currentWeek may be null — onCommit in ReportViewPage creates the week when needed
@@ -139,15 +148,16 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
           <XlsxMapper
             sourceHeaders={xlsxData.headers}
             sourceRows={xlsxData.rows}
-            report={report}
+            report={{ ...report, columns: localColumns }}
             onBack={() => setXlsxData(null)}
             onMapped={rows => { setParsedRows(rows); setPivotInfo(null) }}
+            onAddColumns={onAddColumns ? handleAddColumns : undefined}
           />
         ) : parsedRows ? (
           /* Step: preview & commit */
           <PastePreview
             rows={parsedRows}
-            columns={report.columns}
+            columns={localColumns}
             existingKeys={new Set(existingEntries.map(e => e.row_key))}
             pivotInfo={pivotInfo}
             onBack={() => { setParsedRows(null); setXlsxData(null) }}

@@ -52,7 +52,7 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
         updated_at: new Date().toISOString(),
       })
       .eq('id', entryId)
-    if (error) toast.error('Failed to save comment')
+    if (error) { console.error('[Comment save]', error); toast.error('Failed to save comment') }
     else { toast.success('Comment saved'); onRefresh() }
   }
 

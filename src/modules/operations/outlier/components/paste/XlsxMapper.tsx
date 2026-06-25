@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { ArrowLeft, Check } from 'lucide-react'
-import { Report, ColumnDef, ParsedRow } from '../../types'
+import { ArrowLeft, Check, Plus } from 'lucide-react'
+import { Report, ColumnDef, ParsedRow, ColumnType } from '../../types'
 import { parseLocation, parseEmployeeRow } from './locationParser'
 import { toDateString, getThisWeekFriday } from '../../lib/weekUtils'
 
@@ -10,6 +10,19 @@ interface Props {
   report: Report
   onBack: () => void
   onMapped: (rows: ParsedRow[]) => void
+  onAddColumns?: (newCols: ColumnDef[]) => Promise<void>
+}
+
+function labelToKey(label: string) {
+  return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+}
+
+function guessColType(header: string, rows: string[][], headerIdx: number): ColumnType {
+  const vals = rows.map(r => String(r[headerIdx] ?? '').trim()).filter(Boolean)
+  if (!vals.length) return 'text'
+  const numericCount = vals.filter(v => !isNaN(parseFloat(v.replace(/[$,%]/g, '')))).length
+  if (numericCount / vals.length >= 0.8) return 'number'
+  return 'text'
 }
 
 function autoMatch(col: ColumnDef, headers: string[]): string {
@@ -23,15 +36,47 @@ function autoMatch(col: ColumnDef, headers: string[]): string {
   return ''
 }
 
-export default function XlsxMapper({ sourceHeaders, sourceRows, report, onBack, onMapped }: Props) {
+export default function XlsxMapper({ sourceHeaders, sourceRows, report, onBack, onMapped, onAddColumns }: Props) {
   const [mapping, setMapping] = useState<Record<string, string>>(() => {
     const m: Record<string, string> = {}
     for (const col of report.columns) m[col.key] = autoMatch(col, sourceHeaders)
     return m
   })
+  const [addingCols, setAddingCols] = useState(false)
+  const [selectedNew, setSelectedNew] = useState<Set<string>>(new Set())
 
   const primaryCol = report.columns.find(c => c.type === 'location' || c.type === 'employee')
   const hasPrimary = !!(primaryCol && mapping[primaryCol.key])
+
+  const existingKeys = new Set(report.columns.map(c => c.key))
+  const usedSourceCols = new Set(Object.values(mapping).filter(Boolean))
+  // Source headers not yet mapped to any report column and not key-conflicting
+  const addableHeaders = sourceHeaders.filter(h => {
+    const key = labelToKey(h)
+    return key && !usedSourceCols.has(h) && !existingKeys.has(key)
+  })
+
+  async function handleAddAndMap() {
+    if (!onAddColumns || !selectedNew.size) return
+    setAddingCols(true)
+    const newCols: ColumnDef[] = Array.from(selectedNew).map(header => {
+      const key = labelToKey(header)
+      const headerIdx = sourceHeaders.indexOf(header)
+      const type = guessColType(header, sourceRows, headerIdx)
+      return { key, label: header, type }
+    })
+    await onAddColumns(newCols)
+    // Auto-map each new col to its source header
+    setMapping(prev => {
+      const next = { ...prev }
+      for (const col of newCols) {
+        next[col.key] = col.label
+      }
+      return next
+    })
+    setAddingCols(false)
+    setSelectedNew(new Set())
+  }
 
   function generate() {
     const defaultDueDate = toDateString(getThisWeekFriday())
@@ -162,6 +207,46 @@ export default function XlsxMapper({ sourceHeaders, sourceRows, report, onBack, 
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Add unmapped source columns to report */}
+      {onAddColumns && addableHeaders.length > 0 && (
+        <div className="border border-sb-inky/30 rounded p-3 space-y-2">
+          <p className="font-brand font-bold text-[10px] text-sb-inky tracking-widest uppercase">
+            Add source columns to report
+          </p>
+          <p className="font-mono text-[11px] text-sb-cream/40">
+            These source columns aren't in the report yet. Check any you'd like to add as new data columns.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {addableHeaders.map(h => (
+              <label key={h} className="flex items-center gap-1.5 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={selectedNew.has(h)}
+                  onChange={e => setSelectedNew(prev => {
+                    const next = new Set(prev)
+                    if (e.target.checked) next.add(h)
+                    else next.delete(h)
+                    return next
+                  })}
+                  className="accent-sb-sky"
+                />
+                <span className="font-mono text-[11px] text-sb-cream/70 group-hover:text-sb-cream transition-colors">{h}</span>
+              </label>
+            ))}
+          </div>
+          {selectedNew.size > 0 && (
+            <button
+              onClick={handleAddAndMap}
+              disabled={addingCols}
+              className="flex items-center gap-1.5 font-brand font-bold text-[11px] tracking-wider bg-sb-inky/40 border border-sb-inky text-sb-cream px-3 py-1.5 rounded hover:bg-sb-inky/60 transition disabled:opacity-40"
+            >
+              <Plus size={12} />
+              {addingCols ? 'Adding…' : `Add ${selectedNew.size} column${selectedNew.size !== 1 ? 's' : ''} to report`}
+            </button>
+          )}
         </div>
       )}
 

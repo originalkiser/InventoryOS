@@ -244,7 +244,8 @@ export default function ReportViewPage() {
     const { error } = await sb.schema('outlier').from('report_entries')
       .update({ am_comment: comment, am_comment_updated_at: new Date().toISOString(), am_comment_updated_by: profile?.id, updated_at: new Date().toISOString() })
       .eq('id', id)
-    if (error) toast.error('Failed to save comment')
+    if (error) { console.error('[Comment save]', error); toast.error('Failed to save comment') }
+    else setEntries(prev => prev.map(e => e.id === id ? { ...e, am_comment: comment } : e))
   }
 
   async function handleDueDateChange(id: string, date: string) {
@@ -280,6 +281,17 @@ export default function ReportViewPage() {
     if (error) { toast.error('Failed to clear week'); return }
     toast.success('Week cleared — paste new data to start over')
     setEntries([])
+  }
+
+  async function handleAddReportColumns(newCols: import('../types').ColumnDef[]): Promise<import('../types').ColumnDef[]> {
+    if (!report || !newCols.length) return report?.columns ?? []
+    const merged = [...report.columns, ...newCols]
+    const { error } = await sb.schema('outlier').from('reports')
+      .update({ columns: merged })
+      .eq('id', report.id)
+    if (error) { toast.error('Failed to add columns'); return report.columns }
+    setReport(r => r ? { ...r, columns: merged } : r)
+    return merged
   }
 
   async function handleRDONameChange(id: string, name: string) {
@@ -416,6 +428,7 @@ export default function ReportViewPage() {
           existingEntries={entries}
           onClose={() => setShowPaste(false)}
           onCommit={handleCommit}
+          onAddColumns={handleAddReportColumns}
         />
       )}
     </div>
