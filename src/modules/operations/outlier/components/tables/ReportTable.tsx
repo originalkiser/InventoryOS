@@ -5,9 +5,23 @@ import StreakCell from '../shared/StreakCell'
 import DueDateCell from '../shared/DueDateCell'
 import StatusPill from '../shared/StatusPill'
 
+// Keys that are handled as fixed columns — exclude from user data columns to avoid duplicates
+const FIXED_KEYS = new Set([
+  'area_manager', 'area_manager_name', 'am',
+  'rdo', 'rdo_name', 'director',
+  'am_comment', 'am_comments', 'comments',
+  'due_date', 'due date',
+  'status', 'completed', 'is_complete',
+  'submitted_by', 'submitted_by_override',
+])
+
+function normalizeKey(k: string) {
+  return k.toLowerCase().replace(/[\s-]+/g, '_')
+}
+
 interface Props {
   entries: ReportEntry[]
-  allEntries: ReportEntry[]   // all weeks, for streak calc
+  allEntries: ReportEntry[]
   allWeeks: Week[]
   currentWeekId: string
   columns: ColumnDef[]
@@ -16,6 +30,8 @@ interface Props {
   onCommentChange?: (id: string, comment: string) => void
   onDueDateChange?: (id: string, date: string) => void
   onCompleteToggle?: (id: string, val: boolean) => void
+  onAMNameChange?: (id: string, name: string) => void
+  onRDONameChange?: (id: string, name: string) => void
   editableByAM?: boolean
 }
 
@@ -32,6 +48,8 @@ export default function ReportTable({
   onCommentChange,
   onDueDateChange,
   onCompleteToggle,
+  onAMNameChange,
+  onRDONameChange,
   editableByAM,
 }: Props) {
   const [sortKey, setSortKey] = useState<string | null>(null)
@@ -49,19 +67,22 @@ export default function ReportTable({
 
   const sorted = [...entries].sort((a, b) => {
     if (!sortKey || !sortDir) return 0
-    // Check top-level typed columns first, then fall back to data bag
     const av = (a as any)[sortKey] ?? a.data[sortKey] ?? ''
     const bv = (b as any)[sortKey] ?? b.data[sortKey] ?? ''
     const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true })
     return sortDir === 'asc' ? cmp : -cmp
   })
 
-  // Separate data rows from total rows
   const dataRows = sorted.filter(e => e.row_type !== 'total')
   const totalRows = sorted.filter(e => e.row_type === 'total')
   const displayRows = [...dataRows, ...totalRows]
 
-  const dataColumns = columns.filter(c => c.type !== 'location' && c.type !== 'employee')
+  // User-defined data columns: exclude location/employee identifiers AND fixed columns
+  const dataColumns = columns.filter(c =>
+    c.type !== 'location' &&
+    c.type !== 'employee' &&
+    !FIXED_KEYS.has(normalizeKey(c.key))
+  )
 
   if (entries.length === 0) {
     return (
@@ -82,16 +103,23 @@ export default function ReportTable({
       <table className="w-full text-left sticky-table">
         <thead>
           <tr className="border-b border-sb-inky/40">
+            {/* Shop/Employee — always first, sticky */}
             <Th label={isEmployeeReport ? 'EMPLOYEE' : 'SHOP'} sortKey="row_label" current={sortKey} dir={sortDir} onSort={handleSort} sticky />
+
+            {/* User-defined data columns */}
+            {dataColumns.map(col => (
+              <Th key={col.key} label={col.label} sortKey={col.key} current={sortKey} dir={sortDir} onSort={handleSort} />
+            ))}
+
+            {/* Fixed enriched columns: AM → RDO (shop reports only) */}
             {!isEmployeeReport && (
               <>
                 <Th label="AREA MANAGER" sortKey="area_manager_name" current={sortKey} dir={sortDir} onSort={handleSort} />
                 <Th label="RDO" sortKey="rdo_name" current={sortKey} dir={sortDir} onSort={handleSort} />
               </>
             )}
-            {dataColumns.map(col => (
-              <Th key={col.key} label={col.label} sortKey={col.key} current={sortKey} dir={sortDir} onSort={handleSort} />
-            ))}
+
+            {/* Fixed trailing columns */}
             <Th label="STREAK / LAST" sortKey={null} current={null} dir={null} onSort={() => {}} />
             <Th label="DUE DATE" sortKey="due_date" current={sortKey} dir={sortDir} onSort={handleSort} />
             <Th label="AM COMMENT" sortKey={null} current={null} dir={null} onSort={() => {}} />
@@ -118,7 +146,7 @@ export default function ReportTable({
                   'hover:bg-sb-inky/10'
                 } ${isTotal ? 'font-medium' : ''}`}
               >
-                {/* Shop/Employee name */}
+                {/* Shop/Employee name — sticky */}
                 <td className={`px-3 py-2.5 bg-sb-navy ${isTotal ? 'bg-sb-inky/20' : ''}`}>
                   <div className="flex items-center gap-2 min-w-[140px]">
                     {isTotal
@@ -133,23 +161,7 @@ export default function ReportTable({
                   </div>
                 </td>
 
-                {/* Area Manager / RDO — only for shop reports, from enriched columns */}
-                {!isEmployeeReport && (
-                  <>
-                    <td className="px-3 py-2.5">
-                      <span className="font-mono text-[12px] text-sb-cream/70">
-                        {entry.area_manager_name ?? '—'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span className="font-mono text-[12px] text-sb-cream/70">
-                        {entry.rdo_name ?? '—'}
-                      </span>
-                    </td>
-                  </>
-                )}
-
-                {/* Data columns */}
+                {/* User data columns */}
                 {dataColumns.map(col => (
                   <td key={col.key} className="px-3 py-2.5 text-right">
                     <span className="font-mono text-[12px] text-sb-cream/90">
@@ -157,6 +169,38 @@ export default function ReportTable({
                     </span>
                   </td>
                 ))}
+
+                {/* Area Manager / RDO — inline editable for shop reports */}
+                {!isEmployeeReport && (
+                  <>
+                    <td className="px-3 py-2.5 min-w-[160px]">
+                      {!isTotal && onAMNameChange ? (
+                        <InlineTextInput
+                          value={entry.area_manager_name ?? ''}
+                          placeholder="Area manager…"
+                          onChange={v => onAMNameChange(entry.id, v)}
+                        />
+                      ) : (
+                        <span className="font-mono text-[12px] text-sb-cream/70">
+                          {entry.area_manager_name ?? '—'}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 min-w-[140px]">
+                      {!isTotal && onRDONameChange ? (
+                        <InlineTextInput
+                          value={entry.rdo_name ?? ''}
+                          placeholder="RDO…"
+                          onChange={v => onRDONameChange(entry.id, v)}
+                        />
+                      ) : (
+                        <span className="font-mono text-[12px] text-sb-cream/70">
+                          {entry.rdo_name ?? '—'}
+                        </span>
+                      )}
+                    </td>
+                  </>
+                )}
 
                 {/* Streak / Last */}
                 <td className="px-3 py-2.5">
@@ -242,6 +286,40 @@ function Th({
         {active && dir === 'desc' && <ChevronDown size={10} />}
       </span>
     </th>
+  )
+}
+
+function InlineTextInput({ value, placeholder, onChange }: {
+  value: string
+  placeholder?: string
+  onChange: (v: string) => void
+}) {
+  const [local, setLocal] = useState(value)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const handleBlur = useCallback(async () => {
+    if (local === value) return
+    setSaving(true)
+    await Promise.resolve(onChange(local))
+    setSaving(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }, [local, value, onChange])
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        value={local}
+        onChange={e => { setLocal(e.target.value); setSaved(false) }}
+        onBlur={handleBlur}
+        onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+        placeholder={placeholder}
+        className="flex-1 bg-sb-inky/20 text-sb-cream font-mono text-[12px] px-2 py-1 rounded border border-sb-inky/40 focus:outline-none focus:border-sb-sky placeholder:text-sb-cream/25 min-w-[110px]"
+      />
+      {saving && <span className="font-mono text-[10px] text-sb-inky animate-spin">⟳</span>}
+      {saved && <span className="font-mono text-[10px] text-sb-green">✓</span>}
+    </div>
   )
 }
 

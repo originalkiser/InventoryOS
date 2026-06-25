@@ -385,6 +385,7 @@ function SortableSection({
   onNavClick,
   itemOrder,
   overrideItems,
+  onSetItemOrder,
 }: {
   sectionKey: string
   collapsed: boolean
@@ -395,6 +396,7 @@ function SortableSection({
   onNavClick?: () => void
   itemOrder: string[]
   overrideItems?: NavItem[]
+  onSetItemOrder?: (sectionKey: string, items: string[]) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sectionKey })
   const style: React.CSSProperties = {
@@ -414,14 +416,14 @@ function SortableSection({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
-  const handleItemDragEnd = (event: DragEndEvent, setItemOrd: (k: string, items: string[]) => void) => {
+  const handleItemDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
     const oldIdx = items.findIndex((i) => i.key === active.id)
     const newIdx = items.findIndex((i) => i.key === over.id)
     if (oldIdx !== -1 && newIdx !== -1) {
       const reordered = arrayMove(items, oldIdx, newIdx)
-      setItemOrd(sectionKey, reordered.map((i) => i.key))
+      onSetItemOrder?.(sectionKey, reordered.map((i) => i.key))
     }
   }
 
@@ -480,7 +482,7 @@ function SortableSection({
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
-          onDragEnd={(e) => handleItemDragEnd(e, () => {})}
+          onDragEnd={handleItemDragEnd}
         >
           <SortableContext items={items.map((i) => i.key)} strategy={verticalListSortingStrategy}>
             {items.map((item) => (
@@ -959,6 +961,7 @@ function ExpandedSidebar({
     setSectionOrder,
     toggleSection,
     toggleFavorite,
+    setItemOrder,
   } = useSidebarPrefs()
 
   const visibleSectionOrder = useMemo(
@@ -1017,6 +1020,7 @@ function ExpandedSidebar({
                 onNavClick={onNavClick}
                 itemOrder={itemOrder[sectionKey] ?? []}
                 overrideItems={undefined}
+                onSetItemOrder={setItemOrder}
               />
             ))}
           </SortableContext>

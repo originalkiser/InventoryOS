@@ -1,15 +1,11 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { X, Upload, ClipboardPaste, FileSpreadsheet } from 'lucide-react'
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
-import { supabase } from '@/lib/supabase'
-import { useAuthStore } from '@/stores/authStore'
-import { isAdminOrDeveloper } from '@/lib/roles'
 import { Report, ParsedRow, Week } from '../../types'
 import { detectPivot } from './pivotDetector'
 import PastePreview from './PastePreview'
 import XlsxMapper from './XlsxMapper'
-import { toDateString, getThisWeekFriday } from '../../lib/weekUtils'
 import toast from 'react-hot-toast'
 
 interface Props {
@@ -21,33 +17,14 @@ interface Props {
 }
 
 export default function PasteModal({ report, currentWeek, existingEntries, onClose, onCommit }: Props) {
-  const { profile } = useAuthStore()
   const [rawText, setRawText] = useState('')
   const [parsedRows, setParsedRows] = useState<ParsedRow[] | null>(null)
   const [xlsxData, setXlsxData] = useState<{ headers: string[]; rows: string[][] } | null>(null)
   const [pivotInfo, setPivotInfo] = useState<{ isPivot: boolean; shopCount: number; employeeCount: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [committing, setCommitting] = useState(false)
-  const [submittedByOverride, setSubmittedByOverride] = useState<string>('')
-  const [orgUsers, setOrgUsers] = useState<{ id: string; full_name: string | null; email: string }[]>([])
   const csvRef = useRef<HTMLInputElement>(null)
   const xlsxRef = useRef<HTMLInputElement>(null)
-
-  const canOverride = isAdminOrDeveloper(profile?.role)
-
-  useEffect(() => {
-    if (!canOverride) return
-    ;(supabase as any).schema('platform').from('user_profiles')
-      .select('id, full_name, email')
-      .is('deleted_at', null)
-      .order('full_name')
-      .then(({ data }: { data: any[] }) => { if (data) setOrgUsers(data) })
-  }, [canOverride])
-
-  const dataColumns = report.columns.filter(c => c.type !== 'location' && c.type !== 'employee')
-  const defaultDueDate = toDateString(getThisWeekFriday())
-
-  void dataColumns
 
   function parseText(text: string) {
     setError(null)
@@ -130,7 +107,7 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
         weekId: currentWeek?.id ?? '(new week)',
         reportId: report.id,
       })
-      await onCommit(parsedRows, currentWeek?.id ?? '', submittedByOverride || null)
+      await onCommit(parsedRows, currentWeek?.id ?? '')
       onClose()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -195,24 +172,6 @@ export default function PasteModal({ report, currentWeek, existingEntries, onClo
 
             {error && (
               <p className="font-mono text-sb-red text-[12px] bg-sb-red/10 border border-sb-red/30 rounded px-3 py-2">{error}</p>
-            )}
-
-            {canOverride && (
-              <div>
-                <label className="font-brand font-bold text-[11px] text-sb-inky tracking-widest uppercase mb-1.5 block">
-                  Submitted By (Override)
-                </label>
-                <select
-                  value={submittedByOverride}
-                  onChange={e => setSubmittedByOverride(e.target.value)}
-                  className="bg-sb-inky/20 text-sb-cream font-mono text-[12px] px-3 py-1.5 rounded border border-sb-inky/40 focus:outline-none focus:border-sb-sky"
-                >
-                  <option value="">— use my account —</option>
-                  {orgUsers.map(u => (
-                    <option key={u.id} value={u.id}>{u.full_name ?? u.email}</option>
-                  ))}
-                </select>
-              </div>
             )}
 
             <div className="flex flex-wrap items-center gap-3">

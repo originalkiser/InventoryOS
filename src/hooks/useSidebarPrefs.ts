@@ -49,7 +49,11 @@ export function useSidebarPrefs() {
         if (!data) return
         setPrefs({
           sectionOrder: data.section_order?.length
-            ? [...new Set([...DEFAULT_SECTION_ORDER, ...data.section_order])]
+            ? [
+                // Respect saved order; append any new default sections at the end
+                ...data.section_order.filter((k: string) => DEFAULT_SECTION_ORDER.includes(k)),
+                ...DEFAULT_SECTION_ORDER.filter((k) => !data.section_order.includes(k)),
+              ]
             : DEFAULT_SECTION_ORDER,
           sectionCollapsed: { marketing: true, ...data.section_collapsed },
           itemOrder: data.item_order ?? {},

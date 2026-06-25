@@ -273,6 +273,22 @@ export default function ReportViewPage() {
     else toast.success(val ? 'Marked complete' : 'Marked incomplete')
   }
 
+  async function handleAMNameChange(id: string, name: string) {
+    const { error } = await sb.schema('outlier').from('report_entries')
+      .update({ area_manager_name: name || null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) toast.error('Failed to save area manager name')
+    else setEntries(prev => prev.map(e => e.id === id ? { ...e, area_manager_name: name || null } : e))
+  }
+
+  async function handleRDONameChange(id: string, name: string) {
+    const { error } = await sb.schema('outlier').from('report_entries')
+      .update({ rdo_name: name || null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) toast.error('Failed to save RDO name')
+    else setEntries(prev => prev.map(e => e.id === id ? { ...e, rdo_name: name || null } : e))
+  }
+
   if (loading) {
     return (
       <div className="p-8 space-y-3">
@@ -354,6 +370,8 @@ export default function ReportViewPage() {
         onCommentChange={isAM || canPaste ? handleCommentChange : undefined}
         onDueDateChange={isAM || canPaste ? handleDueDateChange : undefined}
         onCompleteToggle={isAM || canPaste ? handleCompleteToggle : undefined}
+        onAMNameChange={canPaste ? handleAMNameChange : undefined}
+        onRDONameChange={canPaste ? handleRDONameChange : undefined}
         editableByAM={isAM || canPaste}
       />
 
