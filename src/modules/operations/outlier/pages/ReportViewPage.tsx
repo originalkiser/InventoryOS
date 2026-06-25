@@ -270,6 +270,18 @@ export default function ReportViewPage() {
     else setEntries(prev => prev.map(e => e.id === id ? { ...e, area_manager_name: name || null } : e))
   }
 
+  async function handleClearWeek() {
+    if (!report || !currentWeek) return
+    if (!window.confirm(`Delete all ${entries.length} entries for this week? This cannot be undone.`)) return
+    const { error } = await sb.schema('outlier').from('report_entries')
+      .delete()
+      .eq('report_id', report.id)
+      .eq('week_id', currentWeek.id)
+    if (error) { toast.error('Failed to clear week'); return }
+    toast.success('Week cleared — paste new data to start over')
+    setEntries([])
+  }
+
   async function handleRDONameChange(id: string, name: string) {
     const { error } = await sb.schema('outlier').from('report_entries')
       .update({ rdo_name: name || null, updated_at: new Date().toISOString() })
@@ -333,6 +345,15 @@ export default function ReportViewPage() {
               title="Re-run AM / Regional Director lookup from location data"
             >
               ↺ Re-enrich
+            </button>
+          )}
+          {entries.length > 0 && canPaste && (
+            <button
+              onClick={handleClearWeek}
+              className="flex items-center gap-1.5 font-mono text-[11px] text-sb-red/70 hover:text-sb-red border border-sb-red/30 hover:border-sb-red/60 px-2 py-1.5 rounded transition"
+              title="Delete all entries for this week and start over"
+            >
+              ✕ Clear week
             </button>
           )}
           {canPaste && !report.is_employee_report && (

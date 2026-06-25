@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { InverseToggle } from '@/components/shared/InverseToggle'
 import { Button } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
@@ -77,6 +77,60 @@ function buildMappings(requiredFields: RequiredField[], headers: string[], saved
     const auto = headers.find((h) => norm(h) === norm(f.name))
     return { fieldName: f.name, sourceColumn: auto ?? '', invert: false }
   })
+}
+
+function CompositeEditor({ value, headers, onChange }: {
+  value: string
+  headers: string[]
+  onChange: (v: string) => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const insertToken = useCallback((header: string) => {
+    const el = inputRef.current
+    if (!el) { onChange(value + `{${header}}`); return }
+    const start = el.selectionStart ?? value.length
+    const end = el.selectionEnd ?? value.length
+    const token = `{${header}}`
+    const next = value.slice(0, start) + token + value.slice(end)
+    onChange(next)
+    // Restore cursor after the inserted token
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(start + token.length, start + token.length)
+    })
+  }, [value, onChange])
+
+  return (
+    <div className="pl-[192px] flex flex-col gap-1.5">
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Type literals and click columns below to insert tokens"
+        title="Click column buttons below to insert {Header} tokens at the cursor"
+        className="bg-cream border border-sky/40 rounded px-2 py-1 text-xs font-mono text-inky focus:outline-none focus:border-sky"
+      />
+      <div className="flex flex-wrap gap-1">
+        <span className="text-[10px] font-mono text-inky/40 self-center mr-0.5">+ column:</span>
+        {headers.map(h => (
+          <button
+            key={h}
+            type="button"
+            onClick={() => insertToken(h)}
+            className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-sky/30 bg-sky/5 text-sky hover:bg-sky/15 transition-colors"
+          >
+            {h}
+          </button>
+        ))}
+      </div>
+      {value && (
+        <span className="text-[10px] font-mono text-inky/40">
+          Preview: <span className="text-navy">{value.replace(/\{([^}]+)\}/g, '‹$1›')}</span>
+        </span>
+      )}
+    </div>
+  )
 }
 
 export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn, rememberKey, previewRows }: ColumnMapperProps) {
@@ -223,20 +277,13 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
                 </div>
               )}
 
-              {/* Composite template input + token hints */}
+              {/* Composite template input + column picker */}
               {isComposite && (
-                <div className="pl-[192px] flex flex-col gap-0.5">
-                  <input
-                    value={mapping.template ?? ''}
-                    onChange={(e) => patch(field.name, { template: e.target.value })}
-                    placeholder="{location_code}-{city}"
-                    title="Use {Header} tokens; literals are kept as-is"
-                    className="bg-cream border border-sky/40 rounded px-2 py-1 text-xs font-mono text-inky focus:outline-none focus:border-sky"
-                  />
-                  <div className="text-[10px] font-mono text-inky/50">
-                    Tokens: {headers.slice(0, 8).map((h) => `{${h}}`).join('  ')}{headers.length > 8 ? '  …' : ''}
-                  </div>
-                </div>
+                <CompositeEditor
+                  value={mapping.template ?? ''}
+                  headers={headers}
+                  onChange={(v) => patch(field.name, { template: v })}
+                />
               )}
 
               {/* Transform chain — shown for regular column mappings */}
