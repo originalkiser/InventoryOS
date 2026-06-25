@@ -48,6 +48,8 @@ export interface Report {
   sort_order: number
   created_at: string
   department?: Department
+  am_location_field?: string | null
+  rdo_location_field?: string | null
 }
 
 export interface Week {

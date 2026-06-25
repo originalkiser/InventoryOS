@@ -2,8 +2,16 @@ import { CONSTANT_SOURCE, COMPOSITE_SOURCE, type ColumnMapping, type TransformKi
 import { applyTransforms } from '@/lib/transforms'
 
 // Fill a composite template: {Header} tokens → row[Header], literals kept.
+// Token names are matched first by exact file header, then by normalized key
+// (lowercase, spaces/hyphens → underscores) so {location_code} matches "Location Code".
 export function fillTemplate(template: string, row: Record<string, string>): string {
-  return (template ?? '').replace(/\{([^}]+)\}/g, (_, key) => row[String(key).trim()] ?? '')
+  const norm = (s: string) => s.trim().toLowerCase().replace(/[\s\-]+/g, '_')
+  const normRow: Record<string, string> = {}
+  for (const [k, v] of Object.entries(row)) normRow[norm(k)] = v
+  return (template ?? '').replace(/\{([^}]+)\}/g, (_, key) => {
+    const k = String(key).trim()
+    return row[k] ?? normRow[norm(k)] ?? ''
+  })
 }
 
 export const TRANSFORM_OPTIONS: { value: TransformKind; label: string }[] = [

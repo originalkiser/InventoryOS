@@ -33,8 +33,8 @@ const BASE_FIELDS = [
   { name: 'active', label: 'Active Status (text)' },
 ]
 
-// Text-based active check: "Active" (case-insensitive) â€” and a few common
-// affirmatives for backward-compatible files â€” count as active; any other text
+// Text-based active check: "Active" (case-insensitive) — and a few common
+// affirmatives for backward-compatible files — count as active; any other text
 // ("Inactive", "Closed", etc.) marks the location inactive. Blank keeps the
 // default (active) rather than deactivating on a missing value.
 function isActiveText(raw: string): boolean {
@@ -88,23 +88,23 @@ export function LocationsTab() {
     const cols: any[] = [
       col.accessor('location_code', { header: 'Code' }),
       col.accessor('name', { header: 'Name' }),
-      col.accessor('region', { header: 'Region', cell: (i) => i.getValue() ?? 'â€”' }),
+      col.accessor('region', { header: 'Region', cell: (i) => i.getValue() ?? '—' }),
     ]
     for (const f of customFields) {
       cols.push({
         id: `cf_${f.field_key}`,
         header: f.label,
         accessorFn: (r: Location) => (r.metadata as any)?.[f.field_key] ?? '',
-        cell: (i: any) => i.getValue() || 'â€”',
+        cell: (i: any) => i.getValue() || '—',
       })
     }
-    cols.push(col.accessor('active', { header: 'Active', cell: (i) => (i.getValue() ? 'âœ“' : 'âœ—') }))
+    cols.push(col.accessor('active', { header: 'Active', cell: (i) => (i.getValue() ? '✓' : '✗') }))
     cols.push(col.accessor('updated_at', {
       header: 'Last Updated',
       cell: (i) => {
         const r = i.row.original as Location
         const src = r.last_change_source ? ` (${r.last_change_source})` : ''
-        return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${src}` : 'â€”'
+        return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${src}` : '—'
       },
     }))
     cols.push({
@@ -190,7 +190,7 @@ export function LocationsTab() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
-          <ConfigUpload requiredFields={uploadFields} onImport={confirmImport} importing={importing} onAddColumn={(label) => addField({ label })} />
+          <ConfigUpload requiredFields={uploadFields} onImport={confirmImport} importing={importing} onAddColumn={(label) => addField({ label })} storageKey="locations" />
         </div>
 
         <DataSourceLinker configType="locations" />
