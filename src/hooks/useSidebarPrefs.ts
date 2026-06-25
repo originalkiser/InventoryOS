@@ -24,13 +24,13 @@ const DEFAULT_PREFS: SidebarPrefs = {
 async function upsertPrefs(userId: string, data: Record<string, unknown>) {
   try {
     const sb = supabase as any
-    await sb.schema('core').from('user_sidebar_prefs').upsert({
-      user_id: userId,
-      updated_at: new Date().toISOString(),
-      ...data,
-    })
-  } catch {
-    // table may not exist yet during migration window — silent fail
+    const { error } = await sb.schema('core').from('user_sidebar_prefs').upsert(
+      { user_id: userId, updated_at: new Date().toISOString(), ...data },
+      { onConflict: 'user_id' },
+    )
+    if (error) console.warn('[SidebarPrefs] upsert error:', error)
+  } catch (err) {
+    console.warn('[SidebarPrefs] upsert exception:', err)
   }
 }
 
