@@ -256,7 +256,7 @@ export function ProductUsageTab() {
       let product_id = '', category: string | null = null
       let daily_usage: number | null = null, on_hands: number | null = null
       for (const m of maps) {
-        const v = mappedValue(row, m)
+        const v = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
         else if (m.fieldName === 'product_id') product_id = v
         else if (m.fieldName === 'category') category = v.trim() || null

@@ -45,7 +45,7 @@ export function PosLocationMapTab() {
     const payload = rows.map((row) => {
       let pos_string = '', location_id: string | null = null, code = ''
       for (const m of maps) {
-        const v = mappedValue(row, m)
+        const v = mappedValue(row, m, maps)
         if (m.fieldName === 'pos_string') pos_string = v
         else if (m.fieldName === 'location_code') code = v
         else if (m.fieldName === 'location') location_id = loc.resolveId(v)

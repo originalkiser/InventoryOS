@@ -177,7 +177,7 @@ function OrderImportModal({ companyId, createdBy, onClose, onDone }: { companyId
       let location_id: string | null = null, product = '', quantity = 0
       let order_date: string | null = null, expected_delivery: string | null = null
       for (const m of maps) {
-        const v = mappedValue(row, m)
+        const v = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
         else if (m.fieldName === 'product') product = v
         else if (m.fieldName === 'quantity') quantity = parseFloat(v.replace(/[$,]/g, '')) || 0

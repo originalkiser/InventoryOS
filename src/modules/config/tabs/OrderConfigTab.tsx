@@ -102,7 +102,7 @@ export function OrderConfigTab() {
       const out: Record<string, unknown> = { vendor_id: uploadVendorId || null, active: true }
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = mappedValue(row, m)
+        const raw = mappedValue(row, m, maps)
         if (m.fieldName === 'location') out.location_id = loc.resolveId(raw)
         else if (m.fieldName === 'uom') meta.uom = raw || null
         else if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)

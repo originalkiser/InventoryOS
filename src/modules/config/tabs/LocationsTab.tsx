@@ -155,7 +155,7 @@ export function LocationsTab() {
       const out: Record<string, unknown> = {}
       const meta: Record<string, unknown> = {}
       for (const m of maps) {
-        const raw = mappedValue(row, m)
+        const raw = mappedValue(row, m, maps)
         if (m.fieldName === 'active') out.active = isActiveText(raw)
         else if (customKeys.has(m.fieldName)) meta[m.fieldName] = coerce(raw, typeByKey.get(m.fieldName) ?? 'text')
         else out[m.fieldName] = raw

@@ -44,13 +44,29 @@ export function applyTransform(raw: string, t?: TransformKind): string {
 }
 
 /**
- * Resolve a mapping's value for a given file row: a constant when the source is
- * set to "constant", otherwise the file cell — then apply the transform.
+ * Resolve a mapping's value for a given file row.
+ *
+ * Pass `allMaps` so composite templates can reference other mapped field names
+ * (with their transforms applied) in addition to raw file headers.
+ * e.g. `{location_code}-{city}` where `location_code` has strip_leading_zeros
+ * will receive the stripped value when allMaps is provided.
  */
-export function mappedValue(row: Record<string, string>, m: ColumnMapping): string {
-  const raw = m.sourceColumn === CONSTANT_SOURCE ? (m.constant ?? '')
-    : m.sourceColumn === COMPOSITE_SOURCE ? fillTemplate(m.template ?? '', row)
-    : (row[m.sourceColumn] ?? '')
-  // Legacy single transform first, then the richer ordered chain.
+export function mappedValue(row: Record<string, string>, m: ColumnMapping, allMaps?: ColumnMapping[]): string {
+  let raw: string
+  if (m.sourceColumn === CONSTANT_SOURCE) {
+    raw = m.constant ?? ''
+  } else if (m.sourceColumn === COMPOSITE_SOURCE) {
+    let context = { ...row }
+    if (allMaps) {
+      for (const other of allMaps) {
+        if (other.fieldName !== m.fieldName && other.sourceColumn && other.sourceColumn !== COMPOSITE_SOURCE) {
+          context[other.fieldName] = mappedValue(row, other)
+        }
+      }
+    }
+    raw = fillTemplate(m.template ?? '', context)
+  } else {
+    raw = row[m.sourceColumn] ?? ''
+  }
   return applyTransforms(applyTransform(raw, m.transform), m.transforms)
 }

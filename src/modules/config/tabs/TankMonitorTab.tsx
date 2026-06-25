@@ -65,7 +65,7 @@ export function TankMonitorTab() {
     const payload = rows.map((row) => {
       let location_id: string | null = null, product_id = '', keep_fill = false, inventory_time: string | null = null, reading_date: string | null = null, on_hand: number | null = null
       for (const m of maps) {
-        const v = mappedValue(row, m)
+        const v = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
         else if (m.fieldName === 'product_id') product_id = v
         else if (m.fieldName === 'keep_fill') keep_fill = truthy(v)

@@ -47,7 +47,7 @@ export function ProductMappingTab() {
     setImporting(true)
     const payload = rows.map((row) => {
       const out: Record<string, unknown> = {}
-      for (const m of maps) out[m.fieldName] = mappedValue(row, m) || null
+      for (const m of maps) out[m.fieldName] = mappedValue(row, m, maps) || null
       return out as Partial<ProductIdMapping>
     }).filter((r: any) => r.old_product_id)
     await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.old_product_id ?? '').toLowerCase() })

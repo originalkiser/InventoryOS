@@ -50,7 +50,7 @@ export function UomMappingsTab() {
     const payload = rows.map((row) => {
       const out: Record<string, unknown> = {}
       for (const m of maps) {
-        const v = mappedValue(row, m)
+        const v = mappedValue(row, m, maps)
         out[m.fieldName] = m.fieldName === 'factor' ? num(v) : (v || null)
       }
       return out as Partial<UomMapping>

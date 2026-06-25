@@ -79,27 +79,37 @@ function buildMappings(requiredFields: RequiredField[], headers: string[], saved
   })
 }
 
-function CompositeEditor({ value, headers, onChange }: {
+function CompositeEditor({ value, headers, mappings, requiredFields, fieldName, onChange }: {
   value: string
   headers: string[]
+  mappings: ColumnMapping[]
+  requiredFields: RequiredField[]
+  fieldName: string
   onChange: (v: string) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const insertToken = useCallback((header: string) => {
+  const insert = useCallback((token: string) => {
     const el = inputRef.current
-    if (!el) { onChange(value + `{${header}}`); return }
+    if (!el) { onChange(value + `{${token}}`); return }
     const start = el.selectionStart ?? value.length
     const end = el.selectionEnd ?? value.length
-    const token = `{${header}}`
-    const next = value.slice(0, start) + token + value.slice(end)
-    onChange(next)
-    // Restore cursor after the inserted token
+    const t = `{${token}}`
+    onChange(value.slice(0, start) + t + value.slice(end))
     requestAnimationFrame(() => {
       el.focus()
-      el.setSelectionRange(start + token.length, start + token.length)
+      el.setSelectionRange(start + t.length, start + t.length)
     })
   }, [value, onChange])
+
+  // Non-composite sibling mappings that have a source column set
+  const mappedFields = mappings.filter(
+    m => m.fieldName !== fieldName && m.sourceColumn && m.sourceColumn !== COMPOSITE_SOURCE
+  ).map(m => ({
+    key: m.fieldName,
+    label: requiredFields.find(f => f.name === m.fieldName)?.label ?? m.fieldName,
+    hasTransforms: (m.transforms?.length ?? 0) > 0,
+  }))
 
   return (
     <div className="pl-[192px] flex flex-col gap-1.5">
@@ -107,17 +117,33 @@ function CompositeEditor({ value, headers, onChange }: {
         ref={inputRef}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Type literals and click columns below to insert tokens"
-        title="Click column buttons below to insert {Header} tokens at the cursor"
+        placeholder="Type literals and click fields or columns below to insert tokens"
         className="bg-cream border border-sky/40 rounded px-2 py-1 text-xs font-mono text-inky focus:outline-none focus:border-sky"
       />
+      {mappedFields.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          <span className="text-[10px] font-mono text-inky/40 self-center mr-0.5">mapped fields:</span>
+          {mappedFields.map(f => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => insert(f.key)}
+              title={`Insert {${f.key}} — uses transformed value`}
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/5 text-emerald-700 hover:bg-emerald-500/15 transition-colors"
+            >
+              {f.label}{f.hasTransforms ? ' ⚡' : ''}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap gap-1">
-        <span className="text-[10px] font-mono text-inky/40 self-center mr-0.5">+ column:</span>
+        <span className="text-[10px] font-mono text-inky/40 self-center mr-0.5">raw columns:</span>
         {headers.map(h => (
           <button
             key={h}
             type="button"
-            onClick={() => insertToken(h)}
+            onClick={() => insert(h)}
+            title={`Insert {${h}} — raw file value`}
             className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-sky/30 bg-sky/5 text-sky hover:bg-sky/15 transition-colors"
           >
             {h}
@@ -282,6 +308,9 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
                 <CompositeEditor
                   value={mapping.template ?? ''}
                   headers={headers}
+                  mappings={mappings}
+                  requiredFields={requiredFields}
+                  fieldName={field.name}
                   onChange={(v) => patch(field.name, { template: v })}
                 />
               )}

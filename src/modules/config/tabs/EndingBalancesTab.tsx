@@ -102,7 +102,7 @@ export function EndingBalancesTab() {
       let month: string | null = null
       let ending_balance: number | null = null
       for (const m of maps) {
-        const raw = mappedValue(row, m)
+        const raw = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(raw)
         else if (m.fieldName === 'month') month = monthKey(raw)
         else if (m.fieldName === 'ending_balance') ending_balance = num(raw)
