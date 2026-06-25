@@ -17,6 +17,25 @@ import { format, parseISO } from 'date-fns'
 
 const col = createColumnHelper<Location>()
 
+const LOC_FILTER_HIERARCHY = [
+  { field: 'meta:owner',             label: 'Owner' },
+  { field: 'region',                 label: 'Region' },
+  { field: 'meta:market',            label: 'Market' },
+  { field: 'meta:area_manager',      label: 'Area Manager' },
+  { field: 'meta:regional_director', label: 'Regional Director' },
+]
+const LS_DROP_FILTERS = 'locations.page.dropFilters'
+const LS_HIDDEN_DROPS = 'locations.page.hiddenDropdowns'
+
+function locFieldValue(loc: Location, field: string): string {
+  if (field === 'meta:regional_director') {
+    // support both 'regional_director' and 'director' key variants
+    return String((loc.metadata as any)?.regional_director ?? (loc.metadata as any)?.director ?? '')
+  }
+  if (field.startsWith('meta:')) return String((loc.metadata as any)?.[field.slice(5)] ?? '')
+  return String((loc as any)[field] ?? '')
+}
+
 const PINNED: string[] = []
 
 // Drag-to-reorder row inside the Columns popover
@@ -65,6 +84,19 @@ export function LocationsPage() {
   const [colsOpen, setColsOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
 
+  // Contextual dropdown filter state
+  const [dropFilters, setDropFilters] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem(LS_DROP_FILTERS) ?? '{}') } catch { return {} }
+  })
+  const [hiddenDropdowns, setHiddenDropdowns] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(LS_HIDDEN_DROPS) ?? '[]')) } catch { return new Set() }
+  })
+  const [dropSettingsOpen, setDropSettingsOpen] = useState(false)
+  const dropSettingsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { localStorage.setItem(LS_DROP_FILTERS, JSON.stringify(dropFilters)) }, [dropFilters])
+  useEffect(() => { localStorage.setItem(LS_HIDDEN_DROPS, JSON.stringify([...hiddenDropdowns])) }, [hiddenDropdowns])
+
   useEffect(() => {
     if (!colsOpen) return
     function handleClick(e: MouseEvent) {
@@ -73,6 +105,15 @@ export function LocationsPage() {
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [colsOpen])
+
+  useEffect(() => {
+    if (!dropSettingsOpen) return
+    function handleClick(e: MouseEvent) {
+      if (dropSettingsRef.current && !dropSettingsRef.current.contains(e.target as Node)) setDropSettingsOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [dropSettingsOpen])
 
   const baseColumns = useMemo(() => {
     const cols: any[] = [
@@ -128,7 +169,43 @@ export function LocationsPage() {
     return cols
   }, [customFields])
 
-  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, baseColumns)
+  // Rows passing all filters ABOVE a given hierarchy index (for per-dropdown option counts)
+  function rowsAbove(fi: number): Location[] {
+    let r = data
+    for (let i = 0; i < fi; i++) {
+      const val = dropFilters[LOC_FILTER_HIERARCHY[i].field]
+      if (val) r = r.filter(loc => locFieldValue(loc, LOC_FILTER_HIERARCHY[i].field) === val)
+    }
+    return r
+  }
+
+  const filteredData = useMemo(() => {
+    let r = data
+    for (const { field } of LOC_FILTER_HIERARCHY) {
+      const val = dropFilters[field]
+      if (val) r = r.filter(loc => locFieldValue(loc, field) === val)
+    }
+    return r
+  }, [data, dropFilters])
+
+  function setDropFilter(field: string, val: string, fi: number) {
+    setDropFilters(prev => {
+      const next: Record<string, string> = {}
+      for (let i = 0; i < fi; i++) next[LOC_FILTER_HIERARCHY[i].field] = prev[LOC_FILTER_HIERARCHY[i].field] ?? ''
+      next[field] = val
+      return next
+    })
+  }
+
+  const hasActiveFilters = LOC_FILTER_HIERARCHY.some(({ field }) => dropFilters[field])
+
+  const visibleHierarchy = LOC_FILTER_HIERARCHY.filter(({ field }) => {
+    if (hiddenDropdowns.has(field)) return false
+    const vals = new Set(data.map(loc => locFieldValue(loc, field)).filter(Boolean))
+    return vals.size >= 2
+  })
+
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(filteredData, baseColumns)
   useColumnPrefs('core.locations', table, columnVisibility, columnOrder, setColumnOrder)
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -176,56 +253,124 @@ export function LocationsPage() {
         <p className="text-xs text-inky mt-0.5">All locations in your workspace — read-only view</p>
       </div>
 
-      <DataTable
-        table={table}
-        globalFilter={globalFilter}
-        onGlobalFilterChange={setGlobalFilter}
-        exportFilename="locations.csv"
-        exportData={data}
-        loading={loading}
-        hideColumnControl
-        actions={
-          <div className="relative" ref={popoverRef}>
-            <button
-              onClick={() => setColsOpen((v) => !v)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-              </svg>
-              Columns
-            </button>
-            {colsOpen && (
-              <div className="absolute right-0 top-full mt-1 z-20 w-56 bg-cream border border-navy/20 rounded shadow-lg p-2 flex flex-col gap-1">
-                <div className="flex items-center justify-between px-1 pb-1 border-b border-navy/10 mb-0.5">
-                  <span className="text-[10px] font-mono text-inky/50 uppercase tracking-wide">Drag to reorder · Toggle to show/hide</span>
-                </div>
-                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                  <SortableContext items={manageableCols.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-                    {manageableCols.map((column) => (
-                      <SortableColRow
-                        key={column.id}
-                        id={column.id}
-                        label={colLabel(column)}
-                        visible={column.getIsVisible()}
-                        onToggle={column.getToggleVisibilityHandler()}
-                      />
-                    ))}
-                  </SortableContext>
-                </DndContext>
-                <div className="border-t border-navy/10 mt-1 pt-1">
-                  <button
-                    onClick={resetToDefault}
-                    className="w-full text-left px-2 py-1 text-[10px] font-mono text-inky/50 hover:text-navy transition-colors rounded hover:bg-navy/5"
+      <div className="flex flex-col gap-2">
+        {/* Contextual filter dropdowns */}
+        {!loading && visibleHierarchy.length > 0 && (
+          <div className="flex items-end gap-3 flex-wrap">
+            {visibleHierarchy.map(({ field, label }, fi) => {
+              const hierarchyIdx = LOC_FILTER_HIERARCHY.findIndex(h => h.field === field)
+              const above = rowsAbove(hierarchyIdx)
+              const opts = Array.from(new Set(above.map(loc => locFieldValue(loc, field)).filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+              const countFor = (v: string) => above.filter(loc => locFieldValue(loc, field) === v).length
+              return (
+                <div key={field} className="flex flex-col gap-0.5 min-w-[120px]">
+                  <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">{label}</span>
+                  <select
+                    value={dropFilters[field] ?? ''}
+                    onChange={e => setDropFilter(field, e.target.value, hierarchyIdx)}
+                    className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none max-w-[160px]"
                   >
-                    Reset to Default
-                  </button>
+                    <option value="">All</option>
+                    {opts.map(v => <option key={v} value={v}>{v} ({countFor(v)})</option>)}
+                  </select>
                 </div>
+              )
+            })}
+            <div className="flex items-end gap-2 ml-auto pb-0.5">
+              {hasActiveFilters && (
+                <button
+                  onClick={() => setDropFilters({})}
+                  className="text-xs font-mono text-inky/60 hover:text-navy underline whitespace-nowrap"
+                >
+                  Clear Filters
+                </button>
+              )}
+              <div className="relative" ref={dropSettingsRef}>
+                <button
+                  onClick={() => setDropSettingsOpen(o => !o)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
+                >
+                  Dropdowns ▾
+                </button>
+                {dropSettingsOpen && (
+                  <div className="absolute top-full right-0 mt-1 z-30 bg-cream dark:bg-[#0e2638] border border-navy/30 rounded shadow-xl p-3 min-w-[190px] flex flex-col gap-1.5">
+                    <p className="text-[10px] font-mono text-inky/50 uppercase tracking-wide mb-1">Toggle visible dropdowns</p>
+                    {LOC_FILTER_HIERARCHY.map(({ field, label }) => (
+                      <label key={field} className="flex items-center gap-2 cursor-pointer text-xs font-body text-navy">
+                        <input
+                          type="checkbox"
+                          checked={!hiddenDropdowns.has(field)}
+                          onChange={e => {
+                            setHiddenDropdowns(prev => {
+                              const next = new Set(prev)
+                              if (e.target.checked) next.delete(field)
+                              else next.add(field)
+                              return next
+                            })
+                          }}
+                          className="accent-sky"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
-        }
-      />
+        )}
+
+        <DataTable
+          table={table}
+          globalFilter={globalFilter}
+          onGlobalFilterChange={setGlobalFilter}
+          exportFilename="locations.csv"
+          exportData={data}
+          loading={loading}
+          hideColumnControl
+          actions={
+            <div className="relative" ref={popoverRef}>
+              <button
+                onClick={() => setColsOpen((v) => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                </svg>
+                Columns
+              </button>
+              {colsOpen && (
+                <div className="absolute right-0 top-full mt-1 z-20 w-56 bg-cream border border-navy/20 rounded shadow-lg p-2 flex flex-col gap-1">
+                  <div className="flex items-center justify-between px-1 pb-1 border-b border-navy/10 mb-0.5">
+                    <span className="text-[10px] font-mono text-inky/50 uppercase tracking-wide">Drag to reorder · Toggle to show/hide</span>
+                  </div>
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                    <SortableContext items={manageableCols.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+                      {manageableCols.map((column) => (
+                        <SortableColRow
+                          key={column.id}
+                          id={column.id}
+                          label={colLabel(column)}
+                          visible={column.getIsVisible()}
+                          onToggle={column.getToggleVisibilityHandler()}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
+                  <div className="border-t border-navy/10 mt-1 pt-1">
+                    <button
+                      onClick={resetToDefault}
+                      className="w-full text-left px-2 py-1 text-[10px] font-mono text-inky/50 hover:text-navy transition-colors rounded hover:bg-navy/5"
+                    >
+                      Reset to Default
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          }
+        />
+      </div>
     </div>
   )
 }
