@@ -20,6 +20,8 @@ function normalizeKey(k: string) {
   return k.toLowerCase().replace(/[\s-]+/g, '_')
 }
 
+interface AppUser { id: string; full_name: string | null; work_email: string }
+
 interface Props {
   entries: ReportEntry[]
   allEntries: ReportEntry[]
@@ -31,8 +33,9 @@ interface Props {
   onCommentChange?: (id: string, comment: string) => void
   onDueDateChange?: (id: string, date: string) => void
   onCompleteToggle?: (id: string, val: boolean) => void
-  onAMNameChange?: (id: string, name: string) => void
-  onRDONameChange?: (id: string, name: string) => void
+  onAMNameChange?: (id: string, name: string, userId?: string | null) => void
+  onRDONameChange?: (id: string, name: string, userId?: string | null) => void
+  appUsers?: AppUser[]
   editableByAM?: boolean
 }
 
@@ -51,6 +54,7 @@ export default function ReportTable({
   onCompleteToggle,
   onAMNameChange,
   onRDONameChange,
+  appUsers,
   editableByAM,
 }: Props) {
   const [sortKey, setSortKey] = useState<string | null>(null)
@@ -171,11 +175,18 @@ export default function ReportTable({
                   </td>
                 ))}
 
-                {/* Area Manager / RDO — inline editable for shop reports */}
+                {/* Area Manager / RDO — user picker when appUsers provided, else inline text */}
                 {!isEmployeeReport && (
                   <>
                     <td className="px-3 py-2.5 min-w-[160px]">
-                      {!isTotal && onAMNameChange ? (
+                      {!isTotal && onAMNameChange && appUsers ? (
+                        <UserPickerCell
+                          currentName={entry.area_manager_name}
+                          currentUserId={entry.am_assigned_user_id ?? null}
+                          appUsers={appUsers}
+                          onSelect={(name, userId) => onAMNameChange(entry.id, name, userId)}
+                        />
+                      ) : !isTotal && onAMNameChange ? (
                         <InlineTextInput
                           value={entry.area_manager_name ?? ''}
                           placeholder="Area manager…"
@@ -188,7 +199,14 @@ export default function ReportTable({
                       )}
                     </td>
                     <td className="px-3 py-2.5 min-w-[140px]">
-                      {!isTotal && onRDONameChange ? (
+                      {!isTotal && onRDONameChange && appUsers ? (
+                        <UserPickerCell
+                          currentName={entry.rdo_name}
+                          currentUserId={entry.rdo_assigned_user_id ?? null}
+                          appUsers={appUsers}
+                          onSelect={(name, userId) => onRDONameChange(entry.id, name, userId)}
+                        />
+                      ) : !isTotal && onRDONameChange ? (
                         <InlineTextInput
                           value={entry.rdo_name ?? ''}
                           placeholder="RDO…"
@@ -287,6 +305,45 @@ function Th({
         {active && dir === 'desc' && <ChevronDown size={10} />}
       </span>
     </th>
+  )
+}
+
+function UserPickerCell({ currentName, currentUserId, appUsers, onSelect }: {
+  currentName: string | null
+  currentUserId: string | null
+  appUsers: AppUser[]
+  onSelect: (name: string, userId: string | null) => void
+}) {
+  const [saving, setSaving] = useState(false)
+
+  async function handleChange(userId: string) {
+    setSaving(true)
+    if (!userId) {
+      await onSelect('', null)
+    } else {
+      const user = appUsers.find(u => u.id === userId)
+      await onSelect(user?.full_name ?? user?.work_email ?? '', userId)
+    }
+    setSaving(false)
+  }
+
+  const selectedId = appUsers.find(u => u.id === currentUserId)?.id ?? ''
+
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        value={selectedId}
+        onChange={e => handleChange(e.target.value)}
+        disabled={saving}
+        className="bg-sb-inky/20 text-sb-cream font-mono text-[11px] px-2 py-1 rounded border border-sb-inky/40 focus:outline-none focus:border-sb-sky max-w-[180px] disabled:opacity-50"
+      >
+        <option value="">— Auto: {currentName || 'none'} —</option>
+        {appUsers.map(u => (
+          <option key={u.id} value={u.id}>{u.full_name ?? u.work_email}</option>
+        ))}
+      </select>
+      {saving && <span className="font-mono text-[10px] text-sb-inky">⟳</span>}
+    </div>
   )
 }
 

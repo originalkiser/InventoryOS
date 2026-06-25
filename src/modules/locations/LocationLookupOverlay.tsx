@@ -399,6 +399,7 @@ const COL_LABELS: Record<string, string> = {
   active: 'Active',
   updated_at: 'Updated',
   __pos__: 'POS String',
+  'meta:owner': 'Owner',
   'meta:area_manager': 'Area Manager',
   'meta:regional_director': 'Regional Director',
   'meta:market': 'Market',
@@ -414,7 +415,7 @@ function colLabel(c: string): string {
 }
 
 // Contextual filter hierarchy for locations
-const LOC_FILTER_HIERARCHY = ['region', 'meta:market', 'meta:area_manager', 'meta:regional_director']
+const LOC_FILTER_HIERARCHY = ['meta:owner', 'region', 'meta:market', 'meta:area_manager', 'meta:regional_director']
 
 const PAGE = 1000
 const PAGE_SIZES = [50, 100, 150, 200] as const
@@ -428,14 +429,25 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
   const loc = useLocations()
   const [rows, setRows] = useState<Record<string, any>[]>([])
   const [allCols, setAllCols] = useState<string[]>([])
-  const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(
-    block.source === 'locations' ? { col: 'location_code', dir: 'asc' } : null
-  )
-  // Contextual dropdown filters for locations
-  const [dropFilters, setDropFilters] = useState<Record<string, string>>({})
-  const [pageSize, setPageSize] = useState<number | 'all'>(50)
-  const [page, setPage] = useState(0)
   const isLocations = block.source === 'locations'
+  const stateKey = `lookup.block.${block.id}.state`
+
+  function loadState() {
+    try { return JSON.parse(localStorage.getItem(stateKey) || 'null') ?? {} } catch { return {} }
+  }
+  const saved = loadState()
+
+  const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(
+    saved.sort ?? (isLocations ? { col: 'location_code', dir: 'asc' } : null)
+  )
+  const [dropFilters, setDropFilters] = useState<Record<string, string>>(saved.dropFilters ?? {})
+  const [pageSize, setPageSize] = useState<number | 'all'>(saved.pageSize ?? 50)
+  const [page, setPage] = useState(saved.page ?? 0)
+
+  // Persist state whenever it changes
+  useEffect(() => {
+    localStorage.setItem(stateKey, JSON.stringify({ sort, dropFilters, pageSize, page }))
+  }, [sort, dropFilters, pageSize, page, stateKey])
 
   function deriveAllCols(r: Record<string, any>[], source: string) {
     const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
@@ -663,10 +675,10 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
           </select>
           {pageSize !== 'all' && totalPages > 1 && (
             <>
-              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}
+              <button onClick={() => setPage((p: number) => Math.max(0, p - 1))} disabled={page === 0}
                 className="px-1.5 py-0.5 border border-navy/30 rounded disabled:opacity-30 hover:border-navy text-navy">‹</button>
               <span>{page + 1} / {totalPages}</span>
-              <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
+              <button onClick={() => setPage((p: number) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
                 className="px-1.5 py-0.5 border border-navy/30 rounded disabled:opacity-30 hover:border-navy text-navy">›</button>
             </>
           )}

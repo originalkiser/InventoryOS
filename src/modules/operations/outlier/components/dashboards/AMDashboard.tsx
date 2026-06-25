@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ExternalLink, MessageSquare } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -24,6 +24,17 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
   const navigate = useNavigate()
   const sb = supabase as any
   const locationIds = new Set(amLocations.map(l => l.location_id))
+
+  // Entries explicitly assigned to this user (via the user dropdown override)
+  const [assignedEntries, setAssignedEntries] = useState<ReportEntry[]>([])
+  useEffect(() => {
+    if (!currentWeekId) return
+    sb.schema('outlier').from('report_entries')
+      .select('*')
+      .eq('week_id', currentWeekId)
+      .or(`am_assigned_user_id.eq.${profile.id},rdo_assigned_user_id.eq.${profile.id}`)
+      .then(({ data }: any) => { if (data) setAssignedEntries(data as ReportEntry[]) })
+  }, [currentWeekId, profile.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const friday = getThisWeekFriday()
   const daysLeft = getDaysUntil(toDateString(friday))
@@ -114,12 +125,57 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
         </div>
       </div>
 
+      {/* Assigned-to-me section: entries where this user was manually assigned as AM or RDO */}
+      {assignedEntries.length > 0 && (
+        <div className="border border-sb-sky/40 rounded-lg overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-3 bg-sb-sky/10 border-b border-sb-sky/20">
+            <MessageSquare size={13} className="text-sb-sky" />
+            <h2 className="font-brand font-bold text-sb-sky tracking-wider text-[13px] uppercase">Assigned to Me</h2>
+            <span className="font-mono text-[11px] text-sb-inky ml-auto">{assignedEntries.length} item{assignedEntries.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left sticky-table">
+              <thead>
+                <tr className="border-b border-sb-inky/30">
+                  <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase sticky left-0 bg-sb-navy">SHOP</th>
+                  <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">ASSIGNED AS</th>
+                  <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">DUE DATE</th>
+                  <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase min-w-[200px]">AM COMMENT</th>
+                  <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">DONE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {assignedEntries.map(entry => {
+                  const role = entry.am_assigned_user_id === profile.id ? 'Area Manager' : 'Regional Director'
+                  const columns: { key: string; label: string; type: string }[] = []
+                  return (
+                    <AMEntryRow
+                      key={entry.id}
+                      entry={entry}
+                      columns={columns}
+                      allEntries={allEntries}
+                      allWeeks={allWeeks}
+                      reportColumns={[]}
+                      currentWeekId={currentWeekId}
+                      onSaveComment={saveComment}
+                      onSaveDueDate={saveDueDate}
+                      onToggleComplete={toggleComplete}
+                      assignedRole={role}
+                    />
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Report sections */}
-      {reportsWithMyEntries.length === 0 ? (
+      {reportsWithMyEntries.length === 0 && assignedEntries.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16">
           <p className="font-brand font-bold text-sb-inky tracking-widest text-[13px] uppercase">No items assigned this week</p>
         </div>
-      ) : (
+      ) : reportsWithMyEntries.length === 0 ? null : (
         reportsWithMyEntries.map(report => {
           const myEntries = (entriesByReport[report.id] ?? []).filter(e =>
             locationIds.has(e.row_key) || amLocations.some(l => e.row_key.startsWith(l.location_id))
@@ -179,14 +235,15 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
             </div>
           )
         })
-      )}
+      )
+      }
     </div>
   )
 }
 
 function AMEntryRow({
   entry, columns, allEntries, allWeeks, reportColumns, currentWeekId,
-  onSaveComment, onSaveDueDate, onToggleComplete,
+  onSaveComment, onSaveDueDate, onToggleComplete, assignedRole,
 }: {
   entry: ReportEntry
   columns: { key: string; label: string; type: string }[]
@@ -197,6 +254,7 @@ function AMEntryRow({
   onSaveComment: (id: string, v: string) => Promise<void>
   onSaveDueDate: (id: string, v: string) => Promise<void>
   onToggleComplete: (id: string, v: boolean) => Promise<void>
+  assignedRole?: string
 }) {
   const [comment, setComment] = useState(entry.am_comment ?? '')
   const [saving, setSaving] = useState(false)
@@ -214,6 +272,11 @@ function AMEntryRow({
   return (
     <tr className={`border-b border-sb-inky/15 hover:bg-sb-inky/10 transition-colors ${entry.is_complete ? 'bg-sb-green/5' : ''}`}>
       <td className="px-3 py-2.5 sticky left-0 bg-sb-navy font-mono text-[12px] text-sb-cream">{entry.row_label}</td>
+      {assignedRole && (
+        <td className="px-3 py-2.5">
+          <span className="font-mono text-[11px] text-sb-sky/80">{assignedRole}</span>
+        </td>
+      )}
       {columns.map(col => (
         <td key={col.key} className="px-3 py-2.5 font-mono text-[12px] text-sb-cream/80 text-right">
           {entry.data[col.key] != null ? String(entry.data[col.key]) : '—'}

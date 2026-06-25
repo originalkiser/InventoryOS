@@ -35,9 +35,20 @@ export default function ReportViewPage() {
   const [flashedIds, setFlashedIds] = useState<Set<string>>(new Set())
   const [realtimeConnected, setRealtimeConnected] = useState(false)
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const [appUsers, setAppUsers] = useState<{ id: string; full_name: string | null; work_email: string }[]>([])
 
   // Location custom fields — used to populate the AM/RDO field mapping dropdowns
   const { active: locationFields } = useCustomFields('locations')
+
+  useEffect(() => {
+    if (!profile?.company_id || !canPaste) return
+    ;(sb as any).schema('platform').from('user_profiles')
+      .select('id, full_name, work_email')
+      .eq('company_id', profile.company_id)
+      .eq('is_active', true)
+      .order('full_name')
+      .then(({ data }: any) => { if (data) setAppUsers(data) })
+  }, [profile?.company_id, canPaste])
 
   const loadData = useCallback(async () => {
     if (!slug) return
@@ -263,12 +274,25 @@ export default function ReportViewPage() {
     else toast.success(val ? 'Marked complete' : 'Marked incomplete')
   }
 
-  async function handleAMNameChange(id: string, name: string) {
-    const { error } = await sb.schema('outlier').from('report_entries')
-      .update({ area_manager_name: name || null, updated_at: new Date().toISOString() })
-      .eq('id', id)
+  async function handleAMNameChange(id: string, name: string, userId?: string | null) {
+    let resolvedName = name
+    if (userId === null && !name && report) {
+      // Reverting to auto: re-derive name from location metadata
+      const entry = entries.find(e => e.id === id)
+      if (entry?.location_id) {
+        const { data: loc } = await sb.schema('core').from('locations').select('metadata').eq('id', entry.location_id).single()
+        const amField = report.am_location_field ?? 'area_manager'
+        resolvedName = (loc?.metadata as any)?.[amField] ?? (loc?.metadata as any)?.area_manager ?? ''
+      }
+    }
+    const patch: Record<string, unknown> = { area_manager_name: resolvedName || null, updated_at: new Date().toISOString() }
+    if (userId !== undefined) patch.am_assigned_user_id = userId
+    const { error } = await sb.schema('outlier').from('report_entries').update(patch).eq('id', id)
     if (error) toast.error('Failed to save area manager name')
-    else setEntries(prev => prev.map(e => e.id === id ? { ...e, area_manager_name: name || null } : e))
+    else setEntries(prev => prev.map(e => {
+      if (e.id !== id) return e
+      return { ...e, area_manager_name: resolvedName || null, ...(userId !== undefined ? { am_assigned_user_id: userId } : {}) }
+    }))
   }
 
   async function handleClearWeek() {
@@ -294,12 +318,24 @@ export default function ReportViewPage() {
     return merged
   }
 
-  async function handleRDONameChange(id: string, name: string) {
-    const { error } = await sb.schema('outlier').from('report_entries')
-      .update({ rdo_name: name || null, updated_at: new Date().toISOString() })
-      .eq('id', id)
+  async function handleRDONameChange(id: string, name: string, userId?: string | null) {
+    let resolvedName = name
+    if (userId === null && !name && report) {
+      const entry = entries.find(e => e.id === id)
+      if (entry?.location_id) {
+        const { data: loc } = await sb.schema('core').from('locations').select('metadata').eq('id', entry.location_id).single()
+        const rdoField = report.rdo_location_field ?? 'regional_director'
+        resolvedName = (loc?.metadata as any)?.[rdoField] ?? (loc?.metadata as any)?.regional_director ?? ''
+      }
+    }
+    const patch: Record<string, unknown> = { rdo_name: resolvedName || null, updated_at: new Date().toISOString() }
+    if (userId !== undefined) patch.rdo_assigned_user_id = userId
+    const { error } = await sb.schema('outlier').from('report_entries').update(patch).eq('id', id)
     if (error) toast.error('Failed to save regional director name')
-    else setEntries(prev => prev.map(e => e.id === id ? { ...e, rdo_name: name || null } : e))
+    else setEntries(prev => prev.map(e => {
+      if (e.id !== id) return e
+      return { ...e, rdo_name: resolvedName || null, ...(userId !== undefined ? { rdo_assigned_user_id: userId } : {}) }
+    }))
   }
 
   if (loading) {
@@ -418,6 +454,7 @@ export default function ReportViewPage() {
         onCompleteToggle={isAM || canPaste ? handleCompleteToggle : undefined}
         onAMNameChange={canPaste ? handleAMNameChange : undefined}
         onRDONameChange={canPaste ? handleRDONameChange : undefined}
+        appUsers={canPaste && appUsers.length > 0 ? appUsers : undefined}
         editableByAM={isAM || canPaste}
       />
 

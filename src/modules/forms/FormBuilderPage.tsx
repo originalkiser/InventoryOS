@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
@@ -168,30 +168,62 @@ function numericCode(code: string) {
   return isNaN(n) ? Infinity : n
 }
 
-function LocationSeeder({ companyId, onSeed }: {
+type LocData = {
+  location_code: string
+  region: string | null
+  owner: string | null
+  market: string | null
+  area_manager: string | null
+  regional_director: string | null
+  location_type: string | null
+}
+
+type LocGroup = { key: string; label: string; codes: string[] }
+
+function mostCommon(vals: (string | null)[]): string | null {
+  const counts: Record<string, number> = {}
+  for (const v of vals) if (v) counts[v] = (counts[v] ?? 0) + 1
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+}
+
+function LocationSeeder({ companyId, onSeed, onUndoSeed }: {
   companyId: string
   onSeed: (labels: string[]) => void
+  onUndoSeed?: (labels: string[]) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [locs, setLocs] = useState<{ location_code: string; name: string; region: string | null; market: string | null; location_type: string | null }[]>([])
+  const [locs, setLocs] = useState<LocData[]>([])
   const [loadingLocs, setLoadingLocs] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set()) // group keys
+  const [lastSeeded, setLastSeeded] = useState<string[] | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onOut(e: MouseEvent) {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onOut)
+    return () => document.removeEventListener('mousedown', onOut)
+  }, [open])
 
   async function load() {
     if (locs.length > 0) return
     setLoadingLocs(true)
     const { data } = await (sb as any).schema('core').from('locations')
-      .select('location_code, name, region, metadata')
+      .select('location_code, region, metadata')
       .eq('company_id', companyId)
       .eq('active', true)
     const raw = (data ?? []) as any[]
-    const mapped = raw.map((r) => ({
+    const mapped: LocData[] = raw.map((r) => ({
       location_code: r.location_code,
-      name: r.name,
       region: r.region ?? null,
+      owner: r.metadata?.owner ?? null,
       market: r.metadata?.market ?? null,
+      area_manager: r.metadata?.area_manager ?? null,
+      regional_director: r.metadata?.regional_director ?? null,
       location_type: r.metadata?.location_type ?? null,
     }))
-    // Numeric ascending sort — strips non-digits for comparison, displays original code
     mapped.sort((a, b) => numericCode(a.location_code) - numericCode(b.location_code))
     setLocs(mapped)
     setLoadingLocs(false)
@@ -202,92 +234,171 @@ function LocationSeeder({ companyId, onSeed }: {
     setOpen((v) => !v)
   }
 
-  function seed(filtered: typeof locs) {
-    onSeed(filtered.map((l) => l.location_code))
+  // Build group lists
+  const groups = useMemo<LocGroup[]>(() => {
+    if (!locs.length) return []
+    const result: LocGroup[] = []
+
+    // All
+    result.push({ key: '__all__', label: `All Locations (${locs.length})`, codes: locs.map(l => l.location_code) })
+
+    // By Owner
+    const owners = [...new Set(locs.map(l => l.owner).filter(Boolean) as string[])].sort()
+    if (owners.length > 0) {
+      for (const owner of owners) {
+        const codes = locs.filter(l => l.owner === owner).map(l => l.location_code)
+        result.push({ key: `owner:${owner}`, label: `${owner} (${codes.length})`, codes })
+      }
+    }
+
+    // By Region (with director in parens)
+    const regions = [...new Set(locs.map(l => l.region).filter(Boolean) as string[])].sort()
+    if (regions.length > 0) {
+      for (const region of regions) {
+        const inRegion = locs.filter(l => l.region === region)
+        const director = mostCommon(inRegion.map(l => l.regional_director))
+        const label = director ? `${region} (${director}) (${inRegion.length})` : `${region} (${inRegion.length})`
+        result.push({ key: `region:${region}`, label, codes: inRegion.map(l => l.location_code) })
+      }
+    }
+
+    // By Market (with AM in parens)
+    const markets = [...new Set(locs.map(l => l.market).filter(Boolean) as string[])].sort()
+    if (markets.length > 0) {
+      for (const market of markets) {
+        const inMarket = locs.filter(l => l.market === market)
+        const am = mostCommon(inMarket.map(l => l.area_manager))
+        const label = am ? `${market} (${am}) (${inMarket.length})` : `${market} (${inMarket.length})`
+        result.push({ key: `market:${market}`, label, codes: inMarket.map(l => l.location_code) })
+      }
+    }
+
+    // By Type
+    const types = [...new Set(locs.map(l => l.location_type).filter(Boolean) as string[])].sort()
+    if (types.length > 0) {
+      for (const type of types) {
+        const codes = locs.filter(l => l.location_type === type).map(l => l.location_code)
+        result.push({ key: `type:${type}`, label: `${type.charAt(0).toUpperCase() + type.slice(1)} (${codes.length})`, codes })
+      }
+    }
+
+    return result
+  }, [locs])
+
+  const sectionOf = (key: string) => {
+    if (key === '__all__') return 'all'
+    if (key.startsWith('owner:')) return 'owner'
+    if (key.startsWith('region:')) return 'region'
+    if (key.startsWith('market:')) return 'market'
+    if (key.startsWith('type:')) return 'type'
+    return 'all'
+  }
+
+  const selectedCodes = useMemo(() => {
+    const codes = new Set<string>()
+    for (const key of selected) {
+      const g = groups.find(g => g.key === key)
+      if (g) g.codes.forEach(c => codes.add(c))
+    }
+    return codes
+  }, [groups, selected])
+
+  function toggleGroup(key: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function handleAdd() {
+    const codes = Array.from(selectedCodes)
+    if (!codes.length) return
+    onSeed(codes)
+    setLastSeeded(codes)
+    setSelected(new Set())
     setOpen(false)
   }
 
-  const regions = [...new Set(locs.map((l) => l.region).filter(Boolean) as string[])].sort()
-  const markets = [...new Set(locs.map((l) => l.market).filter(Boolean) as string[])].sort()
+  function handleUndo() {
+    if (lastSeeded && onUndoSeed) {
+      onUndoSeed(lastSeeded)
+      setLastSeeded(null)
+    }
+  }
+
+  const sections: { id: string; label: string; keys: string[] }[] = [
+    { id: 'all',    label: '',              keys: ['__all__'] },
+    { id: 'owner',  label: 'By Owner',      keys: groups.filter(g => sectionOf(g.key) === 'owner').map(g => g.key) },
+    { id: 'region', label: 'By Region',     keys: groups.filter(g => sectionOf(g.key) === 'region').map(g => g.key) },
+    { id: 'market', label: 'By Market',     keys: groups.filter(g => sectionOf(g.key) === 'market').map(g => g.key) },
+    { id: 'type',   label: 'By Type',       keys: groups.filter(g => sectionOf(g.key) === 'type').map(g => g.key) },
+  ].filter(s => s.keys.length > 0)
 
   return (
-    <div className="relative">
+    <div className="relative flex items-center gap-2" ref={panelRef}>
       <button
         onClick={toggle}
         className="text-xs font-mono border border-navy/20 rounded px-2 py-1 text-inky hover:text-navy hover:border-navy/40 transition-colors"
       >
         ↓ Seed from Locations
       </button>
+      {lastSeeded && onUndoSeed && (
+        <button
+          onClick={handleUndo}
+          className="text-xs font-mono text-inky/50 hover:text-navy underline transition-colors"
+        >
+          Undo last seed
+        </button>
+      )}
       {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute top-full left-0 mt-1 z-20 bg-cream border border-navy/20 rounded shadow-lg min-w-[220px]">
-            {loadingLocs ? (
-              <p className="p-3 text-xs font-mono text-inky">Loading…</p>
-            ) : locs.length === 0 ? (
-              <p className="p-3 text-xs font-mono text-inky/60">No active locations found.</p>
-            ) : (
-              <div className="flex flex-col py-1 max-h-72 overflow-y-auto">
-                <button onClick={() => seed(locs)}
-                  className="text-left px-3 py-1.5 text-xs font-mono text-navy hover:bg-navy/5">
-                  All Locations ({locs.length})
-                </button>
-
-                {/* Corporate / Franchise */}
-                {locs.some((l) => l.location_type) && (
-                  <>
-                    <div className="mx-3 my-1 border-t border-navy/10" />
-                    <div className="px-3 pb-0.5 text-[10px] font-mono text-inky/50 uppercase tracking-wide">By Type</div>
-                    {(['corporate', 'franchise'] as const).map((type) => {
-                      const filtered = locs.filter((l) => l.location_type === type)
-                      if (filtered.length === 0) return null
+        <div className="absolute top-full left-0 mt-1 z-20 bg-cream border border-navy/20 rounded shadow-lg min-w-[280px] max-w-[340px]">
+          {loadingLocs ? (
+            <p className="p-3 text-xs font-mono text-inky">Loading…</p>
+          ) : locs.length === 0 ? (
+            <p className="p-3 text-xs font-mono text-inky/60">No active locations found.</p>
+          ) : (
+            <>
+              <div className="max-h-80 overflow-y-auto">
+                {sections.map((section, si) => (
+                  <div key={section.id}>
+                    {si > 0 && <div className="mx-3 my-1 border-t border-navy/10" />}
+                    {section.label && (
+                      <div className="px-3 pb-0.5 pt-1 text-[10px] font-mono text-inky/50 uppercase tracking-wide">{section.label}</div>
+                    )}
+                    {section.keys.map(key => {
+                      const g = groups.find(g => g.key === key)
+                      if (!g) return null
+                      const isChecked = selected.has(key)
                       return (
-                        <button key={type} onClick={() => seed(filtered)}
-                          className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy capitalize">
-                          {type} ({filtered.length})
-                        </button>
+                        <label key={key} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-navy/5">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleGroup(key)}
+                            className="accent-navy"
+                          />
+                          <span className="text-xs font-mono text-navy truncate" title={g.label}>{g.label}</span>
+                        </label>
                       )
                     })}
-                  </>
-                )}
-
-                {/* By Region */}
-                {regions.length > 0 && (
-                  <>
-                    <div className="mx-3 my-1 border-t border-navy/10" />
-                    <div className="px-3 pb-0.5 text-[10px] font-mono text-inky/50 uppercase tracking-wide">By Region</div>
-                    {regions.map((r) => {
-                      const filtered = locs.filter((l) => l.region === r)
-                      return (
-                        <button key={r} onClick={() => seed(filtered)}
-                          className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy">
-                          {r} ({filtered.length})
-                        </button>
-                      )
-                    })}
-                  </>
-                )}
-
-                {/* By Market */}
-                {markets.length > 0 && (
-                  <>
-                    <div className="mx-3 my-1 border-t border-navy/10" />
-                    <div className="px-3 pb-0.5 text-[10px] font-mono text-inky/50 uppercase tracking-wide">By Market</div>
-                    {markets.map((m) => {
-                      const filtered = locs.filter((l) => l.market === m)
-                      return (
-                        <button key={m} onClick={() => seed(filtered)}
-                          className="text-left px-3 py-1 text-xs font-mono text-inky hover:bg-navy/5 hover:text-navy">
-                          {m} ({filtered.length})
-                        </button>
-                      )
-                    })}
-                  </>
-                )}
+                  </div>
+                ))}
               </div>
-            )}
-          </div>
-        </>
+              <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-navy/10">
+                <span className="text-[11px] font-mono text-inky/60">{selectedCodes.size} location{selectedCodes.size !== 1 ? 's' : ''} selected</span>
+                <button
+                  onClick={handleAdd}
+                  disabled={selectedCodes.size === 0}
+                  className="text-xs font-mono bg-navy text-cream rounded px-3 py-1 hover:bg-inky transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Add Selected
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       )}
     </div>
   )
@@ -581,6 +692,10 @@ function FieldCard({
                           .filter((c) => !existing.has(c))
                           .map((c) => ({ id: crypto.randomUUID(), label: c, score: 0 }))
                         onUpdate({ options: [...field.options, ...newOpts] })
+                      }}
+                      onUndoSeed={(codes) => {
+                        const codeSet = new Set(codes)
+                        onUpdate({ options: field.options.filter((o) => !codeSet.has(o.label)) })
                       }}
                     />
                   )}
