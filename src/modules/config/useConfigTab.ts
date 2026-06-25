@@ -101,7 +101,9 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       const group = batches.slice(i, i + CONCURRENCY)
       const results = await Promise.all(
         group.map((slice) =>
-          op === 'upsert' ? sb.schema(schemaName).from(tableName).upsert(slice) : sb.schema(schemaName).from(tableName).insert(slice)
+          op === 'upsert'
+            ? sb.schema(schemaName).from(tableName).upsert(slice, { onConflict: 'id' })
+            : sb.schema(schemaName).from(tableName).insert(slice)
         )
       )
       for (const { error } of results) {
@@ -169,8 +171,12 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     }
     const payload = rows.map((r) => {
       const base = stamp(r as Record<string, unknown>, source)
-      const id = keyOf ? existingByKey.get(keyOf(r)) : undefined
-      return id ? { ...base, id } : base
+      const existingId = keyOf ? existingByKey.get(keyOf(r)) : undefined
+      // Always supply an id — upsert with onConflict:'id' needs a PK present.
+      // New rows get a fresh UUID; existing rows get their stored id so Postgres
+      // resolves the conflict and updates in place rather than inserting.
+      const id = existingId ?? crypto.randomUUID()
+      return { ...base, id }
     })
     const error = await writeInBatches(payload, 'upsert')
     if (error) { toast.error(error.message); return }
