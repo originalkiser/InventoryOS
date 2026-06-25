@@ -18,6 +18,7 @@ export type Transform =
   | { kind: 'date' } // → yyyy-MM-dd
   | { kind: 'datetime' } // → ISO timestamp
   | { kind: 'currency' } // strip symbols → numeric string
+  | { kind: 'strip_leading_zeros' } // "001" → "1", "007.5" → "7.5"
 
 export type TransformChainKind = Transform['kind']
 
@@ -34,6 +35,7 @@ export const TRANSFORM_CATALOG: { kind: TransformChainKind; label: string; opera
   { kind: 'date', label: 'Date (no time)' },
   { kind: 'datetime', label: 'Date & time' },
   { kind: 'currency', label: 'Currency (numeric)' },
+  { kind: 'strip_leading_zeros', label: 'Strip leading zeros (001 → 1)' },
 ]
 
 function toNum(v: string): number {
@@ -95,6 +97,13 @@ function applyOne(value: string, t: Transform): string {
     case 'date': { const d = parseDateSafe(v); return d ? format(d, 'yyyy-MM-dd') : '' }
     case 'datetime': { const d = parseDateSafe(v); return d ? d.toISOString() : '' }
     case 'currency': { const n = toNum(v); return isNaN(n) ? '' : String(n) }
+    case 'strip_leading_zeros': {
+      const trimmed = v.trim()
+      // Only strip from pure numeric strings (integers or decimals)
+      if (/^\d+$/.test(trimmed)) return String(Number(trimmed))
+      if (/^\d+\.\d+$/.test(trimmed)) return String(Number(trimmed))
+      return v
+    }
     default: return v
   }
 }
@@ -124,5 +133,6 @@ export function describeTransform(t: Transform): string {
     case 'date': return 'date'
     case 'datetime': return 'date+time'
     case 'currency': return '$'
+    case 'strip_leading_zeros': return '0-strip'
   }
 }

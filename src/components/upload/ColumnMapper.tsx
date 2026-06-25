@@ -175,7 +175,8 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
 
       <div className="flex flex-col">
         {requiredFields.map((field, rowIdx) => {
-          const mapping = mappings.find((m) => m.fieldName === field.name)!
+          const mapping = mappings.find((m) => m.fieldName === field.name)
+          if (!mapping) return null
           const isConstant = mapping.sourceColumn === CONSTANT_SOURCE
           const isComposite = mapping.sourceColumn === COMPOSITE_SOURCE
           return (

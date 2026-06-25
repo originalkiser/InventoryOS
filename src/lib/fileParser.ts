@@ -62,6 +62,14 @@ async function parseExcel(file: File): Promise<ParseResult> {
   return processRawRows(raw)
 }
 
+// Returns true when every non-empty cell in the row exactly matches its header
+// (case-insensitive). Used to discard repeated header rows from stacked tables.
+function isDuplicateHeaderRow(record: Record<string, string>, headers: string[]): boolean {
+  const nonEmpty = headers.filter(h => record[h] !== '')
+  if (nonEmpty.length === 0) return false
+  return nonEmpty.every(h => record[h].toLowerCase() === h.toLowerCase())
+}
+
 function processRawRows(raw: unknown[][]): ParseResult {
   const { headerRowIndex, skippedRows } = detectHeaderRow(raw)
   const headerRow = raw[headerRowIndex]
@@ -69,6 +77,7 @@ function processRawRows(raw: unknown[][]): ParseResult {
 
   const dataRows = raw.slice(headerRowIndex + 1)
   const rows: Record<string, string>[] = []
+  let dupHeadersSkipped = 0
 
   for (const row of dataRows) {
     const arr = row as unknown[]
@@ -79,8 +88,10 @@ function processRawRows(raw: unknown[][]): ParseResult {
     headers.forEach((h, i) => {
       record[h] = String(arr[i] ?? '').trim()
     })
+
+    if (isDuplicateHeaderRow(record, headers)) { dupHeadersSkipped++; continue }
     rows.push(record)
   }
 
-  return { headers, rows, skippedRows, totalRowsParsed: rows.length }
+  return { headers, rows, skippedRows: skippedRows + dupHeadersSkipped, totalRowsParsed: rows.length }
 }

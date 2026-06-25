@@ -235,7 +235,7 @@ export default function ReportViewPage() {
 
       const meta = (location.metadata as any) ?? {}
       const amName: string | null = meta.area_manager ?? meta['Area Manager'] ?? null
-      const rdoName: string | null = meta.director ?? meta['Director'] ?? meta.rdo ?? meta['Regional Director'] ?? null
+      const rdoName: string | null = meta['Regional Director'] ?? meta.regional_director ?? meta.director ?? meta['Director'] ?? meta.rdo ?? null
 
       await sb.schema('outlier').from('report_entries')
         .update({ location_id: location.id, area_manager_name: amName, rdo_name: rdoName })

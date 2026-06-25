@@ -9,6 +9,7 @@ import StatusPill from '../shared/StatusPill'
 const FIXED_KEYS = new Set([
   'area_manager', 'area_manager_name', 'am',
   'rdo', 'rdo_name', 'director',
+  'regional_director', 'regional director',
   'am_comment', 'am_comments', 'comments',
   'due_date', 'due date',
   'status', 'completed', 'is_complete',
@@ -115,7 +116,7 @@ export default function ReportTable({
             {!isEmployeeReport && (
               <>
                 <Th label="AREA MANAGER" sortKey="area_manager_name" current={sortKey} dir={sortDir} onSort={handleSort} />
-                <Th label="RDO" sortKey="rdo_name" current={sortKey} dir={sortDir} onSort={handleSort} />
+                <Th label="REGIONAL DIRECTOR" sortKey="rdo_name" current={sortKey} dir={sortDir} onSort={handleSort} />
               </>
             )}
 
