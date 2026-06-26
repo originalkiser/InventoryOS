@@ -52,7 +52,7 @@ export function VendorPartsTab() {
   }, [companyId])
   useEffect(() => { loadVendors() }, [loadVendors])
 
-  const vendorName = (id: string | null) => vendors.find((v) => v.id === id)?.name ?? 'â€”'
+  const vendorName = (id: string | null) => vendors.find((v) => v.id === id)?.name ?? '—'
   const vendorOptions: ComboboxOption[] = vendors.map((v) => ({ value: v.id, label: v.name }))
 
   async function createVendor(name: string): Promise<ComboboxOption> {
@@ -67,15 +67,15 @@ export function VendorPartsTab() {
     const cols: any[] = [
       { id: 'vendor', header: 'Vendor', accessorFn: (r: VendorPart) => vendorName(r.vendor_id), cell: (i: any) => i.getValue() },
       col.accessor('part_number', { header: 'Vendor Part #' }),
-      col.accessor('our_part_number', { header: 'Our Part #', cell: (i) => i.getValue() ?? 'â€”' }),
-      col.accessor('description', { header: 'Description', cell: (i) => i.getValue() ?? 'â€”' }),
-      col.accessor('unit_of_measure', { header: 'UoM', cell: (i) => i.getValue() ?? 'â€”' }),
-      col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? 'â€”' }),
-      col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? 'â€”' }),
-      col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? 'â€”' }),
+      col.accessor('our_part_number', { header: 'Our Part #', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('description', { header: 'Description', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('unit_of_measure', { header: 'UoM', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
     ]
-    for (const f of customFields) cols.push({ id: `cf_${f.field_key}`, header: f.label, accessorFn: (r: VendorPart) => (r.metadata as any)?.[f.field_key] ?? '', cell: (i: any) => i.getValue() || 'â€”' })
-    cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }))
+    for (const f of customFields) cols.push({ id: `cf_${f.field_key}`, header: f.label, accessorFn: (r: VendorPart) => (r.metadata as any)?.[f.field_key] ?? '', cell: (i: any) => i.getValue() || '—' })
+    cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
     cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as VendorPart)} className="text-xs font-mono text-inky hover:underline">Edit</button> })
     return cols
   }, [customFields, vendors])
@@ -176,7 +176,7 @@ export function VendorPartsTab() {
             onChange={(v) => setUploadVendorId(v)} placeholder="Select or create vendor"
             allowCreate onCreateOption={createVendor} />
           <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label })} />
-          <p className="text-xs font-mono text-inky/70">Upload one file per vendor â€” each can map differently. Re-uploading a vendor's file updates its parts; other vendors are untouched.</p>
+          <p className="text-xs font-mono text-inky/70">Upload one file per vendor — each can map differently. Re-uploading a vendor's file updates its parts; other vendors are untouched.</p>
         </div>
         <DataSourceLinker configType="vendor_parts" />
       </div>

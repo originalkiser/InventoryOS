@@ -21,7 +21,7 @@ const col = createColumnHelper<PosLocationMap>()
 const EMPTY = { pos_string: '', locationId: '' }
 
 export function PosLocationMapTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<PosLocationMap>('pos_location_map')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<PosLocationMap>('pos_location_map', 'inventory')
   const loc = useLocations()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -50,7 +50,7 @@ export function PosLocationMapTab() {
         else if (m.fieldName === 'location_code') code = v
         else if (m.fieldName === 'location') location_id = loc.resolveId(v)
       }
-      // Priority: explicit location_code (force match) â†’ location â†’ parsed leading number.
+      // Priority: explicit location_code (force match) → location → parsed leading number.
       if (!location_id && code) location_id = loc.resolveId(code)
       if (!location_id && pos_string) location_id = loc.resolveId(applyTransforms(pos_string, [{ kind: 'pos_location' }]))
       return { pos_string, location_id } as Partial<PosLocationMap>

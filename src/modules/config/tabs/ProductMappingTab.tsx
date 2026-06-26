@@ -21,7 +21,7 @@ const col = createColumnHelper<ProductIdMapping>()
 const EMPTY = { old_product_id: '', new_product_id: '', notes: '' }
 
 export function ProductMappingTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<ProductIdMapping>('product_id_mappings')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<ProductIdMapping>('product_id_mappings', 'inventory')
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -30,8 +30,8 @@ export function ProductMappingTab() {
   const COLUMNS = [
     col.accessor('old_product_id', { header: 'Old ID' }),
     col.accessor('new_product_id', { header: 'New ID' }),
-    col.accessor('notes', { header: 'Notes', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }),
+    col.accessor('notes', { header: 'Notes', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductIdMapping)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
   const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)

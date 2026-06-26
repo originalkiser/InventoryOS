@@ -27,7 +27,7 @@ const NUM = ['bulk_minimum', 'individual_minimum']
 const col = createColumnHelper<GlobalProduct>()
 
 export function GlobalProductsTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<GlobalProduct>('global_products')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<GlobalProduct>('global_products', 'inventory')
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -35,12 +35,12 @@ export function GlobalProductsTab() {
 
   const COLUMNS = [
     col.accessor('product_id', { header: 'Product ID' }),
-    col.accessor('unit_of_measure', { header: 'On-Hand UoM', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('order_uom', { header: 'Order UoM', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }),
+    col.accessor('unit_of_measure', { header: 'On-Hand UoM', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('order_uom', { header: 'Order UoM', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as GlobalProduct)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
   const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS)

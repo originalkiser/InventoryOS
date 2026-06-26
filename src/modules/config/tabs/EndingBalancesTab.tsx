@@ -24,7 +24,7 @@ const RECOMMENDED = [
 ]
 
 const fmt = (v: number | null) =>
-  v != null ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v) : 'â€”'
+  v != null ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v) : '—'
 
 // Normalize any month input ('YYYY-MM', a date) to a first-of-month 'YYYY-MM-01'.
 function monthKey(v: string): string | null {
@@ -77,9 +77,9 @@ export function EndingBalancesTab() {
       col.accessor('ending_balance', { header: 'Ending Balance', cell: (i) => fmt(i.getValue()) }),
     ]
     for (const c of categories) {
-      cols.push({ id: `cf_${c.field_key}`, header: c.label, accessorFn: (r: MonthlyEndingBalance) => (r.metadata as any)?.[c.field_key] ?? '', cell: (i: any) => (i.getValue() === '' ? 'â€”' : fmt(Number(i.getValue()))) })
+      cols.push({ id: `cf_${c.field_key}`, header: c.label, accessorFn: (r: MonthlyEndingBalance) => (r.metadata as any)?.[c.field_key] ?? '', cell: (i: any) => (i.getValue() === '' ? '—' : fmt(Number(i.getValue()))) })
     }
-    cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as MonthlyEndingBalance; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }))
+    cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as MonthlyEndingBalance; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
     cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as MonthlyEndingBalance)} className="text-xs font-mono text-inky hover:underline">Edit</button> })
     return cols
   }, [categories, loc])
@@ -171,7 +171,7 @@ export function EndingBalancesTab() {
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Month End Ending Balance</h2>
-        <p className="text-xs text-inky mt-0.5">Location-specific ending balances by month. Uploads stack â€” prior months are always kept.</p>
+        <p className="text-xs text-inky mt-0.5">Location-specific ending balances by month. Uploads stack — prior months are always kept.</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}

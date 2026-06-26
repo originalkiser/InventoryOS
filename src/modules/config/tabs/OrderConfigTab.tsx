@@ -47,7 +47,7 @@ export function OrderConfigTab() {
   }, [companyId])
   useEffect(() => { loadVendors() }, [loadVendors])
 
-  const vendorName = (id: string | null) => vendors.find((v) => v.id === id)?.name ?? 'â€”'
+  const vendorName = (id: string | null) => vendors.find((v) => v.id === id)?.name ?? '—'
   const vendorOptions: ComboboxOption[] = vendors.map((v) => ({ value: v.id, label: v.name }))
 
   // Non-linked custom fields are editable/stored; linked ones derive from the location.
@@ -62,21 +62,21 @@ export function OrderConfigTab() {
       { id: 'vendor', header: 'Vendor', accessorFn: (r: LocationOrderConfig) => vendorName(r.vendor_id), cell: (i: any) => i.getValue() },
       { id: 'location', header: 'Location', accessorFn: (r: LocationOrderConfig) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
       col.accessor('product_id', { header: 'Product ID' }),
-      { id: 'uom', header: 'UoM', accessorFn: (r: LocationOrderConfig) => (r.metadata as any)?.uom ?? '', cell: (i: any) => i.getValue() || 'â€”' },
-      col.accessor('capacity', { header: 'Capacity', cell: (i) => i.getValue() ?? 'â€”' }),
-      col.accessor('order_trigger', { header: 'Trigger', cell: (i) => i.getValue() ?? 'â€”' }),
-      col.accessor('order_limit', { header: 'Limit (0 = inactive)', cell: (i) => i.getValue() ?? 'â€”' }),
+      { id: 'uom', header: 'UoM', accessorFn: (r: LocationOrderConfig) => (r.metadata as any)?.uom ?? '', cell: (i: any) => i.getValue() || '—' },
+      col.accessor('capacity', { header: 'Capacity', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('order_trigger', { header: 'Trigger', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('order_limit', { header: 'Limit (0 = inactive)', cell: (i) => i.getValue() ?? '—' }),
     ]
     for (const f of customFields) {
       cols.push({
         id: `cf_${f.field_key}`,
-        header: f.linked_section ? `${f.label} â†—` : f.label,
+        header: f.linked_section ? `${f.label} ↗` : f.label,
         accessorFn: (r: LocationOrderConfig) =>
           f.linked_section ? loc.fieldValue(r.location_id, f.linked_match_key || f.field_key) : ((r.metadata as any)?.[f.field_key] ?? ''),
-        cell: (i: any) => i.getValue() || 'â€”',
+        cell: (i: any) => i.getValue() || '—',
       })
     }
-    cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as LocationOrderConfig; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }))
+    cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as LocationOrderConfig; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
     cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as LocationOrderConfig)} className="text-xs font-mono text-inky hover:underline">Edit</button> })
     return cols
   }, [customFields, loc, vendors])
@@ -167,7 +167,7 @@ export function OrderConfigTab() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File (per vendor)</h3>
-          <Combobox label="Vendor for this file" options={[{ value: '', label: 'â€” No vendor â€”' }, ...vendorOptions]} value={uploadVendorId}
+          <Combobox label="Vendor for this file" options={[{ value: '', label: '— No vendor —' }, ...vendorOptions]} value={uploadVendorId}
             onChange={(v) => setUploadVendorId(v)} placeholder="Select vendor (optional)" />
           <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} onAddColumn={(label) => addField({ label })} />
           <p className="text-xs font-mono text-inky/70">Tag the file with a vendor to keep each vendor's order config separate. Re-uploading a vendor's file updates only its rows.</p>
@@ -178,7 +178,7 @@ export function OrderConfigTab() {
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Order Config' : 'Add Order Config'} size="lg">
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
-            <Combobox label="Vendor" options={[{ value: '', label: 'â€” No vendor â€”' }, ...vendorOptions]} value={form.vendorId} onChange={(v) => setForm({ ...form, vendorId: v })} placeholder="Optional" />
+            <Combobox label="Vendor" options={[{ value: '', label: '— No vendor —' }, ...vendorOptions]} value={form.vendorId} onChange={(v) => setForm({ ...form, vendorId: v })} placeholder="Optional" />
             <Combobox label="Location *" options={loc.options} value={form.locationId} onChange={(v) => setForm({ ...form, locationId: v })} placeholder="Select location" />
           </div>
           <div className="grid grid-cols-2 gap-3">

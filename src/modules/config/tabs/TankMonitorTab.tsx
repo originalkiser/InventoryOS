@@ -42,11 +42,11 @@ export function TankMonitorTab() {
 
   const columns = useMemo(() => [
     { id: 'location', header: 'Location', accessorFn: (r: TankMonitor) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
-    col.accessor('product_id', { header: 'Product', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('keep_fill', { header: 'Keep-fill', cell: (i) => (i.getValue() ? 'âœ“' : 'â€”') }),
-    { id: 'inventory_time', header: 'Inventory Time', accessorFn: (r: TankMonitor) => r.inventory_time ?? r.reading_date, cell: (i: any) => { const v = i.getValue(); if (!v) return 'â€”'; try { return format(new Date(v), 'MMM d, yyyy h:mm a') } catch { return String(v) } } },
-    col.accessor('on_hand', { header: 'On Hand', cell: (i) => i.getValue() ?? 'â€”' }),
-    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => i.getValue() ? format(new Date(i.getValue()), 'MMM d, yyyy') : 'â€”' }),
+    col.accessor('product_id', { header: 'Product', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('keep_fill', { header: 'Keep-fill', cell: (i) => (i.getValue() ? '✓' : '—') }),
+    { id: 'inventory_time', header: 'Inventory Time', accessorFn: (r: TankMonitor) => r.inventory_time ?? r.reading_date, cell: (i: any) => { const v = i.getValue(); if (!v) return '—'; try { return format(new Date(v), 'MMM d, yyyy h:mm a') } catch { return String(v) } } },
+    col.accessor('on_hand', { header: 'On Hand', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('updated_at', { header: 'Last Updated', cell: (i) => i.getValue() ? format(new Date(i.getValue()), 'MMM d, yyyy') : '—' }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as TankMonitor)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
 
@@ -103,7 +103,7 @@ export function TankMonitorTab() {
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Tank Monitor</h2>
-        <p className="text-xs text-inky mt-0.5">Daily readings by location. Use transforms on import for gallonsâ†”quarts or to parse the location number from a messy export.</p>
+        <p className="text-xs text-inky mt-0.5">Daily readings by location. Use transforms on import for gallons↔quarts or to parse the location number from a messy export.</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
