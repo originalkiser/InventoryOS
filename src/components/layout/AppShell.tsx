@@ -108,7 +108,7 @@ export function AppShell() {
           className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
           title="Location Lookup (Ctrl/Cmd+L)"
         >
-          {lookupMode !== 'hidden' && <span className="text-[10px] text-sky">●</span>}
+          {lookupMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
           {!mobile && 'Lookup'}
           {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>}
         </button>
@@ -117,7 +117,7 @@ export function AppShell() {
           className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
           title="Inventory — all locations (Ctrl/Cmd+I)"
         >
-          {invMode !== 'hidden' && <span className="text-[10px] text-sky">●</span>}
+          {invMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
           {!mobile && 'Inventory'}
           {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 10V7" /></svg>}
         </button>

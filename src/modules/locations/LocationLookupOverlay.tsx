@@ -455,12 +455,15 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
 
   function deriveAllCols(r: Record<string, any>[], source: string) {
     const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
+    const baseSet = new Set(base)
     const metaKeys = new Set<string>()
     for (const row of r) {
       const m = row.metadata
       if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`)
     }
-    return [...base, ...metaKeys, ...(source === 'locations' ? ['__pos__'] : [])]
+    // Exclude meta:X when X is already a real column (e.g. meta:region when region exists)
+    const uniqueMetaKeys = [...metaKeys].filter((mk) => !baseSet.has(mk.slice(5)))
+    return [...base, ...uniqueMetaKeys, ...(source === 'locations' ? ['__pos__'] : [])]
   }
 
   useEffect(() => {
@@ -495,7 +498,9 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
   const valueOf = (r: Record<string, any>, c: string) =>
     c === '__pos__' && isLocations ? loc.posStringFor(r.id) : cellVal(r, c)
 
-  const cols = block.columns.length ? block.columns : allCols.slice(0, 4)
+  // Deduplicate: drop meta:X if X is already present (handles stale saved views)
+  const rawCols = block.columns.length ? block.columns : allCols.slice(0, 4)
+  const cols = rawCols.filter((c, _, arr) => !c.startsWith('meta:') || !arr.includes(c.slice(5)))
 
   // Which filter fields from the hierarchy actually exist in this dataset
   const filterFields = useMemo(

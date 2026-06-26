@@ -139,6 +139,7 @@ export function LocationsTab() {
       col.accessor('region', { header: 'Region', cell: (i) => i.getValue() ?? '—' }),
     ]
     for (const f of customFields) {
+      if (['region', 'name', 'location_code'].includes(f.field_key)) continue
       cols.push({
         id: `cf_${f.field_key}`,
         header: f.label,
