@@ -1,17 +1,16 @@
 -- =====================================================================
--- 1. Add package_capacity to product_usage
+-- 1. Add package_capacity to product_usage  (inventory schema)
 -- =====================================================================
-ALTER TABLE product_usage
+ALTER TABLE inventory.product_usage
   ADD COLUMN IF NOT EXISTS package_capacity numeric;
 
 -- =====================================================================
--- 2. Create monthly_ending_balances if it doesn't exist
---    (public schema — matches 0001_initial_schema + phase4_custom_fields)
+-- 2. Create monthly_ending_balances in inventory schema (if missing)
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS monthly_ending_balances (
+CREATE TABLE IF NOT EXISTS inventory.monthly_ending_balances (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id          uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  location_id         uuid REFERENCES locations(id) ON DELETE CASCADE,
+  company_id          uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  location_id         uuid REFERENCES public.locations(id) ON DELETE CASCADE,
   month               date NOT NULL,
   ending_balance      numeric NOT NULL,
   metadata            jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -22,34 +21,28 @@ CREATE TABLE IF NOT EXISTS monthly_ending_balances (
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
-ALTER TABLE monthly_ending_balances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory.monthly_ending_balances ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN
-  DROP POLICY IF EXISTS "Company members read monthly_ending_balances" ON monthly_ending_balances;
+  DROP POLICY IF EXISTS "Company members read monthly_ending_balances" ON inventory.monthly_ending_balances;
   CREATE POLICY "Company members read monthly_ending_balances"
-    ON monthly_ending_balances FOR SELECT
+    ON inventory.monthly_ending_balances FOR SELECT
     USING (company_id = get_my_company_id());
 
-  DROP POLICY IF EXISTS "Company members manage monthly_ending_balances" ON monthly_ending_balances;
+  DROP POLICY IF EXISTS "Company members manage monthly_ending_balances" ON inventory.monthly_ending_balances;
   CREATE POLICY "Company members manage monthly_ending_balances"
-    ON monthly_ending_balances FOR ALL
+    ON inventory.monthly_ending_balances FOR ALL
     USING (company_id = get_my_company_id())
     WITH CHECK (company_id = get_my_company_id());
 END $$;
 
-DO $$ BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE monthly_ending_balances;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
 -- =====================================================================
--- 3. Create tank_monitors if it doesn't exist
---    (public schema — matches batch2_config + tank_monitor_cols + tank_inventory_time)
+-- 3. Create tank_monitors in inventory schema (if missing)
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS tank_monitors (
+CREATE TABLE IF NOT EXISTS inventory.tank_monitors (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id          uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  location_id         uuid REFERENCES locations(id) ON DELETE SET NULL,
+  company_id          uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  location_id         uuid REFERENCES public.locations(id) ON DELETE SET NULL,
   reading_date        date NOT NULL DEFAULT CURRENT_DATE,
   value               numeric,
   unit                text DEFAULT 'gal',
@@ -59,32 +52,28 @@ CREATE TABLE IF NOT EXISTS tank_monitors (
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
-ALTER TABLE tank_monitors
+ALTER TABLE inventory.tank_monitors
   ADD COLUMN IF NOT EXISTS product_id      text,
   ADD COLUMN IF NOT EXISTS keep_fill       boolean NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS on_hand         numeric,
   ADD COLUMN IF NOT EXISTS inventory_time  timestamptz;
 
-CREATE INDEX IF NOT EXISTS idx_tank_monitors_company ON tank_monitors (company_id, reading_date);
+CREATE INDEX IF NOT EXISTS idx_tank_monitors_company
+  ON inventory.tank_monitors (company_id, reading_date);
 
-ALTER TABLE tank_monitors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory.tank_monitors ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN
-  DROP POLICY IF EXISTS "Company members read tank_monitors" ON tank_monitors;
+  DROP POLICY IF EXISTS "Company members read tank_monitors" ON inventory.tank_monitors;
   CREATE POLICY "Company members read tank_monitors"
-    ON tank_monitors FOR SELECT
+    ON inventory.tank_monitors FOR SELECT
     USING (company_id = get_my_company_id());
 
-  DROP POLICY IF EXISTS "Company members manage tank_monitors" ON tank_monitors;
+  DROP POLICY IF EXISTS "Company members manage tank_monitors" ON inventory.tank_monitors;
   CREATE POLICY "Company members manage tank_monitors"
-    ON tank_monitors FOR ALL
+    ON inventory.tank_monitors FOR ALL
     USING (company_id = get_my_company_id())
     WITH CHECK (company_id = get_my_company_id());
-END $$;
-
-DO $$ BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE tank_monitors;
-EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 -- =====================================================================
@@ -108,13 +97,14 @@ RETURNS TABLE(
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
+SET search_path = inventory, public
 AS $$
   SELECT
     id, location_id, product_id,
     NULLIF(TRIM(COALESCE(category, '')), '') AS category,
     daily_usage, on_hands, package_capacity, days_of_supply,
     updated_by, last_change_source, created_at, updated_at
-  FROM product_usage
+  FROM inventory.product_usage
   WHERE company_id = p_company_id
   ORDER BY product_id, location_id NULLS LAST;
 $$;

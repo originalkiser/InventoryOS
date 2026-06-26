@@ -33,7 +33,7 @@ const nowLocal = () => format(new Date(), "yyyy-MM-dd'T'HH:mm")
 const EMPTY = { locationId: '', product_id: '', keep_fill: false, inventory_time: nowLocal(), on_hand: '' }
 
 export function TankMonitorTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<TankMonitor>('tank_monitors')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<TankMonitor>('tank_monitors', 'inventory')
   const loc = useLocations()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)

@@ -56,7 +56,7 @@ const col = createColumnHelper<MonthlyEndingBalance>()
 
 export function EndingBalancesTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances', 'inventory')
   const { active: categories, addField } = useCustomFields('ending_balance')
   const loc = useLocations()
 
