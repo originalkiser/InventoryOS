@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import { DataTable } from '@/components/shared/DataTable'
 import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
-import { RichTextEditor } from '@/components/shared/RichTextEditor'
+import { RichTextEditor, RichTextDisplay } from '@/components/shared/RichTextEditor'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import type { MeetingNote, Project, Task } from '@/types'
@@ -36,7 +36,13 @@ const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
 const col = createColumnHelper<MeetingNote>()
 
-function ExpandableDisplay({ value, clamp = 1 }: { value: string | null; clamp?: 1 | 2 }) {
+function stripHtml(html: string): string {
+  const el = document.createElement('div')
+  el.innerHTML = html
+  return el.textContent ?? ''
+}
+
+function ExpandableDisplay({ value, clamp = 1, isHtml = false }: { value: string | null; clamp?: 1 | 2; isHtml?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [canExpand, setCanExpand] = useState(false)
   const textRef = useRef<HTMLDivElement>(null)
@@ -48,14 +54,20 @@ function ExpandableDisplay({ value, clamp = 1 }: { value: string | null; clamp?:
     setCanExpand(el.scrollHeight > el.clientHeight + 1)
   })
 
-  const text = value ?? ''
+  const raw = value ?? ''
+  const text = isHtml ? stripHtml(raw) : raw
+
   return (
     <div className="whitespace-normal">
       <div
         ref={textRef}
-        className={['text-xs font-mono', text ? 'text-navy' : 'text-inky/40', expanded ? 'whitespace-pre-wrap break-words' : clamp === 2 ? 'line-clamp-2' : 'line-clamp-1'].join(' ')}
+        className={[
+          'text-xs font-mono',
+          text ? 'text-navy' : 'text-inky/40',
+          expanded ? (isHtml ? '' : 'whitespace-pre-wrap break-words') : clamp === 2 ? 'line-clamp-2' : 'line-clamp-1',
+        ].join(' ')}
       >
-        {text || '—'}
+        {expanded && isHtml ? <RichTextDisplay html={raw} className="text-xs" /> : (text || '—')}
       </div>
       {(canExpand || expanded) && (
         <button onClick={() => setExpanded((e) => !e)} className="mt-0.5 text-[10px] font-mono text-inky hover:underline">
@@ -88,8 +100,6 @@ export function MeetingNotesPage() {
   const companyId = profile?.company_id ?? null
   const myId = profile?.id ?? null
   const [searchParams, setSearchParams] = useSearchParams()
-  const quickTriggered = useRef(false)
-
   const [meetings, setMeetings] = useState<MeetingNote[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -115,14 +125,14 @@ export function MeetingNotesPage() {
         .order('meeting_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false }),
       sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).order('project_name'),
-      sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name'),
+      sb.schema('platform').from('user_profiles').select('id, full_name, email, department').eq('company_id', companyId).order('full_name'),
     ])
     if (meetRes.error) toast.error(meetRes.error.message)
     else setMeetings((meetRes.data ?? []) as MeetingNote[])
     setProjects((projRes.data ?? []) as Project[])
     setAllUsers(
-      ((usersRes.data ?? []) as { id: string; full_name: string | null; email: string | null }[])
-        .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email ?? '' }))
+      ((usersRes.data ?? []) as { id: string; full_name: string | null; email: string | null; department?: string | null }[])
+        .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email ?? '', department: u.department ?? null }))
     )
     setLoading(false)
   }, [companyId])
@@ -158,10 +168,9 @@ export function MeetingNotesPage() {
     setModalOpen(true)
   }
 
-  // Auto-open a quick meeting if navigated to with ?quick=1
+  // Auto-open a quick meeting if navigated to with ?quick=1 (including repeat clicks from FAB)
   useEffect(() => {
-    if (searchParams.get('quick') === '1' && !quickTriggered.current) {
-      quickTriggered.current = true
+    if (searchParams.get('quick') === '1') {
       setSearchParams({}, { replace: true })
       openNew(true)
     }
@@ -285,6 +294,7 @@ export function MeetingNotesPage() {
   const columns = useMemo(() => [
     col.accessor('title', {
       header: 'Meeting',
+      size: 140,
       meta: { noClip: true },
       cell: (i) => (
         <div className="flex items-center gap-1.5 group/title">
@@ -304,12 +314,27 @@ export function MeetingNotesPage() {
     }),
     col.accessor('meeting_date', {
       header: 'Date',
-      cell: (i) => formatDateTime(i.getValue(), (i.row.original as MeetingNote).meeting_time),
+      size: 120,
+      cell: (i) => {
+        const date = i.getValue()
+        const time = (i.row.original as MeetingNote).meeting_time
+        if (!date) return <span className="text-inky/40 text-xs font-mono">—</span>
+        try {
+          const d = format(new Date(date + 'T00:00:00'), 'MMM d, yyyy')
+          return (
+            <div className="flex flex-col text-xs font-mono leading-snug">
+              <span>{d}</span>
+              {time && <span className="text-inky/60">{time.slice(0, 5)}</span>}
+            </div>
+          )
+        } catch { return <span className="text-xs font-mono">{date}</span> }
+      },
     }),
-    col.accessor('vendor', { header: 'Vendor', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} /> }),
-    col.accessor('category', { header: 'Category', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} /> }),
+    col.accessor('vendor', { header: 'Vendor', size: 100, meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} /> }),
+    col.accessor('category', { header: 'Category', size: 110, meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} /> }),
     col.accessor('shared', {
       header: 'Visibility',
+      size: 95,
       cell: (i) => {
         const vis: VisibilityValue = (i.row.original as any).visibility ?? (i.getValue() ? 'department' : 'private')
         const opt = VISIBILITY_OPTIONS.find((o) => o.value === vis)
@@ -320,7 +345,7 @@ export function MeetingNotesPage() {
         )
       },
     }),
-    col.accessor('notes', { header: 'Notes', meta: { noClip: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} /> }),
+    col.accessor('notes', { header: 'Notes', size: 200, meta: { noClip: true, fill: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} isHtml /> }),
   ], [openEdit]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const { table, globalFilter, setGlobalFilter } = useTable(meetings, columns)

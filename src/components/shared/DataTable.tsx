@@ -119,6 +119,7 @@ export function DataTable<T>({
     currentPageRows.length > 0 && currentPageRows.every((r) => selectedIds.has(rowKey(r)))
   const isSomePageSelected = currentPageRows.some((r) => selectedIds.has(rowKey(r))) && !isAllPageSelected
   const selectedCount = filteredRows.filter((r) => selectedIds.has(rowKey(r))).length
+  const hasFill = table.getVisibleLeafColumns().some(c => (c.columnDef.meta as any)?.fill)
 
   // Wire the indeterminate state — can't be set in JSX directly, needs a DOM ref.
   const selectAllRef = useRef<HTMLInputElement>(null)
@@ -329,8 +330,8 @@ export function DataTable<T>({
       {/* Table */}
       <div className="overflow-x-auto rounded border border-inky/20">
         <table
-          className="text-xs font-body table-fixed"
-          style={{ width: table.getTotalSize() + SEL_W }}
+          className={`text-xs font-body table-fixed${hasFill ? ' w-full' : ''}`}
+          style={hasFill ? { minWidth: table.getTotalSize() + SEL_W } : { width: table.getTotalSize() + SEL_W }}
         >
           <thead className="sticky top-0 z-20">
             {table.getHeaderGroups().map((hg) => (
@@ -353,7 +354,9 @@ export function DataTable<T>({
                   <th
                     key={header.id}
                     style={{
-                      width: header.getSize(),
+                      ...((header.column.columnDef.meta as any)?.fill
+                        ? { minWidth: header.getSize() }
+                        : { width: header.getSize() }),
                       ...(header.column.getIsPinned() === 'left'
                         ? { position: 'sticky', left: header.column.getStart('left') + SEL_W, zIndex: 20 }
                         : { position: 'relative' }),
@@ -424,13 +427,15 @@ export function DataTable<T>({
                     </td>
                     {row.getVisibleCells().map((cell) => {
                       const noClip = (cell.column.columnDef.meta as any)?.noClip
+                      const isFill = (cell.column.columnDef.meta as any)?.fill
                       return (
                         <td
                           key={cell.id}
                           style={{
-                            width: cell.column.getSize(),
-                            maxWidth: cell.column.getSize(),
-                            ...(noClip ? {} : { overflow: 'hidden', textOverflow: 'ellipsis' }),
+                            ...(isFill
+                              ? { minWidth: cell.column.getSize() }
+                              : { width: cell.column.getSize(), maxWidth: cell.column.getSize() }),
+                            ...(noClip || isFill ? {} : { overflow: 'hidden', textOverflow: 'ellipsis' }),
                             ...(cell.column.getIsPinned() === 'left'
                               ? { position: 'sticky', left: cell.column.getStart('left') + SEL_W, zIndex: 10 }
                               : {}),

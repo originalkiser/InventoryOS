@@ -6,6 +6,7 @@ export interface SlimUser {
   id: string
   full_name: string | null
   email: string
+  department?: string | null
 }
 
 const VISIBILITY_OPTIONS: { value: VisibilityValue; icon: string; label: string; desc: string }[] = [
@@ -135,7 +136,7 @@ export function VisibilitySelector({
 
       {value === 'department' && (
         <div className="flex flex-col gap-1.5">
-          {departments && departments.length > 1 ? (
+          {departments && departments.length > 1 && (
             <select
               value={selectedDept}
               onChange={(e) => {
@@ -149,11 +150,42 @@ export function VisibilitySelector({
                 <option key={d} value={d}>{d}</option>
               ))}
             </select>
-          ) : (
-            <p className="text-[10px] font-mono text-inky/60">
-              Visible to all members of {effectiveDeptName ? <strong>{effectiveDeptName}</strong> : 'your department'}.
-            </p>
           )}
+          {(() => {
+            const deptMembers = allUsers.filter(
+              (u) => effectiveDeptName && u.department === effectiveDeptName
+            )
+            if (!effectiveDeptName || deptMembers.length === 0) {
+              return (
+                <p className="text-[10px] font-mono text-inky/60">
+                  Visible to all members of {effectiveDeptName ? <strong>{effectiveDeptName}</strong> : 'your department'}.
+                </p>
+              )
+            }
+            return (
+              <>
+                <p className="text-[10px] font-mono text-inky/60">
+                  Shared with <strong>{effectiveDeptName}</strong> — remove anyone to switch to specific users:
+                </p>
+                <ul className="flex flex-col gap-0.5">
+                  {deptMembers.map((u) => (
+                    <li key={u.id} className="flex items-center justify-between gap-2 rounded bg-navy/5 px-2 py-1">
+                      <span className="text-xs font-mono text-navy">{u.full_name ?? u.email}</span>
+                      <button
+                        onClick={() => {
+                          const remaining = deptMembers.filter((m) => m.id !== u.id)
+                          onChange('specific_users')
+                          onSpecificUsersChange(remaining)
+                        }}
+                        className="text-[10px] text-inky/40 hover:text-[#C0392B] transition-colors flex-shrink-0"
+                        title="Remove from share list"
+                      >✕</button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )
+          })()}
         </div>
       )}
 

@@ -33,8 +33,8 @@ function ToolbarButton({
       className={[
         'px-1.5 py-0.5 rounded text-xs font-mono transition-colors',
         active
-          ? 'bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/40'
-          : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/10 border border-transparent',
+          ? 'bg-sky/20 text-navy border border-sky/50'
+          : 'text-navy/50 hover:text-navy hover:bg-navy/10 border border-transparent',
       ].join(' ')}
     >
       {children}
@@ -48,7 +48,7 @@ export function RichTextEditor({ value, onChange, placeholder, minHeight = 160, 
       StarterKit,
       Underline,
       Highlight.configure({ multicolor: false }),
-      Link.configure({ openOnClick: false, HTMLAttributes: { class: 'text-[#00e5ff] underline' } }),
+      Link.configure({ openOnClick: false, HTMLAttributes: { class: 'text-sky underline cursor-pointer' } }),
     ],
     content: value || '',
     editable: !disabled,
@@ -109,10 +109,14 @@ export function RichTextEditor({ value, onChange, placeholder, minHeight = 160, 
         </div>
       )}
 
-      {/* Editor area */}
-      <div className="relative px-3 py-2" style={{ minHeight }}>
-        {/* Placeholder */}
-        {editor.isEmpty && placeholder && (
+      {/* Editor area — full area is clickable to place cursor */}
+      <div
+        className="relative px-3 py-2 cursor-text [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_a]:text-sky [&_a]:underline [&_a]:cursor-pointer"
+        style={{ minHeight }}
+        onClick={(e) => { if (e.target === e.currentTarget) editor.chain().focus('end').run() }}
+      >
+        {/* Placeholder — hide when list/block formatting is active (isEmpty is true for empty list items too) */}
+        {editor.isEmpty && !editor.isActive('bulletList') && !editor.isActive('orderedList') && placeholder && (
           <div className="absolute top-2 left-3 text-sm font-mono text-inky/40 pointer-events-none select-none">
             {placeholder}
           </div>
