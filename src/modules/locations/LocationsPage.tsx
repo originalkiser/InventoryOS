@@ -140,7 +140,7 @@ export function LocationsPage() {
       },
     ]
     for (const f of customFields) {
-      if (['market', 'area_manager', 'director'].includes(f.field_key)) continue
+      if (['region', 'market', 'area_manager', 'director'].includes(f.field_key)) continue
       cols.push({
         id: `cf_${f.field_key}`,
         header: f.label,
