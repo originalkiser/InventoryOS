@@ -45,7 +45,7 @@ export default function ReportViewPage() {
     ;(sb as any).schema('platform').from('user_profiles')
       .select('id, full_name, email')
       .eq('company_id', profile.company_id)
-      .eq('is_active', true)
+      .is('deleted_at', null)
       .order('full_name')
       .then(({ data }: any) => { if (data) setAppUsers(data) })
   }, [profile?.company_id])
