@@ -275,24 +275,22 @@ export default function ReportViewPage() {
   }
 
   async function handleAMNameChange(id: string, name: string, userId?: string | null) {
-    let resolvedName = name
-    if (userId === null && !name && report) {
-      // Reverting to auto: re-derive name from location metadata
-      const entry = entries.find(e => e.id === id)
-      if (entry?.location_id) {
-        const { data: loc } = await sb.schema('core').from('locations').select('metadata').eq('id', entry.location_id).single()
-        const amField = report.am_location_field ?? 'area_manager'
-        resolvedName = (loc?.metadata as any)?.[amField] ?? (loc?.metadata as any)?.area_manager ?? ''
-      }
+    // Save the name first — this always works regardless of whether the
+    // assignment columns exist in the current DB schema.
+    const { error } = await sb.schema('outlier').from('report_entries')
+      .update({ area_manager_name: name || null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) { toast.error('Failed to save area manager name'); return }
+    setEntries(prev => prev.map(e => e.id === id ? { ...e, area_manager_name: name || null } : e))
+    // Best-effort: also save user assignment (column may not exist in all envs yet)
+    if (userId !== undefined) {
+      sb.schema('outlier').from('report_entries')
+        .update({ am_assigned_user_id: userId })
+        .eq('id', id)
+        .then(({ error: aErr }: any) => {
+          if (!aErr) setEntries(prev => prev.map(e => e.id === id ? { ...e, am_assigned_user_id: userId } : e))
+        })
     }
-    const patch: Record<string, unknown> = { area_manager_name: resolvedName || null, updated_at: new Date().toISOString() }
-    if (userId !== undefined) patch.am_assigned_user_id = userId
-    const { error } = await sb.schema('outlier').from('report_entries').update(patch).eq('id', id)
-    if (error) toast.error('Failed to save area manager name')
-    else setEntries(prev => prev.map(e => {
-      if (e.id !== id) return e
-      return { ...e, area_manager_name: resolvedName || null, ...(userId !== undefined ? { am_assigned_user_id: userId } : {}) }
-    }))
   }
 
   async function handleClearWeek() {
@@ -319,23 +317,19 @@ export default function ReportViewPage() {
   }
 
   async function handleRDONameChange(id: string, name: string, userId?: string | null) {
-    let resolvedName = name
-    if (userId === null && !name && report) {
-      const entry = entries.find(e => e.id === id)
-      if (entry?.location_id) {
-        const { data: loc } = await sb.schema('core').from('locations').select('metadata').eq('id', entry.location_id).single()
-        const rdoField = report.rdo_location_field ?? 'regional_director'
-        resolvedName = (loc?.metadata as any)?.[rdoField] ?? (loc?.metadata as any)?.regional_director ?? ''
-      }
+    const { error } = await sb.schema('outlier').from('report_entries')
+      .update({ rdo_name: name || null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) { toast.error('Failed to save regional director name'); return }
+    setEntries(prev => prev.map(e => e.id === id ? { ...e, rdo_name: name || null } : e))
+    if (userId !== undefined) {
+      sb.schema('outlier').from('report_entries')
+        .update({ rdo_assigned_user_id: userId })
+        .eq('id', id)
+        .then(({ error: rErr }: any) => {
+          if (!rErr) setEntries(prev => prev.map(e => e.id === id ? { ...e, rdo_assigned_user_id: userId } : e))
+        })
     }
-    const patch: Record<string, unknown> = { rdo_name: resolvedName || null, updated_at: new Date().toISOString() }
-    if (userId !== undefined) patch.rdo_assigned_user_id = userId
-    const { error } = await sb.schema('outlier').from('report_entries').update(patch).eq('id', id)
-    if (error) toast.error('Failed to save regional director name')
-    else setEntries(prev => prev.map(e => {
-      if (e.id !== id) return e
-      return { ...e, rdo_name: resolvedName || null, ...(userId !== undefined ? { rdo_assigned_user_id: userId } : {}) }
-    }))
   }
 
   if (loading) {
