@@ -238,7 +238,10 @@ export function LocationsTab() {
 
   async function confirmImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
-    const customKeys = new Set(customFields.map((f) => f.field_key))
+    // Exclude base columns — they must always go to `out.*`, never metadata, even if a
+    // custom field with the same key exists from an earlier duplicate-field bug.
+    const BASE_FIELD_KEYS = new Set(['location_code', 'name', 'region', 'active'])
+    const customKeys = new Set(customFields.filter((f) => !BASE_FIELD_KEYS.has(f.field_key)).map((f) => f.field_key))
     const typeByKey = new Map(customFields.map((f) => [f.field_key, f.field_type]))
     const payload = rows.map((row) => {
       const out: Record<string, unknown> = {}

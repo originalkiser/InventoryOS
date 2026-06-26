@@ -57,6 +57,8 @@ export function AppShell() {
   const pushWidth = !mobile
     ? (lookupMode === 'docked' ? lookupWidth : invMode === 'docked' ? invWidth : 0)
     : 0
+  // w-14 collapsed (56px), w-64 expanded (256px)
+  const sidebarWidth = mobile ? 0 : sidebarCollapsed ? 56 : 256
 
   return (
     <div className="flex h-screen overflow-hidden bg-cream font-body">
@@ -124,11 +126,11 @@ export function AppShell() {
       </div>
 
       <LocationLookupOverlay
-        mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight}
+        mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
         onModeChange={setLookupModeP} onToggle={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')} onWidthChange={setLookupWidthP}
       />
       <InventoryOverlay
-        mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight}
+        mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
         onModeChange={setInvModeP} onToggle={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')} onWidthChange={setInvWidthP}
       />
     </div>

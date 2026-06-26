@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
 } from '@dnd-kit/core'
@@ -53,12 +54,13 @@ interface OverlayProps {
   width: number
   mobile: boolean
   topOffset?: number
+  sidebarWidth?: number
   onModeChange: (m: LookupMode) => void
   onToggle: () => void
   onWidthChange: (w: number) => void
 }
 
-export function LocationLookupOverlay({ mode, width, mobile, topOffset, onModeChange, onToggle, onWidthChange }: OverlayProps) {
+export function LocationLookupOverlay({ mode, width, mobile, topOffset, sidebarWidth, onModeChange, onToggle, onWidthChange }: OverlayProps) {
   const open = mode !== 'hidden'
 
   useEffect(() => {
@@ -71,18 +73,16 @@ export function LocationLookupOverlay({ mode, width, mobile, topOffset, onModeCh
 
   return open ? (
     <LookupPanel
-      mode={mode} width={width} mobile={mobile} topOffset={topOffset} onModeChange={onModeChange} onWidthChange={onWidthChange}
-      onClose={() => onModeChange('hidden')}
+      mode={mode} width={width} mobile={mobile} topOffset={topOffset} sidebarWidth={sidebarWidth}
+      onModeChange={onModeChange} onWidthChange={onWidthChange} onClose={() => onModeChange('hidden')}
     />
   ) : null
 }
 
 // ---------------------------------------------------------------------------
-const BOTTOM_OFFSET = 64 // FAB row + structural spacer (h-16)
-
-function LookupPanel({ mode, width, mobile, topOffset = 48, onModeChange, onWidthChange, onClose }: Omit<OverlayProps, 'onToggle'> & { onClose: () => void }) {
+function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, onModeChange, onWidthChange, onClose }: Omit<OverlayProps, 'onToggle'> & { onClose: () => void }) {
   const docked = mode === 'docked' && !mobile
-  const maxPanelHeight = window.innerHeight - topOffset - BOTTOM_OFFSET
+  const maxPanelHeight = window.innerHeight - topOffset
   const [height, setHeight] = useState<number>(() => Math.min(Number(localStorage.getItem(SIZE_KEY)) || Math.round(window.innerHeight * 0.6), maxPanelHeight))
   const [pos, setPos] = useState<{ right: number; bottom: number } | null>(() => {
     try { return JSON.parse(localStorage.getItem(POS_KEY) || 'null') } catch { return null }
@@ -95,7 +95,7 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, onModeChange, onWidt
   const panelRef = useRef<HTMLDivElement>(null)
 
   const right = pos?.right ?? 16
-  const bottom = Math.max(pos?.bottom ?? BOTTOM_OFFSET, BOTTOM_OFFSET)
+  const bottom = Math.max(pos?.bottom ?? 16, 0)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   function startResize(e: React.MouseEvent) {
@@ -115,8 +115,9 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, onModeChange, onWidt
     if (mobile || docked) return
     const sx = e.clientX, sy = e.clientY, sr = right, sb = bottom
     const move = (ev: MouseEvent) => {
-      const nr = Math.min(Math.max(sr - (ev.clientX - sx), 0), window.innerWidth - 120)
-      const nb = Math.min(Math.max(sb - (ev.clientY - sy), BOTTOM_OFFSET), window.innerHeight - topOffset - height)
+      const maxRight = Math.max(0, window.innerWidth - width - sidebarWidth)
+      const nr = Math.min(Math.max(sr - (ev.clientX - sx), 0), maxRight)
+      const nb = Math.min(Math.max(sb - (ev.clientY - sy), 0), window.innerHeight - topOffset - height)
       setPos({ right: nr, bottom: nb })
     }
     const up = () => {
@@ -129,6 +130,13 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, onModeChange, onWidt
   function saveView() { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); setEditing(false); setConfigId(null) }
   function updateBlock(id: string, patch: Partial<Block>) {
     setView((v) => ({ ...v, blocks: v.blocks.map((b) => (b.id === id ? { ...b, ...patch } as Block : b)) }))
+  }
+  function saveColumns(id: string, columns: string[]) {
+    setView((v) => {
+      const newView = { ...v, blocks: v.blocks.map((b) => b.id === id ? { ...b, columns } as Block : b) }
+      localStorage.setItem(VIEW_KEY, JSON.stringify(newView))
+      return newView
+    })
   }
   function removeBlock(id: string) { setView((v) => ({ ...v, blocks: v.blocks.filter((b) => b.id !== id) })) }
   function addBlock(type: 'pills' | 'table') {
@@ -147,10 +155,10 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, onModeChange, onWidt
   }
 
   const panelStyle: React.CSSProperties = mobile
-    ? { position: 'fixed', left: 0, right: 0, bottom: BOTTOM_OFFSET, height: `calc(70vh - ${BOTTOM_OFFSET}px)`, zIndex: 55 }
+    ? { position: 'fixed', left: 0, right: 0, bottom: 0, height: '70vh', zIndex: 65 }
     : docked
-    ? { position: 'fixed', top: topOffset, right: 0, bottom: BOTTOM_OFFSET, width, zIndex: 55 }
-    : { position: 'fixed', right, bottom, width, height: Math.min(height, maxPanelHeight), maxHeight: maxPanelHeight, zIndex: 55 }
+    ? { position: 'fixed', top: topOffset, right: 0, bottom: 0, width, zIndex: 65 }
+    : { position: 'fixed', right, bottom, width, height: Math.min(height, maxPanelHeight), maxHeight: maxPanelHeight, zIndex: 65 }
 
   return (
     <div ref={panelRef} style={panelStyle}
@@ -200,7 +208,7 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, onModeChange, onWidt
                   onConfig={() => setConfigId((c) => (c === b.id ? null : b.id))} onRemove={() => removeBlock(b.id)}>
                   {b.type === 'pills'
                     ? <PillsBlock block={b} editing={editing && configId === b.id} onChange={(p) => updateBlock(b.id, p)} onFilter={setActiveFilter} />
-                    : <TableBlock block={b} editing={editing && configId === b.id} search={search} activeFilter={activeFilter} onChange={(p) => updateBlock(b.id, p)} />}
+                    : <TableBlock block={b} editing={editing && configId === b.id} search={search} activeFilter={activeFilter} onChange={(p) => updateBlock(b.id, p)} onSaveColumns={(cols) => saveColumns(b.id, cols)} />}
                 </BlockWrap>
               ))}
               {view.blocks.length === 0 && <p className="py-6 text-center text-xs font-body italic text-inky">No blocks. Add one below.</p>}
@@ -424,15 +432,121 @@ const LOC_FILTER_HIERARCHY = ['meta:owner', 'region', 'meta:market', 'meta:area_
 const PAGE = 1000
 const PAGE_SIZES = [50, 100, 150, 200] as const
 
-function TableBlock({ block, editing, search, activeFilter, onChange }: {
+// ---------------------------------------------------------------------------
+// Sortable column row used inside ManageColsPortal
+function SortableColItem({ id, label, onToggle }: { id: string; label: string; onToggle: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
+      className="flex items-center gap-2 px-2 py-1.5 rounded border border-navy/15 bg-cream/80 dark:bg-[#0a2035]/80"
+    >
+      <span {...attributes} {...listeners} className="cursor-grab text-inky/40 select-none text-sm leading-none">⋮⋮</span>
+      <input type="checkbox" checked onChange={onToggle} className="accent-sky cursor-pointer" />
+      <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">{label}</span>
+    </div>
+  )
+}
+
+// Portal-based Manage Columns modal — renders above everything (z-[200]) to avoid
+// z-index conflicts with the panel itself.
+function ManageColsPortal({ allCols, cols, onClose, onSave }: {
+  allCols: string[]
+  cols: string[]
+  onClose: () => void
+  onSave: (newCols: string[]) => void
+}) {
+  const [visible, setVisible] = useState<string[]>(cols)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    setVisible((v) => {
+      const oldIdx = v.indexOf(active.id as string)
+      const newIdx = v.indexOf(over.id as string)
+      return oldIdx >= 0 && newIdx >= 0 ? arrayMove(v, oldIdx, newIdx) : v
+    })
+  }
+
+  function toggle(c: string) {
+    setVisible((v) => v.includes(c) ? v.filter((x) => x !== c) : [...v, c])
+  }
+
+  const hidden = allCols.filter((c) => !visible.includes(c))
+
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative w-full max-w-sm mx-4 max-h-[80vh] flex flex-col bg-cream dark:bg-[#0e2638] border border-navy/40 rounded-xl shadow-2xl">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-navy/20 flex-shrink-0 bg-[#1a5c87] rounded-t-xl">
+          <span className="text-xs font-heading font-bold text-[#F2F1E6] uppercase tracking-wide">Manage Columns</span>
+          <button onClick={onClose} className="text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-colors">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3">
+          {/* Visible columns — draggable to reorder */}
+          <div className="flex flex-col gap-1">
+            <p className="text-[10px] font-mono uppercase tracking-wide text-inky/60 dark:text-[#F2F1E6]/40">
+              Visible · drag to reorder
+            </p>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <SortableContext items={visible} strategy={verticalListSortingStrategy}>
+                <div className="flex flex-col gap-1">
+                  {visible.map((c) => (
+                    <SortableColItem key={c} id={c} label={colLabel(c)} onToggle={() => toggle(c)} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+            {visible.length === 0 && (
+              <p className="text-xs font-body italic text-inky/50 py-1">No columns visible</p>
+            )}
+          </div>
+
+          {/* Hidden columns */}
+          {hidden.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p className="text-[10px] font-mono uppercase tracking-wide text-inky/60 dark:text-[#F2F1E6]/40">Hidden</p>
+              {hidden.map((c) => (
+                <div key={c} className="flex items-center gap-2 px-2 py-1.5 rounded border border-navy/10 bg-cream/40 dark:bg-[#0a2035]/40">
+                  <span className="w-4" />
+                  <input type="checkbox" checked={false} onChange={() => toggle(c)} className="accent-sky cursor-pointer" />
+                  <span className="text-xs font-body text-inky/70 dark:text-[#F2F1E6]/60">{colLabel(c)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-navy/20 flex-shrink-0">
+          <button onClick={onClose}
+            className="px-3 py-1.5 text-xs font-heading uppercase tracking-wide rounded border border-navy/30 text-inky hover:border-navy">
+            Cancel
+          </button>
+          <button onClick={() => { onSave(visible); onClose() }}
+            className="px-3 py-1.5 text-xs font-heading uppercase tracking-wide rounded bg-[#1a5c87] text-[#F2F1E6] hover:bg-[#154d73]">
+            Save
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColumns }: {
   block: Extract<Block, { type: 'table' }>; editing: boolean; search: string
   activeFilter: { column: string; value: string; label: string } | null
   onChange: (p: Partial<Block>) => void
+  onSaveColumns: (cols: string[]) => void
 }) {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const [rows, setRows] = useState<Record<string, any>[]>([])
   const [allCols, setAllCols] = useState<string[]>([])
+  const [colsOpen, setColsOpen] = useState(false)
   const isLocations = block.source === 'locations'
   const stateKey = `lookup.block.${block.id}.state`
 
@@ -579,24 +693,36 @@ function TableBlock({ block, editing, search, activeFilter, onChange }: {
 
   return (
     <div className="flex flex-col gap-2">
-      {editing ? (
-        <div className="flex flex-col gap-2">
-          <input value={block.title} onChange={(e) => onChange({ title: e.target.value })}
-            className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none" />
-          <select value={block.source} onChange={(e) => onChange({ source: e.target.value, columns: [] })} className={selectCls}>
-            {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-          <div className="flex flex-wrap gap-2">
-            {allCols.map((c) => (
-              <label key={c} className="flex cursor-pointer items-center gap-1 text-[11px] font-body text-inky">
-                <input type="checkbox" checked={cols.includes(c)} className="accent-inky"
-                  onChange={() => onChange({ columns: cols.includes(c) ? cols.filter((x) => x !== c) : [...cols, c] })} />
-                {colLabel(c)}
-              </label>
-            ))}
+      {/* Block header: title (editable in edit mode) + Columns button */}
+      <div className="flex items-center justify-between gap-2">
+        {editing ? (
+          <div className="flex flex-col gap-1.5 flex-1">
+            <input value={block.title} onChange={(e) => onChange({ title: e.target.value })}
+              className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none" />
+            <select value={block.source} onChange={(e) => onChange({ source: e.target.value, columns: [] })} className={selectCls}>
+              {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
           </div>
-        </div>
-      ) : <div className="text-[11px] font-heading uppercase tracking-wide text-inky">{block.title}</div>}
+        ) : (
+          <div className="text-[11px] font-heading uppercase tracking-wide text-inky">{block.title}</div>
+        )}
+        <button
+          onClick={() => setColsOpen(true)}
+          className="shrink-0 rounded border border-navy/30 px-2 py-1 text-[10px] font-heading uppercase tracking-wide text-inky hover:border-navy hover:text-navy transition-colors"
+          title="Manage visible columns and their order"
+        >
+          Columns
+        </button>
+      </div>
+
+      {colsOpen && (
+        <ManageColsPortal
+          allCols={allCols}
+          cols={cols}
+          onClose={() => setColsOpen(false)}
+          onSave={onSaveColumns}
+        />
+      )}
 
       {/* Contextual filter dropdowns — locations source only */}
       {!editing && isLocations && filterFields.length > 0 && (

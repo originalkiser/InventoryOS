@@ -18,13 +18,13 @@ interface FloatingPanelProps {
   children: React.ReactNode
   /** Pixels reserved at the top (TopBar height). Panel never overlaps above this. */
   topOffset?: number
-  /** Pixels reserved at the bottom (FAB row height). Panel never overlaps below this. */
-  bottomOffset?: number
+  /** Sidebar width in px — floating panel won't be dragged to overlap it. */
+  sidebarWidth?: number
 }
 
 export function FloatingPanel({
   title, mode, width, mobile, prefix, headerActions, onModeChange, onWidthChange, onClose, children,
-  topOffset = 48, bottomOffset = 64,
+  topOffset = 48, sidebarWidth = 0,
 }: FloatingPanelProps) {
   const docked = mode === 'docked' && !mobile
   const sizeKey = `${prefix}.size`
@@ -34,10 +34,9 @@ export function FloatingPanel({
     try { return JSON.parse(localStorage.getItem(posKey) || 'null') } catch { return null }
   })
   const right = pos?.right ?? 16
-  const bottom = pos?.bottom ?? 16
+  const clampedBottom = Math.max(pos?.bottom ?? 16, 0)
 
-  const maxPanelHeight = window.innerHeight - topOffset - bottomOffset
-  const clampedBottom = Math.max(pos?.bottom ?? bottomOffset, bottomOffset)
+  const maxPanelHeight = window.innerHeight - topOffset
 
   function startResize(e: React.MouseEvent) {
     e.preventDefault()
@@ -56,8 +55,9 @@ export function FloatingPanel({
     if (mobile || docked) return
     const sx = e.clientX, sy = e.clientY, sr = right, sb = clampedBottom
     const move = (ev: MouseEvent) => {
-      const nr = Math.min(Math.max(sr - (ev.clientX - sx), 0), window.innerWidth - 120)
-      const nb = Math.min(Math.max(sb - (ev.clientY - sy), bottomOffset), window.innerHeight - topOffset - height)
+      const maxRight = Math.max(0, window.innerWidth - width - sidebarWidth)
+      const nr = Math.min(Math.max(sr - (ev.clientX - sx), 0), maxRight)
+      const nb = Math.min(Math.max(sb - (ev.clientY - sy), 0), window.innerHeight - topOffset - height)
       setPos({ right: nr, bottom: nb })
     }
     const up = () => {
@@ -68,10 +68,10 @@ export function FloatingPanel({
   }
 
   const style: React.CSSProperties = mobile
-    ? { position: 'fixed', left: 0, right: 0, bottom: bottomOffset, height: `calc(70vh - ${bottomOffset}px)`, zIndex: 55 }
+    ? { position: 'fixed', left: 0, right: 0, bottom: 0, height: '70vh', zIndex: 65 }
     : docked
-    ? { position: 'fixed', top: topOffset, right: 0, bottom: bottomOffset, width, zIndex: 55 }
-    : { position: 'fixed', right, bottom: clampedBottom, width, height: Math.min(height, maxPanelHeight), maxHeight: maxPanelHeight, zIndex: 55 }
+    ? { position: 'fixed', top: topOffset, right: 0, bottom: 0, width, zIndex: 65 }
+    : { position: 'fixed', right, bottom: clampedBottom, width, height: Math.min(height, maxPanelHeight), maxHeight: maxPanelHeight, zIndex: 65 }
 
   return (
     <div style={style} className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream shadow-2xl">
