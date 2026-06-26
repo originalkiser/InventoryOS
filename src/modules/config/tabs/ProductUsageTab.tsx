@@ -42,6 +42,7 @@ const REQUIRED_FIELDS = [
   { name: 'category', label: 'Category' },
   { name: 'daily_usage', label: 'Daily Usage' },
   { name: 'on_hands', label: 'On Hands' },
+  { name: 'package_capacity', label: 'Package Capacity' },
 ]
 
 const BATCH = 2000
@@ -126,7 +127,7 @@ function CategoryDropdown({
 
 // ---------------------------------------------------------------------------
 const col = createColumnHelper<ProductUsage>()
-const EMPTY = { locationId: '', product_id: '', category: '', daily_usage: '', on_hands: '' }
+const EMPTY = { locationId: '', product_id: '', category: '', daily_usage: '', on_hands: '', package_capacity: '' }
 
 export function ProductUsageTab() {
   const { profile } = useAuthStore()
@@ -140,8 +141,8 @@ export function ProductUsageTab() {
   const [importing, setImporting] = useState(false)
   const [form, setForm] = useState({ ...EMPTY })
 
-  // ---- Zero on-hand filter ----
-  const [excludeZeroOH, setExcludeZeroOH] = useAppSetting<boolean>('product_usage.excludeZeroOnHand', true)
+  // ---- Zero package-capacity filter ----
+  const [excludeZeroPC, setExcludeZeroPC] = useAppSetting<boolean>('product_usage.excludeZeroPackageCapacity', true)
   const [includedZeroCats, setIncludedZeroCats] = useAppSetting<string[]>('product_usage.includedZeroCategories', [])
 
   const distinctCategories = useMemo(
@@ -150,9 +151,9 @@ export function ProductUsageTab() {
   )
 
   const displayData = useMemo(() => {
-    if (!excludeZeroOH) return data
-    return data.filter((r) => (r.on_hands ?? 0) > 0 || includedZeroCats.includes(r.category ?? ''))
-  }, [data, excludeZeroOH, includedZeroCats])
+    if (!excludeZeroPC) return data
+    return data.filter((r) => (r.package_capacity ?? 0) > 0 || includedZeroCats.includes(r.category ?? ''))
+  }, [data, excludeZeroPC, includedZeroCats])
 
   const zeroExcludedCount = data.length - displayData.length
 
@@ -180,11 +181,12 @@ export function ProductUsageTab() {
 
   // ---- Columns ----
   const columns = useMemo(() => [
-    { id: 'location', header: 'Location', accessorFn: (r: ProductUsage) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
+    { id: 'location', header: 'Location', accessorFn: (r: ProductUsage) => loc.codeOf(r.location_id), cell: (i: any) => i.getValue() || 'â€”' },
     col.accessor('product_id', { header: 'Product ID' }),
     col.accessor('category', { header: 'Category', cell: (i) => i.getValue() ?? 'â€”' }),
     col.accessor('daily_usage', { header: 'Daily Usage', cell: (i) => i.getValue() ?? 'â€”' }),
     col.accessor('on_hands', { header: 'On Hands', cell: (i) => i.getValue() ?? 'â€”' }),
+    col.accessor('package_capacity', { header: 'Package Capacity', cell: (i) => i.getValue() ?? 'â€”' }),
     col.accessor('days_of_supply', { header: 'Days of Supply', cell: (i) => { const r = i.row.original as ProductUsage; return dosDisplay(i.getValue(), r.on_hands) } }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : 'â€”' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductUsage)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
@@ -203,6 +205,7 @@ export function ProductUsageTab() {
       category: r.category ?? '',
       daily_usage: r.daily_usage?.toString() ?? '',
       on_hands: r.on_hands?.toString() ?? '',
+      package_capacity: r.package_capacity?.toString() ?? '',
     })
     setAddOpen(true)
   }
@@ -210,7 +213,7 @@ export function ProductUsageTab() {
   // ---- Single-row mutations ----
   async function onSubmit() {
     if (!profile?.company_id || !form.product_id.trim()) return
-    const du = parseNum(form.daily_usage), oh = parseNum(form.on_hands)
+    const du = parseNum(form.daily_usage), oh = parseNum(form.on_hands), pc = parseNum(form.package_capacity)
     const payload: Record<string, unknown> = {
       company_id: profile.company_id,
       location_id: form.locationId || null,
@@ -218,6 +221,7 @@ export function ProductUsageTab() {
       category: form.category.trim() || null,
       daily_usage: du,
       on_hands: oh,
+      package_capacity: pc,
       days_of_supply: daysOfSupply(oh, du),
       updated_by: profile.id ?? null,
       last_change_source: 'manual',
@@ -254,7 +258,7 @@ export function ProductUsageTab() {
     const payload = rows.map((row) => {
       let location_id: string | null = null
       let product_id = '', category: string | null = null
-      let daily_usage: number | null = null, on_hands: number | null = null
+      let daily_usage: number | null = null, on_hands: number | null = null, package_capacity: number | null = null
       for (const m of maps) {
         const v = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
@@ -262,8 +266,9 @@ export function ProductUsageTab() {
         else if (m.fieldName === 'category') category = v.trim() || null
         else if (m.fieldName === 'daily_usage') daily_usage = parseNum(v)
         else if (m.fieldName === 'on_hands') on_hands = parseNum(v)
+        else if (m.fieldName === 'package_capacity') package_capacity = parseNum(v)
       }
-      return { location_id, product_id, category, daily_usage, on_hands, days_of_supply: daysOfSupply(on_hands, daily_usage) }
+      return { location_id, product_id, category, daily_usage, on_hands, package_capacity, days_of_supply: daysOfSupply(on_hands, daily_usage) }
     }).filter((r) => r.product_id)
 
     if (mode === 'replace') {
@@ -303,20 +308,20 @@ export function ProductUsageTab() {
         <p className="text-xs text-inky mt-0.5">Daily usage, on-hands, and days of supply by location. Use a Divide transform on Daily Usage to convert a period total to a daily figure.</p>
       </div>
 
-      {/* Zero on-hand filter banner */}
+      {/* Zero package-capacity filter banner */}
       <div className="flex flex-wrap items-center gap-2 rounded border border-navy/20 bg-cream px-3 py-2">
         <span className="text-xs font-mono text-inky">
-          {excludeZeroOH
-            ? <>0 on-hands excluded{zeroExcludedCount > 0 && <span className="text-orange-600"> Â· {zeroExcludedCount.toLocaleString()} hidden</span>}</>
+          {excludeZeroPC
+            ? <>Zero package capacity hidden{zeroExcludedCount > 0 && <span className="text-orange-600"> Â· {zeroExcludedCount.toLocaleString()} hidden</span>}</>
             : 'Showing all products'}
         </span>
         <button
-          onClick={() => setExcludeZeroOH(!excludeZeroOH)}
+          onClick={() => setExcludeZeroPC(!excludeZeroPC)}
           className="text-xs font-mono text-inky/60 hover:text-navy underline"
         >
-          {excludeZeroOH ? 'show all' : 'hide zero on-hands'}
+          {excludeZeroPC ? 'show all' : 'hide zero package capacity'}
         </button>
-        {excludeZeroOH && (
+        {excludeZeroPC && (
           <>
             <span className="text-navy/30 text-xs">Â·</span>
             <span className="text-xs font-mono text-inky">include by category:</span>
@@ -362,6 +367,7 @@ export function ProductUsageTab() {
             <Input label="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
             <Input label="Daily Usage" type="number" step="0.01" value={form.daily_usage} onChange={(e) => setForm({ ...form, daily_usage: e.target.value })} />
             <Input label="On Hands" type="number" step="0.01" value={form.on_hands} onChange={(e) => setForm({ ...form, on_hands: e.target.value })} />
+            <Input label="Package Capacity" type="number" step="0.01" value={form.package_capacity} onChange={(e) => setForm({ ...form, package_capacity: e.target.value })} />
           </div>
           <p className="text-xs font-mono text-inky">Days of Supply: <span className="text-inky">{dosDisplay(daysOfSupply(parseNum(form.on_hands), parseNum(form.daily_usage)), parseNum(form.on_hands))}</span></p>
           <div className="flex justify-between gap-2 pt-2">

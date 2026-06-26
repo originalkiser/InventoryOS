@@ -16,7 +16,7 @@ export function GlobalConfigPage() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Global Configuration</h1>
-        <p className="text-xs text-inky mt-0.5">Locations, vendors, products, and POS mappings — shared across all modules</p>
+        <p className="text-xs text-inky mt-0.5">Locations, vendors, products, and location mappings — shared across all modules</p>
       </div>
 
       {!isAdmin && (
@@ -38,7 +38,7 @@ export function GlobalConfigPage() {
           <TabsTrigger value="order-config">Order Config</TabsTrigger>
           <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
           <TabsTrigger value="global-products">Global Products</TabsTrigger>
-          <TabsTrigger value="pos-map">POS Mapping</TabsTrigger>
+          <TabsTrigger value="pos-map">Location Mapping</TabsTrigger>
         </TabsList>
 
         <TabsContent value="locations"><LocationsTab /></TabsContent>

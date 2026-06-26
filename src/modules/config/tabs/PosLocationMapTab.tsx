@@ -13,7 +13,7 @@ import { applyTransforms } from '@/lib/transforms'
 import type { PosLocationMap, ColumnMapping } from '@/types'
 
 const REQUIRED_FIELDS = [
-  { name: 'pos_string', label: 'POS String', required: true },
+  { name: 'pos_string', label: 'Location String', required: true },
   { name: 'location_code', label: 'Location Code (force match)' },
   { name: 'location', label: 'Location (code/name)' },
 ]
@@ -29,7 +29,7 @@ export function PosLocationMapTab() {
   const [form, setForm] = useState({ ...EMPTY })
 
   const columns = useMemo(() => [
-    col.accessor('pos_string', { header: 'POS String' }),
+    col.accessor('pos_string', { header: 'Location String' }),
     { id: 'parsed', header: 'Parsed #', accessorFn: (r: PosLocationMap) => applyTransforms(r.pos_string, [{ kind: 'pos_location' }]), cell: (i: any) => i.getValue() || 'â€”' },
     { id: 'location', header: 'Location Code', accessorFn: (r: PosLocationMap) => r.location_id, cell: (i: any) => (i.getValue() ? <span className="text-inky">{loc.codeOf(i.getValue())}</span> : <Badge color="amber">Unmatched</Badge>) },
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
@@ -77,8 +77,8 @@ export function PosLocationMapTab() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-sm font-bold text-navy uppercase tracking-wide">POS Location Mapping</h2>
-        <p className="text-xs text-inky mt-0.5">Map POS strings like &quot;1 - Thomasville&quot; to internal locations. Imports auto-match on the leading number; {unmatched > 0 ? <span className="text-orange-600">{unmatched} unmatched â€” map them below.</span> : 'all mapped.'}</p>
+        <h2 className=”text-sm font-bold text-navy uppercase tracking-wide”>Location Mapping</h2>
+        <p className=”text-xs text-inky mt-0.5”>Map location strings from any reporter (e.g. &quot;1 - Thomasville&quot;, &quot;Store 001&quot;) to internal locations. Imports auto-match on leading numbers; merge mode adds new strings without removing existing ones. {unmatched > 0 ? <span className=”text-orange-600”>{unmatched} unmatched â€” map them below.</span> : 'All mapped.'}</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
@@ -95,7 +95,7 @@ export function PosLocationMapTab() {
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Mapping' : 'Add Mapping'}>
         <div className="flex flex-col gap-3">
-          <Input label="POS String *" value={form.pos_string} onChange={(e) => setForm({ ...form, pos_string: e.target.value })} placeholder="1 - Thomasville" />
+          <Input label="Location String *" value={form.pos_string} onChange={(e) => setForm({ ...form, pos_string: e.target.value })} placeholder="e.g. 1 - Thomasville, Store 001" />
           <Combobox label="Location" options={loc.options} value={form.locationId} onChange={(v) => setForm({ ...form, locationId: v })} placeholder="Select location" />
           <div className="flex justify-between gap-2 pt-2">
             <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
