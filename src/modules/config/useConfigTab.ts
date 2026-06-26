@@ -32,6 +32,12 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
   const [data, setData] = useState<T[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Public schema must use supabase.from() directly — .schema('public') is not
+  // a valid PostgREST header and causes "not found in schema cache" errors.
+  const tbl = () => schemaName === 'public'
+    ? (supabase as any).from(tableName)
+    : (supabase as any).schema(schemaName).from(tableName)
+
   const load = useCallback(async () => {
     if (!profile?.company_id) return
     const key = cacheKey(profile.company_id, tableName)
@@ -47,9 +53,6 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     } else {
       setLoading(true)
     }
-
-    const sb = supabase as any
-    const tbl = () => sb.schema(schemaName).from(tableName)
 
     // Count first so we know exactly how many pages to fire in parallel
     const { count, error: countErr } = await tbl()
@@ -91,7 +94,6 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
 
   // Insert/upsert in batches — 4 concurrent at 2000 rows each for large imports.
   async function writeInBatches(rows: Record<string, unknown>[], op: 'insert' | 'upsert'): Promise<{ message: string } | null> {
-    const sb = supabase as any
     const BATCH = 2000
     const CONCURRENCY = 4
     const batches: Record<string, unknown>[][] = []
@@ -102,8 +104,8 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       const results = await Promise.all(
         group.map((slice) =>
           op === 'upsert'
-            ? sb.schema(schemaName).from(tableName).upsert(slice, { onConflict: 'id' })
-            : sb.schema(schemaName).from(tableName).insert(slice)
+            ? tbl().upsert(slice, { onConflict: 'id' })
+            : tbl().insert(slice)
         )
       )
       for (const { error } of results) {
@@ -125,13 +127,13 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
 
   async function insert(row: Partial<T> & { company_id?: string }) {
     if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
-    const { error } = await (supabase as any).schema(schemaName).from(tableName).insert(stamp(row as Record<string, unknown>, 'manual'))
+    const { error } = await tbl().insert(stamp(row as Record<string, unknown>, 'manual'))
     if (error) toast.error(error.message)
     else { toast.success('Saved'); invalidate(); await load() }
   }
 
   async function update(id: string, patch: Partial<T>) {
-    const { error } = await (supabase as any).schema(schemaName).from(tableName).update(stamp(patch as Record<string, unknown>, 'manual')).eq('id', id)
+    const { error } = await tbl().update(stamp(patch as Record<string, unknown>, 'manual')).eq('id', id)
     if (error) toast.error(error.message)
     else { toast.success('Updated'); invalidate(); await load() }
   }
@@ -148,11 +150,10 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
   // Merge (match existing by natural key, update or insert) or replace-all.
   async function importRows(rows: Partial<T>[], opts: ImportOptions<T>) {
     if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
-    const sb = supabase as any
     const source = opts.source ?? 'upload'
 
     if (opts.mode === 'replace') {
-      const { error: delErr } = await sb.schema(schemaName).from(tableName).delete().eq('company_id', profile.company_id)
+      const { error: delErr } = await tbl().delete().eq('company_id', profile.company_id)
       if (delErr) { toast.error(delErr.message); return }
       const error = await writeInBatches(rows.map((r) => stamp(r as Record<string, unknown>, source)), 'insert')
       if (error) { toast.error(error.message); return }
@@ -186,14 +187,14 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
   }
 
   async function remove(id: string) {
-    const { error } = await (supabase as any).schema(schemaName).from(tableName).delete().eq('id', id)
+    const { error } = await tbl().delete().eq('id', id)
     if (error) toast.error(error.message)
     else { invalidate(); await load() }
   }
 
   async function clearAll() {
     if (!profile?.company_id) return
-    const { error } = await (supabase as any).schema(schemaName).from(tableName).delete().eq('company_id', profile.company_id)
+    const { error } = await tbl().delete().eq('company_id', profile.company_id)
     if (error) { toast.error(error.message); return }
     toast.success('Table cleared')
     invalidate()
