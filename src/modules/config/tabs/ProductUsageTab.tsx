@@ -161,9 +161,9 @@ export function ProductUsageTab() {
   const loadRpc = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
-    const { data: rows, error } = await (supabase as any).rpc('get_product_usage', {
-      p_company_id: profile.company_id,
-    })
+    const { data: rows, error } = await (supabase as any)
+      .rpc('get_product_usage', { p_company_id: profile.company_id })
+      .range(0, 99999)
     if (error) toast.error('Product usage load failed â€” run the latest DB migration')
     else setData((rows ?? []) as ProductUsage[])
     setLoading(false)
