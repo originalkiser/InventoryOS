@@ -68,19 +68,24 @@ export function AppShell() {
         onMobileClose={() => setMobileNavOpen(false)}
       />
 
-      <div className="flex flex-col flex-1 min-w-0 relative transition-[margin] duration-150" style={{ marginRight: pushWidth || undefined }}>
+      <div className="flex flex-col flex-1 min-w-0 relative">
         <div ref={topBarRef}>
           <TopBar mobile={mobile} onMobileMenuOpen={() => setMobileNavOpen((v) => !v)} />
         </div>
-        <main className="flex-1 overflow-auto p-3 sm:p-6">
-          <ErrorBoundary key={location.pathname}>
-            <Outlet />
-          </ErrorBoundary>
-        </main>
-        {/* Invisible structural spacer — reserves the same height as the floating
-            button row so <main> (flex-1) physically ends above it.
-            No background, no border; purely a layout constraint. */}
-        <div className="flex-shrink-0 h-16" />
+        {/* Only the scrollable content area shifts right for docked panels —
+            TopBar always spans full width above the panel. */}
+        <div
+          className="flex-1 overflow-auto transition-[margin] duration-150"
+          style={{ marginRight: pushWidth || undefined }}
+        >
+          <main className="p-3 sm:p-6">
+            <ErrorBoundary key={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
+          </main>
+          {/* Spacer so scrolled-to-bottom content clears the FAB row */}
+          <div className="h-16" />
+        </div>
       </div>
 
       {/* Floating action buttons — bottom-left, anchored next to sidebar */}

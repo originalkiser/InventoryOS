@@ -112,6 +112,7 @@ export function MeetingNotesPage() {
   const [meetingTasks, setMeetingTasks] = useState<Task[]>([])
   const [taskForm, setTaskForm] = useState({ ...EMPTY_TASK })
 
+  const [viewFilter, setViewFilter] = useState<'all' | 'mine' | 'shared'>('all')
   const [participants, setParticipants] = useState<SlimUser[]>([])
   const [specificUsers, setSpecificUsers] = useState<SlimUser[]>([])
   const [allUsers, setAllUsers] = useState<SlimUser[]>([])
@@ -282,6 +283,12 @@ export function MeetingNotesPage() {
     if (editId) loadMeetingTasks(editId)
   }
 
+  const visibleMeetings = useMemo(() => {
+    if (viewFilter === 'mine') return meetings.filter((m) => m.created_by === myId)
+    if (viewFilter === 'shared') return meetings.filter((m) => m.created_by !== myId)
+    return meetings
+  }, [meetings, viewFilter, myId])
+
   const distinctCategories = useMemo(
     () => Array.from(new Set(meetings.map((m) => m.category).filter(Boolean))).sort() as string[],
     [meetings]
@@ -298,7 +305,7 @@ export function MeetingNotesPage() {
       meta: { noClip: true },
       cell: (i) => (
         <div className="flex items-center gap-1.5 group/title">
-          <ExpandableDisplay value={i.getValue()} />
+          <ExpandableDisplay value={i.getValue()} clamp={2} />
           <button
             onClick={(e) => { e.stopPropagation(); openEdit(i.row.original as MeetingNote) }}
             title="Edit meeting"
@@ -348,7 +355,7 @@ export function MeetingNotesPage() {
     col.accessor('notes', { header: 'Notes', size: 200, meta: { noClip: true, fill: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} isHtml /> }),
   ], [openEdit]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { table, globalFilter, setGlobalFilter } = useTable(meetings, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(visibleMeetings, columns)
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -359,12 +366,29 @@ export function MeetingNotesPage() {
         </div>
       </div>
 
+      <div className="flex gap-0 border-b border-navy/15 -mb-4">
+        {(['all', 'mine', 'shared'] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setViewFilter(f)}
+            className={[
+              'px-4 py-2 text-xs font-heading uppercase tracking-wide transition-colors border-b-2',
+              viewFilter === f
+                ? 'border-sky text-navy'
+                : 'border-transparent text-inky/50 hover:text-navy',
+            ].join(' ')}
+          >
+            {f === 'all' ? 'All' : f === 'mine' ? 'My Notes' : 'Shared with Me'}
+          </button>
+        ))}
+      </div>
+
       <DataTable
         table={table}
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         exportFilename="meeting_notes.csv"
-        exportData={meetings}
+        exportData={visibleMeetings}
         loading={loading}
         actions={<Button size="sm" onClick={() => openNew()}>+ New Meeting</Button>}
       />

@@ -95,9 +95,6 @@ function ManageUserModal({
     })
   }
 
-  const needsAccessConfig = (role: RoleValue) =>
-    ([ROLES.DEPARTMENT_USER, ROLES.AREA_MANAGER, ROLES.DIRECTOR] as string[]).includes(role)
-
   const activeDepts = DEPT_OPTIONS.filter((d) => editAccess.has(d.key))
   const effectiveRole = isSelf ? (user.role as RoleValue) : editRole
 
@@ -199,8 +196,8 @@ function ManageUserModal({
           )}
         </div>
 
-        {/* Department / module access */}
-        {needsAccessConfig(effectiveRole) && (
+        {/* Department / module access — always shown, independent of role */}
+        {effectiveRole && (
           <div className="flex flex-col gap-3 border-t border-navy/10 dark:border-[#F2F1E6]/10 pt-4">
             <div className="text-[10px] font-heading text-inky/70 dark:text-[#F2F1E6]/60 uppercase tracking-wide">Department Access</div>
             <div className="grid grid-cols-2 gap-2">
