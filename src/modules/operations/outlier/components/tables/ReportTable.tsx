@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Truck, User as UserIcon, ChevronUp, ChevronDown } from 'lucide-react'
 import { ReportEntry, ColumnDef, Week } from '../../types'
 import StreakCell from '../shared/StreakCell'
@@ -20,7 +20,7 @@ function normalizeKey(k: string) {
   return k.toLowerCase().replace(/[\s-]+/g, '_')
 }
 
-interface AppUser { id: string; full_name: string | null; work_email: string }
+interface AppUser { id: string; full_name: string | null; email: string }
 
 interface Props {
   entries: ReportEntry[]
@@ -175,22 +175,17 @@ export default function ReportTable({
                   </td>
                 ))}
 
-                {/* Area Manager / RDO — user picker when appUsers provided, else inline text */}
+                {/* Area Manager / RDO — text entry + optional user picker */}
                 {!isEmployeeReport && (
                   <>
-                    <td className="px-3 py-2.5 min-w-[160px]">
-                      {!isTotal && onAMNameChange && appUsers ? (
-                        <UserPickerCell
-                          currentName={entry.area_manager_name}
-                          currentUserId={entry.am_assigned_user_id ?? null}
-                          appUsers={appUsers}
-                          onSelect={(name, userId) => onAMNameChange(entry.id, name, userId)}
-                        />
-                      ) : !isTotal && onAMNameChange ? (
-                        <InlineTextInput
+                    <td className="px-3 py-2.5 min-w-[180px]">
+                      {!isTotal && onAMNameChange ? (
+                        <AMUserInput
                           value={entry.area_manager_name ?? ''}
+                          currentUserId={entry.am_assigned_user_id}
                           placeholder="Area manager…"
-                          onChange={v => onAMNameChange(entry.id, v)}
+                          appUsers={appUsers}
+                          onChange={(name, userId) => onAMNameChange(entry.id, name, userId)}
                         />
                       ) : (
                         <span className="font-mono text-[12px] text-sb-cream/70">
@@ -198,19 +193,14 @@ export default function ReportTable({
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 min-w-[140px]">
-                      {!isTotal && onRDONameChange && appUsers ? (
-                        <UserPickerCell
-                          currentName={entry.rdo_name}
-                          currentUserId={entry.rdo_assigned_user_id ?? null}
-                          appUsers={appUsers}
-                          onSelect={(name, userId) => onRDONameChange(entry.id, name, userId)}
-                        />
-                      ) : !isTotal && onRDONameChange ? (
-                        <InlineTextInput
+                    <td className="px-3 py-2.5 min-w-[180px]">
+                      {!isTotal && onRDONameChange ? (
+                        <AMUserInput
                           value={entry.rdo_name ?? ''}
-                          placeholder="RDO…"
-                          onChange={v => onRDONameChange(entry.id, v)}
+                          currentUserId={entry.rdo_assigned_user_id}
+                          placeholder="Regional director…"
+                          appUsers={appUsers}
+                          onChange={(name, userId) => onRDONameChange(entry.id, name, userId)}
                         />
                       ) : (
                         <span className="font-mono text-[12px] text-sb-cream/70">
@@ -308,41 +298,97 @@ function Th({
   )
 }
 
-function UserPickerCell({ currentName, currentUserId, appUsers, onSelect }: {
-  currentName: string | null
-  currentUserId: string | null
-  appUsers: AppUser[]
-  onSelect: (name: string, userId: string | null) => void
+// Combined text input + optional user-picker dropdown for AM/RDO cells
+function AMUserInput({ value, currentUserId, placeholder, appUsers, onChange }: {
+  value: string
+  currentUserId?: string | null
+  placeholder?: string
+  appUsers?: AppUser[]
+  onChange: (name: string, userId?: string | null) => void
 }) {
+  const [local, setLocal] = useState(value)
   const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const pickerRef = useRef<HTMLDivElement>(null)
 
-  async function handleChange(userId: string) {
-    setSaving(true)
-    if (!userId) {
-      await onSelect('', null)
-    } else {
-      const user = appUsers.find(u => u.id === userId)
-      await onSelect(user?.full_name ?? user?.work_email ?? '', userId)
+  useEffect(() => {
+    if (!pickerOpen) return
+    function onOut(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOpen(false)
     }
+    document.addEventListener('mousedown', onOut)
+    return () => document.removeEventListener('mousedown', onOut)
+  }, [pickerOpen])
+
+  // Sync local value if parent value changes (e.g. user selected from picker on another row)
+  useEffect(() => { setLocal(value) }, [value])
+
+  async function handleBlur() {
+    if (local === value) return
+    setSaving(true)
+    await onChange(local, undefined) // free-text edit: don't change userId assignment
     setSaving(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
   }
 
-  const selectedId = appUsers.find(u => u.id === currentUserId)?.id ?? ''
+  async function pickUser(userId: string) {
+    const user = appUsers?.find(u => u.id === userId)
+    const name = user ? (user.full_name ?? user.email ?? '') : ''
+    setLocal(name)
+    setPickerOpen(false)
+    setSaving(true)
+    await onChange(name, userId || null)
+    setSaving(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const hasUsers = appUsers && appUsers.length > 0
 
   return (
     <div className="flex items-center gap-1">
-      <select
-        value={selectedId}
-        onChange={e => handleChange(e.target.value)}
-        disabled={saving}
-        className="bg-sb-inky/20 text-sb-cream font-mono text-[11px] px-2 py-1 rounded border border-sb-inky/40 focus:outline-none focus:border-sb-sky max-w-[180px] disabled:opacity-50"
-      >
-        <option value="">— Auto: {currentName || 'none'} —</option>
-        {appUsers.map(u => (
-          <option key={u.id} value={u.id}>{u.full_name ?? u.work_email}</option>
-        ))}
-      </select>
-      {saving && <span className="font-mono text-[10px] text-sb-inky">⟳</span>}
+      <input
+        value={local}
+        onChange={e => { setLocal(e.target.value); setSaved(false) }}
+        onBlur={handleBlur}
+        onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+        placeholder={placeholder}
+        className="flex-1 bg-sb-inky/20 text-sb-cream font-mono text-[12px] px-2 py-1 rounded border border-sb-inky/40 focus:outline-none focus:border-sb-sky placeholder:text-sb-cream/25 min-w-[110px]"
+      />
+      {saving && <span className="font-mono text-[10px] text-sb-inky animate-spin">⟳</span>}
+      {saved && <span className="font-mono text-[10px] text-sb-green">✓</span>}
+      {hasUsers && (
+        <div className="relative shrink-0" ref={pickerRef}>
+          <button
+            onClick={() => setPickerOpen(o => !o)}
+            title="Pick from SB Net users"
+            className={`p-1 rounded border transition-colors ${pickerOpen ? 'border-sb-sky text-sb-sky' : 'border-sb-inky/40 text-sb-inky hover:border-sb-sky hover:text-sb-sky'}`}
+          >
+            <UserIcon size={11} />
+          </button>
+          {pickerOpen && (
+            <div className="absolute top-full right-0 mt-1 z-20 bg-sb-navy border border-sb-inky/40 rounded shadow-xl min-w-[180px] max-h-56 overflow-y-auto">
+              <button
+                onClick={() => pickUser('')}
+                className="block w-full text-left px-3 py-1.5 font-mono text-[11px] text-sb-inky hover:bg-sb-inky/30 border-b border-sb-inky/20"
+              >
+                — Clear / Auto —
+              </button>
+              {appUsers!.map(u => (
+                <button
+                  key={u.id}
+                  onClick={() => pickUser(u.id)}
+                  className={`block w-full text-left px-3 py-1.5 font-mono text-[11px] hover:bg-sb-inky/30 transition-colors ${u.id === currentUserId ? 'text-sb-sky' : 'text-sb-cream'}`}
+                >
+                  {u.full_name ?? u.email}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

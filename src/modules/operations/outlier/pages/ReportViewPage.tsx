@@ -35,20 +35,20 @@ export default function ReportViewPage() {
   const [flashedIds, setFlashedIds] = useState<Set<string>>(new Set())
   const [realtimeConnected, setRealtimeConnected] = useState(false)
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
-  const [appUsers, setAppUsers] = useState<{ id: string; full_name: string | null; work_email: string }[]>([])
+  const [appUsers, setAppUsers] = useState<{ id: string; full_name: string | null; email: string }[]>([])
 
   // Location custom fields — used to populate the AM/RDO field mapping dropdowns
   const { active: locationFields } = useCustomFields('locations')
 
   useEffect(() => {
-    if (!profile?.company_id || !canPaste) return
+    if (!profile?.company_id) return
     ;(sb as any).schema('platform').from('user_profiles')
-      .select('id, full_name, work_email')
+      .select('id, full_name, email')
       .eq('company_id', profile.company_id)
       .eq('is_active', true)
       .order('full_name')
       .then(({ data }: any) => { if (data) setAppUsers(data) })
-  }, [profile?.company_id, canPaste])
+  }, [profile?.company_id])
 
   const loadData = useCallback(async () => {
     if (!slug) return
@@ -454,7 +454,7 @@ export default function ReportViewPage() {
         onCompleteToggle={isAM || canPaste ? handleCompleteToggle : undefined}
         onAMNameChange={canPaste ? handleAMNameChange : undefined}
         onRDONameChange={canPaste ? handleRDONameChange : undefined}
-        appUsers={canPaste && appUsers.length > 0 ? appUsers : undefined}
+        appUsers={appUsers.length > 0 ? appUsers : undefined}
         editableByAM={isAM || canPaste}
       />
 
