@@ -30,7 +30,7 @@ export function PosLocationMapTab() {
 
   const columns = useMemo(() => [
     col.accessor('pos_string', { header: 'Location String' }),
-    { id: 'parsed', header: 'Parsed #', accessorFn: (r: PosLocationMap) => applyTransforms(r.pos_string, [{ kind: 'pos_location' }]), cell: (i: any) => i.getValue() || 'â€”' },
+    { id: 'parsed', header: 'Parsed #', accessorFn: (r: PosLocationMap) => applyTransforms(r.pos_string, [{ kind: 'pos_location' }]), cell: (i: any) => i.getValue() || '—' },
     { id: 'location', header: 'Location Code', accessorFn: (r: PosLocationMap) => r.location_id, cell: (i: any) => (i.getValue() ? <span className="text-inky">{loc.codeOf(i.getValue())}</span> : <Badge color="amber">Unmatched</Badge>) },
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
@@ -77,8 +77,8 @@ export function PosLocationMapTab() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className=”text-sm font-bold text-navy uppercase tracking-wide”>Location Mapping</h2>
-        <p className=”text-xs text-inky mt-0.5”>Map location strings from any reporter (e.g. &quot;1 - Thomasville&quot;, &quot;Store 001&quot;) to internal locations. Imports auto-match on leading numbers; merge mode adds new strings without removing existing ones. {unmatched > 0 ? <span className=”text-orange-600”>{unmatched} unmatched &#x2014; map them below.</span> : 'All mapped.'}</p>
+        <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Location Mapping</h2>
+        <p className="text-xs text-inky mt-0.5">Map location strings from any reporter (e.g. &quot;1 - Thomasville&quot;, &quot;Store 001&quot;) to internal locations. Imports auto-match on leading numbers; merge mode adds new strings without removing existing ones. {unmatched > 0 ? <span className="text-orange-600">{unmatched} unmatched &#x2014; map them below.</span> : 'All mapped.'}</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
