@@ -546,9 +546,9 @@ export function FormResultsPage() {
         submissions.length === 0 ? (
           <p className="text-xs font-mono text-inky py-8 text-center">No responses yet.</p>
         ) : (
-          <div className="overflow-x-auto rounded border border-navy/30">
+          <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
             <table className="w-full text-xs font-mono" style={{ minWidth: 600 }}>
-              <thead>
+              <thead className="sticky top-0">
                 <tr className="border-b border-navy/30 bg-cream">
                   <th className="px-3 py-2 text-left text-inky uppercase tracking-wide w-8">#</th>
                   <th className="px-3 py-2 text-left text-inky uppercase tracking-wide whitespace-nowrap">Submitted At</th>

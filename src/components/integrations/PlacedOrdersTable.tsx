@@ -100,9 +100,9 @@ export function PlacedOrdersTable({ onNewOrder }: Props) {
       ) : orders.length === 0 ? (
         <p className="text-xs font-mono text-inky/40 py-6 text-center">No orders found</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[calc(100vh-300px)]">
           <table className="w-full text-xs font-mono border-collapse">
-            <thead>
+            <thead className="sticky top-0 bg-cream">
               <tr className="border-b-2 border-inky/20">
                 <th className="text-left py-2 pr-4 font-heading text-xs uppercase tracking-wider text-inky/60">Order #</th>
                 <th className="text-left py-2 pr-4 font-heading text-xs uppercase tracking-wider text-inky/60">Location</th>

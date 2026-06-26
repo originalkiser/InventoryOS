@@ -353,9 +353,9 @@ export function UsersPage() {
       {loading ? (
         <div className="text-xs font-mono text-inky/50 animate-pulse">Loading...</div>
       ) : (
-        <div className="rounded border border-navy/15 dark:border-[#F2F1E6]/10 overflow-hidden">
+        <div className="rounded border border-navy/15 dark:border-[#F2F1E6]/10 overflow-auto max-h-[calc(100vh-300px)]">
           <table className="w-full text-xs font-body">
-            <thead>
+            <thead className="sticky top-0">
               <tr className="border-b border-navy/10 dark:border-[#F2F1E6]/10 bg-navy/5 dark:bg-[#F2F1E6]/5">
                 {['Name', 'Email', 'Role', 'Joined', 'Actions'].map((h) => (
                   <th key={h} className="text-left px-4 py-2.5 font-heading text-[10px] text-inky/70 dark:text-[#F2F1E6]/50 uppercase tracking-wide">{h}</th>
@@ -409,9 +409,9 @@ export function UsersPage() {
         </button>
 
         {showRemoved && removedUsers.length > 0 && (
-          <div className="mt-3 rounded border border-navy/15 dark:border-[#F2F1E6]/10 overflow-hidden">
+          <div className="mt-3 rounded border border-navy/15 dark:border-[#F2F1E6]/10 overflow-auto max-h-[40vh]">
             <table className="w-full text-xs font-body">
-              <thead>
+              <thead className="sticky top-0">
                 <tr className="border-b border-navy/10 dark:border-[#F2F1E6]/10 bg-red-50 dark:bg-red-900/10">
                   {['Name', 'Email', 'Removed', 'Days Left', 'Actions'].map((h) => (
                     <th key={h} className="text-left px-4 py-2 font-heading text-[10px] text-inky/70 dark:text-[#F2F1E6]/50 uppercase tracking-wide">{h}</th>

@@ -512,9 +512,9 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
       </div>
 
       {rows.length > 0 && (
-        <div className="overflow-x-auto rounded border border-navy/30">
+        <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
           <table className="min-w-full text-xs font-mono">
-            <thead className="bg-navy text-inky uppercase tracking-wide">
+            <thead className="sticky top-0 bg-navy text-inky uppercase tracking-wide">
               <tr><th className="px-2 py-2 text-left">Location</th><th className="px-2 py-2 text-left">Product</th><th className="px-2 py-2 text-left">Order Amount</th><th /></tr>
             </thead>
             <tbody>
@@ -758,9 +758,9 @@ function PackRulesCard({ productIds, onChange }: { productIds: string[]; onChang
             <Button size="sm" variant="secondary" onClick={detect}>Scan {productIds.length} products</Button>
           </div>
           {detected.length > 0 && (
-            <div className="overflow-auto rounded border border-navy/30">
+            <div className="overflow-auto max-h-[40vh] rounded border border-navy/30">
               <table className="w-full text-xs font-mono">
-                <thead className="bg-navy text-inky uppercase tracking-wide">
+                <thead className="sticky top-0 bg-navy text-inky uppercase tracking-wide">
                   <tr>
                     <th className="px-2 py-2 text-left">Use</th>
                     <th className="px-2 py-2 text-left">Pattern</th>

@@ -104,9 +104,9 @@ export default function ReportTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-auto max-h-[calc(100vh-300px)]">
       <table className="w-full text-left sticky-table">
-        <thead>
+        <thead className="sticky top-0">
           <tr className="border-b border-sb-inky/40">
             {/* Shop/Employee — always first, sticky */}
             <Th label={isEmployeeReport ? 'EMPLOYEE' : 'SHOP'} sortKey="row_label" current={sortKey} dir={sortDir} onSort={handleSort} sticky />

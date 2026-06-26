@@ -364,9 +364,9 @@ export function RecountLogicTab() {
           ) : flagged.length === 0 ? (
             <p className="text-xs font-mono text-inky/70">No shops flag under the current rules.</p>
           ) : (
-            <div className="overflow-auto rounded border border-navy/30">
+            <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
               <table className="w-full text-xs font-mono">
-                <thead>
+                <thead className="sticky top-0">
                   <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                     <th className="px-3 py-2 text-left">Location</th>
                     <th className="px-3 py-2 text-right">Adj Count</th>

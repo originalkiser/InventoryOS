@@ -46,9 +46,9 @@ export function OrderConfigPage() {
             No config loaded yet. Upload an XLSX file above to import.
           </p>
         ) : (
-          <div className="overflow-x-auto border border-inky/20 rounded">
+          <div className="overflow-auto max-h-[calc(100vh-300px)] border border-inky/20 rounded">
             <table className="w-full text-xs font-mono border-collapse">
-              <thead>
+              <thead className="sticky top-0">
                 <tr className="border-b-2 border-inky/20 bg-inky/5">
                   <th className="text-left px-3 py-2 font-heading text-xs uppercase tracking-wider text-inky/60">Product</th>
                   <th className="text-left px-3 py-2 font-heading text-xs uppercase tracking-wider text-inky/60">SKU</th>

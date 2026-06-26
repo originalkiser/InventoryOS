@@ -332,9 +332,9 @@ function SubTasks({ projectId, tasks, linkedTasks, onAdd, onUpdate, onDelete, on
   }
   return (
     <div className="border-l-2 border-[#00e5ff]/30 bg-sky/10 pl-6 pr-3 py-3">
-      <div className="overflow-x-auto rounded border border-navy/30">
+      <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
         <table className="text-xs font-mono" style={{ tableLayout: 'fixed', minWidth: '100%' }}>
-          <thead className="bg-[#002745] text-[#6A9AB2] uppercase tracking-wide">
+          <thead className="sticky top-0 bg-[#002745] text-[#6A9AB2] uppercase tracking-wide">
             <tr>
               <th style={{ width: 28, minWidth: 28 }} />
               <th style={{ width: 32, minWidth: 32 }} className="px-2 py-1.5 text-left">✓</th>
@@ -739,10 +739,10 @@ export function ProjectsModule() {
           <Button size="sm" onClick={onNewProject}>+ New Project</Button>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded border border-navy/30">
+        <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
           <table className="border-collapse text-xs font-mono" style={{ minWidth: '100%' }}>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onColumnDragEnd}>
-              <thead>
+              <thead className="sticky top-0 bg-navy">
                 <tr>
                   <th className="sticky left-0 z-30 border-b border-r border-navy/30 bg-navy" style={{ width: CTRL_W, minWidth: CTRL_W }} />
                   <SortableContext items={ordered.map((c) => c.key)} strategy={horizontalListSortingStrategy}>

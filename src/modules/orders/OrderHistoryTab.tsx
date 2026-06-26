@@ -393,7 +393,7 @@ function OrderDetailModal({
 
         <div className="max-h-72 overflow-auto rounded border border-navy/30">
           <table className="w-full text-xs font-mono">
-            <thead className="bg-navy text-inky uppercase tracking-wide">
+            <thead className="sticky top-0 bg-navy text-inky uppercase tracking-wide">
               <tr>
                 <th className="px-3 py-2 text-left">Product</th>
                 <th className="px-3 py-2 text-left">Vendor Part</th>

@@ -139,9 +139,9 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
             <h2 className="font-brand font-bold text-sb-sky tracking-wider text-[13px] uppercase">Assigned to Me</h2>
             <span className="font-mono text-[11px] text-sb-inky ml-auto">{assignedEntries.length} item{assignedEntries.length !== 1 ? 's' : ''}</span>
           </div>
-          <div className="overflow-x-auto">
+          <div className="overflow-auto max-h-[calc(100vh-400px)]">
             <table className="w-full text-left sticky-table">
-              <thead>
+              <thead className="sticky top-0 bg-sb-navy">
                 <tr className="border-b border-sb-inky/30">
                   <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase sticky left-0 bg-sb-navy">SHOP</th>
                   <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">ASSIGNED AS</th>
@@ -206,9 +206,9 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
                 </button>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="overflow-auto max-h-[calc(100vh-400px)]">
                 <table className="w-full text-left sticky-table">
-                  <thead>
+                  <thead className="sticky top-0 bg-sb-navy">
                     <tr className="border-b border-sb-inky/30">
                       <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase sticky left-0 bg-sb-navy">SHOP</th>
                       {dataColumns.map(col => (

@@ -328,7 +328,7 @@ export function DataTable<T>({
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto rounded border border-inky/20">
+      <div className="overflow-auto rounded border border-inky/20 max-h-[calc(100vh-300px)]">
         <table
           className={`text-xs font-body table-fixed${hasFill ? ' w-full' : ''}`}
           style={hasFill ? { minWidth: table.getTotalSize() + SEL_W } : { width: table.getTotalSize() + SEL_W }}
