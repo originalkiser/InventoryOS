@@ -9,12 +9,12 @@ ALTER TABLE inventory.product_usage
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS inventory.monthly_ending_balances (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id          uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-  location_id         uuid REFERENCES public.locations(id) ON DELETE CASCADE,
+  company_id          uuid NOT NULL,
+  location_id         uuid,
   month               date NOT NULL,
   ending_balance      numeric NOT NULL,
   metadata            jsonb NOT NULL DEFAULT '{}'::jsonb,
-  updated_by          uuid REFERENCES auth.users ON DELETE SET NULL,
+  updated_by          uuid,
   last_change_source  text,
   uploaded_at         timestamptz NOT NULL DEFAULT now(),
   created_at          timestamptz NOT NULL DEFAULT now(),
@@ -41,22 +41,20 @@ END $$;
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS inventory.tank_monitors (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id          uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-  location_id         uuid REFERENCES public.locations(id) ON DELETE SET NULL,
+  company_id          uuid NOT NULL,
+  location_id         uuid,
   reading_date        date NOT NULL DEFAULT CURRENT_DATE,
   value               numeric,
   unit                text DEFAULT 'gal',
-  updated_by          uuid REFERENCES auth.users ON DELETE SET NULL,
+  product_id          text,
+  keep_fill           boolean NOT NULL DEFAULT false,
+  on_hand             numeric,
+  inventory_time      timestamptz,
+  updated_by          uuid,
   last_change_source  text,
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
-
-ALTER TABLE inventory.tank_monitors
-  ADD COLUMN IF NOT EXISTS product_id      text,
-  ADD COLUMN IF NOT EXISTS keep_fill       boolean NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS on_hand         numeric,
-  ADD COLUMN IF NOT EXISTS inventory_time  timestamptz;
 
 CREATE INDEX IF NOT EXISTS idx_tank_monitors_company
   ON inventory.tank_monitors (company_id, reading_date);
