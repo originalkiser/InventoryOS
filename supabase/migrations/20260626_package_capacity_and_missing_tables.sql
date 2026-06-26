@@ -77,6 +77,7 @@ END $$;
 -- =====================================================================
 -- 4. Update get_product_usage RPC to include package_capacity
 -- =====================================================================
+DROP FUNCTION IF EXISTS get_product_usage(uuid);
 CREATE OR REPLACE FUNCTION get_product_usage(p_company_id uuid)
 RETURNS TABLE(
   id                  uuid,
