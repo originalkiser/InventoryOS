@@ -78,7 +78,7 @@ export function PosLocationMapTab() {
     <div className="flex flex-col gap-6">
       <div>
         <h2 className=”text-sm font-bold text-navy uppercase tracking-wide”>Location Mapping</h2>
-        <p className=”text-xs text-inky mt-0.5”>Map location strings from any reporter (e.g. &quot;1 - Thomasville&quot;, &quot;Store 001&quot;) to internal locations. Imports auto-match on leading numbers; merge mode adds new strings without removing existing ones. {unmatched > 0 ? <span className=”text-orange-600”>{unmatched} unmatched â€” map them below.</span> : 'All mapped.'}</p>
+        <p className=”text-xs text-inky mt-0.5”>Map location strings from any reporter (e.g. &quot;1 - Thomasville&quot;, &quot;Store 001&quot;) to internal locations. Imports auto-match on leading numbers; merge mode adds new strings without removing existing ones. {unmatched > 0 ? <span className=”text-orange-600”>{unmatched} unmatched &#x2014; map them below.</span> : 'All mapped.'}</p>
       </div>
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
