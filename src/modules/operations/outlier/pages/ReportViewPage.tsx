@@ -253,10 +253,14 @@ export default function ReportViewPage() {
 
   async function handleCommentChange(id: string, comment: string) {
     const { error } = await sb.schema('outlier').from('report_entries')
-      .update({ am_comment: comment, am_comment_updated_at: new Date().toISOString(), am_comment_updated_by: profile?.id, updated_at: new Date().toISOString() })
+      .update({ am_comment: comment, updated_at: new Date().toISOString() })
       .eq('id', id)
-    if (error) { console.error('[Comment save]', error); toast.error('Failed to save comment') }
-    else setEntries(prev => prev.map(e => e.id === id ? { ...e, am_comment: comment } : e))
+    if (error) { console.error('[Comment save]', error); toast.error('Failed to save comment'); return }
+    setEntries(prev => prev.map(e => e.id === id ? { ...e, am_comment: comment } : e))
+    sb.schema('outlier').from('report_entries')
+      .update({ am_comment_updated_at: new Date().toISOString(), am_comment_updated_by: profile?.id })
+      .eq('id', id)
+      .then(() => {})
   }
 
   async function handleDueDateChange(id: string, date: string) {

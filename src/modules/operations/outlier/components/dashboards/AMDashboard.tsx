@@ -56,15 +56,15 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
 
   async function saveComment(entryId: string, comment: string) {
     const { error } = await sb.schema('outlier').from('report_entries')
-      .update({
-        am_comment: comment,
-        am_comment_updated_at: new Date().toISOString(),
-        am_comment_updated_by: profile.id,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ am_comment: comment, updated_at: new Date().toISOString() })
       .eq('id', entryId)
-    if (error) { console.error('[Comment save]', error); toast.error('Failed to save comment') }
-    else { toast.success('Comment saved'); onRefresh() }
+    if (error) { console.error('[Comment save]', error); toast.error('Failed to save comment'); return }
+    toast.success('Comment saved')
+    onRefresh()
+    sb.schema('outlier').from('report_entries')
+      .update({ am_comment_updated_at: new Date().toISOString(), am_comment_updated_by: profile.id })
+      .eq('id', entryId)
+      .then(() => {})
   }
 
   async function saveDueDate(entryId: string, date: string) {
@@ -103,7 +103,13 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
               {[profile.region, profile.area].filter(Boolean).join(' · ')}
             </p>
             <p className="font-mono text-[11px] text-sb-cream/50 mt-1">
-              {amLocations.length} assigned {amLocations.length === 1 ? 'location' : 'locations'}
+              {(() => {
+                const items = allMyEntries.filter(e => e.row_type !== 'total').length
+                return `${items} assigned ${items === 1 ? 'item' : 'items'}`
+              })()}
+              {uncommented > 0 && (
+                <span className="text-sb-orange ml-2">· {uncommented} need{uncommented === 1 ? 's' : ''} attention</span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-6">
