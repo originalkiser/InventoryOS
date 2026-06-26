@@ -75,6 +75,7 @@ interface NavItem {
 const SECTION_ITEMS: Record<string, NavItem[]> = {
   inventory: [
     { key: 'dashboard', label: 'Dashboard', to: '/dashboard' },
+    { key: 'on-hand', label: 'On Hand', to: '/on-hand' },
     { key: 'monthend', label: 'Month End Count', to: '/monthend' },
     { key: 'weekly', label: 'Weekly Count', to: '/weekly' },
     { key: 'orders', label: 'Orders', to: '/orders' },

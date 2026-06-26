@@ -82,7 +82,7 @@ export function InventoryView({ maxHeight = '60vh', withScaleEditor = true }: { 
   )
 }
 
-function FlagScaleEditor({ config, onChange, onClose }: { config: FlagConfig; onChange: (c: FlagConfig) => void; onClose: () => void }) {
+export function FlagScaleEditor({ config, onChange, onClose }: { config: FlagConfig; onChange: (c: FlagConfig) => void; onClose: () => void }) {
   const [draft, setDraft] = useState<FlagConfig>(config)
   function setBandRange(color: FlagColor, i: number, patch: Partial<{ min: number | null; max: number | null }>) {
     setDraft((d) => ({ ...d, bands: d.bands.map((b) => b.color === color ? { ...b, ranges: b.ranges.map((r, j) => j === i ? { ...r, ...patch } : r) } : b) }))

@@ -34,6 +34,7 @@ import { FormBuilderPage } from '@/modules/forms/FormBuilderPage'
 import { FormResultsPage } from '@/modules/forms/FormResultsPage'
 import { FormAssignmentsPage } from '@/modules/forms/FormAssignmentsPage'
 import { PublicFormPage } from '@/pages/PublicFormPage'
+import { OnHandPage } from '@/pages/OnHandPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, initialized } = useAuthStore()
@@ -107,6 +108,7 @@ export default function App() {
           <Route path="month-end" element={<Navigate to="/monthend" replace />} />
           <Route path="weekly" element={<WeeklyPage />} />
           <Route path="orders" element={<OrdersPage />} />
+          <Route path="on-hand" element={<OnHandPage />} />
           <Route path="issues" element={<IssuesPage />} />
           <Route path="projects" element={<ProjectsModule />} />
           <Route path="schedule" element={<SchedulePage />} />
