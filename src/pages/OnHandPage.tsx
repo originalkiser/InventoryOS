@@ -148,8 +148,8 @@ export function OnHandPage() {
         return dir === 'asc' ? av - bv : bv - av
       }
       if (key === 'location_label' || key === 'product_id') {
-        const av = String((a as Record<string, unknown>)[key] ?? '')
-        const bv = String((b as Record<string, unknown>)[key] ?? '')
+        const av = String(a[key as keyof InventoryRow] ?? '')
+        const bv = String(b[key as keyof InventoryRow] ?? '')
         return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
       }
       // Location metadata / base column sort
