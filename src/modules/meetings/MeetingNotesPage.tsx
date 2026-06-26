@@ -195,7 +195,7 @@ export function MeetingNotesPage() {
   async function onSave() {
     if (!companyId || !form.title.trim()) return
     setSaving(true)
-    const payload = {
+    const corePayload = {
       company_id: companyId,
       title: form.title.trim(),
       meeting_date: form.meeting_date || null,
@@ -203,22 +203,29 @@ export function MeetingNotesPage() {
       vendor: form.vendor.trim() || null,
       category: form.category.trim() || null,
       notes: form.notes || null,
-      links: form.links,
       visibility: isOwner ? form.visibility : undefined,
       shared: isOwner ? form.visibility !== 'private' : undefined,
-      created_by: editId ? undefined : myId,
     }
     const sb = supabase as any
+    let savedId = editId
     if (editId) {
-      const { error } = await sb.schema('inventory').from('meeting_notes').update(payload).eq('id', editId)
+      const { error } = await sb.schema('inventory').from('meeting_notes').update(corePayload).eq('id', editId)
       if (error) { toast.error(error.message); setSaving(false); return }
       toast.success('Meeting saved')
     } else {
-      const { data, error } = await sb.schema('inventory').from('meeting_notes').insert({ ...payload, created_by: myId }).select().single()
+      const { data, error } = await sb.schema('inventory').from('meeting_notes').insert({ ...corePayload, created_by: myId }).select().single()
       if (error) { toast.error(error.message); setSaving(false); return }
+      savedId = data.id
       setEditId(data.id)
       setEditCreatedBy(myId)
       toast.success('Meeting created')
+    }
+    // Best-effort: save links separately (column may not exist in all environments yet)
+    if (savedId) {
+      sb.schema('inventory').from('meeting_notes')
+        .update({ links: form.links })
+        .eq('id', savedId)
+        .then(() => {})
     }
     setSaving(false)
     load()
