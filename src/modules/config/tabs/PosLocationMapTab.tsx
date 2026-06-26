@@ -21,7 +21,7 @@ const col = createColumnHelper<PosLocationMap>()
 const EMPTY = { pos_string: '', locationId: '' }
 
 export function PosLocationMapTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<PosLocationMap>('pos_location_map', 'inventory')
+  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<PosLocationMap>('pos_location_map', 'core')
   const loc = useLocations()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
