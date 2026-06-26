@@ -52,12 +52,13 @@ interface OverlayProps {
   mode: LookupMode
   width: number
   mobile: boolean
+  topOffset?: number
   onModeChange: (m: LookupMode) => void
   onToggle: () => void
   onWidthChange: (w: number) => void
 }
 
-export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onToggle, onWidthChange }: OverlayProps) {
+export function LocationLookupOverlay({ mode, width, mobile, topOffset, onModeChange, onToggle, onWidthChange }: OverlayProps) {
   const open = mode !== 'hidden'
 
   useEffect(() => {
@@ -70,16 +71,19 @@ export function LocationLookupOverlay({ mode, width, mobile, onModeChange, onTog
 
   return open ? (
     <LookupPanel
-      mode={mode} width={width} mobile={mobile} onModeChange={onModeChange} onWidthChange={onWidthChange}
+      mode={mode} width={width} mobile={mobile} topOffset={topOffset} onModeChange={onModeChange} onWidthChange={onWidthChange}
       onClose={() => onModeChange('hidden')}
     />
   ) : null
 }
 
 // ---------------------------------------------------------------------------
-function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose }: Omit<OverlayProps, 'onToggle'> & { onClose: () => void }) {
+const BOTTOM_OFFSET = 64 // FAB row + structural spacer (h-16)
+
+function LookupPanel({ mode, width, mobile, topOffset = 48, onModeChange, onWidthChange, onClose }: Omit<OverlayProps, 'onToggle'> & { onClose: () => void }) {
   const docked = mode === 'docked' && !mobile
-  const [height, setHeight] = useState<number>(() => Number(localStorage.getItem(SIZE_KEY)) || Math.round(window.innerHeight * 0.6))
+  const maxPanelHeight = window.innerHeight - topOffset - BOTTOM_OFFSET
+  const [height, setHeight] = useState<number>(() => Math.min(Number(localStorage.getItem(SIZE_KEY)) || Math.round(window.innerHeight * 0.6), maxPanelHeight))
   const [pos, setPos] = useState<{ right: number; bottom: number } | null>(() => {
     try { return JSON.parse(localStorage.getItem(POS_KEY) || 'null') } catch { return null }
   })
@@ -91,7 +95,7 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
   const panelRef = useRef<HTMLDivElement>(null)
 
   const right = pos?.right ?? 16
-  const bottom = pos?.bottom ?? 16
+  const bottom = Math.max(pos?.bottom ?? BOTTOM_OFFSET, BOTTOM_OFFSET)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   function startResize(e: React.MouseEvent) {
@@ -99,7 +103,7 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
     const sx = e.clientX, sy = e.clientY, sw = width, sh = height
     const move = (ev: MouseEvent) => {
       onWidthChange(Math.min(Math.max(sw + (sx - ev.clientX), 320), window.innerWidth - 40))
-      setHeight(Math.min(Math.max(sh + (sy - ev.clientY), 240), window.innerHeight - 40))
+      setHeight(Math.min(Math.max(sh + (sy - ev.clientY), 240), maxPanelHeight))
     }
     const up = () => {
       localStorage.setItem(SIZE_KEY, String(height))
@@ -112,7 +116,7 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
     const sx = e.clientX, sy = e.clientY, sr = right, sb = bottom
     const move = (ev: MouseEvent) => {
       const nr = Math.min(Math.max(sr - (ev.clientX - sx), 0), window.innerWidth - 120)
-      const nb = Math.min(Math.max(sb - (ev.clientY - sy), 0), window.innerHeight - 80)
+      const nb = Math.min(Math.max(sb - (ev.clientY - sy), BOTTOM_OFFSET), window.innerHeight - topOffset - height)
       setPos({ right: nr, bottom: nb })
     }
     const up = () => {
@@ -143,10 +147,10 @@ function LookupPanel({ mode, width, mobile, onModeChange, onWidthChange, onClose
   }
 
   const panelStyle: React.CSSProperties = mobile
-    ? { position: 'fixed', left: 0, right: 0, bottom: 0, height: '70vh', zIndex: 55 }
+    ? { position: 'fixed', left: 0, right: 0, bottom: BOTTOM_OFFSET, height: `calc(70vh - ${BOTTOM_OFFSET}px)`, zIndex: 55 }
     : docked
-    ? { position: 'fixed', top: 0, right: 0, bottom: 0, width, zIndex: 55 }
-    : { position: 'fixed', right, bottom, width, height: Math.min(height, window.innerHeight * 0.9), maxHeight: '92vh', zIndex: 55 }
+    ? { position: 'fixed', top: topOffset, right: 0, bottom: BOTTOM_OFFSET, width, zIndex: 55 }
+    : { position: 'fixed', right, bottom, width, height: Math.min(height, maxPanelHeight), maxHeight: maxPanelHeight, zIndex: 55 }
 
   return (
     <div ref={panelRef} style={panelStyle}

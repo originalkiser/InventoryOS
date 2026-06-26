@@ -6,6 +6,7 @@ interface Props {
   mode: PanelMode
   width: number
   mobile: boolean
+  topOffset?: number
   onModeChange: (m: PanelMode) => void
   onToggle: () => void
   onWidthChange: (w: number) => void
@@ -13,7 +14,7 @@ interface Props {
 
 // All-locations inventory as a corner overlay (float / pin-right / hidden),
 // same chrome as Location Lookup. Trigger sits bottom-right, below the Lookup pill.
-export function InventoryOverlay({ mode, width, mobile, onModeChange, onToggle, onWidthChange }: Props) {
+export function InventoryOverlay({ mode, width, mobile, topOffset, onModeChange, onToggle, onWidthChange }: Props) {
   const open = mode !== 'hidden'
 
   useEffect(() => {
@@ -27,7 +28,7 @@ export function InventoryOverlay({ mode, width, mobile, onModeChange, onToggle, 
   return open ? (
     <FloatingPanel
       title="Inventory · All Locations" prefix="inventory"
-      mode={mode} width={width} mobile={mobile}
+      mode={mode} width={width} mobile={mobile} topOffset={topOffset}
       onModeChange={onModeChange} onWidthChange={onWidthChange} onClose={() => onModeChange('hidden')}
     >
       <InventoryView maxHeight="100%" />

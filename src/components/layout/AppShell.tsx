@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
@@ -22,9 +22,21 @@ export function AppShell() {
   const [invWidth, setInvWidth] = useState(() => Number(localStorage.getItem(INV_WIDTH_KEY)) || 460)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [topBarHeight, setTopBarHeight] = useState(48)
+  const topBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
   const lastInv = useRef<Exclude<PanelMode, 'hidden'>>(invMode === 'docked' ? 'docked' : 'floating')
   const location = useLocation()
+
+  // Measure TopBar height so panels can stay below it even when it wraps
+  useLayoutEffect(() => {
+    const el = topBarRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setTopBarHeight(el.offsetHeight))
+    ro.observe(el)
+    setTopBarHeight(el.offsetHeight)
+    return () => ro.disconnect()
+  }, [])
 
   // Close mobile nav on every route change
   useEffect(() => { setMobileNavOpen(false) }, [location.pathname])
@@ -57,7 +69,9 @@ export function AppShell() {
       />
 
       <div className="flex flex-col flex-1 min-w-0 relative transition-[margin] duration-150" style={{ marginRight: pushWidth || undefined }}>
-        <TopBar mobile={mobile} onMobileMenuOpen={() => setMobileNavOpen((v) => !v)} />
+        <div ref={topBarRef}>
+          <TopBar mobile={mobile} onMobileMenuOpen={() => setMobileNavOpen((v) => !v)} />
+        </div>
         <main className="flex-1 overflow-auto p-3 sm:p-6">
           <ErrorBoundary key={location.pathname}>
             <Outlet />
@@ -105,11 +119,11 @@ export function AppShell() {
       </div>
 
       <LocationLookupOverlay
-        mode={lookupMode} width={lookupWidth} mobile={mobile}
+        mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight}
         onModeChange={setLookupModeP} onToggle={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')} onWidthChange={setLookupWidthP}
       />
       <InventoryOverlay
-        mode={invMode} width={invWidth} mobile={mobile}
+        mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight}
         onModeChange={setInvModeP} onToggle={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')} onWidthChange={setInvWidthP}
       />
     </div>
