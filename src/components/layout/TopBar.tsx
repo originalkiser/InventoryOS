@@ -125,11 +125,12 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   const allPillPrefsRef = useRef<Record<string, unknown>>({})
   const [checklistOpen, setChecklistOpen] = useState(false)
   const [filterUserId, setFilterUserId] = useState('')
-  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string; assignedTo: string[] | null }
+  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string; assignedTo: string[] | null; startTime?: string | null; reminderMinutes?: number | null }
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   const [openNote, setOpenNote] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
+  const checklistItemsRef = useRef<ChecklistItem[]>([])
 
   const companyId = profile?.company_id
 
@@ -138,6 +139,9 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     ;(supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
       .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
   }, [companyId])
+
+  // Keep ref in sync so reminder interval has closure access without re-creating on each state change
+  useEffect(() => { checklistItemsRef.current = checklistItems }, [checklistItems])
 
   // EOD reminder: poll every 60 s, auto-open once per day and keep button glowing until reviewed.
   useEffect(() => {
@@ -171,6 +175,51 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     return () => clearInterval(id)
   }, [profile?.eod_review_enabled, profile?.eod_review_time, profile?.popup_timezone])
 
+  // Checklist event reminders: open Today's Tasks N minutes before a timed checklist event starts.
+  // Uses checklistItemsRef so the interval closure always sees fresh data without re-creating.
+  useEffect(() => {
+    if (profile?.task_popups_enabled === false) return
+    const tz = profile?.popup_timezone ?? 'America/Chicago'
+
+    function todayKey() {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date())
+    }
+    function currentHHMM() {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+      }).formatToParts(new Date())
+      const h = parts.find((p) => p.type === 'hour')?.value ?? '00'
+      const m = parts.find((p) => p.type === 'minute')?.value ?? '00'
+      return `${h}:${m}`
+    }
+
+    function checkReminders() {
+      const hhmm = currentHHMM()
+      const dk = todayKey()
+      const [nowH, nowM] = hhmm.split(':').map(Number)
+      const nowTotal = nowH * 60 + nowM
+      for (const item of checklistItemsRef.current) {
+        if (item.kind !== 'event' || !item.startTime || item.reminderMinutes == null || item.completed) continue
+        const mins = item.reminderMinutes
+        if (mins <= 0) continue
+        const [sh, sm] = item.startTime.split(':').map(Number)
+        const startTotal = sh * 60 + sm
+        const reminderTotal = Math.max(0, startTotal - mins)
+        if (nowTotal >= reminderTotal && nowTotal < startTotal) {
+          const key = `reminder_${item.id}_${dk}`
+          if (!localStorage.getItem(key)) {
+            localStorage.setItem(key, '1')
+            setChecklistOpen(true)
+          }
+        }
+      }
+    }
+
+    checkReminders()
+    const remId = setInterval(checkReminders, 60_000)
+    return () => clearInterval(remId)
+  }, [profile?.popup_timezone, profile?.task_popups_enabled])
+
   useEffect(() => {
     if (!companyId) return
     loadStats()
@@ -180,9 +229,9 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       .channel('topbar')
       .on('postgres_changes', { event: '*', schema: 'inventory', table: 'issues', filter: `company_id=eq.${companyId}` }, loadStats)
       .on('postgres_changes', { event: '*', schema: 'platform', table: 'schedule_events', filter: `company_id=eq.${companyId}` }, () => { loadStats(); loadTodayChecklists() })
-      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'ending_balances', filter: `company_id=eq.${companyId}` }, loadStats)
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'monthly_ending_balances', filter: `company_id=eq.${companyId}` }, loadStats)
       .on('postgres_changes', { event: '*', schema: 'core', table: 'locations', filter: `company_id=eq.${companyId}` }, loadStats)
-      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'project_tasks', filter: `company_id=eq.${companyId}` }, () => loadTodayChecklists())
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'project_tasks', filter: `company_id=eq.${companyId}` }, () => { loadStats(); loadTodayChecklists() })
       .subscribe()
 
     return () => { void supabase.removeChannel(channel) }
@@ -262,23 +311,22 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   async function loadStats() {
     if (!companyId) return
     const today = format(new Date(), 'yyyy-MM-dd')
-
     const sb = supabase as any
     const [issuesRes, scheduleRes, balancesRes, locationsRes, ordersRes, tasksRes, formsDueRes, recountRes] = await Promise.all([
-      sb.schema('inventory').from('issues').select('id, status_id, issue_statuses!inner(name)').eq('company_id', companyId),
+      sb.schema('inventory').from('issues').select('id, status_id, issue_statuses(name)').eq('company_id', companyId).is('deleted_at', null),
       sb.schema('platform').from('schedule_events').select('*').eq('company_id', companyId).gte('start_date', today).order('start_date'),
-      sb.schema('inventory').from('ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false }),
-      sb.schema('core').from('locations').select('id').eq('company_id', companyId).or('active.eq.true,active.is.null'),
+      sb.schema('inventory').from('monthly_ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false }),
+      sb.schema('core').from('locations').select('id, active').eq('company_id', companyId),
       sb.schema('inventory').from('order_sessions').select('id').eq('company_id', companyId).eq('status', 'pending').catch(() => ({ data: [] })),
       sb.schema('inventory').from('project_tasks').select('id, due_date').eq('company_id', companyId).eq('done', false).lt('due_date', today).catch(() => ({ data: [] })),
       sb.schema('forms').from('assignments').select('id').eq('company_id', companyId).lte('due_date', today).eq('completed', false).catch(() => ({ data: [] })),
       sb.schema('inventory').from('recount_requests').select('id').eq('company_id', companyId).eq('status', 'pending').catch(() => ({ data: [] })),
     ])
 
-    const pendingIssues = issuesRes.data?.filter((i: any) =>
-      i.issue_statuses?.name?.toLowerCase().includes('pending') ||
-      i.issue_statuses?.name?.toLowerCase().includes('open')
-    ).length ?? 0
+    const pendingIssues = issuesRes.data?.filter((i: any) => {
+      const name = (i.issue_statuses?.name ?? '').toLowerCase()
+      return !name.includes('close') && !name.includes('resolv') && !name.includes('complet')
+    }).length ?? 0
 
     const nextCount = scheduleRes.data?.find((e: any) => e.event_type === 'monthly_count')
     const nextCountDays = nextCount
@@ -297,7 +345,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       pendingIssues,
       nextCountDays,
       lastEndingValue,
-      activeShops: locationsRes.data?.length ?? 0,
+      activeShops: (locationsRes.data ?? []).filter((l: any) => l.active).length,
       pendingOrders: ordersRes.data?.length ?? 0,
       overdueTasks: tasksRes.data?.length ?? 0,
       formsDue: formsDueRes.data?.length ?? 0,
@@ -310,11 +358,11 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
     const [ev, tk] = await Promise.all([
-      sb.schema('platform').from('schedule_events').select('id, title, completed, notes, assigned_to').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
+      sb.schema('platform').from('schedule_events').select('id, title, completed, notes, assigned_to, start_time, reminder_minutes').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
       sb.schema('inventory').from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
     ])
     const items: ChecklistItem[] = [
-      ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '', assignedTo: e.assigned_to ?? null })),
+      ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '', assignedTo: e.assigned_to ?? null, startTime: e.start_time ?? null, reminderMinutes: e.reminder_minutes ?? null })),
       ...((tk.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.task_name || '(untitled task)', completed: false, kind: 'task' as const, notes: t.notes ?? '', assignedTo: null })),
     ]
     setChecklistItems(items)
@@ -544,7 +592,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
           </div>
           {(() => {
             const visible = filterUserId
-              ? checklistItems.filter((i) => i.assignedTo?.includes(filterUserId))
+              ? checklistItems.filter((i) => i.kind === 'task' || i.assignedTo?.includes(filterUserId))
               : checklistItems
             return visible.length === 0 ? (
               <div className="px-4 py-3 text-xs text-inky font-body italic">

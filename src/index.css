@@ -151,6 +151,18 @@ body {
 /* Agenda + month dark mode text */
 .dark .rbc-date-cell.rbc-current { color: rgb(var(--color-navy)) !important; }
 
+/* SB brand loader */
+.sb-loader { position: relative; display: inline-block; width: 96px; aspect-ratio: 100 / 124; color: #002745; }
+.sb-loader--sky { color: #B7E0DE; }
+.sb-loader svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.sb-loader__line { animation: sb-loader-draw 2.6s ease-in-out infinite; }
+.sb-loader__mark { position: absolute; width: 62%; left: 50%; top: 55%; transform: translate(-50%, -50%); pointer-events: none; }
+@keyframes sb-loader-draw {
+  0%,  6%   { stroke-dashoffset: 1; }
+  46%, 54%  { stroke-dashoffset: 0; }
+  94%, 100% { stroke-dashoffset: -1; }
+}
+
 /* Profile panel — time inputs need explicit color-scheme in dark mode so
    Chrome/Edge render the picker value text in light color, not system black. */
 .dark .profile-panel input[type="time"] {

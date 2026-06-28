@@ -597,6 +597,10 @@ export interface ScheduleEvent {
   event_type: string
   start_date: string
   end_date: string | null
+  start_time: string | null
+  end_time: string | null
+  is_all_day: boolean
+  reminder_minutes: number | null
   recurrence: Json | null
   series_id: string | null
   is_checklist: boolean

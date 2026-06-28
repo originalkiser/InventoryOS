@@ -148,6 +148,10 @@ export function ScheduleEventModal({
   const [visibility, setVisibility] = useState<'private' | 'department' | 'attendees' | 'specific_users'>('private')
   const [applyToSeries, setApplyToSeries] = useState(false)
   const [addToBlocked, setAddToBlocked] = useState(false)
+  const [isAllDay, setIsAllDay] = useState(true)
+  const [startTime, setStartTime] = useState('09:00')
+  const [endTime, setEndTime] = useState('10:00')
+  const [reminderMinutes, setReminderMinutes] = useState('15')
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
@@ -171,6 +175,7 @@ export function ScheduleEventModal({
   useEffect(() => {
     setApplyToSeries(false)
     setAddToBlocked(false)
+    setReminderMinutes('15')
     if (existing) {
       setTitle(existing.title)
       setEventType(EVENT_TYPES.includes(existing.event_type) ? existing.event_type : 'other')
@@ -183,6 +188,10 @@ export function ScheduleEventModal({
       setAssignedTo(existing.assigned_to ?? [])
       setNotes(existing.notes ?? '')
       setVisibility((existing as any).visibility ?? 'private')
+      setIsAllDay((existing as any).is_all_day !== false)
+      setStartTime((existing as any).start_time ?? '09:00')
+      setEndTime((existing as any).end_time ?? '10:00')
+      setReminderMinutes(String((existing as any).reminder_minutes ?? 15))
     } else {
       setTitle('')
       setEventType('other')
@@ -195,8 +204,22 @@ export function ScheduleEventModal({
       setAssignedTo([])
       setNotes('')
       setVisibility('private')
+      const isTimedSlot = defaultDate && (defaultDate.getHours() !== 0 || defaultDate.getMinutes() !== 0)
+      setIsAllDay(!isTimedSlot)
+      if (isTimedSlot && defaultDate) {
+        setStartTime(format(defaultDate, 'HH:mm'))
+        const endDt = new Date(defaultDate.getTime() + 60 * 60 * 1000)
+        setEndTime(format(endDt, 'HH:mm'))
+      } else {
+        setStartTime('09:00')
+        setEndTime('10:00')
+      }
     }
   }, [existing, defaultDate, open])
+
+  useEffect(() => {
+    if (recurrence !== 'none' && !existing?.series_id) setIsAllDay(true)
+  }, [recurrence, existing?.series_id])
 
   const resolvedEventType = eventType === 'other' && customType.trim() ? customType.trim() : eventType
 
@@ -210,6 +233,19 @@ export function ScheduleEventModal({
     if (!profile?.company_id || !title.trim() || !startDate) {
       toast.error('Title and start date are required')
       return
+    }
+    if (!isAllDay && !willGenerateSeries) {
+      if (!startTime || !endTime) {
+        toast.error('Start and end times are required for timed events')
+        return
+      }
+      const effectiveEndDate = endDate || startDate
+      const startDt = new Date(`${startDate}T${startTime}:00`)
+      const endDt = new Date(`${effectiveEndDate}T${endTime}:00`)
+      if (endDt <= startDt) {
+        toast.error('End time must be after start time')
+        return
+      }
     }
     setSaving(true)
 
@@ -303,25 +339,44 @@ export function ScheduleEventModal({
       completed_by: completed ? (existing?.completed_by ?? profile.id) : null,
     }
 
-    const { error } = existing?.id
-      ? await sb.schema('platform').from('schedule_events').update(payload).eq('id', existing.id)
-      : await sb.schema('platform').from('schedule_events').insert(payload)
-
-    if (error) toast.error(error.message)
-    else {
-      toast.success('Saved')
-      if (addToBlocked && startDate && profile?.id) {
-        const current = normalizeBlockedDays(profile.blocked_days)
-        const updated = upsertBlockedDay(current, {
-          date: startDate,
-          ...(title.trim() ? { note: title.trim() } : {}),
-        })
-        ;(supabase as any).schema('platform').from('user_profiles')
-          .update({ blocked_days: updated }).eq('id', profile.id).select().single()
-          .then(({ data }: any) => { if (data && profile) setProfile({ ...profile, ...data }) })
-      }
-      onSaved(); onClose()
+    let savedId: string | null = existing?.id ?? null
+    if (existing?.id) {
+      const { error } = await sb.schema('platform').from('schedule_events')
+        .update(payload).eq('id', existing.id)
+      if (error) { toast.error(error.message); setSaving(false); return }
+    } else {
+      const { data: inserted, error } = await sb.schema('platform').from('schedule_events')
+        .insert(payload).select('id').single()
+      if (error) { toast.error(error.message); setSaving(false); return }
+      savedId = (inserted as any).id
     }
+
+    // Best-effort: time/reminder columns (pending DB migration — fails silently until applied)
+    if (savedId) {
+      sb.schema('platform').from('schedule_events')
+        .update({
+          start_time: !isAllDay ? startTime : null,
+          end_time: !isAllDay ? endTime : null,
+          is_all_day: isAllDay,
+          reminder_minutes: (isChecklist && !isAllDay && Number(reminderMinutes) > 0)
+            ? Number(reminderMinutes) : null,
+        })
+        .eq('id', savedId)
+        .then(() => {})
+    }
+
+    toast.success('Saved')
+    if (addToBlocked && startDate && profile?.id) {
+      const current = normalizeBlockedDays(profile.blocked_days)
+      const updated = upsertBlockedDay(current, {
+        date: startDate,
+        ...(title.trim() ? { note: title.trim() } : {}),
+      })
+      ;(supabase as any).schema('platform').from('user_profiles')
+        .update({ blocked_days: updated }).eq('id', profile.id).select().single()
+        .then(({ data }: any) => { if (data && profile) setProfile({ ...profile, ...data }) })
+    }
+    onSaved(); onClose()
     setSaving(false)
   }
 
@@ -395,6 +450,24 @@ export function ScheduleEventModal({
           onChange={(e) => setEndDate(e.target.value)}
         />
 
+        {/* All-day toggle */}
+        <div className="col-span-2">
+          <Toggle
+            checked={isAllDay || willGenerateSeries}
+            onChange={(v) => { if (!willGenerateSeries) setIsAllDay(v) }}
+            label={willGenerateSeries ? 'All-day event (recurring series are always all-day)' : 'All-day event'}
+            color="cyan"
+          />
+        </div>
+
+        {/* Start/end times — shown for non-all-day standalone events */}
+        {!isAllDay && !willGenerateSeries && (
+          <>
+            <Input label="Start Time" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            <Input label="End Time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+          </>
+        )}
+
         <div className="flex flex-col gap-2">
           <Toggle
             checked={isChecklist}
@@ -411,6 +484,24 @@ export function ScheduleEventModal({
             />
           )}
         </div>
+
+        {isChecklist && !isAllDay && !willGenerateSeries && (
+          <div className="col-span-2 flex flex-col gap-1">
+            <label className="text-xs font-mono text-inky uppercase tracking-wide">Reminder before start</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                max="480"
+                value={reminderMinutes}
+                onChange={(e) => setReminderMinutes(e.target.value)}
+                className="w-20 text-xs font-mono rounded border border-navy/30 bg-cream px-2 py-1.5 text-navy focus:border-[#00e5ff] focus:outline-none"
+              />
+              <span className="text-xs font-mono text-inky">minutes before start (0 = no reminder)</span>
+            </div>
+            <p className="text-[10px] font-mono text-inky/70">Opens Today&apos;s Tasks at the reminder time.</p>
+          </div>
+        )}
 
         {isChecklist && (
           <div className="col-span-2">

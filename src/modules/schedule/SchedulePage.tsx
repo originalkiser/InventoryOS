@@ -29,6 +29,7 @@ interface CalendarEvent {
   title: string
   start: Date
   end: Date
+  allDay?: boolean
   resource: ScheduleEvent | { markerType: 'holiday' | 'blocked'; date: string; note?: string }
 }
 
@@ -118,19 +119,31 @@ export function SchedulePage() {
 
   // Combine real events with holiday / blocked-day markers
   const calendarEvents: CalendarEvent[] = [
-    ...events.map((e): CalendarEvent => ({
-      id: e.id,
-      title: e.title + (e.is_checklist && e.completed ? ' ✓' : ''),
-      start: new Date(e.start_date + 'T00:00:00'),
-      end: new Date((e.end_date ?? e.start_date) + 'T23:59:59'),
-      resource: e,
-    })),
+    ...events.map((e): CalendarEvent => {
+      const evAllDay = (e as any).is_all_day !== false
+      const evStartTime = (e as any).start_time as string | null
+      const evEndTime = (e as any).end_time as string | null
+      const endDateStr = e.end_date ?? e.start_date
+      return {
+        id: e.id,
+        title: e.title + (e.is_checklist && e.completed ? ' ✓' : ''),
+        start: evAllDay
+          ? new Date(e.start_date + 'T00:00:00')
+          : new Date(`${e.start_date}T${evStartTime ?? '00:00'}:00`),
+        end: evAllDay
+          ? new Date(endDateStr + 'T23:59:59')
+          : new Date(`${endDateStr}T${evEndTime ?? '23:59'}:00`),
+        allDay: evAllDay,
+        resource: e,
+      }
+    }),
     ...(showHolidays
       ? companyHolidays.map((h): CalendarEvent => ({
           id: `holiday-${h.id}`,
           title: h.name,
           start: new Date(h.date + 'T00:00:00'),
           end: new Date(h.date + 'T23:59:59'),
+          allDay: true,
           resource: { markerType: 'holiday' as const, date: h.date },
         }))
       : []),
@@ -140,6 +153,7 @@ export function SchedulePage() {
           title: bd.note ? `Blocked: ${bd.note}` : 'Blocked',
           start: new Date(bd.date + 'T00:00:00'),
           end: new Date(bd.date + 'T23:59:59'),
+          allDay: true,
           resource: { markerType: 'blocked' as const, date: bd.date, note: bd.note },
         }))
       : []),

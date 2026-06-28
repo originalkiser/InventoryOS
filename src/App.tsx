@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useAuthStore } from '@/stores/authStore'
 import { SUPABASE_MISSING } from '@/lib/supabase'
 import { AppShell } from '@/components/layout/AppShell'
+import { SbLoader } from '@/components/ui'
 import { UpdateBanner } from '@/components/shared/UpdateBanner'
 import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
@@ -42,7 +43,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!isPlaceholder && !initialized) {
     return (
       <div className="min-h-screen bg-cream flex items-center justify-center">
-        <div className="text-inky font-body text-xs tracking-widest animate-pulse">Loading</div>
+        <SbLoader />
       </div>
     )
   }
