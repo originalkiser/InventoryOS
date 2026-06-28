@@ -7,6 +7,7 @@ import { OrderConfigTab } from './tabs/OrderConfigTab'
 import { ProductMappingTab } from './tabs/ProductMappingTab'
 import { GlobalProductsTab } from './tabs/GlobalProductsTab'
 import { PosLocationMapTab } from './tabs/PosLocationMapTab'
+import { CompanyHolidaysTab } from './tabs/CompanyHolidaysTab'
 
 export function GlobalConfigPage() {
   const { profile } = useAuthStore()
@@ -39,6 +40,7 @@ export function GlobalConfigPage() {
           <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
           <TabsTrigger value="global-products">Global Products</TabsTrigger>
           <TabsTrigger value="pos-map">Location Mapping</TabsTrigger>
+          <TabsTrigger value="holidays">Holidays</TabsTrigger>
         </TabsList>
 
         <TabsContent value="locations"><LocationsTab /></TabsContent>
@@ -47,6 +49,7 @@ export function GlobalConfigPage() {
         <TabsContent value="product-mapping"><ProductMappingTab /></TabsContent>
         <TabsContent value="global-products"><GlobalProductsTab /></TabsContent>
         <TabsContent value="pos-map"><PosLocationMapTab /></TabsContent>
+        <TabsContent value="holidays"><CompanyHolidaysTab /></TabsContent>
       </Tabs>
     </div>
   )

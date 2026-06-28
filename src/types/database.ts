@@ -166,6 +166,7 @@ export interface ProjectTask {
   notes: string | null
   done: boolean
   sort_order: number
+  times_pushed: number
   created_at: string
   updated_at: string
 }
@@ -262,6 +263,19 @@ export interface Profile {
   task_popups_enabled: boolean | null
   popup_timezone: string | null
   browser_notifications_enabled: boolean | null
+  // Task-push behaviour
+  auto_push_tasks: boolean | null
+  skip_weekends_holidays: boolean | null
+  blocked_days: Array<{ date: string; note?: string }> | null
+}
+
+export interface CompanyHoliday {
+  id: string
+  company_id: string
+  date: string
+  name: string
+  created_by: string | null
+  created_at: string
 }
 
 export interface Location {

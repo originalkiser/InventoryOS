@@ -104,6 +104,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   const { profile } = useAuthStore()
   useDarkMode() // keep dark-mode class applied
   const [endDayOpen, setEndDayOpen] = useState(false)
+  const [eodGlow, setEodGlow] = useState(false)
   const [stats, setStats] = useState<TopBarStats>({
     pendingIssues: 0,
     todayChecklists: 0,
@@ -137,6 +138,38 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     ;(supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name')
       .then(({ data }: any) => setOrgProfiles((data ?? []) as Profile[]))
   }, [companyId])
+
+  // EOD reminder: poll every 60 s, auto-open once per day and keep button glowing until reviewed.
+  useEffect(() => {
+    if (!profile?.eod_review_enabled || !profile?.eod_review_time) return
+    const eodHHMM = profile.eod_review_time.slice(0, 5)
+    const tz = profile.popup_timezone ?? 'America/Chicago'
+
+    function todayKey() {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date())
+    }
+    function currentHHMM() {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date())
+      const h = parts.find((p) => p.type === 'hour')?.value ?? '00'
+      const m = parts.find((p) => p.type === 'minute')?.value ?? '00'
+      return `${h}:${m}`
+    }
+
+    function check() {
+      const isPast = currentHHMM() >= eodHHMM
+      const dk = todayKey()
+      const reviewed = !!localStorage.getItem(`eod_reviewed_${dk}`)
+      setEodGlow(isPast && !reviewed)
+      if (isPast && !reviewed && !localStorage.getItem(`eod_prompted_${dk}`)) {
+        localStorage.setItem(`eod_prompted_${dk}`, '1')
+        setEndDayOpen(true)
+      }
+    }
+
+    check()
+    const id = setInterval(check, 60_000)
+    return () => clearInterval(id)
+  }, [profile?.eod_review_enabled, profile?.eod_review_time, profile?.popup_timezone])
 
   useEffect(() => {
     if (!companyId) return
@@ -471,7 +504,12 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       <button
         onClick={() => setEndDayOpen(true)}
         title="End of day check-in"
-        className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 text-[10px] font-heading uppercase tracking-wide transition-all"
+        className={[
+          'flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-heading uppercase tracking-wide transition-all',
+          eodGlow
+            ? 'border-orange-500/70 text-orange-400 shadow-[0_0_10px_2px_rgba(249,115,22,0.45)] animate-pulse'
+            : 'border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40',
+        ].join(' ')}
       >
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
@@ -567,7 +605,16 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
         </div>
       )}
 
-      <EndDayModal open={endDayOpen} onClose={() => setEndDayOpen(false)} />
+      <EndDayModal
+        open={endDayOpen}
+        onClose={() => setEndDayOpen(false)}
+        onSaved={() => {
+          const tz = profile?.popup_timezone ?? 'America/Chicago'
+          const dk = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date())
+          localStorage.setItem(`eod_reviewed_${dk}`, '1')
+          setEodGlow(false)
+        }}
+      />
     </header>
   )
 }

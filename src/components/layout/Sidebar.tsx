@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { format } from 'date-fns'
 import { NavLink } from 'react-router-dom'
 import {
   DndContext,
@@ -617,8 +618,12 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
   const [eodTime, setEodTime] = useState(profile?.eod_review_time?.slice(0, 5) ?? '16:45')
   const [taskPopups, setTaskPopups] = useState(profile?.task_popups_enabled ?? true)
   const [timezone, setTimezone] = useState(profile?.popup_timezone ?? 'America/Chicago')
+  const [autoPush, setAutoPush] = useState(profile?.auto_push_tasks ?? false)
+  const [skipWeekends, setSkipWeekends] = useState(profile?.skip_weekends_holidays ?? false)
   const [schedSaving, setSchedSaving] = useState(false)
   const [schedSaved, setSchedSaved] = useState(false)
+  const [blockedDays, setBlockedDays] = useState<Array<{ date: string; note?: string }>>(profile?.blocked_days ?? [])
+  const [newBlockedDate, setNewBlockedDate] = useState('')
 
   async function saveSchedule() {
     if (!profile?.id) return
@@ -630,6 +635,8 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
       eod_review_time: eodTime,
       task_popups_enabled: taskPopups,
       popup_timezone: timezone,
+      auto_push_tasks: autoPush,
+      skip_weekends_holidays: skipWeekends,
       updated_at: new Date().toISOString(),
     }
     const { data, error } = await (supabase as any).schema('platform').from('user_profiles')
@@ -639,6 +646,28 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
     setProfile({ ...profile, ...data })
     setSchedSaved(true)
     setTimeout(() => setSchedSaved(false), 2000)
+  }
+
+  async function addBlockedDay() {
+    if (!newBlockedDate || !profile?.id) return
+    const updated = [...blockedDays.filter((d) => d.date !== newBlockedDate), { date: newBlockedDate }]
+      .sort((a, b) => a.date.localeCompare(b.date))
+    const { data, error } = await (supabase as any).schema('platform').from('user_profiles')
+      .update({ blocked_days: updated }).eq('id', profile.id).select().single()
+    if (error) { console.error(error); return }
+    setProfile({ ...profile, ...data })
+    setBlockedDays(updated)
+    setNewBlockedDate('')
+  }
+
+  async function removeBlockedDay(date: string) {
+    if (!profile?.id) return
+    const updated = blockedDays.filter((d) => d.date !== date)
+    const { data, error } = await (supabase as any).schema('platform').from('user_profiles')
+      .update({ blocked_days: updated }).eq('id', profile.id).select().single()
+    if (error) { console.error(error); return }
+    setProfile({ ...profile, ...data })
+    setBlockedDays(updated)
   }
 
   const initials = (profile?.full_name ?? profile?.email ?? '?')
@@ -767,11 +796,71 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
                   className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none" />
               </div>
             )}
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono text-navy dark:text-[#F2F1E6]">Auto-push incomplete</span>
+              <button onClick={() => setAutoPush((v) => !v)}
+                className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', autoPush ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', autoPush ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono text-navy dark:text-[#F2F1E6]">Skip weekends &amp; holidays</span>
+              <button onClick={() => setSkipWeekends((v) => !v)}
+                className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', skipWeekends ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', skipWeekends ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
+              </button>
+            </div>
           </div>
           <button onClick={saveSchedule} disabled={schedSaving}
             className={['mt-3 w-full text-xs font-mono rounded px-3 py-1.5 transition-colors', schedSaved ? 'bg-green-600 text-white' : 'bg-navy dark:bg-[#4F7489] text-cream hover:bg-inky disabled:opacity-40'].join(' ')}>
             {schedSaving ? 'Saving…' : schedSaved ? '✓ Saved' : 'Save Schedule'}
           </button>
+        </div>
+
+        {/* My Blocked Days */}
+        <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-1">
+            My Blocked Days
+          </div>
+          <p className="text-[10px] font-mono text-inky/70 dark:text-[#F2F1E6]/50 mb-3">
+            Tasks won&apos;t push to these dates.
+          </p>
+          <div className="flex items-center gap-2 mb-3">
+            <input
+              type="date"
+              value={newBlockedDate}
+              onChange={(e) => setNewBlockedDate(e.target.value)}
+              style={{ colorScheme: dark ? 'dark' : 'light' }}
+              className="flex-1 text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
+            />
+            <button
+              onClick={addBlockedDay}
+              disabled={!newBlockedDate}
+              className="text-xs font-mono rounded px-2 py-1 bg-navy dark:bg-[#4F7489] text-cream hover:bg-inky disabled:opacity-40 transition-colors whitespace-nowrap"
+            >
+              + Add
+            </button>
+          </div>
+          {blockedDays.length === 0 ? (
+            <p className="text-[10px] font-mono text-inky/50 dark:text-[#F2F1E6]/40 italic">No blocked days.</p>
+          ) : (
+            <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
+              {blockedDays.map((bd) => (
+                <div key={bd.date} className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-mono text-navy dark:text-[#F2F1E6] flex-1 min-w-0">
+                    {format(new Date(bd.date + 'T00:00:00'), 'EEE, MMM d, yyyy')}
+                    {bd.note && <span className="text-inky/60 dark:text-[#F2F1E6]/50"> — {bd.note}</span>}
+                  </span>
+                  <button
+                    onClick={() => removeBlockedDay(bd.date)}
+                    className="text-[10px] font-mono text-inky/50 hover:text-[#C0392B] dark:text-[#F2F1E6]/40 dark:hover:text-[#C0392B] transition-colors flex-shrink-0"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Outlook Sync (placeholder for Phase 9) */}
