@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Modal, Button, Input, Toggle } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { normalizeBlockedDays, upsertBlockedDay } from '@/utils/blockedDays'
 import type { Profile, ScheduleEvent } from '@/types'
 import { format, parseISO, addDays, addWeeks, addMonths } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -133,7 +134,7 @@ interface ScheduleEventModalProps {
 export function ScheduleEventModal({
   open, onClose, existing, defaultDate, onSaved,
 }: ScheduleEventModalProps) {
-  const { profile } = useAuthStore()
+  const { profile, setProfile } = useAuthStore()
   const [title, setTitle] = useState('')
   const [eventType, setEventType] = useState('other')
   const [customType, setCustomType] = useState('')
@@ -146,6 +147,7 @@ export function ScheduleEventModal({
   const [notes, setNotes] = useState('')
   const [visibility, setVisibility] = useState<'private' | 'department' | 'attendees' | 'specific_users'>('private')
   const [applyToSeries, setApplyToSeries] = useState(false)
+  const [addToBlocked, setAddToBlocked] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
@@ -168,6 +170,7 @@ export function ScheduleEventModal({
 
   useEffect(() => {
     setApplyToSeries(false)
+    setAddToBlocked(false)
     if (existing) {
       setTitle(existing.title)
       setEventType(EVENT_TYPES.includes(existing.event_type) ? existing.event_type : 'other')
@@ -305,7 +308,20 @@ export function ScheduleEventModal({
       : await sb.schema('platform').from('schedule_events').insert(payload)
 
     if (error) toast.error(error.message)
-    else { toast.success('Saved'); onSaved(); onClose() }
+    else {
+      toast.success('Saved')
+      if (addToBlocked && startDate && profile?.id) {
+        const current = normalizeBlockedDays(profile.blocked_days)
+        const updated = upsertBlockedDay(current, {
+          date: startDate,
+          ...(title.trim() ? { note: title.trim() } : {}),
+        })
+        ;(supabase as any).schema('platform').from('user_profiles')
+          .update({ blocked_days: updated }).eq('id', profile.id).select().single()
+          .then(({ data }: any) => { if (data && profile) setProfile({ ...profile, ...data }) })
+      }
+      onSaved(); onClose()
+    }
     setSaving(false)
   }
 
@@ -446,6 +462,24 @@ export function ScheduleEventModal({
             className="w-full bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy placeholder-inky/50 focus:outline-none focus:border-[#00e5ff] resize-none"
           />
         </div>
+
+        {/* Add to blocked days — only on new events */}
+        {!existing && (
+          <div className="col-span-2 flex flex-col gap-1 border-t border-navy/30 pt-3">
+            <Toggle
+              checked={addToBlocked}
+              onChange={setAddToBlocked}
+              label="Add to blocked days"
+              color="amber"
+            />
+            {addToBlocked && (
+              <p className="text-[10px] font-mono text-inky">
+                The start date will be saved as a blocked day. Tasks won&apos;t auto-push to it.
+                The event title will be used as the blocked-day note.
+              </p>
+            )}
+          </div>
+        )}
 
         {isSeriesMember && (
           <div className="col-span-2 flex flex-col gap-1 border-t border-navy/30 pt-3">

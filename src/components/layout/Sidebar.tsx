@@ -1,6 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
-import { format } from 'date-fns'
 import { NavLink } from 'react-router-dom'
+import {
+  normalizeBlockedDays,
+  formatBlockedDayLabel,
+  upsertBlockedDay,
+  removeBlockedDay,
+} from '@/utils/blockedDays'
 import {
   DndContext,
   closestCenter,
@@ -622,8 +627,9 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
   const [skipWeekends, setSkipWeekends] = useState(profile?.skip_weekends_holidays ?? false)
   const [schedSaving, setSchedSaving] = useState(false)
   const [schedSaved, setSchedSaved] = useState(false)
-  const [blockedDays, setBlockedDays] = useState<Array<{ date: string; note?: string }>>(profile?.blocked_days ?? [])
+  const [blockedDays, setBlockedDays] = useState(() => normalizeBlockedDays(profile?.blocked_days))
   const [newBlockedDate, setNewBlockedDate] = useState('')
+  const [newBlockedNote, setNewBlockedNote] = useState('')
 
   async function saveSchedule() {
     if (!profile?.id) return
@@ -650,19 +656,22 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
 
   async function addBlockedDay() {
     if (!newBlockedDate || !profile?.id) return
-    const updated = [...blockedDays.filter((d) => d.date !== newBlockedDate), { date: newBlockedDate }]
-      .sort((a, b) => a.date.localeCompare(b.date))
+    const updated = upsertBlockedDay(blockedDays, {
+      date: newBlockedDate,
+      ...(newBlockedNote.trim() ? { note: newBlockedNote.trim() } : {}),
+    })
     const { data, error } = await (supabase as any).schema('platform').from('user_profiles')
       .update({ blocked_days: updated }).eq('id', profile.id).select().single()
     if (error) { console.error(error); return }
     setProfile({ ...profile, ...data })
     setBlockedDays(updated)
     setNewBlockedDate('')
+    setNewBlockedNote('')
   }
 
-  async function removeBlockedDay(date: string) {
+  async function removeBlockedDayEntry(date: string) {
     if (!profile?.id) return
-    const updated = blockedDays.filter((d) => d.date !== date)
+    const updated = removeBlockedDay(blockedDays, date)
     const { data, error } = await (supabase as any).schema('platform').from('user_profiles')
       .update({ blocked_days: updated }).eq('id', profile.id).select().single()
     if (error) { console.error(error); return }
@@ -825,18 +834,26 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
           <p className="text-[10px] font-mono text-inky/70 dark:text-[#F2F1E6]/50 mb-3">
             Tasks won&apos;t push to these dates.
           </p>
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex flex-col gap-2 mb-3">
             <input
               type="date"
               value={newBlockedDate}
               onChange={(e) => setNewBlockedDate(e.target.value)}
               style={{ colorScheme: dark ? 'dark' : 'light' }}
-              className="flex-1 text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
+              className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
+            />
+            <input
+              type="text"
+              value={newBlockedNote}
+              onChange={(e) => setNewBlockedNote(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addBlockedDay()}
+              placeholder="Note (optional)"
+              className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] placeholder-inky/50 px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
             />
             <button
               onClick={addBlockedDay}
               disabled={!newBlockedDate}
-              className="text-xs font-mono rounded px-2 py-1 bg-navy dark:bg-[#4F7489] text-cream hover:bg-inky disabled:opacity-40 transition-colors whitespace-nowrap"
+              className="text-xs font-mono rounded px-2 py-1 bg-navy dark:bg-[#4F7489] text-cream hover:bg-inky disabled:opacity-40 transition-colors"
             >
               + Add
             </button>
@@ -847,12 +864,11 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
               {blockedDays.map((bd) => (
                 <div key={bd.date} className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-mono text-navy dark:text-[#F2F1E6] flex-1 min-w-0">
-                    {format(new Date(bd.date + 'T00:00:00'), 'EEE, MMM d, yyyy')}
-                    {bd.note && <span className="text-inky/60 dark:text-[#F2F1E6]/50"> — {bd.note}</span>}
+                  <span className="text-[10px] font-mono text-navy dark:text-[#F2F1E6] flex-1 min-w-0 break-words">
+                    {formatBlockedDayLabel(bd)}
                   </span>
                   <button
-                    onClick={() => removeBlockedDay(bd.date)}
+                    onClick={() => removeBlockedDayEntry(bd.date)}
                     className="text-[10px] font-mono text-inky/50 hover:text-[#C0392B] dark:text-[#F2F1E6]/40 dark:hover:text-[#C0392B] transition-colors flex-shrink-0"
                   >
                     Remove

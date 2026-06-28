@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { format, addDays } from 'date-fns'
+import { normalizeBlockedDays } from '@/utils/blockedDays'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { Modal, Button } from '@/components/ui'
@@ -49,7 +50,7 @@ export function EndDayModal({ open, onClose, onSaved }: EndDayModalProps) {
   const tomorrow = format(addDays(new Date(), 1), 'yyyy-MM-dd')
 
   const skipWeekends = profile?.skip_weekends_holidays ?? false
-  const userBlockedDays = (profile?.blocked_days ?? []).map((d) => d.date)
+  const userBlockedDays = normalizeBlockedDays(profile?.blocked_days).map((d) => d.date)
   const pushDate = nextWorkday(skipWeekends, holidays, userBlockedDays)
   const pushLabel = pushDate === tomorrow
     ? '→ Tomorrow'

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Calendar, dateFnsLocalizer, type View } from 'react-big-calendar'
 import { format, parse, startOfWeek, getDay } from 'date-fns'
 import { enUS } from 'date-fns/locale'
@@ -7,8 +7,14 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { Button } from '@/components/ui'
 import { ScheduleEventModal } from './ScheduleEventModal'
-import type { ScheduleEvent } from '@/types'
+import type { CompanyHoliday, ScheduleEvent } from '@/types'
 import toast from 'react-hot-toast'
+import {
+  normalizeBlockedDays,
+  formatBlockedDayLabel,
+  upsertBlockedDay,
+  removeBlockedDay,
+} from '@/utils/blockedDays'
 
 const localizer = dateFnsLocalizer({
   format,
@@ -23,11 +29,11 @@ interface CalendarEvent {
   title: string
   start: Date
   end: Date
-  resource: ScheduleEvent
+  resource: ScheduleEvent | { markerType: 'holiday' | 'blocked'; date: string; note?: string }
 }
 
 export function SchedulePage() {
-  const { profile } = useAuthStore()
+  const { profile, setProfile } = useAuthStore()
   const [events, setEvents] = useState<ScheduleEvent[]>([])
   const [view, setView] = useState<View>('month')
   const [date, setDate] = useState(new Date())
@@ -35,14 +41,29 @@ export function SchedulePage() {
   const [editEvent, setEditEvent] = useState<ScheduleEvent | null>(null)
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null)
 
+  // Holiday + blocked-day overlay
+  const [companyHolidays, setCompanyHolidays] = useState<CompanyHoliday[]>([])
+  const [showHolidays, setShowHolidays] = useState(true)
+  const [showBlocked, setShowBlocked] = useState(true)
+  const [showBlockedMgr, setShowBlockedMgr] = useState(false)
+  const [newBlockedDate, setNewBlockedDate] = useState('')
+  const [newBlockedNote, setNewBlockedNote] = useState('')
+  const [savingBlocked, setSavingBlocked] = useState(false)
+
+  const normalizedBlocked = normalizeBlockedDays(profile?.blocked_days)
+
   useEffect(() => {
     if (!profile?.company_id) return
     loadEvents()
+    loadHolidays()
     const channel = supabase
       .channel('schedule-rt')
-      .on('postgres_changes', { event: '*', schema: 'platform', table: 'schedule_events', filter: `company_id=eq.${profile.company_id}` },
-        () => loadEvents()
-      )
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'platform',
+        table: 'schedule_events',
+        filter: `company_id=eq.${profile.company_id}`,
+      }, () => loadEvents())
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [profile?.company_id])
@@ -54,20 +75,103 @@ export function SchedulePage() {
       .select('*')
       .eq('company_id', profile.company_id)
       .order('start_date')
-    if (error) toast.error('Failed to load schedule')
+    if (error) toast.error('Failed to load calendar')
     else setEvents(data ?? [])
   }
 
-  const calendarEvents: CalendarEvent[] = events.map((e) => ({
-    id: e.id,
-    title: e.title + (e.is_checklist && e.completed ? ' ✓' : ''),
-    start: new Date(e.start_date + 'T00:00:00'),
-    end: new Date((e.end_date ?? e.start_date) + 'T23:59:59'),
-    resource: e,
-  }))
+  async function loadHolidays() {
+    if (!profile?.company_id) return
+    const { data } = await (supabase as any)
+      .schema('core').from('company_holidays')
+      .select('*')
+      .eq('company_id', profile.company_id)
+      .order('date')
+    setCompanyHolidays(data ?? [])
+  }
+
+  async function addBlockedDay() {
+    if (!newBlockedDate || !profile?.id) return
+    setSavingBlocked(true)
+    const updated = upsertBlockedDay(normalizedBlocked, {
+      date: newBlockedDate,
+      ...(newBlockedNote.trim() ? { note: newBlockedNote.trim() } : {}),
+    })
+    const { data, error } = await (supabase as any)
+      .schema('platform').from('user_profiles')
+      .update({ blocked_days: updated }).eq('id', profile.id).select().single()
+    if (error) { toast.error('Failed to save blocked day'); setSavingBlocked(false); return }
+    setProfile({ ...profile, ...data })
+    setNewBlockedDate('')
+    setNewBlockedNote('')
+    setSavingBlocked(false)
+  }
+
+  async function deleteBlockedDay(date: string) {
+    if (!profile?.id) return
+    const updated = removeBlockedDay(normalizedBlocked, date)
+    const { data, error } = await (supabase as any)
+      .schema('platform').from('user_profiles')
+      .update({ blocked_days: updated }).eq('id', profile.id).select().single()
+    if (error) { toast.error('Failed to remove'); return }
+    setProfile({ ...profile, ...data })
+  }
+
+  // Combine real events with holiday / blocked-day markers
+  const calendarEvents: CalendarEvent[] = [
+    ...events.map((e): CalendarEvent => ({
+      id: e.id,
+      title: e.title + (e.is_checklist && e.completed ? ' ✓' : ''),
+      start: new Date(e.start_date + 'T00:00:00'),
+      end: new Date((e.end_date ?? e.start_date) + 'T23:59:59'),
+      resource: e,
+    })),
+    ...(showHolidays
+      ? companyHolidays.map((h): CalendarEvent => ({
+          id: `holiday-${h.id}`,
+          title: h.name,
+          start: new Date(h.date + 'T00:00:00'),
+          end: new Date(h.date + 'T23:59:59'),
+          resource: { markerType: 'holiday' as const, date: h.date },
+        }))
+      : []),
+    ...(showBlocked
+      ? normalizedBlocked.map((bd): CalendarEvent => ({
+          id: `blocked-${bd.date}`,
+          title: bd.note ? `Blocked: ${bd.note}` : 'Blocked',
+          start: new Date(bd.date + 'T00:00:00'),
+          end: new Date(bd.date + 'T23:59:59'),
+          resource: { markerType: 'blocked' as const, date: bd.date, note: bd.note },
+        }))
+      : []),
+  ]
 
   const eventStyleGetter = (event: CalendarEvent) => {
-    const e = event.resource
+    const r = event.resource as any
+    if (r?.markerType === 'holiday') {
+      return {
+        style: {
+          backgroundColor: 'rgba(230,126,34,0.15)',
+          border: '1px solid rgba(230,126,34,0.45)',
+          color: '#E67E22',
+          fontSize: '11px',
+          fontFamily: '"DM Mono", monospace',
+          borderRadius: '4px',
+        },
+      }
+    }
+    if (r?.markerType === 'blocked') {
+      return {
+        style: {
+          backgroundColor: 'rgba(192,57,43,0.12)',
+          border: '1px solid rgba(192,57,43,0.35)',
+          color: '#C0392B',
+          fontSize: '11px',
+          fontFamily: '"DM Mono", monospace',
+          borderRadius: '4px',
+        },
+      }
+    }
+    const e = r as ScheduleEvent
     const colors: Record<string, string> = {
       monthly_count: '#00e5ff',
       weekly_count: '#39ff14',
@@ -80,7 +184,7 @@ export function SchedulePage() {
       style: {
         backgroundColor: `${color}20`,
         border: `1px solid ${color}60`,
-        color: color,
+        color,
         fontSize: '11px',
         fontFamily: 'JetBrains Mono, monospace',
         borderRadius: '4px',
@@ -96,24 +200,118 @@ export function SchedulePage() {
   }, [])
 
   const onSelectEvent = useCallback((event: CalendarEvent) => {
-    setEditEvent(event.resource)
+    const r = event.resource as any
+    if (r?.markerType) return  // holiday / blocked markers — no modal
+    setEditEvent(r as ScheduleEvent)
     setSelectedSlot(null)
     setModalOpen(true)
   }, [])
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <div className="flex flex-col gap-4">
+      {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Schedule</h1>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Calendar</h1>
           <p className="text-xs text-inky mt-0.5">Events, checklists, and recurring tasks</p>
         </div>
-        <Button size="sm" onClick={() => { setEditEvent(null); setSelectedSlot(new Date()); setModalOpen(true) }}>
+        <Button
+          size="sm"
+          onClick={() => { setEditEvent(null); setSelectedSlot(new Date()); setModalOpen(true) }}
+        >
           + Add Event
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0" style={{ minHeight: '600px' }}>
+      {/* Controls row */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setShowHolidays((v) => !v)}
+          className={[
+            'text-xs font-mono rounded border px-2.5 py-1 transition-colors',
+            showHolidays
+              ? 'border-[#E67E22]/60 bg-[#E67E22]/10 text-[#E67E22]'
+              : 'border-navy/20 text-inky hover:border-navy/40',
+          ].join(' ')}
+        >
+          Holidays {showHolidays ? 'on' : 'off'}
+        </button>
+        <button
+          onClick={() => setShowBlocked((v) => !v)}
+          className={[
+            'text-xs font-mono rounded border px-2.5 py-1 transition-colors',
+            showBlocked
+              ? 'border-[#C0392B]/60 bg-[#C0392B]/10 text-[#C0392B]'
+              : 'border-navy/20 text-inky hover:border-navy/40',
+          ].join(' ')}
+        >
+          Blocked {showBlocked ? 'on' : 'off'}
+        </button>
+        <button
+          onClick={() => setShowBlockedMgr((v) => !v)}
+          className="ml-auto text-xs font-mono text-inky hover:text-navy border border-navy/20 rounded px-2.5 py-1 hover:border-navy/40 transition-colors"
+        >
+          {showBlockedMgr ? 'Hide blocked days ▴' : 'Manage blocked days ▾'}
+        </button>
+      </div>
+
+      {/* Blocked-day manager (collapsible) */}
+      {showBlockedMgr && (
+        <div className="rounded-lg border border-navy/20 bg-cream dark:bg-navy/20 p-4 flex flex-col gap-3">
+          <p className="text-[10px] font-mono text-inky uppercase tracking-wide">
+            My Blocked Days &mdash; tasks won&apos;t push to these dates
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Date</label>
+              <input
+                type="date"
+                value={newBlockedDate}
+                onChange={(e) => setNewBlockedDate(e.target.value)}
+                className="text-xs font-mono rounded border border-navy/30 bg-cream px-2 py-1.5 text-navy focus:border-[#00e5ff] focus:outline-none"
+              />
+            </div>
+            <div className="flex flex-col gap-1 flex-1 min-w-[140px]">
+              <label className="text-[10px] font-mono text-inky uppercase tracking-wide">
+                Note (optional)
+              </label>
+              <input
+                type="text"
+                value={newBlockedNote}
+                onChange={(e) => setNewBlockedNote(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addBlockedDay()}
+                placeholder="e.g. Vacation"
+                className="text-xs font-mono rounded border border-navy/30 bg-cream px-2 py-1.5 text-navy placeholder-inky/50 focus:border-[#00e5ff] focus:outline-none"
+              />
+            </div>
+            <Button size="sm" onClick={addBlockedDay} loading={savingBlocked} disabled={!newBlockedDate}>
+              + Add
+            </Button>
+          </div>
+          {normalizedBlocked.length === 0 ? (
+            <p className="text-[10px] font-mono text-inky/50 italic">No blocked days yet.</p>
+          ) : (
+            <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto">
+              {normalizedBlocked.map((bd) => (
+                <div key={bd.date} className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-mono text-navy flex-1">
+                    {formatBlockedDayLabel(bd)}
+                  </span>
+                  <button
+                    onClick={() => deleteBlockedDay(bd.date)}
+                    className="text-[10px] font-mono text-inky/50 hover:text-[#C0392B] transition-colors flex-shrink-0"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Calendar — explicit pixel height so react-big-calendar month/agenda rows render */}
+      <div style={{ height: 'calc(100vh - 240px)', minHeight: '560px' }}>
         <style>{`
           .rbc-calendar { background: #F2F1E6; color: #002745; font-family: 'DM Mono', monospace; border-radius: 8px; border: 1px solid rgba(0,39,69,0.2); }
           .rbc-header { background: #002745; border-color: rgba(0,39,69,0.2) !important; padding: 8px 4px; font-size: 11px; color: #F2F1E6; text-transform: uppercase; letter-spacing: 0.07em; font-family: 'Chakra Petch', sans-serif; font-weight: 700; }

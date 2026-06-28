@@ -141,6 +141,16 @@ body {
   z-index: 1;
 }
 
+/* Dark mode: calmer time-view grid lines (week / day) */
+.dark .rbc-time-slot { border-top-color: rgba(196,218,230,0.04) !important; }
+.dark .rbc-timeslot-group { border-bottom-color: rgba(196,218,230,0.07) !important; }
+.dark .rbc-time-header-content { border-left-color: rgba(196,218,230,0.08) !important; }
+.dark .rbc-time-content { border-top-color: rgba(196,218,230,0.1) !important; }
+.dark .rbc-time-content > * + * > * { border-left-color: rgba(196,218,230,0.06) !important; }
+.dark .rbc-current-time-indicator { background-color: rgba(183,224,222,0.45) !important; }
+/* Agenda + month dark mode text */
+.dark .rbc-date-cell.rbc-current { color: rgb(var(--color-navy)) !important; }
+
 /* Profile panel — time inputs need explicit color-scheme in dark mode so
    Chrome/Edge render the picker value text in light color, not system black. */
 .dark .profile-panel input[type="time"] {
