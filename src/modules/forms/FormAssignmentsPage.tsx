@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { loadFormWithFields } from '@/hooks/useForms'
 import { useAuthStore } from '@/stores/authStore'
-import { Button, Badge } from '@/components/ui'
+import { Button, Badge, SbLoader } from '@/components/ui'
 import { downloadAssignmentTemplate } from '@/lib/formImportTemplate'
 import * as XLSX from 'xlsx'
 import type { FormDefinition, FormAssignment, AssignmentRule } from '@/types/forms'
@@ -474,7 +474,7 @@ export function FormAssignmentsPage() {
     )
   }
 
-  if (loading) return <div className="py-8 text-xs font-mono text-inky animate-pulse">Loading…</div>
+  if (loading) return <div className="py-8 flex justify-center"><SbLoader size={40} /></div>
   if (!form) return <div className="py-8 text-xs font-mono text-inky">Form not found.</div>
 
   const activeRuleCount = rules.filter((r) => r.is_active).length

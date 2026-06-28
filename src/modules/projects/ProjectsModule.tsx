@@ -8,7 +8,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { format } from 'date-fns'
-import { Button, Badge, Modal } from '@/components/ui'
+import { Button, Badge, Modal, SbLoader } from '@/components/ui'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { LinksCell } from '@/components/shared/LinksCell'
 import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
@@ -732,7 +732,7 @@ export function ProjectsModule() {
 
       {/* Grid */}
       {loading ? (
-        <div className="py-8 text-xs font-mono text-inky">Loading…</div>
+        <div className="py-8 flex justify-center"><SbLoader size={40} /></div>
       ) : projects.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded border border-dashed border-navy/30 py-16">
           <p className="text-sm font-mono text-inky">No projects yet</p>

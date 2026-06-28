@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { Badge, Button, Input, Modal } from '@/components/ui'
+import { Badge, Button, Input, Modal, SbLoader } from '@/components/ui'
 import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import type { Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types'
@@ -503,7 +503,7 @@ export function TasksPage() {
 
       {/* Task list */}
       {loading ? (
-        <div className="text-xs font-mono text-inky/50 animate-pulse py-8 text-center">Loading…</div>
+        <div className="py-8 flex justify-center"><SbLoader size={40} /></div>
       ) : displayed.length === 0 ? (
         <div className="py-12 text-center">
           <p className="text-xs font-body italic text-inky/50">No tasks{showCompleted ? '' : ' — all done!'}</p>

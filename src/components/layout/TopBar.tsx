@@ -312,15 +312,16 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     if (!companyId) return
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
+    const safe = (p: Promise<any>) => p.catch(() => ({ data: null, error: null }))
     const [issuesRes, scheduleRes, balancesRes, locationsRes, ordersRes, tasksRes, formsDueRes, recountRes] = await Promise.all([
-      sb.schema('inventory').from('issues').select('id, status_id, issue_statuses(name)').eq('company_id', companyId).is('deleted_at', null),
-      sb.schema('platform').from('schedule_events').select('*').eq('company_id', companyId).gte('start_date', today).order('start_date'),
-      sb.schema('inventory').from('monthly_ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false }),
-      sb.schema('core').from('locations').select('id, active').eq('company_id', companyId),
-      sb.schema('inventory').from('order_sessions').select('id').eq('company_id', companyId).eq('status', 'pending').catch(() => ({ data: [] })),
-      sb.schema('inventory').from('project_tasks').select('id, due_date').eq('company_id', companyId).eq('done', false).lt('due_date', today).catch(() => ({ data: [] })),
-      sb.schema('forms').from('assignments').select('id').eq('company_id', companyId).lte('due_date', today).eq('completed', false).catch(() => ({ data: [] })),
-      sb.schema('inventory').from('recount_requests').select('id').eq('company_id', companyId).eq('status', 'pending').catch(() => ({ data: [] })),
+      safe(sb.schema('inventory').from('issues').select('id, status_id, issue_statuses(name)').eq('company_id', companyId).is('deleted_at', null)),
+      safe(sb.schema('platform').from('schedule_events').select('id, title, start_date, event_type').eq('company_id', companyId).gte('start_date', today).order('start_date')),
+      safe(sb.schema('inventory').from('monthly_ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false })),
+      safe(sb.schema('core').from('locations').select('id, active').eq('company_id', companyId)),
+      safe(sb.schema('inventory').from('order_sessions').select('id').eq('company_id', companyId).eq('status', 'pending')),
+      safe(sb.schema('inventory').from('project_tasks').select('id, due_date').eq('company_id', companyId).eq('done', false).lt('due_date', today)),
+      safe(sb.schema('forms').from('assignments').select('id').eq('company_id', companyId).lte('due_date', today).eq('completed', false)),
+      safe(sb.schema('inventory').from('recount_requests').select('id').eq('company_id', companyId).eq('status', 'pending')),
     ])
 
     const pendingIssues = issuesRes.data?.filter((i: any) => {

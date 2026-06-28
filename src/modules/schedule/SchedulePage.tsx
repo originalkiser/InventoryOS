@@ -47,6 +47,7 @@ export function SchedulePage() {
   const [showHolidays, setShowHolidays] = useState(true)
   const [showBlocked, setShowBlocked] = useState(true)
   const [showBlockedMgr, setShowBlockedMgr] = useState(false)
+  const [showList, setShowList] = useState(false)
   const [newBlockedDate, setNewBlockedDate] = useState('')
   const [newBlockedNote, setNewBlockedNote] = useState('')
   const [savingBlocked, setSavingBlocked] = useState(false)
@@ -262,6 +263,17 @@ export function SchedulePage() {
           Blocked {showBlocked ? 'on' : 'off'}
         </button>
         <button
+          onClick={() => setShowList((v) => !v)}
+          className={[
+            'text-xs font-mono rounded border px-2.5 py-1 transition-colors',
+            showList
+              ? 'border-sky/60 bg-sky/10 text-navy'
+              : 'border-navy/20 text-inky hover:border-navy/40',
+          ].join(' ')}
+        >
+          List {showList ? '▴' : '▾'}
+        </button>
+        <button
           onClick={() => setShowBlockedMgr((v) => !v)}
           className="ml-auto text-xs font-mono text-inky hover:text-navy border border-navy/20 rounded px-2.5 py-1 hover:border-navy/40 transition-colors"
         >
@@ -321,6 +333,61 @@ export function SchedulePage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Holidays + blocked days list */}
+      {showList && (
+        <div className="rounded-lg border border-navy/20 bg-cream dark:bg-navy/20 p-4 flex flex-col gap-3">
+          <p className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/80 uppercase tracking-widest">
+            Holidays &amp; Blocked Days
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Company holidays */}
+            <div>
+              <p className="text-[10px] font-mono text-[#E67E22] uppercase tracking-wide mb-2">Company Holidays</p>
+              {companyHolidays.length === 0 ? (
+                <p className="text-[10px] font-mono text-inky/50 italic">No company holidays configured.</p>
+              ) : (
+                <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto">
+                  {companyHolidays.map((h) => (
+                    <div key={h.id} className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-[#E67E22]/80 w-24 flex-shrink-0">
+                        {format(new Date(h.date + 'T00:00:00'), 'EEE, MMM d')}
+                      </span>
+                      <span className="text-xs font-mono text-navy dark:text-[#F2F1E6] truncate">{h.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Personal blocked days */}
+            <div>
+              <p className="text-[10px] font-mono text-[#C0392B] uppercase tracking-wide mb-2">My Blocked Days</p>
+              {normalizedBlocked.length === 0 ? (
+                <p className="text-[10px] font-mono text-inky/50 italic">No blocked days set.</p>
+              ) : (
+                <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto">
+                  {normalizedBlocked.map((bd) => (
+                    <div key={bd.date} className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-[#C0392B]/80 w-24 flex-shrink-0">
+                        {format(new Date(bd.date + 'T00:00:00'), 'EEE, MMM d')}
+                      </span>
+                      <span className="text-xs font-mono text-navy dark:text-[#F2F1E6] truncate">
+                        {bd.note || '—'}
+                      </span>
+                      <button
+                        onClick={() => deleteBlockedDay(bd.date)}
+                        className="text-[10px] font-mono text-inky/40 hover:text-[#C0392B] transition-colors flex-shrink-0 ml-auto"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

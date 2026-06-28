@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { loadFormWithFields } from '@/hooks/useForms'
 import { useAuthStore } from '@/stores/authStore'
-import { Button, Badge } from '@/components/ui'
+import { Button, Badge, SbLoader } from '@/components/ui'
 import type {
   FormDefinition, FormField, FormSubmission, FormResponse, ScoreStreak,
   SubmissionColumn, SubmissionColumnValue, ResponseOverride,
@@ -497,7 +497,7 @@ export function FormResultsPage() {
     return 'border-l-sky bg-sky/5'
   }
 
-  if (loading) return <div className="py-8 text-xs font-mono text-inky">Loading…</div>
+  if (loading) return <div className="py-8 flex justify-center"><SbLoader size={40} /></div>
   if (!form) return <div className="py-8 text-xs font-mono text-inky">Form not found.</div>
 
   return (

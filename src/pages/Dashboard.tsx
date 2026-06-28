@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { Card, CardHeader, CardBody, Badge } from '@/components/ui'
+import { Card, CardHeader, CardBody, Badge, SbLoader } from '@/components/ui'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { format, endOfWeek } from 'date-fns'
 import { useInventory } from '@/hooks/useInventory'
@@ -143,7 +143,7 @@ export function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <span className="text-inky font-body text-sm italic">Loading</span>
+        <SbLoader />
       </div>
     )
   }

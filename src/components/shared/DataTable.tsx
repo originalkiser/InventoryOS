@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { flexRender, type Row, type Table as TTable } from '@tanstack/react-table'
-import { Button, Input } from '@/components/ui'
+import { Button, Input, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -393,7 +393,7 @@ export function DataTable<T>({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={100} className="px-3 py-8 text-center text-inky font-body italic">Loading</td>
+                <td colSpan={100} className="px-3 py-8"><div className="flex justify-center"><SbLoader size={32} /></div></td>
               </tr>
             ) : table.getRowModel().rows.length === 0 ? (
               <tr>

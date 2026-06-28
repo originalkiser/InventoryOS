@@ -840,7 +840,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
               value={newBlockedDate}
               onChange={(e) => setNewBlockedDate(e.target.value)}
               style={{ colorScheme: dark ? 'dark' : 'light' }}
-              className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
+              className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#0D3555] text-navy dark:text-[#F2F1E6] px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
             />
             <input
               type="text"
@@ -848,7 +848,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
               onChange={(e) => setNewBlockedNote(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addBlockedDay()}
               placeholder="Note (optional)"
-              className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-navy text-navy dark:text-[#F2F1E6] placeholder-inky/50 px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
+              className="text-xs font-mono rounded border border-navy/20 dark:border-[#F2F1E6]/20 bg-[#F2F1E6] dark:bg-[#0D3555] text-navy dark:text-[#F2F1E6] placeholder-inky/50 px-2 py-1 focus:border-[#00e5ff] focus:outline-none"
             />
             <button
               onClick={addBlockedDay}

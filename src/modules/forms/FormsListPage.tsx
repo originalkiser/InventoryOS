@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useForms } from '@/hooks/useForms'
-import { Button, Badge } from '@/components/ui'
+import { Button, Badge, SbLoader } from '@/components/ui'
 import type { FormDefinition, FormAssignment, AssignmentRule } from '@/types/forms'
 import { format, isPast, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -195,7 +195,7 @@ export function FormsListPage() {
       <div className="flex flex-col gap-2">
         <h2 className="text-xs font-mono text-inky uppercase tracking-wide">Forms I Created</h2>
         {loading ? (
-          <p className="text-xs font-mono text-inky animate-pulse">Loading…</p>
+          <div className="py-8 flex justify-center"><SbLoader size={40} /></div>
         ) : forms.length === 0 ? (
           <div className="flex flex-col items-center gap-3 rounded border border-dashed border-navy/30 py-16">
             <p className="text-sm font-mono text-inky">No forms yet</p>

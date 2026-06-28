@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { Button, Modal, Input } from '@/components/ui'
+import { Button, Modal, Input, SbLoader } from '@/components/ui'
 import { InviteUserModal } from './InviteUserModal'
 import { ROLES, ROLE_OPTIONS, getRoleLabel, isDeveloper, isAdminOrDeveloper } from '@/lib/roles'
 import type { Profile } from '@/types'
@@ -351,7 +351,7 @@ export function UsersPage() {
       </div>
 
       {loading ? (
-        <div className="text-xs font-mono text-inky/50 animate-pulse">Loading...</div>
+        <div className="py-4 flex justify-center"><SbLoader size={40} /></div>
       ) : (
         <div className="rounded border border-navy/15 dark:border-[#F2F1E6]/10 overflow-auto max-h-[calc(100vh-300px)]">
           <table className="w-full text-xs font-body">
