@@ -12,6 +12,7 @@ interface PendingTask {
   project_name: string
   due_date: string | null
   times_pushed: number
+  kind: 'project' | 'standalone'
 }
 
 interface EndDayModalProps {
@@ -68,13 +69,20 @@ export function EndDayModal({ open, onClose, onSaved }: EndDayModalProps) {
     setDatePicks({})
     const sb = supabase as any
 
-    const [tasksRes, holidayRes] = await Promise.all([
+    const [tasksRes, standaloneRes, holidayRes] = await Promise.all([
       sb.schema('inventory').from('project_tasks')
         .select('id, task_name, times_pushed, done, due_date, projects!inner(project_name)')
         .eq('company_id', profile.company_id)
         .eq('done', false)
         .lte('due_date', today)
         .order('due_date'),
+      sb.schema('core').from('tasks')
+        .select('id, title, target_date, source, meeting_id')
+        .eq('company_id', profile.company_id)
+        .eq('completed', false)
+        .lte('target_date', today)
+        .is('deleted_at', null)
+        .order('target_date'),
       sb.schema('core').from('company_holidays')
         .select('date')
         .eq('company_id', profile.company_id)
@@ -84,13 +92,24 @@ export function EndDayModal({ open, onClose, onSaved }: EndDayModalProps) {
 
     if (tasksRes.error) { toast.error('Failed to load tasks'); setLoading(false); return }
 
-    const loaded: PendingTask[] = (tasksRes.data ?? []).map((t: any) => ({
-      id: t.id,
-      task_name: t.task_name,
-      project_name: t.projects?.project_name ?? '—',
-      due_date: t.due_date,
-      times_pushed: t.times_pushed ?? 0,
-    }))
+    const loaded: PendingTask[] = [
+      ...(tasksRes.data ?? []).map((t: any) => ({
+        id: t.id,
+        task_name: t.task_name,
+        project_name: t.projects?.project_name ?? '—',
+        due_date: t.due_date,
+        times_pushed: t.times_pushed ?? 0,
+        kind: 'project' as const,
+      })),
+      ...(standaloneRes.data ?? []).map((t: any) => ({
+        id: t.id,
+        task_name: t.title,
+        project_name: t.source === 'meeting' ? 'Meeting Task' : 'Task',
+        due_date: t.target_date,
+        times_pushed: 0,
+        kind: 'standalone' as const,
+      })),
+    ]
 
     setHolidays((holidayRes.data ?? []).map((h: any) => h.date as string))
     setTasks(loaded)
@@ -116,17 +135,33 @@ export function EndDayModal({ open, onClose, onSaved }: EndDayModalProps) {
     const dateTasks = tasks.filter((t) => actions[t.id] === 'date' && datePicks[t.id])
 
     const ops: Promise<any>[] = []
-    if (doneIds.length) {
+
+    const doneProject = tasks.filter((t) => actions[t.id] === 'done' && t.kind === 'project').map((t) => t.id)
+    const doneStandalone = tasks.filter((t) => actions[t.id] === 'done' && t.kind === 'standalone').map((t) => t.id)
+    if (doneProject.length) {
       ops.push(sb.schema('inventory').from('project_tasks')
-        .update({ done: true, status: 'Complete' }).in('id', doneIds))
+        .update({ done: true, status: 'Complete' }).in('id', doneProject))
+    }
+    if (doneStandalone.length) {
+      ops.push(sb.schema('core').from('tasks')
+        .update({ completed: true, completed_at: new Date().toISOString(), completed_by: profile?.id ?? null })
+        .in('id', doneStandalone))
     }
     for (const t of pushTasks) {
-      ops.push(sb.schema('inventory').from('project_tasks')
-        .update({ due_date: pushDate, times_pushed: t.times_pushed + 1 }).eq('id', t.id))
+      if (t.kind === 'standalone') {
+        ops.push(sb.schema('core').from('tasks').update({ target_date: pushDate }).eq('id', t.id))
+      } else {
+        ops.push(sb.schema('inventory').from('project_tasks')
+          .update({ due_date: pushDate, times_pushed: t.times_pushed + 1 }).eq('id', t.id))
+      }
     }
     for (const t of dateTasks) {
-      ops.push(sb.schema('inventory').from('project_tasks')
-        .update({ due_date: datePicks[t.id], times_pushed: t.times_pushed + 1 }).eq('id', t.id))
+      if (t.kind === 'standalone') {
+        ops.push(sb.schema('core').from('tasks').update({ target_date: datePicks[t.id] }).eq('id', t.id))
+      } else {
+        ops.push(sb.schema('inventory').from('project_tasks')
+          .update({ due_date: datePicks[t.id], times_pushed: t.times_pushed + 1 }).eq('id', t.id))
+      }
     }
 
     const results = await Promise.all(ops)
