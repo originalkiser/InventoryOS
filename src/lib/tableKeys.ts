@@ -1,7 +1,7 @@
 export const TABLE_KEYS = {
   issues:        'inventory.issues',
   projects:      'inventory.projects',
-  tasks:         'inventory.tasks',
+  tasks:         'core.tasks',
   meetingNotes:  'inventory.meeting_notes',
   counts:        'inventory.monthly_counts',
   countProducts: 'inventory.count_products',

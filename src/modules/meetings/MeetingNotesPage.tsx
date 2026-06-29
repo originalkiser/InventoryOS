@@ -148,7 +148,7 @@ export function MeetingNotesPage() {
 
   async function loadMeetingTasks(meetingId: string) {
     const { data } = await (supabase as any)
-      .schema('inventory').from('tasks').select('*').eq('meeting_id', meetingId)
+      .schema('core').from('tasks').select('*').eq('meeting_id', meetingId)
       .order('sort_order').order('created_at')
     setMeetingTasks((data ?? []) as Task[])
   }
@@ -253,7 +253,7 @@ export function MeetingNotesPage() {
 
   async function addTask() {
     if (!editId || !taskForm.title.trim() || !companyId) return
-    const { error } = await (supabase as any).schema('inventory').from('tasks').insert({
+    const { error } = await (supabase as any).schema('core').from('tasks').insert({
       company_id: companyId,
       title: taskForm.title.trim(),
       target_date: taskForm.target_date || null,
@@ -269,7 +269,7 @@ export function MeetingNotesPage() {
 
   async function toggleTask(task: Task) {
     const done = !task.completed
-    const { error } = await (supabase as any).schema('inventory').from('tasks').update({
+    const { error } = await (supabase as any).schema('core').from('tasks').update({
       completed: done,
       completed_at: done ? new Date().toISOString() : null,
       completed_by: done ? myId : null,
@@ -279,7 +279,7 @@ export function MeetingNotesPage() {
   }
 
   async function deleteTask(taskId: string) {
-    await (supabase as any).schema('inventory').from('tasks').delete().eq('id', taskId)
+    await (supabase as any).schema('core').from('tasks').delete().eq('id', taskId)
     if (editId) loadMeetingTasks(editId)
   }
 

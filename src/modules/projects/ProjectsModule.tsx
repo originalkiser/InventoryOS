@@ -545,7 +545,7 @@ export function ProjectsModule() {
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([])
   useEffect(() => {
     if (!companyId) return
-    ;(supabase as any).schema('inventory').from('tasks').select('*').eq('company_id', companyId).not('project_id', 'is', null).order('created_at')
+    ;(supabase as any).schema('core').from('tasks').select('*').eq('company_id', companyId).not('project_id', 'is', null).order('created_at')
       .then(({ data }: any) => setLinkedTasks((data ?? []) as Task[]))
   }, [companyId])
 
@@ -557,7 +557,7 @@ export function ProjectsModule() {
 
   async function toggleLinkedTask(id: string, done: boolean) {
     setLinkedTasks((prev) => prev.map((t) => t.id === id ? { ...t, completed: done } : t))
-    await (supabase as any).schema('inventory').from('tasks').update({
+    await (supabase as any).schema('core').from('tasks').update({
       completed: done,
       completed_at: done ? new Date().toISOString() : null,
     }).eq('id', id)

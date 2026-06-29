@@ -126,7 +126,7 @@ function ManageUserModal({
 
     if (newName && oldName && newName !== oldName && myProfile.company_id) {
       await Promise.all([
-        sb.schema('inventory').from('tasks').update({ assignee_name: newName }).eq('company_id', myProfile.company_id).eq('assignee_name', oldName).is('assignee_id', null),
+        sb.schema('core').from('tasks').update({ assignee_name: newName }).eq('company_id', myProfile.company_id).eq('assignee_name', oldName).is('assignee_id', null),
         sb.schema('inventory').from('project_tasks').update({ assignee: newName }).eq('company_id', myProfile.company_id).eq('assignee', oldName),
         sb.schema('inventory').from('issues').update({ assignee: newName }).eq('company_id', myProfile.company_id).eq('assignee', oldName),
       ])

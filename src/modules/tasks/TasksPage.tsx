@@ -106,7 +106,7 @@ const EMPTY_FORM = {
 // Purge deleted tasks older than 30 days (client-side lazy purge).
 async function purgeExpired(companyId: string) {
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-  await (supabase as any).schema('inventory').from('tasks').delete().eq('company_id', companyId).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
+  await (supabase as any).schema('core').from('tasks').delete().eq('company_id', companyId).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
 }
 
 export function TasksPage() {
@@ -148,8 +148,8 @@ export function TasksPage() {
       sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId),
       sb.schema('inventory').from('project_tasks').select('*').eq('company_id', companyId).order('sort_order'),
       sb.schema('platform').from('schedule_events').select('*').eq('company_id', companyId).eq('is_checklist', true).order('start_date'),
-      sb.schema('inventory').from('tasks').select('*').eq('company_id', companyId).is('deleted_at', null).order('sort_order').order('created_at'),
-      sb.schema('inventory').from('tasks').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      sb.schema('core').from('tasks').select('*').eq('company_id', companyId).is('deleted_at', null).order('sort_order').order('created_at'),
+      sb.schema('core').from('tasks').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
     ])
     setOrgProfiles((profRes.data ?? []) as Profile[])
     setProjects((projRes.data ?? []) as Project[])
@@ -256,7 +256,7 @@ export function TasksPage() {
         completed_by: done ? myId : null,
       }).eq('id', task.id))
     } else {
-      ;({ error } = await sb.schema('inventory').from('tasks').update({
+      ;({ error } = await sb.schema('core').from('tasks').update({
         completed: done,
         completed_at: done ? new Date().toISOString() : null,
         completed_by: done ? myId : null,
@@ -268,7 +268,7 @@ export function TasksPage() {
 
   async function togglePublic(task: UnifiedTask) {
     if (task.createdBy !== myId) return
-    const { error } = await (supabase as any).schema('inventory').from('tasks').update({ is_public: !task.isPublic }).eq('id', task.id)
+    const { error } = await (supabase as any).schema('core').from('tasks').update({ is_public: !task.isPublic }).eq('id', task.id)
     if (error) { toast.error(error.message); return }
     loadAll()
   }
@@ -364,11 +364,11 @@ export function TasksPage() {
         is_public: form.is_public,
       }
       if (editTaskId) {
-        const { error } = await sb.schema('inventory').from('tasks').update(payload).eq('id', editTaskId)
+        const { error } = await sb.schema('core').from('tasks').update(payload).eq('id', editTaskId)
         if (error) { toast.error(error.message); setSaving(false); return }
         toast.success('Task updated')
       } else {
-        const { error } = await sb.schema('inventory').from('tasks').insert({ ...payload, source: 'manual', created_by: myId })
+        const { error } = await sb.schema('core').from('tasks').insert({ ...payload, source: 'manual', created_by: myId })
         if (error) { toast.error(error.message); setSaving(false); return }
         toast.success('Task added')
       }
@@ -387,7 +387,7 @@ export function TasksPage() {
 
   async function confirmDelete() {
     if (!deleteTarget) return
-    const { error } = await (supabase as any).schema('inventory').from('tasks').update({ deleted_at: new Date().toISOString() }).eq('id', deleteTarget.id)
+    const { error } = await (supabase as any).schema('core').from('tasks').update({ deleted_at: new Date().toISOString() }).eq('id', deleteTarget.id)
     if (error) { toast.error(error.message); return }
     toast.success('Task moved to deleted items')
     setDeleteTarget(null)
@@ -395,14 +395,14 @@ export function TasksPage() {
   }
 
   async function restoreTask(id: string) {
-    const { error } = await (supabase as any).schema('inventory').from('tasks').update({ deleted_at: null }).eq('id', id)
+    const { error } = await (supabase as any).schema('core').from('tasks').update({ deleted_at: null }).eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Task restored')
     loadAll()
   }
 
   async function hardDeleteTask(id: string) {
-    const { error } = await (supabase as any).schema('inventory').from('tasks').delete().eq('id', id)
+    const { error } = await (supabase as any).schema('core').from('tasks').delete().eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Task permanently deleted')
     loadAll()
