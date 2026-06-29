@@ -87,11 +87,17 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   )
 }
 
+function to12hr(time: string): string {
+  const [h, m] = time.slice(0, 5).split(':').map(Number)
+  const ampm = h < 12 ? 'AM' : 'PM'
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
 function formatDateTime(date: string | null, time: string | null): string {
   if (!date) return '—'
   try {
     const d = format(new Date(date + 'T00:00:00'), 'MMM d, yyyy')
-    return time ? `${d} ${time.slice(0, 5)}` : d
+    return time ? `${d} ${to12hr(time)}` : d
   } catch { return date }
 }
 
@@ -331,7 +337,7 @@ export function MeetingNotesPage() {
           return (
             <div className="flex flex-col text-xs font-mono leading-snug">
               <span>{d}</span>
-              {time && <span className="text-inky/60">{time.slice(0, 5)}</span>}
+              {time && <span className="text-inky/60">{to12hr(time)}</span>}
             </div>
           )
         } catch { return <span className="text-xs font-mono">{date}</span> }
