@@ -327,7 +327,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
 
     const pendingIssues = issuesRes.data?.length ?? 0
 
-    const nextCount = scheduleRes.data?.find((e: any) => e.event_type === 'monthly_count')
+    const nextCount = scheduleRes.data?.find((e: any) => e.event_type === 'monthly_count' && e.start_date > today)
     const nextCountDays = nextCount
       ? differenceInDays(new Date(nextCount.start_date), new Date())
       : null
