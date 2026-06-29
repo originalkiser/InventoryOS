@@ -125,7 +125,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   const allPillPrefsRef = useRef<Record<string, unknown>>({})
   const [checklistOpen, setChecklistOpen] = useState(false)
   const [filterUserId, setFilterUserId] = useState('')
-  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task'; notes: string; assignedTo: string[] | null; startTime?: string | null; reminderMinutes?: number | null }
+  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task' | 'standalone'; notes: string; assignedTo: string[] | null; startTime?: string | null; reminderMinutes?: number | null }
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   const [openNote, setOpenNote] = useState<string | null>(null)
@@ -356,13 +356,15 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     if (!companyId) return
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
-    const [ev, tk] = await Promise.all([
+    const [ev, tk, st] = await Promise.all([
       sb.schema('platform').from('schedule_events').select('id, title, completed, notes, assigned_to, start_time, reminder_minutes').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
       sb.schema('inventory').from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
+      sb.schema('core').from('tasks').select('id, title, notes, target_date, completed, assignee_id, assignee_name').eq('company_id', companyId).eq('completed', false).lte('target_date', today).is('deleted_at', null),
     ])
     const items: ChecklistItem[] = [
       ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '', assignedTo: e.assigned_to ?? null, startTime: e.start_time ?? null, reminderMinutes: e.reminder_minutes ?? null })),
       ...((tk.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.task_name || '(untitled task)', completed: false, kind: 'task' as const, notes: t.notes ?? '', assignedTo: null })),
+      ...((st.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.title || '(untitled task)', completed: false, kind: 'standalone' as const, notes: t.notes ?? '', assignedTo: t.assignee_id ? [t.assignee_id] : null })),
     ]
     setChecklistItems(items)
     setStats((s) => ({ ...s, todayChecklists: items.filter((i) => !i.completed).length }))
@@ -376,6 +378,12 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
         completed_at: !item.completed ? new Date().toISOString() : null,
         completed_by: profile?.id ?? null,
       }).eq('id', item.id)
+    } else if (item.kind === 'standalone') {
+      await sb.schema('core').from('tasks').update({
+        completed: !item.completed,
+        completed_at: !item.completed ? new Date().toISOString() : null,
+        completed_by: !item.completed ? (profile?.id ?? null) : null,
+      }).eq('id', item.id)
     } else {
       await sb.schema('inventory').from('project_tasks').update({ done: !item.completed }).eq('id', item.id)
     }
@@ -386,7 +394,9 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     const sb = supabase as any
     const query = item.kind === 'event'
       ? sb.schema('platform').from('schedule_events')
-      : sb.schema('inventory').from('project_tasks')
+      : item.kind === 'standalone'
+        ? sb.schema('core').from('tasks')
+        : sb.schema('inventory').from('project_tasks')
     await query.update({ notes: noteDraft }).eq('id', item.id)
     setChecklistItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, notes: noteDraft } : i)))
   }
@@ -591,7 +601,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
           </div>
           {(() => {
             const visible = filterUserId
-              ? checklistItems.filter((i) => i.kind === 'task' || i.assignedTo?.includes(filterUserId))
+              ? checklistItems.filter((i) => i.kind === 'task' || i.kind === 'standalone' || i.assignedTo?.includes(filterUserId))
               : checklistItems
             return visible.length === 0 ? (
               <div className="px-4 py-3 text-xs text-inky font-body italic">
@@ -620,6 +630,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
                         >
                           {item.title}
                           {item.kind === 'task' && <span className="ml-1.5 text-[10px] text-inky">· project</span>}
+                          {item.kind === 'standalone' && <span className="ml-1.5 text-[10px] text-inky">· task</span>}
                           {item.notes && <span className="ml-1 text-inky/60">✎</span>}
                         </button>
                       </div>
