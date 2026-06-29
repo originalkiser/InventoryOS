@@ -217,9 +217,6 @@ export function ScheduleEventModal({
     }
   }, [existing, defaultDate, open])
 
-  useEffect(() => {
-    if (recurrence !== 'none' && !existing?.series_id) setIsAllDay(true)
-  }, [recurrence, existing?.series_id])
 
   const resolvedEventType = eventType === 'other' && customType.trim() ? customType.trim() : eventType
 
@@ -234,17 +231,19 @@ export function ScheduleEventModal({
       toast.error('Title and start date are required')
       return
     }
-    if (!isAllDay && !willGenerateSeries) {
+    if (!isAllDay) {
       if (!startTime || !endTime) {
         toast.error('Start and end times are required for timed events')
         return
       }
-      const effectiveEndDate = endDate || startDate
-      const startDt = new Date(`${startDate}T${startTime}:00`)
-      const endDt = new Date(`${effectiveEndDate}T${endTime}:00`)
-      if (endDt <= startDt) {
-        toast.error('End time must be after start time')
-        return
+      if (!willGenerateSeries) {
+        const effectiveEndDate = endDate || startDate
+        const startDt = new Date(`${startDate}T${startTime}:00`)
+        const endDt = new Date(`${effectiveEndDate}T${endTime}:00`)
+        if (endDt <= startDt) {
+          toast.error('End time must be after start time')
+          return
+        }
       }
     }
     setSaving(true)
@@ -278,6 +277,10 @@ export function ScheduleEventModal({
         end_date: d, // each occurrence is a single day
         recurrence: { type: recurrence, until: endDate || null },
         series_id: seriesId,
+        is_all_day: isAllDay,
+        start_time: isAllDay ? null : startTime || null,
+        end_time: isAllDay ? null : endTime || null,
+        reminder_minutes: (isChecklist && !isAllDay && Number(reminderMinutes) > 0) ? Number(reminderMinutes) : null,
         completed: false,
         completed_at: null,
         completed_by: null,
@@ -307,7 +310,13 @@ export function ScheduleEventModal({
     // Editing a single occurrence but propagating shared attributes to the whole
     // series. Per-occurrence fields (dates, completion) stay row-specific.
     if (isSeriesMember && applyToSeries && existing?.series_id) {
-      const shared = { ...base }
+      const shared = {
+        ...base,
+        is_all_day: isAllDay,
+        start_time: isAllDay ? null : startTime || null,
+        end_time: isAllDay ? null : endTime || null,
+        reminder_minutes: (isChecklist && !isAllDay && Number(reminderMinutes) > 0) ? Number(reminderMinutes) : null,
+      }
       const seriesUpdate = await sb.schema('platform').from('schedule_events').update(shared).eq('series_id', existing.series_id)
       let error = seriesUpdate.error
       if (!error) {
@@ -453,15 +462,15 @@ export function ScheduleEventModal({
         {/* All-day toggle */}
         <div className="col-span-2">
           <Toggle
-            checked={isAllDay || willGenerateSeries}
-            onChange={(v) => { if (!willGenerateSeries) setIsAllDay(v) }}
-            label={willGenerateSeries ? 'All-day event (recurring series are always all-day)' : 'All-day event'}
+            checked={isAllDay}
+            onChange={setIsAllDay}
+            label="All-day event"
             color="cyan"
           />
         </div>
 
-        {/* Start/end times — shown for non-all-day standalone events */}
-        {!isAllDay && !willGenerateSeries && (
+        {/* Start/end times — shown for any non-all-day event, including recurring series */}
+        {!isAllDay && (
           <>
             <Input label="Start Time" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
             <Input label="End Time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
@@ -485,7 +494,7 @@ export function ScheduleEventModal({
           )}
         </div>
 
-        {isChecklist && !isAllDay && !willGenerateSeries && (
+        {isChecklist && !isAllDay && (
           <div className="col-span-2 flex flex-col gap-1">
             <label className="text-xs font-mono text-inky uppercase tracking-wide">Reminder before start</label>
             <div className="flex items-center gap-2">
