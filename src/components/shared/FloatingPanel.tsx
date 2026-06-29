@@ -84,9 +84,20 @@ export function FloatingPanel({
           {!mobile && (
             <>
               <button onClick={() => onModeChange('floating')} title="Float on top"
-                className={['p-1 rounded text-sm transition-colors', mode === 'floating' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>⬛</button>
-              <button onClick={() => onModeChange('docked')} title="Pin to right (push content)"
-                className={['p-1 rounded text-sm transition-colors', mode === 'docked' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>📌</button>
+                className={['p-1 rounded transition-colors', mode === 'floating' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>
+                {/* Pin / thumbtack — keep floating on screen */}
+                <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.845V2.42a2.19 2.19 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
+                </svg>
+              </button>
+              <button onClick={() => onModeChange('docked')} title="Push to right sidebar"
+                className={['p-1 rounded transition-colors', mode === 'docked' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>
+                {/* Arrow-right + vertical bar — dock to right edge */}
+                <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1 8a.5.5 0 0 1 .5-.5h9.793L8.146 4.354a.5.5 0 1 1 .708-.708l4 4a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708-.708L11.293 8.5H1.5A.5.5 0 0 1 1 8z"/>
+                  <path d="M14.5 1a.5.5 0 0 1 .5.5v13a.5.5 0 0 1-1 0v-13a.5.5 0 0 1 .5-.5z"/>
+                </svg>
+              </button>
             </>
           )}
           <button onClick={onClose} className="p-1 text-inky/50 hover:text-cream transition-colors" title="Hide">✕</button>
