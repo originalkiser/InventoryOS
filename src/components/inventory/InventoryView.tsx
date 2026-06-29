@@ -52,7 +52,7 @@ export function InventoryView({ maxHeight = '60vh', withScaleEditor = true }: { 
         {withScaleEditor && <button onClick={() => setEditorOpen(true)} className="rounded border border-navy/30 px-2 py-1 text-xs font-mono text-inky hover:text-navy" title="Flag scale">⚙ Scale</button>}
       </div>
 
-      <div className="overflow-auto rounded border border-navy/30" style={{ maxHeight }}>
+      <div className="overflow-x-auto rounded border border-navy/30" style={{ maxHeight }}>
         <table className="w-full text-xs font-mono">
           <thead className="sticky top-0 bg-navy text-inky uppercase tracking-wide">
             <tr>{th('Location', 'location_label')}{th('Product', 'product_id')}<th className="px-2 py-1.5 text-right">On Hand</th><th className="px-2 py-1.5 text-right">Usage/day</th>{th('Days', 'days_of_supply')}</tr>

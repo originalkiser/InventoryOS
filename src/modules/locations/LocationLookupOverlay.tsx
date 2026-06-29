@@ -773,7 +773,7 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
         </div>
       )}
 
-      <div className="overflow-auto rounded border border-inky/20">
+      <div className="overflow-x-auto rounded border border-inky/20">
         <table className="w-full text-[11px] font-body">
           <thead className="bg-[#1a5c87] sticky top-0">
             <tr>
