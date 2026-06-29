@@ -74,24 +74,24 @@ export function FloatingPanel({
     : { position: 'fixed', right, bottom: clampedBottom, width, height: Math.min(height, maxPanelHeight), maxHeight: maxPanelHeight, zIndex: 65 }
 
   return (
-    <div style={style} className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream shadow-2xl">
+    <div style={style} className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:bg-[#0e2638] dark:border-[#C4DAE6]/20 shadow-2xl">
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
-      <div onMouseDown={startMove} className={['flex items-center justify-between bg-navy border-b border-navy/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
-        <span className="text-xs font-heading font-bold text-cream uppercase tracking-wide">{title}</span>
+      <div onMouseDown={startMove} className={['flex items-center justify-between bg-[#1a5c87] border-b border-[#1a5c87]/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
+        <span className="text-xs font-heading font-bold text-[#F2F1E6] uppercase tracking-wide">{title}</span>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
           {headerActions}
           {!mobile && (
             <>
               <button onClick={() => onModeChange('floating')} title="Float on top"
-                className={['p-1 rounded transition-colors', mode === 'floating' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>
+                className={['p-1 rounded transition-colors', mode === 'floating' ? 'text-sky' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'].join(' ')}>
                 {/* Pin / thumbtack — keep floating on screen */}
                 <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.845V2.42a2.19 2.19 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
                 </svg>
               </button>
               <button onClick={() => onModeChange('docked')} title="Push to right sidebar"
-                className={['p-1 rounded transition-colors', mode === 'docked' ? 'text-sky' : 'text-inky/50 hover:text-cream'].join(' ')}>
+                className={['p-1 rounded transition-colors', mode === 'docked' ? 'text-sky' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'].join(' ')}>
                 {/* Arrow-right + vertical bar — dock to right edge */}
                 <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M1 8a.5.5 0 0 1 .5-.5h9.793L8.146 4.354a.5.5 0 1 1 .708-.708l4 4a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708-.708L11.293 8.5H1.5A.5.5 0 0 1 1 8z"/>
@@ -100,7 +100,7 @@ export function FloatingPanel({
               </button>
             </>
           )}
-          <button onClick={onClose} className="p-1 text-inky/50 hover:text-cream transition-colors" title="Hide">✕</button>
+          <button onClick={onClose} className="p-1 text-[#F2F1E6]/50 hover:text-[#F2F1E6] transition-colors" title="Hide">✕</button>
         </div>
       </div>
 
