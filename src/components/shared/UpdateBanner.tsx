@@ -24,7 +24,10 @@ async function forceUpdate() {
   } catch {
     /* ignore */
   }
-  const url = new URL(window.location.href)
+  // Navigate to the base URL root so GitHub Pages serves index.html.
+  // Reloading the current deep path (e.g. /InventoryOS/tasks) causes a 404
+  // on GitHub Pages because there is no static file at that path.
+  const url = new URL(import.meta.env.BASE_URL, window.location.origin)
   url.searchParams.set('_v', String(Date.now()))
   window.location.replace(url.toString())
 }
