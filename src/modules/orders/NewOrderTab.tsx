@@ -75,10 +75,10 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
       sb.schema('core').from('locations').select('*').eq('company_id', companyId),
       sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('active', true),
       sb.schema('inventory').from('product_id_mappings').select('*').eq('company_id', companyId),
-      sb.schema('core').from('global_products').select('*').eq('company_id', companyId),
-      sb.schema('core').from('vendor_parts').select('*').eq('company_id', companyId),
+      sb.schema('inventory').from('global_products').select('*').eq('company_id', companyId),
+      sb.schema('inventory').from('vendor_parts').select('*').eq('company_id', companyId),
       sb.schema('inventory').from('order_min_rules').select('*').eq('company_id', companyId).eq('active', true),
-      sb.schema('core').from('uom_mappings').select('*').eq('company_id', companyId),
+      sb.schema('inventory').from('uom_mappings').select('*').eq('company_id', companyId),
     ])
     const globalProducts = (gp.data ?? []) as GlobalProduct[]
     setConfig({
