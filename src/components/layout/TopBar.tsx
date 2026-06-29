@@ -309,12 +309,12 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   }
 
   async function loadStats() {
-    if (!companyId) return
+    if (!companyId) { console.warn('[TopBar] loadStats: companyId is null, skipping'); return }
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
-    const safe = (p: Promise<any>) => p.catch(() => ({ data: null, error: null }))
+    const safe = (p: Promise<any>) => p.catch((e: unknown) => { console.error('[TopBar] query threw:', e); return { data: null, error: null } })
     const [issuesRes, scheduleRes, balancesRes, locationsRes, ordersRes, tasksRes, formsDueRes, recountRes] = await Promise.all([
-      safe(sb.schema('inventory').from('issues').select('id, status_id, issue_statuses(name)').eq('company_id', companyId).is('deleted_at', null)),
+      safe(sb.schema('inventory').from('issues').select('id').eq('company_id', companyId).is('deleted_at', null)),
       safe(sb.schema('platform').from('schedule_events').select('id, title, start_date, event_type').eq('company_id', companyId).gte('start_date', today).order('start_date')),
       safe(sb.schema('inventory').from('monthly_ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false })),
       safe(sb.schema('core').from('locations').select('id, active').eq('company_id', companyId)),
@@ -323,11 +323,9 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       safe(sb.schema('forms').from('assignments').select('id').eq('company_id', companyId).lte('due_date', today).eq('completed', false)),
       safe(sb.schema('inventory').from('recount_requests').select('id').eq('company_id', companyId).eq('status', 'pending')),
     ])
+    console.log('[TopBar] issues:', issuesRes.data?.length ?? null, issuesRes.error?.message ?? null, '| locs:', locationsRes.data?.length ?? null, locationsRes.error?.message ?? null, '| bal:', balancesRes.data?.length ?? null, balancesRes.error?.message ?? null)
 
-    const pendingIssues = issuesRes.data?.filter((i: any) => {
-      const name = (i.issue_statuses?.name ?? '').toLowerCase()
-      return !name.includes('close') && !name.includes('resolv') && !name.includes('complet')
-    }).length ?? 0
+    const pendingIssues = issuesRes.data?.length ?? 0
 
     const nextCount = scheduleRes.data?.find((e: any) => e.event_type === 'monthly_count')
     const nextCountDays = nextCount
