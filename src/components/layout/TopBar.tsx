@@ -312,7 +312,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
     if (!companyId) { console.warn('[TopBar] loadStats: companyId is null, skipping'); return }
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
-    const safe = (p: Promise<any>) => p.catch((e: unknown) => { console.error('[TopBar] query threw:', e); return { data: null, error: null } })
+    const safe = (p: any) => Promise.resolve(p).catch((e: unknown) => { console.error('[TopBar] query threw:', e); return { data: null, error: null } })
     const [issuesRes, scheduleRes, balancesRes, locationsRes, ordersRes, tasksRes, formsDueRes, recountRes] = await Promise.all([
       safe(sb.schema('inventory').from('issues').select('id').eq('company_id', companyId).is('deleted_at', null)),
       safe(sb.schema('platform').from('schedule_events').select('id, title, start_date, event_type').eq('company_id', companyId).gte('start_date', today).order('start_date')),
