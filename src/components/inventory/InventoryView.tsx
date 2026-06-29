@@ -44,15 +44,15 @@ export function InventoryView({ maxHeight = '60vh', withScaleEditor = true }: { 
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-2 flex-1 min-h-0">
+      <div className="flex items-center gap-2 flex-shrink-0">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter products / locations…"
           className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy placeholder-inky/50 focus:border-[#00e5ff] focus:outline-none" />
         {lowCount > 0 && <span className="text-xs font-mono" style={{ color: FLAG_HEX.red }}>{lowCount} below {flagConfig.slider_days}d</span>}
         {withScaleEditor && <button onClick={() => setEditorOpen(true)} className="rounded border border-navy/30 px-2 py-1 text-xs font-mono text-inky hover:text-navy" title="Flag scale">⚙ Scale</button>}
       </div>
 
-      <div className="overflow-x-auto rounded border border-navy/30" style={{ maxHeight }}>
+      <div className="flex-1 overflow-auto rounded border border-navy/30 min-h-0">
         <table className="w-full text-xs font-mono">
           <thead className="sticky top-0 bg-navy text-inky uppercase tracking-wide">
             <tr>{th('Location', 'location_label')}{th('Product', 'product_id')}<th className="px-2 py-1.5 text-right">On Hand</th><th className="px-2 py-1.5 text-right">Usage/day</th>{th('Days', 'days_of_supply')}</tr>
