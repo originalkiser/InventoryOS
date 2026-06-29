@@ -320,8 +320,8 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       safe(sb.schema('core').from('locations').select('id, active').eq('company_id', companyId)),
       safe(sb.schema('inventory').from('order_sessions').select('id').eq('company_id', companyId).eq('status', 'pending')),
       safe(sb.schema('inventory').from('project_tasks').select('id, due_date').eq('company_id', companyId).eq('done', false).lt('due_date', today)),
-      safe(sb.schema('forms').from('assignments').select('id').eq('company_id', companyId).lte('due_date', today).eq('completed', false)),
-      safe(sb.schema('inventory').from('recount_requests').select('id').eq('company_id', companyId).eq('status', 'pending')),
+      safe(sb.schema('forms').from('assignments').select('id').eq('company_id', companyId).lte('due_date', today).eq('is_completed', false)),
+      safe(sb.schema('inventory').from('recount_requests').select('id').eq('company_id', companyId).eq('recount_status', 'open')),
     ])
     console.log('[TopBar] issues:', issuesRes.data?.length ?? null, issuesRes.error?.message ?? null, '| locs:', locationsRes.data?.length ?? null, locationsRes.error?.message ?? null, '| bal:', balancesRes.data?.length ?? null, balancesRes.error?.message ?? null)
 
