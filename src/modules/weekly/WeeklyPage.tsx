@@ -6,6 +6,7 @@ import { useWeeklyStore } from '@/stores/weeklyStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { NotSubmittedPanel } from '@/components/shared/NotSubmittedPanel'
 import { useTable } from '@/hooks/useTable'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Modal, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { CountSummaryUpload } from '@/modules/monthend/CountSummaryUpload'
 import { weeklySummaryTarget, locationLabel } from '@/modules/monthend/countsShared'
@@ -402,6 +403,21 @@ function WeeklyCountsTab({
   const [counts, setCounts] = useState<WeeklyCount[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Allowable count type rules — company-wide, cross-user via app_settings
+  type TypeRuleMode = 'include' | 'exclude' | 'allow_if_over'
+  interface TypeRule { mode: TypeRuleMode; threshold: number | null }
+  const [typeRules, setTypeRules] = useAppSetting<Record<string, TypeRule>>('weekly.allowableTypeRules', {})
+  const [rulePopover, setRulePopover] = useState<string | null>(null)
+  const [thresholdDraft, setThresholdDraft] = useState<Record<string, string>>({})
+
+  const distinctTypes = useMemo(
+    () => Array.from(new Set(counts.map((c) => c.count_type ?? '—'))).sort(),
+    [counts],
+  )
+
+  function getTypeRule(t: string): TypeRule { return typeRules[t] ?? { mode: 'include', threshold: null } }
+  function saveTypeRule(t: string, rule: TypeRule) { setTypeRules({ ...typeRules, [t]: rule }); setRulePopover(null) }
+
   const load = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -431,9 +447,15 @@ function WeeklyCountsTab({
 
   const rows: WeeklyRow[] = useMemo(() =>
     counts
-      .filter((c) => allowedIds.has(c.location_id ?? ''))
+      .filter((c) => {
+        if (!allowedIds.has(c.location_id ?? '')) return false
+        const rule = typeRules[c.count_type ?? '—'] ?? { mode: 'include' as TypeRuleMode, threshold: null }
+        if (rule.mode === 'exclude') return false
+        if (rule.mode === 'allow_if_over') return rule.threshold == null || (c.total_adjustments ?? 0) > rule.threshold
+        return true
+      })
       .map((c) => ({ ...c, location_label: locationLabel(c.location_id, effectiveLocations) })),
-    [counts, allowedIds, effectiveLocations],
+    [counts, allowedIds, effectiveLocations, typeRules], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   const columns = useMemo(() => [
@@ -477,6 +499,95 @@ function WeeklyCountsTab({
           onImported={load}
         />
       </div>
+      {/* Allowable count types */}
+      {distinctTypes.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-navy/30 bg-cream px-3 py-2">
+          <span className="text-xs font-mono uppercase tracking-wide text-inky">Allowable types:</span>
+          {distinctTypes.map((t) => {
+            const rule = getTypeRule(t)
+            const chipColor =
+              rule.mode === 'exclude' ? 'border-red-300 bg-red-50 text-red-600' :
+              rule.mode === 'allow_if_over' ? 'border-amber-400 bg-amber-50 text-amber-700' :
+              'border-navy bg-navy/10 text-navy'
+            const chipLabel =
+              rule.mode === 'exclude' ? `✕ ${t}` :
+              rule.mode === 'allow_if_over' ? `≥${rule.threshold ?? '?'} adj · ${t}` :
+              `✓ ${t}`
+            return (
+              <div key={t} className="relative">
+                <button
+                  onClick={() => {
+                    setRulePopover(rulePopover === t ? null : t)
+                    setThresholdDraft((d) => ({ ...d, [t]: String(getTypeRule(t).threshold ?? '') }))
+                  }}
+                  className={['rounded border px-2 py-0.5 text-xs font-mono transition-colors', chipColor].join(' ')}
+                >
+                  {chipLabel}
+                </button>
+                {rulePopover === t && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setRulePopover(null)} />
+                    <div className="absolute z-50 top-full mt-1 left-0 min-w-[220px] rounded border border-navy/30 bg-cream shadow-xl p-3 flex flex-col gap-2">
+                      <p className="text-[10px] font-mono text-inky uppercase tracking-wide mb-1">{t}</p>
+                      <button
+                        onClick={() => saveTypeRule(t, { mode: 'include', threshold: null })}
+                        className={['flex items-center gap-2 text-xs font-mono px-2 py-1.5 rounded border transition-colors', rule.mode === 'include' ? 'border-navy bg-navy/10 text-navy' : 'border-navy/20 text-inky hover:border-navy/40'].join(' ')}
+                      >
+                        <span className="text-green-600">✓</span> Include (always allowed)
+                      </button>
+                      <button
+                        onClick={() => saveTypeRule(t, { mode: 'exclude', threshold: null })}
+                        className={['flex items-center gap-2 text-xs font-mono px-2 py-1.5 rounded border transition-colors', rule.mode === 'exclude' ? 'border-red-400 bg-red-50 text-red-600' : 'border-navy/20 text-inky hover:border-navy/40'].join(' ')}
+                      >
+                        <span className="text-red-500">✕</span> Don't allow
+                      </button>
+                      <div className={['flex flex-col gap-1.5 rounded border px-2 py-2 transition-colors', rule.mode === 'allow_if_over' ? 'border-amber-400 bg-amber-50' : 'border-navy/20'].join(' ')}>
+                        <button
+                          onClick={() => saveTypeRule(t, { mode: 'allow_if_over', threshold: Number(thresholdDraft[t]) || null })}
+                          className="flex items-center gap-2 text-xs font-mono text-left"
+                        >
+                          <span className={rule.mode === 'allow_if_over' ? 'text-amber-600' : 'text-inky/40'}>◎</span>
+                          <span className={rule.mode === 'allow_if_over' ? 'text-amber-700' : 'text-inky'}>Allow if over X adjustments</span>
+                        </button>
+                        <div className="flex items-center gap-1.5 pl-5">
+                          <span className="text-[10px] font-mono text-inky">Threshold:</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={thresholdDraft[t] ?? ''}
+                            onChange={(e) => setThresholdDraft((d) => ({ ...d, [t]: e.target.value }))}
+                            onClick={(e) => e.stopPropagation()}
+                            placeholder="e.g. 5"
+                            className="w-16 rounded border border-navy/30 bg-cream px-1.5 py-0.5 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none"
+                          />
+                          <button
+                            onClick={() => saveTypeRule(t, { mode: 'allow_if_over', threshold: Number(thresholdDraft[t]) || null })}
+                            className="text-[10px] font-mono border border-navy/20 rounded px-1.5 py-0.5 text-inky hover:border-navy/40"
+                          >
+                            Set
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )
+          })}
+          {(() => {
+            const excluded = counts.filter((c) => allowedIds.has(c.location_id ?? '') && (() => {
+              const rule = typeRules[c.count_type ?? '—'] ?? { mode: 'include' as TypeRuleMode, threshold: null }
+              if (rule.mode === 'exclude') return true
+              if (rule.mode === 'allow_if_over') return !(rule.threshold == null || (c.total_adjustments ?? 0) > rule.threshold)
+              return false
+            })()).length
+            return excluded > 0 ? (
+              <span className="text-xs font-mono text-orange-600">{excluded} row{excluded !== 1 ? 's' : ''} excluded</span>
+            ) : null
+          })()}
+        </div>
+      )}
+
       <div>
         <h2 className="text-xs font-mono text-inky uppercase tracking-wide mb-3">Results</h2>
         <DataTable
