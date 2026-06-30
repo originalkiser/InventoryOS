@@ -174,19 +174,55 @@ export function WeeklyPage() {
       .then(({ data }: any) => setLocations((data ?? []) as Location[]))
   }, [companyId])
 
-  // Load persisted exclusions on mount
+  // Load persisted exclusions — Supabase primary, localStorage fallback.
   useEffect(() => {
-    if (!storageKey) return
-    try {
-      const raw = localStorage.getItem(storageKey)
-      if (raw) setManualExclusions(new Set(JSON.parse(raw) as string[]))
-    } catch { /* ignore corrupt storage */ }
-  }, [storageKey])
+    if (!profile?.id) return
+    const sb = supabase as any
+    sb.schema('core').from('user_sidebar_prefs')
+      .select('weekly_shop_exclusions')
+      .eq('user_id', profile.id)
+      .maybeSingle()
+      .then(({ data }: any) => {
+        const ids: string[] | null = data?.weekly_shop_exclusions ?? null
+        if (ids && ids.length > 0) {
+          setManualExclusions(new Set(ids))
+          if (storageKey) {
+            try { localStorage.setItem(storageKey, JSON.stringify(ids)) } catch { /* ignore */ }
+          }
+        } else if (storageKey) {
+          // Column not yet in DB or empty — fall back to localStorage
+          try {
+            const raw = localStorage.getItem(storageKey)
+            if (raw) setManualExclusions(new Set(JSON.parse(raw) as string[]))
+          } catch { /* ignore */ }
+        }
+      })
+      .catch(() => {
+        // Network / RLS failure — fall back to localStorage
+        if (!storageKey) return
+        try {
+          const raw = localStorage.getItem(storageKey)
+          if (raw) setManualExclusions(new Set(JSON.parse(raw) as string[]))
+        } catch { /* ignore */ }
+      })
+  }, [profile?.id, storageKey])
 
   function updateExclusions(next: Set<string>) {
     setManualExclusions(next)
+    const ids = [...next]
+    // localStorage — immediate, always
     if (storageKey) {
-      try { localStorage.setItem(storageKey, JSON.stringify([...next])) } catch { /* ignore */ }
+      try { localStorage.setItem(storageKey, JSON.stringify(ids)) } catch { /* ignore */ }
+    }
+    // Supabase — best-effort (column may be pending migration)
+    if (profile?.id) {
+      const sb = supabase as any
+      sb.schema('core').from('user_sidebar_prefs')
+        .upsert(
+          { user_id: profile.id, weekly_shop_exclusions: ids, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id' },
+        )
+        .then(() => {})
     }
   }
 
