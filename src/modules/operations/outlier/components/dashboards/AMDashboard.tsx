@@ -48,11 +48,12 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
     daysLeft <= 2     ? 'text-sb-orange' :
     'text-sb-green'
 
-  // Count uncommented items
+  // Count uncommented items — union of location-based entries and directly-assigned entries
   const allMyEntries = Object.values(entriesByReport).flat().filter(e =>
     locationIds.has(e.row_key) || amLocations.some(l => e.row_key.startsWith(l.location_id))
   )
-  const uncommented = allMyEntries.filter(e => !e.am_comment && !e.is_complete && e.row_type !== 'total').length
+  const combinedEntries = [...new Map([...allMyEntries, ...assignedEntries].map(e => [e.id, e])).values()]
+  const uncommented = combinedEntries.filter(e => !e.am_comment && !e.is_complete && e.row_type !== 'total').length
 
   async function saveComment(entryId: string, comment: string) {
     const { error } = await sb.schema('outlier').from('report_entries')
@@ -104,7 +105,7 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
             </p>
             <p className="font-mono text-[11px] text-sb-cream/50 mt-1">
               {(() => {
-                const items = allMyEntries.filter(e => e.row_type !== 'total').length
+                const items = combinedEntries.filter(e => e.row_type !== 'total').length
                 return `${items} assigned ${items === 1 ? 'item' : 'items'}`
               })()}
               {uncommented > 0 && (
@@ -145,6 +146,8 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
                 <tr className="border-b border-sb-inky/30">
                   <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase sticky left-0 bg-sb-navy">SHOP</th>
                   <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">ASSIGNED AS</th>
+                  <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">REPORT</th>
+                  <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">STREAK</th>
                   <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">DUE DATE</th>
                   <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase min-w-[200px]">AM COMMENT</th>
                   <th className="px-3 py-2 font-brand font-bold text-[10px] tracking-widest text-sb-inky uppercase">DONE</th>
@@ -153,12 +156,12 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
               <tbody>
                 {assignedEntries.map(entry => {
                   const role = entry.am_assigned_user_id === profile.id ? 'Area Manager' : 'Regional Director'
-                  const columns: { key: string; label: string; type: string }[] = []
+                  const reportName = reports.find(r => r.id === entry.report_id)?.name ?? '—'
                   return (
                     <AMEntryRow
                       key={entry.id}
                       entry={entry}
-                      columns={columns}
+                      columns={[]}
                       allEntries={allEntries}
                       allWeeks={allWeeks}
                       reportColumns={[]}
@@ -167,6 +170,7 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
                       onSaveDueDate={saveDueDate}
                       onToggleComplete={toggleComplete}
                       assignedRole={role}
+                      reportName={reportName}
                     />
                   )
                 })}
@@ -249,7 +253,7 @@ export default function AMDashboard({ profile, amLocations, reports, entriesByRe
 
 function AMEntryRow({
   entry, columns, allEntries, allWeeks, reportColumns, currentWeekId,
-  onSaveComment, onSaveDueDate, onToggleComplete, assignedRole,
+  onSaveComment, onSaveDueDate, onToggleComplete, assignedRole, reportName,
 }: {
   entry: ReportEntry
   columns: { key: string; label: string; type: string }[]
@@ -261,6 +265,7 @@ function AMEntryRow({
   onSaveDueDate: (id: string, v: string) => Promise<void>
   onToggleComplete: (id: string, v: boolean) => Promise<void>
   assignedRole?: string
+  reportName?: string
 }) {
   const [comment, setComment] = useState(entry.am_comment ?? '')
   const [saving, setSaving] = useState(false)
@@ -281,6 +286,11 @@ function AMEntryRow({
       {assignedRole && (
         <td className="px-3 py-2.5">
           <span className="font-mono text-[11px] text-sb-sky/80">{assignedRole}</span>
+        </td>
+      )}
+      {reportName !== undefined && (
+        <td className="px-3 py-2.5 max-w-[180px]">
+          <span className="font-mono text-[11px] text-sb-cream/70 truncate block">{reportName}</span>
         </td>
       )}
       {columns.map(col => (
