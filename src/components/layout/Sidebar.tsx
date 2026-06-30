@@ -306,6 +306,17 @@ function OutlierExpandableItem({
   }
   const [expanded, setExpanded] = useState(false)
   const [reports, setReports] = useState<{ id: string; name: string; slug: string }[]>([])
+  const prevExpandedRef = useRef(expanded)
+  const [isOpening, setIsOpening] = useState(false)
+  useEffect(() => {
+    if (!prevExpandedRef.current && expanded) {
+      setIsOpening(true)
+      const t = setTimeout(() => setIsOpening(false), reports.length * 60 + 300)
+      prevExpandedRef.current = expanded
+      return () => clearTimeout(t)
+    }
+    prevExpandedRef.current = expanded
+  }, [expanded, reports.length])
 
   useEffect(() => {
     ;(supabase as any).schema('outlier').from('reports')
@@ -353,28 +364,33 @@ function OutlierExpandableItem({
           </button>
         )}
       </div>
-      {showLabel && expanded && (
-        <div className="ml-5 border-l border-[#F2F1E6]/10 mb-0.5">
-          {reports.map(r => (
-            <NavLink
-              key={r.id}
-              to={`/operations/outlier/report/${r.slug}`}
-              onClick={onNavClick}
-              className={({ isActive }) =>
-                [
-                  'flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs font-heading transition-all duration-100',
-                  isActive
-                    ? 'text-[#F2F1E6] bg-[#F2F1E6]/8'
-                    : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
-                ].join(' ')
-              }
-            >
-              <svg className="w-3 h-3 flex-shrink-0 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span className="truncate">{r.name}</span>
-            </NavLink>
-          ))}
+      {showLabel && (
+        <div className={['grid transition-[grid-template-rows] duration-500 ease-in-out', expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'].join(' ')}>
+          <div className="overflow-hidden">
+            <div className="ml-5 border-l border-[#F2F1E6]/10 mb-0.5">
+              {reports.map((r, idx) => (
+                <div key={r.id} className={isOpening ? 'sb-drop-in' : ''} style={isOpening ? { animationDelay: `${idx * 60}ms` } : undefined}>
+                  <NavLink
+                    to={`/operations/outlier/report/${r.slug}`}
+                    onClick={onNavClick}
+                    className={({ isActive }) =>
+                      [
+                        'flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs font-heading transition-all duration-100',
+                        isActive
+                          ? 'text-[#F2F1E6] bg-[#F2F1E6]/8'
+                          : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                      ].join(' ')
+                    }
+                  >
+                    <svg className="w-3 h-3 flex-shrink-0 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <span className="truncate">{r.name}</span>
+                  </NavLink>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
