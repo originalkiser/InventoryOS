@@ -11,6 +11,7 @@ import { LinksCell } from '@/components/shared/LinksCell'
 import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
 import { IssueFormModal } from './IssueFormModal'
 import { AddIssueColumnModal } from './AddIssueColumnModal'
+import { IssueImportModal } from './IssueImportModal'
 import type { Issue, IssueColumnType, IssueTrackerColumn } from '@/types'
 import { differenceInDays, format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -227,6 +228,7 @@ export function IssuesPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editIssue, setEditIssue] = useState<IssueRow | null>(null)
   const [addColOpen, setAddColOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [statuses, setStatuses] = useState<StatusOpt[]>([])
   const [deleteTarget, setDeleteTarget] = useState<IssueRow | null>(null)
 
@@ -432,6 +434,7 @@ export function IssuesPage() {
   const actions = (
     <>
       <Button size="sm" onClick={onNew}>+ New Issue</Button>
+      <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>+ Import</Button>
       <Button size="sm" variant="secondary" onClick={() => setAddColOpen(true)}>+ Add Column</Button>
     </>
   )
@@ -494,6 +497,7 @@ export function IssuesPage() {
 
       <IssueFormModal open={modalOpen} onClose={() => { setModalOpen(false); setEditIssue(null) }} existing={editIssue} onSaved={loadIssues} />
       <AddIssueColumnModal open={addColOpen} onClose={() => setAddColOpen(false)} existingColumns={customColumns} onAdd={issueCols.addColumn} />
+      <IssueImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={loadIssues} />
 
       {/* Delete confirmation */}
       {deleteTarget && (
