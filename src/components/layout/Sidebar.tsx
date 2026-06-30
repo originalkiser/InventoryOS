@@ -30,44 +30,46 @@ import { useDarkMode } from '@/hooks/useDarkMode'
 import { isAdminOrDeveloper, getRoleLabel } from '@/lib/roles'
 import sbLogo from '@/assets/logo-cream.png'
 import sbIcon from '@/assets/SBOC-IconCream.png'
+import {
+  Package, Settings, Building2, DollarSign, TrendingUp, Megaphone,
+  LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
+  Database, Users, AlertTriangle, MessageSquare, Lightbulb,
+  CheckCircle2, FileText, MapPin, GripVertical, ChevronRight,
+  ChevronsLeft, ChevronsRight,
+} from 'lucide-react'
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 
-function Icon({ d, d2 }: { d: string; d2?: string }) {
-  return (
-    <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={d} />
-      {d2 && <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={d2} />}
-    </svg>
-  )
+const ICONS: Record<string, JSX.Element> = {
+  dashboard: <LayoutDashboard className="w-4 h-4 flex-shrink-0" />,
+  'on-hand': <Package className="w-4 h-4 flex-shrink-0" />,
+  monthend: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
+  weekly: <CalendarDays className="w-4 h-4 flex-shrink-0" />,
+  orders: <ClipboardList className="w-4 h-4 flex-shrink-0" />,
+  config: <Settings className="w-4 h-4 flex-shrink-0" />,
+  'global-config': <Database className="w-4 h-4 flex-shrink-0" />,
+  outlier: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
+  'outlier-am': <Users className="w-4 h-4 flex-shrink-0" />,
+  'outlier-leadership': <TrendingUp className="w-4 h-4 flex-shrink-0" />,
+  projects: <FolderKanban className="w-4 h-4 flex-shrink-0" />,
+  calendar: <CalendarDays className="w-4 h-4 flex-shrink-0" />,
+  issues: <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
+  meetings: <MessageSquare className="w-4 h-4 flex-shrink-0" />,
+  'feature-requests': <Lightbulb className="w-4 h-4 flex-shrink-0" />,
+  tasks: <CheckCircle2 className="w-4 h-4 flex-shrink-0" />,
+  forms: <FileText className="w-4 h-4 flex-shrink-0" />,
+  users: <Users className="w-4 h-4 flex-shrink-0" />,
+  locations: <MapPin className="w-4 h-4 flex-shrink-0" />,
+  drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
 
-const ICONS: Record<string, JSX.Element> = {
-  dashboard: <Icon d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />,
-  monthend: <Icon d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />,
-  weekly: <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />,
-  orders: <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />,
-  config: <Icon d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" d2="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />,
-  'global-config': <Icon d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />,
-  outlier: <Icon d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />,
-  'outlier-am': <Icon d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />,
-  'outlier-leadership': <Icon d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />,
-  projects: <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />,
-  calendar: <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />,
-  issues: <Icon d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />,
-  meetings: <Icon d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" />,
-  'feature-requests': <Icon d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />,
-  tasks: <Icon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />,
-  forms: <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />,
-  users: <Icon d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />,
-  locations: <Icon d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" d2="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />,
-  drag: (
-    <svg className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" fill="currentColor" viewBox="0 0 24 24">
-      <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" />
-      <circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" />
-      <circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" />
-    </svg>
-  ),
+const SECTION_ICONS: Record<string, JSX.Element> = {
+  inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
+  'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
+  operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
+  finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
+  accounting: <TrendingUp className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
+  marketing: <Megaphone className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
 }
 
 // ── Nav data ───────────────────────────────────────────────────────────────
@@ -101,13 +103,13 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
   marketing: [{ key: 'marketing-soon', label: 'Coming Soon', to: null }],
 }
 
-const SECTION_META: Record<string, { label: string; emoji: string }> = {
-  inventory: { label: 'Inventory', emoji: '📦' },
-  'global-config': { label: 'Configuration', emoji: '⚙️' },
-  operations: { label: 'Operations', emoji: '🏢' },
-  finance: { label: 'Finance', emoji: '💰' },
-  accounting: { label: 'Accounting', emoji: '📊' },
-  marketing: { label: 'Marketing', emoji: '📣' },
+const SECTION_META: Record<string, { label: string }> = {
+  inventory: { label: 'Inventory' },
+  'global-config': { label: 'Configuration' },
+  operations: { label: 'Operations' },
+  finance: { label: 'Finance' },
+  accounting: { label: 'Accounting' },
+  marketing: { label: 'Marketing' },
 }
 
 const UTILITY_ITEMS: NavItem[] = [
@@ -345,12 +347,9 @@ function OutlierExpandableItem({
             className="flex-shrink-0 mr-1 p-1 rounded text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
             title={expanded ? 'Collapse reports' : 'Expand reports'}
           >
-            <svg
+            <ChevronRight
               className={['w-3 h-3 transition-transform duration-150', expanded ? 'rotate-90' : ''].join(' ')}
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
+            />
           </button>
         )}
       </div>
@@ -468,19 +467,16 @@ function SortableSection({
           onClick={onToggleCollapse}
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
         >
-          <span className="text-[10px] leading-none">{meta?.emoji}</span>
+          {SECTION_ICONS[sectionKey]}
           <span className="text-[10px] font-heading text-[#F2F1E6]/50 uppercase tracking-widest truncate flex-1">
             {meta?.label}
           </span>
-          <svg
+          <ChevronRight
             className={[
               'w-3 h-3 flex-shrink-0 text-[#F2F1E6]/30 transition-transform duration-150',
               collapsed ? '' : 'rotate-90',
             ].join(' ')}
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
+          />
         </button>
       </div>
 
@@ -993,9 +989,7 @@ function CollapsedNav({
             title="Expand sidebar"
             className="flex items-center justify-center w-8 h-8 rounded text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-            </svg>
+            <ChevronsRight className="w-4 h-4" />
           </button>
         </div>
       )}
@@ -1142,9 +1136,7 @@ function ExpandedSidebar({
             title="Collapse sidebar"
             className="flex items-center gap-1 text-[#4F7489] hover:text-[#F2F1E6] transition-colors px-1.5 py-1 rounded hover:bg-[#F2F1E6]/5"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-            </svg>
+            <ChevronsLeft className="w-4 h-4" />
           </button>
         </div>
       )}

@@ -22,11 +22,11 @@ type Block =
 interface ViewConfig { showSearch: boolean; blocks: Block[] }
 
 const SOURCES = [
-  { value: 'locations', label: 'Locations' },
-  { value: 'monthly_counts', label: 'Monthly Counts' },
-  { value: 'order_sessions', label: 'Orders' },
-  { value: 'issues', label: 'Issues' },
-  { value: 'tank_monitors', label: 'Tank Monitors' },
+  { value: 'locations', label: 'Locations', schema: 'inventory', table: 'locations' },
+  { value: 'monthly_counts', label: 'Monthly Counts', schema: 'inventory', table: 'monthly_counts' },
+  { value: 'order_sessions', label: 'Orders', schema: 'inventory', table: 'order_sessions' },
+  { value: 'issues', label: 'Issues', schema: 'inventory', table: 'issues' },
+  { value: 'tank_monitors', label: 'Tank Monitors', schema: 'inventory', table: 'tank_monitors' },
 ]
 const VIEW_KEY = 'locationLookup.view'
 const SIZE_KEY = 'locationLookup.size'
@@ -298,7 +298,8 @@ function PillsBlock({ block, editing, onChange, onFilter }: {
     if (!companyId) return
     let cancelled = false
     Promise.all(block.pills.map(async (p) => {
-      let q = (supabase as any).from(p.source || 'locations').select('*', { count: 'exact', head: true }).eq('company_id', companyId)
+      const pSrc = SOURCES.find((s) => s.value === (p.source || 'locations')) ?? SOURCES[0]
+      let q = (supabase as any).schema(pSrc.schema).from(pSrc.table).select('*', { count: 'exact', head: true }).eq('company_id', companyId)
       if (p.column && p.op && p.value !== undefined && p.value !== '') {
         const val = parseVal(p.value)
         q = p.op === '!=' ? q.neq(p.column, val) : p.op === '<' ? q.lt(p.column, val) : p.op === '>' ? q.gt(p.column, val) : q.eq(p.column, val)
@@ -347,16 +348,18 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
 
   useEffect(() => {
     if (!profile?.company_id) return
+    const srcMeta = SOURCES.find((s) => s.value === source) ?? SOURCES[0]
     let cancelled = false
-    ;(supabase as any).from(source).select('*').eq('company_id', profile.company_id).limit(1)
+    ;(supabase as any).schema(srcMeta.schema).from(srcMeta.table).select('*').eq('company_id', profile.company_id).limit(1)
       .then(({ data }: any) => { if (!cancelled) setCols(data?.[0] ? Object.keys(data[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []) })
     return () => { cancelled = true }
   }, [source, profile?.company_id])
 
   useEffect(() => {
     if (!profile?.company_id || !column) { setDistinctVals([]); return }
+    const srcMeta = SOURCES.find((s) => s.value === source) ?? SOURCES[0]
     let cancelled = false
-    ;(supabase as any).from(source).select(column).eq('company_id', profile.company_id).limit(500)
+    ;(supabase as any).schema(srcMeta.schema).from(srcMeta.table).select(column).eq('company_id', profile.company_id).limit(500)
       .then(({ data }: any) => {
         if (cancelled) return
         const vals = Array.from(new Set((data ?? []).map((r: any) => String(r[column] ?? '')).filter(Boolean))).sort() as string[]
