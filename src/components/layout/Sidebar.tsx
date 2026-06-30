@@ -480,38 +480,40 @@ function SortableSection({
         </button>
       </div>
 
-      {/* Section items */}
-      {!collapsed && (
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleItemDragEnd}
-        >
-          <SortableContext items={items.map((i) => i.key)} strategy={verticalListSortingStrategy}>
-            {items.map((item) => (
-              item.key === 'outlier' ? (
-                <OutlierExpandableItem
-                  key={item.key}
-                  item={item}
-                  showLabel
-                  isFavorite={favorites.includes(item.key)}
-                  onToggleFavorite={onToggleFavorite}
-                  onNavClick={onNavClick}
-                />
-              ) : (
-                <SortableNavItem
-                  key={item.key}
-                  item={item}
-                  showLabel
-                  isFavorite={favorites.includes(item.key)}
-                  onToggleFavorite={onToggleFavorite}
-                  onNavClick={onNavClick}
-                />
-              )
-            ))}
-          </SortableContext>
-        </DndContext>
-      )}
+      {/* Section items — animated slide */}
+      <div className={['grid transition-[grid-template-rows] duration-200 ease-in-out', collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'].join(' ')}>
+        <div className="overflow-hidden">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleItemDragEnd}
+          >
+            <SortableContext items={items.map((i) => i.key)} strategy={verticalListSortingStrategy}>
+              {items.map((item) => (
+                item.key === 'outlier' ? (
+                  <OutlierExpandableItem
+                    key={item.key}
+                    item={item}
+                    showLabel
+                    isFavorite={favorites.includes(item.key)}
+                    onToggleFavorite={onToggleFavorite}
+                    onNavClick={onNavClick}
+                  />
+                ) : (
+                  <SortableNavItem
+                    key={item.key}
+                    item={item}
+                    showLabel
+                    isFavorite={favorites.includes(item.key)}
+                    onToggleFavorite={onToggleFavorite}
+                    onNavClick={onNavClick}
+                  />
+                )
+              ))}
+            </SortableContext>
+          </DndContext>
+        </div>
+      </div>
     </div>
   )
 }
