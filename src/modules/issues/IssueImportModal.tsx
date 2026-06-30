@@ -290,8 +290,8 @@ export function IssueImportModal({ open, onClose, onImported }: Props) {
   const unresolved = previewRows.filter(r => r.location_code && !r.location_found).length
 
   return (
-    <Modal open={open} onClose={() => { reset(); onClose() }} title="Import Issues">
-      <div className="flex flex-col gap-4" style={{ minWidth: 520 }}>
+    <Modal open={open} onClose={() => { reset(); onClose() }} title="Import Issues" size="lg">
+      <div className="flex flex-col gap-4">
 
         {/* ── Input phase ── */}
         {phase === 'input' && (
