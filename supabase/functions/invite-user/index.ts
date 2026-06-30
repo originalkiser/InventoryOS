@@ -40,6 +40,9 @@ Deno.serve(async (req) => {
       .schema('platform').from('user_profiles').select('company_id, role, email').eq('id', who.user.id).single()
     if (meErr || !me) return json({ error: 'Your profile was not found' })
     if (me.role !== 'admin' && me.role !== 'developer') return json({ error: 'Only admins can invite users' })
+    if (!me.company_id) {
+      return json({ error: 'Your account is not linked to a workspace — a developer must backfill your company_id before you can invite users.' }, 403)
+    }
 
     // 2) Validate the payload.
     const body = await req.json().catch(() => ({}))

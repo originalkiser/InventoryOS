@@ -42,7 +42,10 @@ export function InviteUserModal({ open, onClose, onInvited }: InviteUserModalPro
       toast.error('Name and email are required')
       return
     }
-    if (!profile?.company_id) return
+    if (!profile?.company_id) {
+      toast.error('Your account is not linked to a workspace — contact a developer to fix your profile')
+      return
+    }
 
     setLoading(true)
     try {

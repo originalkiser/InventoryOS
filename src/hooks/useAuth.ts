@@ -63,15 +63,13 @@ export function useAuth() {
       const fullName: string = meta.full_name || prof?.full_name || user.email || emailLocal
 
       if (prof && !prof.company_id) {
-        // Repair an existing company-less profile. Client-generated id avoids the
-        // RLS read-back problem (can't SELECT the new company before it's linked).
-        const newCompanyId = crypto.randomUUID()
-        const { error: cErr } = await sb.schema('platform').from('companies').insert({ id: newCompanyId, name: companyName })
-        if (cErr) throw cErr
-        const { error: uErr } = await sb.schema('platform').from('user_profiles')
-          .update({ company_id: newCompanyId, full_name: fullName, email: user.email })
-          .eq('id', user.id)
-        if (uErr) throw uErr
+        // Profile exists but company_id is NULL. Creating a new company here would
+        // silently isolate this account from all existing company data.
+        // Fix: run the backfill SQL from supabase/migrations/backfill_company_id.sql
+        // in the Supabase dashboard, then redeploy.
+        throw new Error(
+          'Your account is not linked to a workspace. A developer must run the company_id backfill SQL in the Supabase dashboard to fix this.'
+        )
       } else if (!prof) {
         // No profile row at all — create company + profile
         await completeSetup(user.id, companyName, fullName, user.email ?? '')
