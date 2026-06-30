@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   normalizeBlockedDays,
@@ -411,11 +411,24 @@ function SortableSection({
     opacity: isDragging ? 0.5 : 1,
   }
   const meta = SECTION_META[sectionKey]
+
   const baseItems = overrideItems ?? SECTION_ITEMS[sectionKey] ?? []
   const items =
     itemOrder.length > 0
       ? itemOrder.map((k) => baseItems.find((i) => i.key === k)).filter((i): i is NavItem => !!i)
       : baseItems
+
+  const prevCollapsedRef = useRef(collapsed)
+  const [isOpening, setIsOpening] = useState(false)
+  useEffect(() => {
+    if (prevCollapsedRef.current && !collapsed) {
+      setIsOpening(true)
+      const t = setTimeout(() => setIsOpening(false), items.length * 60 + 300)
+      prevCollapsedRef.current = collapsed
+      return () => clearTimeout(t)
+    }
+    prevCollapsedRef.current = collapsed
+  }, [collapsed, items.length])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -481,7 +494,7 @@ function SortableSection({
       </div>
 
       {/* Section items — animated slide */}
-      <div className={['grid transition-[grid-template-rows] duration-200 ease-in-out', collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'].join(' ')}>
+      <div className={['grid transition-[grid-template-rows] duration-500 ease-in-out', collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'].join(' ')}>
         <div className="overflow-hidden">
           <DndContext
             sensors={sensors}
@@ -489,26 +502,30 @@ function SortableSection({
             onDragEnd={handleItemDragEnd}
           >
             <SortableContext items={items.map((i) => i.key)} strategy={verticalListSortingStrategy}>
-              {items.map((item) => (
-                item.key === 'outlier' ? (
-                  <OutlierExpandableItem
-                    key={item.key}
-                    item={item}
-                    showLabel
-                    isFavorite={favorites.includes(item.key)}
-                    onToggleFavorite={onToggleFavorite}
-                    onNavClick={onNavClick}
-                  />
-                ) : (
-                  <SortableNavItem
-                    key={item.key}
-                    item={item}
-                    showLabel
-                    isFavorite={favorites.includes(item.key)}
-                    onToggleFavorite={onToggleFavorite}
-                    onNavClick={onNavClick}
-                  />
-                )
+              {items.map((item, idx) => (
+                <div
+                  key={item.key}
+                  className={isOpening ? 'sb-drop-in' : ''}
+                  style={isOpening ? { animationDelay: `${idx * 60}ms` } : undefined}
+                >
+                  {item.key === 'outlier' ? (
+                    <OutlierExpandableItem
+                      item={item}
+                      showLabel
+                      isFavorite={favorites.includes(item.key)}
+                      onToggleFavorite={onToggleFavorite}
+                      onNavClick={onNavClick}
+                    />
+                  ) : (
+                    <SortableNavItem
+                      item={item}
+                      showLabel
+                      isFavorite={favorites.includes(item.key)}
+                      onToggleFavorite={onToggleFavorite}
+                      onNavClick={onNavClick}
+                    />
+                  )}
+                </div>
               ))}
             </SortableContext>
           </DndContext>

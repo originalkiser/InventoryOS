@@ -163,6 +163,15 @@ body {
   94%, 100% { stroke-dashoffset: -1; }
 }
 
+/* Sidebar section item drop-in animation */
+@keyframes sb-drop-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sb-drop-in {
+  animation: sb-drop-in 260ms ease-out both;
+}
+
 /* Profile panel — time inputs need explicit color-scheme in dark mode so
    Chrome/Edge render the picker value text in light color, not system black. */
 .dark .profile-panel input[type="time"] {
