@@ -35,6 +35,72 @@ const GET_LOCATIONS_QUERY = `
   }
 `
 
+// ─── Board Preview (for Test Connection) ─────────────────────────────────────
+
+const GET_BOARD_META_QUERY = `
+  query GetBoardMeta($boardId: ID!) {
+    boards(ids: [$boardId]) {
+      name
+      columns { id title type }
+      items_page(limit: 25) {
+        items {
+          id
+          name
+          column_values { id text }
+        }
+      }
+    }
+  }
+`
+
+export interface MondayBoardColumn { id: string; title: string; type: string }
+
+export interface MondayPreviewResult {
+  boardName: string
+  columns: MondayBoardColumn[]
+  rows: Record<string, string>[]
+  previewCount: number
+}
+
+export async function getMondayBoardPreview(boardId: string): Promise<MondayPreviewResult> {
+  const apiKey = import.meta.env.VITE_MONDAY_API_KEY
+  if (!apiKey) throw new Error('VITE_MONDAY_API_KEY not set — monday.com integration not configured')
+
+  const res = await fetch(MONDAY_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: apiKey },
+    body: JSON.stringify({ query: GET_BOARD_META_QUERY, variables: { boardId } }),
+  })
+  if (!res.ok) throw new Error(`monday.com API error: HTTP ${res.status}`)
+  const json = await res.json()
+  if (json.errors?.length) throw new Error(json.errors[0]?.message ?? 'monday.com GraphQL error')
+
+  const board = json.data?.boards?.[0]
+  if (!board) throw new Error(`Board ${boardId} not found or not accessible`)
+
+  const columns: MondayBoardColumn[] = [
+    { id: '_name', title: 'Name', type: 'name' },
+    ...(board.columns ?? []),
+  ]
+
+  const colIdToTitle: Record<string, string> = {}
+  for (const col of board.columns ?? []) colIdToTitle[col.id] = col.title
+
+  const items = board.items_page?.items ?? []
+  const rows: Record<string, string>[] = items.map((item: any) => {
+    const row: Record<string, string> = { Name: item.name }
+    for (const cv of item.column_values ?? []) {
+      const title = colIdToTitle[cv.id]
+      if (title) row[title] = cv.text ?? ''
+    }
+    return row
+  })
+
+  return { boardName: board.name ?? boardId, columns, rows, previewCount: rows.length }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function getMondayBoardItems(boardId: string): Promise<MondayItem[]> {
   const apiKey = import.meta.env.VITE_MONDAY_API_KEY
   if (!apiKey) throw new Error('monday.com integration not yet configured. Set VITE_MONDAY_API_KEY in .env')
