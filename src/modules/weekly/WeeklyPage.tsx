@@ -6,7 +6,7 @@ import { useWeeklyStore } from '@/stores/weeklyStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { NotSubmittedPanel } from '@/components/shared/NotSubmittedPanel'
 import { useTable } from '@/hooks/useTable'
-import { Button, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Button, Modal, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { CountSummaryUpload } from '@/modules/monthend/CountSummaryUpload'
 import { weeklySummaryTarget, locationLabel } from '@/modules/monthend/countsShared'
 import type { Location, WeeklyCount } from '@/types'
@@ -26,7 +26,6 @@ function weekRange(weekStart: string) {
   }
 }
 
-// Effective query range when a count window is active.
 function windowRange(windowStart: string, windowEnd: string) {
   return {
     startISO: `${windowStart}T00:00:00.000Z`,
@@ -34,25 +33,164 @@ function windowRange(windowStart: string, windowEnd: string) {
   }
 }
 
-interface TabFilters {
-  corporateOnly: boolean
+const inputCls = 'bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky'
+const badgeCls = 'text-[10px] font-mono text-inky/70 bg-navy/[0.07] rounded px-1.5 py-0.5'
+
+interface WindowFilters {
   windowEnabled: boolean
   windowStart: string
   windowEnd: string
 }
 
-const inputCls = 'bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky'
+// ---------------------------------------------------------------------------
+// Exclusion manager modal
+// ---------------------------------------------------------------------------
+function ExclusionManagerModal({
+  open,
+  onClose,
+  locations,
+  exclusions,
+  onChange,
+}: {
+  open: boolean
+  onClose: () => void
+  locations: Location[]
+  exclusions: Set<string>
+  onChange: (next: Set<string>) => void
+}) {
+  const [search, setSearch] = useState('')
 
+  const sorted = useMemo(() => {
+    const q = search.toLowerCase()
+    const filtered = q
+      ? locations.filter(
+          (l) =>
+            l.location_code?.toLowerCase().includes(q) ||
+            l.name?.toLowerCase().includes(q),
+        )
+      : locations
+    return [...filtered].sort((a, b) => {
+      const aEx = exclusions.has(a.id)
+      const bEx = exclusions.has(b.id)
+      if (aEx && !bEx) return -1
+      if (!aEx && bEx) return 1
+      return (a.location_code ?? '').localeCompare(b.location_code ?? '')
+    })
+  }, [locations, exclusions, search])
+
+  function toggle(id: string) {
+    const next = new Set(exclusions)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    onChange(next)
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Manage Shop Exclusions" size="md">
+      <div className="flex flex-col gap-3">
+        <p className="text-xs font-mono text-inky">
+          Excluded shops are hidden from counts, not-submitted tracking, and exports. Selections persist across weeks.
+        </p>
+        <input
+          type="text"
+          placeholder="Search by code or name…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className={`${inputCls} w-full`}
+        />
+        <div className="flex flex-col gap-0 max-h-80 overflow-y-auto border border-navy/10 rounded">
+          {sorted.map((loc) => (
+            <label
+              key={loc.id}
+              className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-navy/5 select-none border-b border-navy/5 last:border-0"
+            >
+              <input
+                type="checkbox"
+                checked={exclusions.has(loc.id)}
+                onChange={() => toggle(loc.id)}
+                className="w-3.5 h-3.5 accent-navy flex-shrink-0"
+              />
+              <span className="text-xs font-mono text-navy font-semibold w-16 flex-shrink-0">
+                {loc.location_code}
+              </span>
+              <span className="text-xs font-mono text-inky truncate">{loc.name}</span>
+              {(loc.metadata as any)?.owner && (
+                <span className="ml-auto text-[10px] font-mono text-inky/50 flex-shrink-0">
+                  {(loc.metadata as any).owner}
+                </span>
+              )}
+            </label>
+          ))}
+          {sorted.length === 0 && (
+            <p className="text-xs font-mono text-inky/50 italic px-3 py-3">No shops match.</p>
+          )}
+        </div>
+        <div className="flex items-center justify-between pt-1">
+          {exclusions.size > 0 ? (
+            <button
+              onClick={() => onChange(new Set())}
+              className="text-xs font-mono text-[#C0392B] hover:underline"
+            >
+              Clear all ({exclusions.size})
+            </button>
+          ) : (
+            <span />
+          )}
+          <Button size="sm" onClick={onClose}>Done</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Page shell
+// ---------------------------------------------------------------------------
 export function WeeklyPage() {
   const { selectedWeek, setSelectedWeek } = useWeeklyStore()
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
   const { label, weekEndDate } = weekRange(selectedWeek)
 
+  // Filters
   const [corporateOnly, setCorporateOnly] = useState(false)
   const [windowEnabled, setWindowEnabled] = useState(false)
   const [windowStart, setWindowStart] = useState(selectedWeek)
   const [windowEnd, setWindowEnd] = useState(weekEndDate)
 
-  // Reset window to full week whenever the selected week changes.
+  // Manual shop exclusions — persisted in localStorage per company
+  const storageKey = companyId ? `weekly_exclusions_${companyId}` : null
+  const [manualExclusions, setManualExclusions] = useState<Set<string>>(new Set())
+  const [exclusionPanelOpen, setExclusionPanelOpen] = useState(false)
+
+  // All active locations — loaded once at page level
+  const [locations, setLocations] = useState<Location[]>([])
+
+  useEffect(() => {
+    if (!companyId) return
+    const sb = supabase as any
+    sb.schema('core').from('locations')
+      .select('*').eq('company_id', companyId).eq('active', true).order('location_code')
+      .then(({ data }: any) => setLocations((data ?? []) as Location[]))
+  }, [companyId])
+
+  // Load persisted exclusions on mount
+  useEffect(() => {
+    if (!storageKey) return
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (raw) setManualExclusions(new Set(JSON.parse(raw) as string[]))
+    } catch { /* ignore corrupt storage */ }
+  }, [storageKey])
+
+  function updateExclusions(next: Set<string>) {
+    setManualExclusions(next)
+    if (storageKey) {
+      try { localStorage.setItem(storageKey, JSON.stringify([...next])) } catch { /* ignore */ }
+    }
+  }
+
+  // Reset window to full week when week changes
   useEffect(() => {
     const { weekEndDate: end } = weekRange(selectedWeek)
     setWindowStart(selectedWeek)
@@ -64,7 +202,20 @@ export function WeeklyPage() {
     setSelectedWeek(format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd'))
   }
 
-  const filters: TabFilters = { corporateOnly, windowEnabled, windowStart, windowEnd }
+  // Effective locations after all filters
+  const effectiveLocations = useMemo(() => {
+    let locs = locations
+    if (corporateOnly) locs = locs.filter((l) => (l.metadata as any)?.owner === 'Corporate')
+    if (manualExclusions.size > 0) locs = locs.filter((l) => !manualExclusions.has(l.id))
+    return locs
+  }, [locations, corporateOnly, manualExclusions])
+
+  const nonCorporateCount = useMemo(
+    () => locations.filter((l) => (l.metadata as any)?.owner !== 'Corporate').length,
+    [locations],
+  )
+
+  const windowFilters: WindowFilters = { windowEnabled, windowStart, windowEnd }
 
   return (
     <div className="flex flex-col gap-4">
@@ -94,51 +245,69 @@ export function WeeklyPage() {
       <p className="text-xs font-mono text-inky">Selected: <span className="text-navy">{label}</span></p>
 
       {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2.5 border border-navy/10 rounded bg-navy/[0.03]">
-        {/* Corporate only */}
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={corporateOnly}
-            onChange={(e) => setCorporateOnly(e.target.checked)}
-            className="w-3.5 h-3.5 accent-navy"
-          />
-          <span className="text-xs font-mono text-inky">Corporate shops only</span>
-        </label>
-
-        <div className="hidden sm:block w-px h-4 bg-navy/15" />
-
-        {/* Count window */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={windowEnabled}
-              onChange={(e) => setWindowEnabled(e.target.checked)}
-              className="w-3.5 h-3.5 accent-navy"
-            />
-            <span className="text-xs font-mono text-inky">Count window</span>
-          </label>
-          {windowEnabled && (
-            <div className="flex items-center gap-1.5">
+      <div className="flex flex-col gap-2.5 px-3 py-2.5 border border-navy/10 rounded bg-navy/[0.03]">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {/* Corporate only */}
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
-                type="date"
-                value={windowStart}
-                min={selectedWeek}
-                max={windowEnd}
-                onChange={(e) => e.target.value && setWindowStart(e.target.value)}
-                className={inputCls}
+                type="checkbox"
+                checked={corporateOnly}
+                onChange={(e) => setCorporateOnly(e.target.checked)}
+                className="w-3.5 h-3.5 accent-navy"
               />
-              <span className="text-[10px] font-mono text-inky/50">to</span>
+              <span className="text-xs font-mono text-inky">Corporate shops only</span>
+            </label>
+            {corporateOnly && nonCorporateCount > 0 && (
+              <span className={badgeCls}>{nonCorporateCount} excluded</span>
+            )}
+          </div>
+
+          <div className="hidden sm:block w-px h-4 bg-navy/15" />
+
+          {/* Count window — no min on start, allowing dates before the week */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
-                type="date"
-                value={windowEnd}
-                min={windowStart}
-                max={weekEndDate}
-                onChange={(e) => e.target.value && setWindowEnd(e.target.value)}
-                className={inputCls}
+                type="checkbox"
+                checked={windowEnabled}
+                onChange={(e) => setWindowEnabled(e.target.checked)}
+                className="w-3.5 h-3.5 accent-navy"
               />
-            </div>
+              <span className="text-xs font-mono text-inky">Count window</span>
+            </label>
+            {windowEnabled && (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="date"
+                  value={windowStart}
+                  max={windowEnd}
+                  onChange={(e) => e.target.value && setWindowStart(e.target.value)}
+                  className={inputCls}
+                />
+                <span className="text-[10px] font-mono text-inky/50">to</span>
+                <input
+                  type="date"
+                  value={windowEnd}
+                  min={windowStart}
+                  onChange={(e) => e.target.value && setWindowEnd(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Manual exclusions row */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setExclusionPanelOpen(true)}
+            className="text-xs font-mono text-inky hover:text-navy transition-colors underline decoration-dotted underline-offset-2"
+          >
+            Manage shop exclusions
+          </button>
+          {manualExclusions.size > 0 && (
+            <span className={badgeCls}>{manualExclusions.size} excluded</span>
           )}
         </div>
       </div>
@@ -148,9 +317,21 @@ export function WeeklyPage() {
           <TabsTrigger value="counts">Counts</TabsTrigger>
           <TabsTrigger value="not_submitted">Not Submitted</TabsTrigger>
         </TabsList>
-        <TabsContent value="counts"><WeeklyCountsTab filters={filters} /></TabsContent>
-        <TabsContent value="not_submitted"><WeeklyNotSubmittedTab filters={filters} /></TabsContent>
+        <TabsContent value="counts">
+          <WeeklyCountsTab effectiveLocations={effectiveLocations} windowFilters={windowFilters} />
+        </TabsContent>
+        <TabsContent value="not_submitted">
+          <WeeklyNotSubmittedTab effectiveLocations={effectiveLocations} windowFilters={windowFilters} />
+        </TabsContent>
       </Tabs>
+
+      <ExclusionManagerModal
+        open={exclusionPanelOpen}
+        onClose={() => setExclusionPanelOpen(false)}
+        locations={locations}
+        exclusions={manualExclusions}
+        onChange={updateExclusions}
+      />
     </div>
   )
 }
@@ -166,19 +347,22 @@ const col = createColumnHelper<WeeklyRow>()
 const num = (v: number | null | undefined) =>
   v === null || v === undefined ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 })
 
-function WeeklyCountsTab({ filters }: { filters: TabFilters }) {
+function WeeklyCountsTab({
+  effectiveLocations,
+  windowFilters,
+}: {
+  effectiveLocations: Location[]
+  windowFilters: WindowFilters
+}) {
   const { profile } = useAuthStore()
   const { selectedWeek } = useWeeklyStore()
   const companyId = profile?.company_id ?? null
+  const { windowEnabled, windowStart, windowEnd } = windowFilters
 
-  const { corporateOnly, windowEnabled, windowStart, windowEnd } = filters
-
-  // Use window range for the query when enabled; fall back to full week.
   const { startISO, endExclusiveISO } = windowEnabled
     ? windowRange(windowStart, windowEnd)
     : weekRange(selectedWeek)
 
-  const [locations, setLocations] = useState<Location[]>([])
   const [counts, setCounts] = useState<WeeklyCount[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -186,13 +370,12 @@ function WeeklyCountsTab({ filters }: { filters: TabFilters }) {
     if (!companyId) return
     setLoading(true)
     const sb = supabase as any
-    const [locRes, countRes] = await Promise.all([
-      sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code'),
-      sb.schema('inventory').from('weekly_counts').select('*').eq('company_id', companyId)
-        .gte('count_date', startISO).lt('count_date', endExclusiveISO).order('count_date', { ascending: false }),
-    ])
-    setLocations((locRes.data ?? []) as Location[])
-    setCounts((countRes.data ?? []) as WeeklyCount[])
+    const { data } = await sb.schema('inventory').from('weekly_counts').select('*')
+      .eq('company_id', companyId)
+      .gte('count_date', startISO)
+      .lt('count_date', endExclusiveISO)
+      .order('count_date', { ascending: false })
+    setCounts((data ?? []) as WeeklyCount[])
     setLoading(false)
   }, [companyId, startISO, endExclusiveISO])
 
@@ -208,18 +391,14 @@ function WeeklyCountsTab({ filters }: { filters: TabFilters }) {
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, load])
 
-  // Apply corporate filter to locations.
-  const filteredLocations = useMemo(
-    () => corporateOnly ? locations.filter((l) => (l.metadata as any)?.owner === 'Corporate') : locations,
-    [locations, corporateOnly],
-  )
+  const allowedIds = useMemo(() => new Set(effectiveLocations.map((l) => l.id)), [effectiveLocations])
 
-  const rows: WeeklyRow[] = useMemo(() => {
-    const allowedIds = new Set(filteredLocations.map((l) => l.id))
-    return counts
+  const rows: WeeklyRow[] = useMemo(() =>
+    counts
       .filter((c) => allowedIds.has(c.location_id ?? ''))
-      .map((c) => ({ ...c, location_label: locationLabel(c.location_id, filteredLocations) }))
-  }, [counts, filteredLocations])
+      .map((c) => ({ ...c, location_label: locationLabel(c.location_id, effectiveLocations) })),
+    [counts, allowedIds, effectiveLocations],
+  )
 
   const columns = useMemo(() => [
     col.accessor('location_label', { header: 'Location' }),
@@ -255,14 +434,13 @@ function WeeklyCountsTab({ filters }: { filters: TabFilters }) {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <CountSummaryUpload
-          locations={filteredLocations}
+          locations={effectiveLocations}
           companyId={companyId}
           target={weeklySummaryTarget(selectedWeek)}
           uploadedBy={profile?.id ?? null}
           onImported={load}
         />
       </div>
-
       <div>
         <h2 className="text-xs font-mono text-inky uppercase tracking-wide mb-3">Results</h2>
         <DataTable
@@ -281,26 +459,28 @@ function WeeklyCountsTab({ filters }: { filters: TabFilters }) {
 // ---------------------------------------------------------------------------
 // Not Submitted tab
 // ---------------------------------------------------------------------------
-function WeeklyNotSubmittedTab({ filters }: { filters: TabFilters }) {
+function WeeklyNotSubmittedTab({
+  effectiveLocations,
+  windowFilters,
+}: {
+  effectiveLocations: Location[]
+  windowFilters: WindowFilters
+}) {
   const { profile } = useAuthStore()
   const { selectedWeek } = useWeeklyStore()
   const companyId = profile?.company_id ?? null
-
-  const { corporateOnly, windowEnabled, windowStart, windowEnd } = filters
+  const { windowEnabled, windowStart, windowEnd } = windowFilters
   const { startISO, endExclusiveISO, label } = weekRange(selectedWeek)
 
-  // For the "submitted this period" check, use the window if enabled.
   const submitCheckStart = windowEnabled ? `${windowStart}T00:00:00.000Z` : startISO
   const submitCheckEnd = windowEnabled
     ? format(addDays(new Date(`${windowEnd}T00:00:00`), 1), "yyyy-MM-dd'T'00:00:00.000'Z'")
     : endExclusiveISO
 
-  // Period label shown in the panel and reminders.
   const periodLabel = windowEnabled
     ? `${format(new Date(`${windowStart}T00:00:00`), 'MMM d')} – ${format(new Date(`${windowEnd}T00:00:00`), 'MMM d, yyyy')}`
     : label
 
-  const [locations, setLocations] = useState<Location[]>([])
   const [missing, setMissing] = useState<Location[]>([])
   const [lastSubmitted, setLastSubmitted] = useState<Record<string, string | null>>({})
   const [loading, setLoading] = useState(true)
@@ -309,25 +489,17 @@ function WeeklyNotSubmittedTab({ filters }: { filters: TabFilters }) {
     if (!companyId) return
     setLoading(true)
     const sb = supabase as any
-    const [locRes, weekRes, priorRes] = await Promise.all([
-      sb.schema('core').from('locations').select('*').eq('company_id', companyId).eq('active', true).order('location_code'),
+    const [weekRes, priorRes] = await Promise.all([
       sb.schema('inventory').from('weekly_counts').select('location_id').eq('company_id', companyId)
         .gte('count_date', submitCheckStart).lt('count_date', submitCheckEnd),
       sb.schema('inventory').from('weekly_counts').select('location_id, count_date').eq('company_id', companyId)
         .lt('count_date', startISO).order('count_date', { ascending: false }),
     ])
 
-    const allLocs = (locRes.data ?? []) as Location[]
-    // Apply corporate filter before computing missing.
-    const locs = corporateOnly
-      ? allLocs.filter((l) => (l.metadata as any)?.owner === 'Corporate')
-      : allLocs
-
     const submittedIds = new Set(
-      ((weekRes.data ?? []) as { location_id: string | null }[]).map((r) => r.location_id).filter(Boolean)
+      ((weekRes.data ?? []) as { location_id: string | null }[]).map((r) => r.location_id).filter(Boolean),
     )
-    setLocations(locs)
-    setMissing(locs.filter((l) => !submittedIds.has(l.id)))
+    setMissing(effectiveLocations.filter((l) => !submittedIds.has(l.id)))
 
     const lastMap: Record<string, string | null> = {}
     for (const r of (priorRes.data ?? []) as { location_id: string | null; count_date: string }[]) {
@@ -335,7 +507,7 @@ function WeeklyNotSubmittedTab({ filters }: { filters: TabFilters }) {
     }
     setLastSubmitted(lastMap)
     setLoading(false)
-  }, [companyId, startISO, submitCheckStart, submitCheckEnd, corporateOnly])
+  }, [companyId, startISO, submitCheckStart, submitCheckEnd, effectiveLocations])
 
   useEffect(() => { load() }, [load])
 
@@ -356,7 +528,7 @@ function WeeklyNotSubmittedTab({ filters }: { filters: TabFilters }) {
       periodStartISO={selectedWeek}
       periodLabel={periodLabel}
       missing={missing}
-      totalActive={locations.length}
+      totalActive={effectiveLocations.length}
       lastSubmittedByLoc={lastSubmitted}
       reminderTitle={`Weekly counts outstanding — ${periodLabel}`}
       exportPrefix="weekly_not_submitted"
