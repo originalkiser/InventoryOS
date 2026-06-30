@@ -22,27 +22,59 @@ function weekRange(weekStart: string) {
     startISO: `${weekStart}T00:00:00.000Z`,
     endExclusiveISO: format(endExclusive, "yyyy-MM-dd'T'00:00:00.000'Z'"),
     label: `Week of ${format(start, 'MMM d')} – ${format(endInclusive, 'MMM d, yyyy')}`,
+    weekEndDate: format(endInclusive, 'yyyy-MM-dd'),
   }
 }
 
+// Effective query range when a count window is active.
+function windowRange(windowStart: string, windowEnd: string) {
+  return {
+    startISO: `${windowStart}T00:00:00.000Z`,
+    endExclusiveISO: format(addDays(new Date(`${windowEnd}T00:00:00`), 1), "yyyy-MM-dd'T'00:00:00.000'Z'"),
+  }
+}
+
+interface TabFilters {
+  corporateOnly: boolean
+  windowEnabled: boolean
+  windowStart: string
+  windowEnd: string
+}
+
+const inputCls = 'bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky'
+
 export function WeeklyPage() {
   const { selectedWeek, setSelectedWeek } = useWeeklyStore()
-  const { label } = weekRange(selectedWeek)
+  const { label, weekEndDate } = weekRange(selectedWeek)
+
+  const [corporateOnly, setCorporateOnly] = useState(false)
+  const [windowEnabled, setWindowEnabled] = useState(false)
+  const [windowStart, setWindowStart] = useState(selectedWeek)
+  const [windowEnd, setWindowEnd] = useState(weekEndDate)
+
+  // Reset window to full week whenever the selected week changes.
+  useEffect(() => {
+    const { weekEndDate: end } = weekRange(selectedWeek)
+    setWindowStart(selectedWeek)
+    setWindowEnd(end)
+  }, [selectedWeek])
 
   function shiftWeek(deltaDays: number) {
     const d = addDays(new Date(`${selectedWeek}T00:00:00`), deltaDays)
     setSelectedWeek(format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd'))
   }
 
+  const filters: TabFilters = { corporateOnly, windowEnabled, windowStart, windowEnd }
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Weekly Counts</h1>
           <p className="text-xs text-inky mt-0.5">Track weekly count submissions across shops</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => shiftWeek(-7)} className="px-2 py-1.5 border border-navy/30 rounded text-inky hover:border-gray-500 font-mono text-xs">‹ Prev</button>
+          <button onClick={() => shiftWeek(-7)} className="px-2 py-1.5 border border-navy/30 rounded text-inky hover:border-navy/60 font-mono text-xs">‹ Prev</button>
           <div className="flex flex-col">
             <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Week</span>
             <input
@@ -52,22 +84,72 @@ export function WeeklyPage() {
                 if (!e.target.value) return
                 setSelectedWeek(format(startOfWeek(new Date(`${e.target.value}T00:00:00`), { weekStartsOn: 1 }), 'yyyy-MM-dd'))
               }}
-              className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-[#00e5ff]"
+              className={inputCls}
             />
           </div>
-          <button onClick={() => shiftWeek(7)} className="px-2 py-1.5 border border-navy/30 rounded text-inky hover:border-gray-500 font-mono text-xs">Next ›</button>
+          <button onClick={() => shiftWeek(7)} className="px-2 py-1.5 border border-navy/30 rounded text-inky hover:border-navy/60 font-mono text-xs">Next ›</button>
         </div>
       </div>
 
-      <p className="text-xs font-mono text-inky">Selected: <span className="text-inky">{label}</span></p>
+      <p className="text-xs font-mono text-inky">Selected: <span className="text-navy">{label}</span></p>
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2.5 border border-navy/10 rounded bg-navy/[0.03]">
+        {/* Corporate only */}
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={corporateOnly}
+            onChange={(e) => setCorporateOnly(e.target.checked)}
+            className="w-3.5 h-3.5 accent-navy"
+          />
+          <span className="text-xs font-mono text-inky">Corporate shops only</span>
+        </label>
+
+        <div className="hidden sm:block w-px h-4 bg-navy/15" />
+
+        {/* Count window */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={windowEnabled}
+              onChange={(e) => setWindowEnabled(e.target.checked)}
+              className="w-3.5 h-3.5 accent-navy"
+            />
+            <span className="text-xs font-mono text-inky">Count window</span>
+          </label>
+          {windowEnabled && (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="date"
+                value={windowStart}
+                min={selectedWeek}
+                max={windowEnd}
+                onChange={(e) => e.target.value && setWindowStart(e.target.value)}
+                className={inputCls}
+              />
+              <span className="text-[10px] font-mono text-inky/50">to</span>
+              <input
+                type="date"
+                value={windowEnd}
+                min={windowStart}
+                max={weekEndDate}
+                onChange={(e) => e.target.value && setWindowEnd(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+          )}
+        </div>
+      </div>
 
       <Tabs defaultValue="counts">
         <TabsList>
           <TabsTrigger value="counts">Counts</TabsTrigger>
           <TabsTrigger value="not_submitted">Not Submitted</TabsTrigger>
         </TabsList>
-        <TabsContent value="counts"><WeeklyCountsTab /></TabsContent>
-        <TabsContent value="not_submitted"><WeeklyNotSubmittedTab /></TabsContent>
+        <TabsContent value="counts"><WeeklyCountsTab filters={filters} /></TabsContent>
+        <TabsContent value="not_submitted"><WeeklyNotSubmittedTab filters={filters} /></TabsContent>
       </Tabs>
     </div>
   )
@@ -84,11 +166,17 @@ const col = createColumnHelper<WeeklyRow>()
 const num = (v: number | null | undefined) =>
   v === null || v === undefined ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 })
 
-function WeeklyCountsTab() {
+function WeeklyCountsTab({ filters }: { filters: TabFilters }) {
   const { profile } = useAuthStore()
   const { selectedWeek } = useWeeklyStore()
   const companyId = profile?.company_id ?? null
-  const { startISO, endExclusiveISO } = weekRange(selectedWeek)
+
+  const { corporateOnly, windowEnabled, windowStart, windowEnd } = filters
+
+  // Use window range for the query when enabled; fall back to full week.
+  const { startISO, endExclusiveISO } = windowEnabled
+    ? windowRange(windowStart, windowEnd)
+    : weekRange(selectedWeek)
 
   const [locations, setLocations] = useState<Location[]>([])
   const [counts, setCounts] = useState<WeeklyCount[]>([])
@@ -120,10 +208,18 @@ function WeeklyCountsTab() {
     return () => { void supabase.removeChannel(channel) }
   }, [companyId, load])
 
-  const rows: WeeklyRow[] = useMemo(() => counts.map((c) => ({
-    ...c,
-    location_label: locationLabel(c.location_id, locations),
-  })), [counts, locations])
+  // Apply corporate filter to locations.
+  const filteredLocations = useMemo(
+    () => corporateOnly ? locations.filter((l) => (l.metadata as any)?.owner === 'Corporate') : locations,
+    [locations, corporateOnly],
+  )
+
+  const rows: WeeklyRow[] = useMemo(() => {
+    const allowedIds = new Set(filteredLocations.map((l) => l.id))
+    return counts
+      .filter((c) => allowedIds.has(c.location_id ?? ''))
+      .map((c) => ({ ...c, location_label: locationLabel(c.location_id, filteredLocations) }))
+  }, [counts, filteredLocations])
 
   const columns = useMemo(() => [
     col.accessor('location_label', { header: 'Location' }),
@@ -159,7 +255,7 @@ function WeeklyCountsTab() {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <CountSummaryUpload
-          locations={locations}
+          locations={filteredLocations}
           companyId={companyId}
           target={weeklySummaryTarget(selectedWeek)}
           uploadedBy={profile?.id ?? null}
@@ -183,13 +279,26 @@ function WeeklyCountsTab() {
 }
 
 // ---------------------------------------------------------------------------
-// Not Submitted tab (the module's primary purpose)
+// Not Submitted tab
 // ---------------------------------------------------------------------------
-function WeeklyNotSubmittedTab() {
+function WeeklyNotSubmittedTab({ filters }: { filters: TabFilters }) {
   const { profile } = useAuthStore()
   const { selectedWeek } = useWeeklyStore()
   const companyId = profile?.company_id ?? null
+
+  const { corporateOnly, windowEnabled, windowStart, windowEnd } = filters
   const { startISO, endExclusiveISO, label } = weekRange(selectedWeek)
+
+  // For the "submitted this period" check, use the window if enabled.
+  const submitCheckStart = windowEnabled ? `${windowStart}T00:00:00.000Z` : startISO
+  const submitCheckEnd = windowEnabled
+    ? format(addDays(new Date(`${windowEnd}T00:00:00`), 1), "yyyy-MM-dd'T'00:00:00.000'Z'")
+    : endExclusiveISO
+
+  // Period label shown in the panel and reminders.
+  const periodLabel = windowEnabled
+    ? `${format(new Date(`${windowStart}T00:00:00`), 'MMM d')} – ${format(new Date(`${windowEnd}T00:00:00`), 'MMM d, yyyy')}`
+    : label
 
   const [locations, setLocations] = useState<Location[]>([])
   const [missing, setMissing] = useState<Location[]>([])
@@ -203,13 +312,20 @@ function WeeklyNotSubmittedTab() {
     const [locRes, weekRes, priorRes] = await Promise.all([
       sb.schema('core').from('locations').select('*').eq('company_id', companyId).eq('active', true).order('location_code'),
       sb.schema('inventory').from('weekly_counts').select('location_id').eq('company_id', companyId)
-        .gte('count_date', startISO).lt('count_date', endExclusiveISO),
+        .gte('count_date', submitCheckStart).lt('count_date', submitCheckEnd),
       sb.schema('inventory').from('weekly_counts').select('location_id, count_date').eq('company_id', companyId)
         .lt('count_date', startISO).order('count_date', { ascending: false }),
     ])
 
-    const locs = (locRes.data ?? []) as Location[]
-    const submittedIds = new Set(((weekRes.data ?? []) as { location_id: string | null }[]).map((r) => r.location_id).filter(Boolean))
+    const allLocs = (locRes.data ?? []) as Location[]
+    // Apply corporate filter before computing missing.
+    const locs = corporateOnly
+      ? allLocs.filter((l) => (l.metadata as any)?.owner === 'Corporate')
+      : allLocs
+
+    const submittedIds = new Set(
+      ((weekRes.data ?? []) as { location_id: string | null }[]).map((r) => r.location_id).filter(Boolean)
+    )
     setLocations(locs)
     setMissing(locs.filter((l) => !submittedIds.has(l.id)))
 
@@ -219,7 +335,7 @@ function WeeklyNotSubmittedTab() {
     }
     setLastSubmitted(lastMap)
     setLoading(false)
-  }, [companyId, startISO, endExclusiveISO])
+  }, [companyId, startISO, submitCheckStart, submitCheckEnd, corporateOnly])
 
   useEffect(() => { load() }, [load])
 
@@ -238,11 +354,11 @@ function WeeklyNotSubmittedTab() {
     <NotSubmittedPanel
       companyId={companyId}
       periodStartISO={selectedWeek}
-      periodLabel={label}
+      periodLabel={periodLabel}
       missing={missing}
       totalActive={locations.length}
       lastSubmittedByLoc={lastSubmitted}
-      reminderTitle={`Weekly counts outstanding — ${label}`}
+      reminderTitle={`Weekly counts outstanding — ${periodLabel}`}
       exportPrefix="weekly_not_submitted"
       lastSubmittedFormat="MMM d, yyyy"
       loading={loading}
