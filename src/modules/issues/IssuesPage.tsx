@@ -12,7 +12,8 @@ import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
 import { IssueFormModal } from './IssueFormModal'
 import { AddIssueColumnModal } from './AddIssueColumnModal'
 import { IssueImportModal } from './IssueImportModal'
-import type { Issue, IssueColumnType, IssueTrackerColumn } from '@/types'
+import { isAdminOrDeveloper } from '@/lib/roles'
+import type { Issue, IssueColumnType, IssueTrackerColumn, Department } from '@/types'
 import { differenceInDays, format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -231,6 +232,8 @@ export function IssuesPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [statuses, setStatuses] = useState<StatusOpt[]>([])
   const [deleteTarget, setDeleteTarget] = useState<IssueRow | null>(null)
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [selectedDeptId, setSelectedDeptId] = useState<string>('')
 
   const issueCols = useIssueColumns()
 
@@ -239,14 +242,24 @@ export function IssuesPage() {
   const loadIssues = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
+    const sb = supabase as any
     // Purge issues older than 30 days
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    void (supabase as any).schema('inventory').from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
+    void sb.schema('platform').from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
 
+    let liveQ = sb.schema('platform').from('issues')
+      .select(`*, issue_categories(name), issue_statuses(name)`)
+      .eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false })
+    let delQ = sb.schema('platform').from('issues')
+      .select(`*, issue_categories(name), issue_statuses(name)`)
+      .eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
+    if (selectedDeptId) {
+      liveQ = liveQ.eq('department_id', selectedDeptId)
+      delQ = delQ.eq('department_id', selectedDeptId)
+    }
     const [liveRes, delRes, locRes] = await Promise.all([
-      (supabase as any).schema('inventory').from('issues').select(`*, issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false }),
-      (supabase as any).schema('inventory').from('issues').select(`*, issue_categories(name), issue_statuses(name)`).eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
-      (supabase as any).schema('core').from('locations').select('id, name').eq('company_id', profile.company_id),
+      liveQ, delQ,
+      sb.schema('core').from('locations').select('id, name').eq('company_id', profile.company_id),
     ])
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
     else {
@@ -263,11 +276,31 @@ export function IssuesPage() {
       setDeletedIssues(map(delRes.data ?? []))
     }
     setLoading(false)
-  }, [profile?.company_id])
+  }, [profile?.company_id, selectedDeptId])
+
+  const loadDepartments = useCallback(async () => {
+    if (!profile?.company_id) return
+    const sb = supabase as any
+    if (isAdminOrDeveloper(profile.role)) {
+      const { data } = await sb.schema('platform').from('departments')
+        .select('id, name, slug, sort_order').eq('company_id', profile.company_id).order('sort_order')
+      setDepartments((data ?? []) as Department[])
+    } else {
+      const { data: memberships } = await sb.schema('platform').from('user_department_memberships')
+        .select('department_id').eq('user_id', profile.id).eq('company_id', profile.company_id)
+      const deptIds = (memberships ?? []).map((m: any) => m.department_id as string)
+      if (!deptIds.length) { setDepartments([]); return }
+      const { data } = await sb.schema('platform').from('departments')
+        .select('id, name, slug, sort_order').in('id', deptIds).order('sort_order')
+      setDepartments((data ?? []) as Department[])
+    }
+  }, [profile?.company_id, profile?.id, profile?.role])
+
+  useEffect(() => { loadDepartments() }, [loadDepartments])
 
   const updateLinks = useCallback(async (id: string, links: string[]) => {
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, helpful_links: links } : i)))
-    const { error } = await (supabase as any).schema('inventory').from('issues').update({ helpful_links: links }).eq('id', id)
+    const { error } = await (supabase as any).schema('platform').from('issues').update({ helpful_links: links }).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
@@ -275,7 +308,7 @@ export function IssuesPage() {
   const updateVendor = useCallback(async (id: string, val: string) => {
     const next = val || null
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, vendor: next } : i)))
-    const { error } = await (supabase as any).schema('inventory').from('issues').update({ vendor: next }).eq('id', id)
+    const { error } = await (supabase as any).schema('platform').from('issues').update({ vendor: next }).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
@@ -283,7 +316,7 @@ export function IssuesPage() {
   // localPatch carries derived display fields like status_name).
   const updateIssue = useCallback(async (id: string, dbPatch: Record<string, unknown>, localPatch: Partial<IssueRow> = {}) => {
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbPatch, ...localPatch } : i)))
-    const { error } = await (supabase as any).schema('inventory').from('issues').update(dbPatch).eq('id', id)
+    const { error } = await (supabase as any).schema('platform').from('issues').update(dbPatch).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
@@ -403,13 +436,13 @@ export function IssuesPage() {
     loadIssues()
     const channel = supabase
       .channel('issues-rt')
-      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'issues', filter: `company_id=eq.${profile.company_id}` }, () => loadIssues())
+      .on('postgres_changes', { event: '*', schema: 'platform', table: 'issues', filter: `company_id=eq.${profile.company_id}` }, () => loadIssues())
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [profile?.company_id, loadIssues])
 
   async function softDeleteIssue(id: string) {
-    const { error } = await (supabase as any).schema('inventory').from('issues').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await (supabase as any).schema('platform').from('issues').update({ deleted_at: new Date().toISOString() }).eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Issue moved to deleted items')
     setDeleteTarget(null)
@@ -417,14 +450,14 @@ export function IssuesPage() {
   }
 
   async function restoreIssue(id: string) {
-    const { error } = await (supabase as any).schema('inventory').from('issues').update({ deleted_at: null }).eq('id', id)
+    const { error } = await (supabase as any).schema('platform').from('issues').update({ deleted_at: null }).eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Issue restored')
     loadIssues()
   }
 
   async function hardDeleteIssue(id: string) {
-    const { error } = await (supabase as any).schema('inventory').from('issues').delete().eq('id', id)
+    const { error } = await (supabase as any).schema('platform').from('issues').delete().eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Issue permanently deleted')
     loadIssues()
@@ -441,6 +474,23 @@ export function IssuesPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Department filter */}
+      {departments.length > 1 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={() => setSelectedDeptId('')}
+            className={['px-2.5 py-1 rounded text-xs font-mono transition-colors', selectedDeptId === '' ? 'bg-navy text-cream' : 'bg-navy/10 text-navy/70 hover:bg-navy/20'].join(' ')}
+          >All</button>
+          {departments.map((d) => (
+            <button
+              key={d.id}
+              onClick={() => setSelectedDeptId(d.id)}
+              className={['px-2.5 py-1 rounded text-xs font-mono transition-colors', selectedDeptId === d.id ? 'bg-navy text-cream' : 'bg-navy/10 text-navy/70 hover:bg-navy/20'].join(' ')}
+            >{d.name}</button>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Issue Tracker</h1>
@@ -495,9 +545,9 @@ export function IssuesPage() {
         </TabsContent>
       </Tabs>
 
-      <IssueFormModal open={modalOpen} onClose={() => { setModalOpen(false); setEditIssue(null) }} existing={editIssue} onSaved={loadIssues} />
+      <IssueFormModal open={modalOpen} onClose={() => { setModalOpen(false); setEditIssue(null) }} existing={editIssue} onSaved={loadIssues} defaultDepartmentId={selectedDeptId} departments={departments} />
       <AddIssueColumnModal open={addColOpen} onClose={() => setAddColOpen(false)} existingColumns={customColumns} onAdd={issueCols.addColumn} />
-      <IssueImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={loadIssues} />
+      <IssueImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={loadIssues} departments={departments} defaultDepartmentId={selectedDeptId} />
 
       {/* Delete confirmation */}
       {deleteTarget && (

@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { Button, Modal } from '@/components/ui'
+import type { Department } from '@/types'
 import toast from 'react-hot-toast'
 
 type Phase = 'input' | 'preview' | 'importing' | 'done'
@@ -122,14 +123,17 @@ interface Props {
   open: boolean
   onClose: () => void
   onImported: () => void
+  departments?: Department[]
+  defaultDepartmentId?: string
 }
 
-export function IssueImportModal({ open, onClose, onImported }: Props) {
+export function IssueImportModal({ open, onClose, onImported, departments = [], defaultDepartmentId = '' }: Props) {
   const { profile } = useAuthStore()
   const sb = supabase as any
 
   const [phase, setPhase] = useState<Phase>('input')
   const [mode, setMode] = useState<InputMode>('paste')
+  const [deptId, setDeptId] = useState(defaultDepartmentId)
   const [pasteText, setPasteText] = useState('')
   const [rawRows, setRawRows] = useState<RawRow[]>([])
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([])
@@ -140,6 +144,7 @@ export function IssueImportModal({ open, onClose, onImported }: Props) {
   function reset() {
     setPhase('input')
     setMode('paste')
+    setDeptId(defaultDepartmentId)
     setPasteText('')
     setRawRows([])
     setPreviewRows([])
@@ -258,6 +263,7 @@ export function IssueImportModal({ open, onClose, onImported }: Props) {
       ])
       toInsert.push({
         company_id: profile.company_id,
+        department_id: deptId,
         title: row.title || null,
         location_id,
         status_id,
@@ -273,7 +279,7 @@ export function IssueImportModal({ open, onClose, onImported }: Props) {
     let inserted = 0
     for (let i = 0; i < toInsert.length; i += 100) {
       const chunk = toInsert.slice(i, i + 100)
-      const { data, error } = await sb.schema('inventory').from('issues').insert(chunk).select('id')
+      const { data, error } = await sb.schema('platform').from('issues').insert(chunk).select('id')
       if (error) {
         toast.error(`Import failed: ${error.message}`)
         setPhase('preview')
@@ -296,6 +302,23 @@ export function IssueImportModal({ open, onClose, onImported }: Props) {
         {/* ── Input phase ── */}
         {phase === 'input' && (
           <>
+            {/* Department selector */}
+            {departments.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-mono text-inky uppercase tracking-wide">Department</label>
+                <select
+                  value={deptId}
+                  onChange={(e) => setDeptId(e.target.value)}
+                  className="rounded border border-navy/20 bg-cream text-xs font-mono text-navy px-2 py-1.5 focus:border-sky focus:outline-none"
+                >
+                  <option value="">Select a department…</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="flex gap-0 border-b border-navy/10">
               {(['paste', 'file'] as InputMode[]).map(m => (
                 <button
@@ -327,7 +350,7 @@ export function IssueImportModal({ open, onClose, onImported }: Props) {
                 {parseError && <p className="text-xs font-mono text-red-500">{parseError}</p>}
                 <div className="flex justify-end gap-2">
                   <Button variant="secondary" size="sm" onClick={() => { reset(); onClose() }}>Cancel</Button>
-                  <Button size="sm" onClick={handlePasteSubmit} disabled={!pasteText.trim()}>Preview →</Button>
+                  <Button size="sm" onClick={handlePasteSubmit} disabled={!pasteText.trim() || (departments.length > 0 && !deptId)}>Preview →</Button>
                 </div>
               </>
             )}

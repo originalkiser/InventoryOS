@@ -6,7 +6,7 @@ import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
-import type { Issue, Location, IssueCategory, IssueStatus, Profile } from '@/types'
+import type { Issue, Location, IssueCategory, IssueStatus, Profile, Department } from '@/types'
 import type { ComboboxOption } from '@/components/ui'
 import toast from 'react-hot-toast'
 
@@ -15,15 +15,19 @@ interface IssueFormModalProps {
   onClose: () => void
   existing?: Partial<Issue> | null
   onSaved: () => void
+  defaultDepartmentId?: string
+  departments?: Department[]
 }
 
-export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormModalProps) {
+export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepartmentId, departments: deptsProp }: IssueFormModalProps) {
   const { profile } = useAuthStore()
   const [locations, setLocations] = useState<ComboboxOption[]>([])
   const [categories, setCategories] = useState<ComboboxOption[]>([])
   const [statuses, setStatuses] = useState<ComboboxOption[]>([])
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
+  const [deptOptions, setDeptOptions] = useState<ComboboxOption[]>([])
 
+  const [deptId, setDeptId] = useState(existing?.department_id ?? defaultDepartmentId ?? '')
   const [title, setTitle] = useState(existing?.title ?? '')
   const [locationId, setLocationId] = useState(existing?.location_id ?? '')
   const [categoryId, setCategoryId] = useState(existing?.category_id ?? '')
@@ -51,6 +55,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   }, [companyId, open])
 
   useEffect(() => {
+    setDeptId(existing?.department_id ?? defaultDepartmentId ?? '')
     setTitle(existing?.title ?? '')
     setLocationId(existing?.location_id ?? '')
     setCategoryId(existing?.category_id ?? '')
@@ -68,16 +73,26 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
   }, [existing])
 
   async function loadOptions() {
+    const sb = supabase as any
     const [locs, cats, stats, profs] = await Promise.all([
-      (supabase as any).schema('core').from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
-      (supabase as any).schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
-      (supabase as any).schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
-      (supabase as any).schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).order('full_name'),
+      sb.schema('core').from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
+      sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
+      sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
+      sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).order('full_name'),
     ])
     setLocations((locs.data ?? []).map((l: Location) => ({ value: l.id, label: l.name })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
     setOrgProfiles((profs.data ?? []) as Profile[])
+
+    // Departments: use prop if provided (avoids a round-trip), otherwise load from memberships
+    if (deptsProp?.length) {
+      setDeptOptions(deptsProp.map((d) => ({ value: d.id, label: d.name })))
+    } else {
+      const { data: depts } = await sb.schema('platform').from('departments')
+        .select('id, name, sort_order').eq('company_id', companyId!).order('sort_order')
+      setDeptOptions((depts ?? []).map((d: any) => ({ value: d.id, label: d.name })))
+    }
   }
 
   async function createCategory(name: string): Promise<ComboboxOption> {
@@ -108,6 +123,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
 
   async function save() {
     if (!companyId) return
+    if (!deptId) { toast.error('Select a department for this issue'); return }
     if (!title.trim() && !locationId) {
       toast.error('Add a title (or pick a location) for the issue')
       return
@@ -115,6 +131,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
     setSaving(true)
     const payload: Record<string, unknown> = {
       company_id: companyId,
+      department_id: deptId,
       title: title.trim() || null,
       location_id: locationId || null,
       category_id: categoryId || null,
@@ -134,8 +151,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = supabase as any
     const { error } = existing?.id
-      ? await sb.schema('inventory').from('issues').update(payload).eq('id', existing.id)
-      : await sb.schema('inventory').from('issues').insert(payload)
+      ? await sb.schema('platform').from('issues').update(payload).eq('id', existing.id)
+      : await sb.schema('platform').from('issues').insert(payload)
 
     if (error) toast.error(error.message)
     else {
@@ -157,6 +174,11 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
         />
       </div>
       <div className="grid grid-cols-2 gap-4">
+        <div className="col-span-2">
+          <Combobox label="Department" options={deptOptions} value={deptId}
+            onChange={(v) => setDeptId(v)} placeholder="Select department…" />
+        </div>
+
         <Combobox label="Location (optional)" options={locations} value={locationId}
           onChange={(v) => setLocationId(v)} placeholder="None — general issue" />
 
@@ -222,12 +244,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved }: IssueFormMo
             specificUsers={specificUsers}
             onSpecificUsersChange={setSpecificUsers}
             allUsers={orgProfiles.map((p) => ({ id: p.id, full_name: p.full_name, email: p.email ?? '' }))}
-            departmentName={(profile as any)?.department ?? null}
-            departments={
-              isAdminOrDeveloper(profile?.role)
-                ? [...new Set(orgProfiles.map((p) => (p as any).department).filter(Boolean) as string[])]
-                : (profile as any)?.department ? [(profile as any).department] : undefined
-            }
+            departmentName={deptOptions.find((d) => d.value === deptId)?.label ?? null}
+            departments={deptOptions.map((d) => d.label)}
             label="Issue Visibility"
           />
         </div>

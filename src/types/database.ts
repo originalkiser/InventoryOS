@@ -556,9 +556,29 @@ export interface IssueStatus {
   created_at: string
 }
 
+export interface Department {
+  id: string
+  company_id: string
+  name: string
+  slug: string
+  sort_order: number
+  created_at: string
+  created_by: string | null
+}
+
+export interface UserDepartmentMembership {
+  id: string
+  user_id: string
+  department_id: string
+  company_id: string
+  created_at: string
+  created_by: string | null
+}
+
 export interface Issue {
   id: string
   company_id: string
+  department_id: string
   title: string | null
   location_id: string | null
   category_id: string | null
@@ -571,6 +591,7 @@ export interface Issue {
   vendor: string | null
   assignee: string | null
   helpful_links: string[]
+  visibility: 'private' | 'department' | 'attendees' | 'specific_users'
   created_by: string | null
   created_at: string
   updated_at: string
