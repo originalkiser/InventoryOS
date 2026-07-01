@@ -420,12 +420,13 @@ export function IssuesPage() {
 
     const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
       liveQ, delQ,
-      sb.schema('inventory').from('locations').select('id, location_code, name').eq('company_id', profile.company_id).eq('active', true).order('location_code'),
+      sb.schema('inventory').from('locations').select('id, location_code, name').eq('company_id', profile.company_id).order('location_code'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
     ])
 
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
+    if (locRes.error) { console.error('[IssuesPage] locations query failed:', locRes.error) }
 
     const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, `${l.location_code} — ${l.name}`]))
     const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
