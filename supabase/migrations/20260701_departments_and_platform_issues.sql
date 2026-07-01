@@ -59,9 +59,9 @@ CREATE TABLE platform.issues (
   id                      uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id              uuid        NOT NULL,
   department_id           uuid        NOT NULL REFERENCES platform.departments(id) ON DELETE RESTRICT,
-  location_id             uuid        REFERENCES inventory.locations(id) ON DELETE SET NULL,
-  category_id             uuid        REFERENCES inventory.issue_categories(id) ON DELETE SET NULL,
-  status_id               uuid        REFERENCES inventory.issue_statuses(id) ON DELETE SET NULL,
+  location_id             uuid,       -- logical FK → inventory.locations(id)
+  category_id             uuid,       -- logical FK → inventory.issue_categories(id)
+  status_id               uuid,       -- logical FK → inventory.issue_statuses(id)
   title                   text,
   issue_notes             text,
   resolution_notes        text,
