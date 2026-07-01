@@ -697,11 +697,9 @@ export function IssuesPage() {
     const ids = [...selectedRows]
     setIssues(prev => prev.filter(i => !ids.includes(i.id)))
     setBulkDeleteConfirm(false)
-    const now = new Date().toISOString()
-    const sb = supabase as any
-    const results = await Promise.all(ids.map(id => sb.schema('platform').from('issues').update({ deleted_at: now }).eq('id', id)))
-    const failed = results.filter((r: any) => r.error)
-    if (failed.length) { toast.error(`Failed to delete ${failed.length} issue(s)`); loadIssues(); return }
+    const { error } = await (supabase as any).schema('platform').from('issues')
+      .update({ deleted_at: new Date().toISOString() }).in('id', ids)
+    if (error) { toast.error(`Failed to delete: ${error.message}`); loadIssues(); return }
     toast.success(`Deleted ${ids.length} issue${ids.length !== 1 ? 's' : ''}`)
     loadIssues()
   }
@@ -716,10 +714,8 @@ export function IssuesPage() {
     // Optimistic: update in state; if dept-filtered, rows with wrong dept will
     // disappear naturally after reload
     setIssues(prev => prev.map(i => ids.includes(i.id) ? { ...i, ...patch } : i))
-    const sb = supabase as any
-    const results = await Promise.all(ids.map(id => sb.schema('platform').from('issues').update(patch).eq('id', id)))
-    const failed = results.filter((r: any) => r.error)
-    if (failed.length) { toast.error(`Failed to move ${failed.length} issue(s)`); loadIssues(); return }
+    const { error } = await (supabase as any).schema('platform').from('issues').update(patch).in('id', ids)
+    if (error) { toast.error(`Failed to move: ${error.message}`); loadIssues(); return }
     const label = targetDeptId ? (departments.find(d => d.id === targetDeptId)?.name ?? 'department') : 'Personal'
     toast.success(`Moved ${ids.length} issue${ids.length !== 1 ? 's' : ''} to ${label}`)
     loadIssues()

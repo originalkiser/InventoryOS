@@ -104,21 +104,26 @@ export function DashboardPage() {
     const monthStart = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), 'yyyy-MM-dd')
 
     const sb = supabase as any
-    const [issuesRes, eventsRes, ordersRes, locsRes, monthCountsRes] = await Promise.all([
-      sb.schema('inventory').from('issues').select('id, issue_categories(name), issue_statuses(name)').eq('company_id', cid),
+    const [issuesRes, issueCatsRes, issueStatusesRes, eventsRes, ordersRes, locsRes, monthCountsRes] = await Promise.all([
+      sb.schema('platform').from('issues').select('id, status_id, category_id').eq('company_id', cid).is('deleted_at', null),
+      sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', cid),
+      sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', cid),
       sb.schema('platform').from('schedule_events').select('id, title, start_date, event_type').eq('company_id', cid).gte('start_date', today).lte('start_date', weekEnd).order('start_date').limit(10),
       sb.schema('inventory').from('order_sessions').select('id, status, created_at').eq('company_id', cid).order('created_at', { ascending: false }).limit(5),
       sb.schema('core').from('locations').select('id, active').eq('company_id', cid),
       sb.schema('inventory').from('counts').select('location_id').eq('company_id', cid).gte('count_date', monthStart),
     ])
 
+    const statusMap: Record<string, string> = Object.fromEntries((issueStatusesRes.data ?? []).map((s: any) => [s.id, s.name as string]))
+    const catMap: Record<string, string> = Object.fromEntries((issueCatsRes.data ?? []).map((c: any) => [c.id, c.name as string]))
+
     const openIssues = (issuesRes.data ?? []).filter((i: any) => {
-      const s = i.issue_statuses?.name?.toLowerCase() ?? ''
+      const s = (statusMap[i.status_id] ?? '').toLowerCase()
       return !s.includes('resolved') && !s.includes('closed')
     })
     const byCat: Record<string, number> = {}
     openIssues.forEach((i: any) => {
-      const cat = i.issue_categories?.name ?? 'Uncategorized'
+      const cat = catMap[i.category_id] ?? 'Uncategorized'
       byCat[cat] = (byCat[cat] ?? 0) + 1
     })
     const openIssuesByCategory = Object.entries(byCat)
