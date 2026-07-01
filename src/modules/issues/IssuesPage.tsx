@@ -417,19 +417,19 @@ export function IssuesPage() {
 
     const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
       liveQ, delQ,
-      sb.schema('inventory').from('locations').select('id, name').eq('company_id', profile.company_id),
+      sb.schema('inventory').from('locations').select('id, location_code, name').eq('company_id', profile.company_id).eq('active', true).order('location_code'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
     ])
 
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
 
-    const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, l.name]))
+    const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, `${l.location_code} — ${l.name}`]))
     const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
     const statusMap: Record<string, string> = Object.fromEntries((statusRes.data ?? []).map((s: any) => [s.id, s.name]))
 
     // Update refs so InlineCombobox cells pick up fresh options without re-mounting
-    locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: l.name }))
+    locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: `${l.location_code} — ${l.name}` }))
     catOptionsRef.current = (catRes.data ?? []).map((c: any) => ({ value: c.id, label: c.name }))
 
     const mapRow = (data: any[]) => (data ?? []).map((r: any) => ({
@@ -509,17 +509,6 @@ export function IssuesPage() {
     return opt
   }, [profile?.company_id])
 
-  const addLocation = useCallback(async (name: string): Promise<{ value: string; label: string } | null> => {
-    if (!profile?.company_id) return null
-    const { data, error } = await (supabase as any).schema('inventory').from('locations')
-      .insert({ company_id: profile.company_id, name, location_code: name.toUpperCase().replace(/\s+/g, '-').slice(0, 20), active: true })
-      .select().single()
-    if (error || !data) { toast.error(error?.message ?? 'Could not add location'); return null }
-    const opt = { value: data.id, label: data.name }
-    locOptionsRef.current = [...locOptionsRef.current, opt]
-    return opt
-  }, [profile?.company_id])
-
   function moveBuiltin(id: string, dir: -1 | 1) {
     setBuiltinOrder(prev => {
       const arr = [...prev]
@@ -574,8 +563,7 @@ export function IssuesPage() {
         cell: (i: any) => <InlineCombobox
           getOptions={() => locOptionsRef.current}
           value={i.row.original.location_id}
-          onSave={(v, label) => updateIssue(i.row.original.id, { location_id: v }, { location_name: label ?? undefined })}
-          onCreateOption={addLocation} />,
+          onSave={(v, label) => updateIssue(i.row.original.id, { location_id: v }, { location_name: label ?? undefined })} />,
       },
       category_name: hiddenCols.has('category_name') ? null : {
         id: 'category_name', header: 'Category', enableColumnFilter: false,
@@ -654,7 +642,7 @@ export function IssuesPage() {
 
     return [titleCol, ...orderedBuiltins, ...customs].filter(Boolean) as any[]
   }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn,
-    updateVendor, updateIssue, updateLinks, statuses, addStatus, addCategory, addLocation,
+    updateVendor, updateIssue, updateLinks, statuses, addStatus, addCategory,
     profile?.company_id, hiddenCols, builtinOrder, deptMap])
 
   const allTable = useTable(issues, columns)

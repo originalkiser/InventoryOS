@@ -99,12 +99,12 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
   async function loadOptions() {
     const sb = supabase as any
     const [locs, cats, stats, profs] = await Promise.all([
-      sb.schema('inventory').from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
+      sb.schema('inventory').from('locations').select('id, location_code, name').eq('company_id', companyId!).eq('active', true).order('location_code'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
       sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).is('deleted_at', null).order('full_name'),
     ])
-    setLocations((locs.data ?? []).map((l: Location) => ({ value: l.id, label: l.name })))
+    setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: `${l.location_code} — ${l.name}` })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
     setOrgProfiles((profs.data ?? []) as Profile[])
