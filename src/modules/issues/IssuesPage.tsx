@@ -248,29 +248,31 @@ export function IssuesPage() {
     void sb.schema('platform').from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
 
     let liveQ = sb.schema('platform').from('issues')
-      .select(`*, issue_categories(name), issue_statuses(name)`)
+      .select('*')
       .eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false })
     let delQ = sb.schema('platform').from('issues')
-      .select(`*, issue_categories(name), issue_statuses(name)`)
+      .select('*')
       .eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
     if (selectedDeptId) {
       liveQ = liveQ.eq('department_id', selectedDeptId)
       delQ = delQ.eq('department_id', selectedDeptId)
     }
-    const [liveRes, delRes, locRes] = await Promise.all([
+    const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
       liveQ, delQ,
-      sb.schema('core').from('locations').select('id, name').eq('company_id', profile.company_id),
+      sb.schema('inventory').from('locations').select('id, name').eq('company_id', profile.company_id),
+      sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
+      sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
     ])
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
     else {
-      const locMap: Record<string, string> = Object.fromEntries(
-        (locRes.data ?? []).map((l: any) => [l.id, l.name])
-      )
+      const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, l.name]))
+      const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
+      const statusMap: Record<string, string> = Object.fromEntries((statusRes.data ?? []).map((s: any) => [s.id, s.name]))
       const map = (data: any[]) => (data ?? []).map((r: any) => ({
         ...r,
-        location_name: locMap[r.location_id] ?? r.locations?.name,
-        category_name: r.issue_categories?.name,
-        status_name: r.issue_statuses?.name,
+        location_name: locMap[r.location_id],
+        category_name: catMap[r.category_id],
+        status_name: statusMap[r.status_id],
       }))
       setIssues(map(liveRes.data ?? []))
       setDeletedIssues(map(delRes.data ?? []))
