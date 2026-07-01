@@ -98,16 +98,30 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
 
   async function loadOptions() {
     const sb = supabase as any
-    const [locs, cats, stats, profs] = await Promise.all([
+    const [locs, cats, stats, profs, depts, memberships] = await Promise.all([
       sb.schema('core').from('locations').select('id, location_code, name').eq('company_id', companyId!).order('location_code'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
       sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).is('deleted_at', null).order('full_name'),
+      sb.schema('platform').from('departments').select('id, name').eq('company_id', companyId!),
+      sb.schema('platform').from('user_department_memberships').select('user_id, department_id').eq('company_id', companyId!),
     ])
     setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: `${l.location_code} — ${l.name}` })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
-    setOrgProfiles((profs.data ?? []) as Profile[])
+
+    // Build dept id → name lookup, then user id → dept names[] for VisibilitySelector
+    const deptNameById: Record<string, string> = Object.fromEntries(
+      (depts.data ?? []).map((d: any) => [d.id, d.name])
+    )
+    const userDeptNames: Record<string, string[]> = {}
+    for (const m of (memberships.data ?? [])) {
+      const name = deptNameById[m.department_id]
+      if (!name) continue
+      if (!userDeptNames[m.user_id]) userDeptNames[m.user_id] = []
+      userDeptNames[m.user_id].push(name)
+    }
+    setOrgProfiles((profs.data ?? []).map((p: any) => ({ ...p, departments: userDeptNames[p.id] ?? [] })) as Profile[])
 
     if (deptsProp?.length) {
       setDeptOptions(deptsProp.map((d) => ({ value: d.id, label: d.name })))
@@ -293,7 +307,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
               onParticipantsChange={setParticipants}
               specificUsers={specificUsers}
               onSpecificUsersChange={setSpecificUsers}
-              allUsers={orgProfiles.map((p) => ({ id: p.id, full_name: p.full_name, email: p.email ?? '' }))}
+              allUsers={orgProfiles.map((p) => ({ id: p.id, full_name: p.full_name, email: p.email ?? '', departments: (p as any).departments ?? [] }))}
               departmentName={ownerDeptLabel}
               departments={deptOptions.map((d) => d.label)}
               label="Issue Visibility"

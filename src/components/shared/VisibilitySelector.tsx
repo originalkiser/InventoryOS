@@ -6,7 +6,10 @@ export interface SlimUser {
   id: string
   full_name: string | null
   email: string
+  /** Single dept string from user_profiles.department (meetings flow) */
   department?: string | null
+  /** Multi-dept array from user_department_memberships (issues flow) */
+  departments?: string[]
 }
 
 const VISIBILITY_OPTIONS: { value: VisibilityValue; icon: string; label: string; desc: string }[] = [
@@ -153,7 +156,10 @@ export function VisibilitySelector({
           )}
           {(() => {
             const deptMembers = allUsers.filter(
-              (u) => effectiveDeptName && u.department === effectiveDeptName
+              (u) => effectiveDeptName && (
+                u.departments?.includes(effectiveDeptName) ||
+                u.department === effectiveDeptName
+              )
             )
             if (!effectiveDeptName) {
               return (
