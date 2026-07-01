@@ -154,7 +154,7 @@ export function IssueImportModal({ open, onClose, onImported, departments = [], 
 
   async function buildPreview(mapped: RawRow[]) {
     if (!profile?.company_id) return
-    const { data: locs } = await sb.schema('inventory').from('locations')
+    const { data: locs } = await sb.schema('core').from('locations')
       .select('location_code').eq('company_id', profile.company_id)
     const locSet = new Set<string>((locs ?? []).map((l: any) => String(l.location_code).trim()))
     setRawRows(mapped)
@@ -218,7 +218,7 @@ export function IssueImportModal({ open, onClose, onImported, departments = [], 
     setPhase('importing')
 
     const [locRes, statusRes, catRes] = await Promise.all([
-      sb.schema('inventory').from('locations').select('id, location_code').eq('company_id', profile.company_id),
+      sb.schema('core').from('locations').select('id, location_code').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
     ])

@@ -317,7 +317,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       safe(sb.schema('platform').from('issues').select('id').eq('company_id', companyId).is('deleted_at', null)),
       safe(sb.schema('platform').from('schedule_events').select('id, title, start_date, event_type').eq('company_id', companyId).gte('start_date', today).order('start_date')),
       safe(sb.schema('inventory').from('monthly_ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false })),
-      safe(sb.schema('inventory').from('locations').select('id, active').eq('company_id', companyId)),
+      safe(sb.schema('core').from('locations').select('id, active').eq('company_id', companyId)),
       safe(sb.schema('inventory').from('order_sessions').select('id').eq('company_id', companyId).eq('status', 'pending')),
       safe(sb.schema('inventory').from('project_tasks').select('id, due_date').eq('company_id', companyId).eq('done', false).lt('due_date', today)),
       safe(sb.schema('forms').from('assignments').select('id, forms!inner(company_id)').eq('forms.company_id', companyId).lte('due_date', today).eq('is_completed', false)),

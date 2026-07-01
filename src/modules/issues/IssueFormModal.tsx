@@ -99,7 +99,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
   async function loadOptions() {
     const sb = supabase as any
     const [locs, cats, stats, profs] = await Promise.all([
-      sb.schema('inventory').from('locations').select('id, location_code, name').eq('company_id', companyId!).order('location_code'),
+      sb.schema('core').from('locations').select('id, location_code, name').eq('company_id', companyId!).order('location_code'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
       sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).is('deleted_at', null).order('full_name'),

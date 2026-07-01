@@ -420,7 +420,7 @@ export function IssuesPage() {
 
     const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
       liveQ, delQ,
-      sb.schema('inventory').from('locations').select('id, location_code, name').eq('company_id', profile.company_id).order('location_code'),
+      sb.schema('core').from('locations').select('id, location_code, name').eq('company_id', profile.company_id).order('location_code'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
     ])

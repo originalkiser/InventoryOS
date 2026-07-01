@@ -138,8 +138,8 @@ sb.schema('outlier').from('table_name')
 
 | Schema | Contains |
 |--------|----------|
-| `inventory` | locations, counts, thresholds, orders, meeting_notes, projects, project_tasks, monthly_ending_balances, tank_monitors, location_order_config, global_products, product_id_mappings, uom_mappings, vendor_parts, vendors, product_usage |
-| `core` | user_sidebar_prefs, shared config, pos_location_map, company_holidays |
+| `inventory` | counts, thresholds, orders, meeting_notes, projects, project_tasks, monthly_ending_balances, tank_monitors, location_order_config, global_products, product_id_mappings, uom_mappings, vendor_parts, vendors, product_usage |
+| `core` | **locations**, user_sidebar_prefs, shared config, pos_location_map, company_holidays |
 | `platform` | user_profiles (auth users, company, role, preferences) |
 | `outlier` | report system: reports, report_entries, weeks, departments |
 
@@ -194,7 +194,7 @@ Palette from `tailwind.config.ts` — CSS-variable-backed for dark mode:
 
 ## Database schema reference
 
-### `inventory.locations`
+### `core.locations`
 `id, company_id, location_code, name, region, active, metadata (jsonb), order_date, district, monday_item_id (nullable, unique), raw_monday_data, last_synced_at, created_at, updated_at, updated_by, last_change_source`
 
 - `metadata` may contain: `owner`, `market`, `area_manager`, `regional_director`, `director`, `type`
