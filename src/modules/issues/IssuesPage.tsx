@@ -375,6 +375,7 @@ export function IssuesPage() {
   const [selectedDeptId, setSelectedDeptId] = useState<string>('')
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false)
   const [colMenuOpen, setColMenuOpen] = useState(false)
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set())
   const [deptMap, setDeptMap] = useState<Record<string, string>>({})
@@ -705,15 +706,61 @@ export function IssuesPage() {
     loadIssues()
   }
 
+  async function bulkMove(targetDeptId: string | null) {
+    const ids = [...selectedRows]
+    setBulkMoveOpen(false)
+    const patch = {
+      department_id: targetDeptId,
+      visibility: (targetDeptId === null ? 'private' : 'department') as IssueRow['visibility'],
+    }
+    // Optimistic: update in state; if dept-filtered, rows with wrong dept will
+    // disappear naturally after reload
+    setIssues(prev => prev.map(i => ids.includes(i.id) ? { ...i, ...patch } : i))
+    const sb = supabase as any
+    const results = await Promise.all(ids.map(id => sb.schema('platform').from('issues').update(patch).eq('id', id)))
+    const failed = results.filter((r: any) => r.error)
+    if (failed.length) { toast.error(`Failed to move ${failed.length} issue(s)`); loadIssues(); return }
+    const label = targetDeptId ? (departments.find(d => d.id === targetDeptId)?.name ?? 'department') : 'Personal'
+    toast.success(`Moved ${ids.length} issue${ids.length !== 1 ? 's' : ''} to ${label}`)
+    loadIssues()
+  }
+
   const onNew = () => { setEditIssue(null); setModalOpen(true) }
   const toggleHiddenCol = (id: string) => setHiddenCols(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   const actions = (
     <>
       {selectedRows.size > 0 && (
-        <Button size="sm" variant="danger" onClick={() => setBulkDeleteConfirm(true)}>
-          Delete {selectedRows.size} selected
-        </Button>
+        <>
+          <div className="relative">
+            <button onClick={() => setBulkMoveOpen(o => !o)}
+              className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-mono text-navy hover:bg-navy/5 whitespace-nowrap">
+              Move {selectedRows.size} selected ▾
+            </button>
+            {bulkMoveOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setBulkMoveOpen(false)} />
+                <div className="absolute left-0 z-50 mt-1 w-52 rounded border border-navy/30 bg-cream shadow-xl py-1">
+                  <div className="px-2 pb-1 text-[10px] font-mono text-inky/60 uppercase tracking-wide">Move to…</div>
+                  <button onClick={() => bulkMove(null)}
+                    className="flex w-full px-3 py-1.5 text-xs font-mono text-navy hover:bg-navy/5 text-left gap-1.5">
+                    🔒 Personal
+                  </button>
+                  {departments.length > 0 && <div className="border-t border-navy/10 my-0.5" />}
+                  {departments.map(d => (
+                    <button key={d.id} onClick={() => bulkMove(d.id)}
+                      className="flex w-full px-3 py-1.5 text-xs font-mono text-navy hover:bg-navy/5 text-left">
+                      {d.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          <Button size="sm" variant="danger" onClick={() => setBulkDeleteConfirm(true)}>
+            Delete {selectedRows.size} selected
+          </Button>
+        </>
       )}
       <Button size="sm" onClick={onNew}>+ New Issue</Button>
       <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>+ Import</Button>
