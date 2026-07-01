@@ -20,6 +20,8 @@ interface DataTableProps<T> {
   attachmentEntityType?: 'issue' | 'project'
   /** Suppress the built-in column visibility dropdown (use when the caller provides its own) */
   hideColumnControl?: boolean
+  /** Called whenever the internal row-selection Set changes */
+  onSelectionChange?: (ids: Set<string>) => void
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -105,9 +107,14 @@ export function DataTable<T>({
   actions,
   attachmentEntityType,
   hideColumnControl,
+  onSelectionChange,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    onSelectionChange?.(selectedIds)
+  }, [selectedIds, onSelectionChange])
 
   function rowKey(row: Row<T>): string {
     return String((row.original as any)?.id ?? row.id)

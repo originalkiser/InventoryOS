@@ -58,8 +58,6 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
 
   const companyId = profile?.company_id
 
-  const isResolved = statuses.find((s) => s.value === statusId)?.label?.toLowerCase().includes('resolved')
-
   // Auto-set resolved date when status changes to resolved (only if not already set)
   useEffect(() => {
     if (!statusId || !statuses.length) return
@@ -248,10 +246,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
           placeholder="Unassigned"
         />
 
-        {(isResolved || resolvedDate) && (
-          <Input label="Resolved Date" type="date" value={resolvedDate}
-            onChange={(e) => setResolvedDate(e.target.value)} />
-        )}
+        <Input label="Resolved Date" type="date" value={resolvedDate}
+          onChange={(e) => setResolvedDate(e.target.value)} />
 
         <div className="col-span-2">
           <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Issue Notes</label>
