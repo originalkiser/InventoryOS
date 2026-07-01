@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
@@ -44,7 +44,25 @@ const CUSTOM_STATUS_COLOR: Record<string, 'gray' | 'cyan' | 'red' | 'green'> = {
   'Not Started': 'gray', 'In Progress': 'cyan', 'Blocked': 'red', 'Complete': 'green',
 }
 
-// --- inline cell editors (used in vendor + custom columns) -----------------
+// Built-in column definitions for the Columns dropdown
+const BUILT_IN_COL_DEFS = [
+  { id: 'department', label: 'Department' },
+  { id: 'location_name', label: 'Location' },
+  { id: 'category_name', label: 'Category' },
+  { id: 'status', label: 'Status' },
+  { id: 'start_date', label: 'Start Date' },
+  { id: 'target_resolution_date', label: 'Target' },
+  { id: 'resolved_date', label: 'Resolved' },
+  { id: 'days_open', label: 'Days Open' },
+  { id: 'vendor', label: 'Vendor' },
+  { id: 'issue_notes', label: 'Issue Notes' },
+  { id: 'resolution_notes', label: 'Resolution Notes' },
+  { id: 'helpful_links', label: 'Helpful Links' },
+  { id: 'attachments', label: 'Attachments' },
+]
+
+// --- inline cell editors ---------------------------------------------------
+
 function InlineText({ value, type, onSave }: { value: string | null; type?: 'text' | 'number' | 'date'; onSave: (v: string) => void }) {
   const [v, setV] = useState(value ?? '')
   useEffect(() => { setV(value ?? '') }, [value])
@@ -58,9 +76,64 @@ function InlineText({ value, type, onSave }: { value: string | null; type?: 'tex
   )
 }
 
+function InlineDate({ value, onSave }: { value: string | null; onSave: (v: string | null) => void }) {
+  const [editing, setEditing] = useState(false)
+  if (editing) {
+    return (
+      <input autoFocus type="date" defaultValue={value ?? ''}
+        className="rounded border border-sky/60 px-1.5 py-0.5 text-xs font-mono text-navy bg-cream focus:outline-none"
+        onBlur={(e) => { setEditing(false); onSave(e.target.value || null) }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+          if (e.key === 'Escape') setEditing(false)
+        }}
+      />
+    )
+  }
+  return (
+    <button onClick={() => setEditing(true)} className="text-xs font-mono text-left px-1 hover:text-navy w-full">
+      {value ? format(new Date(value), 'MMM d, yyyy') : <span className="text-inky/30">—</span>}
+    </button>
+  )
+}
+
+function InlineCombobox({ value, options, onSave }: {
+  value: string | null
+  options: { value: string; label: string }[]
+  onSave: (v: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const label = options.find(o => o.value === value)?.label
+  function toggle() {
+    if (!open && btnRef.current) { const r = btnRef.current.getBoundingClientRect(); setRect({ left: r.left, top: r.bottom + 2 }) }
+    setOpen(o => !o)
+  }
+  return (
+    <>
+      <button ref={btnRef} onClick={toggle} className="text-xs font-mono text-left px-1 hover:text-navy w-full">
+        {label ?? <span className="text-inky/30">—</span>}
+      </button>
+      {open && rect && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+          <div className="fixed z-[61] w-48 rounded border border-navy/30 bg-cream py-0.5 shadow-xl max-h-48 overflow-y-auto"
+            style={{ left: rect.left, top: rect.top }}>
+            <button onClick={() => { onSave(null); setOpen(false) }}
+              className="flex w-full px-2 py-1 text-xs font-mono text-inky/40 hover:bg-navy/5 text-left">— None</button>
+            {options.map(o => (
+              <button key={o.value} onClick={() => { onSave(o.value); setOpen(false) }}
+                className="flex w-full px-2 py-1 text-xs font-mono text-navy hover:bg-navy/5 text-left">{o.label}</button>
+            ))}
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
 // Expandable text cell for long-form text columns.
-// Shows a "more/less" toggle only when the text is actually clipped by the column width —
-// detected via DOM overflow measurement so it responds to column resizes too.
 function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: string) => void }) {
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -70,10 +143,6 @@ function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: s
 
   useEffect(() => { setV(value ?? '') }, [value])
 
-  // Run after every render (no deps) so column resizes are caught immediately.
-  // When expanded, skip the check so canExpand is preserved for the "less" button.
-  // React bails out of re-render when setCanExpand receives the same value, so this
-  // settles after at most one extra render per change and doesn't loop.
   useLayoutEffect(() => {
     if (expanded) return
     const el = textRef.current
@@ -95,7 +164,7 @@ function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: s
       <div
         ref={textRef}
         onClick={() => setEditing(true)}
-        className={['cursor-text text-xs font-mono', text ? 'text-navy' : 'text-inky/40', expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-1'].join(' ')}
+        className={['cursor-text text-xs font-mono', text ? 'text-navy' : 'text-inky/40', expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'].join(' ')}
       >
         {text || '—'}
       </div>
@@ -145,11 +214,12 @@ function CustomColHeader({ col: c, onMove, onPin, onDelete }: {
   return (
     <span className="inline-flex items-center gap-1">
       <span className="truncate">{c.label}</span>
-      <span className="flex items-center gap-0.5 text-inky/70">
-        <button onClick={() => onMove(c.id, -1)} title="Move left" className="hover:text-navy">◀</button>
-        <button onClick={() => onMove(c.id, 1)} title="Move right" className="hover:text-navy">▶</button>
-        <button onClick={() => onPin(c.id)} title={c.pinned ? 'Unpin' : 'Pin to left'} className={c.pinned ? 'text-orange-600' : 'hover:text-navy'}>📌</button>
-        <button onClick={() => { if (confirm(`Delete column “${c.label}”?`)) onDelete(c.id) }} title="Delete column" className="hover:text-red-400">✕</button>
+      <span className="flex items-center gap-0.5">
+        <button onClick={() => onMove(c.id, -1)} title="Move left" className="text-inky/70 hover:text-navy">◀</button>
+        <button onClick={() => onMove(c.id, 1)} title="Move right" className="text-inky/70 hover:text-navy">▶</button>
+        <button onClick={() => onPin(c.id)} title={c.pinned ? 'Unpin' : 'Pin to left'}
+          className={['px-0.5 text-xs', c.pinned ? 'text-orange-600' : 'text-inky/70 hover:text-navy'].join(' ')}>📌</button>
+        <button onClick={() => { if (confirm(`Delete column "${c.label}"?`)) onDelete(c.id) }} title="Delete column" className="text-inky/70 hover:text-red-400">✕</button>
       </span>
     </span>
   )
@@ -157,8 +227,6 @@ function CustomColHeader({ col: c, onMove, onPin, onDelete }: {
 
 interface StatusOpt { id: string; name: string }
 
-// Inline status: badge button + fixed-position dropdown (escapes the grid's
-// overflow clip) writing status_id.
 function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | undefined; statuses: StatusOpt[]; onChange: (statusId: string) => void; onAdd: (name: string) => Promise<string | null> }) {
   const [open, setOpen] = useState(false)
   const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
@@ -194,19 +262,8 @@ function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | u
   )
 }
 
-const BASE_LOCATION_CAT = [
-  col.accessor('location_name', { header: 'Location', cell: (i) => i.getValue() ?? '—' }),
-  col.accessor('category_name', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
-]
-const BASE_AFTER = [
-  col.accessor('start_date', { header: 'Start', cell: (i) => i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—' }),
-  col.accessor('target_resolution_date', { header: 'Target', cell: (i) => i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—' }),
-  col.accessor('resolved_date', { header: 'Resolved', cell: (i) => i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—' }),
-  col.accessor('start_date', { id: 'days_open', header: 'Days Open', cell: (i) => daysOpen(i.getValue()) }),
-]
-
-// Hoisted to module scope — see git history; defining inside the page remounted
-// the table subtree on each render and swallowed the "+ New Issue" click.
+// Hoisted to module scope — defining inside the page remounted the table
+// subtree on each render and swallowed the "+ New Issue" click.
 function IssuesTable({ table, filter, onFilterChange, issues, loading, actions }: {
   table: any; filter: string; onFilterChange: (v: string) => void; issues: IssueRow[]; loading: boolean; actions: React.ReactNode
 }) {
@@ -216,6 +273,8 @@ function IssuesTable({ table, filter, onFilterChange, issues, loading, actions }
       attachmentEntityType="issue" />
   )
 }
+
+const PERSONAL_DEPT_ID = '__personal__'
 
 export function IssuesPage() {
   const { profile } = useAuthStore()
@@ -231,71 +290,95 @@ export function IssuesPage() {
   const [addColOpen, setAddColOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [statuses, setStatuses] = useState<StatusOpt[]>([])
-  const [deleteTarget, setDeleteTarget] = useState<IssueRow | null>(null)
   const [departments, setDepartments] = useState<Department[]>([])
   const [selectedDeptId, setSelectedDeptId] = useState<string>('')
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+  const [colMenuOpen, setColMenuOpen] = useState(false)
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set())
+  const [locOptions, setLocOptions] = useState<{ value: string; label: string }[]>([])
+  const [catOptions, setCatOptions] = useState<{ value: string; label: string }[]>([])
+  const [deptMap, setDeptMap] = useState<Record<string, string>>({})
 
   const issueCols = useIssueColumns()
 
   const openEdit = useCallback((r: IssueRow) => { setEditIssue(r); setModalOpen(true) }, [])
 
+  const toggleRow = useCallback((id: string) => {
+    setSelectedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
   const loadIssues = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
     const sb = supabase as any
-    // Purge issues older than 30 days
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
     void sb.schema('platform').from('issues').delete().eq('company_id', profile.company_id).lt('deleted_at', cutoff).not('deleted_at', 'is', null)
 
     let liveQ = sb.schema('platform').from('issues')
-      .select('*')
-      .eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false })
+      .select('*').eq('company_id', profile.company_id).is('deleted_at', null).order('created_at', { ascending: false })
     let delQ = sb.schema('platform').from('issues')
-      .select('*')
-      .eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
-    if (selectedDeptId) {
+      .select('*').eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
+
+    if (selectedDeptId === PERSONAL_DEPT_ID) {
+      liveQ = liveQ.is('department_id', null).eq('created_by', profile.id)
+      delQ = delQ.is('department_id', null).eq('created_by', profile.id)
+    } else if (selectedDeptId) {
       liveQ = liveQ.eq('department_id', selectedDeptId)
       delQ = delQ.eq('department_id', selectedDeptId)
     }
+
     const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
       liveQ, delQ,
       sb.schema('inventory').from('locations').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
     ])
+
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
-    else {
-      const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, l.name]))
-      const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
-      const statusMap: Record<string, string> = Object.fromEntries((statusRes.data ?? []).map((s: any) => [s.id, s.name]))
-      const map = (data: any[]) => (data ?? []).map((r: any) => ({
-        ...r,
-        location_name: locMap[r.location_id],
-        category_name: catMap[r.category_id],
-        status_name: statusMap[r.status_id],
-      }))
-      setIssues(map(liveRes.data ?? []))
-      setDeletedIssues(map(delRes.data ?? []))
-    }
+
+    const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, l.name]))
+    const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
+    const statusMap: Record<string, string> = Object.fromEntries((statusRes.data ?? []).map((s: any) => [s.id, s.name]))
+
+    setLocOptions((locRes.data ?? []).map((l: any) => ({ value: l.id, label: l.name })))
+    setCatOptions((catRes.data ?? []).map((c: any) => ({ value: c.id, label: c.name })))
+
+    const mapRow = (data: any[]) => (data ?? []).map((r: any) => ({
+      ...r,
+      location_name: locMap[r.location_id],
+      category_name: catMap[r.category_id],
+      status_name: statusMap[r.status_id],
+    }))
+    setIssues(mapRow(liveRes.data ?? []))
+    setDeletedIssues(mapRow(delRes.data ?? []))
     setLoading(false)
-  }, [profile?.company_id, selectedDeptId])
+  }, [profile?.company_id, profile?.id, selectedDeptId])
 
   const loadDepartments = useCallback(async () => {
     if (!profile?.company_id) return
     const sb = supabase as any
+    let data: Department[] = []
     if (isAdminOrDeveloper(profile.role)) {
-      const { data } = await sb.schema('platform').from('departments')
+      const res = await sb.schema('platform').from('departments')
         .select('id, name, slug, sort_order').eq('company_id', profile.company_id).order('sort_order')
-      setDepartments((data ?? []) as Department[])
+      data = (res.data ?? []) as Department[]
     } else {
       const { data: memberships } = await sb.schema('platform').from('user_department_memberships')
         .select('department_id').eq('user_id', profile.id).eq('company_id', profile.company_id)
       const deptIds = (memberships ?? []).map((m: any) => m.department_id as string)
-      if (!deptIds.length) { setDepartments([]); return }
-      const { data } = await sb.schema('platform').from('departments')
-        .select('id, name, slug, sort_order').in('id', deptIds).order('sort_order')
-      setDepartments((data ?? []) as Department[])
+      if (deptIds.length) {
+        const res = await sb.schema('platform').from('departments')
+          .select('id, name, slug, sort_order').in('id', deptIds).order('sort_order')
+        data = (res.data ?? []) as Department[]
+      }
     }
+    setDepartments(data)
+    setDeptMap(Object.fromEntries(data.map((d) => [d.id, d.name])))
   }, [profile?.company_id, profile?.id, profile?.role])
 
   useEffect(() => { loadDepartments() }, [loadDepartments])
@@ -306,7 +389,6 @@ export function IssuesPage() {
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
-  // Optimistic inline vendor edit on the issues row.
   const updateVendor = useCallback(async (id: string, val: string) => {
     const next = val || null
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, vendor: next } : i)))
@@ -314,22 +396,18 @@ export function IssuesPage() {
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
-  // Optimistic inline edit for status / resolution notes (dbPatch writes the row;
-  // localPatch carries derived display fields like status_name).
   const updateIssue = useCallback(async (id: string, dbPatch: Record<string, unknown>, localPatch: Partial<IssueRow> = {}) => {
     setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbPatch, ...localPatch } : i)))
     const { error } = await (supabase as any).schema('platform').from('issues').update(dbPatch).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
-  // Load the company's issue statuses for the inline dropdown.
   useEffect(() => {
     if (!profile?.company_id) return
     ;(supabase as any).schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id)
       .then(({ data }: any) => setStatuses((data ?? []) as StatusOpt[]))
   }, [profile?.company_id])
 
-  // Create a new status inline (no full dialog) and add it to the dropdown.
   const addStatus = useCallback(async (name: string): Promise<string | null> => {
     if (!profile?.company_id) return null
     const { data, error } = await (supabase as any).schema('inventory').from('issue_statuses').insert({ company_id: profile.company_id, name }).select().single()
@@ -348,26 +426,18 @@ export function IssuesPage() {
       header: () => <CustomColHeader col={c} onMove={moveColumn} onPin={togglePin} onDelete={removeColumn} />,
       cell: (i: any) => <CustomCell type={c.type} value={valueFor(i.row.original.id, c.id)} onSave={(v) => setValue(i.row.original.id, c.id, v)} />,
     }))
-    const statusCol = {
-      id: 'status', header: 'Status', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.status_name ?? '',
-      cell: (i: any) => <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onAdd={addStatus} onChange={(sid) => updateIssue(i.row.original.id, { status_id: sid }, { status_name: statuses.find((s) => s.id === sid)?.name })} />,
-    }
-    const issueNotesCol = {
-      id: 'issue_notes', header: 'Issue Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true }, accessorFn: (r: IssueRow) => r.issue_notes ?? '',
-      cell: (i: any) => <ExpandableText value={i.row.original.issue_notes} onSave={(v) => updateIssue(i.row.original.id, { issue_notes: v || null })} />,
-    }
-    const notesCol = {
-      id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true }, accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
-      cell: (i: any) => <ExpandableText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
-    }
-    const linksCol = {
-      id: 'helpful_links', header: 'Helpful Links', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
-      accessorFn: (r: IssueRow) => r.helpful_links?.join(' ') ?? '',
-      cell: (i: any) => <LinksCell links={i.row.original.helpful_links ?? []} onSave={(links) => updateLinks(i.row.original.id, links)} />,
-    }
-    const attachmentsCol = {
-      id: 'attachments', header: 'Attachments', enableColumnFilter: false, enableSorting: false,
-      cell: (i: any) => <AttachmentsCell entityType="issue" entityId={i.row.original.id} companyId={profile?.company_id ?? ''} />,
+
+    const checkboxCol = {
+      id: '__select',
+      header: () => null,
+      enableSorting: false,
+      enableColumnFilter: false,
+      size: 36,
+      cell: (i: any) => (
+        <input type="checkbox" checked={selectedRows.has(i.row.original.id)}
+          onChange={() => toggleRow(i.row.original.id)}
+          className="accent-inky cursor-pointer" />
+      ),
     }
 
     const titleCol = col.accessor('title', {
@@ -376,7 +446,12 @@ export function IssuesPage() {
       meta: { noClip: true },
       cell: (i) => (
         <div className="flex items-center gap-1.5 group/title">
-          <ExpandableText value={i.getValue() ?? ''} onSave={() => {}} />
+          <div
+            onClick={() => openEdit(i.row.original as IssueRow)}
+            className={['cursor-pointer text-xs font-mono line-clamp-2 whitespace-normal break-words flex-1', i.getValue() ? 'text-navy' : 'text-inky/40'].join(' ')}
+          >
+            {i.getValue() || '—'}
+          </div>
           <button
             onClick={(e) => { e.stopPropagation(); openEdit(i.row.original as IssueRow) }}
             title="Edit issue"
@@ -391,39 +466,130 @@ export function IssuesPage() {
       ),
     })
 
-    const actionsCol = {
-      id: 'actions',
-      header: '',
-      enableColumnFilter: false,
-      enableSorting: false,
+    const deptCol = hiddenCols.has('department') ? null : {
+      id: 'department', header: 'Department', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.department_id ? (deptMap[r.department_id] ?? '') : 'Personal',
       cell: (i: any) => (
-        <button onClick={() => setDeleteTarget(i.row.original as IssueRow)} className="text-xs font-mono text-red-400 hover:underline">Delete</button>
+        <span className="text-xs font-mono">
+          {i.row.original.department_id
+            ? <span className="text-navy">{deptMap[i.row.original.department_id] ?? '—'}</span>
+            : <span className="text-inky/50 italic">Personal</span>}
+        </span>
       ),
     }
 
-    // Only add the built-in Issue Notes column if the user hasn't already created
-    // a custom column with that name via "+ Add Column".
+    const locationCol = hiddenCols.has('location_name') ? null : {
+      id: 'location_name', header: 'Location', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.location_name ?? '',
+      cell: (i: any) => <InlineCombobox value={i.row.original.location_id} options={locOptions}
+        onSave={(v) => updateIssue(i.row.original.id, { location_id: v }, { location_name: locOptions.find(o => o.value === v)?.label })} />,
+    }
+
+    const categoryCol = hiddenCols.has('category_name') ? null : {
+      id: 'category_name', header: 'Category', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.category_name ?? '',
+      cell: (i: any) => <InlineCombobox value={i.row.original.category_id} options={catOptions}
+        onSave={(v) => updateIssue(i.row.original.id, { category_id: v }, { category_name: catOptions.find(o => o.value === v)?.label })} />,
+    }
+
+    const statusCol = hiddenCols.has('status') ? null : {
+      id: 'status', header: 'Status', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.status_name ?? '',
+      cell: (i: any) => (
+        <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onAdd={addStatus}
+          onChange={(sid) => {
+            const statusName = statuses.find((s) => s.id === sid)?.name ?? ''
+            const isResolved = statusName.toLowerCase().includes('resolved')
+            const patch: Record<string, unknown> = { status_id: sid }
+            const local: Partial<IssueRow> = { status_name: statusName }
+            if (isResolved && !i.row.original.resolved_date) {
+              const today = new Date().toISOString().split('T')[0]
+              patch.resolved_date = today
+              local.resolved_date = today
+            }
+            updateIssue(i.row.original.id, patch, local)
+          }} />
+      ),
+    }
+
+    const startCol = hiddenCols.has('start_date') ? null : {
+      id: 'start_date', header: 'Start', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.start_date ?? '',
+      cell: (i: any) => <InlineDate value={i.row.original.start_date} onSave={(v) => updateIssue(i.row.original.id, { start_date: v })} />,
+    }
+
+    const targetCol = hiddenCols.has('target_resolution_date') ? null : {
+      id: 'target_resolution_date', header: 'Target', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.target_resolution_date ?? '',
+      cell: (i: any) => <InlineDate value={i.row.original.target_resolution_date} onSave={(v) => updateIssue(i.row.original.id, { target_resolution_date: v })} />,
+    }
+
+    const resolvedCol = hiddenCols.has('resolved_date') ? null : {
+      id: 'resolved_date', header: 'Resolved', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.resolved_date ?? '',
+      cell: (i: any) => <InlineDate value={i.row.original.resolved_date} onSave={(v) => updateIssue(i.row.original.id, { resolved_date: v })} />,
+    }
+
+    const daysOpenCol = hiddenCols.has('days_open') ? null : {
+      id: 'days_open', header: 'Days Open', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.start_date ? differenceInDays(new Date(), new Date(r.start_date)) : -1,
+      cell: (i: any) => <span className="text-xs font-mono text-navy px-1">{daysOpen(i.row.original.start_date)}</span>,
+    }
+
+    const vendorCol = hiddenCols.has('vendor') ? null : {
+      id: 'vendor', header: 'Vendor', enableColumnFilter: false,
+      accessorFn: (r: IssueRow) => r.vendor ?? '',
+      cell: (i: any) => <InlineText value={i.row.original.vendor} onSave={(v) => updateVendor(i.row.original.id, v)} />,
+    }
+
     const hasCustomIssueNotes = customColumns.some((c) => c.label.toLowerCase() === 'issue notes')
+    const issueNotesCol = hasCustomIssueNotes || hiddenCols.has('issue_notes') ? null : {
+      id: 'issue_notes', header: 'Issue Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
+      accessorFn: (r: IssueRow) => r.issue_notes ?? '',
+      cell: (i: any) => <ExpandableText value={i.row.original.issue_notes} onSave={(v) => updateIssue(i.row.original.id, { issue_notes: v || null })} />,
+    }
+
+    const notesCol = hiddenCols.has('resolution_notes') ? null : {
+      id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
+      accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
+      cell: (i: any) => <ExpandableText value={i.row.original.resolution_notes} onSave={(v) => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
+    }
+
+    const linksCol = hiddenCols.has('helpful_links') ? null : {
+      id: 'helpful_links', header: 'Helpful Links', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
+      accessorFn: (r: IssueRow) => r.helpful_links?.join(' ') ?? '',
+      cell: (i: any) => <LinksCell links={i.row.original.helpful_links ?? []} onSave={(links) => updateLinks(i.row.original.id, links)} />,
+    }
+
+    const attachmentsCol = hiddenCols.has('attachments') ? null : {
+      id: 'attachments', header: 'Attachments', enableColumnFilter: false, enableSorting: false,
+      cell: (i: any) => <AttachmentsCell entityType="issue" entityId={i.row.original.id} companyId={profile?.company_id ?? ''} />,
+    }
+
     return [
+      checkboxCol,
       titleCol,
-      ...BASE_LOCATION_CAT,
+      deptCol,
+      locationCol,
+      categoryCol,
       statusCol,
-      ...BASE_AFTER,
-      { id: 'vendor', header: 'Vendor', enableColumnFilter: false, accessorFn: (r: IssueRow) => r.vendor ?? '', cell: (i: any) => <InlineText value={i.row.original.vendor} onSave={(v) => updateVendor(i.row.original.id, v)} /> },
+      startCol,
+      targetCol,
+      resolvedCol,
+      daysOpenCol,
+      vendorCol,
       ...customs,
-      ...(hasCustomIssueNotes ? [] : [issueNotesCol]),
+      issueNotesCol,
       notesCol,
       linksCol,
       attachmentsCol,
-      actionsCol,
-    ]
-  }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, updateLinks, statuses, addStatus, profile?.company_id])
+    ].filter(Boolean) as any[]
+  }, [openEdit, toggleRow, selectedRows, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn, updateVendor, updateIssue, updateLinks, statuses, addStatus, profile?.company_id, locOptions, catOptions, deptMap, hiddenCols])
 
   const allTable = useTable(issues, columns)
   const pendingTable = useTable(issues.filter((i) => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('pending') || s.includes('open') }), columns)
   const resolvedTable = useTable(issues.filter((i) => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('resolved') || s.includes('closed') }), columns)
 
-  // Apply pinned custom columns (true sticky) to every tab's table.
   const pinnedIds = useMemo(() => customColumns.filter((c) => c.pinned).map((c) => `cf_${c.id}`), [customColumns])
   const { setColumnPinning: setAllPin } = allTable
   const { setColumnPinning: setPendPin } = pendingTable
@@ -447,7 +613,6 @@ export function IssuesPage() {
     const { error } = await (supabase as any).schema('platform').from('issues').update({ deleted_at: new Date().toISOString() }).eq('id', id)
     if (error) { toast.error(error.message); return }
     toast.success('Issue moved to deleted items')
-    setDeleteTarget(null)
     loadIssues()
   }
 
@@ -465,31 +630,98 @@ export function IssuesPage() {
     loadIssues()
   }
 
+  async function bulkSoftDelete() {
+    const ids = [...selectedRows]
+    const now = new Date().toISOString()
+    const sb = supabase as any
+    await Promise.all(ids.map((id) => sb.schema('platform').from('issues').update({ deleted_at: now }).eq('id', id)))
+    setSelectedRows(new Set())
+    setBulkDeleteConfirm(false)
+    toast.success(`Deleted ${ids.length} issue${ids.length !== 1 ? 's' : ''}`)
+    loadIssues()
+  }
+
   const onNew = () => { setEditIssue(null); setModalOpen(true) }
+
+  const toggleHiddenCol = (id: string) => {
+    setHiddenCols(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+
   const actions = (
     <>
+      {selectedRows.size > 0 && (
+        <Button size="sm" variant="danger" onClick={() => setBulkDeleteConfirm(true)}>
+          Delete {selectedRows.size} selected
+        </Button>
+      )}
       <Button size="sm" onClick={onNew}>+ New Issue</Button>
       <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>+ Import</Button>
-      <Button size="sm" variant="secondary" onClick={() => setAddColOpen(true)}>+ Add Column</Button>
+      <div className="relative">
+        <button
+          onClick={() => setColMenuOpen(o => !o)}
+          className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-mono text-navy hover:bg-navy/5 whitespace-nowrap"
+        >
+          Columns ▾
+        </button>
+        {colMenuOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setColMenuOpen(false)} />
+            <div className="absolute right-0 z-50 mt-1 w-56 rounded border border-navy/30 bg-cream shadow-xl py-1.5">
+              <div className="px-2 pb-1 text-[10px] font-mono text-inky/60 uppercase tracking-wide">Built-in columns</div>
+              {BUILT_IN_COL_DEFS.map(c => (
+                <label key={c.id} className="flex items-center gap-2 px-2 py-0.5 cursor-pointer text-xs font-mono text-navy hover:bg-navy/5">
+                  <input type="checkbox" checked={!hiddenCols.has(c.id)} onChange={() => toggleHiddenCol(c.id)} className="accent-inky" />
+                  {c.label}
+                </label>
+              ))}
+              {customColumns.length > 0 && (
+                <>
+                  <div className="border-t border-navy/10 mt-1 mb-1 mx-2" />
+                  <div className="px-2 pb-1 text-[10px] font-mono text-inky/60 uppercase tracking-wide">Custom columns</div>
+                  {[...customColumns].sort((a, b) => a.sort_order - b.sort_order).map(c => (
+                    <div key={c.id} className="flex items-center justify-between gap-1 px-2 py-0.5 text-xs font-mono text-navy">
+                      <span className="truncate flex-1">{c.label}</span>
+                      <span className="flex items-center gap-0.5 flex-shrink-0">
+                        <button onClick={() => moveColumn(c.id, -1)} className="text-inky/70 hover:text-navy" title="Move left">◀</button>
+                        <button onClick={() => moveColumn(c.id, 1)} className="text-inky/70 hover:text-navy" title="Move right">▶</button>
+                        <button onClick={() => togglePin(c.id)} title={c.pinned ? 'Unpin' : 'Pin'}
+                          className={['px-0.5', c.pinned ? 'text-orange-600' : 'text-inky/70 hover:text-navy'].join(' ')}>📌</button>
+                        <button onClick={() => { if (confirm(`Delete "${c.label}"?`)) removeColumn(c.id) }} className="text-inky/70 hover:text-red-400">✕</button>
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
+              <div className="border-t border-navy/10 mt-1 mx-2" />
+              <button
+                onClick={() => { setColMenuOpen(false); setAddColOpen(true) }}
+                className="w-full text-left px-2 py-1 text-xs font-mono text-inky/60 hover:text-navy hover:bg-navy/5"
+              >＋ Add column…</button>
+            </div>
+          </>
+        )}
+      </div>
     </>
   )
 
   return (
     <div className="flex flex-col gap-6">
       {/* Department filter */}
-      {departments.length > 1 && (
+      {(departments.length > 0) && (
         <div className="flex items-center gap-1.5 flex-wrap">
           <button
             onClick={() => setSelectedDeptId('')}
             className={['px-2.5 py-1 rounded text-xs font-mono transition-colors', selectedDeptId === '' ? 'bg-navy text-cream' : 'bg-navy/10 text-navy/70 hover:bg-navy/20'].join(' ')}
           >All</button>
           {departments.map((d) => (
-            <button
-              key={d.id}
-              onClick={() => setSelectedDeptId(d.id)}
+            <button key={d.id} onClick={() => setSelectedDeptId(d.id)}
               className={['px-2.5 py-1 rounded text-xs font-mono transition-colors', selectedDeptId === d.id ? 'bg-navy text-cream' : 'bg-navy/10 text-navy/70 hover:bg-navy/20'].join(' ')}
             >{d.name}</button>
           ))}
+          <button
+            onClick={() => setSelectedDeptId(PERSONAL_DEPT_ID)}
+            className={['px-2.5 py-1 rounded text-xs font-mono transition-colors', selectedDeptId === PERSONAL_DEPT_ID ? 'bg-navy text-cream' : 'bg-navy/10 text-navy/70 hover:bg-navy/20'].join(' ')}
+          >🔒 Personal</button>
         </div>
       )}
 
@@ -508,7 +740,6 @@ export function IssuesPage() {
         )}
       </div>
 
-      {/* Deleted issues panel */}
       {showDeleted && deletedIssues.length > 0 && (
         <div className="rounded border border-red-200 bg-red-50/40">
           <div className="px-4 py-2 border-b border-red-200">
@@ -547,21 +778,29 @@ export function IssuesPage() {
         </TabsContent>
       </Tabs>
 
-      <IssueFormModal open={modalOpen} onClose={() => { setModalOpen(false); setEditIssue(null) }} existing={editIssue} onSaved={loadIssues} defaultDepartmentId={selectedDeptId} departments={departments} />
+      <IssueFormModal
+        open={modalOpen}
+        onClose={() => { setModalOpen(false); setEditIssue(null) }}
+        existing={editIssue}
+        onSaved={loadIssues}
+        defaultDepartmentId={selectedDeptId === PERSONAL_DEPT_ID ? PERSONAL_DEPT_ID : selectedDeptId}
+        departments={departments}
+        onDelete={(id) => { softDeleteIssue(id); setModalOpen(false); setEditIssue(null) }}
+      />
       <AddIssueColumnModal open={addColOpen} onClose={() => setAddColOpen(false)} existingColumns={customColumns} onAdd={issueCols.addColumn} />
-      <IssueImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={loadIssues} departments={departments} defaultDepartmentId={selectedDeptId} />
+      <IssueImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={loadIssues} departments={departments} defaultDepartmentId={selectedDeptId === PERSONAL_DEPT_ID ? '' : selectedDeptId} />
 
-      {/* Delete confirmation */}
-      {deleteTarget && (
-        <Modal open onClose={() => setDeleteTarget(null)} title="Delete Issue?">
+      {/* Bulk delete confirmation */}
+      {bulkDeleteConfirm && (
+        <Modal open onClose={() => setBulkDeleteConfirm(false)} title="Delete Issues?">
           <div className="flex flex-col gap-4">
             <p className="text-sm font-body text-navy">
-              Delete <span className="font-bold">"{deleteTarget.title ?? 'this issue'}"</span>?
+              You are about to delete <span className="font-bold">{selectedRows.size} issue{selectedRows.size !== 1 ? 's' : ''}</span>, continue?
             </p>
-            <p className="text-xs font-mono text-inky/70">The issue will be kept for 30 days and can be restored before that.</p>
+            <p className="text-xs font-mono text-inky/70">Issues will be kept for 30 days and can be restored.</p>
             <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-              <Button variant="danger" size="sm" onClick={() => softDeleteIssue(deleteTarget.id)}>Delete</Button>
+              <Button variant="secondary" size="sm" onClick={() => setBulkDeleteConfirm(false)}>Cancel</Button>
+              <Button variant="danger" size="sm" onClick={bulkSoftDelete}>Delete</Button>
             </div>
           </div>
         </Modal>

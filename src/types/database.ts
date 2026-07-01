@@ -578,7 +578,8 @@ export interface UserDepartmentMembership {
 export interface Issue {
   id: string
   company_id: string
-  department_id: string
+  department_id: string | null
+  shared_department_ids: string[]
   title: string | null
   location_id: string | null
   category_id: string | null

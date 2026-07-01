@@ -5,21 +5,23 @@ import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/compo
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { isAdminOrDeveloper } from '@/lib/roles'
 import type { Issue, Location, IssueCategory, IssueStatus, Profile, Department } from '@/types'
 import type { ComboboxOption } from '@/components/ui'
 import toast from 'react-hot-toast'
+
+const PERSONAL_VALUE = '__personal__'
 
 interface IssueFormModalProps {
   open: boolean
   onClose: () => void
   existing?: Partial<Issue> | null
   onSaved: () => void
+  onDelete?: (id: string) => void
   defaultDepartmentId?: string
   departments?: Department[]
 }
 
-export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepartmentId, departments: deptsProp }: IssueFormModalProps) {
+export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, defaultDepartmentId, departments: deptsProp }: IssueFormModalProps) {
   const { profile } = useAuthStore()
   const [locations, setLocations] = useState<ComboboxOption[]>([])
   const [categories, setCategories] = useState<ComboboxOption[]>([])
@@ -27,7 +29,14 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   const [deptOptions, setDeptOptions] = useState<ComboboxOption[]>([])
 
-  const [deptId, setDeptId] = useState(existing?.department_id ?? defaultDepartmentId ?? '')
+  const resolveInitialDept = () => {
+    if (existing?.department_id) return existing.department_id
+    if (existing && 'department_id' in existing && existing.department_id === null) return PERSONAL_VALUE
+    if (defaultDepartmentId === PERSONAL_VALUE) return PERSONAL_VALUE
+    return defaultDepartmentId ?? ''
+  }
+
+  const [deptId, setDeptId] = useState(resolveInitialDept)
   const [title, setTitle] = useState(existing?.title ?? '')
   const [locationId, setLocationId] = useState(existing?.location_id ?? '')
   const [categoryId, setCategoryId] = useState(existing?.category_id ?? '')
@@ -40,6 +49,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
   const [issueNotes, setIssueNotes] = useState(existing?.issue_notes ?? '')
   const [notes, setNotes] = useState(existing?.resolution_notes ?? '')
   const [saving, setSaving] = useState(false)
+  const [sharedDeptIds, setSharedDeptIds] = useState<string[]>((existing as any)?.shared_department_ids ?? [])
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
 
   const [visibility, setVisibility] = useState<VisibilityValue>((existing as any)?.visibility ?? 'department')
   const [participants, setParticipants] = useState<SlimUser[]>([])
@@ -49,13 +60,25 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
 
   const isResolved = statuses.find((s) => s.value === statusId)?.label?.toLowerCase().includes('resolved')
 
+  // Auto-set resolved date when status changes to resolved (only if not already set)
+  useEffect(() => {
+    if (!statusId || !statuses.length) return
+    const statusName = statuses.find(s => s.value === statusId)?.label ?? ''
+    if (statusName.toLowerCase().includes('resolved') && !resolvedDate) {
+      setResolvedDate(new Date().toISOString().split('T')[0])
+    }
+  // resolvedDate intentionally excluded — only auto-set on status change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusId, statuses])
+
   useEffect(() => {
     if (!companyId || !open) return
     loadOptions()
   }, [companyId, open])
 
   useEffect(() => {
-    setDeptId(existing?.department_id ?? defaultDepartmentId ?? '')
+    const initDept = resolveInitialDept()
+    setDeptId(initDept)
     setTitle(existing?.title ?? '')
     setLocationId(existing?.location_id ?? '')
     setCategoryId(existing?.category_id ?? '')
@@ -68,24 +91,26 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
     setIssueNotes(existing?.issue_notes ?? '')
     setNotes(existing?.resolution_notes ?? '')
     setVisibility((existing as any)?.visibility ?? 'department')
+    setSharedDeptIds((existing as any)?.shared_department_ids ?? [])
     setParticipants([])
     setSpecificUsers([])
+    setDeleteConfirm(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing])
 
   async function loadOptions() {
     const sb = supabase as any
     const [locs, cats, stats, profs] = await Promise.all([
-      sb.schema('core').from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
+      sb.schema('inventory').from('locations').select('id, name').eq('company_id', companyId!).eq('active', true),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
-      sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).order('full_name'),
+      sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).is('deleted_at', null).order('full_name'),
     ])
     setLocations((locs.data ?? []).map((l: Location) => ({ value: l.id, label: l.name })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
     setOrgProfiles((profs.data ?? []) as Profile[])
 
-    // Departments: use prop if provided (avoids a round-trip), otherwise load from memberships
     if (deptsProp?.length) {
       setDeptOptions(deptsProp.map((d) => ({ value: d.id, label: d.name })))
     } else {
@@ -95,13 +120,19 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
     }
   }
 
+  // All dept options including "Personal" at the top
+  const allDeptOptions: ComboboxOption[] = [
+    { value: PERSONAL_VALUE, label: '🔒 Personal (private)' },
+    ...deptOptions,
+  ]
+
+  const isPersonal = deptId === PERSONAL_VALUE
+
   async function createCategory(name: string): Promise<ComboboxOption> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .schema('inventory').from('issue_categories')
       .insert({ company_id: companyId!, name })
-      .select()
-      .single()
+      .select().single()
     if (error) throw error
     const opt = { value: data.id, label: data.name }
     setCategories((prev) => [...prev, opt])
@@ -109,16 +140,18 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
   }
 
   async function createStatus(name: string): Promise<ComboboxOption> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .schema('inventory').from('issue_statuses')
       .insert({ company_id: companyId!, name })
-      .select()
-      .single()
+      .select().single()
     if (error) throw error
     const opt = { value: data.id, label: data.name }
     setStatuses((prev) => [...prev, opt])
     return opt
+  }
+
+  function toggleSharedDept(id: string) {
+    setSharedDeptIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
   async function save() {
@@ -129,9 +162,10 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
       return
     }
     setSaving(true)
+
     const payload: Record<string, unknown> = {
       company_id: companyId,
-      department_id: deptId,
+      department_id: isPersonal ? null : deptId,
       title: title.trim() || null,
       location_id: locationId || null,
       category_id: categoryId || null,
@@ -143,12 +177,11 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
       assignee: assignee.trim() || null,
       issue_notes: issueNotes || null,
       resolution_notes: notes || null,
-      visibility: visibility,
+      visibility: isPersonal ? 'private' : visibility,
+      shared_department_ids: isPersonal ? [] : sharedDeptIds,
     }
-    // Only stamp the creator on insert — editing must not reassign it.
     if (!existing?.id) payload.created_by = profile?.id ?? null
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = supabase as any
     const { error } = existing?.id
       ? await sb.schema('platform').from('issues').update(payload).eq('id', existing.id)
@@ -163,6 +196,9 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
     setSaving(false)
   }
 
+  const ownerDeptLabel = isPersonal ? null : deptOptions.find((d) => d.value === deptId)?.label ?? null
+  const otherDepts = deptOptions.filter(d => d.value !== deptId)
+
   return (
     <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Issue' : 'New Issue'} size="lg">
       <div className="mb-4">
@@ -175,12 +211,18 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2">
-          <Combobox label="Department" options={deptOptions} value={deptId}
-            onChange={(v) => setDeptId(v)} placeholder="Select department…" />
+          <Combobox label="Department" options={allDeptOptions} value={deptId}
+            onChange={(v) => {
+              setDeptId(v)
+              if (v === PERSONAL_VALUE) setVisibility('private')
+            }}
+            placeholder="Select department…" />
         </div>
 
-        <Combobox label="Location (optional)" options={locations} value={locationId}
-          onChange={(v) => setLocationId(v)} placeholder="None — general issue" />
+        {!isPersonal && (
+          <Combobox label="Location (optional)" options={locations} value={locationId}
+            onChange={(v) => setLocationId(v)} placeholder="None — general issue" />
+        )}
 
         <Combobox label="Category" options={categories} value={categoryId}
           onChange={(v) => setCategoryId(v)} placeholder="Select or create..."
@@ -206,56 +248,87 @@ export function IssueFormModal({ open, onClose, existing, onSaved, defaultDepart
           placeholder="Unassigned"
         />
 
-        {isResolved && (
+        {(isResolved || resolvedDate) && (
           <Input label="Resolved Date" type="date" value={resolvedDate}
             onChange={(e) => setResolvedDate(e.target.value)} />
         )}
 
         <div className="col-span-2">
-          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">
-            Issue Notes
-          </label>
-          <RichTextEditor
-            value={issueNotes}
-            onChange={setIssueNotes}
-            placeholder="Details, observations, context…"
-            minHeight={100}
-          />
+          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Issue Notes</label>
+          <RichTextEditor value={issueNotes} onChange={setIssueNotes} placeholder="Details, observations, context…" minHeight={100} />
         </div>
 
         <div className="col-span-2">
-          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">
-            Resolution Notes
-          </label>
-          <RichTextEditor
-            value={notes}
-            onChange={setNotes}
-            placeholder="Resolution details…"
-            minHeight={100}
-          />
+          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Resolution Notes</label>
+          <RichTextEditor value={notes} onChange={setNotes} placeholder="Resolution details…" minHeight={100} />
         </div>
 
-        <div className="col-span-2">
-          <VisibilitySelector
-            value={visibility}
-            onChange={setVisibility}
-            participants={participants}
-            onParticipantsChange={setParticipants}
-            specificUsers={specificUsers}
-            onSpecificUsersChange={setSpecificUsers}
-            allUsers={orgProfiles.map((p) => ({ id: p.id, full_name: p.full_name, email: p.email ?? '' }))}
-            departmentName={deptOptions.find((d) => d.value === deptId)?.label ?? null}
-            departments={deptOptions.map((d) => d.label)}
-            label="Issue Visibility"
-          />
-        </div>
+        {!isPersonal && otherDepts.length > 0 && (
+          <div className="col-span-2">
+            <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1.5">
+              Share with other departments (optional)
+            </label>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+              {otherDepts.map(d => (
+                <label key={d.value} className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={sharedDeptIds.includes(d.value)}
+                    onChange={() => toggleSharedDept(d.value)}
+                    className="accent-inky" />
+                  <span className="text-xs font-mono text-navy">{d.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!isPersonal && (
+          <div className="col-span-2">
+            <VisibilitySelector
+              value={visibility}
+              onChange={setVisibility}
+              participants={participants}
+              onParticipantsChange={setParticipants}
+              specificUsers={specificUsers}
+              onSpecificUsersChange={setSpecificUsers}
+              allUsers={orgProfiles.map((p) => ({ id: p.id, full_name: p.full_name, email: p.email ?? '' }))}
+              departmentName={ownerDeptLabel}
+              departments={deptOptions.map((d) => d.label)}
+              label="Issue Visibility"
+            />
+          </div>
+        )}
+
+        {isPersonal && (
+          <div className="col-span-2 flex items-center gap-2 rounded bg-navy/5 px-3 py-2">
+            <span className="text-xs font-mono text-inky/70">🔒 Personal issues are only visible to you.</span>
+          </div>
+        )}
       </div>
 
-      <div className="flex justify-end gap-2 mt-4">
-        <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-        <Button size="sm" loading={saving} onClick={save}>
-          {existing?.id ? 'Update' : 'Create'} Issue
-        </Button>
+      <div className="flex items-center justify-between gap-2 mt-4">
+        <div>
+          {existing?.id && !deleteConfirm && (
+            <button
+              onClick={() => setDeleteConfirm(true)}
+              className="text-xs font-mono text-red-400 hover:text-red-600 hover:underline"
+            >
+              Delete issue
+            </button>
+          )}
+          {existing?.id && deleteConfirm && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-red-500">Confirm delete?</span>
+              <button onClick={() => { onDelete?.(existing.id!); onClose() }} className="text-xs font-mono text-red-500 font-bold hover:underline">Yes, delete</button>
+              <button onClick={() => setDeleteConfirm(false)} className="text-xs font-mono text-inky/60 hover:underline">Cancel</button>
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" loading={saving} onClick={save}>
+            {existing?.id ? 'Update' : 'Create'} Issue
+          </Button>
+        </div>
       </div>
     </Modal>
   )
