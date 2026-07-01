@@ -408,11 +408,13 @@ export function IssuesPage() {
       .select('*').eq('company_id', profile.company_id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
 
     if (selectedDeptId === PERSONAL_DEPT_ID) {
-      liveQ = liveQ.is('department_id', null).eq('created_by', profile.id)
-      delQ = delQ.is('department_id', null).eq('created_by', profile.id)
+      // Personal = null-dept issues OR private visibility issues created by the user
+      liveQ = liveQ.eq('created_by', profile.id).or('department_id.is.null,visibility.eq.private')
+      delQ = delQ.eq('created_by', profile.id).or('department_id.is.null,visibility.eq.private')
     } else if (selectedDeptId) {
-      liveQ = liveQ.eq('department_id', selectedDeptId)
-      delQ = delQ.eq('department_id', selectedDeptId)
+      // Department view: exclude private issues (those belong in Personal tab)
+      liveQ = liveQ.eq('department_id', selectedDeptId).neq('visibility', 'private')
+      delQ = delQ.eq('department_id', selectedDeptId).neq('visibility', 'private')
     }
 
     const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
@@ -669,8 +671,9 @@ export function IssuesPage() {
   }, [profile?.company_id, loadIssues])
 
   async function softDeleteIssue(id: string) {
+    setIssues(prev => prev.filter(i => i.id !== id))
     const { error } = await (supabase as any).schema('platform').from('issues').update({ deleted_at: new Date().toISOString() }).eq('id', id)
-    if (error) { toast.error(error.message); return }
+    if (error) { toast.error(error.message); loadIssues(); return }
     toast.success('Issue moved to deleted items')
     loadIssues()
   }
@@ -691,10 +694,13 @@ export function IssuesPage() {
 
   async function bulkSoftDelete() {
     const ids = [...selectedRows]
+    setIssues(prev => prev.filter(i => !ids.includes(i.id)))
+    setBulkDeleteConfirm(false)
     const now = new Date().toISOString()
     const sb = supabase as any
-    await Promise.all(ids.map(id => sb.schema('platform').from('issues').update({ deleted_at: now }).eq('id', id)))
-    setBulkDeleteConfirm(false)
+    const results = await Promise.all(ids.map(id => sb.schema('platform').from('issues').update({ deleted_at: now }).eq('id', id)))
+    const failed = results.filter((r: any) => r.error)
+    if (failed.length) { toast.error(`Failed to delete ${failed.length} issue(s)`); loadIssues(); return }
     toast.success(`Deleted ${ids.length} issue${ids.length !== 1 ? 's' : ''}`)
     loadIssues()
   }

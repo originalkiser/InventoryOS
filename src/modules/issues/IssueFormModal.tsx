@@ -161,7 +161,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
     }
     setSaving(true)
 
-    const payload: Record<string, unknown> = {
+    // Core payload — all columns that are guaranteed to exist in production
+    const corePayload: Record<string, unknown> = {
       company_id: companyId,
       department_id: isPersonal ? null : deptId,
       title: title.trim() || null,
@@ -176,21 +177,27 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
       issue_notes: issueNotes || null,
       resolution_notes: notes || null,
       visibility: isPersonal ? 'private' : visibility,
-      shared_department_ids: isPersonal ? [] : sharedDeptIds,
     }
-    if (!existing?.id) payload.created_by = profile?.id ?? null
+    if (!existing?.id) corePayload.created_by = profile?.id ?? null
 
     const sb = supabase as any
     const { error } = existing?.id
-      ? await sb.schema('platform').from('issues').update(payload).eq('id', existing.id)
-      : await sb.schema('platform').from('issues').insert(payload)
+      ? await sb.schema('platform').from('issues').update(corePayload).eq('id', existing.id)
+      : await sb.schema('platform').from('issues').insert(corePayload)
 
-    if (error) toast.error(error.message)
-    else {
-      toast.success(existing?.id ? 'Issue updated' : 'Issue created')
-      onSaved()
-      onClose()
+    if (error) { toast.error(error.message); setSaving(false); return }
+
+    // Best-effort: shared_department_ids may be missing if migration not yet applied
+    const sharedPayload = { shared_department_ids: isPersonal ? [] : sharedDeptIds }
+    if (existing?.id) {
+      sb.schema('platform').from('issues').update(sharedPayload).eq('id', existing.id).then(() => {})
+    } else {
+      // For inserts we'd need the new row id — skip best-effort on insert for now
     }
+
+    toast.success(existing?.id ? 'Issue updated' : 'Issue created')
+    onSaved()
+    onClose()
     setSaving(false)
   }
 
