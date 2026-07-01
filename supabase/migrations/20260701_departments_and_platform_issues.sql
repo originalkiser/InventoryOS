@@ -155,10 +155,10 @@ JOIN platform.departments d
 -- ============================================================
 -- 6. Drop old inventory tables (pending migrations used IF EXISTS)
 -- ============================================================
-DROP TABLE IF EXISTS inventory.issue_department_exclusions;
-DROP TABLE IF EXISTS inventory.issue_participants;
-DROP TABLE IF EXISTS inventory.issue_shares;
-DROP TABLE IF EXISTS inventory.issues;
+DROP TABLE IF EXISTS inventory.issue_department_exclusions CASCADE;
+DROP TABLE IF EXISTS inventory.issue_participants CASCADE;
+DROP TABLE IF EXISTS inventory.issue_shares CASCADE;
+DROP TABLE IF EXISTS inventory.issues CASCADE;
 
 -- ============================================================
 -- 7. RLS policies
