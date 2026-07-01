@@ -155,22 +155,30 @@ export function VisibilitySelector({
             const deptMembers = allUsers.filter(
               (u) => effectiveDeptName && u.department === effectiveDeptName
             )
-            if (!effectiveDeptName || deptMembers.length === 0) {
+            if (!effectiveDeptName) {
+              return (
+                <p className="text-[10px] font-mono text-inky/60">Select a department above.</p>
+              )
+            }
+            if (deptMembers.length === 0) {
               return (
                 <p className="text-[10px] font-mono text-inky/60">
-                  Visible to all members of {effectiveDeptName ? <strong>{effectiveDeptName}</strong> : 'your department'}.
+                  No users found in <strong>{effectiveDeptName}</strong>.
                 </p>
               )
             }
             return (
               <>
                 <p className="text-[10px] font-mono text-inky/60">
-                  Shared with <strong>{effectiveDeptName}</strong> — remove anyone to switch to specific users:
+                  {deptMembers.length} member{deptMembers.length !== 1 ? 's' : ''} in <strong>{effectiveDeptName}</strong> — click ✕ to switch to specific users:
                 </p>
-                <ul className="flex flex-col gap-0.5">
+                <ul className="flex flex-col gap-0.5 max-h-40 overflow-y-auto">
                   {deptMembers.map((u) => (
                     <li key={u.id} className="flex items-center justify-between gap-2 rounded bg-navy/5 px-2 py-1">
-                      <span className="text-xs font-mono text-navy">{u.full_name ?? u.email}</span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-xs font-mono text-navy truncate">{u.full_name ?? u.email}</span>
+                        {u.full_name && <span className="text-[10px] font-mono text-inky/50 truncate">{u.email}</span>}
+                      </div>
                       <button
                         onClick={() => {
                           const remaining = deptMembers.filter((m) => m.id !== u.id)

@@ -290,9 +290,14 @@ export function MeetingNotesPage() {
   }
 
   const visibleMeetings = useMemo(() => {
-    if (viewFilter === 'mine') return meetings.filter((m) => m.created_by === myId)
-    if (viewFilter === 'shared') return meetings.filter((m) => m.created_by !== myId)
-    return meetings
+    // Never expose private notes belonging to another user
+    const accessible = meetings.filter((m) => {
+      const vis: VisibilityValue = (m as any).visibility ?? (m.shared ? 'department' : 'private')
+      return vis !== 'private' || m.created_by === myId
+    })
+    if (viewFilter === 'mine') return accessible.filter((m) => m.created_by === myId)
+    if (viewFilter === 'shared') return accessible.filter((m) => m.created_by !== myId)
+    return accessible
   }, [meetings, viewFilter, myId])
 
   const distinctCategories = useMemo(
@@ -424,11 +429,7 @@ export function MeetingNotesPage() {
                 onSpecificUsersChange={setSpecificUsers}
                 allUsers={allUsers}
                 departmentName={(profile as any)?.department ?? null}
-                departments={
-                  isAdminOrDeveloper(profile?.role)
-                    ? [...new Set(allUsers.map((u) => (u as any).department).filter(Boolean) as string[])]
-                    : (profile as any)?.department ? [(profile as any).department] : undefined
-                }
+                departments={[...new Set(allUsers.map((u) => (u as any).department).filter(Boolean) as string[])]}
                 label="Visibility"
                 disabled={!isOwner}
               />
