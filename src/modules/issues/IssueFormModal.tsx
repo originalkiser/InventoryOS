@@ -75,6 +75,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
   }, [companyId, open])
 
   useEffect(() => {
+    if (!open) return
     const initDept = resolveInitialDept()
     setDeptId(initDept)
     setTitle(existing?.title ?? '')
@@ -94,7 +95,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
     setSpecificUsers([])
     setDeleteConfirm(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existing])
+  }, [existing, open])
 
   async function loadOptions() {
     const sb = supabase as any
