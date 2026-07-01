@@ -21,11 +21,12 @@ const ROLE_BADGE_COLOR: Record<string, string> = {
 }
 
 const DEPT_OPTIONS = [
-  { key: 'dept:inventory', label: 'Inventory' },
-  { key: 'dept:operations', label: 'Operations' },
-  { key: 'dept:finance', label: 'Finance' },
-  { key: 'dept:accounting', label: 'Accounting' },
-  { key: 'dept:marketing', label: 'Marketing' },
+  { key: 'dept:inventory',           label: 'Inventory',           slug: 'inventory' },
+  { key: 'dept:operations',          label: 'Operations',          slug: 'operations' },
+  { key: 'dept:finance',             label: 'Finance',             slug: 'finance' },
+  { key: 'dept:accounting',          label: 'Accounting',          slug: 'accounting' },
+  { key: 'dept:marketing',           label: 'Marketing',           slug: 'marketing' },
+  { key: 'dept:project_management',  label: 'Project Management',  slug: 'project_management' },
 ]
 
 const MODULE_OPTIONS = [
@@ -124,11 +125,38 @@ function ManageUserModal({
       { onConflict: 'user_id,feature_key' }
     )
 
+    // Sync platform.user_department_memberships to match the dept checkboxes
+    if (myProfile.company_id) {
+      const enabledSlugs = DEPT_OPTIONS.filter((d) => editAccess.has(d.key)).map((d) => d.slug)
+      const allSlugs = DEPT_OPTIONS.map((d) => d.slug)
+      const { data: depts } = await sb.schema('platform').from('departments')
+        .select('id, slug').eq('company_id', myProfile.company_id).in('slug', allSlugs)
+      if (depts) {
+        const slugToId = Object.fromEntries((depts as any[]).map((d) => [d.slug, d.id]))
+        // Remove all managed dept memberships then re-insert enabled ones
+        const allDeptIds = allSlugs.map((s) => slugToId[s]).filter(Boolean)
+        if (allDeptIds.length) {
+          await sb.schema('platform').from('user_department_memberships')
+            .delete().eq('user_id', user.id).in('department_id', allDeptIds)
+        }
+        const toInsert = enabledSlugs.map((s) => slugToId[s]).filter(Boolean).map((deptId: string) => ({
+          user_id: user.id,
+          department_id: deptId,
+          company_id: myProfile.company_id,
+          created_by: myProfile.id,
+        }))
+        if (toInsert.length) {
+          await sb.schema('platform').from('user_department_memberships')
+            .upsert(toInsert, { onConflict: 'user_id,department_id' })
+        }
+      }
+    }
+
     if (newName && oldName && newName !== oldName && myProfile.company_id) {
       await Promise.all([
         sb.schema('core').from('tasks').update({ assignee_name: newName }).eq('company_id', myProfile.company_id).eq('assignee_name', oldName).is('assignee_id', null),
         sb.schema('inventory').from('project_tasks').update({ assignee: newName }).eq('company_id', myProfile.company_id).eq('assignee', oldName),
-        sb.schema('inventory').from('issues').update({ assignee: newName }).eq('company_id', myProfile.company_id).eq('assignee', oldName),
+        sb.schema('platform').from('issues').update({ assignee: newName }).eq('company_id', myProfile.company_id).eq('assignee', oldName),
       ])
     }
 
