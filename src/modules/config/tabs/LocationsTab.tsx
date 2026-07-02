@@ -673,7 +673,6 @@ export function LocationsTab() {
 
   const { table, globalFilter, setGlobalFilter } = useTable(filteredData, columns, {
     initialSorting: [{ id: 'name', desc: false }],
-    initialVisibility: INITIAL_COL_VISIBILITY,
   })
 
   // ── Save helpers ────────────────────────────────────────────────────────────
@@ -848,6 +847,7 @@ export function LocationsTab() {
           onGlobalFilterChange={setGlobalFilter}
           exportFilename="locations.csv"
           loading={loading}
+          hideColumnControl
           actions={
             <>
               <ClearTableButton clearAll={clearAll} />
@@ -1119,9 +1119,58 @@ export function LocationsTab() {
         </div>
       </Modal>
 
-      {/* ── Manage custom columns ────────────────────────────────────────── */}
-      <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Location Columns" size="lg">
-        <CustomFieldsEditor section="locations" recommended={RECOMMENDED} />
+      {/* ── Manage columns ───────────────────────────────────────────────── */}
+      <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Manage Columns" size="xl">
+        <div className="flex flex-col gap-6">
+          {/* Column visibility */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-mono text-navy font-bold uppercase tracking-wide">Visible Columns</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => table.getAllLeafColumns().forEach((c) => { if (c.id !== 'select' && c.id !== 'edit') c.toggleVisibility(true) })}
+                  className="text-[10px] font-mono text-inky/60 hover:text-navy underline"
+                >
+                  Show all
+                </button>
+                <button
+                  onClick={() => {
+                    const keep = new Set(['name', 'shop_city', 'region', 'active', 'updated_at'])
+                    table.getAllLeafColumns().forEach((c) => {
+                      if (c.id !== 'select' && c.id !== 'edit') c.toggleVisibility(keep.has(c.id))
+                    })
+                  }}
+                  className="text-[10px] font-mono text-inky/60 hover:text-navy underline"
+                >
+                  Reset to defaults
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-x-4 gap-y-1 border border-navy/10 rounded p-3 bg-cream/60 dark:bg-[#0e2638]/40 max-h-72 overflow-y-auto">
+              {table.getAllLeafColumns()
+                .filter((c) => c.id !== 'select' && c.id !== 'edit')
+                .map((c) => (
+                  <label key={c.id} className="flex items-center gap-2 cursor-pointer py-0.5">
+                    <input
+                      type="checkbox"
+                      checked={c.getIsVisible()}
+                      onChange={c.getToggleVisibilityHandler()}
+                      className="accent-sky flex-shrink-0"
+                    />
+                    <span className="text-xs font-body text-navy truncate">
+                      {String(c.columnDef.header ?? c.id)}
+                    </span>
+                  </label>
+                ))}
+            </div>
+          </div>
+
+          {/* Custom metadata fields */}
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-mono text-navy font-bold uppercase tracking-wide">Custom Fields</p>
+            <CustomFieldsEditor section="locations" recommended={RECOMMENDED} />
+          </div>
+        </div>
       </Modal>
     </div>
   )
