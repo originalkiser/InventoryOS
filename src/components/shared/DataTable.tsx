@@ -22,6 +22,8 @@ interface DataTableProps<T> {
   hideColumnControl?: boolean
   /** Called whenever the internal row-selection Set changes */
   onSelectionChange?: (ids: Set<string>) => void
+  /** Increment to imperatively clear the current selection */
+  clearSelectionToken?: number
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -108,6 +110,7 @@ export function DataTable<T>({
   attachmentEntityType,
   hideColumnControl,
   onSelectionChange,
+  clearSelectionToken,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -115,6 +118,11 @@ export function DataTable<T>({
   useEffect(() => {
     onSelectionChange?.(selectedIds)
   }, [selectedIds, onSelectionChange])
+
+  useEffect(() => {
+    if (clearSelectionToken === undefined) return
+    setSelectedIds(new Set())
+  }, [clearSelectionToken])
 
   function rowKey(row: Row<T>): string {
     return String((row.original as any)?.id ?? row.id)

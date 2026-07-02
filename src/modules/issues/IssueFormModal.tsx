@@ -107,7 +107,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
       sb.schema('platform').from('departments').select('id, name').eq('company_id', companyId!),
       sb.schema('platform').from('user_department_memberships').select('user_id, department_id').eq('company_id', companyId!),
     ])
-    setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: `${l.name} — ${l.shop_city}` })))
+    setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: l.shop_city ?? l.name })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
 

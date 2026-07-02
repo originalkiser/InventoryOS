@@ -344,14 +344,16 @@ function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | u
 
 // Hoisted to module scope — defining inside IssuesPage remounted the table
 // subtree on each render and swallowed the "+ New Issue" click.
-function IssuesTable({ table, filter, onFilterChange, issues, loading, actions, onSelectionChange }: {
+function IssuesTable({ table, filter, onFilterChange, issues, loading, actions, onSelectionChange, clearSelectionToken }: {
   table: any; filter: string; onFilterChange: (v: string) => void; issues: IssueRow[]
   loading: boolean; actions: React.ReactNode; onSelectionChange?: (ids: Set<string>) => void
+  clearSelectionToken?: number
 }) {
   return (
     <DataTable table={table} globalFilter={filter} onGlobalFilterChange={onFilterChange}
       exportFilename="issues.csv" exportData={issues} loading={loading} actions={actions}
-      attachmentEntityType="issue" hideColumnControl onSelectionChange={onSelectionChange} />
+      attachmentEntityType="issue" hideColumnControl onSelectionChange={onSelectionChange}
+      clearSelectionToken={clearSelectionToken} />
   )
 }
 
@@ -374,6 +376,7 @@ export function IssuesPage() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [selectedDeptId, setSelectedDeptId] = useState<string>('')
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
+  const [clearToken, setClearToken] = useState(0)
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false)
   const [colMenuOpen, setColMenuOpen] = useState(false)
@@ -428,12 +431,12 @@ export function IssuesPage() {
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
     if (locRes.error) { console.error('[IssuesPage] locations query failed:', locRes.error) }
 
-    const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, `${l.name} — ${l.shop_city}`]))
+    const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, l.shop_city ?? l.name]))
     const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
     const statusMap: Record<string, string> = Object.fromEntries((statusRes.data ?? []).map((s: any) => [s.id, s.name]))
 
     // Update refs so InlineCombobox cells pick up fresh options without re-mounting
-    locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: `${l.name} — ${l.shop_city}` }))
+    locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: l.shop_city ?? l.name }))
     catOptionsRef.current = (catRes.data ?? []).map((c: any) => ({ value: c.id, label: c.name }))
 
     const mapRow = (data: any[]) => (data ?? []).map((r: any) => ({
@@ -702,6 +705,8 @@ export function IssuesPage() {
       .update({ deleted_at: new Date().toISOString() }).in('id', ids)
     if (error) { toast.error(`Failed to delete: ${error.message}`); loadIssues(); return }
     toast.success(`Deleted ${ids.length} issue${ids.length !== 1 ? 's' : ''}`)
+    setSelectedRows(new Set())
+    setClearToken(t => t + 1)
     loadIssues()
   }
 
@@ -719,6 +724,8 @@ export function IssuesPage() {
     if (error) { toast.error(`Failed to move: ${error.message}`); loadIssues(); return }
     const label = targetDeptId ? (departments.find(d => d.id === targetDeptId)?.name ?? 'department') : 'Personal'
     toast.success(`Moved ${ids.length} issue${ids.length !== 1 ? 's' : ''} to ${label}`)
+    setSelectedRows(new Set())
+    setClearToken(t => t + 1)
     loadIssues()
   }
 
@@ -885,13 +892,13 @@ export function IssuesPage() {
           <TabsTrigger value="resolved">Resolved ({resolvedTable.table.getCoreRowModel().rows.length})</TabsTrigger>
         </TabsList>
         <TabsContent value="all">
-          <IssuesTable table={allTable.table} filter={allTable.globalFilter} onFilterChange={allTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} />
+          <IssuesTable table={allTable.table} filter={allTable.globalFilter} onFilterChange={allTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} clearSelectionToken={clearToken} />
         </TabsContent>
         <TabsContent value="pending">
-          <IssuesTable table={pendingTable.table} filter={pendingTable.globalFilter} onFilterChange={pendingTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} />
+          <IssuesTable table={pendingTable.table} filter={pendingTable.globalFilter} onFilterChange={pendingTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} clearSelectionToken={clearToken} />
         </TabsContent>
         <TabsContent value="resolved">
-          <IssuesTable table={resolvedTable.table} filter={resolvedTable.globalFilter} onFilterChange={resolvedTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} />
+          <IssuesTable table={resolvedTable.table} filter={resolvedTable.globalFilter} onFilterChange={resolvedTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} clearSelectionToken={clearToken} />
         </TabsContent>
       </Tabs>
 
