@@ -23,10 +23,10 @@ const multiSelectFilter: FilterFn<any> = (row, columnId, value: string[]) => {
   return value.includes(String(row.getValue(columnId) ?? ''))
 }
 
-export function useTable<T>(data: T[], columns: ColumnDef<T, any>[], options?: { initialSorting?: SortingState }) {
+export function useTable<T>(data: T[], columns: ColumnDef<T, any>[], options?: { initialSorting?: SortingState; initialVisibility?: VisibilityState }) {
   const [sorting, setSorting] = useState<SortingState>(options?.initialSorting ?? [])
   const [globalFilter, setGlobalFilter] = useState('')
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(options?.initialVisibility ?? {})
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   // Optional ordering/pinning — empty by default, so tables that don't use them
   // are unaffected (no column is pinned/reordered).
