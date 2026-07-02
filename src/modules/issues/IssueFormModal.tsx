@@ -100,14 +100,14 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
   async function loadOptions() {
     const sb = supabase as any
     const [locs, cats, stats, profs, depts, memberships] = await Promise.all([
-      sb.schema('core').from('locations').select('id, location_code, name').eq('company_id', companyId!).order('location_code'),
+      sb.schema('core').from('locations').select('id, name, shop_city').eq('company_id', companyId!).order('name'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
       sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).is('deleted_at', null).order('full_name'),
       sb.schema('platform').from('departments').select('id, name').eq('company_id', companyId!),
       sb.schema('platform').from('user_department_memberships').select('user_id, department_id').eq('company_id', companyId!),
     ])
-    setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: `${l.location_code} — ${l.name}` })))
+    setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: `${l.name} — ${l.shop_city}` })))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
 

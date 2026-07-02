@@ -420,7 +420,7 @@ export function IssuesPage() {
 
     const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
       liveQ, delQ,
-      sb.schema('core').from('locations').select('id, location_code, name').eq('company_id', profile.company_id).order('location_code'),
+      sb.schema('core').from('locations').select('id, name, shop_city').eq('company_id', profile.company_id).order('name'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
     ])
@@ -428,12 +428,12 @@ export function IssuesPage() {
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
     if (locRes.error) { console.error('[IssuesPage] locations query failed:', locRes.error) }
 
-    const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, `${l.location_code} — ${l.name}`]))
+    const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, `${l.name} — ${l.shop_city}`]))
     const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
     const statusMap: Record<string, string> = Object.fromEntries((statusRes.data ?? []).map((s: any) => [s.id, s.name]))
 
     // Update refs so InlineCombobox cells pick up fresh options without re-mounting
-    locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: `${l.location_code} — ${l.name}` }))
+    locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: `${l.name} — ${l.shop_city}` }))
     catOptionsRef.current = (catRes.data ?? []).map((c: any) => ({ value: c.id, label: c.name }))
 
     const mapRow = (data: any[]) => (data ?? []).map((r: any) => ({
