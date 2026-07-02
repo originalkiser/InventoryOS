@@ -53,8 +53,8 @@ export function resolveLocationId(value: string, locations: Location[]): string 
   const match = locations.find(
     (l) =>
       l.id.toLowerCase() === v ||
-      l.location_code.toLowerCase() === v ||
-      l.name.toLowerCase() === v
+      l.name.toLowerCase() === v ||
+      (l.shop_city ?? '').toLowerCase() === v
   )
   return match?.id ?? null
 }
@@ -63,13 +63,13 @@ export function resolveLocationId(value: string, locations: Location[]): string 
 export function locationOptions(locations: Location[]) {
   return locations
     .filter((l) => l.active)
-    .map((l) => ({ value: l.id, label: `${l.location_code} — ${l.name}` }))
+    .map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
 }
 
 export function locationLabel(locationId: string | null, locations: Location[]): string {
   if (!locationId) return '—'
   const l = locations.find((x) => x.id === locationId)
-  return l ? `${l.location_code} — ${l.name}` : '—'
+  return l ? `${l.name} — ${l.shop_city ?? ''}` : '—'
 }
 
 // ---------------------------------------------------------------------------

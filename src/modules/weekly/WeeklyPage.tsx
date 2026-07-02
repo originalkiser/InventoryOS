@@ -66,8 +66,8 @@ function ExclusionManagerModal({
     const filtered = q
       ? locations.filter(
           (l) =>
-            l.location_code?.toLowerCase().includes(q) ||
-            l.name?.toLowerCase().includes(q),
+            l.name?.toLowerCase().includes(q) ||
+            l.shop_city?.toLowerCase().includes(q),
         )
       : locations
     return [...filtered].sort((a, b) => {
@@ -75,7 +75,7 @@ function ExclusionManagerModal({
       const bEx = exclusions.has(b.id)
       if (aEx && !bEx) return -1
       if (!aEx && bEx) return 1
-      return (a.location_code ?? '').localeCompare(b.location_code ?? '')
+      return (a.name ?? '').localeCompare(b.name ?? '')
     })
   }, [locations, exclusions, search])
 
@@ -112,12 +112,12 @@ function ExclusionManagerModal({
                 className="w-3.5 h-3.5 accent-navy flex-shrink-0"
               />
               <span className="text-xs font-mono text-navy font-semibold w-16 flex-shrink-0">
-                {loc.location_code}
+                {loc.name}
               </span>
-              <span className="text-xs font-mono text-inky truncate">{loc.name}</span>
-              {(loc.metadata as any)?.owner && (
+              <span className="text-xs font-mono text-inky truncate">{loc.shop_city}</span>
+              {(loc.owner ?? (loc.metadata as any)?.owner) && (
                 <span className="ml-auto text-[10px] font-mono text-inky/50 flex-shrink-0">
-                  {(loc.metadata as any).owner}
+                  {loc.owner ?? (loc.metadata as any)?.owner}
                 </span>
               )}
             </label>

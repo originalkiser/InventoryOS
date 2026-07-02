@@ -394,7 +394,7 @@ function MultiLocPicker({ locations, selected, onChange }: {
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
   const filtered = locations.filter((l) =>
-    !search || l.location_code.toLowerCase().includes(search.toLowerCase()) || l.name.toLowerCase().includes(search.toLowerCase())
+    !search || l.name.toLowerCase().includes(search.toLowerCase()) || (l.shop_city ?? '').toLowerCase().includes(search.toLowerCase())
   )
   function toggle(loc: Location) {
     const already = selected.some((s) => s.id === loc.id)
@@ -411,7 +411,7 @@ function MultiLocPicker({ locations, selected, onChange }: {
         <div className="flex flex-wrap gap-1 mb-1">
           {selected.map((l) => (
             <span key={l.id} className="flex items-center gap-1 px-1.5 py-0.5 bg-navy/10 border border-navy/30 rounded text-[10px] font-mono text-navy">
-              {l.location_code}
+              {l.name}
               <button onClick={() => toggle(l)} className="hover:text-red-400 leading-none">×</button>
             </span>
           ))}
@@ -442,8 +442,8 @@ function MultiLocPicker({ locations, selected, onChange }: {
                   <button key={loc.id} onClick={() => toggle(loc)}
                     className={['flex items-center gap-2 w-full px-3 py-1.5 text-xs font-mono text-left hover:bg-navy/5', active ? 'bg-navy/5' : ''].join(' ')}>
                     <input type="checkbox" readOnly checked={active} className="accent-inky flex-shrink-0" />
-                    <span className="text-navy">{loc.location_code}</span>
-                    <span className="text-inky/60 truncate">— {loc.name}</span>
+                    <span className="text-navy">{loc.name}</span>
+                    <span className="text-inky/60 truncate">— {loc.shop_city}</span>
                   </button>
                 )
               })}
@@ -463,15 +463,15 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
 
   function resolveLoc(locStr: string): { id: string | null; label: string } {
     const v = locStr.trim().toLowerCase()
-    const m = locations.find((l) => l.id.toLowerCase() === v || l.location_code.toLowerCase() === v || l.name.toLowerCase() === v)
-    if (m) return { id: m.id, label: `${m.location_code} — ${m.name}` }
+    const m = locations.find((l) => l.id.toLowerCase() === v || l.name.toLowerCase() === v || (l.shop_city ?? '').toLowerCase() === v)
+    if (m) return { id: m.id, label: `${m.name} — ${m.shop_city ?? ''}` }
     return { id: null, label: locStr.trim() || '—' }
   }
 
   function addEntry() {
     if (!entry.product.trim() || !entry.amount.trim()) { toast.error('Enter a product and order amount'); return }
     if (selectedLocs.length === 0) { toast.error('Select at least one location'); return }
-    const newRows: MRow[] = selectedLocs.map((l) => ({ location: l.location_code, product: entry.product, amount: entry.amount }))
+    const newRows: MRow[] = selectedLocs.map((l) => ({ location: l.name, product: entry.product, amount: entry.amount }))
     setRows((r) => [...r, ...newRows])
     setEntry({ product: '', amount: '' })
     productRef.current?.focus()
@@ -537,7 +537,7 @@ function ManualEntry({ locations, onConfirm }: { locations: Location[]; onConfir
       </div>
 
       <datalist id="manual-loc-list">
-        {locations.map((l) => <option key={l.id} value={l.location_code}>{l.location_code} — {l.name}</option>)}
+        {locations.map((l) => <option key={l.id} value={l.name}>{l.name} — {l.shop_city}</option>)}
       </datalist>
     </div>
   )

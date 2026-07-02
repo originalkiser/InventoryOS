@@ -497,7 +497,7 @@ export function MapRoutesTab({ locations }: Props) {
                   <Marker
                     key={loc.id}
                     position={[loc.latitude as number, loc.longitude as number]}
-                    icon={makePin(loc.location_code, color, selected, showLabels)}
+                    icon={makePin(loc.name, color, selected, showLabels)}
                     eventHandlers={{ click: () => toggleSelect(loc.id) }}
                   />
                 )
@@ -605,8 +605,8 @@ export function MapRoutesTab({ locations }: Props) {
                         <div className="flex items-start gap-2 min-w-0">
                           <span className="text-[10px] font-mono text-inky/40 w-4 text-right flex-shrink-0 mt-0.5">{i + 1}</span>
                           <div className="min-w-0">
-                            <p className="text-xs font-mono font-bold text-navy">{loc.location_code}</p>
-                            <p className="text-[10px] font-mono text-inky/60 truncate">{loc.name}</p>
+                            <p className="text-xs font-mono font-bold text-navy">{loc.name}</p>
+                            <p className="text-[10px] font-mono text-inky/60 truncate">{loc.shop_city}</p>
                             {!hasCoords && (
                               <p className="text-[10px] font-mono text-[#E67E22]">No coordinates</p>
                             )}
@@ -689,7 +689,7 @@ export function MapRoutesTab({ locations }: Props) {
                         className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                         style={{ background: getMarketColor(locMeta(loc, 'market'), allMarkets) }}
                       />
-                      <span className="text-xs font-mono text-navy flex-1 truncate">{loc.location_code}</span>
+                      <span className="text-xs font-mono text-navy flex-1 truncate">{loc.name}</span>
                       {!hasCoords && (
                         <button
                           onClick={(e) => {

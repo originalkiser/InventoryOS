@@ -281,13 +281,121 @@ export interface CompanyHoliday {
 export interface Location {
   id: string
   company_id: string
-  location_code: string
+  // Primary code identifier (was location_code)
   name: string
+  // Human-readable label, e.g. "101 - Atlanta" (was name)
+  shop_city: string | null
   region: string | null
+  // Text status: 'Active' | 'Inactive' (was boolean active)
+  status: string | null
+  // active kept for migration compat — prefer status
   active: boolean
   metadata: Json | null
+  // Promoted from metadata
+  owner: string | null
+  market: string | null
+  area_manager: string | null
+  am_phone: string | null
+  am_email: string | null
+  director: string | null
+  rd_email: string | null
+  // Address / contact
+  address: string | null
+  city: string | null
+  state: string | null
+  county: string | null
+  zip: string | null
+  store_phone: string | null
+  store_email: string | null
+  location: string | null
+  // Operational
+  num_bays: number | null
+  pit_type: string | null
+  store_type: string | null
+  classification: string | null
+  groups: string | null
+  entity_name: string | null
+  brand_used: string | null
+  developer: string | null
+  landlord: string | null
+  num_days_open: number | null
+  manager_workweek: string | null
+  second_asm_approved: boolean | null
+  // Dates
+  date_opened: string | null
+  acquisition_date: string | null
+  year_opened: number | null
+  droptop_go_live: string | null
+  last_price_change: string | null
+  review_pricing_date: string | null
+  last_day_of_business: string | null
+  // Store hours
+  monday_hours: string | null
+  tuesday_hours: string | null
+  wednesday_hours: string | null
+  thursday_hours: string | null
+  friday_hours: string | null
+  saturday_hours: string | null
+  sunday_hours: string | null
+  holiday_hours: string | null
+  // Services
+  tire_rotations: boolean | null
+  safety_inspections: boolean | null
+  emissions_inspections: boolean | null
+  // Financial / rates
+  royalty_rate: number | null
+  local_ad_percent: number | null
+  local_ad_dollar: number | null
+  brand_fund: number | null
+  technology_fee: number | null
+  sales_quartile: string | null
+  economy: number | null
+  premium_hm: number | null
+  premium_full_synthetic: number | null
+  premium_full_synthetic_hm: number | null
+  rp: number | null
+  diesel_syn_blend: number | null
+  diesel_full_syn: number | null
+  european: number | null
+  supply_fee: number | null
+  disposal_fee: number | null
+  oil_inflation_surcharge: number | null
+  // Planning
+  planned_2023: number | null
+  planned_2024: number | null
+  // External integrations
+  valvoline_account_num: string | null
+  ai_shop_id: string | null
+  ai_username: string | null
+  partnerconnect_username: string | null
+  google_review_url: string | null
+  google_review_qr_code: string | null
+  training_shops: string | null
+  integration_manager_region: string | null
+  opus_serial_primary: string | null
+  opus_serial_secondary: string | null
+  former_fz_store_num: string | null
+  tmcw_ql: string | null
+  am_data_map: string | null
+  rd_data_map: string | null
+  droptop_num: string | null
+  droptop_operation_id: string | null
+  reladyne_delivery_day: string | null
+  ai_call_center: string | null
+  ai_call_center_phone: string | null
+  mighty_fz: string | null
+  camera_system: string | null
+  inspection_station_id: string | null
+  mighty_po_upload: boolean | null
+  // People / contacts
+  marketing_manager: string | null
+  mm_email: string | null
+  mm_cell: string | null
+  hrbp: string | null
+  // Coordinates
   latitude: number | null
   longitude: number | null
+  // Audit
   updated_by: string | null
   last_change_source: string | null
   created_at: string

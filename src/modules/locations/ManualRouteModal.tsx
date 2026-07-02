@@ -33,9 +33,9 @@ export function ManualRouteModal({ origin, destination, existing, onSave, onClos
       <div className="flex flex-col gap-4">
         <div className="rounded bg-navy/5 px-3 py-2 text-xs font-mono text-navy">
           <span className="text-inky/60">From</span>{' '}
-          <strong>{origin.location_code}</strong>{' '}
+          <strong>{origin.name}</strong>{' '}
           <span className="text-inky/60">to</span>{' '}
-          <strong>{destination.location_code}</strong>
+          <strong>{destination.name}</strong>
         </div>
 
         <div className="grid grid-cols-2 gap-3">

@@ -146,7 +146,7 @@ function resolveLocationId(value: string, locations: Location[]): string | null 
   const v = value.trim().toLowerCase()
   if (!v) return null
   const m = locations.find(
-    (l) => l.id.toLowerCase() === v || l.location_code.toLowerCase() === v || l.name.toLowerCase() === v
+    (l) => l.id.toLowerCase() === v || l.name.toLowerCase() === v || (l.shop_city ?? '').toLowerCase() === v
   )
   return m?.id ?? null
 }
@@ -154,7 +154,7 @@ function resolveLocationId(value: string, locations: Location[]): string | null 
 function locLabel(locationId: string | null, raw: string, locations: Location[]): string {
   if (locationId) {
     const l = locations.find((x) => x.id === locationId)
-    if (l) return `${l.location_code} — ${l.name}`
+    if (l) return `${l.name} — ${l.shop_city ?? ''}`
   }
   return raw || '—'
 }

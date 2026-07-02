@@ -36,23 +36,22 @@ const RECOMMENDED = [
 
 // Contextual filter hierarchy for the locations quick-access table
 const LOC_FILTER_HIERARCHY = [
-  { field: 'meta:owner',               label: 'Owner' },
-  { field: 'region',                   label: 'Region' },
-  { field: 'meta:market',              label: 'Market' },
-  { field: 'meta:area_manager',        label: 'Area Manager' },
-  { field: 'meta:regional_director',   label: 'Regional Director' },
+  { field: 'owner',         label: 'Owner' },
+  { field: 'region',        label: 'Region' },
+  { field: 'market',        label: 'Market' },
+  { field: 'area_manager',  label: 'Area Manager' },
+  { field: 'director',      label: 'Regional Director' },
 ]
 const LS_DROP_FILTERS = 'locations.tab.dropFilters'
 const LS_HIDDEN_DROPS = 'locations.tab.hiddenDropdowns'
 
 function locFieldValue(loc: any, field: string): string {
-  if (field.startsWith('meta:')) return String((loc.metadata ?? {})[field.slice(5)] ?? '')
   return String((loc as any)[field] ?? '')
 }
 
 const BASE_FIELDS = [
-  { name: 'location_code', label: 'Location Code', required: true },
-  { name: 'name', label: 'Name', required: true },
+  { name: 'name', label: 'Name (Code)', required: true },
+  { name: 'shop_city', label: 'Shop # / City', required: true },
   { name: 'region', label: 'Region' },
   { name: 'active', label: 'Active Status (text)' },
 ]
@@ -111,13 +110,13 @@ export function LocationsTab() {
   }, [dropSettingsOpen])
 
   // Add/Edit-form state: base + dynamic custom values
-  const [base, setBase] = useState({ location_code: '', name: '', region: '' })
+  const [base, setBase] = useState({ name: '', shop_city: '', region: '' })
   const [active, setActive] = useState(true)
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
   const openAdd = useCallback(() => {
     setEditId(null)
-    setBase({ location_code: '', name: '', region: '' })
+    setBase({ name: '', shop_city: '', region: '' })
     setActive(true)
     setCustomVals({})
     setAddOpen(true)
@@ -125,7 +124,7 @@ export function LocationsTab() {
 
   const openEdit = useCallback((r: Location) => {
     setEditId(r.id)
-    setBase({ location_code: r.location_code, name: r.name, region: r.region ?? '' })
+    setBase({ name: r.name, shop_city: r.shop_city ?? '', region: r.region ?? '' })
     setActive(r.active)
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     setCustomVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
@@ -134,12 +133,12 @@ export function LocationsTab() {
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      col.accessor('location_code', { header: 'Code', sortingFn: numericSort }),
-      col.accessor('name', { header: 'Name' }),
+      col.accessor('name', { header: 'Code', sortingFn: numericSort }),
+      col.accessor('shop_city', { header: 'Shop # / City' }),
       col.accessor('region', { header: 'Region', cell: (i) => i.getValue() ?? '—' }),
     ]
     for (const f of customFields) {
-      if (['region', 'name', 'location_code'].includes(f.field_key)) continue
+      if (['region', 'name', 'shop_city'].includes(f.field_key)) continue
       cols.push({
         id: `cf_${f.field_key}`,
         header: f.label,
@@ -204,7 +203,7 @@ export function LocationsTab() {
   })
 
   const { table, globalFilter, setGlobalFilter } = useTable(filteredData, columns, {
-    initialSorting: [{ id: 'location_code', desc: false }],
+    initialSorting: [{ id: 'name', desc: false }],
   })
 
   function buildMetadata(values: Record<string, string>) {
@@ -214,10 +213,10 @@ export function LocationsTab() {
   }
 
   async function onSubmit() {
-    if (!base.location_code.trim() || !base.name.trim()) return
+    if (!base.name.trim() || !base.shop_city.trim()) return
     const payload = {
-      location_code: base.location_code.trim(),
       name: base.name.trim(),
+      shop_city: base.shop_city.trim(),
       region: base.region.trim() || null,
       active,
       metadata: buildMetadata(customVals),
@@ -230,7 +229,7 @@ export function LocationsTab() {
 
   async function onDelete() {
     if (!editId) return
-    if (!confirm(`Delete location "${base.name}"? This cannot be undone.`)) return
+    if (!confirm(`Delete location "${base.shop_city || base.name}"? This cannot be undone.`)) return
     await remove(editId)
     setAddOpen(false)
     setEditId(null)
@@ -240,7 +239,7 @@ export function LocationsTab() {
     setImporting(true)
     // Exclude base columns — they must always go to `out.*`, never metadata, even if a
     // custom field with the same key exists from an earlier duplicate-field bug.
-    const BASE_FIELD_KEYS = new Set(['location_code', 'name', 'region', 'active'])
+    const BASE_FIELD_KEYS = new Set(['name', 'shop_city', 'region', 'active'])
     const customKeys = new Set(customFields.filter((f) => !BASE_FIELD_KEYS.has(f.field_key)).map((f) => f.field_key))
     const typeByKey = new Map(customFields.map((f) => [f.field_key, f.field_type]))
     const payload = rows.map((row) => {
@@ -254,8 +253,8 @@ export function LocationsTab() {
       }
       out.metadata = meta
       return out as Partial<Location>
-    }).filter((r: any) => r.location_code)
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.location_code ?? '').toLowerCase() })
+    }).filter((r: any) => r.name)
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.name ?? '').toLowerCase() })
     setImporting(false)
   }
 
@@ -361,8 +360,8 @@ export function LocationsTab() {
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Location' : 'Add Location'} size="lg">
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Location Code *" value={base.location_code} onChange={(e) => setBase({ ...base, location_code: e.target.value })} />
-            <Input label="Name *" value={base.name} onChange={(e) => setBase({ ...base, name: e.target.value })} />
+            <Input label="Name (Code) *" value={base.name} onChange={(e) => setBase({ ...base, name: e.target.value })} />
+            <Input label="Shop # / City *" value={base.shop_city} onChange={(e) => setBase({ ...base, shop_city: e.target.value })} />
             <Input label="Region" value={base.region} onChange={(e) => setBase({ ...base, region: e.target.value })} />
             {customFields.map((f) => (
               <Input key={f.id} label={f.label}
@@ -378,7 +377,7 @@ export function LocationsTab() {
             </div>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" type="button" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
-              <Button size="sm" onClick={onSubmit} disabled={!base.location_code.trim() || !base.name.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
+              <Button size="sm" onClick={onSubmit} disabled={!base.name.trim() || !base.shop_city.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
             </div>
           </div>
         </div>

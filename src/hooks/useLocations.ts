@@ -16,7 +16,7 @@ export function useLocations() {
   const reload = useCallback(async () => {
     if (!companyId) { setLocations([]); setPosMaps([]); return }
     const [loc, pos] = await Promise.all([
-      (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code'),
+      (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
       (supabase as any).schema('core').from('pos_location_map').select('*').eq('company_id', companyId),
     ])
     setLocations((loc.data ?? []) as Location[])
@@ -29,7 +29,7 @@ export function useLocations() {
     const v = String(value ?? '').trim().toLowerCase()
     if (!v) return null
     const m = locations.find(
-      (l) => l.id.toLowerCase() === v || l.location_code.toLowerCase() === v || l.name.toLowerCase() === v
+      (l) => l.id.toLowerCase() === v || l.name.toLowerCase() === v || (l.shop_city ?? '').toLowerCase() === v
     )
     if (m) return m.id
     // Exact POS-string match.
@@ -41,7 +41,7 @@ export function useLocations() {
     const digits = String(value ?? '').match(/\d+/)?.[0]
     if (digits) {
       const n = Number(digits)
-      const byCode = locations.find((l) => { const cd = String(l.location_code ?? '').match(/\d+/)?.[0]; return cd != null && Number(cd) === n })
+      const byCode = locations.find((l) => { const cd = String(l.name ?? '').match(/\d+/)?.[0]; return cd != null && Number(cd) === n })
       if (byCode) return byCode.id
       const posByNum = posMaps.find((p) => { const pd = String(p.pos_string ?? '').match(/\d+/)?.[0]; return pd != null && Number(pd) === n && p.location_id })
       if (posByNum?.location_id) return posByNum.location_id
@@ -62,7 +62,7 @@ export function useLocations() {
 
   function labelOf(id: string | null): string {
     const l = byId(id)
-    return l ? `${l.location_code} — ${l.name}` : '—'
+    return l ? `${l.name} — ${l.shop_city ?? ''}` : '—'
   }
 
   // Resolve a (possibly linked) field value for a location: base columns first,
@@ -70,18 +70,18 @@ export function useLocations() {
   function fieldValue(id: string | null, key: string): string {
     const l = byId(id)
     if (!l) return ''
-    if (key === 'location_code') return l.location_code
     if (key === 'name') return l.name
+    if (key === 'shop_city') return l.shop_city ?? ''
     if (key === 'region') return l.region ?? ''
     const v = (l.metadata as any)?.[key]
     return v == null ? '' : String(v)
   }
 
-  const options = locations.filter((l) => l.active).map((l) => ({ value: l.id, label: `${l.location_code} — ${l.name}` }))
+  const options = locations.filter((l) => l.active).map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
 
-  // Resolve to a location_code string (for tables that key on code).
+  // Resolve to a location name (code) string (for tables that key on code).
   function codeOf(id: string | null): string {
-    return byId(id)?.location_code ?? ''
+    return byId(id)?.name ?? ''
   }
 
   return { locations, posMaps, options, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload }

@@ -15,8 +15,8 @@ interface MetaColumn {
 
 interface NotSubmittedRow {
   location_id: string
-  location_code: string
   name: string
+  shop_city: string
   region: string
   _meta: Record<string, string>
   days_since: number
@@ -58,8 +58,8 @@ export function NotSubmittedPanel({
     }
     return {
       location_id: l.id,
-      location_code: l.location_code,
       name: l.name,
+      shop_city: l.shop_city ?? '',
       region: l.region ?? '',
       _meta: metaVals,
       days_since: daysSince,
@@ -84,8 +84,8 @@ export function NotSubmittedPanel({
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      col.accessor('location_code', { header: 'Code' }),
-      col.accessor('name', { header: 'Name' }),
+      col.accessor('name', { header: 'Code' }),
+      col.accessor('shop_city', { header: 'Shop # / City' }),
       col.accessor('region', { header: 'Region', cell: (i: any) => i.getValue() || '—' }),
     ]
     for (const mc of (metaColumns ?? [])) {
@@ -107,7 +107,7 @@ export function NotSubmittedPanel({
       accessorFn: (row: NotSubmittedRow) => row.location_id,
       cell: (i: any) => {
         const locId = i.getValue() as string
-        const locCode = i.row.original.location_code as string
+        const locCode = i.row.original.name as string
         const busy = marking.has(locId)
         return (
           <button
@@ -128,7 +128,7 @@ export function NotSubmittedPanel({
   function copyList() {
     const pending = missing.filter((l) => !confirmed.has(l.id))
     if (!pending.length) { toast('Nothing to copy — all shops submitted or confirmed', { icon: '✅' }); return }
-    const text = pending.map((l) => `${l.location_code} — ${l.name}`).join('\n')
+    const text = pending.map((l) => `${l.name} — ${l.shop_city ?? ''}`).join('\n')
     navigator.clipboard.writeText(text)
       .then(() => toast.success(`Copied ${pending.length} shop${pending.length === 1 ? '' : 's'}`))
       .catch(() => toast.error('Clipboard not available'))
@@ -138,7 +138,7 @@ export function NotSubmittedPanel({
     if (!missing.length) { toast('All shops submitted — no reminder needed', { icon: '✅' }); return }
     const today = format(new Date(), 'yyyy-MM-dd')
     const notes = `Shops not submitted for ${periodLabel} (${missing.length}):\n` +
-      missing.map((l) => `• ${l.location_code} — ${l.name}`).join('\n')
+      missing.map((l) => `• ${l.name} — ${l.shop_city ?? ''}`).join('\n')
     const { error } = await (supabase as any).schema('platform').from('schedule_events').insert({
       company_id: companyId,
       title: reminderTitle,
@@ -153,7 +153,7 @@ export function NotSubmittedPanel({
   }
 
   const exportRows = rows.map((r) => {
-    const base: Record<string, unknown> = { code: r.location_code, name: r.name, region: r.region }
+    const base: Record<string, unknown> = { code: r.name, shop_city: r.shop_city, region: r.region }
     for (const mc of (metaColumns ?? [])) base[mc.header.toLowerCase().replace(/\s+/g, '_')] = r._meta[mc.key] ?? ''
     base.days_since_period_start = r.days_since
     base.last_submitted = r.last_submitted ? format(new Date(r.last_submitted), 'yyyy-MM') : 'Never'
@@ -208,8 +208,8 @@ export function NotSubmittedPanel({
           <ul className="divide-y divide-green-100">
             {confirmedRows.map((r) => (
               <li key={r.location_id} className="flex items-center gap-3 px-4 py-2">
-                <span className="text-xs font-mono text-green-700">{r.location_code}</span>
-                <span className="flex-1 text-xs font-body text-green-600">{r.name}</span>
+                <span className="text-xs font-mono text-green-700">{r.name}</span>
+                <span className="flex-1 text-xs font-body text-green-600">{r.shop_city}</span>
                 <span className="text-[10px] font-mono text-green-500">✓ Marked counted</span>
               </li>
             ))}

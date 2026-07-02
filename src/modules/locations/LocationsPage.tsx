@@ -119,13 +119,13 @@ export function LocationsPage() {
 
   const baseColumns = useMemo(() => {
     const cols: any[] = [
-      col.accessor('location_code', { id: 'location_code', header: 'Code' }),
-      col.accessor('name', { id: 'name', header: 'Name' }),
+      col.accessor('name', { id: 'name', header: 'Code' }),
+      col.accessor('shop_city', { id: 'shop_city', header: 'Shop # / City' }),
       col.accessor('region', { id: 'region', header: 'Region', cell: (i) => i.getValue() ?? '—' }),
       {
         id: 'market',
         header: 'Market',
-        accessorFn: (r: Location) => (r.metadata as any)?.market ?? '',
+        accessorFn: (r: Location) => r.market ?? (r.metadata as any)?.market ?? '',
         cell: (i: any) => i.getValue() || '—',
       },
       {

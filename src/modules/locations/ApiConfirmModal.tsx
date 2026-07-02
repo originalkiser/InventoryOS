@@ -23,9 +23,9 @@ export function ApiConfirmModal({ pairs, onConfirm, onClose, loading }: Props) {
         <div className="max-h-48 overflow-y-auto flex flex-col gap-0.5">
           {pairs.map(([o, d], i) => (
             <div key={i} className="flex items-center gap-2 text-[10px] font-mono text-navy px-1">
-              <span className="font-bold text-navy/70">{o.location_code}</span>
+              <span className="font-bold text-navy/70">{o.name}</span>
               <span className="text-inky/40">→</span>
-              <span className="font-bold text-navy/70">{d.location_code}</span>
+              <span className="font-bold text-navy/70">{d.name}</span>
             </div>
           ))}
         </div>
