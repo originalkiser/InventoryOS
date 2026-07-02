@@ -192,6 +192,12 @@ const BOOL_FIELD_KEYS = new Set([
   'second_asm_approved', 'mighty_po_upload',
 ])
 
+// Date fields — normalize to YYYY-MM-DD on import to avoid Postgres timezone errors
+const DATE_FIELD_KEYS = new Set([
+  'date_opened', 'acquisition_date', 'droptop_go_live',
+  'last_price_change', 'review_pricing_date', 'last_day_of_business',
+])
+
 // ── Default column visibility: hide everything except key columns ─────────────
 
 const INITIAL_COL_VISIBILITY: VisibilityState = {
@@ -382,6 +388,14 @@ function coerce(value: string, type: string): unknown {
   if (v === '') return null
   if (type === 'number') { const n = Number(v.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
   return v
+}
+
+function normalizeDate(raw: string): string | null {
+  const t = raw.trim()
+  if (!t) return null
+  const d = new Date(t)
+  if (isNaN(d.getTime())) return null
+  return format(d, 'yyyy-MM-dd')
 }
 
 // ── Recommended custom column labels (for CustomFieldsEditor) ─────────────────
@@ -718,6 +732,8 @@ export function LocationsTab() {
         } else if (BOOL_FIELD_KEYS.has(m.fieldName)) {
           const t = raw.trim()
           out[m.fieldName] = t ? isActiveText(raw) : null
+        } else if (DATE_FIELD_KEYS.has(m.fieldName)) {
+          out[m.fieldName] = normalizeDate(raw)
         } else if (NUMERIC_FIELD_KEYS.has(m.fieldName)) {
           const n = Number(raw.replace(/[$,]/g, ''))
           out[m.fieldName] = raw.trim() && !isNaN(n) ? n : null
