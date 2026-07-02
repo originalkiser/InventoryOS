@@ -27,8 +27,37 @@ interface LocationRoute {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-// All existing brand colors from tailwind.config
-const MARKET_COLORS = ['#002745', '#C0392B', '#E67E22', '#2ECC71', '#4F7489', '#B7E0DE']
+// 12 perceptually distinct colors (brand palette + safe extensions)
+const MARKET_PALETTE = [
+  '#002745', '#C0392B', '#E67E22', '#2ECC71',
+  '#4F7489', '#9B59B6', '#1ABC9C', '#E91E63',
+  '#FF5722', '#3F51B5', '#00BCD4', '#FFC107',
+]
+// 3 pattern types — solid, diagonal stripe, horizontal stripe.
+// 12 colors × 3 patterns = 36 unique combinations before any repeat.
+const MARKET_PATTERNS = ['solid', 'diag', 'horiz'] as const
+type MarketPattern = typeof MARKET_PATTERNS[number]
+
+function getMarketBackground(market: string, allMarkets: string[]): string {
+  if (!market) return '#4F7489'
+  const idx = allMarkets.indexOf(market)
+  const color = MARKET_PALETTE[idx % MARKET_PALETTE.length]
+  const pattern: MarketPattern = MARKET_PATTERNS[Math.floor(idx / MARKET_PALETTE.length) % MARKET_PATTERNS.length]
+  if (pattern === 'diag') {
+    return `repeating-linear-gradient(45deg,${color},${color} 3px,rgba(255,255,255,0.45) 3px,rgba(255,255,255,0.45) 6px)`
+  }
+  if (pattern === 'horiz') {
+    return `repeating-linear-gradient(0deg,${color},${color} 3px,rgba(255,255,255,0.45) 3px,rgba(255,255,255,0.45) 6px)`
+  }
+  return color // solid
+}
+
+// Keep a solid color for the legend swatch border and list dots
+function getMarketSolidColor(market: string, allMarkets: string[]): string {
+  if (!market) return '#4F7489'
+  const idx = allMarkets.indexOf(market)
+  return MARKET_PALETTE[idx % MARKET_PALETTE.length]
+}
 
 const LOC_FILTER_HIERARCHY = [
   { field: 'region',        label: 'Region' },
@@ -47,12 +76,6 @@ function locFieldValue(loc: Location, field: string): string {
 
 function routeKey(a: string, b: string): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`
-}
-
-function getMarketColor(market: string, allMarkets: string[]): string {
-  if (!market) return '#4F7489'
-  const idx = allMarkets.indexOf(market)
-  return MARKET_COLORS[idx % MARKET_COLORS.length]
 }
 
 /** Decode a Google encoded polyline to [lat, lng] pairs */
@@ -114,16 +137,17 @@ function nearestNeighborRoute(locs: Location[]): Location[] {
   return ordered
 }
 
-function makePin(code: string, color: string, selected: boolean, showLabel: boolean): L.DivIcon {
-  const size = selected ? 25 : 18
+function makePin(code: string, background: string, selected: boolean, showLabel: boolean): L.DivIcon {
+  const size = 14
   const label = showLabel
-    ? `<span style="position:absolute;top:${selected ? 28 : 21}px;left:50%;transform:translateX(-50%);font-size:13px;font-family:monospace;font-weight:600;white-space:nowrap;color:#002745;background:rgba(242,241,230,0.92);padding:1px 4px;border-radius:3px;pointer-events:none;">${code}</span>`
+    ? `<span style="position:absolute;top:17px;left:50%;transform:translateX(-50%);font-size:11px;font-family:monospace;font-weight:600;white-space:nowrap;color:#002745;background:rgba(242,241,230,0.92);padding:1px 4px;border-radius:3px;pointer-events:none;">${code}</span>`
     : ''
   const border = selected ? '2px solid #F2F1E6' : '1.5px solid rgba(0,39,69,0.3)'
+  const shadow = selected ? '0 0 0 4px rgba(183,224,222,0.7)' : '0 1px 3px rgba(0,0,0,0.25)'
   return L.divIcon({
     className: '',
     iconAnchor: [size / 2, size / 2],
-    html: `<div style="position:relative;width:${size}px;height:${size}px;background:${color};border:${border};border-radius:50%;box-shadow:${selected ? '0 0 0 4px rgba(183,224,222,0.6)' : 'none'};"></div>${label}`,
+    html: `<div style="position:relative;width:${size}px;height:${size}px;background:${background};border:${border};border-radius:50%;box-shadow:${shadow};"></div>${label}`,
     iconSize: [size, size],
   })
 }
@@ -489,13 +513,13 @@ export function MapRoutesTab({ locations }: Props) {
               {/* Location pins */}
               {mappableLocations.map((loc) => {
                 const market = locFieldValue(loc, 'market')
-                const color = getMarketColor(market, allMarkets)
+                const bg = getMarketBackground(market, allMarkets)
                 const selected = selectedIds.has(loc.id)
                 return (
                   <Marker
                     key={loc.id}
                     position={[loc.latitude as number, loc.longitude as number]}
-                    icon={makePin(loc.name, color, selected, showLabels)}
+                    icon={makePin(loc.name, bg, selected, showLabels)}
                     eventHandlers={{ click: () => toggleSelect(loc.id) }}
                   />
                 )
@@ -542,9 +566,15 @@ export function MapRoutesTab({ locations }: Props) {
               <div>
                 <p className="text-[10px] font-mono text-inky/50 uppercase tracking-wide mb-1.5">Market Colors</p>
                 <div className="flex flex-col gap-1">
-                  {allMarkets.slice(0, 10).map((m) => (
+                  {allMarkets.slice(0, 12).map((m) => (
                     <div key={m} className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: getMarketColor(m, allMarkets) }} />
+                      <div
+                        className="w-3.5 h-3.5 rounded-full flex-shrink-0"
+                        style={{
+                          background: getMarketBackground(m, allMarkets),
+                          border: `1.5px solid ${getMarketSolidColor(m, allMarkets)}`,
+                        }}
+                      />
                       <span className="text-[10px] font-mono text-navy truncate">{m}</span>
                     </div>
                   ))}
@@ -685,7 +715,7 @@ export function MapRoutesTab({ locations }: Props) {
                     >
                       <div
                         className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                        style={{ background: getMarketColor(locFieldValue(loc, 'market'), allMarkets) }}
+                        style={{ background: getMarketBackground(locFieldValue(loc, 'market'), allMarkets) }}
                       />
                       <span className="text-xs font-mono text-navy flex-1 truncate">{loc.name}</span>
                       {!hasCoords && (
