@@ -31,20 +31,18 @@ interface LocationRoute {
 const MARKET_COLORS = ['#002745', '#C0392B', '#E67E22', '#2ECC71', '#4F7489', '#B7E0DE']
 
 const LOC_FILTER_HIERARCHY = [
-  { field: 'region',            label: 'Region' },
-  { field: 'meta:market',       label: 'Market' },
-  { field: 'meta:area_manager', label: 'Area Manager' },
+  { field: 'region',        label: 'Region' },
+  { field: 'market',        label: 'Market' },
+  { field: 'area_manager',  label: 'Area Manager' },
 ]
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
-function locMeta(loc: Location, key: string): string {
-  return String((loc.metadata as any)?.[key] ?? '')
-}
-
 function locFieldValue(loc: Location, field: string): string {
-  if (field.startsWith('meta:')) return locMeta(loc, field.slice(5))
-  return String((loc as any)[field] ?? '')
+  // Direct columns take priority (post-schema-overhaul); fall back to metadata
+  const direct = (loc as any)[field]
+  if (direct != null) return String(direct)
+  return String((loc.metadata as any)?.[field] ?? '')
 }
 
 function routeKey(a: string, b: string): string {
@@ -117,15 +115,15 @@ function nearestNeighborRoute(locs: Location[]): Location[] {
 }
 
 function makePin(code: string, color: string, selected: boolean, showLabel: boolean): L.DivIcon {
-  const size = selected ? 14 : 10
+  const size = selected ? 25 : 18
   const label = showLabel
-    ? `<span style="position:absolute;top:${selected ? 16 : 12}px;left:50%;transform:translateX(-50%);font-size:9px;font-family:monospace;white-space:nowrap;color:#002745;background:rgba(242,241,230,0.9);padding:0 2px;border-radius:2px;pointer-events:none;">${code}</span>`
+    ? `<span style="position:absolute;top:${selected ? 28 : 21}px;left:50%;transform:translateX(-50%);font-size:13px;font-family:monospace;font-weight:600;white-space:nowrap;color:#002745;background:rgba(242,241,230,0.92);padding:1px 4px;border-radius:3px;pointer-events:none;">${code}</span>`
     : ''
   const border = selected ? '2px solid #F2F1E6' : '1.5px solid rgba(0,39,69,0.3)'
   return L.divIcon({
     className: '',
     iconAnchor: [size / 2, size / 2],
-    html: `<div style="position:relative;width:${size}px;height:${size}px;background:${color};border:${border};border-radius:50%;box-shadow:${selected ? '0 0 0 3px rgba(183,224,222,0.6)' : 'none'};"></div>${label}`,
+    html: `<div style="position:relative;width:${size}px;height:${size}px;background:${color};border:${border};border-radius:50%;box-shadow:${selected ? '0 0 0 4px rgba(183,224,222,0.6)' : 'none'};"></div>${label}`,
     iconSize: [size, size],
   })
 }
@@ -210,7 +208,7 @@ export function MapRoutesTab({ locations }: Props) {
 
   // Markets for coloring
   const allMarkets = useMemo(() => {
-    const s = new Set(locations.map((l) => locMeta(l, 'market')).filter(Boolean))
+    const s = new Set(locations.map((l) => locFieldValue(l, 'market')).filter(Boolean))
     return Array.from(s).sort()
   }, [locations])
 
@@ -219,21 +217,21 @@ export function MapRoutesTab({ locations }: Props) {
   const marketOptions = useMemo(() => {
     let r = locations
     if (filterRegion) r = r.filter((l) => l.region === filterRegion)
-    return Array.from(new Set(r.map((l) => locMeta(l, 'market')).filter(Boolean))).sort()
+    return Array.from(new Set(r.map((l) => locFieldValue(l, 'market')).filter(Boolean))).sort()
   }, [locations, filterRegion])
   const amOptions = useMemo(() => {
     let r = locations
     if (filterRegion) r = r.filter((l) => l.region === filterRegion)
-    if (filterMarket) r = r.filter((l) => locMeta(l, 'market') === filterMarket)
-    return Array.from(new Set(r.map((l) => locMeta(l, 'area_manager')).filter(Boolean))).sort()
+    if (filterMarket) r = r.filter((l) => locFieldValue(l, 'market') === filterMarket)
+    return Array.from(new Set(r.map((l) => locFieldValue(l, 'area_manager')).filter(Boolean))).sort()
   }, [locations, filterRegion, filterMarket])
 
   // Filtered locations (with lat/lng for the map; still show all on map but highlight)
   const filteredLocations = useMemo(() => {
     let r = locations
     if (filterRegion) r = r.filter((l) => l.region === filterRegion)
-    if (filterMarket) r = r.filter((l) => locMeta(l, 'market') === filterMarket)
-    if (filterAM) r = r.filter((l) => locMeta(l, 'area_manager') === filterAM)
+    if (filterMarket) r = r.filter((l) => locFieldValue(l, 'market') === filterMarket)
+    if (filterAM) r = r.filter((l) => locFieldValue(l, 'area_manager') === filterAM)
     return r
   }, [locations, filterRegion, filterMarket, filterAM])
 
@@ -468,7 +466,7 @@ export function MapRoutesTab({ locations }: Props) {
       </div>
 
       {/* Map + panel layout */}
-      <div className="flex gap-4" style={{ height: 520 }}>
+      <div className="flex gap-4" style={{ height: 1040 }}>
         {/* Map */}
         <div className="flex-1 rounded border border-navy/20 overflow-hidden min-w-0">
           {mappableLocations.length === 0 && !loadingRoutes ? (
@@ -490,7 +488,7 @@ export function MapRoutesTab({ locations }: Props) {
 
               {/* Location pins */}
               {mappableLocations.map((loc) => {
-                const market = locMeta(loc, 'market')
+                const market = locFieldValue(loc, 'market')
                 const color = getMarketColor(market, allMarkets)
                 const selected = selectedIds.has(loc.id)
                 return (
@@ -687,7 +685,7 @@ export function MapRoutesTab({ locations }: Props) {
                     >
                       <div
                         className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                        style={{ background: getMarketColor(locMeta(loc, 'market'), allMarkets) }}
+                        style={{ background: getMarketColor(locFieldValue(loc, 'market'), allMarkets) }}
                       />
                       <span className="text-xs font-mono text-navy flex-1 truncate">{loc.name}</span>
                       {!hasCoords && (
