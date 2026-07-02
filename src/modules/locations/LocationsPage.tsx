@@ -14,6 +14,8 @@ import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import type { Location } from '@/types'
 import { format, parseISO } from 'date-fns'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs'
+import { MapRoutesTab } from './MapRoutesTab'
 
 const col = createColumnHelper<Location>()
 
@@ -250,9 +252,20 @@ export function LocationsPage() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Locations</h1>
-        <p className="text-xs text-inky mt-0.5">All locations in your workspace — read-only view</p>
+        <p className="text-xs text-inky mt-0.5">All locations in your workspace</p>
       </div>
 
+      <Tabs defaultValue="list">
+        <TabsList>
+          <TabsTrigger value="list">List</TabsTrigger>
+          <TabsTrigger value="map">Map &amp; Routes</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="map">
+          <MapRoutesTab locations={data} />
+        </TabsContent>
+
+        <TabsContent value="list">
       <div className="flex flex-col gap-2">
         {/* Contextual filter dropdowns */}
         {!loading && visibleHierarchy.length > 0 && (
@@ -371,6 +384,8 @@ export function LocationsPage() {
           }
         />
       </div>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
