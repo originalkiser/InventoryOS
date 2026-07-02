@@ -155,12 +155,23 @@ export function IssueImportModal({ open, onClose, onImported, departments = [], 
   async function buildPreview(mapped: RawRow[]) {
     if (!profile?.company_id) return
     const { data: locs } = await sb.schema('core').from('locations')
-      .select('location_code').eq('company_id', profile.company_id)
-    const locSet = new Set<string>((locs ?? []).map((l: any) => String(l.location_code).trim()))
+      .select('name').eq('company_id', profile.company_id)
+    // Index by exact code (lower) AND by stripped numeric value so "1" matches "0001" etc.
+    const locSet = new Set<string>()
+    for (const l of (locs ?? [])) {
+      const code = String(l.name).trim()
+      locSet.add(code.toLowerCase())
+      const n = parseInt(code, 10)
+      if (!isNaN(n)) locSet.add(String(n))
+    }
+    function locFound(code: string) {
+      const t = code.trim()
+      return locSet.has(t.toLowerCase()) || locSet.has(String(parseInt(t, 10)))
+    }
     setRawRows(mapped)
     setPreviewRows(mapped.map(r => ({
       ...r,
-      location_found: !r.location_code || locSet.has(r.location_code),
+      location_found: !r.location_code || locFound(r.location_code),
     })))
     setPhase('preview')
   }
@@ -218,12 +229,19 @@ export function IssueImportModal({ open, onClose, onImported, departments = [], 
     setPhase('importing')
 
     const [locRes, statusRes, catRes] = await Promise.all([
-      sb.schema('core').from('locations').select('id, location_code').eq('company_id', profile.company_id),
+      sb.schema('core').from('locations').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
     ])
 
-    const locMap = new Map<string, string>((locRes.data ?? []).map((l: any) => [String(l.location_code).trim(), l.id]))
+    // Index by exact code (lower) AND numeric-stripped so "1" resolves to "0001" etc.
+    const locMap = new Map<string, string>()
+    for (const l of (locRes.data ?? [])) {
+      const code = String(l.name).trim()
+      locMap.set(code.toLowerCase(), l.id)
+      const n = parseInt(code, 10)
+      if (!isNaN(n)) locMap.set(String(n), l.id)
+    }
     const statusMap = new Map<string, string>((statusRes.data ?? []).map((s: any) => [s.name.trim().toLowerCase(), s.id]))
     const catMap = new Map<string, string>((catRes.data ?? []).map((c: any) => [c.name.trim().toLowerCase(), c.id]))
 
@@ -253,7 +271,10 @@ export function IssueImportModal({ open, onClose, onImported, departments = [], 
     const toInsert: object[] = []
 
     for (const row of rawRows) {
-      const location_id = row.location_code ? (locMap.get(row.location_code.trim()) ?? null) : null
+      const rawCode = row.location_code.trim()
+      const location_id = rawCode
+        ? (locMap.get(rawCode.toLowerCase()) ?? locMap.get(String(parseInt(rawCode, 10))) ?? null)
+        : null
       if (row.location_code && !location_id) {
         warnings.push(`Shop "${row.location_code}" not found — imported without location`)
       }
@@ -423,11 +444,19 @@ export function IssueImportModal({ open, onClose, onImported, departments = [], 
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setPhase('input')}>← Back</Button>
-              <Button size="sm" onClick={runImport}>
-                Import {previewRows.length} Issue{previewRows.length !== 1 ? 's' : ''}
-              </Button>
+            {unresolved > 0 && (
+              <p className="text-xs font-mono text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                ⚠ {unresolved} shop code{unresolved !== 1 ? 's' : ''} could not be matched to a location. Those issues will be imported <strong>without a location</strong>. Go back to fix the codes, or cancel to abort.
+              </p>
+            )}
+            <div className="flex justify-between gap-2">
+              <Button variant="danger" size="sm" onClick={() => { reset(); onClose() }}>Cancel Import</Button>
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setPhase('input')}>← Back</Button>
+                <Button size="sm" onClick={runImport}>
+                  Import {previewRows.length} Issue{previewRows.length !== 1 ? 's' : ''}
+                </Button>
+              </div>
             </div>
           </>
         )}
