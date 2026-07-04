@@ -29,10 +29,10 @@ export function MarketingPlannerPage() {
     const { data, error } = await sb.schema('core').from('locations')
       .select('id, name, location_code, region, active, metadata')
       .eq('company_id', companyId)
-      .neq('active', false)
       .order('name')
-    if (error) toast.error('Failed to load shops')
-    setLocations(data ?? [])
+    if (error) { toast.error('Failed to load shops'); setLoadingLocations(false); return }
+    // Filter client-side: exclude only explicitly deactivated (active === false)
+    setLocations((data ?? []).filter((l: any) => l.active !== false))
     setLoadingLocations(false)
   }
 

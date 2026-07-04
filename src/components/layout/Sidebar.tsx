@@ -659,6 +659,9 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
   const [skipWeekends, setSkipWeekends] = useState(profile?.skip_weekends_holidays ?? false)
   const [schedSaving, setSchedSaving] = useState(false)
   const [schedSaved, setSchedSaved] = useState(false)
+  const [showMeetingFab,   setShowMeetingFab]   = useState(() => localStorage.getItem('sb:fab:meeting')   !== 'false')
+  const [showLookupFab,    setShowLookupFab]    = useState(() => localStorage.getItem('sb:fab:lookup')    !== 'false')
+  const [showInventoryFab, setShowInventoryFab] = useState(() => localStorage.getItem('sb:fab:inventory') !== 'false')
   const [blockedDays, setBlockedDays] = useState(() => normalizeBlockedDays(profile?.blocked_days))
   const [newBlockedDate, setNewBlockedDate] = useState('')
   const [newBlockedNote, setNewBlockedNote] = useState('')
@@ -684,6 +687,11 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
     setProfile({ ...profile, ...data })
     setSchedSaved(true)
     setTimeout(() => setSchedSaved(false), 2000)
+  }
+
+  function toggleFab(key: string, value: boolean) {
+    localStorage.setItem(key, String(value))
+    window.dispatchEvent(new Event('fab-prefs-changed'))
   }
 
   async function addBlockedDay() {
@@ -778,6 +786,30 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
                 dark ? 'translate-x-[18px]' : 'translate-x-0.5',
               ].join(' ')} />
             </button>
+          </div>
+        </div>
+
+        {/* Floating Buttons */}
+        <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
+            Floating Buttons
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {([
+              { label: 'Meeting',   key: 'sb:fab:meeting',   val: showMeetingFab,   set: setShowMeetingFab },
+              { label: 'Lookup',    key: 'sb:fab:lookup',    val: showLookupFab,    set: setShowLookupFab },
+              { label: 'Inventory', key: 'sb:fab:inventory', val: showInventoryFab, set: setShowInventoryFab },
+            ] as const).map(({ label, key, val, set }) => (
+              <div key={key} className="flex items-center justify-between">
+                <span className="text-xs font-mono text-navy dark:text-[#F2F1E6]">{label}</span>
+                <button
+                  onClick={() => { const next = !val; set(next as any); toggleFab(key, next) }}
+                  className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', val ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}
+                >
+                  <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', val ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
+                </button>
+              </div>
+            ))}
           </div>
         </div>
 

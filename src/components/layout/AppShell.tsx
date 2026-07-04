@@ -13,6 +13,15 @@ const LOOKUP_WIDTH_KEY = 'locationLookup.width'
 const INV_MODE_KEY = 'inventory.mode'
 const INV_WIDTH_KEY = 'inventory.width'
 
+const FAB_KEYS = { meeting: 'sb:fab:meeting', lookup: 'sb:fab:lookup', inventory: 'sb:fab:inventory' }
+function readFabPrefs() {
+  return {
+    meeting:   localStorage.getItem(FAB_KEYS.meeting)   !== 'false',
+    lookup:    localStorage.getItem(FAB_KEYS.lookup)    !== 'false',
+    inventory: localStorage.getItem(FAB_KEYS.inventory) !== 'false',
+  }
+}
+
 export function AppShell() {
   const mobile = useMediaQuery('(max-width: 640px)')
   const navigate = useNavigate()
@@ -22,6 +31,7 @@ export function AppShell() {
   const [invWidth, setInvWidth] = useState(() => Number(localStorage.getItem(INV_WIDTH_KEY)) || 460)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [fabPrefs, setFabPrefs] = useState(readFabPrefs)
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
@@ -40,6 +50,13 @@ export function AppShell() {
 
   // Close mobile nav on every route change
   useEffect(() => { setMobileNavOpen(false) }, [location.pathname])
+
+  // Re-read FAB prefs when ProfilePanel writes them
+  useEffect(() => {
+    const handler = () => setFabPrefs(readFabPrefs())
+    window.addEventListener('fab-prefs-changed', handler)
+    return () => window.removeEventListener('fab-prefs-changed', handler)
+  }, [])
 
   function setLookupModeP(m: PanelMode) {
     setLookupMode(m); localStorage.setItem(LOOKUP_MODE_KEY, m)
@@ -90,40 +107,48 @@ export function AppShell() {
         </div>
       </div>
 
-      {/* Floating action buttons — bottom-left, anchored next to sidebar */}
-      <div
-        className="fixed bottom-4 z-[60] flex items-center gap-2 transition-[left] duration-200"
-        style={{ left: mobile ? '1rem' : sidebarCollapsed ? '4.25rem' : '16.75rem' }}
-      >
-        <button
-          onClick={() => navigate('/meetings?quick=1')}
-          className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-          title="Quick Meeting — opens notes with date + time pre-filled"
+      {/* Floating action buttons — bottom-left, anchored next to sidebar, always above map/content */}
+      {(fabPrefs.meeting || fabPrefs.lookup || fabPrefs.inventory) && (
+        <div
+          className="fixed bottom-4 z-[1000] flex items-center gap-2 transition-[left] duration-200"
+          style={{ left: mobile ? '1rem' : sidebarCollapsed ? '4.25rem' : '16.75rem' }}
         >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-          {!mobile && 'Meeting'}
-        </button>
-        <button
-          onClick={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')}
-          className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-          title="Location Lookup (Ctrl/Cmd+L)"
-        >
-          {lookupMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
-          {!mobile && 'Lookup'}
-          {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>}
-        </button>
-        <button
-          onClick={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')}
-          className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-          title="Inventory — all locations (Ctrl/Cmd+I)"
-        >
-          {invMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
-          {!mobile && 'Inventory'}
-          {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 10V7" /></svg>}
-        </button>
-      </div>
+          {fabPrefs.meeting && (
+            <button
+              onClick={() => navigate('/meetings?quick=1')}
+              className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
+              title="Quick Meeting — opens notes with date + time pre-filled"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              {!mobile && 'Meeting'}
+            </button>
+          )}
+          {fabPrefs.lookup && (
+            <button
+              onClick={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')}
+              className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
+              title="Location Lookup (Ctrl/Cmd+L)"
+            >
+              {lookupMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
+              {!mobile && 'Lookup'}
+              {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>}
+            </button>
+          )}
+          {fabPrefs.inventory && (
+            <button
+              onClick={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')}
+              className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
+              title="Inventory — all locations (Ctrl/Cmd+I)"
+            >
+              {invMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
+              {!mobile && 'Inventory'}
+              {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 10V7" /></svg>}
+            </button>
+          )}
+        </div>
+      )}
 
       <LocationLookupOverlay
         mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}

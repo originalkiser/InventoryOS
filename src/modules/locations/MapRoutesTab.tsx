@@ -614,20 +614,34 @@ export function MapRoutesTab({ locations }: Props) {
     })
   }
 
-  /** Apply new filter values, persist to localStorage, then zoom to filtered locations */
+  /** Apply new filter values, persist to localStorage, then zoom to filtered locations.
+   *  Automatically prunes downstream selections that no longer exist in cascaded options. */
   function applyFilters(owners: string[], regions: string[], markets: string[], ams: string[]) {
-    setFilterOwners(owners);   localStorage.setItem(LS.owners,  JSON.stringify(owners))
-    setFilterRegions(regions); localStorage.setItem(LS.regions, JSON.stringify(regions))
-    setFilterMarkets(markets); localStorage.setItem(LS.markets, JSON.stringify(markets))
-    setFilterAMs(ams);         localStorage.setItem(LS.ams,     JSON.stringify(ams))
+    // Compute valid markets under new owners + regions, then prune selection
+    let marketBase = locations
+    if (owners.length)  marketBase = marketBase.filter(l => owners.includes(locFieldValue(l, 'owner')))
+    if (regions.length) marketBase = marketBase.filter(l => regions.includes(l.region ?? ''))
+    const validMarkets = new Set(marketBase.map(l => locFieldValue(l, 'market')).filter(Boolean))
+    const prunedMarkets = markets.filter(m => validMarkets.has(m))
 
-    const anyFilter = owners.length || regions.length || markets.length || ams.length
+    // Compute valid AMs under owners + regions + pruned markets, then prune
+    let amBase = marketBase
+    if (prunedMarkets.length) amBase = amBase.filter(l => prunedMarkets.includes(locFieldValue(l, 'market')))
+    const validAMs = new Set(amBase.map(l => locFieldValue(l, 'area_manager')).filter(Boolean))
+    const prunedAMs = ams.filter(am => validAMs.has(am))
+
+    setFilterOwners(owners);          localStorage.setItem(LS.owners,  JSON.stringify(owners))
+    setFilterRegions(regions);        localStorage.setItem(LS.regions, JSON.stringify(regions))
+    setFilterMarkets(prunedMarkets);  localStorage.setItem(LS.markets, JSON.stringify(prunedMarkets))
+    setFilterAMs(prunedAMs);          localStorage.setItem(LS.ams,     JSON.stringify(prunedAMs))
+
+    const anyFilter = owners.length || regions.length || prunedMarkets.length || prunedAMs.length
     if (!anyFilter || !mapRef.current) return
     const locs = locations.filter(l => {
-      if (owners.length  && !owners.includes(locFieldValue(l, 'owner')))          return false
-      if (regions.length && !regions.includes(l.region ?? ''))                    return false
-      if (markets.length && !markets.includes(locFieldValue(l, 'market')))        return false
-      if (ams.length     && !ams.includes(locFieldValue(l, 'area_manager')))      return false
+      if (owners.length         && !owners.includes(locFieldValue(l, 'owner')))           return false
+      if (regions.length        && !regions.includes(l.region ?? ''))                     return false
+      if (prunedMarkets.length  && !prunedMarkets.includes(locFieldValue(l, 'market')))   return false
+      if (prunedAMs.length      && !prunedAMs.includes(locFieldValue(l, 'area_manager'))) return false
       return l.latitude != null && l.longitude != null
     })
     if (locs.length === 0) return
