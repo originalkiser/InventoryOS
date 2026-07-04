@@ -230,19 +230,19 @@ export function CampaignTemplatesTab() {
       {/* Task edit modal */}
       {editingTask && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-cream rounded-lg shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
-            <p className="font-heading font-bold text-navy">{editingTask.task.id ? 'Edit Task' : 'Add Task'}</p>
+          <div className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
+            <p className="font-heading font-bold text-navy dark:text-cream">{editingTask.task.id ? 'Edit Task' : 'Add Task'}</p>
             <div>
               <label className="text-xs font-mono text-inky/60 block mb-1">Task Name *</label>
-              <input className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white focus:outline-none focus:ring-1 focus:ring-sky"
+              <input className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy dark:text-cream focus:outline-none focus:ring-1 focus:ring-sky"
                 value={editingTask.task.name ?? ''} onChange={e => setEditingTask(et => et ? { ...et, task: { ...et.task, name: e.target.value } } : null)} />
             </div>
             <div>
               <label className="text-xs font-mono text-inky/60 block mb-1">Description</label>
-              <input className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white focus:outline-none focus:ring-1 focus:ring-sky"
+              <input className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy dark:text-cream focus:outline-none focus:ring-1 focus:ring-sky"
                 value={editingTask.task.description ?? ''} onChange={e => setEditingTask(et => et ? { ...et, task: { ...et.task, description: e.target.value } } : null)} />
             </div>
-            <label className="flex items-center gap-2 text-sm font-mono cursor-pointer">
+            <label className="flex items-center gap-2 text-sm font-mono cursor-pointer text-navy dark:text-cream">
               <input type="checkbox" checked={editingTask.task.is_required ?? true}
                 onChange={e => setEditingTask(et => et ? { ...et, task: { ...et.task, is_required: e.target.checked } } : null)} />
               Required task

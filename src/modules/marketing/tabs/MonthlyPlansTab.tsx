@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import type { MarketingLocation, MarketingMonthlyPlan } from '@/types/marketing'
 import { locMeta, MONTHS, calcProgress } from '@/types/marketing'
 import { NewPlanModal } from '../modals/NewPlanModal'
+import { ImportPlansModal } from '../modals/ImportPlansModal'
 
 interface Props {
   locations: MarketingLocation[]
@@ -27,6 +28,7 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
   const [filterMonth, setFilterMonth] = useState(CURRENT_MONTH)
   const [filterLocation, setFilterLocation] = useState('')
   const [showNewPlan, setShowNewPlan] = useState(false)
+  const [showImport, setShowImport] = useState(false)
 
   useEffect(() => {
     if (!companyId) return
@@ -78,7 +80,8 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
         </select>
         <input className="border border-sky/30 rounded px-3 py-1.5 text-xs font-mono bg-cream w-48"
           placeholder="Filter by shop…" value={filterLocation} onChange={e => setFilterLocation(e.target.value)} />
-        <div className="ml-auto">
+        <div className="ml-auto flex gap-2">
+          {isAdmin && <Button size="sm" variant="secondary" onClick={() => setShowImport(true)}>Import</Button>}
           {isAdmin && <Button size="sm" variant="primary" onClick={() => setShowNewPlan(true)}>+ New Plan</Button>}
         </div>
       </div>
@@ -144,6 +147,16 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
           existingPlanLocationIds={plans.map(p => p.location_id)}
           onClose={() => setShowNewPlan(false)}
           onCreated={() => { setShowNewPlan(false); load() }}
+        />
+      )}
+
+      {showImport && (
+        <ImportPlansModal
+          locations={locations}
+          filterMonth={filterMonth}
+          filterYear={filterYear}
+          onClose={() => setShowImport(false)}
+          onImported={() => { setShowImport(false); load() }}
         />
       )}
     </div>
