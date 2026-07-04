@@ -125,22 +125,22 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
     <div className="fixed inset-0 bg-black/40 flex items-start justify-center z-50 overflow-y-auto py-8">
       <div className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-2xl mx-4 flex flex-col gap-5 p-6">
         <div className="flex items-center justify-between">
-          <h2 className="font-heading font-bold text-navy dark:text-cream">New Monthly Plan</h2>
-          <button onClick={onClose} className="text-inky/40 hover:text-navy dark:hover:text-cream text-xl">✕</button>
+          <h2 className="font-heading font-bold text-navy">New Monthly Plan</h2>
+          <button onClick={onClose} className="text-inky/40 hover:text-navy text-xl">✕</button>
         </div>
 
         {/* Month/year */}
         <div className="flex gap-3">
           <div className="flex-1">
             <label className="text-xs font-mono text-inky/60 block mb-1">Month</label>
-            <select className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy dark:text-cream"
+            <select className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy"
               value={month} onChange={e => setMonth(Number(e.target.value))}>
               {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
             </select>
           </div>
           <div className="w-28">
             <label className="text-xs font-mono text-inky/60 block mb-1">Year</label>
-            <select className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy dark:text-cream"
+            <select className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy"
               value={year} onChange={e => setYear(Number(e.target.value))}>
               {[CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1].map(y => <option key={y} value={y}>{y}</option>)}
             </select>
@@ -152,11 +152,11 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
           <div className="flex items-center justify-between mb-2">
             <label className="text-xs font-mono text-inky/60">Shops ({selectedLocIds.length} selected)</label>
             <div className="flex gap-3 text-xs font-mono text-inky/50">
-              <button onClick={() => setSelectedLocIds(available.map(l => l.id))} className="hover:text-navy dark:hover:text-cream">All</button>
-              <button onClick={() => setSelectedLocIds([])} className="hover:text-navy dark:hover:text-cream">None</button>
+              <button onClick={() => setSelectedLocIds(available.map(l => l.id))} className="hover:text-navy">All</button>
+              <button onClick={() => setSelectedLocIds([])} className="hover:text-navy">None</button>
             </div>
           </div>
-          <input className="w-full border border-sky/30 rounded px-3 py-1.5 text-xs font-mono bg-white dark:bg-[#122b40] text-navy dark:text-cream placeholder:text-inky/40 mb-2 focus:outline-none focus:ring-1 focus:ring-sky"
+          <input className="w-full border border-sky/30 rounded px-3 py-1.5 text-xs font-mono bg-white dark:bg-[#122b40] text-navy placeholder:text-inky/40 mb-2 focus:outline-none focus:ring-1 focus:ring-sky"
             placeholder="Search shops…" value={locSearch} onChange={e => setLocSearch(e.target.value)} />
           <div className="border border-sky/20 rounded max-h-40 overflow-y-auto bg-white dark:bg-[#122b40]">
             {available.map(loc => {
@@ -164,7 +164,7 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
               return (
                 <label key={loc.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono">
                   <input type="checkbox" checked={selectedLocIds.includes(loc.id)} onChange={() => toggleLoc(loc.id)} />
-                  <span className="text-navy dark:text-cream">{loc.name}</span>
+                  <span className="text-navy">{loc.name}</span>
                   {loc.location_code && <span className="text-inky/50">{loc.location_code}</span>}
                   {alreadyHas && <Badge color="orange">Existing</Badge>}
                 </label>
@@ -178,8 +178,8 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
           <div className="flex items-center justify-between mb-2">
             <label className="text-xs font-mono text-inky/60">Campaigns ({selectedTemplateIds.length} selected)</label>
             <div className="flex gap-3 text-xs font-mono text-inky/50">
-              <button onClick={() => setSelectedTemplateIds(templates.map(t => t.id))} className="hover:text-navy dark:hover:text-cream">All</button>
-              <button onClick={() => setSelectedTemplateIds([])} className="hover:text-navy dark:hover:text-cream">None</button>
+              <button onClick={() => setSelectedTemplateIds(templates.map(t => t.id))} className="hover:text-navy">All</button>
+              <button onClick={() => setSelectedTemplateIds([])} className="hover:text-navy">None</button>
             </div>
           </div>
           {loadingTemplates ? (
@@ -191,7 +191,7 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
               {templates.map(tpl => (
                 <label key={tpl.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono">
                   <input type="checkbox" checked={selectedTemplateIds.includes(tpl.id)} onChange={() => toggleTemplate(tpl.id)} />
-                  <span className="text-navy dark:text-cream">{tpl.name}</span>
+                  <span className="text-navy">{tpl.name}</span>
                   <span className="text-inky/50">{tpl.category}</span>
                   <span className="text-inky/40">· {tpl.campaign_template_tasks?.length ?? 0} tasks</span>
                 </label>

@@ -1198,31 +1198,30 @@ export function MapRoutesTab({ locations }: Props) {
         )}
       </div>
 
-      {/* ── DESKTOP LAYOUT: map flex-1 + sidebar w-72 ──────────────────────── */}
-      <div className={`hidden md:flex gap-4`} style={{ height: 1040 }}>
-        {/* Map */}
-        {mapArea}
-        {/* Sidebar */}
-        <div className="w-72 flex-shrink-0 flex flex-col border border-navy/20 rounded overflow-hidden">
-          {sidebarContent}
+      {/* Single map rendered conditionally — avoids duplicate MapContainer + ref collision */}
+      {isMobile ? (
+        /* ── MOBILE LAYOUT: full-width map + bottom sheet ─────────────────── */
+        <div
+          className="relative rounded overflow-hidden"
+          style={{ height: 'min(640px, calc(100svh - 190px))' }}
+        >
+          {/* flex col so mapArea's flex:1 works and map fills height */}
+          <div className="absolute inset-0 flex flex-col">
+            {mapArea}
+          </div>
+          <MobileBottomSheet snap={sheetSnap} onSnapChange={setSheetSnap}>
+            {sidebarContent}
+          </MobileBottomSheet>
         </div>
-      </div>
-
-      {/* ── MOBILE LAYOUT: full-width map + bottom sheet ────────────────────── */}
-      <div
-        className="relative md:hidden rounded overflow-hidden"
-        style={{ height: 'min(640px, calc(100svh - 190px))' }}
-      >
-        {/* Map fills entire container */}
-        <div className="absolute inset-0">
+      ) : (
+        /* ── DESKTOP LAYOUT: map flex-1 + sidebar w-72 ────────────────────── */
+        <div className="flex gap-4" style={{ height: 1040 }}>
           {mapArea}
+          <div className="w-72 flex-shrink-0 flex flex-col border border-navy/20 rounded overflow-hidden">
+            {sidebarContent}
+          </div>
         </div>
-
-        {/* Bottom sheet overlays from bottom */}
-        <MobileBottomSheet snap={sheetSnap} onSnapChange={setSheetSnap}>
-          {sidebarContent}
-        </MobileBottomSheet>
-      </div>
+      )}
 
       {/* Unmapped count */}
       {filteredLocations.length > 0 && filteredLocations.length !== mappableLocations.length && (

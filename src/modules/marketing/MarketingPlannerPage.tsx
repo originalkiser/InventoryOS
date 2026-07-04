@@ -3,6 +3,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent, SbLoader } from '@/components
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
+import toast from 'react-hot-toast'
 import type { MarketingLocation } from '@/types/marketing'
 import { CampaignTemplatesTab } from './tabs/CampaignTemplatesTab'
 import { MonthlyPlansTab } from './tabs/MonthlyPlansTab'
@@ -25,11 +26,12 @@ export function MarketingPlannerPage() {
   async function loadLocations() {
     setLoadingLocations(true)
     const sb = supabase as any
-    const { data } = await sb.schema('core').from('locations')
+    const { data, error } = await sb.schema('core').from('locations')
       .select('id, name, location_code, region, active, metadata')
       .eq('company_id', companyId)
-      .eq('active', true)
+      .neq('active', false)
       .order('name')
+    if (error) toast.error('Failed to load shops')
     setLocations(data ?? [])
     setLoadingLocations(false)
   }
