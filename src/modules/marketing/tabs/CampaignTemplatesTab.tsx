@@ -40,6 +40,7 @@ export function CampaignTemplatesTab() {
   async function seedDefaults() {
     if (templates.length > 0) return
     setSeeding(true)
+    let successCount = 0
     try {
       for (let i = 0; i < DEFAULT_TEMPLATES.length; i++) {
         const tpl = DEFAULT_TEMPLATES[i]
@@ -47,7 +48,7 @@ export function CampaignTemplatesTab() {
           .insert({ company_id: companyId, name: tpl.name, category: tpl.category, description: tpl.description, sort_order: i, created_by: userId })
           .select('id')
           .single()
-        if (error || !created) { toast.error(`Failed seeding "${tpl.name}"`); continue }
+        if (error || !created) continue
         const taskInserts = tpl.tasks.map((t, j) => ({
           campaign_template_id: created.id,
           name: t.name,
@@ -56,9 +57,14 @@ export function CampaignTemplatesTab() {
           created_by: userId,
         }))
         await sb.schema('marketing').from('campaign_template_tasks').insert(taskInserts)
+        successCount++
       }
-      toast.success('Default templates seeded')
-      load()
+      if (successCount > 0) {
+        toast.success(`${successCount} template${successCount > 1 ? 's' : ''} seeded`)
+        load()
+      } else {
+        toast.error('Seeding failed — add "marketing" to Supabase API exposed schemas, then retry')
+      }
     } finally {
       setSeeding(false)
     }
