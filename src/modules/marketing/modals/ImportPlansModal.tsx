@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { Button, Badge } from '@/components/ui'
@@ -25,7 +26,6 @@ interface Props {
 
 const CURRENT_YEAR = new Date().getFullYear()
 
-// Normalize a string for fuzzy matching
 function norm(s: string) {
   return s.toLowerCase()
     .replace(/strickland\s*bros?\.?/gi, '')
@@ -41,30 +41,24 @@ function matchLoc(text: string, locations: MarketingLocation[]): { loc: Marketin
   if (!t) return { loc: null, quality: 'none' }
   const tl = t.toLowerCase()
 
-  // Exact code match
   const byCode = locations.find(l => (l.location_code ?? '').toLowerCase() === tl)
   if (byCode) return { loc: byCode, quality: 'exact' }
 
-  // Exact name match
   const byName = locations.find(l => l.name.toLowerCase() === tl)
   if (byName) return { loc: byName, quality: 'exact' }
 
-  // Exact name after normalization
   const tn = norm(t)
   if (tn) {
     const byNorm = locations.find(l => norm(l.name) === tn)
     if (byNorm) return { loc: byNorm, quality: 'exact' }
   }
 
-  // Partial: location name contains search text
   const partial1 = locations.find(l => l.name.toLowerCase().includes(tl))
   if (partial1) return { loc: partial1, quality: 'partial' }
 
-  // Partial: search text contains location name
   const partial2 = locations.find(l => tl.includes(l.name.toLowerCase()))
   if (partial2) return { loc: partial2, quality: 'partial' }
 
-  // Partial: normalized contains
   if (tn) {
     const partial3 = locations.find(l => {
       const ln = norm(l.name)
@@ -76,53 +70,43 @@ function matchLoc(text: string, locations: MarketingLocation[]): { loc: Marketin
   return { loc: null, quality: 'none' }
 }
 
-function parseRaw(raw: string, locations: MarketingLocation[]): ParsedRow[] {
-  const lines = raw.split('\n').map(line => {
-    // First TSV/CSV column
-    const col = line.split('\t')[0].split(',')[0].trim()
-    return col
-  }).filter(Boolean)
-
-  // Deduplicate raw strings
+function toRows(values: string[], locations: MarketingLocation[]): ParsedRow[] {
   const seen = new Set<string>()
-  const unique = lines.filter(l => {
-    if (seen.has(l.toLowerCase())) return false
-    seen.add(l.toLowerCase())
-    return true
-  })
-
-  return unique.map(raw => {
-    const { loc, quality } = matchLoc(raw, locations)
-    return { raw, loc, quality, include: loc != null }
-  })
+  return values
+    .filter(v => {
+      const k = v.toLowerCase()
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
+    .map(raw => {
+      const { loc, quality } = matchLoc(raw, locations)
+      return { raw, loc, quality, include: loc != null }
+    })
 }
 
-function parseCSVText(text: string, locations: MarketingLocation[]): ParsedRow[] {
-  // Detect delimiter
-  const firstLine = text.split('\n')[0] ?? ''
-  const isCSV = (firstLine.match(/,/g) ?? []).length > (firstLine.match(/\t/g) ?? []).length
+function parseWorkbook(wb: XLSX.WorkBook, sheetName: string, colIdx: number): string[] {
+  const sheet = wb.Sheets[sheetName]
+  if (!sheet) return []
+  const data = XLSX.utils.sheet_to_json<(string | number | undefined)[]>(sheet, { header: 1, defval: '' })
+  return data
+    .map(row => String(row[colIdx] ?? '').trim())
+    .filter(Boolean)
+}
 
-  const lines = text.split('\n').map(line => {
-    if (isCSV) {
-      // Simple CSV parse: strip quotes from first field
-      const field = line.split(',')[0].replace(/^"|"$/g, '').trim()
-      return field
-    }
-    return line.split('\t')[0].trim()
-  }).filter(Boolean)
+function parsePaste(raw: string): string[] {
+  return raw
+    .split('\n')
+    .map(line => line.split('\t')[0].trim())
+    .filter(Boolean)
+}
 
-  const seen = new Set<string>()
-  const unique = lines.filter(l => {
-    const k = l.toLowerCase()
-    if (seen.has(k)) return false
-    seen.add(k)
-    return true
-  })
-
-  return unique.map(raw => {
-    const { loc, quality } = matchLoc(raw, locations)
-    return { raw, loc, quality, include: loc != null }
-  })
+// Column index → Excel-style letter (0=A, 1=B, …)
+function colLabel(i: number): string {
+  let s = ''
+  let n = i
+  do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1 } while (n >= 0)
+  return s
 }
 
 export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, onImported }: Props) {
@@ -132,8 +116,16 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
   const sb = supabase as any
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const [inputMode, setInputMode] = useState<'paste' | 'file'>('paste')
+  const [inputMode, setInputMode] = useState<'paste' | 'file'>('file')
   const [pasteText, setPasteText] = useState('')
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null)
+  const [fileName, setFileName] = useState('')
+  const [sheetNames, setSheetNames] = useState<string[]>([])
+  const [selectedSheet, setSelectedSheet] = useState('')
+  const [colCount, setColCount] = useState(0)
+  const [selectedCol, setSelectedCol] = useState(0)
+  const [previewHeaders, setPreviewHeaders] = useState<string[]>([])
+
   const [rows, setRows] = useState<ParsedRow[]>([])
   const [templates, setTemplates] = useState<MarketingCampaignTemplate[]>([])
   const [loadingTemplates, setLoadingTemplates] = useState(true)
@@ -141,11 +133,8 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
   const [month, setMonth] = useState(filterMonth)
   const [year, setYear] = useState(filterYear)
   const [importing, setImporting] = useState(false)
-  const [fileName, setFileName] = useState('')
 
-  useEffect(() => {
-    loadTemplates()
-  }, []) // eslint-disable-line
+  useEffect(() => { loadTemplates() }, []) // eslint-disable-line
 
   async function loadTemplates() {
     setLoadingTemplates(true)
@@ -160,25 +149,57 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
     setLoadingTemplates(false)
   }
 
-  function handlePasteChange(text: string) {
-    setPasteText(text)
-    if (text.trim()) {
-      setRows(parseRaw(text, locations))
-    } else {
-      setRows([])
-    }
-  }
-
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setFileName(file.name)
     const reader = new FileReader()
     reader.onload = ev => {
-      const text = (ev.target?.result as string) ?? ''
-      setRows(parseCSVText(text, locations))
+      const ab = ev.target?.result as ArrayBuffer
+      const wb = XLSX.read(ab, { type: 'array' })
+      setWorkbook(wb)
+      const names = wb.SheetNames
+      setSheetNames(names)
+      // Default to "2026" sheet if present, else first sheet
+      const defaultSheet = names.find(n => n === '2026') ?? names[0] ?? ''
+      setSelectedSheet(defaultSheet)
+      applySheet(wb, defaultSheet, 0)
     }
-    reader.readAsText(file)
+    reader.readAsArrayBuffer(file)
+  }
+
+  function applySheet(wb: XLSX.WorkBook, sheetName: string, colIdx: number) {
+    const sheet = wb.Sheets[sheetName]
+    if (!sheet) { setRows([]); return }
+    const data = XLSX.utils.sheet_to_json<(string | number | undefined)[]>(sheet, { header: 1, defval: '' })
+    // Determine column count from first few rows
+    const maxCols = Math.max(...data.slice(0, 5).map(r => r.length), 1)
+    setColCount(maxCols)
+    // Preview headers: first non-empty value in each column from first row
+    const headerRow = data[0] ?? []
+    setPreviewHeaders(Array.from({ length: maxCols }, (_, i) => String(headerRow[i] ?? '').trim()))
+
+    const values = data
+      .slice(1) // skip header row
+      .map(row => String(row[colIdx] ?? '').trim())
+      .filter(Boolean)
+    setRows(toRows(values, locations))
+  }
+
+  function onSheetChange(name: string) {
+    setSelectedSheet(name)
+    setSelectedCol(0)
+    if (workbook) applySheet(workbook, name, 0)
+  }
+
+  function onColChange(idx: number) {
+    setSelectedCol(idx)
+    if (workbook && selectedSheet) applySheet(workbook, selectedSheet, idx)
+  }
+
+  function handlePasteChange(text: string) {
+    setPasteText(text)
+    setRows(text.trim() ? toRows(parsePaste(text), locations) : [])
   }
 
   function toggleRow(idx: number) {
@@ -201,11 +222,9 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
     let successCount = 0
     let skipCount = 0
 
-    for (let ri = 0; ri < includedRows.length; ri++) {
-      const row = includedRows[ri]
+    for (const row of includedRows) {
       const locId = row.loc!.id
 
-      // Upsert plan
       const { data: plan, error: planErr } = await sb.schema('marketing').from('monthly_plans')
         .upsert(
           { company_id: companyId, location_id: locId, plan_month: month, plan_year: year, created_by: userId, updated_by: userId, updated_at: new Date().toISOString() },
@@ -215,7 +234,6 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
         .single()
       if (planErr || !plan) { skipCount++; continue }
 
-      // Get existing assignments to avoid duplicates
       const { data: existing } = await sb.schema('marketing').from('campaign_assignments')
         .select('campaign_template_id')
         .eq('monthly_plan_id', plan.id)
@@ -252,51 +270,32 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
     onImported()
   }
 
-  const hasData = rows.length > 0
+  const hasRows = rows.length > 0
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-start justify-center z-50 overflow-y-auto py-8">
       <div className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-2xl mx-4 flex flex-col gap-5 p-6">
         <div className="flex items-center justify-between">
           <h2 className="font-heading font-bold text-navy">Import Plans</h2>
-          <button onClick={onClose} className="text-inky/40 hover:text-navy dark:hover:text-cream text-xl">✕</button>
+          <button onClick={onClose} className="text-inky/40 hover:text-navy text-xl">✕</button>
         </div>
 
         {/* Input mode toggle */}
         <div className="flex gap-2 text-xs font-mono">
-          <button
-            onClick={() => setInputMode('paste')}
-            className={`px-3 py-1.5 rounded border transition-colors ${inputMode === 'paste' ? 'bg-navy text-cream border-navy' : 'border-sky/30 text-inky/60 hover:text-navy dark:hover:text-cream'}`}
-          >
-            Paste from Excel
-          </button>
-          <button
-            onClick={() => setInputMode('file')}
-            className={`px-3 py-1.5 rounded border transition-colors ${inputMode === 'file' ? 'bg-navy text-cream border-navy' : 'border-sky/30 text-inky/60 hover:text-navy dark:hover:text-cream'}`}
-          >
-            Upload CSV / TSV
-          </button>
+          {(['file', 'paste'] as const).map(mode => (
+            <button
+              key={mode}
+              onClick={() => setInputMode(mode)}
+              className={`px-3 py-1.5 rounded border transition-colors ${inputMode === mode ? 'bg-navy text-cream border-navy' : 'border-sky/30 text-inky/60 hover:text-navy'}`}
+            >
+              {mode === 'file' ? 'Upload Excel / CSV' : 'Paste from Excel'}
+            </button>
+          ))}
         </div>
 
-        {/* Input area */}
-        {inputMode === 'paste' ? (
-          <div>
-            <label className="text-xs font-mono text-inky/60 block mb-1">
-              Paste shop names or codes (one per line, or copy a column from Excel)
-            </label>
-            <textarea
-              className="w-full border border-sky/30 rounded px-3 py-2 text-xs font-mono bg-white dark:bg-[#122b40] text-navy placeholder:text-inky/40 focus:outline-none focus:ring-1 focus:ring-sky resize-y"
-              rows={6}
-              placeholder={"Houston - Westheimer\nDallas - Greenville\n12345\n..."}
-              value={pasteText}
-              onChange={e => handlePasteChange(e.target.value)}
-            />
-          </div>
-        ) : (
-          <div>
-            <label className="text-xs font-mono text-inky/60 block mb-2">
-              Upload a CSV or TSV file — first column should be the shop name or code
-            </label>
+        {/* File upload */}
+        {inputMode === 'file' && (
+          <div className="flex flex-col gap-3">
             <div
               className="border-2 border-dashed border-sky/30 rounded-lg p-6 text-center cursor-pointer hover:border-sky/60 transition-colors"
               onClick={() => fileRef.current?.click()}
@@ -304,41 +303,91 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
               {fileName ? (
                 <p className="text-xs font-mono text-navy">{fileName}</p>
               ) : (
-                <p className="text-xs font-mono text-inky/50">Click to choose file, or drag and drop</p>
+                <>
+                  <p className="text-xs font-mono text-navy font-bold mb-1">Click to choose file</p>
+                  <p className="text-[11px] font-mono text-inky/50">Supports .xlsx, .xls, .csv, .tsv</p>
+                </>
               )}
-              <input ref={fileRef} type="file" accept=".csv,.tsv,.txt" className="hidden" onChange={handleFile} />
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" className="hidden" onChange={handleFile} />
             </div>
+
+            {/* Sheet + column pickers */}
+            {workbook && (
+              <div className="flex gap-3 flex-wrap">
+                {sheetNames.length > 1 && (
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="text-xs font-mono text-inky/60 block mb-1">Sheet</label>
+                    <select
+                      className="w-full border border-sky/30 rounded px-2 py-1.5 text-xs font-mono bg-white dark:bg-[#122b40] text-navy"
+                      value={selectedSheet}
+                      onChange={e => onSheetChange(e.target.value)}
+                    >
+                      {sheetNames.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </div>
+                )}
+                {colCount > 1 && (
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="text-xs font-mono text-inky/60 block mb-1">Shop name column</label>
+                    <select
+                      className="w-full border border-sky/30 rounded px-2 py-1.5 text-xs font-mono bg-white dark:bg-[#122b40] text-navy"
+                      value={selectedCol}
+                      onChange={e => onColChange(Number(e.target.value))}
+                    >
+                      {Array.from({ length: colCount }, (_, i) => (
+                        <option key={i} value={i}>
+                          {colLabel(i)}{previewHeaders[i] ? ` — ${previewHeaders[i]}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Preview table */}
-        {hasData && (
+        {/* Paste */}
+        {inputMode === 'paste' && (
+          <div>
+            <label className="text-xs font-mono text-inky/60 block mb-1">
+              Paste shop names or codes (one per line, or copy a column from Excel)
+            </label>
+            <textarea
+              className="w-full border border-sky/30 rounded px-3 py-2 text-xs font-mono bg-white dark:bg-[#122b40] text-navy placeholder:text-inky/40 focus:outline-none focus:ring-1 focus:ring-sky resize-y"
+              rows={6}
+              placeholder={"Houston - Westheimer\nDallas - Greenville\n..."}
+              value={pasteText}
+              onChange={e => handlePasteChange(e.target.value)}
+            />
+          </div>
+        )}
+
+        {/* Match preview */}
+        {hasRows && (
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-mono text-inky/60">
-                {rows.length} shop{rows.length !== 1 ? 's' : ''} parsed
+                {rows.length} row{rows.length !== 1 ? 's' : ''} parsed
                 {unmatchedCount > 0 && <span className="ml-2 text-sb-orange">{unmatchedCount} unmatched</span>}
               </label>
-              <div className="flex gap-3 text-xs font-mono text-inky/50">
-                <button onClick={() => setRows(rs => rs.map(r => ({ ...r, include: r.loc != null })))} className="hover:text-navy dark:hover:text-cream">Reset</button>
-                <button onClick={() => setRows(rs => rs.map(r => ({ ...r, include: r.loc != null })))} className="hover:text-navy dark:hover:text-cream">Matched only</button>
-              </div>
+              <button
+                className="text-xs font-mono text-inky/50 hover:text-navy"
+                onClick={() => setRows(rs => rs.map(r => ({ ...r, include: r.loc != null })))}
+              >
+                Reset selection
+              </button>
             </div>
             <div className="border border-sky/20 rounded max-h-44 overflow-y-auto bg-white dark:bg-[#122b40]">
               {rows.map((row, i) => (
                 <label key={i} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono border-b border-sky/10 last:border-0">
-                  <input
-                    type="checkbox"
-                    checked={row.include}
-                    disabled={!row.loc}
-                    onChange={() => toggleRow(i)}
-                  />
+                  <input type="checkbox" checked={row.include} disabled={!row.loc} onChange={() => toggleRow(i)} />
                   <span className={`flex-1 truncate ${row.loc ? 'text-navy' : 'text-inky/40 line-through'}`}>
                     {row.raw}
                   </span>
                   {row.loc ? (
                     <>
-                      <span className="text-inky/40">→</span>
+                      <span className="text-inky/40 flex-shrink-0">→</span>
                       <span className="text-navy truncate max-w-[160px]">{row.loc.name}</span>
                       <Badge color={row.quality === 'exact' ? 'green' : 'orange'}>
                         {row.quality === 'exact' ? 'Exact' : 'Fuzzy'}
@@ -353,7 +402,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
           </div>
         )}
 
-        {/* Month/year */}
+        {/* Month / year */}
         <div className="flex gap-3">
           <div className="flex-1">
             <label className="text-xs font-mono text-inky/60 block mb-1">Month</label>
@@ -380,8 +429,8 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
           <div className="flex items-center justify-between mb-2">
             <label className="text-xs font-mono text-inky/60">Campaigns ({selectedTemplateIds.length} selected)</label>
             <div className="flex gap-3 text-xs font-mono text-inky/50">
-              <button onClick={() => setSelectedTemplateIds(templates.map(t => t.id))} className="hover:text-navy dark:hover:text-cream">All</button>
-              <button onClick={() => setSelectedTemplateIds([])} className="hover:text-navy dark:hover:text-cream">None</button>
+              <button onClick={() => setSelectedTemplateIds(templates.map(t => t.id))} className="hover:text-navy">All</button>
+              <button onClick={() => setSelectedTemplateIds([])} className="hover:text-navy">None</button>
             </div>
           </div>
           {loadingTemplates ? (
@@ -406,7 +455,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
           <p className="text-xs font-mono text-inky/50">
             {includedRows.length > 0
               ? `Will create/update plans for ${includedRows.length} shop${includedRows.length !== 1 ? 's' : ''}`
-              : 'Paste or upload shop names to begin'}
+              : 'Upload or paste shop names to begin'}
           </p>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
