@@ -36,6 +36,7 @@ import { FormResultsPage } from '@/modules/forms/FormResultsPage'
 import { FormAssignmentsPage } from '@/modules/forms/FormAssignmentsPage'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { OnHandPage } from '@/pages/OnHandPage'
+import { MarketingPlannerPage } from '@/modules/marketing/MarketingPlannerPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, initialized } = useAuthStore()
@@ -127,6 +128,7 @@ export default function App() {
           <Route path="forms/:formId/edit" element={<FormBuilderPage />} />
           <Route path="forms/:formId/results" element={<FormResultsPage />} />
           <Route path="forms/:formId/assignments" element={<FormAssignmentsPage />} />
+          <Route path="marketing-planner" element={<MarketingPlannerPage />} />
         </Route>
 
         {/* Public form — no auth required */}

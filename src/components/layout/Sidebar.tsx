@@ -60,6 +60,7 @@ const ICONS: Record<string, JSX.Element> = {
   forms: <FileText className="w-4 h-4 flex-shrink-0" />,
   users: <Users className="w-4 h-4 flex-shrink-0" />,
   locations: <MapPin className="w-4 h-4 flex-shrink-0" />,
+  'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
 
@@ -100,7 +101,7 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
   ],
   finance: [{ key: 'finance-soon', label: 'Coming Soon', to: null }],
   accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
-  marketing: [{ key: 'marketing-soon', label: 'Coming Soon', to: null }],
+  marketing: [{ key: 'marketing-planner', label: 'Marketing Planner', to: '/marketing-planner' }],
 }
 
 const SECTION_META: Record<string, { label: string }> = {
