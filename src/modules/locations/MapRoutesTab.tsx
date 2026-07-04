@@ -135,7 +135,8 @@ function makePin(
   showLabel: boolean,
   dimmed = false,
 ): L.DivIcon {
-  const size = 14
+  // Dimmed pins shrink to 25% of default size; labels stay at 11px
+  const size = dimmed ? 4 : 14
   let border: string; let shadow: string
   if (routeSelected) {
     border = '2px solid #F2F1E6'
@@ -144,10 +145,10 @@ function makePin(
     border = '2.5px solid #002745'
     shadow = '0 0 0 3px rgba(0,39,69,0.35)'
   } else {
-    border = '1.5px solid rgba(0,39,69,0.3)'
-    shadow = '0 1px 3px rgba(0,0,0,0.25)'
+    border = dimmed ? '1px solid rgba(0,39,69,0.2)' : '1.5px solid rgba(0,39,69,0.3)'
+    shadow = dimmed ? 'none' : '0 1px 3px rgba(0,0,0,0.25)'
   }
-  const opacityStyle = dimmed ? 'opacity:0.28;' : ''
+  const opacityStyle = dimmed ? 'opacity:0.35;' : ''
   const label = showLabel
     ? `<span style="position:absolute;top:17px;left:50%;transform:translateX(-50%);font-size:11px;font-family:monospace;font-weight:600;white-space:nowrap;color:#002745;background:rgba(242,241,230,0.92);padding:1px 4px;border-radius:3px;pointer-events:none;">${code}</span>`
     : ''
@@ -157,6 +158,80 @@ function makePin(
     html: `<div style="position:relative;width:${size}px;height:${size}px;${opacityStyle}"><div style="width:${size}px;height:${size}px;background:${background};border:${border};border-radius:50%;box-shadow:${shadow};"></div>${label}</div>`,
     iconSize: [size, size],
   })
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function loadLS<T>(key: string, fallback: T): T {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v) as T }
+  catch { return fallback }
+}
+
+const LS = {
+  regions: 'mrt_filter_regions',
+  markets: 'mrt_filter_markets',
+  ams:     'mrt_filter_ams',
+  owners:  'mrt_filter_owners',
+  labels:  'mrt_labels_always_on',
+}
+
+// Multi-select dropdown with checkboxes, closes on outside click
+function MultiSelectDropdown({ label, options, values, onChange }: {
+  label: string
+  options: string[]
+  values: string[]
+  onChange: (v: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const display = values.length === 0 ? 'All' : values.length === 1 ? values[0] : `${values.length} selected`
+  const isFiltered = values.length > 0
+
+  return (
+    <div ref={ref} className="relative flex flex-col gap-0.5">
+      <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">{label}</span>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`rounded border px-2 py-1 text-xs font-body text-left flex items-center gap-1 min-w-[110px] focus:outline-none focus:border-sky transition-colors ${
+          isFiltered
+            ? 'border-sky bg-sky/10 text-navy font-semibold'
+            : 'border-navy/30 bg-cream dark:bg-[#122b40] text-navy'
+        }`}
+      >
+        <span className="flex-1 truncate">{display}</span>
+        <span className="text-inky/40 flex-shrink-0 text-[10px]">▾</span>
+      </button>
+
+      {open && options.length > 0 && (
+        <div className="absolute top-full left-0 mt-1 z-[2000] bg-cream dark:bg-[#0e2638] border border-sky/30 rounded shadow-xl min-w-[160px] max-h-64 overflow-y-auto">
+          <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono border-b border-sky/10">
+            <input type="checkbox" checked={values.length === 0} onChange={() => { onChange([]); setOpen(false) }} />
+            <span className="text-navy">All</span>
+          </label>
+          {options.map(opt => (
+            <label key={opt} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono">
+              <input
+                type="checkbox"
+                checked={values.includes(opt)}
+                onChange={() => onChange(values.includes(opt) ? values.filter(v => v !== opt) : [...values, opt])}
+              />
+              <span className="text-navy truncate">{opt}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -342,7 +417,6 @@ export function MapRoutesTab({ locations }: Props) {
   // Map state
   const [zoom, setZoom] = useState(7)
   const [mapBounds, setMapBounds] = useState<L.LatLngBounds | null>(null)
-  const showLabels = zoom >= 10
 
   // Map theme (independent of app dark mode)
   const [mapTheme, setMapTheme] = useState<MapTheme>('auto')
@@ -361,10 +435,15 @@ export function MapRoutesTab({ locations }: Props) {
   // Mobile bottom sheet snap level
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>(1)
 
-  // Filters
-  const [filterRegion, setFilterRegion] = useState('')
-  const [filterMarket, setFilterMarket] = useState('')
-  const [filterAM, setFilterAM] = useState('')
+  // Filters — multi-select, persisted to localStorage
+  const [filterOwners,  setFilterOwners]  = useState<string[]>(() => loadLS(LS.owners,  []))
+  const [filterRegions, setFilterRegions] = useState<string[]>(() => loadLS(LS.regions, []))
+  const [filterMarkets, setFilterMarkets] = useState<string[]>(() => loadLS(LS.markets, []))
+  const [filterAMs,     setFilterAMs]     = useState<string[]>(() => loadLS(LS.ams,     []))
+
+  // Label display toggle
+  const [alwaysShowLabels, setAlwaysShowLabels] = useState<boolean>(() => loadLS(LS.labels, false))
+  const showLabels = alwaysShowLabels || zoom >= 10
 
   // Modals
   const [manualModal, setManualModal] = useState<{ origin: Location; destination: Location; existing: LocationRoute | null } | null>(null)
@@ -418,32 +497,40 @@ export function MapRoutesTab({ locations }: Props) {
     return m
   }, [locations])
 
-  // Filter helpers
-  const regionOptions = useMemo(
-    () => Array.from(new Set(locations.map((l) => l.region ?? '').filter(Boolean))).sort(),
+  // Filter option memos — cascade: owner → region → market → AM
+  const ownerOptions = useMemo(
+    () => Array.from(new Set(locations.map(l => locFieldValue(l, 'owner')).filter(Boolean))).sort(),
     [locations],
   )
+  const regionOptions = useMemo(() => {
+    let r = locations
+    if (filterOwners.length) r = r.filter(l => filterOwners.includes(locFieldValue(l, 'owner')))
+    return Array.from(new Set(r.map(l => l.region ?? '').filter(Boolean))).sort()
+  }, [locations, filterOwners])
   const marketOptions = useMemo(() => {
     let r = locations
-    if (filterRegion) r = r.filter((l) => l.region === filterRegion)
-    return Array.from(new Set(r.map((l) => locFieldValue(l, 'market')).filter(Boolean))).sort()
-  }, [locations, filterRegion])
+    if (filterOwners.length)  r = r.filter(l => filterOwners.includes(locFieldValue(l, 'owner')))
+    if (filterRegions.length) r = r.filter(l => filterRegions.includes(l.region ?? ''))
+    return Array.from(new Set(r.map(l => locFieldValue(l, 'market')).filter(Boolean))).sort()
+  }, [locations, filterOwners, filterRegions])
   const amOptions = useMemo(() => {
     let r = locations
-    if (filterRegion) r = r.filter((l) => l.region === filterRegion)
-    if (filterMarket) r = r.filter((l) => locFieldValue(l, 'market') === filterMarket)
-    return Array.from(new Set(r.map((l) => locFieldValue(l, 'area_manager')).filter(Boolean))).sort()
-  }, [locations, filterRegion, filterMarket])
+    if (filterOwners.length)  r = r.filter(l => filterOwners.includes(locFieldValue(l, 'owner')))
+    if (filterRegions.length) r = r.filter(l => filterRegions.includes(l.region ?? ''))
+    if (filterMarkets.length) r = r.filter(l => filterMarkets.includes(locFieldValue(l, 'market')))
+    return Array.from(new Set(r.map(l => locFieldValue(l, 'area_manager')).filter(Boolean))).sort()
+  }, [locations, filterOwners, filterRegions, filterMarkets])
 
   const filteredLocations = useMemo(() => {
     let r = locations
-    if (filterRegion) r = r.filter((l) => l.region === filterRegion)
-    if (filterMarket) r = r.filter((l) => locFieldValue(l, 'market') === filterMarket)
-    if (filterAM) r = r.filter((l) => locFieldValue(l, 'area_manager') === filterAM)
+    if (filterOwners.length)  r = r.filter(l => filterOwners.includes(locFieldValue(l, 'owner')))
+    if (filterRegions.length) r = r.filter(l => filterRegions.includes(l.region ?? ''))
+    if (filterMarkets.length) r = r.filter(l => filterMarkets.includes(locFieldValue(l, 'market')))
+    if (filterAMs.length)     r = r.filter(l => filterAMs.includes(locFieldValue(l, 'area_manager')))
     return r
-  }, [locations, filterRegion, filterMarket, filterAM])
+  }, [locations, filterOwners, filterRegions, filterMarkets, filterAMs])
 
-  const hasFilter = !!(filterRegion || filterMarket || filterAM)
+  const hasFilter = filterOwners.length > 0 || filterRegions.length > 0 || filterMarkets.length > 0 || filterAMs.length > 0
 
   const mappableLocations = useMemo(
     () => filteredLocations.filter((l) => l.latitude != null && l.longitude != null),
@@ -525,6 +612,27 @@ export function MapRoutesTab({ locations }: Props) {
       paddingTopLeft: [20, 20],
       paddingBottomRight: [20, 20 + bottomPad],
     })
+  }
+
+  /** Apply new filter values, persist to localStorage, then zoom to filtered locations */
+  function applyFilters(owners: string[], regions: string[], markets: string[], ams: string[]) {
+    setFilterOwners(owners);   localStorage.setItem(LS.owners,  JSON.stringify(owners))
+    setFilterRegions(regions); localStorage.setItem(LS.regions, JSON.stringify(regions))
+    setFilterMarkets(markets); localStorage.setItem(LS.markets, JSON.stringify(markets))
+    setFilterAMs(ams);         localStorage.setItem(LS.ams,     JSON.stringify(ams))
+
+    const anyFilter = owners.length || regions.length || markets.length || ams.length
+    if (!anyFilter || !mapRef.current) return
+    const locs = locations.filter(l => {
+      if (owners.length  && !owners.includes(locFieldValue(l, 'owner')))          return false
+      if (regions.length && !regions.includes(l.region ?? ''))                    return false
+      if (markets.length && !markets.includes(locFieldValue(l, 'market')))        return false
+      if (ams.length     && !ams.includes(locFieldValue(l, 'area_manager')))      return false
+      return l.latitude != null && l.longitude != null
+    })
+    if (locs.length === 0) return
+    const pairs = locs.map(l => [l.latitude as number, l.longitude as number] as [number, number])
+    fitBoundsWithPadding(pairs, isMobile ? sheetHeightPx : 0)
   }
 
   /** Determine whether a pin should be dimmed given current selection state */
@@ -1092,8 +1200,23 @@ export function MapRoutesTab({ locations }: Props) {
         </div>
       )}
 
-      {/* Map theme toggle — floating top-right of map */}
-      <div className="absolute top-2 right-2 z-[999]">
+      {/* Map controls — floating top-right of map */}
+      <div className="absolute top-2 right-2 z-[999] flex gap-1">
+        <button
+          onClick={() => {
+            const next = !alwaysShowLabels
+            setAlwaysShowLabels(next)
+            localStorage.setItem(LS.labels, JSON.stringify(next))
+          }}
+          className={`border rounded px-2.5 py-1 text-[10px] font-mono shadow-sm transition-colors ${
+            alwaysShowLabels
+              ? 'bg-navy text-cream border-navy'
+              : 'bg-cream/90 dark:bg-navy/90 border-navy/20 text-navy dark:text-cream hover:bg-cream dark:hover:bg-navy'
+          }`}
+          title="Always show shop numbers"
+        >
+          # Labels
+        </button>
         <button
           onClick={cycleTheme}
           className="bg-cream/90 dark:bg-navy/90 border border-navy/20 rounded px-2.5 py-1 text-[10px] font-mono text-navy dark:text-cream shadow-sm hover:bg-cream dark:hover:bg-navy"
@@ -1166,33 +1289,20 @@ export function MapRoutesTab({ locations }: Props) {
 
       {/* Filter bar */}
       <div className="flex items-end gap-3 flex-wrap">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Region</span>
-          <select value={filterRegion} onChange={(e) => { setFilterRegion(e.target.value); setFilterMarket(''); setFilterAM('') }}
-            className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none">
-            <option value="">All</option>
-            {regionOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Market</span>
-          <select value={filterMarket} onChange={(e) => { setFilterMarket(e.target.value); setFilterAM('') }}
-            className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none">
-            <option value="">All</option>
-            {marketOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Area Manager</span>
-          <select value={filterAM} onChange={(e) => setFilterAM(e.target.value)}
-            className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none">
-            <option value="">All</option>
-            {amOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-        </div>
+        {ownerOptions.length >= 2 && (
+          <MultiSelectDropdown label="Owner" options={ownerOptions} values={filterOwners}
+            onChange={vals => applyFilters(vals, filterRegions, filterMarkets, filterAMs)} />
+        )}
+        <MultiSelectDropdown label="Region" options={regionOptions} values={filterRegions}
+          onChange={vals => applyFilters(filterOwners, vals, filterMarkets, filterAMs)} />
+        <MultiSelectDropdown label="Market" options={marketOptions} values={filterMarkets}
+          onChange={vals => applyFilters(filterOwners, filterRegions, vals, filterAMs)} />
+        <MultiSelectDropdown label="Area Manager" options={amOptions} values={filterAMs}
+          onChange={vals => applyFilters(filterOwners, filterRegions, filterMarkets, vals)} />
         {hasFilter && (
-          <button onClick={() => { setFilterRegion(''); setFilterMarket(''); setFilterAM('') }}
-            className="text-xs font-mono text-inky/60 hover:text-navy underline pb-1">
+          <button
+            onClick={() => applyFilters([], [], [], [])}
+            className="text-xs font-mono text-inky/60 hover:text-navy underline pb-1 self-end">
             Clear
           </button>
         )}

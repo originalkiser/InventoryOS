@@ -57,6 +57,10 @@
   color-scheme: dark;
 }
 
+/* Hide native scrollbar on the app shell's main scroll container */
+.app-scroll::-webkit-scrollbar { display: none; }
+.app-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+
 * {
   box-sizing: border-box;
 }

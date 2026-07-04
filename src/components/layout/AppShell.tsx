@@ -77,7 +77,7 @@ export function AppShell() {
         {/* Only the scrollable content area shifts right for docked panels —
             TopBar always spans full width above the panel. */}
         <div
-          className="flex-1 overflow-auto transition-[margin] duration-150"
+          className="flex-1 overflow-auto app-scroll transition-[margin] duration-150"
           style={{ marginRight: pushWidth || undefined }}
         >
           <main className="p-3 sm:p-6">
