@@ -27,7 +27,7 @@ export function MarketingPlannerPage() {
     setLoadingLocations(true)
     const sb = supabase as any
     const { data, error } = await sb.schema('core').from('locations')
-      .select('id, name, location_code, region, active, metadata')
+      .select('*')
       .eq('company_id', companyId)
       .order('name')
     if (error) { toast.error('Failed to load shops'); setLoadingLocations(false); return }

@@ -44,25 +44,26 @@ function matchLoc(text: string, locations: MarketingLocation[]): { loc: Marketin
   const byCode = locations.find(l => (l.location_code ?? '').toLowerCase() === tl)
   if (byCode) return { loc: byCode, quality: 'exact' }
 
-  const byName = locations.find(l => l.name.toLowerCase() === tl)
+  const byName = locations.find(l => l.name.toLowerCase() === tl || (l.shop_city ?? '').toLowerCase() === tl)
   if (byName) return { loc: byName, quality: 'exact' }
 
   const tn = norm(t)
   if (tn) {
-    const byNorm = locations.find(l => norm(l.name) === tn)
+    const byNorm = locations.find(l => norm(l.name) === tn || norm(l.shop_city ?? '') === tn)
     if (byNorm) return { loc: byNorm, quality: 'exact' }
   }
 
-  const partial1 = locations.find(l => l.name.toLowerCase().includes(tl))
+  const partial1 = locations.find(l => l.name.toLowerCase().includes(tl) || (l.shop_city ?? '').toLowerCase().includes(tl))
   if (partial1) return { loc: partial1, quality: 'partial' }
 
-  const partial2 = locations.find(l => tl.includes(l.name.toLowerCase()))
+  const partial2 = locations.find(l => tl.includes(l.name.toLowerCase()) || (l.shop_city ? tl.includes(l.shop_city.toLowerCase()) : false))
   if (partial2) return { loc: partial2, quality: 'partial' }
 
   if (tn) {
     const partial3 = locations.find(l => {
       const ln = norm(l.name)
-      return ln && (ln.includes(tn) || tn.includes(ln))
+      const lc = norm(l.shop_city ?? '')
+      return (ln && (ln.includes(tn) || tn.includes(ln))) || (lc && (lc.includes(tn) || tn.includes(lc)))
     })
     if (partial3) return { loc: partial3, quality: 'partial' }
   }
@@ -388,7 +389,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
                   {row.loc ? (
                     <>
                       <span className="text-inky/40 flex-shrink-0">→</span>
-                      <span className="text-navy truncate max-w-[160px]">{row.loc.name}</span>
+                      <span className="text-navy truncate max-w-[160px]">{row.loc.shop_city ?? row.loc.name}</span>
                       <Badge color={row.quality === 'exact' ? 'green' : 'orange'}>
                         {row.quality === 'exact' ? 'Exact' : 'Fuzzy'}
                       </Badge>

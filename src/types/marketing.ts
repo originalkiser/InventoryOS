@@ -79,6 +79,7 @@ export interface MarketingCampaignTask {
 export interface MarketingLocation {
   id: string
   name: string
+  shop_city: string | null
   location_code: string | null
   region: string | null
   active: boolean

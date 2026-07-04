@@ -217,7 +217,7 @@ export function ReportingTab({ locations }: Props) {
                     return (
                       <tr key={s.plan.id} className="border-t border-sky/10">
                         <td className="px-3 py-2.5">
-                          <div className="text-navy font-semibold">{s.loc?.name ?? 'Unknown'}</div>
+                          <div className="text-navy font-semibold">{s.loc?.shop_city ?? s.loc?.name ?? 'Unknown'}</div>
                           {s.loc?.location_code && <div className="text-inky/40">{s.loc.location_code}</div>}
                         </td>
                         <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{s.loc?.region ?? ''}</td>

@@ -164,7 +164,7 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
               return (
                 <label key={loc.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono">
                   <input type="checkbox" checked={selectedLocIds.includes(loc.id)} onChange={() => toggleLoc(loc.id)} />
-                  <span className="text-navy">{loc.name}</span>
+                  <span className="text-navy">{loc.shop_city ?? loc.name}</span>
                   {loc.location_code && <span className="text-inky/50">{loc.location_code}</span>}
                   {alreadyHas && <Badge color="orange">Existing</Badge>}
                 </label>
