@@ -717,7 +717,7 @@ export function IssuesPage() {
   const { setColumnPinning: setPendPin } = pendingTable
   const { setColumnPinning: setResPin } = resolvedTable
   useEffect(() => {
-    const p = { left: ['title', ...builtinPinnedArr, ...pinnedIds], right: [] }
+    const p = { left: ['select', 'title', ...builtinPinnedArr, ...pinnedIds], right: [] }
     setAllPin(p); setPendPin(p); setResPin(p)
   }, [builtinPinnedArr, pinnedIds, setAllPin, setPendPin, setResPin])
 
