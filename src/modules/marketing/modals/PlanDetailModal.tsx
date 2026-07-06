@@ -155,7 +155,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
               {monthLabel}
             </p>
           </div>
-          <button onClick={onClose} className="text-inky/40 hover:text-navy text-xl shrink-0 mt-0.5">✕</button>
+          <button onClick={onClose} className="text-inky/60 hover:text-navy text-xl shrink-0 mt-0.5">✕</button>
         </div>
 
         {/* Overall progress */}
@@ -228,8 +228,8 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                   key={task.id}
                   className={`border rounded-lg p-3 shrink-0 transition-opacity ${
                     isNotDoing
-                      ? 'border-sky/10 dark:border-[#F2F1E6]/5 dark:bg-[#0a2235] opacity-40'
-                      : 'border-sky/20 dark:border-[#F2F1E6]/10 dark:bg-[#0a2235]'
+                      ? 'border-sky/20 dark:border-[#F2F1E6]/5 bg-white/70 dark:bg-[#0a2235] opacity-40'
+                      : 'border-sky/30 dark:border-[#F2F1E6]/10 bg-white/70 dark:bg-[#0a2235]'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -269,7 +269,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                       </div>
                     ) : (
                       <button
-                        className="text-xs font-mono text-inky/40 hover:text-navy disabled:cursor-default"
+                        className="text-xs font-mono text-inky/60 hover:text-navy disabled:cursor-default"
                         disabled={isNotDoing}
                         onClick={() => { if (!isNotDoing) { setNoteEditing(task.id); setNoteValue(task.notes ?? '') } }}
                       >
@@ -279,7 +279,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                   </div>
 
                   {task.status === 'complete' && task.completed_at && (
-                    <p className="text-xs font-mono text-inky/30 mt-1">
+                    <p className="text-xs font-mono text-inky/50 mt-1">
                       Completed {new Date(task.completed_at).toLocaleDateString()}
                     </p>
                   )}

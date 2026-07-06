@@ -127,7 +127,7 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
                   <Badge color={pct === 100 ? 'green' : pct > 0 ? 'orange' : 'inky'}>
                     {pct === 100 ? 'Complete' : pct > 0 ? 'In Progress' : 'Not Started'}
                   </Badge>
-                  <span className="text-inky/30 text-sm">›</span>
+                  <span className="text-inky/50 text-sm">›</span>
                 </div>
               </button>
             )

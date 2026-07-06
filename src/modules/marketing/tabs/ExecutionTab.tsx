@@ -93,7 +93,7 @@ export function ExecutionTab({ locations }: Props) {
           <option value="">All Campaigns</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <span className="text-xs font-mono text-inky/40 ml-auto">{rows.length} rows</span>
+        <span className="text-xs font-mono text-inky/60 ml-auto">{rows.length} rows</span>
       </div>
 
       {loading ? (
@@ -122,12 +122,12 @@ export function ExecutionTab({ locations }: Props) {
                 return (
                   <tr
                     key={`${plan.id}-${assignment.id}`}
-                    className="border-t border-sky/10 hover:bg-sky/5 cursor-pointer"
+                    className="border-t border-sky/20 hover:bg-sky/5 cursor-pointer"
                     onClick={() => setActiveDetail({ plan, assignment })}
                   >
                     <td className="px-3 py-2.5">
                       <div className="text-navy font-semibold">{loc?.shop_city ?? loc?.name ?? 'Unknown'}</div>
-                      {loc && <div className="text-inky/40">{loc.name}</div>}
+                      {loc && <div className="text-inky/60">{loc.name}</div>}
                     </td>
                     <td className="px-3 py-2.5 text-navy">{assignment.campaign_name_snapshot}</td>
                     <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{assignment.campaign_category_snapshot}</td>
@@ -139,7 +139,7 @@ export function ExecutionTab({ locations }: Props) {
                         </div>
                         <span className="text-inky/50 w-8 text-right">{pct}%</span>
                       </div>
-                      <div className="text-inky/40 mt-0.5">{done}/{total} tasks</div>
+                      <div className="text-inky/60 mt-0.5">{done}/{total} tasks</div>
                     </td>
                     <td className="px-3 py-2.5">
                       <Badge color={statusColor}>{statusLabel}</Badge>

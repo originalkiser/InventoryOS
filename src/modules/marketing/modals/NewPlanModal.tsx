@@ -126,7 +126,7 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
       <div className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-2xl mx-4 flex flex-col gap-5 p-6">
         <div className="flex items-center justify-between">
           <h2 className="font-heading font-bold text-navy">New Monthly Plan</h2>
-          <button onClick={onClose} className="text-inky/40 hover:text-navy text-xl">✕</button>
+          <button onClick={onClose} className="text-inky/60 hover:text-navy text-xl">✕</button>
         </div>
 
         {/* Month/year */}

@@ -152,7 +152,7 @@ export function CampaignTemplatesTab() {
               <Badge color="inky">{tpl.category}</Badge>
               <Badge color={tpl.is_active ? 'green' : 'inky'}>{tpl.is_active ? 'Active' : 'Inactive'}</Badge>
             </div>
-            <span className="text-inky/40 text-xs">{tpl.campaign_template_tasks?.length ?? 0} tasks · {expanded === tpl.id ? '▲' : '▼'}</span>
+            <span className="text-inky/60 text-xs">{tpl.campaign_template_tasks?.length ?? 0} tasks · {expanded === tpl.id ? '▲' : '▼'}</span>
           </button>
 
           {expanded === tpl.id && (
@@ -169,13 +169,13 @@ export function CampaignTemplatesTab() {
                 </thead>
                 <tbody>
                   {(tpl.campaign_template_tasks ?? []).map(tk => (
-                    <tr key={tk.id} className="border-b border-sky/10">
+                    <tr key={tk.id} className="border-b border-sky/20">
                       <td className="py-1.5 pr-3 text-navy">{tk.name}</td>
                       <td className="py-1.5 pr-3 text-inky/60">{tk.is_required ? 'Yes' : 'No'}</td>
                       <td className="py-1.5">
                         <div className="flex gap-2">
-                          <button className="text-inky/40 hover:text-navy" onClick={() => setEditingTask({ templateId: tpl.id, task: { ...tk } })}>Edit</button>
-                          <button className="text-inky/40 hover:text-sb-red" onClick={() => deleteTask(tpl.id, tk.id)}>✕</button>
+                          <button className="text-inky/60 hover:text-navy" onClick={() => setEditingTask({ templateId: tpl.id, task: { ...tk } })}>Edit</button>
+                          <button className="text-inky/60 hover:text-sb-red" onClick={() => deleteTask(tpl.id, tk.id)}>✕</button>
                         </div>
                       </td>
                     </tr>

@@ -118,7 +118,7 @@ export function ReportingTab({ locations }: Props) {
               <div key={card.label} className="border border-sky/30 rounded-lg p-4">
                 <p className="text-xs font-mono text-inky/60">{card.label}</p>
                 <p className="text-2xl font-heading font-bold text-navy mt-1">{card.value}</p>
-                <p className="text-xs font-mono text-inky/40 mt-0.5">{card.sub}</p>
+                <p className="text-xs font-mono text-inky/60 mt-0.5">{card.sub}</p>
               </div>
             ))}
           </div>
@@ -138,7 +138,7 @@ export function ReportingTab({ locations }: Props) {
                 </thead>
                 <tbody>
                   {campaignSummaries.map(c => (
-                    <tr key={c.name} className="border-t border-sky/10">
+                    <tr key={c.name} className="border-t border-sky/20">
                       <td className="px-3 py-2.5 text-navy">{c.name}</td>
                       <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{c.category}</td>
                       <td className="px-3 py-2.5 text-inky/60 text-right">{c.shopCount}</td>
@@ -173,7 +173,7 @@ export function ReportingTab({ locations }: Props) {
                   </thead>
                   <tbody>
                     {regionSummaries.map(r => (
-                      <tr key={r.region} className="border-t border-sky/10">
+                      <tr key={r.region} className="border-t border-sky/20">
                         <td className="px-3 py-2.5 text-navy">{r.region}</td>
                         <td className="px-3 py-2.5 text-inky/60 text-right">{r.shopCount}</td>
                         <td className="px-3 py-2.5">
@@ -197,7 +197,7 @@ export function ReportingTab({ locations }: Props) {
           <div>
             <h3 className="font-heading font-bold text-navy text-sm uppercase tracking-wide mb-3">
               Shop Details
-              <span className="text-inky/40 font-normal normal-case ml-2 text-xs">sorted by lowest completion</span>
+              <span className="text-inky/60 font-normal normal-case ml-2 text-xs">sorted by lowest completion</span>
             </h3>
             <div className="border border-sky/20 rounded-lg overflow-hidden">
               <table className="w-full text-xs font-mono border-collapse">
@@ -215,10 +215,10 @@ export function ReportingTab({ locations }: Props) {
                     const color = s.pct === 100 ? 'green' : s.pct > 0 ? 'orange' : 'inky'
                     const label = s.pct === 100 ? 'Complete' : s.pct > 0 ? 'In Progress' : 'Not Started'
                     return (
-                      <tr key={s.plan.id} className="border-t border-sky/10">
+                      <tr key={s.plan.id} className="border-t border-sky/20">
                         <td className="px-3 py-2.5">
                           <div className="text-navy font-semibold">{s.loc?.shop_city ?? s.loc?.name ?? 'Unknown'}</div>
-                          {s.loc?.name && <div className="text-inky/40">{s.loc.name}</div>}
+                          {s.loc?.name && <div className="text-inky/60">{s.loc.name}</div>}
                         </td>
                         <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{s.loc?.region ?? ''}</td>
                         <td className="px-3 py-2.5 text-inky/60 text-right">{s.plan.campaign_assignments?.length ?? 0}</td>

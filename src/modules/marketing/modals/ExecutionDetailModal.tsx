@@ -63,7 +63,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
             <h2 className="font-heading font-bold text-navy">{assignment.campaign_name_snapshot}</h2>
             <p className="text-xs font-mono text-inky/60 mt-0.5">{locationName} · {planMonth}</p>
           </div>
-          <button onClick={onClose} className="text-inky/40 hover:text-navy text-xl shrink-0">✕</button>
+          <button onClick={onClose} className="text-inky/60 hover:text-navy text-xl shrink-0">✕</button>
         </div>
 
         {/* Progress */}
@@ -81,7 +81,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
         {/* Tasks */}
         <div className="flex flex-col gap-2">
           {tasks.map(task => (
-            <div key={task.id} className="border border-sky/20 dark:border-[#F2F1E6]/10 rounded-lg p-3 dark:bg-[#0a2235]">
+            <div key={task.id} className="border border-sky/30 dark:border-[#F2F1E6]/10 rounded-lg p-3 bg-white/70 dark:bg-[#0a2235]">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -120,7 +120,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
                   </div>
                 ) : (
                   <button
-                    className="text-xs font-mono text-inky/40 hover:text-navy"
+                    className="text-xs font-mono text-inky/60 hover:text-navy"
                     onClick={() => { setNoteEditing(task.id); setNoteValue(task.notes ?? '') }}
                   >
                     {task.notes ? `Note: ${task.notes}` : '+ Add note'}
@@ -129,7 +129,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
               </div>
 
               {task.status === 'complete' && task.completed_at && (
-                <p className="text-xs font-mono text-inky/30 mt-1">Completed {new Date(task.completed_at).toLocaleDateString()}</p>
+                <p className="text-xs font-mono text-inky/50 mt-1">Completed {new Date(task.completed_at).toLocaleDateString()}</p>
               )}
             </div>
           ))}
