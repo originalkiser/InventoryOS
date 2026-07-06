@@ -22,7 +22,7 @@ type Block =
 interface ViewConfig { showSearch: boolean; blocks: Block[] }
 
 const SOURCES = [
-  { value: 'locations', label: 'Locations', schema: 'inventory', table: 'locations' },
+  { value: 'locations', label: 'Locations', schema: 'core', table: 'locations' },
   { value: 'monthly_counts', label: 'Monthly Counts', schema: 'inventory', table: 'monthly_counts' },
   { value: 'order_sessions', label: 'Orders', schema: 'inventory', table: 'order_sessions' },
   { value: 'issues', label: 'Issues', schema: 'inventory', table: 'issues' },
@@ -37,12 +37,24 @@ const DEFAULT_VIEW: ViewConfig = {
   showSearch: true,
   blocks: [
     { id: uid(), type: 'pills', title: 'Quick Status', pills: [{ label: 'Inactive', color: 'red', source: 'locations', column: 'active', op: '=', value: 'false' }] },
-    { id: uid(), type: 'table', title: 'Locations', source: 'locations', columns: ['location_code', 'name', 'region'] },
+    { id: uid(), type: 'table', title: 'Locations', source: 'locations', columns: ['name', 'shop_city', 'region'] },
   ],
 }
 
+function migrateView(v: ViewConfig): ViewConfig {
+  // location_code was renamed to name; name was renamed to shop_city
+  return {
+    ...v,
+    blocks: v.blocks.map(b =>
+      b.type === 'table'
+        ? { ...b, columns: b.columns.map(c => c === 'location_code' ? 'name' : c) }
+        : b
+    ),
+  }
+}
+
 function loadView(): ViewConfig {
-  try { const v = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null'); if (v?.blocks) return v } catch { /* ignore */ }
+  try { const v = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null'); if (v?.blocks) return migrateView(v) } catch { /* ignore */ }
   return DEFAULT_VIEW
 }
 
@@ -417,8 +429,8 @@ function cellVal(r: Record<string, any>, c: string): any {
 
 // Map internal column keys to readable header labels
 const COL_LABELS: Record<string, string> = {
-  location_code: 'Code',
-  name: 'Name',
+  name: 'Code',
+  shop_city: 'Name',
   region: 'Region',
   active: 'Active',
   updated_at: 'Updated',
@@ -568,7 +580,7 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
   const saved = loadState()
 
   const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(
-    saved.sort ?? (isLocations ? { col: 'location_code', dir: 'asc' } : null)
+    (() => { const s = saved.sort ?? (isLocations ? { col: 'name', dir: 'asc' } : null); return s?.col === 'location_code' ? { ...s, col: 'name' } : s })()
   )
   const [dropFilters, setDropFilters] = useState<Record<string, string>>(saved.dropFilters ?? {})
   const [pageSize, setPageSize] = useState<number | 'all'>(saved.pageSize ?? 50)
@@ -665,8 +677,8 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
     return [...filtered].sort((a, b) => {
       const av = valueOf(a, sort.col)
       const bv = valueOf(b, sort.col)
-      // Numeric sort for location_code
-      if (sort.col === 'location_code') {
+      // Numeric sort for location code (name column)
+      if (sort.col === 'name') {
         const an = parseInt(String(av ?? ''), 10)
         const bn = parseInt(String(bv ?? ''), 10)
         if (!isNaN(an) && !isNaN(bn)) return sort.dir === 'asc' ? an - bn : bn - an
