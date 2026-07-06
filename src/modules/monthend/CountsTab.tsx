@@ -38,7 +38,7 @@ export function CountsTab() {
     const lowerBound = format(subMonths(new Date(countMonth), lookbackN + 1), 'yyyy-MM-dd')
 
     const [locRes, cfgRes, countRes, aggProdRes, batchRes, balRes, profRes] = await Promise.all([
-      sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code'),
+      sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
       sb.schema('inventory').from('recount_config').select('*').eq('company_id', companyId).maybeSingle(),
       sb.schema('inventory').from('counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
       // RPC does GROUP BY on the server — avoids shipping 256k+ raw rows to the client

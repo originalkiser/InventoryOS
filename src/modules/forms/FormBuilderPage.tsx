@@ -211,12 +211,12 @@ function LocationSeeder({ companyId, onSeed, onUndoSeed }: {
     if (locs.length > 0) return
     setLoadingLocs(true)
     const { data } = await (sb as any).schema('core').from('locations')
-      .select('location_code, region, metadata')
+      .select('name, region, metadata')
       .eq('company_id', companyId)
       .eq('active', true)
     const raw = (data ?? []) as any[]
     const mapped: LocData[] = raw.map((r) => ({
-      location_code: r.location_code,
+      location_code: r.name,
       region: r.region ?? null,
       owner: r.metadata?.owner ?? null,
       market: r.metadata?.market ?? null,

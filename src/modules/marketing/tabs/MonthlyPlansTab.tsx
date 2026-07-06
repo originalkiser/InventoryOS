@@ -62,7 +62,7 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
         const loc = locMap.get(p.location_id)
         if (!loc) return false
         const term = filterLocation.toLowerCase()
-        return loc.name.toLowerCase().includes(term) || (loc.shop_city ?? '').toLowerCase().includes(term) || (loc.location_code ?? '').toLowerCase().includes(term)
+        return loc.name.toLowerCase().includes(term) || (loc.shop_city ?? '').toLowerCase().includes(term)
       })
     : plans
 
@@ -104,7 +104,7 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
                 <div className="flex flex-col gap-1 min-w-0">
                   <span className="font-heading font-bold text-navy text-sm">{loc?.shop_city ?? loc?.name ?? 'Unknown Shop'}</span>
                   <div className="flex items-center gap-2 text-xs font-mono text-inky/60">
-                    <span>{loc?.location_code ?? ''}</span>
+                    <span>{loc?.name ?? ''}</span>
                     {loc && <span>{loc.region ?? locMeta(loc, 'market')}</span>}
                   </div>
                   <div className="flex items-center gap-2 text-xs font-mono text-inky/60">

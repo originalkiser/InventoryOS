@@ -54,7 +54,7 @@ export function ExecutionTab({ locations }: Props) {
     for (const assignment of plan.campaign_assignments ?? []) {
       if (filterLocation) {
         const term = filterLocation.toLowerCase()
-        const matches = loc?.name.toLowerCase().includes(term) || (loc?.shop_city ?? '').toLowerCase().includes(term) || (loc?.location_code ?? '').toLowerCase().includes(term)
+        const matches = loc?.name.toLowerCase().includes(term) || (loc?.shop_city ?? '').toLowerCase().includes(term)
         if (!matches) continue
       }
       if (filterCategory && assignment.campaign_category_snapshot !== filterCategory) continue
@@ -127,7 +127,7 @@ export function ExecutionTab({ locations }: Props) {
                   >
                     <td className="px-3 py-2.5">
                       <div className="text-navy font-semibold">{loc?.shop_city ?? loc?.name ?? 'Unknown'}</div>
-                      {loc && <div className="text-inky/40">{loc.location_code ?? locMeta(loc, 'market')}</div>}
+                      {loc && <div className="text-inky/40">{loc.name}</div>}
                     </td>
                     <td className="px-3 py-2.5 text-navy">{assignment.campaign_name_snapshot}</td>
                     <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{assignment.campaign_category_snapshot}</td>

@@ -205,7 +205,7 @@ export default function ReportViewPage() {
     if (!entriesToEnrich?.length) return
 
     const { data: locations } = await sb.schema('core').from('locations')
-      .select('id, location_code, name, metadata')
+      .select('id, name, shop_city, metadata')
       .eq('company_id', profile?.company_id)
       .or('active.eq.true,active.is.null')
 
@@ -214,7 +214,8 @@ export default function ReportViewPage() {
     for (const entry of entriesToEnrich) {
       const codeDigits = String(entry.row_key ?? '').replace(/\D/g, '')
       const location = locations.find((loc: any) => {
-        const locDigits = String(loc.location_code ?? '').replace(/\D/g, '')
+        // name IS the location code (e.g. "001")
+        const locDigits = String(loc.name ?? '').replace(/\D/g, '')
         return locDigits && locDigits === codeDigits
       }) ?? locations.find((loc: any) => {
         const name = String(loc.name ?? '').toLowerCase()

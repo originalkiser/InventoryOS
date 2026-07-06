@@ -62,7 +62,7 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
   const available = locations.filter(l => {
     if (locSearch) {
       const t = locSearch.toLowerCase()
-      return l.name.toLowerCase().includes(t) || (l.location_code ?? '').toLowerCase().includes(t)
+      return l.name.toLowerCase().includes(t) || (l.shop_city ?? '').toLowerCase().includes(t)
     }
     return true
   })
@@ -165,7 +165,7 @@ export function NewPlanModal({ locations, filterMonth, filterYear, existingPlanL
                 <label key={loc.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono">
                   <input type="checkbox" checked={selectedLocIds.includes(loc.id)} onChange={() => toggleLoc(loc.id)} />
                   <span className="text-navy">{loc.shop_city ?? loc.name}</span>
-                  {loc.location_code && <span className="text-inky/50">{loc.location_code}</span>}
+                  {loc.name && <span className="text-inky/50">{loc.name}</span>}
                   {alreadyHas && <Badge color="orange">Existing</Badge>}
                 </label>
               )

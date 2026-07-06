@@ -41,7 +41,7 @@ function matchLoc(text: string, locations: MarketingLocation[]): { loc: Marketin
   if (!t) return { loc: null, quality: 'none' }
   const tl = t.toLowerCase()
 
-  const byCode = locations.find(l => (l.location_code ?? '').toLowerCase() === tl)
+  const byCode = locations.find(l => l.name.toLowerCase() === tl)
   if (byCode) return { loc: byCode, quality: 'exact' }
 
   const byName = locations.find(l => l.name.toLowerCase() === tl || (l.shop_city ?? '').toLowerCase() === tl)

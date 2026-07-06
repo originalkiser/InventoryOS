@@ -72,7 +72,7 @@ export function RecountsTab() {
   useEffect(() => {
     if (!companyId) return
     ;(async () => {
-      const { data } = await (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('location_code')
+      const { data } = await (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('name')
       setLocations((data ?? []) as Location[])
     })()
   }, [companyId])

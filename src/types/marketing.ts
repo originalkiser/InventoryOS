@@ -78,9 +78,10 @@ export interface MarketingCampaignTask {
 /** Lightweight location shape used across marketing module */
 export interface MarketingLocation {
   id: string
+  /** Location code identifier, e.g. "001" — DB column is `name` */
   name: string
+  /** Human-readable city/label — DB column is `shop_city` */
   shop_city: string | null
-  location_code: string | null
   region: string | null
   active: boolean
   metadata: Record<string, string | null> | null

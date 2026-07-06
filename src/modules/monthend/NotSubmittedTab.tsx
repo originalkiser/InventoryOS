@@ -23,7 +23,7 @@ export function NotSubmittedTab() {
     setLoading(true)
     const sb = supabase as any
     const [locRes, countRes, priorRes] = await Promise.all([
-      sb.schema('core').from('locations').select('*').eq('company_id', companyId).eq('active', true).order('location_code'),
+      sb.schema('core').from('locations').select('*').eq('company_id', companyId).eq('active', true).order('name'),
       sb.schema('inventory').from('counts').select('location_id').eq('company_id', companyId).eq('count_month', countMonth),
       sb.schema('inventory').from('counts').select('location_id, count_month').eq('company_id', companyId)
         .lt('count_month', countMonth).order('count_month', { ascending: false }),

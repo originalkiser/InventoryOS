@@ -171,7 +171,7 @@ export function WeeklyPage() {
     if (!companyId) return
     const sb = supabase as any
     sb.schema('core').from('locations')
-      .select('*').eq('company_id', companyId).eq('active', true).order('location_code')
+      .select('*').eq('company_id', companyId).eq('active', true).order('name')
       .then(({ data }: any) => setLocations((data ?? []) as Location[]))
   }, [companyId])
 
