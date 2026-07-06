@@ -385,6 +385,13 @@ export function IssuesPage() {
   // Built-in column ordering and pinning (separate from custom column pinning)
   const [builtinOrder, setBuiltinOrder] = useState<string[]>(BUILT_IN_COL_DEFS.map(c => c.id))
   const [builtinPinnedArr, setBuiltinPinnedArr] = useState<string[]>([])
+  const [resolvePrompt, setResolvePrompt] = useState<{
+    issueId: string
+    statusId: string
+    statusName: string
+    resolvedDate: string | null
+  } | null>(null)
+  const [resolveNotes, setResolveNotes] = useState('')
 
   // Options for location/category inline comboboxes — stored in refs so updates
   // don't trigger useMemo re-runs and close open dropdowns.
@@ -493,6 +500,18 @@ export function IssuesPage() {
     if (error) { toast.error(error.message); loadIssues() }
   }, [loadIssues])
 
+  function confirmResolve(saveNotes: boolean) {
+    if (!resolvePrompt) return
+    const today = new Date().toISOString().split('T')[0]
+    const patch: Record<string, unknown> = { status_id: resolvePrompt.statusId }
+    const local: Partial<IssueRow> = { status_name: resolvePrompt.statusName }
+    if (!resolvePrompt.resolvedDate) { patch.resolved_date = today; local.resolved_date = today }
+    if (saveNotes && resolveNotes.trim()) { patch.resolution_notes = resolveNotes.trim(); local.resolution_notes = resolveNotes.trim() }
+    updateIssue(resolvePrompt.issueId, patch, local)
+    setResolvePrompt(null)
+    setResolveNotes('')
+  }
+
   useEffect(() => {
     if (!profile?.company_id) return
     ;(supabase as any).schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id)
@@ -588,14 +607,12 @@ export function IssuesPage() {
           <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onAdd={addStatus}
             onChange={sid => {
               const statusName = statuses.find(s => s.id === sid)?.name ?? ''
-              const patch: Record<string, unknown> = { status_id: sid }
-              const local: Partial<IssueRow> = { status_name: statusName }
-              if (statusName.toLowerCase().includes('resolved') && !i.row.original.resolved_date) {
-                const today = new Date().toISOString().split('T')[0]
-                patch.resolved_date = today
-                local.resolved_date = today
+              if (statusName.toLowerCase().includes('resolved')) {
+                setResolvePrompt({ issueId: i.row.original.id, statusId: sid, statusName, resolvedDate: i.row.original.resolved_date ?? null })
+                setResolveNotes(i.row.original.resolution_notes ?? '')
+                return
               }
-              updateIssue(i.row.original.id, patch, local)
+              updateIssue(i.row.original.id, { status_id: sid }, { status_name: statusName })
             }} />
         ),
       },
@@ -913,6 +930,27 @@ export function IssuesPage() {
       />
       <AddIssueColumnModal open={addColOpen} onClose={() => setAddColOpen(false)} existingColumns={customColumns} onAdd={issueCols.addColumn} />
       <IssueImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={loadIssues} departments={departments} defaultDepartmentId={selectedDeptId === PERSONAL_DEPT_ID ? '' : selectedDeptId} />
+
+      <Modal open={!!resolvePrompt} onClose={() => setResolvePrompt(null)} title="Mark as Resolved">
+        <div className="flex flex-col gap-4">
+          <p className="text-sm font-body text-navy">Add resolution notes before closing this issue.</p>
+          <textarea
+            autoFocus
+            value={resolveNotes}
+            onChange={e => setResolveNotes(e.target.value)}
+            placeholder="Describe how this issue was resolved…"
+            rows={4}
+            className="w-full rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-3 py-2 text-sm font-body text-navy dark:text-[#F2F1E6] placeholder-inky/40 focus:border-sky focus:outline-none resize-y"
+          />
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <Button variant="secondary" size="sm" onClick={() => setResolvePrompt(null)}>Cancel</Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => confirmResolve(false)}>Skip</Button>
+              <Button size="sm" onClick={() => confirmResolve(true)}>Save &amp; Resolve</Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {bulkDeleteConfirm && (
         <Modal open onClose={() => setBulkDeleteConfirm(false)} title="Delete Issues?">
