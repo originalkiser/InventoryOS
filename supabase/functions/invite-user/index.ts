@@ -70,13 +70,13 @@ Deno.serve(async (req) => {
     })
     if (createErr || !created.user) return json({ error: createErr?.message ?? 'Could not create the user' })
 
-    const { error: profErr } = await (admin as any).schema('platform').from('user_profiles').insert({
+    const { error: profErr } = await (admin as any).schema('platform').from('user_profiles').upsert({
       id: created.user.id,
       company_id: me.company_id,
       full_name: fullName,
       email,
       role,
-    })
+    }, { onConflict: 'id' })
     if (profErr) {
       // Roll back the auth user so a retry isn't blocked by a duplicate email.
       await admin.auth.admin.deleteUser(created.user.id)
