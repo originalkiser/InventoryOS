@@ -1,4 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
+import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
 import { LocationDataSourceConfig } from '@/modules/locations/LocationDataSourceConfig'
 import { createColumnHelper, type SortingFn, type VisibilityState } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
@@ -430,8 +431,15 @@ export function LocationsTab() {
   const [formTab, setFormTab] = useState<FormTab>('Identity')
 
   // Contextual dropdown filter state
-  const [dropFilters, setDropFilters] = useState<Record<string, string>>(() => {
-    try { return JSON.parse(localStorage.getItem(LS_DROP_FILTERS) ?? '{}') } catch { return {} }
+  const [dropFilters, setDropFilters] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LS_DROP_FILTERS) ?? '{}')
+      const result: Record<string, string[]> = {}
+      for (const [k, v] of Object.entries(raw)) {
+        result[k] = Array.isArray(v) ? (v as string[]) : (v ? [v as string] : [])
+      }
+      return result
+    } catch { return {} }
   })
   const [hiddenDropdowns, setHiddenDropdowns] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem(LS_HIDDEN_DROPS) ?? '[]')) } catch { return new Set() }
@@ -639,8 +647,8 @@ export function LocationsTab() {
   function rowsAbove(fi: number): Location[] {
     let r = data
     for (let i = 0; i < fi; i++) {
-      const val = dropFilters[LOC_FILTER_HIERARCHY[i].field]
-      if (val) r = r.filter(loc => locFieldValue(loc, LOC_FILTER_HIERARCHY[i].field) === val)
+      const vals = dropFilters[LOC_FILTER_HIERARCHY[i].field] ?? []
+      if (vals.length) r = r.filter(loc => vals.includes(locFieldValue(loc, LOC_FILTER_HIERARCHY[i].field)))
     }
     return r
   }
@@ -648,22 +656,22 @@ export function LocationsTab() {
   const filteredData = useMemo(() => {
     let r = data
     for (const { field } of LOC_FILTER_HIERARCHY) {
-      const val = dropFilters[field]
-      if (val) r = r.filter(loc => locFieldValue(loc, field) === val)
+      const vals = dropFilters[field] ?? []
+      if (vals.length) r = r.filter(loc => vals.includes(locFieldValue(loc, field)))
     }
     return r
   }, [data, dropFilters])
 
-  function setDropFilter(field: string, val: string, fi: number) {
+  function setDropFilter(field: string, vals: string[], fi: number) {
     setDropFilters(prev => {
-      const next: Record<string, string> = {}
-      for (let i = 0; i < fi; i++) next[LOC_FILTER_HIERARCHY[i].field] = prev[LOC_FILTER_HIERARCHY[i].field] ?? ''
-      next[field] = val
+      const next: Record<string, string[]> = {}
+      for (let i = 0; i < fi; i++) next[LOC_FILTER_HIERARCHY[i].field] = prev[LOC_FILTER_HIERARCHY[i].field] ?? []
+      next[field] = vals
       return next
     })
   }
 
-  const hasActiveFilters = LOC_FILTER_HIERARCHY.some(({ field }) => dropFilters[field])
+  const hasActiveFilters = LOC_FILTER_HIERARCHY.some(({ field }) => (dropFilters[field] ?? []).length > 0)
 
   const visibleHierarchy = LOC_FILTER_HIERARCHY.filter(({ field }) => {
     if (hiddenDropdowns.has(field)) return false
@@ -793,18 +801,14 @@ export function LocationsTab() {
               const hierarchyIdx = LOC_FILTER_HIERARCHY.findIndex(h => h.field === field)
               const above = rowsAbove(hierarchyIdx)
               const opts = Array.from(new Set(above.map(loc => locFieldValue(loc, field)).filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-              const countFor = (val: string) => above.filter(loc => locFieldValue(loc, field) === val).length
               return (
-                <div key={field} className="flex flex-col gap-0.5 min-w-[120px]">
+                <div key={field} className="flex flex-col gap-0.5">
                   <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">{label}</span>
-                  <select
-                    value={dropFilters[field] ?? ''}
-                    onChange={e => setDropFilter(field, e.target.value, hierarchyIdx)}
-                    className="rounded border border-navy/30 bg-cream dark:bg-[#122b40] px-2 py-1 text-xs font-body text-navy focus:border-sky focus:outline-none max-w-[160px]"
-                  >
-                    <option value="">All</option>
-                    {opts.map(val => <option key={val} value={val}>{val} ({countFor(val)})</option>)}
-                  </select>
+                  <MultiSelectDropdown
+                    options={opts.map(v => ({ value: v, count: above.filter(loc => locFieldValue(loc, field) === v).length }))}
+                    selected={dropFilters[field] ?? []}
+                    onChange={vals => setDropFilter(field, vals, hierarchyIdx)}
+                  />
                 </div>
               )
             })}

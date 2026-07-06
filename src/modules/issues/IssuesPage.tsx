@@ -91,7 +91,7 @@ function InlineDate({ value, onSave }: { value: string | null; onSave: (v: strin
   }
   return (
     <button onClick={() => setEditing(true)} className="text-xs font-mono text-left px-1 hover:text-navy w-full">
-      {value ? format(new Date(value), 'MMM d, yyyy') : <span className="text-inky/30">—</span>}
+      {value ? format(new Date(value + 'T00:00:00'), 'MMM d, yyyy') : <span className="text-inky/30">—</span>}
     </button>
   )
 }
