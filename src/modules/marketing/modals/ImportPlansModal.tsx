@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { Button, Badge } from '@/components/ui'
 import toast from 'react-hot-toast'
-import type { MarketingLocation, MarketingCampaignTemplate } from '@/types/marketing'
+import type { MarketingLocation } from '@/types/marketing'
 import { MONTHS } from '@/types/marketing'
 
 type MatchQuality = 'exact' | 'partial' | 'none'
@@ -14,6 +14,28 @@ interface ParsedRow {
   loc: MarketingLocation | null
   quality: MatchQuality
   include: boolean
+}
+
+interface DetectedTask {
+  name: string
+  colIdx: number
+  include: boolean
+}
+
+interface DetectedCampaign {
+  name: string
+  colStart: number
+  colEnd: number
+  tasks: DetectedTask[]
+  include: boolean
+  existingTemplateId: string | null
+}
+
+interface ExistingTemplate {
+  id: string
+  name: string
+  category: string
+  campaign_template_tasks?: { id: string; name: string; description: string | null; is_required: boolean; sort_order: number }[]
 }
 
 interface Props {
@@ -86,15 +108,6 @@ function toRows(values: string[], locations: MarketingLocation[]): ParsedRow[] {
     })
 }
 
-function parseWorkbook(wb: XLSX.WorkBook, sheetName: string, colIdx: number): string[] {
-  const sheet = wb.Sheets[sheetName]
-  if (!sheet) return []
-  const data = XLSX.utils.sheet_to_json<(string | number | undefined)[]>(sheet, { header: 1, defval: '' })
-  return data
-    .map(row => String(row[colIdx] ?? '').trim())
-    .filter(Boolean)
-}
-
 function parsePaste(raw: string): string[] {
   return raw
     .split('\n')
@@ -102,12 +115,81 @@ function parsePaste(raw: string): string[] {
     .filter(Boolean)
 }
 
-// Column index → Excel-style letter (0=A, 1=B, …)
 function colLabel(i: number): string {
   let s = ''
   let n = i
   do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1 } while (n >= 0)
   return s
+}
+
+function detectCampaigns(
+  sheet: XLSX.WorkSheet,
+  locColIdx: number,
+  existingTemplates: ExistingTemplate[],
+): { campaigns: DetectedCampaign[]; locRows: string[] } {
+  const merges: XLSX.Range[] = (sheet['!merges'] as XLSX.Range[] | undefined) ?? []
+  const data = XLSX.utils.sheet_to_json<(string | number | undefined)[]>(sheet, { header: 1, defval: '' })
+
+  // Find the row with the most merged cells among the first 4 rows — that's the campaign header row
+  const mergesPerRow: Record<number, number> = {}
+  for (const m of merges) mergesPerRow[m.s.r] = (mergesPerRow[m.s.r] ?? 0) + 1
+
+  let headerRowIdx = 0
+  let maxMerges = 0
+  for (const [rowStr, count] of Object.entries(mergesPerRow)) {
+    const r = Number(rowStr)
+    if (r <= 3 && count > maxMerges) { maxMerges = count; headerRowIdx = r }
+  }
+  const taskRowIdx = headerRowIdx + 1
+
+  const headerRow = (data[headerRowIdx] ?? []) as (string | number | undefined)[]
+  const taskRow = (data[taskRowIdx] ?? []) as (string | number | undefined)[]
+
+  const processedCols = new Set<number>()
+  const campaigns: DetectedCampaign[] = []
+
+  function resolveTemplate(name: string) {
+    return existingTemplates.find(t => t.name.toLowerCase() === name.toLowerCase()) ?? null
+  }
+
+  // Merged cells in the header row → campaigns spanning multiple task columns
+  for (const merge of merges.filter(m => m.s.r === headerRowIdx)) {
+    const name = String(headerRow[merge.s.c] ?? '').trim()
+    if (!name) continue
+
+    const tasks: DetectedTask[] = []
+    for (let c = merge.s.c; c <= merge.e.c; c++) {
+      processedCols.add(c)
+      if (c === locColIdx) continue
+      const taskName = String(taskRow[c] ?? '').trim()
+      if (taskName) tasks.push({ name: taskName, colIdx: c, include: true })
+    }
+
+    if (tasks.length > 0) {
+      const tpl = resolveTemplate(name)
+      campaigns.push({ name, colStart: merge.s.c, colEnd: merge.e.c, tasks, include: true, existingTemplateId: tpl?.id ?? null })
+    }
+  }
+
+  // Non-merged header cells → single-task campaigns
+  for (let c = 0; c < headerRow.length; c++) {
+    if (processedCols.has(c) || c === locColIdx) continue
+    const name = String(headerRow[c] ?? '').trim()
+    if (!name) continue
+    const taskName = String(taskRow[c] ?? '').trim()
+    if (taskName) {
+      processedCols.add(c)
+      const tpl = resolveTemplate(name)
+      campaigns.push({ name, colStart: c, colEnd: c, tasks: [{ name: taskName, colIdx: c, include: true }], include: true, existingTemplateId: tpl?.id ?? null })
+    }
+  }
+
+  const locRows = (data as (string | number | undefined)[][])
+    .slice(taskRowIdx + 1)
+    .map(row => String(row[locColIdx] ?? '').trim())
+    .filter(Boolean)
+
+  return { campaigns, locRows }
 }
 
 export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, onImported }: Props) {
@@ -128,26 +210,40 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
   const [previewHeaders, setPreviewHeaders] = useState<string[]>([])
 
   const [rows, setRows] = useState<ParsedRow[]>([])
-  const [templates, setTemplates] = useState<MarketingCampaignTemplate[]>([])
-  const [loadingTemplates, setLoadingTemplates] = useState(true)
-  const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([])
+  const [detectedCampaigns, setDetectedCampaigns] = useState<DetectedCampaign[]>([])
+  const [existingTemplates, setExistingTemplates] = useState<ExistingTemplate[]>([])
   const [month, setMonth] = useState(filterMonth)
   const [year, setYear] = useState(filterYear)
   const [importing, setImporting] = useState(false)
 
-  useEffect(() => { loadTemplates() }, []) // eslint-disable-line
+  // For paste mode: keep template picker
+  const [pasteTemplateIds, setPasteTemplateIds] = useState<string[]>([])
 
-  async function loadTemplates() {
-    setLoadingTemplates(true)
-    const { data } = await sb.schema('marketing').from('campaign_templates')
-      .select('*, campaign_template_tasks(*)')
+  useEffect(() => {
+    sb.schema('marketing').from('campaign_templates')
+      .select('id, name, category, campaign_template_tasks(id, name, description, is_required, sort_order)')
       .eq('company_id', companyId)
       .eq('is_active', true)
       .order('sort_order')
-    const tpls = data ?? []
-    setTemplates(tpls)
-    if (tpls.length) setSelectedTemplateIds(tpls.map((t: MarketingCampaignTemplate) => t.id))
-    setLoadingTemplates(false)
+      .then(({ data }: { data: ExistingTemplate[] | null }) => {
+        const tpls = data ?? []
+        setExistingTemplates(tpls)
+        if (tpls.length) setPasteTemplateIds(tpls.map(t => t.id))
+      })
+  }, []) // eslint-disable-line
+
+  function applySheet(wb: XLSX.WorkBook, sheetName: string, colIdx: number, tpls: ExistingTemplate[]) {
+    const sheet = wb.Sheets[sheetName]
+    if (!sheet) { setRows([]); setDetectedCampaigns([]); return }
+    const data = XLSX.utils.sheet_to_json<(string | number | undefined)[]>(sheet, { header: 1, defval: '' })
+    const maxCols = Math.max(...data.slice(0, 5).map(r => r.length), 1)
+    setColCount(maxCols)
+    const headerRow = data[0] ?? []
+    setPreviewHeaders(Array.from({ length: maxCols }, (_, i) => String(headerRow[i] ?? '').trim()))
+
+    const { campaigns, locRows } = detectCampaigns(sheet, colIdx, tpls)
+    setDetectedCampaigns(campaigns)
+    setRows(toRows(locRows, locations))
   }
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -161,41 +257,22 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
       setWorkbook(wb)
       const names = wb.SheetNames
       setSheetNames(names)
-      // Default to "2026" sheet if present, else first sheet
       const defaultSheet = names.find(n => n === '2026') ?? names[0] ?? ''
       setSelectedSheet(defaultSheet)
-      applySheet(wb, defaultSheet, 0)
+      applySheet(wb, defaultSheet, 0, existingTemplates)
     }
     reader.readAsArrayBuffer(file)
-  }
-
-  function applySheet(wb: XLSX.WorkBook, sheetName: string, colIdx: number) {
-    const sheet = wb.Sheets[sheetName]
-    if (!sheet) { setRows([]); return }
-    const data = XLSX.utils.sheet_to_json<(string | number | undefined)[]>(sheet, { header: 1, defval: '' })
-    // Determine column count from first few rows
-    const maxCols = Math.max(...data.slice(0, 5).map(r => r.length), 1)
-    setColCount(maxCols)
-    // Preview headers: first non-empty value in each column from first row
-    const headerRow = data[0] ?? []
-    setPreviewHeaders(Array.from({ length: maxCols }, (_, i) => String(headerRow[i] ?? '').trim()))
-
-    const values = data
-      .slice(1) // skip header row
-      .map(row => String(row[colIdx] ?? '').trim())
-      .filter(Boolean)
-    setRows(toRows(values, locations))
   }
 
   function onSheetChange(name: string) {
     setSelectedSheet(name)
     setSelectedCol(0)
-    if (workbook) applySheet(workbook, name, 0)
+    if (workbook) applySheet(workbook, name, 0, existingTemplates)
   }
 
   function onColChange(idx: number) {
     setSelectedCol(idx)
-    if (workbook && selectedSheet) applySheet(workbook, selectedSheet, idx)
+    if (workbook && selectedSheet) applySheet(workbook, selectedSheet, idx, existingTemplates)
   }
 
   function handlePasteChange(text: string) {
@@ -207,19 +284,68 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
     setRows(rs => rs.map((r, i) => i === idx ? { ...r, include: !r.include } : r))
   }
 
-  function toggleTemplate(id: string) {
-    setSelectedTemplateIds(ids => ids.includes(id) ? ids.filter(i => i !== id) : [...ids, id])
+  function toggleCampaign(idx: number) {
+    setDetectedCampaigns(cs => cs.map((c, i) => i === idx ? { ...c, include: !c.include } : c))
+  }
+
+  function toggleTask(campaignIdx: number, taskIdx: number) {
+    setDetectedCampaigns(cs => cs.map((c, ci) =>
+      ci !== campaignIdx ? c : { ...c, tasks: c.tasks.map((t, ti) => ti === taskIdx ? { ...t, include: !t.include } : t) }
+    ))
   }
 
   const includedRows = rows.filter(r => r.include && r.loc)
+  const includedCampaigns = inputMode === 'file'
+    ? detectedCampaigns.filter(c => c.include)
+    : existingTemplates.filter(t => pasteTemplateIds.includes(t.id))
   const unmatchedCount = rows.filter(r => !r.loc).length
 
   async function runImport() {
     if (includedRows.length === 0) { toast.error('No matched shops to import'); return }
-    if (selectedTemplateIds.length === 0) { toast.error('Select at least one campaign'); return }
+    if (includedCampaigns.length === 0) { toast.error('No campaigns selected'); return }
     setImporting(true)
 
-    const chosenTemplates = templates.filter(t => selectedTemplateIds.includes(t.id))
+    // Build a template ID map: for file mode, upsert new templates as needed
+    const campaignTemplateIds: string[] = []
+
+    if (inputMode === 'file') {
+      for (const campaign of includedCampaigns as DetectedCampaign[]) {
+        if (campaign.existingTemplateId) {
+          campaignTemplateIds.push(campaign.existingTemplateId)
+          continue
+        }
+
+        // Create new template
+        const { data: tpl, error: tplErr } = await sb.schema('marketing').from('campaign_templates')
+          .insert({ company_id: companyId, name: campaign.name, category: 'General', is_active: true, sort_order: 0, created_by: userId })
+          .select('id')
+          .single()
+        if (tplErr || !tpl) { toast.error(`Failed to create template: ${campaign.name}`); continue }
+
+        // Create template tasks
+        const taskPayloads = campaign.tasks
+          .filter(t => t.include)
+          .map((t, j) => ({ campaign_template_id: tpl.id, name: t.name, description: null, is_required: false, default_status: 'not_started', is_active: true, sort_order: j, created_by: userId }))
+        if (taskPayloads.length) await sb.schema('marketing').from('campaign_template_tasks').insert(taskPayloads)
+
+        // Reload this template so we have task IDs for assignment inserts
+        const { data: fullTpl } = await sb.schema('marketing').from('campaign_templates')
+          .select('id, name, category, campaign_template_tasks(id, name, description, is_required, sort_order)')
+          .eq('id', tpl.id)
+          .single()
+        if (fullTpl) setExistingTemplates(prev => [...prev, fullTpl])
+        campaignTemplateIds.push(tpl.id)
+      }
+    } else {
+      campaignTemplateIds.push(...pasteTemplateIds)
+    }
+
+    // Reload templates to get full task details for new ones
+    const { data: freshTpls } = await sb.schema('marketing').from('campaign_templates')
+      .select('id, name, category, campaign_template_tasks(id, name, description, is_required, sort_order)')
+      .in('id', campaignTemplateIds)
+    const tplMap = new Map<string, ExistingTemplate>((freshTpls ?? []).map((t: ExistingTemplate) => [t.id, t]))
+
     let successCount = 0
     let skipCount = 0
 
@@ -240,12 +366,14 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
         .eq('monthly_plan_id', plan.id)
       const existingTplIds = new Set((existing ?? []).map((a: { campaign_template_id: string }) => a.campaign_template_id))
 
-      for (let si = 0; si < chosenTemplates.length; si++) {
-        const tpl = chosenTemplates[si]
-        if (existingTplIds.has(tpl.id)) continue
+      for (let si = 0; si < campaignTemplateIds.length; si++) {
+        const tplId = campaignTemplateIds[si]
+        if (existingTplIds.has(tplId)) continue
+        const tpl = tplMap.get(tplId)
+        if (!tpl) continue
 
         const { data: assignment, error: aErr } = await sb.schema('marketing').from('campaign_assignments')
-          .insert({ monthly_plan_id: plan.id, campaign_template_id: tpl.id, campaign_name_snapshot: tpl.name, campaign_category_snapshot: tpl.category, sort_order: si, created_by: userId })
+          .insert({ monthly_plan_id: plan.id, campaign_template_id: tplId, campaign_name_snapshot: tpl.name, campaign_category_snapshot: tpl.category, sort_order: si, created_by: userId })
           .select('id')
           .single()
         if (aErr || !assignment) continue
@@ -272,6 +400,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
   }
 
   const hasRows = rows.length > 0
+  const hasCampaigns = inputMode === 'file' ? detectedCampaigns.length > 0 : true
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-start justify-center z-50 overflow-y-auto py-8">
@@ -306,13 +435,12 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
               ) : (
                 <>
                   <p className="text-xs font-mono text-navy font-bold mb-1">Click to choose file</p>
-                  <p className="text-[11px] font-mono text-inky/50">Supports .xlsx, .xls, .csv, .tsv</p>
+                  <p className="text-[11px] font-mono text-inky/50">Supports .xlsx, .xls — campaigns detected from merged header rows</p>
                 </>
               )}
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" className="hidden" onChange={handleFile} />
             </div>
 
-            {/* Sheet + column pickers */}
             {workbook && (
               <div className="flex gap-3 flex-wrap">
                 {sheetNames.length > 1 && (
@@ -364,12 +492,83 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
           </div>
         )}
 
-        {/* Match preview */}
+        {/* Detected campaigns (file mode) */}
+        {inputMode === 'file' && hasCampaigns && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-mono text-inky/60">
+                Detected campaigns ({detectedCampaigns.filter(c => c.include).length} of {detectedCampaigns.length} selected)
+              </label>
+              <div className="flex gap-3 text-xs font-mono text-inky/50">
+                <button onClick={() => setDetectedCampaigns(cs => cs.map(c => ({ ...c, include: true })))} className="hover:text-navy">All</button>
+                <button onClick={() => setDetectedCampaigns(cs => cs.map(c => ({ ...c, include: false })))} className="hover:text-navy">None</button>
+              </div>
+            </div>
+            {detectedCampaigns.length === 0 ? (
+              <p className="text-xs font-mono text-inky/50 py-2">No campaigns detected. Try selecting a different sheet or column.</p>
+            ) : (
+              <div className="border border-sky/20 rounded max-h-52 overflow-y-auto bg-white dark:bg-[#122b40]">
+                {detectedCampaigns.map((campaign, ci) => (
+                  <div key={ci} className="border-b border-sky/10 last:border-0">
+                    <label className="flex items-center gap-2 px-3 py-2 hover:bg-sky/10 cursor-pointer text-xs font-mono">
+                      <input type="checkbox" checked={campaign.include} onChange={() => toggleCampaign(ci)} />
+                      <span className="font-semibold text-navy flex-1">{campaign.name}</span>
+                      {campaign.existingTemplateId
+                        ? <Badge color="green">Existing template</Badge>
+                        : <Badge color="orange">New template</Badge>
+                      }
+                      <span className="text-inky/40">{campaign.tasks.filter(t => t.include).length} tasks</span>
+                    </label>
+                    {campaign.include && campaign.tasks.length > 0 && (
+                      <div className="pb-1.5">
+                        {campaign.tasks.map((task, ti) => (
+                          <label key={ti} className="flex items-center gap-2 px-6 py-0.5 hover:bg-sky/5 cursor-pointer text-xs font-mono text-inky/60">
+                            <input type="checkbox" checked={task.include} onChange={() => toggleTask(ci, ti)} />
+                            <span>{task.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Paste mode: template picker */}
+        {inputMode === 'paste' && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-mono text-inky/60">Campaigns ({pasteTemplateIds.length} selected)</label>
+              <div className="flex gap-3 text-xs font-mono text-inky/50">
+                <button onClick={() => setPasteTemplateIds(existingTemplates.map(t => t.id))} className="hover:text-navy">All</button>
+                <button onClick={() => setPasteTemplateIds([])} className="hover:text-navy">None</button>
+              </div>
+            </div>
+            {existingTemplates.length === 0 ? (
+              <div className="text-xs font-mono text-inky/60 py-2">No templates found. Create them in the Campaign Templates tab first.</div>
+            ) : (
+              <div className="border border-sky/20 rounded max-h-36 overflow-y-auto bg-white dark:bg-[#122b40]">
+                {existingTemplates.map(tpl => (
+                  <label key={tpl.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono">
+                    <input type="checkbox" checked={pasteTemplateIds.includes(tpl.id)} onChange={() => setPasteTemplateIds(ids => ids.includes(tpl.id) ? ids.filter(i => i !== tpl.id) : [...ids, tpl.id])} />
+                    <span className="text-navy">{tpl.name}</span>
+                    <span className="text-inky/50">{tpl.category}</span>
+                    <span className="text-inky/40">· {tpl.campaign_template_tasks?.length ?? 0} tasks</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Location match preview */}
         {hasRows && (
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-mono text-inky/60">
-                {rows.length} row{rows.length !== 1 ? 's' : ''} parsed
+                {rows.length} shop{rows.length !== 1 ? 's' : ''} parsed
                 {unmatchedCount > 0 && <span className="ml-2 text-sb-orange">{unmatchedCount} unmatched</span>}
               </label>
               <button
@@ -425,38 +624,11 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
           </div>
         </div>
 
-        {/* Campaign selection */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-mono text-inky/60">Campaigns ({selectedTemplateIds.length} selected)</label>
-            <div className="flex gap-3 text-xs font-mono text-inky/50">
-              <button onClick={() => setSelectedTemplateIds(templates.map(t => t.id))} className="hover:text-navy">All</button>
-              <button onClick={() => setSelectedTemplateIds([])} className="hover:text-navy">None</button>
-            </div>
-          </div>
-          {loadingTemplates ? (
-            <div className="text-xs font-mono text-inky/60 py-2">Loading templates…</div>
-          ) : templates.length === 0 ? (
-            <div className="text-xs font-mono text-inky/60 py-2">No templates found.</div>
-          ) : (
-            <div className="border border-sky/20 rounded max-h-36 overflow-y-auto bg-white dark:bg-[#122b40]">
-              {templates.map(tpl => (
-                <label key={tpl.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono">
-                  <input type="checkbox" checked={selectedTemplateIds.includes(tpl.id)} onChange={() => toggleTemplate(tpl.id)} />
-                  <span className="text-navy">{tpl.name}</span>
-                  <span className="text-inky/50">{tpl.category}</span>
-                  <span className="text-inky/40">· {tpl.campaign_template_tasks?.length ?? 0} tasks</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-
         <div className="flex items-center justify-between">
           <p className="text-xs font-mono text-inky/50">
-            {includedRows.length > 0
-              ? `Will create/update plans for ${includedRows.length} shop${includedRows.length !== 1 ? 's' : ''}`
-              : 'Upload or paste shop names to begin'}
+            {includedRows.length > 0 && includedCampaigns.length > 0
+              ? `${includedRows.length} shop${includedRows.length !== 1 ? 's' : ''} × ${includedCampaigns.length} campaign${includedCampaigns.length !== 1 ? 's' : ''}`
+              : 'Upload a file or paste shop names to begin'}
           </p>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
@@ -464,7 +636,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
               variant="primary"
               size="sm"
               onClick={runImport}
-              disabled={importing || includedRows.length === 0 || selectedTemplateIds.length === 0}
+              disabled={importing || includedRows.length === 0 || includedCampaigns.length === 0}
             >
               {importing ? 'Importing…' : `Import ${includedRows.length} Shop${includedRows.length !== 1 ? 's' : ''}`}
             </Button>

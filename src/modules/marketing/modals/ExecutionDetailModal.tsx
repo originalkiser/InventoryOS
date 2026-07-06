@@ -57,7 +57,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-start justify-center z-50 overflow-y-auto py-8">
-      <div className="bg-cream rounded-lg shadow-xl w-full max-w-xl mx-4 flex flex-col gap-4 p-6">
+      <div className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-xl mx-4 flex flex-col gap-4 p-6">
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="font-heading font-bold text-navy">{assignment.campaign_name_snapshot}</h2>
@@ -81,7 +81,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
         {/* Tasks */}
         <div className="flex flex-col gap-2">
           {tasks.map(task => (
-            <div key={task.id} className="border border-sky/20 rounded-lg p-3">
+            <div key={task.id} className="border border-sky/20 dark:border-[#F2F1E6]/10 rounded-lg p-3 dark:bg-[#0a2235]">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -94,7 +94,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
                 </div>
 
                 <select
-                  className="border border-sky/30 rounded px-2 py-1 text-xs font-mono bg-white shrink-0 disabled:opacity-50"
+                  className="border border-sky/30 dark:border-[#F2F1E6]/20 rounded px-2 py-1 text-xs font-mono bg-cream dark:bg-[#122b40] text-navy dark:text-[#F2F1E6] shrink-0 disabled:opacity-50"
                   value={task.status}
                   disabled={saving === task.id}
                   onChange={e => updateStatus(task, e.target.value as TaskStatus)}
@@ -110,7 +110,7 @@ export function ExecutionDetailModal({ locationName, planMonth, assignment, onCl
                 {noteEditing === task.id ? (
                   <div className="flex gap-2">
                     <input
-                      className="flex-1 border border-sky/30 rounded px-2 py-1 text-xs font-mono bg-white focus:outline-none focus:ring-1 focus:ring-sky"
+                      className="flex-1 border border-sky/30 dark:border-[#F2F1E6]/20 rounded px-2 py-1 text-xs font-mono bg-cream dark:bg-[#122b40] text-navy dark:text-[#F2F1E6] focus:outline-none focus:ring-1 focus:ring-sky"
                       value={noteValue}
                       onChange={e => setNoteValue(e.target.value)}
                       placeholder="Add a note…"
