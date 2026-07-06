@@ -51,17 +51,12 @@ export function MarketingPlannerPage() {
         <p className="text-xs font-mono text-inky mt-0.5">Campaign templates, monthly plans, and execution tracking</p>
       </div>
 
-      <Tabs defaultValue="execution">
+      <Tabs defaultValue="plans">
         <TabsList>
-          <TabsTrigger value="execution">Execution</TabsTrigger>
           <TabsTrigger value="plans">Monthly Plans</TabsTrigger>
           <TabsTrigger value="reporting">Reporting</TabsTrigger>
           <TabsTrigger value="templates">Campaign Templates</TabsTrigger>
         </TabsList>
-
-        <TabsContent value="execution">
-          <ExecutionTab locations={locations} />
-        </TabsContent>
 
         <TabsContent value="plans">
           <MonthlyPlansTab locations={locations} isAdmin={isAdmin} />
