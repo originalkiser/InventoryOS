@@ -7,6 +7,7 @@ import type { MarketingLocation, MarketingMonthlyPlan } from '@/types/marketing'
 import { locMeta, MONTHS, calcProgress } from '@/types/marketing'
 import { NewPlanModal } from '../modals/NewPlanModal'
 import { ImportPlansModal } from '../modals/ImportPlansModal'
+import { PlanDetailModal } from '../modals/PlanDetailModal'
 
 interface Props {
   locations: MarketingLocation[]
@@ -29,6 +30,7 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
   const [filterLocation, setFilterLocation] = useState('')
   const [showNewPlan, setShowNewPlan] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [selectedPlan, setSelectedPlan] = useState<MarketingMonthlyPlan | null>(null)
 
   useEffect(() => {
     if (!companyId) return
@@ -46,13 +48,6 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
     if (error) toast.error('Failed to load plans')
     else setPlans(data ?? [])
     setLoading(false)
-  }
-
-  async function deletePlan(id: string) {
-    if (!confirm('Delete this plan and all its campaigns? This cannot be undone.')) return
-    const { error } = await sb.schema('marketing').from('monthly_plans').delete().eq('id', id)
-    if (error) toast.error('Failed to delete plan')
-    else { setPlans(ps => ps.filter(p => p.id !== id)); toast.success('Plan deleted') }
   }
 
   const locMap = new Map(locations.map(l => [l.id, l]))
@@ -100,7 +95,11 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
             const allTasks = (plan.campaign_assignments ?? []).flatMap(a => a.campaign_tasks ?? [])
             const { done, total, pct } = calcProgress(allTasks)
             return (
-              <div key={plan.id} className="border border-sky/30 rounded-lg p-4 flex items-center justify-between gap-4">
+              <button
+                key={plan.id}
+                className="border border-sky/30 rounded-lg p-4 flex items-center justify-between gap-4 w-full text-left hover:border-sky/60 hover:shadow-sm transition-all cursor-pointer"
+                onClick={() => setSelectedPlan(plan)}
+              >
                 <div className="flex flex-col gap-1 min-w-0">
                   <span className="font-heading font-bold text-navy text-sm">{loc?.shop_city ?? loc?.name ?? 'Unknown Shop'}</span>
                   <div className="flex items-center gap-2 text-xs font-mono text-inky/60">
@@ -115,7 +114,6 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
                 </div>
 
                 <div className="flex items-center gap-4 shrink-0">
-                  {/* Progress bar */}
                   <div className="w-32">
                     <div className="flex justify-between text-xs font-mono text-inky/60 mb-1">
                       <span>Progress</span>
@@ -129,11 +127,9 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
                   <Badge color={pct === 100 ? 'green' : pct > 0 ? 'orange' : 'inky'}>
                     {pct === 100 ? 'Complete' : pct > 0 ? 'In Progress' : 'Not Started'}
                   </Badge>
-                  {isAdmin && (
-                    <button className="text-xs font-mono text-inky/40 hover:text-sb-red" onClick={() => deletePlan(plan.id)}>Delete</button>
-                  )}
+                  <span className="text-inky/30 text-sm">›</span>
                 </div>
-              </div>
+              </button>
             )
           })}
         </div>
@@ -157,6 +153,23 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
           filterYear={filterYear}
           onClose={() => setShowImport(false)}
           onImported={() => { setShowImport(false); load() }}
+        />
+      )}
+
+      {selectedPlan && (
+        <PlanDetailModal
+          plan={selectedPlan}
+          location={locMap.get(selectedPlan.location_id)}
+          isAdmin={isAdmin}
+          onClose={() => setSelectedPlan(null)}
+          onUpdated={updated => {
+            setPlans(ps => ps.map(p => p.id === updated.id ? updated : p))
+            setSelectedPlan(updated)
+          }}
+          onDeleted={id => {
+            setPlans(ps => ps.filter(p => p.id !== id))
+            setSelectedPlan(null)
+          }}
         />
       )}
     </div>

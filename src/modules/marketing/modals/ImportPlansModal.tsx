@@ -587,15 +587,13 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-mono text-inky/60">
-                {rows.length} shop{rows.length !== 1 ? 's' : ''} parsed
+                {rows.filter(r => r.include).length} of {rows.length} shop{rows.length !== 1 ? 's' : ''} selected
                 {unmatchedCount > 0 && <span className="ml-2 text-sb-orange">{unmatchedCount} unmatched</span>}
               </label>
-              <button
-                className="text-xs font-mono text-inky/50 hover:text-navy"
-                onClick={() => setRows(rs => rs.map(r => ({ ...r, include: r.loc != null })))}
-              >
-                Reset selection
-              </button>
+              <div className="flex gap-3 text-xs font-mono text-inky/50">
+                <button className="hover:text-navy" onClick={() => setRows(rs => rs.map(r => ({ ...r, include: getEffectiveLoc(r) != null })))}>All</button>
+                <button className="hover:text-navy" onClick={() => setRows(rs => rs.map(r => ({ ...r, include: false })))}>None</button>
+              </div>
             </div>
             <div className="border border-sky/20 rounded max-h-44 overflow-y-auto bg-white dark:bg-[#122b40]">
               {rows.map((row, i) => {
