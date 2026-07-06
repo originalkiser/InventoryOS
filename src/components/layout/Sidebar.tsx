@@ -27,6 +27,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useSidebarPrefs } from '@/hooks/useSidebarPrefs'
 import { useDarkMode } from '@/hooks/useDarkMode'
+import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { isAdminOrDeveloper, getRoleLabel } from '@/lib/roles'
 import sbLogo from '@/assets/logo-cream.png'
 import sbIcon from '@/assets/SBOC-IconCream.png'
@@ -1017,8 +1018,13 @@ function CollapsedNav({
 }) {
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
+  const allowedSections = useDeptAccess()
   const allItems = Object.entries(SECTION_ITEMS)
-    .filter(([k]) => k !== 'global-config' || isAdmin)
+    .filter(([k]) => {
+      if (k === 'global-config') return isAdmin
+      if (allowedSections !== null) return allowedSections.has(k)
+      return true
+    })
     .flatMap(([, items]) => items)
   const initials = (profile?.full_name ?? profile?.email ?? '?')
     .split(' ')
@@ -1119,6 +1125,7 @@ function ExpandedSidebar({
   const [profileOpen, setProfileOpen] = useState(false)
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
+  const allowedSections = useDeptAccess()
 
   const {
     sectionOrder,
@@ -1133,8 +1140,12 @@ function ExpandedSidebar({
   } = useSidebarPrefs()
 
   const visibleSectionOrder = useMemo(
-    () => sectionOrder.filter((k) => k !== 'global-config' || isAdmin),
-    [sectionOrder, isAdmin]
+    () => sectionOrder.filter((k) => {
+      if (k === 'global-config') return isAdmin
+      if (allowedSections !== null) return allowedSections.has(k)
+      return true
+    }),
+    [sectionOrder, isAdmin, allowedSections]
   )
 
   const sensors = useSensors(
