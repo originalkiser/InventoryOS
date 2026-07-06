@@ -207,6 +207,45 @@ function ExpandableText({ value, onSave }: { value: string | null; onSave: (v: s
   )
 }
 
+// Rich-text cell — renders HTML saved by RichTextEditor; clicking opens the form modal.
+function RichTextCell({ value, onEdit }: { value: string | null; onEdit: () => void }) {
+  const [expanded, setExpanded] = useState(false)
+  const [canExpand, setCanExpand] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (expanded) return
+    const el = ref.current
+    if (!el) return
+    setCanExpand(el.scrollHeight > el.clientHeight + 1)
+  })
+
+  if (!value) {
+    return <button onClick={onEdit} className="px-1 text-xs font-mono text-inky/40 hover:text-navy">—</button>
+  }
+
+  return (
+    <div className="px-1 whitespace-normal">
+      <div
+        ref={ref}
+        onClick={onEdit}
+        className={[
+          'cursor-pointer text-xs text-navy',
+          '[&_p]:mb-0.5 [&_p]:mt-0 [&_ul]:ml-4 [&_ul]:list-disc [&_ol]:ml-4 [&_ol]:list-decimal [&_strong]:font-bold [&_em]:italic [&_h1]:font-bold [&_h2]:font-bold [&_h3]:font-bold',
+          expanded ? '' : 'max-h-12 overflow-hidden',
+        ].join(' ')}
+        dangerouslySetInnerHTML={{ __html: value }}
+      />
+      {(canExpand || expanded) && (
+        <button onClick={e => { e.stopPropagation(); setExpanded(x => !x) }}
+          className="mt-0.5 text-[10px] font-mono text-inky hover:underline">
+          {expanded ? 'less' : 'more'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // Title cell — 2-line clamp with "more/less" toggle; clicking opens edit modal.
 function ExpandableTitle({ value, onEdit }: { value: string | null; onEdit: () => void }) {
   const [expanded, setExpanded] = useState(false)
@@ -644,12 +683,12 @@ export function IssuesPage() {
       issue_notes: (hasCustomIssueNotes || hiddenCols.has('issue_notes')) ? null : {
         id: 'issue_notes', header: 'Issue Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
         accessorFn: (r: IssueRow) => r.issue_notes ?? '',
-        cell: (i: any) => <ExpandableText value={i.row.original.issue_notes} onSave={v => updateIssue(i.row.original.id, { issue_notes: v || null })} />,
+        cell: (i: any) => <RichTextCell value={i.row.original.issue_notes} onEdit={() => openEdit(i.row.original as IssueRow)} />,
       },
       resolution_notes: hiddenCols.has('resolution_notes') ? null : {
         id: 'resolution_notes', header: 'Resolution Notes', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
         accessorFn: (r: IssueRow) => r.resolution_notes ?? '',
-        cell: (i: any) => <ExpandableText value={i.row.original.resolution_notes} onSave={v => updateIssue(i.row.original.id, { resolution_notes: v || null })} />,
+        cell: (i: any) => <RichTextCell value={i.row.original.resolution_notes} onEdit={() => openEdit(i.row.original as IssueRow)} />,
       },
       helpful_links: hiddenCols.has('helpful_links') ? null : {
         id: 'helpful_links', header: 'Helpful Links', enableColumnFilter: false, enableSorting: false, meta: { noClip: true },
@@ -678,7 +717,7 @@ export function IssuesPage() {
   const { setColumnPinning: setPendPin } = pendingTable
   const { setColumnPinning: setResPin } = resolvedTable
   useEffect(() => {
-    const p = { left: [...builtinPinnedArr, ...pinnedIds], right: [] }
+    const p = { left: ['title', ...builtinPinnedArr, ...pinnedIds], right: [] }
     setAllPin(p); setPendPin(p); setResPin(p)
   }, [builtinPinnedArr, pinnedIds, setAllPin, setPendPin, setResPin])
 
