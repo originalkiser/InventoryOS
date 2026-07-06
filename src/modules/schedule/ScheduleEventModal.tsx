@@ -273,7 +273,6 @@ export function ScheduleEventModal({
       const seriesId = crypto.randomUUID()
       const rows = dates.map((d) => ({
         ...base,
-        created_by: profile.id,
         start_date: d,
         end_date: d, // each occurrence is a single day
         recurrence: { type: recurrence, until: endDate || null },
@@ -300,6 +299,9 @@ export function ScheduleEventModal({
 
       if (error) toast.error(error.message)
       else {
+        // Best-effort: stamp created_by on all series rows (requires migration 20260707)
+        sb.schema('platform').from('schedule_events')
+          .update({ created_by: profile.id }).eq('series_id', seriesId).then(() => {})
         const capped = rows.length >= MAX_OCCURRENCES && !endDate
         toast.success(`Scheduled ${rows.length} occurrence${rows.length > 1 ? 's' : ''}${capped ? ' (capped — set an end date for more)' : ''}`)
         onSaved(); onClose()
@@ -356,9 +358,12 @@ export function ScheduleEventModal({
       if (error) { toast.error(error.message); setSaving(false); return }
     } else {
       const { data: inserted, error } = await sb.schema('platform').from('schedule_events')
-        .insert({ ...(payload as any), created_by: profile.id }).select('id').single()
+        .insert(payload).select('id').single()
       if (error) { toast.error(error.message); setSaving(false); return }
       savedId = (inserted as any).id
+      // Best-effort: stamp created_by (requires migration 20260707)
+      sb.schema('platform').from('schedule_events')
+        .update({ created_by: profile.id }).eq('id', savedId).then(() => {})
     }
 
     // Best-effort: time/reminder columns (pending DB migration — fails silently until applied)

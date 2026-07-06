@@ -121,7 +121,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
     }
     if (notDoing) return 'border-transparent text-sb-orange/60 hover:text-sb-orange hover:border-sb-orange/40'
     if (hasProgress) return 'border-transparent text-sb-green/70 hover:text-sb-green hover:border-sb-green/40'
-    return 'border-transparent text-inky/50 hover:text-navy hover:border-sky/40'
+    return 'border-transparent text-inky hover:text-navy hover:border-sky/40'
   }
 
   function tabBadge(a: MarketingCampaignAssignment) {
@@ -130,7 +130,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
     if (notDoing) return <span className="text-[10px] px-1 rounded bg-sb-orange/20 text-sb-orange">N/A</span>
     if (pct === 100) return <span className="text-[10px] px-1 rounded bg-sb-green/20 text-sb-green">{pct}%</span>
     if (pct > 0) return <span className="text-[10px] px-1 rounded bg-sb-green/10 text-sb-green">{pct}%</span>
-    return <span className="text-[10px] px-1 rounded bg-inky/10 text-inky/50">{pct}%</span>
+    return <span className="text-[10px] px-1 rounded bg-inky/10 text-inky">{pct}%</span>
   }
 
   return (
@@ -150,17 +150,17 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
         <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-3 shrink-0">
           <div>
             <h2 className="font-heading font-bold text-navy text-lg">{locationLabel}</h2>
-            <p className="text-xs font-mono text-inky/60 mt-0.5">
+            <p className="text-xs font-mono text-inky mt-0.5">
               {location?.name && <span>{location.name} · </span>}
               {monthLabel}
             </p>
           </div>
-          <button onClick={onClose} className="text-inky/60 hover:text-navy text-xl shrink-0 mt-0.5">✕</button>
+          <button onClick={onClose} className="text-inky hover:text-navy text-xl shrink-0 mt-0.5">✕</button>
         </div>
 
         {/* Overall progress */}
         <div className="px-6 pb-3 shrink-0">
-          <div className="flex justify-between text-xs font-mono text-inky/60 mb-1">
+          <div className="flex justify-between text-xs font-mono text-inky mb-1">
             <span>Overall — {activeCount} of {assignments.length} campaign{assignments.length !== 1 ? 's' : ''} active</span>
             <span>{overall.done}/{overall.total} tasks · {overall.pct}%</span>
           </div>
@@ -171,7 +171,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
         </div>
 
         {assignments.length === 0 ? (
-          <div className="px-6 pb-6 text-xs font-mono text-inky/60 shrink-0">No campaigns assigned to this plan.</div>
+          <div className="px-6 pb-6 text-xs font-mono text-inky shrink-0">No campaigns assigned to this plan.</div>
         ) : (
           <>
             {/* Campaign tabs */}
@@ -194,17 +194,17 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
             <div className="flex flex-col flex-1 min-h-0 p-6 pt-3 gap-2 overflow-y-auto">
               {/* Campaign header row */}
               <div className="flex items-center justify-between mb-1 shrink-0">
-                <span className="text-xs font-mono text-inky/60">{activeAssignment?.campaign_category_snapshot}</span>
+                <span className="text-xs font-mono text-inky">{activeAssignment?.campaign_category_snapshot}</span>
                 <div className="flex items-center gap-3">
                   {!isNotDoing && (
-                    <span className="text-xs font-mono text-inky/50">{tabProgress.done}/{tabProgress.total} tasks complete</span>
+                    <span className="text-xs font-mono text-inky">{tabProgress.done}/{tabProgress.total} tasks complete</span>
                   )}
                   {activeAssignment && (
                     <button
                       className={`text-xs font-mono px-2 py-0.5 rounded border transition-colors disabled:opacity-50 ${
                         isNotDoing
                           ? 'border-sb-orange/40 text-sb-orange hover:bg-sb-orange/10'
-                          : 'border-inky/20 text-inky/50 hover:text-sb-orange hover:border-sb-orange/40'
+                          : 'border-inky/20 text-inky hover:text-sb-orange hover:border-sb-orange/40'
                       }`}
                       disabled={togglingNotDoing === activeAssignment.id}
                       onClick={() => toggleNotDoing(activeAssignment)}
@@ -222,7 +222,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
               )}
 
               {tasks.length === 0 ? (
-                <p className="text-xs font-mono text-inky/40">No tasks for this campaign.</p>
+                <p className="text-xs font-mono text-inky">No tasks for this campaign.</p>
               ) : tasks.map(task => (
                 <div
                   key={task.id}
@@ -239,7 +239,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                         {task.is_required && <Badge color="inky">Required</Badge>}
                       </div>
                       {task.task_description_snapshot && (
-                        <p className="text-xs font-mono text-inky/50 mt-0.5 truncate">{task.task_description_snapshot}</p>
+                        <p className="text-xs font-mono text-inky mt-0.5 truncate">{task.task_description_snapshot}</p>
                       )}
                     </div>
                     <select
@@ -269,7 +269,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                       </div>
                     ) : (
                       <button
-                        className="text-xs font-mono text-inky/60 hover:text-navy disabled:cursor-default"
+                        className="text-xs font-mono text-inky hover:text-navy disabled:cursor-default"
                         disabled={isNotDoing}
                         onClick={() => { if (!isNotDoing) { setNoteEditing(task.id); setNoteValue(task.notes ?? '') } }}
                       >
@@ -279,7 +279,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                   </div>
 
                   {task.status === 'complete' && task.completed_at && (
-                    <p className="text-xs font-mono text-inky/50 mt-1">
+                    <p className="text-xs font-mono text-inky mt-1">
                       Completed {new Date(task.completed_at).toLocaleDateString()}
                     </p>
                   )}

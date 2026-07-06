@@ -80,9 +80,22 @@ export function SchedulePage() {
       .order('start_date')
     if (error) toast.error('Failed to load calendar')
     else {
-      const visible = (data ?? []).filter((e: any) =>
-        !e.created_by || e.created_by === myId || (e.assigned_to ?? []).includes(myId)
-      )
+      const visible = (data ?? []).filter((e: any) => {
+        const v = e.visibility as string | null
+        // If created_by is set (migration applied), use it as the source-of-truth for private events
+        if (e.created_by) {
+          if (v === 'attendees' || v === 'specific_users') {
+            return (e.assigned_to ?? []).includes(myId)
+          }
+          return e.created_by === myId || (e.assigned_to ?? []).includes(myId)
+        }
+        // Pre-migration: still scope attendee/specific events by assigned_to
+        if (v === 'attendees' || v === 'specific_users') {
+          return (e.assigned_to ?? []).includes(myId)
+        }
+        // Department + private without created_by: visible to all (need migration for full privacy)
+        return true
+      })
       setEvents(visible)
     }
   }
