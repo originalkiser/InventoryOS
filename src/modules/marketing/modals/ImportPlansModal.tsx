@@ -14,6 +14,7 @@ interface ParsedRow {
   loc: MarketingLocation | null
   quality: MatchQuality
   include: boolean
+  overrideLocId?: string | null  // undefined = use auto-match; null = force no match; string = manual pick
 }
 
 interface DetectedTask {
@@ -210,6 +211,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
   const [previewHeaders, setPreviewHeaders] = useState<string[]>([])
 
   const [rows, setRows] = useState<ParsedRow[]>([])
+  const [editingOverrideIdx, setEditingOverrideIdx] = useState<number | null>(null)
   const [detectedCampaigns, setDetectedCampaigns] = useState<DetectedCampaign[]>([])
   const [existingTemplates, setExistingTemplates] = useState<ExistingTemplate[]>([])
   const [month, setMonth] = useState(filterMonth)
@@ -280,8 +282,25 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
     setRows(text.trim() ? toRows(parsePaste(text), locations) : [])
   }
 
+  function getEffectiveLoc(row: ParsedRow) {
+    if (row.overrideLocId !== undefined) {
+      if (row.overrideLocId === null) return null
+      return locations.find(l => l.id === row.overrideLocId) ?? null
+    }
+    return row.loc
+  }
+
   function toggleRow(idx: number) {
     setRows(rs => rs.map((r, i) => i === idx ? { ...r, include: !r.include } : r))
+  }
+
+  function setRowOverride(idx: number, locId: string | null) {
+    setRows(rs => rs.map((r, i) => {
+      if (i !== idx) return r
+      const newLoc = locId ? (locations.find(l => l.id === locId) ?? null) : null
+      return { ...r, overrideLocId: locId, include: newLoc != null }
+    }))
+    setEditingOverrideIdx(null)
   }
 
   function toggleCampaign(idx: number) {
@@ -294,7 +313,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
     ))
   }
 
-  const includedRows = rows.filter(r => r.include && r.loc)
+  const includedRows = rows.filter(r => r.include && getEffectiveLoc(r))
   const includedCampaigns = inputMode === 'file'
     ? detectedCampaigns.filter(c => c.include)
     : existingTemplates.filter(t => pasteTemplateIds.includes(t.id))
@@ -350,7 +369,7 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
     let skipCount = 0
 
     for (const row of includedRows) {
-      const locId = row.loc!.id
+      const locId = getEffectiveLoc(row)!.id
 
       const { data: plan, error: planErr } = await sb.schema('marketing').from('monthly_plans')
         .upsert(
@@ -579,25 +598,60 @@ export function ImportPlansModal({ locations, filterMonth, filterYear, onClose, 
               </button>
             </div>
             <div className="border border-sky/20 rounded max-h-44 overflow-y-auto bg-white dark:bg-[#122b40]">
-              {rows.map((row, i) => (
-                <label key={i} className="flex items-center gap-2 px-3 py-1.5 hover:bg-sky/10 cursor-pointer text-xs font-mono border-b border-sky/10 last:border-0">
-                  <input type="checkbox" checked={row.include} disabled={!row.loc} onChange={() => toggleRow(i)} />
-                  <span className={`flex-1 truncate ${row.loc ? 'text-navy' : 'text-inky/40 line-through'}`}>
-                    {row.raw}
-                  </span>
-                  {row.loc ? (
-                    <>
-                      <span className="text-inky/40 flex-shrink-0">→</span>
-                      <span className="text-navy truncate max-w-[160px]">{row.loc.shop_city ?? row.loc.name}</span>
-                      <Badge color={row.quality === 'exact' ? 'green' : 'orange'}>
-                        {row.quality === 'exact' ? 'Exact' : 'Fuzzy'}
-                      </Badge>
-                    </>
-                  ) : (
-                    <Badge color="inky">No match</Badge>
-                  )}
-                </label>
-              ))}
+              {rows.map((row, i) => {
+                const eff = getEffectiveLoc(row)
+                const isOverridden = row.overrideLocId !== undefined
+                const isEditing = editingOverrideIdx === i
+                return (
+                  <div key={i} className="border-b border-sky/10 last:border-0">
+                    <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-mono">
+                      <input type="checkbox" checked={row.include} disabled={!eff} onChange={() => toggleRow(i)} />
+                      <span className={`flex-1 truncate ${eff ? 'text-navy' : 'text-inky/40 line-through'}`}>
+                        {row.raw}
+                      </span>
+                      {eff ? (
+                        <>
+                          <span className="text-inky/40 flex-shrink-0">→</span>
+                          <span className="text-navy truncate max-w-[140px]">{eff.shop_city ?? eff.name}</span>
+                          <Badge color={isOverridden ? 'inky' : row.quality === 'exact' ? 'green' : 'orange'}>
+                            {isOverridden ? 'Manual' : row.quality === 'exact' ? 'Exact' : 'Fuzzy'}
+                          </Badge>
+                        </>
+                      ) : (
+                        <Badge color="inky">No match</Badge>
+                      )}
+                      <button
+                        className="text-inky/40 hover:text-navy shrink-0 px-1"
+                        title="Override match"
+                        onClick={() => setEditingOverrideIdx(isEditing ? null : i)}
+                      >
+                        ✎
+                      </button>
+                    </div>
+                    {isEditing && (
+                      <div className="flex items-center gap-2 px-3 pb-2">
+                        <select
+                          className="flex-1 border border-sky/30 rounded px-2 py-1 text-xs font-mono bg-white dark:bg-[#122b40] text-navy"
+                          defaultValue={eff?.id ?? ''}
+                          onChange={e => setRowOverride(i, e.target.value || null)}
+                        >
+                          <option value="">— No match —</option>
+                          {[...locations]
+                            .sort((a, b) => (a.shop_city ?? a.name).localeCompare(b.shop_city ?? b.name))
+                            .map(l => (
+                              <option key={l.id} value={l.id}>
+                                {l.shop_city ?? l.name}{l.name ? ` (${l.name})` : ''}
+                              </option>
+                            ))}
+                        </select>
+                        <button className="text-xs font-mono text-inky/50 hover:text-navy" onClick={() => setEditingOverrideIdx(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
