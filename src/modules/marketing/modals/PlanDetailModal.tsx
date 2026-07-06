@@ -31,6 +31,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
   )
   const [activeTab, setActiveTab] = useState(0)
   const [saving, setSaving] = useState<string | null>(null)
+  const [togglingNotDoing, setTogglingNotDoing] = useState<string | null>(null)
   const [noteEditing, setNoteEditing] = useState<string | null>(null)
   const [noteValue, setNoteValue] = useState('')
   const [deleting, setDeleting] = useState(false)
@@ -38,10 +39,15 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
   const monthLabel = `${MONTHS[plan.plan_month - 1]} ${plan.plan_year}`
   const locationLabel = location?.shop_city ?? location?.name ?? 'Unknown Shop'
 
-  const allTasks = assignments.flatMap(a => a.campaign_tasks ?? [])
-  const overall = calcProgress(allTasks)
+  // Exclude "not doing" campaigns from overall progress
+  const activeTasks = assignments
+    .filter(a => a.status !== 'not_doing')
+    .flatMap(a => a.campaign_tasks ?? [])
+  const overall = calcProgress(activeTasks)
+  const activeCount = assignments.filter(a => a.status !== 'not_doing').length
 
   const activeAssignment = assignments[activeTab] as MarketingCampaignAssignment | undefined
+  const isNotDoing = activeAssignment?.status === 'not_doing'
   const tasks: MarketingCampaignTask[] = activeAssignment?.campaign_tasks ?? []
   const tabProgress = calcProgress(tasks)
 
@@ -49,6 +55,17 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
     const next = assignments.map(a => a.id === updatedAssignment.id ? updatedAssignment : a)
     setAssignments(next)
     onUpdated({ ...plan, campaign_assignments: next })
+  }
+
+  async function toggleNotDoing(assignment: MarketingCampaignAssignment) {
+    setTogglingNotDoing(assignment.id)
+    const newStatus = assignment.status === 'not_doing' ? 'not_started' : 'not_doing'
+    const { error } = await sb.schema('marketing').from('campaign_assignments')
+      .update({ status: newStatus, updated_at: new Date().toISOString(), updated_by: userId })
+      .eq('id', assignment.id)
+    if (error) { toast.error('Failed to update'); setTogglingNotDoing(null); return }
+    patchAssignments({ ...assignment, status: newStatus })
+    setTogglingNotDoing(null)
   }
 
   async function updateStatus(task: MarketingCampaignTask, status: TaskStatus) {
@@ -92,12 +109,45 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
     onDeleted(plan.id)
   }
 
+  function tabStyle(a: MarketingCampaignAssignment, isActive: boolean) {
+    const notDoing = a.status === 'not_doing'
+    const { pct } = calcProgress(a.campaign_tasks ?? [])
+    const hasProgress = pct > 0
+
+    if (isActive) {
+      if (notDoing) return 'border-sb-orange text-sb-orange font-semibold'
+      if (hasProgress) return 'border-sb-green text-sb-green font-semibold'
+      return 'border-navy text-navy font-semibold'
+    }
+    if (notDoing) return 'border-transparent text-sb-orange/60 hover:text-sb-orange hover:border-sb-orange/40'
+    if (hasProgress) return 'border-transparent text-sb-green/70 hover:text-sb-green hover:border-sb-green/40'
+    return 'border-transparent text-inky/50 hover:text-navy hover:border-sky/40'
+  }
+
+  function tabBadge(a: MarketingCampaignAssignment) {
+    const notDoing = a.status === 'not_doing'
+    const { pct } = calcProgress(a.campaign_tasks ?? [])
+    if (notDoing) return <span className="text-[10px] px-1 rounded bg-sb-orange/20 text-sb-orange">N/A</span>
+    if (pct === 100) return <span className="text-[10px] px-1 rounded bg-sb-green/20 text-sb-green">{pct}%</span>
+    if (pct > 0) return <span className="text-[10px] px-1 rounded bg-sb-green/10 text-sb-green">{pct}%</span>
+    return <span className="text-[10px] px-1 rounded bg-inky/10 text-inky/50">{pct}%</span>
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-start justify-center z-50 overflow-y-auto py-8">
-      <div className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-2xl mx-4 flex flex-col">
+    // Backdrop — click to close
+    <div
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      {/* Modal — stop propagation so clicks inside don't close */}
+      <div
+        className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-2xl flex flex-col"
+        style={{ height: 'min(88vh, 860px)' }}
+        onClick={e => e.stopPropagation()}
+      >
 
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 p-6 pb-4">
+        <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-3 shrink-0">
           <div>
             <h2 className="font-heading font-bold text-navy text-lg">{locationLabel}</h2>
             <p className="text-xs font-mono text-inky/60 mt-0.5">
@@ -109,9 +159,9 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
         </div>
 
         {/* Overall progress */}
-        <div className="px-6 pb-4">
+        <div className="px-6 pb-3 shrink-0">
           <div className="flex justify-between text-xs font-mono text-inky/60 mb-1">
-            <span>Overall — {assignments.length} campaign{assignments.length !== 1 ? 's' : ''}</span>
+            <span>Overall — {activeCount} of {assignments.length} campaign{assignments.length !== 1 ? 's' : ''} active</span>
             <span>{overall.done}/{overall.total} tasks · {overall.pct}%</span>
           </div>
           <div className="h-1.5 rounded bg-sky/20">
@@ -121,46 +171,67 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
         </div>
 
         {assignments.length === 0 ? (
-          <div className="px-6 pb-6 text-xs font-mono text-inky/60">No campaigns assigned to this plan.</div>
+          <div className="px-6 pb-6 text-xs font-mono text-inky/60 shrink-0">No campaigns assigned to this plan.</div>
         ) : (
           <>
             {/* Campaign tabs */}
-            <div className="border-t border-sky/20 overflow-x-auto">
-              <div className="flex min-w-max px-6">
-                {assignments.map((a, i) => {
-                  const { pct } = calcProgress(a.campaign_tasks ?? [])
-                  const isActive = i === activeTab
-                  return (
-                    <button
-                      key={a.id}
-                      onClick={() => { setActiveTab(i); setNoteEditing(null) }}
-                      className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-mono border-b-2 transition-colors whitespace-nowrap ${
-                        isActive
-                          ? 'border-navy text-navy font-semibold'
-                          : 'border-transparent text-inky/50 hover:text-navy hover:border-sky/40'
-                      }`}
-                    >
-                      {a.campaign_name_snapshot}
-                      <span className={`text-[10px] px-1 rounded ${pct === 100 ? 'bg-sb-green/20 text-sb-green' : pct > 0 ? 'bg-sb-orange/20 text-sb-orange' : 'bg-inky/10 text-inky/50'}`}>
-                        {pct}%
-                      </span>
-                    </button>
-                  )
-                })}
+            <div className="border-t border-sky/20 overflow-x-auto shrink-0">
+              <div className="flex min-w-max px-4">
+                {assignments.map((a, i) => (
+                  <button
+                    key={a.id}
+                    onClick={() => { setActiveTab(i); setNoteEditing(null) }}
+                    className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-mono border-b-2 transition-colors whitespace-nowrap ${tabStyle(a, i === activeTab)}`}
+                  >
+                    {a.campaign_name_snapshot}
+                    {tabBadge(a)}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* Active campaign tasks */}
-            <div className="flex flex-col gap-2 p-6 pt-4 max-h-[420px] overflow-y-auto">
-              <div className="flex justify-between text-xs font-mono text-inky/60 mb-1">
-                <span>{activeAssignment?.campaign_category_snapshot}</span>
-                <span>{tabProgress.done}/{tabProgress.total} tasks complete</span>
+            {/* Active campaign tasks — flex-1 fills remaining height */}
+            <div className="flex flex-col flex-1 min-h-0 p-6 pt-3 gap-2 overflow-y-auto">
+              {/* Campaign header row */}
+              <div className="flex items-center justify-between mb-1 shrink-0">
+                <span className="text-xs font-mono text-inky/60">{activeAssignment?.campaign_category_snapshot}</span>
+                <div className="flex items-center gap-3">
+                  {!isNotDoing && (
+                    <span className="text-xs font-mono text-inky/50">{tabProgress.done}/{tabProgress.total} tasks complete</span>
+                  )}
+                  {activeAssignment && (
+                    <button
+                      className={`text-xs font-mono px-2 py-0.5 rounded border transition-colors disabled:opacity-50 ${
+                        isNotDoing
+                          ? 'border-sb-orange/40 text-sb-orange hover:bg-sb-orange/10'
+                          : 'border-inky/20 text-inky/50 hover:text-sb-orange hover:border-sb-orange/40'
+                      }`}
+                      disabled={togglingNotDoing === activeAssignment.id}
+                      onClick={() => toggleNotDoing(activeAssignment)}
+                    >
+                      {isNotDoing ? 'Resume campaign' : 'Not doing'}
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {isNotDoing && (
+                <div className="border border-sb-orange/20 rounded-lg px-4 py-3 bg-sb-orange/5 text-xs font-mono text-sb-orange shrink-0">
+                  This campaign is marked as not doing — its tasks are excluded from overall progress.
+                </div>
+              )}
 
               {tasks.length === 0 ? (
                 <p className="text-xs font-mono text-inky/40">No tasks for this campaign.</p>
               ) : tasks.map(task => (
-                <div key={task.id} className="border border-sky/20 dark:border-[#F2F1E6]/10 rounded-lg p-3 dark:bg-[#0a2235]">
+                <div
+                  key={task.id}
+                  className={`border rounded-lg p-3 shrink-0 transition-opacity ${
+                    isNotDoing
+                      ? 'border-sky/10 dark:border-[#F2F1E6]/5 dark:bg-[#0a2235] opacity-40'
+                      : 'border-sky/20 dark:border-[#F2F1E6]/10 dark:bg-[#0a2235]'
+                  }`}
+                >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -174,7 +245,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                     <select
                       className="border border-sky/30 dark:border-[#F2F1E6]/20 rounded px-2 py-1 text-xs font-mono bg-cream dark:bg-[#122b40] text-navy dark:text-[#F2F1E6] shrink-0 disabled:opacity-50"
                       value={task.status}
-                      disabled={saving === task.id}
+                      disabled={saving === task.id || isNotDoing}
                       onChange={e => updateStatus(task, e.target.value as TaskStatus)}
                     >
                       {(Object.entries(TASK_STATUS_LABELS) as [TaskStatus, string][]).map(([val, label]) => (
@@ -198,8 +269,9 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
                       </div>
                     ) : (
                       <button
-                        className="text-xs font-mono text-inky/40 hover:text-navy"
-                        onClick={() => { setNoteEditing(task.id); setNoteValue(task.notes ?? '') }}
+                        className="text-xs font-mono text-inky/40 hover:text-navy disabled:cursor-default"
+                        disabled={isNotDoing}
+                        onClick={() => { if (!isNotDoing) { setNoteEditing(task.id); setNoteValue(task.notes ?? '') } }}
                       >
                         {task.notes ? `Note: ${task.notes}` : '+ Add note'}
                       </button>
@@ -218,7 +290,7 @@ export function PlanDetailModal({ plan, location, isAdmin, onClose, onUpdated, o
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-2 px-6 py-4 border-t border-sky/20">
+        <div className="flex items-center justify-between gap-2 px-6 py-4 border-t border-sky/20 shrink-0">
           {isAdmin ? (
             <Button variant="ghost" size="sm" onClick={deletePlan} disabled={deleting}>
               <span className="text-sb-red">{deleting ? 'Deleting…' : 'Delete Plan'}</span>
