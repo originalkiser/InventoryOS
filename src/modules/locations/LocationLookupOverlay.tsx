@@ -41,13 +41,24 @@ const DEFAULT_VIEW: ViewConfig = {
   ],
 }
 
+// Bare metadata column names that must be accessed as meta:X
+const META_FIELD_NAMES = new Set(['owner', 'market', 'area_manager', 'regional_director', 'director', 'delivery_day', 'type'])
+
 function migrateView(v: ViewConfig): ViewConfig {
   // location_code was renamed to name; name was renamed to shop_city
+  // Some older saved views stored metadata fields without the meta: prefix
   return {
     ...v,
     blocks: v.blocks.map(b =>
       b.type === 'table'
-        ? { ...b, columns: b.columns.map(c => c === 'location_code' ? 'name' : c) }
+        ? {
+            ...b,
+            columns: b.columns.map(c => {
+              if (c === 'location_code') return 'name'
+              if (META_FIELD_NAMES.has(c)) return `meta:${c}`
+              return c
+            }),
+          }
         : b
     ),
   }
