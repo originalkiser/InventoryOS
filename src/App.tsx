@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthStore } from '@/stores/authStore'
+import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { SUPABASE_MISSING } from '@/lib/supabase'
 import { AppShell } from '@/components/layout/AppShell'
 import { SbLoader } from '@/components/ui'
@@ -37,6 +38,34 @@ import { FormAssignmentsPage } from '@/modules/forms/FormAssignmentsPage'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { OnHandPage } from '@/pages/OnHandPage'
 import { MarketingPlannerPage } from '@/modules/marketing/MarketingPlannerPage'
+
+const DEPT_FIRST_ROUTE: Record<string, string> = {
+  marketing: '/marketing-planner',
+  operations: '/operations/outlier',
+  inventory: '/dashboard',
+}
+
+function SmartRedirect() {
+  const { profile } = useAuthStore()
+  const allowedSections = useDeptAccess()
+  const isDeptUser = (profile?.role as string) === 'department_user'
+
+  if (isDeptUser && allowedSections === null) {
+    return (
+      <div className="min-h-screen bg-cream flex items-center justify-center">
+        <SbLoader />
+      </div>
+    )
+  }
+
+  if (isDeptUser && allowedSections) {
+    for (const [slug, route] of Object.entries(DEPT_FIRST_ROUTE)) {
+      if (allowedSections.has(slug)) return <Navigate to={route} replace />
+    }
+  }
+
+  return <Navigate to="/dashboard" replace />
+}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, initialized } = useAuthStore()
@@ -100,7 +129,7 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route index element={<SmartRedirect />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="config" element={<ConfigPage />} />
           <Route path="global-config" element={<GlobalConfigPage />} />

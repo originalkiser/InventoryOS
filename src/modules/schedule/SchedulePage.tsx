@@ -71,14 +71,20 @@ export function SchedulePage() {
   }, [profile?.company_id])
 
   async function loadEvents() {
-    if (!profile?.company_id) return
+    if (!profile?.company_id || !profile?.id) return
+    const myId = profile.id
     const { data, error } = await (supabase as any)
       .schema('platform').from('schedule_events')
       .select('*')
       .eq('company_id', profile.company_id)
       .order('start_date')
     if (error) toast.error('Failed to load calendar')
-    else setEvents(data ?? [])
+    else {
+      const visible = (data ?? []).filter((e: any) =>
+        !e.created_by || e.created_by === myId || (e.assigned_to ?? []).includes(myId)
+      )
+      setEvents(visible)
+    }
   }
 
   async function loadHolidays() {

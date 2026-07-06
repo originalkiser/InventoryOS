@@ -93,13 +93,13 @@ export function ExecutionTab({ locations }: Props) {
           <option value="">All Campaigns</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <span className="text-xs font-mono text-inky/60 ml-auto">{rows.length} rows</span>
+        <span className="text-xs font-mono text-inky ml-auto">{rows.length} rows</span>
       </div>
 
       {loading ? (
-        <div className="py-8 text-center text-inky/60 font-mono text-xs">Loading…</div>
+        <div className="py-8 text-center text-inky font-mono text-xs">Loading…</div>
       ) : rows.length === 0 ? (
-        <div className="py-10 text-center text-inky/60 font-mono text-xs border border-dashed border-sky/30 rounded-lg">
+        <div className="py-10 text-center text-inky font-mono text-xs border border-dashed border-sky/30 rounded-lg">
           No campaigns found for {MONTHS[filterMonth - 1]} {filterYear}
         </div>
       ) : (
@@ -127,19 +127,19 @@ export function ExecutionTab({ locations }: Props) {
                   >
                     <td className="px-3 py-2.5">
                       <div className="text-navy font-semibold">{loc?.shop_city ?? loc?.name ?? 'Unknown'}</div>
-                      {loc && <div className="text-inky/60">{loc.name}</div>}
+                      {loc && <div className="text-inky">{loc.name}</div>}
                     </td>
                     <td className="px-3 py-2.5 text-navy">{assignment.campaign_name_snapshot}</td>
-                    <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{assignment.campaign_category_snapshot}</td>
+                    <td className="px-3 py-2.5 text-inky hidden md:table-cell">{assignment.campaign_category_snapshot}</td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-1.5 rounded bg-sky/20">
                           <div className="h-1.5 rounded"
                             style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#2ECC71' : pct >= 50 ? '#E67E22' : '#4F7489' }} />
                         </div>
-                        <span className="text-inky/50 w-8 text-right">{pct}%</span>
+                        <span className="text-inky w-8 text-right">{pct}%</span>
                       </div>
-                      <div className="text-inky/60 mt-0.5">{done}/{total} tasks</div>
+                      <div className="text-inky mt-0.5">{done}/{total} tasks</div>
                     </td>
                     <td className="px-3 py-2.5">
                       <Badge color={statusColor}>{statusLabel}</Badge>

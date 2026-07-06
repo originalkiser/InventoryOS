@@ -82,9 +82,9 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
       </div>
 
       {loading ? (
-        <div className="py-8 text-center text-inky/60 font-mono text-xs">Loading…</div>
+        <div className="py-8 text-center text-inky font-mono text-xs">Loading…</div>
       ) : filtered.length === 0 ? (
-        <div className="py-10 text-center text-inky/60 font-mono text-xs border border-dashed border-sky/30 rounded-lg">
+        <div className="py-10 text-center text-inky font-mono text-xs border border-dashed border-sky/30 rounded-lg">
           No plans for {MONTHS[filterMonth - 1]} {filterYear}
           {isAdmin && <div className="mt-3"><Button size="sm" variant="secondary" onClick={() => setShowNewPlan(true)}>Create Plan</Button></div>}
         </div>
@@ -102,11 +102,11 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
               >
                 <div className="flex flex-col gap-1 min-w-0">
                   <span className="font-heading font-bold text-navy text-sm">{loc?.shop_city ?? loc?.name ?? 'Unknown Shop'}</span>
-                  <div className="flex items-center gap-2 text-xs font-mono text-inky/60">
+                  <div className="flex items-center gap-2 text-xs font-mono text-inky">
                     <span>{loc?.name ?? ''}</span>
                     {loc && <span>{loc.region ?? locMeta(loc, 'market')}</span>}
                   </div>
-                  <div className="flex items-center gap-2 text-xs font-mono text-inky/60">
+                  <div className="flex items-center gap-2 text-xs font-mono text-inky">
                     <span>{plan.campaign_assignments?.length ?? 0} campaigns</span>
                     <span>·</span>
                     <span>{done}/{total} tasks</span>
@@ -115,7 +115,7 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
 
                 <div className="flex items-center gap-4 shrink-0">
                   <div className="w-32">
-                    <div className="flex justify-between text-xs font-mono text-inky/60 mb-1">
+                    <div className="flex justify-between text-xs font-mono text-inky mb-1">
                       <span>Progress</span>
                       <span>{pct}%</span>
                     </div>
@@ -127,7 +127,7 @@ export function MonthlyPlansTab({ locations, isAdmin }: Props) {
                   <Badge color={pct === 100 ? 'green' : pct > 0 ? 'orange' : 'inky'}>
                     {pct === 100 ? 'Complete' : pct > 0 ? 'In Progress' : 'Not Started'}
                   </Badge>
-                  <span className="text-inky/50 text-sm">›</span>
+                  <span className="text-inky text-sm">›</span>
                 </div>
               </button>
             )

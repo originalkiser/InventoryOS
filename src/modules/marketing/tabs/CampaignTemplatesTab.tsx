@@ -128,13 +128,13 @@ export function CampaignTemplatesTab() {
     } : t))
   }
 
-  if (loading) return <div className="py-8 text-center text-inky/60 font-mono text-xs">Loading templates…</div>
+  if (loading) return <div className="py-8 text-center text-inky font-mono text-xs">Loading templates…</div>
 
   return (
     <div className="flex flex-col gap-4 mt-4">
       {templates.length === 0 && (
         <div className="border border-dashed border-sky/40 rounded-lg p-8 text-center">
-          <p className="text-inky/60 font-mono text-xs mb-3">No campaign templates yet.</p>
+          <p className="text-inky font-mono text-xs mb-3">No campaign templates yet.</p>
           <Button variant="primary" size="sm" onClick={seedDefaults} disabled={seeding}>
             {seeding ? 'Seeding…' : 'Seed Default Templates'}
           </Button>
@@ -152,18 +152,18 @@ export function CampaignTemplatesTab() {
               <Badge color="inky">{tpl.category}</Badge>
               <Badge color={tpl.is_active ? 'green' : 'inky'}>{tpl.is_active ? 'Active' : 'Inactive'}</Badge>
             </div>
-            <span className="text-inky/60 text-xs">{tpl.campaign_template_tasks?.length ?? 0} tasks · {expanded === tpl.id ? '▲' : '▼'}</span>
+            <span className="text-inky text-xs">{tpl.campaign_template_tasks?.length ?? 0} tasks · {expanded === tpl.id ? '▲' : '▼'}</span>
           </button>
 
           {expanded === tpl.id && (
             <div className="px-4 py-3 flex flex-col gap-3">
-              {tpl.description && <p className="text-xs font-mono text-inky/60">{tpl.description}</p>}
+              {tpl.description && <p className="text-xs font-mono text-inky">{tpl.description}</p>}
 
               <table className="w-full text-xs font-mono border-collapse">
                 <thead>
                   <tr className="border-b border-sky/20">
-                    <th className="text-left py-1 pr-3 text-inky/60 font-normal">Task</th>
-                    <th className="text-left py-1 pr-3 text-inky/60 font-normal w-20">Required</th>
+                    <th className="text-left py-1 pr-3 text-inky font-normal">Task</th>
+                    <th className="text-left py-1 pr-3 text-inky font-normal w-20">Required</th>
                     <th className="w-16" />
                   </tr>
                 </thead>
@@ -171,11 +171,11 @@ export function CampaignTemplatesTab() {
                   {(tpl.campaign_template_tasks ?? []).map(tk => (
                     <tr key={tk.id} className="border-b border-sky/20">
                       <td className="py-1.5 pr-3 text-navy">{tk.name}</td>
-                      <td className="py-1.5 pr-3 text-inky/60">{tk.is_required ? 'Yes' : 'No'}</td>
+                      <td className="py-1.5 pr-3 text-inky">{tk.is_required ? 'Yes' : 'No'}</td>
                       <td className="py-1.5">
                         <div className="flex gap-2">
-                          <button className="text-inky/60 hover:text-navy" onClick={() => setEditingTask({ templateId: tpl.id, task: { ...tk } })}>Edit</button>
-                          <button className="text-inky/60 hover:text-sb-red" onClick={() => deleteTask(tpl.id, tk.id)}>✕</button>
+                          <button className="text-inky hover:text-navy" onClick={() => setEditingTask({ templateId: tpl.id, task: { ...tk } })}>Edit</button>
+                          <button className="text-inky hover:text-sb-red" onClick={() => deleteTask(tpl.id, tk.id)}>✕</button>
                         </div>
                       </td>
                     </tr>
@@ -201,18 +201,18 @@ export function CampaignTemplatesTab() {
               <p className="font-heading font-bold text-navy text-sm">New Template</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-mono text-inky/60 block mb-1">Name *</label>
+                  <label className="text-xs font-mono text-inky block mb-1">Name *</label>
                   <input className="w-full border border-sky/30 rounded px-2 py-1.5 text-xs font-mono bg-cream focus:outline-none focus:ring-1 focus:ring-sky"
                     value={newTemplate.name} onChange={e => setNewTemplate(p => ({ ...p, name: e.target.value }))} placeholder="Template name" />
                 </div>
                 <div>
-                  <label className="text-xs font-mono text-inky/60 block mb-1">Category</label>
+                  <label className="text-xs font-mono text-inky block mb-1">Category</label>
                   <input className="w-full border border-sky/30 rounded px-2 py-1.5 text-xs font-mono bg-cream focus:outline-none focus:ring-1 focus:ring-sky"
                     value={newTemplate.category} onChange={e => setNewTemplate(p => ({ ...p, category: e.target.value }))} placeholder="Direct Mail, Digital…" />
                 </div>
               </div>
               <div>
-                <label className="text-xs font-mono text-inky/60 block mb-1">Description</label>
+                <label className="text-xs font-mono text-inky block mb-1">Description</label>
                 <input className="w-full border border-sky/30 rounded px-2 py-1.5 text-xs font-mono bg-cream focus:outline-none focus:ring-1 focus:ring-sky"
                   value={newTemplate.description} onChange={e => setNewTemplate(p => ({ ...p, description: e.target.value }))} placeholder="Optional" />
               </div>
@@ -233,12 +233,12 @@ export function CampaignTemplatesTab() {
           <div className="bg-cream dark:bg-[#0e2638] rounded-lg shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
             <p className="font-heading font-bold text-navy">{editingTask.task.id ? 'Edit Task' : 'Add Task'}</p>
             <div>
-              <label className="text-xs font-mono text-inky/60 block mb-1">Task Name *</label>
+              <label className="text-xs font-mono text-inky block mb-1">Task Name *</label>
               <input className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy focus:outline-none focus:ring-1 focus:ring-sky"
                 value={editingTask.task.name ?? ''} onChange={e => setEditingTask(et => et ? { ...et, task: { ...et.task, name: e.target.value } } : null)} />
             </div>
             <div>
-              <label className="text-xs font-mono text-inky/60 block mb-1">Description</label>
+              <label className="text-xs font-mono text-inky block mb-1">Description</label>
               <input className="w-full border border-sky/30 rounded px-3 py-2 text-sm font-mono bg-white dark:bg-[#122b40] text-navy focus:outline-none focus:ring-1 focus:ring-sky"
                 value={editingTask.task.description ?? ''} onChange={e => setEditingTask(et => et ? { ...et, task: { ...et.task, description: e.target.value } } : null)} />
             </div>

@@ -48,7 +48,7 @@ export function MarketingPlannerPage() {
     <div className="flex flex-col gap-4 p-6">
       <div>
         <h1 className="text-lg font-heading font-bold text-navy uppercase tracking-wide">Marketing Planner</h1>
-        <p className="text-xs font-mono text-inky/60 mt-0.5">Campaign templates, monthly plans, and execution tracking</p>
+        <p className="text-xs font-mono text-inky mt-0.5">Campaign templates, monthly plans, and execution tracking</p>
       </div>
 
       <Tabs defaultValue="execution">
@@ -56,7 +56,7 @@ export function MarketingPlannerPage() {
           <TabsTrigger value="execution">Execution</TabsTrigger>
           <TabsTrigger value="plans">Monthly Plans</TabsTrigger>
           <TabsTrigger value="reporting">Reporting</TabsTrigger>
-          {isAdmin && <TabsTrigger value="templates">Campaign Templates</TabsTrigger>}
+          <TabsTrigger value="templates">Campaign Templates</TabsTrigger>
         </TabsList>
 
         <TabsContent value="execution">
@@ -71,11 +71,9 @@ export function MarketingPlannerPage() {
           <ReportingTab locations={locations} />
         </TabsContent>
 
-        {isAdmin && (
-          <TabsContent value="templates">
-            <CampaignTemplatesTab />
-          </TabsContent>
-        )}
+        <TabsContent value="templates">
+          <CampaignTemplatesTab />
+        </TabsContent>
       </Tabs>
     </div>
   )

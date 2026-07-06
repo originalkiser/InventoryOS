@@ -100,9 +100,9 @@ export function ReportingTab({ locations }: Props) {
       </div>
 
       {loading ? (
-        <div className="py-8 text-center text-inky/60 font-mono text-xs">Loading…</div>
+        <div className="py-8 text-center text-inky font-mono text-xs">Loading…</div>
       ) : plans.length === 0 ? (
-        <div className="py-10 text-center text-inky/60 font-mono text-xs border border-dashed border-sky/30 rounded-lg">
+        <div className="py-10 text-center text-inky font-mono text-xs border border-dashed border-sky/30 rounded-lg">
           No plans for {MONTHS[filterMonth - 1]} {filterYear}
         </div>
       ) : (
@@ -116,9 +116,9 @@ export function ReportingTab({ locations }: Props) {
               { label: 'Not Started', value: notStartedShops, sub: `shops at 0%` },
             ].map(card => (
               <div key={card.label} className="border border-sky/30 rounded-lg p-4">
-                <p className="text-xs font-mono text-inky/60">{card.label}</p>
+                <p className="text-xs font-mono text-inky">{card.label}</p>
                 <p className="text-2xl font-heading font-bold text-navy mt-1">{card.value}</p>
-                <p className="text-xs font-mono text-inky/60 mt-0.5">{card.sub}</p>
+                <p className="text-xs font-mono text-inky mt-0.5">{card.sub}</p>
               </div>
             ))}
           </div>
@@ -140,15 +140,15 @@ export function ReportingTab({ locations }: Props) {
                   {campaignSummaries.map(c => (
                     <tr key={c.name} className="border-t border-sky/20">
                       <td className="px-3 py-2.5 text-navy">{c.name}</td>
-                      <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{c.category}</td>
-                      <td className="px-3 py-2.5 text-inky/60 text-right">{c.shopCount}</td>
+                      <td className="px-3 py-2.5 text-inky hidden md:table-cell">{c.category}</td>
+                      <td className="px-3 py-2.5 text-inky text-right">{c.shopCount}</td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-1.5 rounded bg-sky/20">
                             <div className="h-1.5 rounded"
                               style={{ width: `${c.pct}%`, backgroundColor: c.pct === 100 ? '#2ECC71' : c.pct >= 50 ? '#E67E22' : '#4F7489' }} />
                           </div>
-                          <span className="text-inky/50 w-8 text-right">{c.pct}%</span>
+                          <span className="text-inky w-8 text-right">{c.pct}%</span>
                         </div>
                       </td>
                     </tr>
@@ -175,14 +175,14 @@ export function ReportingTab({ locations }: Props) {
                     {regionSummaries.map(r => (
                       <tr key={r.region} className="border-t border-sky/20">
                         <td className="px-3 py-2.5 text-navy">{r.region}</td>
-                        <td className="px-3 py-2.5 text-inky/60 text-right">{r.shopCount}</td>
+                        <td className="px-3 py-2.5 text-inky text-right">{r.shopCount}</td>
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-2">
                             <div className="flex-1 h-1.5 rounded bg-sky/20">
                               <div className="h-1.5 rounded"
                                 style={{ width: `${r.pct}%`, backgroundColor: r.pct === 100 ? '#2ECC71' : r.pct >= 50 ? '#E67E22' : '#4F7489' }} />
                             </div>
-                            <span className="text-inky/50 w-8 text-right">{r.pct}%</span>
+                            <span className="text-inky w-8 text-right">{r.pct}%</span>
                           </div>
                         </td>
                       </tr>
@@ -197,7 +197,7 @@ export function ReportingTab({ locations }: Props) {
           <div>
             <h3 className="font-heading font-bold text-navy text-sm uppercase tracking-wide mb-3">
               Shop Details
-              <span className="text-inky/60 font-normal normal-case ml-2 text-xs">sorted by lowest completion</span>
+              <span className="text-inky font-normal normal-case ml-2 text-xs">sorted by lowest completion</span>
             </h3>
             <div className="border border-sky/20 rounded-lg overflow-hidden">
               <table className="w-full text-xs font-mono border-collapse">
@@ -218,17 +218,17 @@ export function ReportingTab({ locations }: Props) {
                       <tr key={s.plan.id} className="border-t border-sky/20">
                         <td className="px-3 py-2.5">
                           <div className="text-navy font-semibold">{s.loc?.shop_city ?? s.loc?.name ?? 'Unknown'}</div>
-                          {s.loc?.name && <div className="text-inky/60">{s.loc.name}</div>}
+                          {s.loc?.name && <div className="text-inky">{s.loc.name}</div>}
                         </td>
-                        <td className="px-3 py-2.5 text-inky/60 hidden md:table-cell">{s.loc?.region ?? ''}</td>
-                        <td className="px-3 py-2.5 text-inky/60 text-right">{s.plan.campaign_assignments?.length ?? 0}</td>
+                        <td className="px-3 py-2.5 text-inky hidden md:table-cell">{s.loc?.region ?? ''}</td>
+                        <td className="px-3 py-2.5 text-inky text-right">{s.plan.campaign_assignments?.length ?? 0}</td>
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-2">
                             <div className="flex-1 h-1.5 rounded bg-sky/20">
                               <div className="h-1.5 rounded"
                                 style={{ width: `${s.pct}%`, backgroundColor: s.pct === 100 ? '#2ECC71' : s.pct >= 50 ? '#E67E22' : '#4F7489' }} />
                             </div>
-                            <span className="text-inky/50 w-8 text-right">{s.pct}%</span>
+                            <span className="text-inky w-8 text-right">{s.pct}%</span>
                           </div>
                         </td>
                         <td className="px-3 py-2.5"><Badge color={color}>{label}</Badge></td>

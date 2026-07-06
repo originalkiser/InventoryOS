@@ -148,8 +148,8 @@ export function TasksPage() {
       sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId),
       sb.schema('inventory').from('project_tasks').select('*').eq('company_id', companyId).order('sort_order'),
       sb.schema('platform').from('schedule_events').select('*').eq('company_id', companyId).eq('is_checklist', true).order('start_date'),
-      sb.schema('core').from('tasks').select('*').eq('company_id', companyId).is('deleted_at', null).order('sort_order').order('created_at'),
-      sb.schema('core').from('tasks').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      sb.schema('core').from('tasks').select('*').eq('company_id', companyId).is('deleted_at', null).or(`created_by.eq.${myId},assignee_id.eq.${myId},is_public.eq.true`).order('sort_order').order('created_at'),
+      sb.schema('core').from('tasks').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).or(`created_by.eq.${myId},assignee_id.eq.${myId},is_public.eq.true`).order('deleted_at', { ascending: false }),
     ])
     setOrgProfiles((profRes.data ?? []) as Profile[])
     setProjects((projRes.data ?? []) as Project[])
@@ -189,22 +189,29 @@ export function TasksPage() {
         isPublic: true,
         deletedAt: null,
       })),
-      ...calendarTasks.map((t) => ({
-        key: `cal-${t.id}`,
-        id: t.id,
-        title: t.title,
-        notes: t.notes ?? null,
-        targetDate: t.start_date,
-        completed: t.completed,
-        completedAt: t.completed_at ?? null,
-        source: 'calendar' as const,
-        sourceLabel: 'Calendar',
-        createdBy: null,
-        assigneeId: null,
-        assigneeDisplay: null,
-        isPublic: true,
-        deletedAt: null,
-      })),
+      ...calendarTasks
+        .filter((t) => {
+          const ev = t as any
+          if (!ev.created_by) return true
+          if (ev.created_by === myId) return true
+          return (ev.assigned_to ?? []).includes(myId)
+        })
+        .map((t) => ({
+          key: `cal-${t.id}`,
+          id: t.id,
+          title: t.title,
+          notes: t.notes ?? null,
+          targetDate: t.start_date,
+          completed: t.completed,
+          completedAt: t.completed_at ?? null,
+          source: 'calendar' as const,
+          sourceLabel: 'Calendar',
+          createdBy: (t as any).created_by ?? null,
+          assigneeId: null,
+          assigneeDisplay: null,
+          isPublic: !(t as any).created_by,
+          deletedAt: null,
+        })),
       ...standaloneTasks.map((t) => ({
         key: `task-${t.id}`,
         id: t.id,
