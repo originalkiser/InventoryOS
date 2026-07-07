@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
-import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
+import { DataSourceLinker, type ExistingDataSource } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
@@ -140,6 +140,7 @@ export function ProductUsageTab() {
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [form, setForm] = useState({ ...EMPTY })
+  const [dataSource, setDataSource] = useState<ExistingDataSource | null>(null)
 
   // ---- Zero package-capacity filter ----
   const [excludeZeroPC, setExcludeZeroPC] = useAppSetting<boolean>('product_usage.excludeZeroPackageCapacity', true)
@@ -169,7 +170,18 @@ export function ProductUsageTab() {
     setLoading(false)
   }, [profile?.company_id])
 
-  useEffect(() => { loadRpc() }, [loadRpc])
+  const loadDataSource = useCallback(async () => {
+    if (!profile?.company_id) return
+    const { data: link } = await (supabase as any)
+      .schema('inventory').from('data_source_links')
+      .select('id, source_type, url, refresh_interval_minutes, last_synced_at')
+      .eq('company_id', profile.company_id)
+      .eq('config_type', 'product_usage')
+      .maybeSingle()
+    setDataSource((link as ExistingDataSource) ?? null)
+  }, [profile?.company_id])
+
+  useEffect(() => { loadRpc(); loadDataSource() }, [loadRpc, loadDataSource])
 
   async function clearAll() {
     if (!profile?.company_id) return
@@ -356,7 +368,13 @@ export function ProductUsageTab() {
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
           <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
         </div>
-        <DataSourceLinker configType="product_usage" />
+        <DataSourceLinker
+          configType="product_usage"
+          existingLink={dataSource}
+          requiredFields={REQUIRED_FIELDS}
+          onImport={handleImport}
+          onSaved={loadDataSource}
+        />
       </div>
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Product Usage' : 'Add Product Usage'} size="lg">
