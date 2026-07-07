@@ -434,7 +434,12 @@ function PillEditor({ onAdd }: { onAdd: (p: Pill) => void }) {
 }
 
 function cellVal(r: Record<string, any>, c: string): any {
-  if (c.startsWith('meta:')) return (r.metadata as any)?.[c.slice(5)]
+  if (c.startsWith('meta:')) {
+    const key = c.slice(5)
+    // Try metadata JSONB first, then fall back to promoted top-level column
+    const metaVal = (r.metadata as any)?.[key]
+    return (metaVal !== undefined && metaVal !== null) ? metaVal : r[key] ?? null
+  }
   return r[c]
 }
 
