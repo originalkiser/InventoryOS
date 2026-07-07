@@ -111,8 +111,9 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
   const [importing, setImporting] = useState(false)
 
   const canMap = !!(requiredFields?.length && onImport)
-  // Show "Fetch & Map" whenever there is a URL available (typed or from saved link)
+  // Prefer typed value; fall back to the saved URL from DB
   const effectiveUrl = url.trim() || existingLink?.url || ''
+  const isAuthRequired = sourceType === 'onedrive' || sourceType === 'sharepoint'
 
   function toggleDay(day: number) {
     setScheduleDays((prev) =>
@@ -317,19 +318,46 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
           </Button>
         </div>
 
-        {/* Fetch & Map section — shown when there is a URL and canMap */}
-        {canMap && effectiveUrl && (
+        {/* Fetch & Map section — always shown when canMap (ProductUsageTab and similar) */}
+        {canMap && (
           <div className="border-t border-navy/20 pt-4 flex flex-col gap-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-xs font-mono text-inky uppercase tracking-wide">Column Mapping</span>
-              <Button
-                size="sm"
-                loading={fetching}
-                onClick={() => doFetch(effectiveUrl)}
-              >
-                {fetching ? 'Fetching data…' : 'Fetch & Map Columns'}
-              </Button>
+              {effectiveUrl && !isAuthRequired && (
+                <Button size="sm" loading={fetching} onClick={() => doFetch(effectiveUrl)}>
+                  {fetching ? 'Fetching data…' : 'Fetch & Map Columns'}
+                </Button>
+              )}
             </div>
+
+            {/* OneDrive / SharePoint auth warning */}
+            {isAuthRequired && (
+              <div className="rounded bg-navy/5 border border-navy/20 px-3 py-2 flex flex-col gap-1">
+                <span className="text-xs font-mono text-navy font-bold">Direct fetch not supported for {sourceType === 'onedrive' ? 'OneDrive' : 'SharePoint'}</span>
+                <span className="text-xs font-mono text-inky">
+                  SharePoint and OneDrive require Microsoft authentication. To feed this table automatically:
+                </span>
+                <ul className="text-xs font-mono text-inky list-disc pl-4 mt-0.5 space-y-0.5">
+                  <li>Use a public sharing link that allows anonymous download, or</li>
+                  <li>Export the file and upload it manually using the Upload File section below</li>
+                </ul>
+                {effectiveUrl && (
+                  <a
+                    href={effectiveUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-mono text-sky underline mt-1 w-fit"
+                  >
+                    Open source file ↗
+                  </a>
+                )}
+              </div>
+            )}
+
+            {/* No URL yet */}
+            {!effectiveUrl && !isAuthRequired && (
+              <p className="text-xs font-mono text-inky/60">Enter a URL above and save the source to enable fetching.</p>
+            )}
 
             {/* Fetch loading indicator */}
             {fetching && (
@@ -361,9 +389,11 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
               </div>
             )}
 
-            <p className="text-xs font-mono text-inky/60">
-              Fetches from the saved URL and opens a column-matching dialog to map source fields to this table.
-            </p>
+            {!isAuthRequired && (
+              <p className="text-xs font-mono text-inky/60">
+                Fetches from the saved URL and opens a column-matching dialog to map source fields to this table.
+              </p>
+            )}
           </div>
         )}
       </div>
