@@ -571,6 +571,18 @@ function ManageColsPortal({ allCols, cols, onClose, onSave }: {
   )
 }
 
+function deriveAllCols(r: Record<string, any>[], source: string) {
+  const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
+  const baseSet = new Set(base)
+  const metaKeys = new Set<string>()
+  for (const row of r) {
+    const m = row.metadata
+    if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`)
+  }
+  const uniqueMetaKeys = [...metaKeys].filter((mk) => !baseSet.has(mk.slice(5)))
+  return [...base, ...uniqueMetaKeys, ...(source === 'locations' ? ['__pos__'] : [])]
+}
+
 function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColumns }: {
   block: Extract<Block, { type: 'table' }>; editing: boolean; search: string
   activeFilter: { column: string; value: string; label: string } | null
@@ -579,10 +591,12 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
 }) {
   const { profile } = useAuthStore()
   const loc = useLocations()
-  const [rows, setRows] = useState<Record<string, any>[]>([])
-  const [allCols, setAllCols] = useState<string[]>([])
+  const [fetchedRows, setFetchedRows] = useState<Record<string, any>[]>([])
   const [colsOpen, setColsOpen] = useState(false)
   const isLocations = block.source === 'locations'
+  const rows = isLocations ? (loc.locations as unknown as Record<string, any>[]) : fetchedRows
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const allCols = useMemo(() => deriveAllCols(rows, block.source), [rows, block.source])
   const stateKey = `lookup.block.${block.id}.state`
 
   function loadState() {
@@ -602,26 +616,6 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
     localStorage.setItem(stateKey, JSON.stringify({ sort, dropFilters, pageSize, page }))
   }, [sort, dropFilters, pageSize, page, stateKey])
 
-  function deriveAllCols(r: Record<string, any>[], source: string) {
-    const base = r[0] ? Object.keys(r[0]).filter((k) => k !== 'company_id' && k !== 'metadata') : []
-    const baseSet = new Set(base)
-    const metaKeys = new Set<string>()
-    for (const row of r) {
-      const m = row.metadata
-      if (m && typeof m === 'object') for (const k of Object.keys(m)) metaKeys.add(`meta:${k}`)
-    }
-    // Exclude meta:X when X is already a real column (e.g. meta:region when region exists)
-    const uniqueMetaKeys = [...metaKeys].filter((mk) => !baseSet.has(mk.slice(5)))
-    return [...base, ...uniqueMetaKeys, ...(source === 'locations' ? ['__pos__'] : [])]
-  }
-
-  useEffect(() => {
-    if (!isLocations) return
-    const r = loc.locations as unknown as Record<string, any>[]
-    setRows(r)
-    setAllCols(deriveAllCols(r, 'locations'))
-  }, [isLocations, loc.locations])
-
   useEffect(() => {
     if (isLocations || !profile?.company_id) return
     let cancelled = false
@@ -638,8 +632,7 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
       )
       if (cancelled) return
       const r = results.flatMap((res: any) => (res.data ?? []) as Record<string, any>[])
-      setRows(r)
-      setAllCols(deriveAllCols(r, block.source))
+      setFetchedRows(r)
     })()
     return () => { cancelled = true }
   }, [isLocations, block.source, profile?.company_id])
@@ -799,8 +792,8 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
         </div>
       )}
 
-      <div className="rounded border border-inky/20">
-        <table className="w-full text-[11px] font-body">
+      <div className="rounded border border-inky/20 overflow-x-auto">
+        <table className="min-w-full text-[11px] font-body">
           <thead className="bg-[#1a5c87] sticky top-0">
             <tr>
               {cols.map((c) => {
