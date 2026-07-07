@@ -174,7 +174,7 @@ export function ProductUsageTab() {
     if (!profile?.company_id) return
     const { data: link } = await (supabase as any)
       .schema('inventory').from('data_source_links')
-      .select('id, source_type, url, refresh_interval_minutes, last_synced_at')
+      .select('id, source_type, url, refresh_interval_minutes, last_synced_at, schedule_cron')
       .eq('company_id', profile.company_id)
       .eq('config_type', 'product_usage')
       .maybeSingle()
