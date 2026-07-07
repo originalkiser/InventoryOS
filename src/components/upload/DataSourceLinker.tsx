@@ -125,25 +125,17 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
     setFetching(true)
     setFetchError(null)
     try {
-      let text: string
-      if (isAuthRequired) {
-        // OneDrive / SharePoint — route through Edge Function (needs AZURE_* secrets)
-        const { data, error } = await supabase.functions.invoke('fetch-sharepoint-file', {
-          body: { url: targetUrl },
-        })
-        if (error) throw new Error(error.message)
-        if (data?.error === 'credentials_not_configured') {
-          throw new Error(
-            'credentials_not_configured: Microsoft credentials are not set up. A developer must add AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET to Supabase secrets, then redeploy the fetch-sharepoint-file Edge Function.'
-          )
-        }
-        if (data?.error) throw new Error(data.error)
-        text = data?.content ?? ''
-      } else {
-        const response = await fetch(targetUrl)
-        if (!response.ok) throw new Error(`Server returned ${response.status} ${response.statusText}`)
-        text = await response.text()
+      // Always route through Edge Function — avoids CORS on any source type.
+      // useGraphApi=true adds Microsoft auth for OneDrive/SharePoint sharing URLs.
+      const { data, error } = await supabase.functions.invoke('fetch-sharepoint-file', {
+        body: { url: targetUrl, useGraphApi: isAuthRequired },
+      })
+      if (error) throw new Error(error.message)
+      if (data?.error === 'credentials_not_configured') {
+        throw new Error('credentials_not_configured')
       }
+      if (data?.error) throw new Error(data.error)
+      const text: string = data?.content ?? ''
       if (!text.trim()) throw new Error('Response was empty — check the URL or source configuration')
       const blob = new Blob([text], { type: 'text/csv' })
       const file = new File([blob], 'live_data.csv', { type: 'text/csv' })
@@ -154,12 +146,7 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
       setMapOpen(true)
     } catch (err: any) {
       const msg: string = err?.message ?? 'Unknown error'
-      const isCors = !isAuthRequired && (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed'))
-      setFetchError(
-        isCors
-          ? 'Network or CORS error — the source must allow requests from this app\'s origin.'
-          : msg
-      )
+      setFetchError(msg)
     } finally {
       setFetching(false)
     }

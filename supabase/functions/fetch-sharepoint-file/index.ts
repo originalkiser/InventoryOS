@@ -1,17 +1,16 @@
-// Fetches a OneDrive or SharePoint file server-side via Microsoft Graph API.
+// Server-side fetch proxy + optional Microsoft Graph auth for OneDrive/SharePoint.
 //
-// Required Supabase secrets (set with `supabase secrets set KEY=value`):
+// When useGraphApi is false (default): fetches the URL directly from Deno —
+// no CORS restrictions, works for any public URL including OneDrive direct-download links.
+//
+// When useGraphApi is true: uses Microsoft client credentials OAuth to authenticate
+// with Graph API, then downloads via the /shares/{encodedUrl}/driveItem/content endpoint.
+// Requires these Supabase secrets (Project Settings → Edge Functions → Secrets):
 //   AZURE_TENANT_ID      — Azure Portal > Azure Active Directory > Tenant ID
 //   AZURE_CLIENT_ID      — App Registration > Overview > Application (client) ID
 //   AZURE_CLIENT_SECRET  — App Registration > Certificates & secrets > New client secret
-//
-// Required application permissions on the Azure App Registration (not delegated):
-//   Microsoft Graph > Files.Read.All   — read all files in the tenant
-//   (or Sites.Read.All for SharePoint sites)
-//
-// After granting permissions, click "Grant admin consent" in the Azure portal.
-//
-// Deploy: supabase functions deploy fetch-sharepoint-file
+// And these app permissions on the Azure App Registration (application, not delegated):
+//   Microsoft Graph > Files.Read.All
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -26,7 +25,6 @@ function json(body: unknown, status = 200) {
   })
 }
 
-// Encodes a sharing URL into the base64url format required by Graph API
 function encodeShareUrl(shareUrl: string): string {
   const b64 = btoa(shareUrl).replace(/=/g, '').replace(/\//g, '_').replace(/\+/g, '-')
   return `u!${b64}`
@@ -38,8 +36,19 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}))
     const url: string = body.url ?? ''
+    const useGraphApi: boolean = body.useGraphApi ?? false
+
     if (!url) return json({ error: 'url is required' }, 400)
 
+    if (!useGraphApi) {
+      // Simple proxy — fetch the URL server-side (no CORS restrictions in Deno)
+      const res = await fetch(url, { redirect: 'follow' })
+      if (!res.ok) return json({ error: `Fetch failed (${res.status} ${res.statusText})` }, res.status < 500 ? res.status : 502)
+      const content = await res.text()
+      return json({ content })
+    }
+
+    // Graph API path — requires Azure credentials
     const tenantId = Deno.env.get('AZURE_TENANT_ID')
     const clientId = Deno.env.get('AZURE_CLIENT_ID')
     const clientSecret = Deno.env.get('AZURE_CLIENT_SECRET')
@@ -51,7 +60,6 @@ Deno.serve(async (req) => {
       }, 500)
     }
 
-    // 1. Get an app-level access token via client credentials flow
     const tokenRes = await fetch(
       `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
       {
@@ -71,8 +79,6 @@ Deno.serve(async (req) => {
       return json({ error: `Microsoft authentication failed: ${msg}` }, 502)
     }
 
-    // 2. Resolve sharing URL → file content via Graph API
-    // /shares/{encodedUrl}/driveItem/content returns the raw file bytes (follows redirects)
     const encoded = encodeShareUrl(url)
     const graphUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem/content`
 
