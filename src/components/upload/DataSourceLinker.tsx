@@ -125,9 +125,25 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
     setFetching(true)
     setFetchError(null)
     try {
-      const response = await fetch(targetUrl)
-      if (!response.ok) throw new Error(`Server returned ${response.status} ${response.statusText}`)
-      const text = await response.text()
+      let text: string
+      if (isAuthRequired) {
+        // OneDrive / SharePoint — route through Edge Function (needs AZURE_* secrets)
+        const { data, error } = await supabase.functions.invoke('fetch-sharepoint-file', {
+          body: { url: targetUrl },
+        })
+        if (error) throw new Error(error.message)
+        if (data?.error === 'credentials_not_configured') {
+          throw new Error(
+            'credentials_not_configured: Microsoft credentials are not set up. A developer must add AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET to Supabase secrets, then redeploy the fetch-sharepoint-file Edge Function.'
+          )
+        }
+        if (data?.error) throw new Error(data.error)
+        text = data?.content ?? ''
+      } else {
+        const response = await fetch(targetUrl)
+        if (!response.ok) throw new Error(`Server returned ${response.status} ${response.statusText}`)
+        text = await response.text()
+      }
       if (!text.trim()) throw new Error('Response was empty — check the URL or source configuration')
       const blob = new Blob([text], { type: 'text/csv' })
       const file = new File([blob], 'live_data.csv', { type: 'text/csv' })
@@ -137,12 +153,11 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
       setFetchedRows(result.rows)
       setMapOpen(true)
     } catch (err: any) {
-      const msg = err?.message ?? 'Unknown error'
-      // Distinguish CORS/network errors from HTTP errors
-      const isCors = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed')
+      const msg: string = err?.message ?? 'Unknown error'
+      const isCors = !isAuthRequired && (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed'))
       setFetchError(
         isCors
-          ? 'Network or CORS error — the source must allow requests from this app\'s origin. Check the source server\'s CORS settings, or use a server-side fetch instead.'
+          ? 'Network or CORS error — the source must allow requests from this app\'s origin.'
           : msg
       )
     } finally {
@@ -323,39 +338,15 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
           <div className="border-t border-navy/20 pt-4 flex flex-col gap-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-xs font-mono text-inky uppercase tracking-wide">Column Mapping</span>
-              {effectiveUrl && !isAuthRequired && (
+              {effectiveUrl && (
                 <Button size="sm" loading={fetching} onClick={() => doFetch(effectiveUrl)}>
                   {fetching ? 'Fetching data…' : 'Fetch & Map Columns'}
                 </Button>
               )}
             </div>
 
-            {/* OneDrive / SharePoint auth warning */}
-            {isAuthRequired && (
-              <div className="rounded bg-navy/5 border border-navy/20 px-3 py-2 flex flex-col gap-1">
-                <span className="text-xs font-mono text-navy font-bold">Direct fetch not supported for {sourceType === 'onedrive' ? 'OneDrive' : 'SharePoint'}</span>
-                <span className="text-xs font-mono text-inky">
-                  SharePoint and OneDrive require Microsoft authentication. To feed this table automatically:
-                </span>
-                <ul className="text-xs font-mono text-inky list-disc pl-4 mt-0.5 space-y-0.5">
-                  <li>Use a public sharing link that allows anonymous download, or</li>
-                  <li>Export the file and upload it manually using the Upload File section below</li>
-                </ul>
-                {effectiveUrl && (
-                  <a
-                    href={effectiveUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs font-mono text-sky underline mt-1 w-fit"
-                  >
-                    Open source file ↗
-                  </a>
-                )}
-              </div>
-            )}
-
             {/* No URL yet */}
-            {!effectiveUrl && !isAuthRequired && (
+            {!effectiveUrl && (
               <p className="text-xs font-mono text-inky/60">Enter a URL above and save the source to enable fetching.</p>
             )}
 
@@ -366,13 +357,25 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
               </div>
             )}
 
-            {/* Fetch error — persistent, not just a toast */}
-            {fetchError && !fetching && (
-              <div className="rounded bg-red-50 border border-red-200 px-3 py-2 flex flex-col gap-1">
-                <span className="text-xs font-mono text-red-600 font-bold">Fetch failed</span>
-                <span className="text-xs font-mono text-red-500">{fetchError}</span>
-              </div>
-            )}
+            {/* Fetch error — persistent */}
+            {fetchError && !fetching && (() => {
+              const isCredsError = fetchError.startsWith('credentials_not_configured')
+              return (
+                <div className={isCredsError
+                  ? 'rounded border border-navy/20 bg-navy/5 px-3 py-2 flex flex-col gap-1'
+                  : 'rounded border border-red-200 bg-red-50 px-3 py-2 flex flex-col gap-1'
+                }>
+                  <span className={`text-xs font-mono font-bold ${isCredsError ? 'text-navy' : 'text-red-600'}`}>
+                    {isCredsError ? 'Microsoft credentials not configured' : 'Fetch failed'}
+                  </span>
+                  <span className={`text-xs font-mono ${isCredsError ? 'text-inky' : 'text-red-500'}`}>
+                    {isCredsError
+                      ? 'A developer must add AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET to Supabase secrets and deploy the fetch-sharepoint-file Edge Function.'
+                      : fetchError}
+                  </span>
+                </div>
+              )
+            })()}
 
             {/* Success preview (rows ready, mapper closed) */}
             {fetchedRows.length > 0 && !mapOpen && !fetching && !fetchError && (
@@ -389,11 +392,11 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
               </div>
             )}
 
-            {!isAuthRequired && (
-              <p className="text-xs font-mono text-inky/60">
-                Fetches from the saved URL and opens a column-matching dialog to map source fields to this table.
-              </p>
-            )}
+            <p className="text-xs font-mono text-inky/60">
+              {isAuthRequired
+                ? 'Fetches via Microsoft Graph API (server-side) and opens a column-matching dialog.'
+                : 'Fetches from the saved URL and opens a column-matching dialog to map source fields to this table.'}
+            </p>
           </div>
         )}
       </div>
