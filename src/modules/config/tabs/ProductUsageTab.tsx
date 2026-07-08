@@ -416,7 +416,7 @@ export function ProductUsageTab() {
           <div>
             <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Droptop Sync</h3>
             <p className="text-xs text-inky/60 mt-0.5">
-              Pull on-hands and sales usage directly from Droptop. Requires <code className="font-mono bg-navy/5 px-1 rounded">DROPTOP_PUBLIC_KEY</code> and <code className="font-mono bg-navy/5 px-1 rounded">DROPTOP_PRIVATE_KEY</code> in Supabase secrets, and Droptop Operation IDs set on each location under Config → Locations → Integrations.
+              Pull on-hands and sales usage directly from Droptop. Requires <code className="font-mono bg-navy/5 px-1 rounded">DROPTOP_PUBLIC_KEY</code> and <code className="font-mono bg-navy/5 px-1 rounded">DROPTOP_PRIVATE_KEY</code> in Supabase secrets, and a Droptop Operation ID set on each location (edit a location → Integrations tab).
             </p>
           </div>
           <div className="flex items-end gap-3 flex-wrap">

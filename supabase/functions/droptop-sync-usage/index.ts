@@ -154,7 +154,9 @@ Deno.serve(async (req) => {
 
     let locations: any[]
     {
-      const { data, error } = await (admin as any)
+      // Use caller (user JWT) so authenticated RLS grants apply — service_role
+      // may not have explicit USAGE on the core schema until the grants migration runs.
+      const { data, error } = await (caller as any)
         .schema('core').from('locations')
         .select('id, droptop_operation_id')
         .eq('company_id', me.company_id)
