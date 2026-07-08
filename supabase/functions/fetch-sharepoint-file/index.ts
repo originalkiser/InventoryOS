@@ -38,10 +38,18 @@ Deno.serve(async (req) => {
     if (!url) return ok({ error: 'url is required' })
 
     if (!useGraphApi) {
-      // Plain proxy — Deno fetches the URL server-side, no browser CORS restrictions
+      // Plain proxy — Deno fetches server-side (no browser CORS).
+      // Send browser-like headers so SharePoint/OneDrive sharing links aren't rejected.
       let res: Response
       try {
-        res = await fetch(url, { redirect: 'follow' })
+        res = await fetch(url, {
+          redirect: 'follow',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        })
       } catch (fetchErr: unknown) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
         return ok({ error: `Could not reach URL: ${msg}` })
