@@ -154,9 +154,10 @@ Deno.serve(async (req) => {
 
     let locations: any[]
     {
-      // Use caller (user JWT) so authenticated RLS grants apply — service_role
-      // may not have explicit USAGE on the core schema until the grants migration runs.
-      const { data, error } = await (caller as any)
+      // Use admin (service_role) to bypass RLS — RLS helper get_my_company_id()
+      // queries the old profiles table, not platform.user_profiles, so caller JWT
+      // would return 0 rows. Requires 20260708b_edge_function_schema_grants.sql applied.
+      const { data, error } = await (admin as any)
         .schema('core').from('locations')
         .select('id, droptop_operation_id')
         .eq('company_id', me.company_id)
