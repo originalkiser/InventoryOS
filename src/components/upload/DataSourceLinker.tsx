@@ -135,10 +135,20 @@ export function DataSourceLinker({ configType, existingLink, requiredFields, onI
         throw new Error('credentials_not_configured')
       }
       if (data?.error) throw new Error(data.error)
-      const text: string = data?.content ?? ''
-      if (!text.trim()) throw new Error('Response was empty — check the URL or source configuration')
-      const blob = new Blob([text], { type: 'text/csv' })
-      const file = new File([blob], 'live_data.csv', { type: 'text/csv' })
+
+      let file: File
+      if (data?.isBase64 && data?.filename) {
+        // Binary file (xlsx) returned as base64 — decode and reconstruct
+        const binaryStr = atob(data.content)
+        const bytes = new Uint8Array(binaryStr.length)
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i)
+        file = new File([bytes], data.filename)
+      } else {
+        const text: string = data?.content ?? ''
+        if (!text.trim()) throw new Error('Response was empty — check the URL or source configuration')
+        file = new File([text], 'live_data.csv', { type: 'text/csv' })
+      }
+
       const result = await parseFile(file)
       if (!result.headers.length) throw new Error('No columns found in fetched data')
       setFetchedHeaders(result.headers)

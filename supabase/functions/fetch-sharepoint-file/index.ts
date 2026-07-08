@@ -57,6 +57,21 @@ Deno.serve(async (req) => {
       if (!res.ok) {
         return ok({ error: `Source returned ${res.status} ${res.statusText} — check the URL is correct and publicly accessible` })
       }
+      const contentType = res.headers.get('content-type') ?? ''
+      const isBinary = contentType.includes('spreadsheetml') ||
+        contentType.includes('excel') ||
+        contentType.includes('octet-stream') ||
+        contentType.includes('zip')
+      if (isBinary) {
+        const buffer = await res.arrayBuffer()
+        const bytes = new Uint8Array(buffer)
+        let binary = ''
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+        const b64 = btoa(binary)
+        // Determine filename extension from content-type
+        const filename = contentType.includes('spreadsheetml') ? 'live_data.xlsx' : 'live_data.bin'
+        return ok({ content: b64, isBase64: true, filename })
+      }
       const content = await res.text()
       return ok({ content })
     }
