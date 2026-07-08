@@ -271,6 +271,11 @@ Deno.serve(async (req) => {
       })
       .then(() => {})
 
+    // If every location failed, surface the errors instead of returning 0/0 success.
+    if (operationsSynced === 0 && opErrors.length > 0) {
+      return ok({ error: opErrors.join(' | ') })
+    }
+
     return ok({
       success: true,
       operations_synced: operationsSynced,
