@@ -160,7 +160,7 @@ Deno.serve(async (req) => {
         .schema('core').from('locations')
         .select('id, droptop_operation_id')
         .eq('company_id', me.company_id)
-        .neq('droptop_operation_id', null)
+        .not('droptop_operation_id', 'is', null)
       if (error) return ok({ error: `Locations query failed: ${error.message}` })
       locations = (data ?? []).filter((l: any) => l.droptop_operation_id)
     }
