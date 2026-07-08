@@ -142,6 +142,12 @@ export function ProductUsageTab() {
   const [form, setForm] = useState({ ...EMPTY })
   const [dataSource, setDataSource] = useState<ExistingDataSource | null>(null)
 
+  // Droptop sync
+  const [droptopSyncing, setDroptopSyncing] = useState(false)
+  const [droptopDaysBack, setDroptopDaysBack] = useState(30)
+  const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number } | null>(null)
+  const [droptopError, setDroptopError] = useState<string | null>(null)
+
   // ---- Zero package-capacity filter ----
   const [excludeZeroPC, setExcludeZeroPC] = useAppSetting<boolean>('product_usage.excludeZeroPackageCapacity', true)
   const [includedZeroCats, setIncludedZeroCats] = useAppSetting<string[]>('product_usage.includedZeroCategories', [])
@@ -261,6 +267,33 @@ export function ProductUsageTab() {
     await loadRpc()
   }
 
+  // ---- Droptop sync ----
+  async function syncFromDroptop() {
+    setDroptopSyncing(true)
+    setDroptopError(null)
+    setDroptopResult(null)
+    const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
+      body: { daysBack: droptopDaysBack },
+    })
+    setDroptopSyncing(false)
+    if (error) {
+      setDroptopError(error.message)
+      toast.error('Droptop sync failed')
+      return
+    }
+    if (data?.error) {
+      const msg = data.error === 'credentials_not_configured'
+        ? 'Droptop API keys not configured — add DROPTOP_PUBLIC_KEY and DROPTOP_PRIVATE_KEY to Supabase secrets.'
+        : data.error
+      setDroptopError(msg)
+      toast.error('Droptop sync failed')
+      return
+    }
+    setDroptopResult({ operations_synced: data.operations_synced ?? 0, products_upserted: data.products_upserted ?? 0 })
+    toast.success(`Synced ${(data.products_upserted ?? 0).toLocaleString()} products from Droptop`)
+    loadRpc()
+  }
+
   // ---- Batch import ----
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     if (!profile?.company_id) return
@@ -375,6 +408,44 @@ export function ProductUsageTab() {
           onImport={handleImport}
           onSaved={loadDataSource}
         />
+      </div>
+
+      {/* ── Droptop Sync ──────────────────────────────────────────────────── */}
+      <div className="border-t border-navy/10 pt-4">
+        <div className="flex flex-col gap-3">
+          <div>
+            <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Droptop Sync</h3>
+            <p className="text-xs text-inky/60 mt-0.5">
+              Pull on-hands and sales usage directly from Droptop. Requires <code className="font-mono bg-navy/5 px-1 rounded">DROPTOP_PUBLIC_KEY</code> and <code className="font-mono bg-navy/5 px-1 rounded">DROPTOP_PRIVATE_KEY</code> in Supabase secrets, and Droptop Operation IDs set on each location under Config → Locations → Integrations.
+            </p>
+          </div>
+          <div className="flex items-end gap-3 flex-wrap">
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Usage window</span>
+              <select
+                value={droptopDaysBack}
+                onChange={(e) => setDroptopDaysBack(Number(e.target.value))}
+                className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]"
+              >
+                <option value={7}>Last 7 days</option>
+                <option value={14}>Last 14 days</option>
+                <option value={30}>Last 30 days</option>
+                <option value={90}>Last 90 days</option>
+              </select>
+            </label>
+            <Button size="sm" onClick={syncFromDroptop} disabled={droptopSyncing}>
+              {droptopSyncing ? 'Syncing…' : 'Sync from Droptop'}
+            </Button>
+          </div>
+          {droptopResult && (
+            <p className="text-xs font-mono text-inky">
+              Synced {droptopResult.operations_synced} location{droptopResult.operations_synced !== 1 ? 's' : ''} · {droptopResult.products_upserted.toLocaleString()} products updated
+            </p>
+          )}
+          {droptopError && (
+            <p className="text-xs font-mono text-[#C0392B]">{droptopError}</p>
+          )}
+        </div>
       </div>
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Product Usage' : 'Add Product Usage'} size="lg">
