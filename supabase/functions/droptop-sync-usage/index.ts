@@ -43,14 +43,17 @@ async function parseKey(key: string): Promise<[Uint8Array, string]> {
     for (let i = 0; i < Math.min(raw.length, 32); i++) bytes[i] = raw.charCodeAt(i)
     return [bytes, `base64-44`]
   }
-  // Any other length: SHA-256 hash → 32 bytes.
-  // This is the common pattern when the key string is longer or shorter than 32 bytes.
+  // Raw UTF-8 bytes: if already a valid AES key size (16/24/32) use directly.
+  // Otherwise SHA-256 hash to 32 bytes.
   const rawBytes = new TextEncoder().encode(k)
+  if (rawBytes.length === 16 || rawBytes.length === 24 || rawBytes.length === 32) {
+    return [rawBytes, `raw-utf8-${rawBytes.length}bytes`]
+  }
   const hashBuffer = await crypto.subtle.digest('SHA-256', rawBytes)
-  return [new Uint8Array(hashBuffer), `sha256-from-raw-${k.length}chars`]
+  return [new Uint8Array(hashBuffer), `sha256-from-${rawBytes.length}bytes`]
 }
 
-async function buildSig(publicKey: string, method: string, privateKey: string): Promise<[string, string]> {
+async function buildSig(publicKey: string, method: string, privateKey: string): Promise<[string, string, string]> {
   const timestamp = Math.floor(Date.now() / 1000)
   const message = `${publicKey.trim()}|${method.toUpperCase()}|${timestamp}`
   const msgBytes = new TextEncoder().encode(message)
@@ -74,7 +77,8 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
     encrypted.set(new Uint8Array(enc).slice(0, 16), i)
   }
 
-  return [btoa(String.fromCharCode(...encrypted)), keyFormat]
+  const sig = btoa(String.fromCharCode(...encrypted))
+  return [sig, keyFormat, message]
 }
 
 async function callDroptop(
@@ -86,8 +90,9 @@ async function callDroptop(
   const [sig] = await buildSig(publicKey, 'GET', privateKey)
   const qs = new URLSearchParams({ sig, ...params })
   const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
+  // No Content-Type on GET requests — some servers reject or mishandle it.
   const res = await fetch(url, {
-    headers: { 'x-api-key': publicKey, 'Content-Type': 'application/json' },
+    headers: { 'x-api-key': publicKey.trim() },
     redirect: 'follow',
   })
   const text = await res.text()
@@ -175,8 +180,8 @@ Deno.serve(async (req) => {
     const endUnix = Math.floor(Date.now() / 1000)
     const startUnix = endUnix - daysBack * 86400
 
-    // Detect key format for diagnostics (run one sig to capture the format label)
-    const [, keyDebug] = await buildSig(publicKey, 'GET', privateKey)
+    // Diagnostic: detect key format and capture test sig/message for manual verification
+    const [testSig, keyDebug, testMessage] = await buildSig(publicKey, 'GET', privateKey)
 
     // 2. Load locations with droptop_operation_id mapped
     const admin = createClient(supabaseUrl, serviceKey, {
@@ -306,7 +311,7 @@ Deno.serve(async (req) => {
 
     // If every location failed, surface the errors instead of returning 0/0 success.
     if (operationsSynced === 0 && opErrors.length > 0) {
-      return ok({ error: opErrors.join(' | '), keyDebug })
+      return ok({ error: opErrors.join(' | '), keyDebug, testMessage, testSig })
     }
 
     return ok({
@@ -314,6 +319,8 @@ Deno.serve(async (req) => {
       operations_synced: operationsSynced,
       products_upserted: productsUpserted,
       keyDebug,
+      testMessage,
+      testSig,
       ...(opErrors.length > 0 ? { warnings: opErrors } : {}),
     })
   } catch (err: unknown) {

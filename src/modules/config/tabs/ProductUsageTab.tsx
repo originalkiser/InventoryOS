@@ -149,6 +149,8 @@ export function ProductUsageTab() {
   const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number; keyDebug?: string } | null>(null)
   const [droptopError, setDroptopError] = useState<string | null>(null)
   const [droptopKeyDebug, setDroptopKeyDebug] = useState<string | null>(null)
+  const [droptopTestMessage, setDroptopTestMessage] = useState<string | null>(null)
+  const [droptopTestSig, setDroptopTestSig] = useState<string | null>(null)
 
   const droptopLocations = useMemo(
     () => loc.locations.filter((l: any) => l.droptop_operation_id),
@@ -280,6 +282,8 @@ export function ProductUsageTab() {
     setDroptopError(null)
     setDroptopResult(null)
     setDroptopKeyDebug(null)
+    setDroptopTestMessage(null)
+    setDroptopTestSig(null)
     const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
       body: {
         daysBack: droptopDaysBack,
@@ -298,6 +302,8 @@ export function ProductUsageTab() {
         : data.error
       setDroptopError(msg)
       if (data.keyDebug) setDroptopKeyDebug(data.keyDebug)
+      if (data.testMessage) setDroptopTestMessage(data.testMessage)
+      if (data.testSig) setDroptopTestSig(data.testSig)
       toast.error('Droptop sync failed')
       return
     }
@@ -479,10 +485,16 @@ export function ProductUsageTab() {
             </div>
           )}
           {droptopError && (
-            <div className="flex flex-col gap-0.5">
+            <div className="flex flex-col gap-1">
               <p className="text-xs font-mono text-[#C0392B]">{droptopError}</p>
               {droptopKeyDebug && (
-                <p className="text-[10px] font-mono text-inky/50">Key debug: {droptopKeyDebug}</p>
+                <p className="text-[10px] font-mono text-inky/50">Key: {droptopKeyDebug}</p>
+              )}
+              {droptopTestMessage && (
+                <p className="text-[10px] font-mono text-inky/50 break-all">Message: {droptopTestMessage}</p>
+              )}
+              {droptopTestSig && (
+                <p className="text-[10px] font-mono text-inky/50 break-all">Sig: {droptopTestSig}</p>
               )}
             </div>
           )}
