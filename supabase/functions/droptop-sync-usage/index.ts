@@ -9,7 +9,6 @@
 // POST body: { daysBack? }   — default 30, max 365
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import * as aesjs from 'https://esm.sh/aes-js@3.1.2'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -25,28 +24,56 @@ function ok(body: unknown) {
 }
 
 // ── Droptop auth sig ─────────────────────────────────────────────────────────
+// sig = base64(AES-256-ECB(PKCS7pad(publicKey|METHOD|unixTimestamp), privateKey))
+// ECB implemented via AES-CBC with a zeroed IV applied per 16-byte block.
 
-function parseKey(key: string): number[] {
-  if (/^[0-9a-fA-F]{64}$/.test(key)) {
-    const bytes: number[] = []
-    for (let i = 0; i < 32; i++) bytes.push(parseInt(key.slice(i * 2, i * 2 + 2), 16))
+function parseKey(key: string): Uint8Array {
+  const k = key.trim()
+  // 64-char hex → 32 bytes
+  if (/^[0-9a-fA-F]{64}$/.test(k)) {
+    const bytes = new Uint8Array(32)
+    for (let i = 0; i < 32; i++) bytes[i] = parseInt(k.slice(i * 2, i * 2 + 2), 16)
     return bytes
   }
-  const raw = new TextEncoder().encode(key)
-  const bytes = new Array(32).fill(0)
-  for (let i = 0; i < Math.min(raw.length, 32); i++) bytes[i] = raw[i]
+  // 44-char base64 → 32 bytes
+  if (/^[A-Za-z0-9+/]{43}=?$/.test(k)) {
+    const raw = atob(k)
+    const bytes = new Uint8Array(32)
+    for (let i = 0; i < Math.min(raw.length, 32); i++) bytes[i] = raw.charCodeAt(i)
+    return bytes
+  }
+  // Raw UTF-8 string → padded/truncated to 32 bytes
+  const raw = new TextEncoder().encode(k)
+  const bytes = new Uint8Array(32)
+  bytes.set(raw.slice(0, 32))
   return bytes
 }
 
-function buildSig(publicKey: string, method: string, privateKey: string): string {
+async function buildSig(publicKey: string, method: string, privateKey: string): Promise<string> {
   const timestamp = Math.floor(Date.now() / 1000)
-  const message = `${publicKey}|${method.toUpperCase()}|${timestamp}`
-  const msgBytes = Array.from(new TextEncoder().encode(message))
+  const message = `${publicKey.trim()}|${method.toUpperCase()}|${timestamp}`
+  const msgBytes = new TextEncoder().encode(message)
+
+  // PKCS7 pad to 16-byte boundary
   const padLen = 16 - (msgBytes.length % 16)
-  const padded = [...msgBytes, ...new Array(padLen).fill(padLen)]
-  const keyBytes = parseKey(privateKey)
-  const ecb = new (aesjs as any).ModeOfOperation.ecb(keyBytes)
-  const encrypted: number[] = Array.from(ecb.encrypt(padded))
+  const padded = new Uint8Array(msgBytes.length + padLen)
+  padded.set(msgBytes)
+  padded.fill(padLen, msgBytes.length)
+
+  // Import key for AES-CBC (used to emulate ECB per-block)
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', parseKey(privateKey), { name: 'AES-CBC' }, false, ['encrypt'],
+  )
+
+  // Encrypt each 16-byte block independently (zero IV = ECB for each block)
+  const zeroIV = new Uint8Array(16)
+  const encrypted = new Uint8Array(padded.length)
+  for (let i = 0; i < padded.length; i += 16) {
+    // CBC with zero IV on one block; output is 32 bytes (block + PKCS7 tail — discard tail)
+    const enc = await crypto.subtle.encrypt({ name: 'AES-CBC', iv: zeroIV }, cryptoKey, padded.slice(i, i + 16))
+    encrypted.set(new Uint8Array(enc).slice(0, 16), i)
+  }
+
   return btoa(String.fromCharCode(...encrypted))
 }
 
@@ -56,7 +83,7 @@ async function callDroptop(
   publicKey: string,
   privateKey: string,
 ): Promise<any> {
-  const sig = buildSig(publicKey, 'GET', privateKey)
+  const sig = await buildSig(publicKey, 'GET', privateKey)
   const qs = new URLSearchParams({ sig, ...params })
   const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
   const res = await fetch(url, {
