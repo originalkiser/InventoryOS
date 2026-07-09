@@ -171,8 +171,17 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}))
     const daysBack = Math.min(Math.max(Number(body.daysBack ?? 30), 1), 365)
+    const locationId: string | null = body.locationId ?? null
     const endUnix = Math.floor(Date.now() / 1000)
     const startUnix = endUnix - daysBack * 86400
+
+    // Key format diagnostic (no key value exposed)
+    const privTrimmed = privateKey.trim()
+    const keyDebug = /^[0-9a-fA-F]{64}$/.test(privTrimmed)
+      ? `hex-64 (${privTrimmed.length})`
+      : /^[A-Za-z0-9+/]{43}=?$/.test(privTrimmed)
+      ? `base64-44 (${privTrimmed.length})`
+      : `raw-utf8 (${privTrimmed.length} chars)`
 
     // 2. Load locations with droptop_operation_id mapped
     const admin = createClient(supabaseUrl, serviceKey, {
@@ -184,11 +193,13 @@ Deno.serve(async (req) => {
       // Use admin (service_role) to bypass RLS — RLS helper get_my_company_id()
       // queries the old profiles table, not platform.user_profiles, so caller JWT
       // would return 0 rows. Requires 20260708b_edge_function_schema_grants.sql applied.
-      const { data, error } = await (admin as any)
+      let q = (admin as any)
         .schema('core').from('locations')
         .select('id, droptop_operation_id')
         .eq('company_id', me.company_id)
         .not('droptop_operation_id', 'is', null)
+      if (locationId) q = q.eq('id', locationId)
+      const { data, error } = await q
       if (error) return ok({ error: `Locations query failed: ${error.message}` })
       locations = (data ?? []).filter((l: any) => l.droptop_operation_id)
     }
@@ -300,13 +311,14 @@ Deno.serve(async (req) => {
 
     // If every location failed, surface the errors instead of returning 0/0 success.
     if (operationsSynced === 0 && opErrors.length > 0) {
-      return ok({ error: opErrors.join(' | ') })
+      return ok({ error: opErrors.join(' | '), keyDebug })
     }
 
     return ok({
       success: true,
       operations_synced: operationsSynced,
       products_upserted: productsUpserted,
+      keyDebug,
       ...(opErrors.length > 0 ? { warnings: opErrors } : {}),
     })
   } catch (err: unknown) {

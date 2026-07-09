@@ -145,8 +145,14 @@ export function ProductUsageTab() {
   // Droptop sync
   const [droptopSyncing, setDroptopSyncing] = useState(false)
   const [droptopDaysBack, setDroptopDaysBack] = useState(30)
-  const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number } | null>(null)
+  const [droptopLocationId, setDroptopLocationId] = useState<string>('')
+  const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number; keyDebug?: string } | null>(null)
   const [droptopError, setDroptopError] = useState<string | null>(null)
+
+  const droptopLocations = useMemo(
+    () => loc.locations.filter((l: any) => l.droptop_operation_id),
+    [loc.locations],
+  )
 
   // ---- Zero package-capacity filter ----
   const [excludeZeroPC, setExcludeZeroPC] = useAppSetting<boolean>('product_usage.excludeZeroPackageCapacity', true)
@@ -273,7 +279,10 @@ export function ProductUsageTab() {
     setDroptopError(null)
     setDroptopResult(null)
     const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
-      body: { daysBack: droptopDaysBack },
+      body: {
+        daysBack: droptopDaysBack,
+        ...(droptopLocationId ? { locationId: droptopLocationId } : {}),
+      },
     })
     setDroptopSyncing(false)
     if (error) {
@@ -289,7 +298,11 @@ export function ProductUsageTab() {
       toast.error('Droptop sync failed')
       return
     }
-    setDroptopResult({ operations_synced: data.operations_synced ?? 0, products_upserted: data.products_upserted ?? 0 })
+    setDroptopResult({
+      operations_synced: data.operations_synced ?? 0,
+      products_upserted: data.products_upserted ?? 0,
+      keyDebug: data.keyDebug,
+    })
     toast.success(`Synced ${(data.products_upserted ?? 0).toLocaleString()} products from Droptop`)
     loadRpc()
   }
@@ -420,6 +433,21 @@ export function ProductUsageTab() {
             </p>
           </div>
           <div className="flex items-end gap-3 flex-wrap">
+            {droptopLocations.length > 0 && (
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Location</span>
+                <select
+                  value={droptopLocationId}
+                  onChange={(e) => setDroptopLocationId(e.target.value)}
+                  className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]"
+                >
+                  <option value="">All locations ({droptopLocations.length})</option>
+                  {droptopLocations.map((l: any) => (
+                    <option key={l.id} value={l.id}>{l.name || l.shop_city || l.id}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="flex flex-col gap-0.5">
               <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Usage window</span>
               <select
@@ -438,9 +466,14 @@ export function ProductUsageTab() {
             </Button>
           </div>
           {droptopResult && (
-            <p className="text-xs font-mono text-inky">
-              Synced {droptopResult.operations_synced} location{droptopResult.operations_synced !== 1 ? 's' : ''} · {droptopResult.products_upserted.toLocaleString()} products updated
-            </p>
+            <div className="flex flex-col gap-0.5">
+              <p className="text-xs font-mono text-inky">
+                Synced {droptopResult.operations_synced} location{droptopResult.operations_synced !== 1 ? 's' : ''} · {droptopResult.products_upserted.toLocaleString()} products updated
+              </p>
+              {droptopResult.keyDebug && (
+                <p className="text-[10px] font-mono text-inky/50">Key debug: {droptopResult.keyDebug}</p>
+              )}
+            </div>
           )}
           {droptopError && (
             <p className="text-xs font-mono text-[#C0392B]">{droptopError}</p>
