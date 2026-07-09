@@ -77,7 +77,9 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
     encrypted.set(new Uint8Array(enc).slice(0, 16), i)
   }
 
+  // URL-safe base64: avoids %2B/%2F percent-encoding in the query string.
   const sig = btoa(String.fromCharCode(...encrypted))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
   return [sig, keyFormat, message]
 }
 
