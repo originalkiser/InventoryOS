@@ -77,9 +77,9 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
     encrypted.set(new Uint8Array(enc).slice(0, 16), i)
   }
 
-  // URL-safe base64: avoids %2B/%2F percent-encoding in the query string.
-  const sig = btoa(String.fromCharCode(...encrypted))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+  // Droptop expects DOUBLE base64: their reference aesEncrypt already returns
+  // base64 (PHP openssl_encrypt default), which is then base64-encoded again.
+  const sig = btoa(btoa(String.fromCharCode(...encrypted)))
   return [sig, keyFormat, message]
 }
 

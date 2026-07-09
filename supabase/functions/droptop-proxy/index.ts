@@ -58,7 +58,9 @@ export async function buildSig(publicKey: string, method: string, privateKey: st
     const enc = await crypto.subtle.encrypt({ name: 'AES-CBC', iv: zeroIV }, cryptoKey, padded.slice(i, i + 16))
     encrypted.set(new Uint8Array(enc).slice(0, 16), i)
   }
-  return btoa(String.fromCharCode(...encrypted))
+  // Droptop expects DOUBLE base64: their reference aesEncrypt already returns
+  // base64 (PHP openssl_encrypt default), which is then base64-encoded again.
+  return btoa(btoa(String.fromCharCode(...encrypted)))
 }
 
 export async function callDroptop(
