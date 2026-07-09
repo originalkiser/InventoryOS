@@ -6,7 +6,13 @@
 // Requires Supabase secrets: DROPTOP_PUBLIC_KEY, DROPTOP_PRIVATE_KEY
 // (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are injected.)
 //
-// POST body: { daysBack? }   — default 30, max 365
+// POST body: { daysBack?, locationId?, categories? }
+//   daysBack   — default 30, max 365
+//   locationId — sync a single location
+//   categories — product_type filter terms (case-insensitive substring match,
+//                e.g. ["engine oil", "additive"]); empty/absent = all products.
+//                Droptop has no server-side category filter, so this is applied
+//                after fetch, before writing to product_usage.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -179,6 +185,14 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}))
     const daysBack = Math.min(Math.max(Number(body.daysBack ?? 30), 1), 365)
     const locationId: string | null = body.locationId ?? null
+    const categories: string[] = Array.isArray(body.categories)
+      ? body.categories.map((c: unknown) => String(c).trim().toLowerCase()).filter(Boolean)
+      : []
+    const matchesCategory = (productType: string | null | undefined): boolean => {
+      if (!categories.length) return true
+      const pt = (productType ?? '').toLowerCase()
+      return categories.some((c) => pt.includes(c))
+    }
     const endUnix = Math.floor(Date.now() / 1000)
     const startUnix = endUnix - daysBack * 86400
 
@@ -239,6 +253,7 @@ Deno.serve(async (req) => {
         // Aggregate sales by product_id
         const salesByProduct = new Map<string, number>()
         for (const change of sales) {
+          if (!matchesCategory(change.product_type)) continue
           const pid: string = change.product_id
           const qty = Math.abs(parseFloat(change.quantity_change || '0'))
           salesByProduct.set(pid, (salesByProduct.get(pid) ?? 0) + qty)
@@ -247,6 +262,7 @@ Deno.serve(async (req) => {
         // Index inventory by product_id
         const invByProduct = new Map<string, { on_hands: number; product_type: string }>()
         for (const item of inventory) {
+          if (!matchesCategory(item.product_type)) continue
           invByProduct.set(item.product_id, {
             on_hands: parseFloat(item.quantity_on_hand || '0'),
             product_type: item.product_type || '',

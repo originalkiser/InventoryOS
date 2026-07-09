@@ -145,6 +145,7 @@ export function ProductUsageTab() {
   // Droptop sync
   const [droptopSyncing, setDroptopSyncing] = useState(false)
   const [droptopDaysBack, setDroptopDaysBack] = useState(30)
+  const [droptopCategories, setDroptopCategories] = useState('Engine Oil, Additive')
   const [droptopLocationId, setDroptopLocationId] = useState<string>('')
   const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number; keyDebug?: string } | null>(null)
   const [droptopError, setDroptopError] = useState<string | null>(null)
@@ -288,6 +289,7 @@ export function ProductUsageTab() {
       body: {
         daysBack: droptopDaysBack,
         ...(droptopLocationId ? { locationId: droptopLocationId } : {}),
+        categories: droptopCategories.split(',').map((c) => c.trim()).filter(Boolean),
       },
     })
     setDroptopSyncing(false)
@@ -469,6 +471,16 @@ export function ProductUsageTab() {
                 <option value={30}>Last 30 days</option>
                 <option value={90}>Last 90 days</option>
               </select>
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Categories (comma-separated, blank = all)</span>
+              <input
+                type="text"
+                value={droptopCategories}
+                onChange={(e) => setDroptopCategories(e.target.value)}
+                placeholder="All categories"
+                className="w-56 rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]"
+              />
             </label>
             <Button size="sm" onClick={syncFromDroptop} disabled={droptopSyncing}>
               {droptopSyncing ? 'Syncing…' : 'Sync from Droptop'}
