@@ -27,29 +27,30 @@ function ok(body: unknown) {
 // sig = base64(AES-256-ECB(PKCS7pad(publicKey|METHOD|unixTimestamp), privateKey))
 // ECB implemented via AES-CBC with a zeroed IV applied per 16-byte block.
 
-function parseKey(key: string): Uint8Array {
+// Returns [keyBytes, detectedFormat] for diagnostics.
+async function parseKey(key: string): Promise<[Uint8Array, string]> {
   const k = key.trim()
-  // 64-char hex → 32 bytes
+  // 64-char hex → 32 bytes directly
   if (/^[0-9a-fA-F]{64}$/.test(k)) {
     const bytes = new Uint8Array(32)
     for (let i = 0; i < 32; i++) bytes[i] = parseInt(k.slice(i * 2, i * 2 + 2), 16)
-    return bytes
+    return [bytes, `hex-64`]
   }
-  // 44-char base64 → 32 bytes
+  // 44-char base64 → 32 bytes directly
   if (/^[A-Za-z0-9+/]{43}=?$/.test(k)) {
     const raw = atob(k)
     const bytes = new Uint8Array(32)
     for (let i = 0; i < Math.min(raw.length, 32); i++) bytes[i] = raw.charCodeAt(i)
-    return bytes
+    return [bytes, `base64-44`]
   }
-  // Raw UTF-8 string → padded/truncated to 32 bytes
-  const raw = new TextEncoder().encode(k)
-  const bytes = new Uint8Array(32)
-  bytes.set(raw.slice(0, 32))
-  return bytes
+  // Any other length: SHA-256 hash → 32 bytes.
+  // This is the common pattern when the key string is longer or shorter than 32 bytes.
+  const rawBytes = new TextEncoder().encode(k)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', rawBytes)
+  return [new Uint8Array(hashBuffer), `sha256-from-raw-${k.length}chars`]
 }
 
-async function buildSig(publicKey: string, method: string, privateKey: string): Promise<string> {
+async function buildSig(publicKey: string, method: string, privateKey: string): Promise<[string, string]> {
   const timestamp = Math.floor(Date.now() / 1000)
   const message = `${publicKey.trim()}|${method.toUpperCase()}|${timestamp}`
   const msgBytes = new TextEncoder().encode(message)
@@ -60,21 +61,20 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
   padded.set(msgBytes)
   padded.fill(padLen, msgBytes.length)
 
-  // Import key for AES-CBC (used to emulate ECB per-block)
+  const [keyBytes, keyFormat] = await parseKey(privateKey)
   const cryptoKey = await crypto.subtle.importKey(
-    'raw', parseKey(privateKey), { name: 'AES-CBC' }, false, ['encrypt'],
+    'raw', keyBytes, { name: 'AES-CBC' }, false, ['encrypt'],
   )
 
-  // Encrypt each 16-byte block independently (zero IV = ECB for each block)
+  // Encrypt each 16-byte block independently with zero IV = AES-ECB
   const zeroIV = new Uint8Array(16)
   const encrypted = new Uint8Array(padded.length)
   for (let i = 0; i < padded.length; i += 16) {
-    // CBC with zero IV on one block; output is 32 bytes (block + PKCS7 tail — discard tail)
     const enc = await crypto.subtle.encrypt({ name: 'AES-CBC', iv: zeroIV }, cryptoKey, padded.slice(i, i + 16))
     encrypted.set(new Uint8Array(enc).slice(0, 16), i)
   }
 
-  return btoa(String.fromCharCode(...encrypted))
+  return [btoa(String.fromCharCode(...encrypted)), keyFormat]
 }
 
 async function callDroptop(
@@ -83,7 +83,7 @@ async function callDroptop(
   publicKey: string,
   privateKey: string,
 ): Promise<any> {
-  const sig = await buildSig(publicKey, 'GET', privateKey)
+  const [sig] = await buildSig(publicKey, 'GET', privateKey)
   const qs = new URLSearchParams({ sig, ...params })
   const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
   const res = await fetch(url, {
@@ -175,13 +175,8 @@ Deno.serve(async (req) => {
     const endUnix = Math.floor(Date.now() / 1000)
     const startUnix = endUnix - daysBack * 86400
 
-    // Key format diagnostic (no key value exposed)
-    const privTrimmed = privateKey.trim()
-    const keyDebug = /^[0-9a-fA-F]{64}$/.test(privTrimmed)
-      ? `hex-64 (${privTrimmed.length})`
-      : /^[A-Za-z0-9+/]{43}=?$/.test(privTrimmed)
-      ? `base64-44 (${privTrimmed.length})`
-      : `raw-utf8 (${privTrimmed.length} chars)`
+    // Detect key format for diagnostics (run one sig to capture the format label)
+    const [, keyDebug] = await buildSig(publicKey, 'GET', privateKey)
 
     // 2. Load locations with droptop_operation_id mapped
     const admin = createClient(supabaseUrl, serviceKey, {

@@ -148,6 +148,7 @@ export function ProductUsageTab() {
   const [droptopLocationId, setDroptopLocationId] = useState<string>('')
   const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number; keyDebug?: string } | null>(null)
   const [droptopError, setDroptopError] = useState<string | null>(null)
+  const [droptopKeyDebug, setDroptopKeyDebug] = useState<string | null>(null)
 
   const droptopLocations = useMemo(
     () => loc.locations.filter((l: any) => l.droptop_operation_id),
@@ -278,6 +279,7 @@ export function ProductUsageTab() {
     setDroptopSyncing(true)
     setDroptopError(null)
     setDroptopResult(null)
+    setDroptopKeyDebug(null)
     const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
       body: {
         daysBack: droptopDaysBack,
@@ -295,6 +297,7 @@ export function ProductUsageTab() {
         ? 'Droptop API keys not configured — add DROPTOP_PUBLIC_KEY and DROPTOP_PRIVATE_KEY to Supabase secrets.'
         : data.error
       setDroptopError(msg)
+      if (data.keyDebug) setDroptopKeyDebug(data.keyDebug)
       toast.error('Droptop sync failed')
       return
     }
@@ -476,7 +479,12 @@ export function ProductUsageTab() {
             </div>
           )}
           {droptopError && (
-            <p className="text-xs font-mono text-[#C0392B]">{droptopError}</p>
+            <div className="flex flex-col gap-0.5">
+              <p className="text-xs font-mono text-[#C0392B]">{droptopError}</p>
+              {droptopKeyDebug && (
+                <p className="text-[10px] font-mono text-inky/50">Key debug: {droptopKeyDebug}</p>
+              )}
+            </div>
           )}
         </div>
       </div>
