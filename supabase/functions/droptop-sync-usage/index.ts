@@ -1,13 +1,18 @@
 // Droptop usage + on-hands sync.
 // Reads all core.locations with droptop_operation_id set, pulls sales change
-// events and current inventory from Droptop, and upserts into
-// inventory.product_usage.
+// events and/or current inventory from Droptop, and upserts into
+// inventory.product_usage. Can also scan adjustment activity against
+// inventory.alert_thresholds and write inventory.inventory_alerts.
 //
 // Requires Supabase secrets: DROPTOP_PUBLIC_KEY, DROPTOP_PRIVATE_KEY
 // (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are injected.)
 //
-// POST body: { daysBack?, locationId?, categories? }
-//   daysBack   — default 30, max 365
+// POST body: { mode?, daysBack?, locationId?, categories? }
+//   mode       — 'both' (default) | 'inventory' (on-hands only, 1 call/location)
+//                | 'usage' (sales changes only) | 'alerts' (adjustment scan)
+//                Partial modes preserve the other side's existing values and
+//                recompute days_of_supply from the merged pair.
+//   daysBack   — usage/alerts window in days; default 30 (alerts: 1), max 365
 //   locationId — sync a single location
 //   categories — product_type filter terms (case-insensitive substring match,
 //                e.g. ["engine oil", "additive"]); empty/absent = all products.
@@ -30,7 +35,7 @@ function ok(body: unknown) {
 }
 
 // ── Droptop auth sig ─────────────────────────────────────────────────────────
-// sig = base64(AES-256-ECB(PKCS7pad(publicKey|METHOD|unixTimestamp), privateKey))
+// sig = base64(base64(AES-256-ECB(PKCS7pad(publicKey|METHOD|unixTimestamp), privateKey)))
 // ECB implemented via AES-CBC with a zeroed IV applied per 16-byte block.
 
 // Returns [keyBytes, detectedFormat] for diagnostics.
@@ -42,15 +47,7 @@ async function parseKey(key: string): Promise<[Uint8Array, string]> {
     for (let i = 0; i < 32; i++) bytes[i] = parseInt(k.slice(i * 2, i * 2 + 2), 16)
     return [bytes, `hex-64`]
   }
-  // 44-char base64 → 32 bytes directly
-  if (/^[A-Za-z0-9+/]{43}=?$/.test(k)) {
-    const raw = atob(k)
-    const bytes = new Uint8Array(32)
-    for (let i = 0; i < Math.min(raw.length, 32); i++) bytes[i] = raw.charCodeAt(i)
-    return [bytes, `base64-44`]
-  }
   // Raw UTF-8 bytes: if already a valid AES key size (16/24/32) use directly.
-  // Otherwise SHA-256 hash to 32 bytes.
   const rawBytes = new TextEncoder().encode(k)
   if (rawBytes.length === 16 || rawBytes.length === 24 || rawBytes.length === 32) {
     return [rawBytes, `raw-utf8-${rawBytes.length}bytes`]
@@ -98,7 +95,6 @@ async function callDroptop(
   const [sig] = await buildSig(publicKey, 'GET', privateKey)
   const qs = new URLSearchParams({ sig, ...params })
   const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
-  // No Content-Type on GET requests — some servers reject or mishandle it.
   const res = await fetch(url, {
     headers: { 'x-api-key': publicKey.trim() },
     redirect: 'follow',
@@ -110,8 +106,9 @@ async function callDroptop(
 
 // ── Droptop data fetchers ────────────────────────────────────────────────────
 
-// Returns all sale-type change events in [startUnix, endUnix], paginated.
-async function fetchSalesChanges(
+// Returns all change events in [startUnix, endUnix], paginated. Caller filters
+// by change_type — the API has no change_type filter.
+async function fetchChanges(
   operationId: string,
   startUnix: number,
   endUnix: number,
@@ -135,7 +132,7 @@ async function fetchSalesChanges(
     const inner = res?.data ?? res
     const changes: any[] = Array.isArray(inner) ? inner : (inner?.data ?? [])
 
-    all.push(...changes.filter((c: any) => c.change_type === 'sale'))
+    all.push(...changes)
 
     if (!inner?.more_available) break
     cursor = changes.length > 0 ? changes[changes.length - 1].inventory_change_id : null
@@ -183,7 +180,10 @@ Deno.serve(async (req) => {
     if (!me?.company_id) return ok({ error: 'Profile not found' })
 
     const body = await req.json().catch(() => ({}))
-    const daysBack = Math.min(Math.max(Number(body.daysBack ?? 30), 1), 365)
+    const mode: 'both' | 'inventory' | 'usage' | 'alerts' =
+      ['inventory', 'usage', 'alerts'].includes(body.mode) ? body.mode : 'both'
+    const defaultDays = mode === 'alerts' ? 1 : 30
+    const daysBack = Math.min(Math.max(Number(body.daysBack ?? defaultDays), 1), 365)
     const locationId: string | null = body.locationId ?? null
     const categories: string[] = Array.isArray(body.categories)
       ? body.categories.map((c: unknown) => String(c).trim().toLowerCase()).filter(Boolean)
@@ -196,9 +196,6 @@ Deno.serve(async (req) => {
     const endUnix = Math.floor(Date.now() / 1000)
     const startUnix = endUnix - daysBack * 86400
 
-    // Diagnostic: detect key format and capture test sig/message for manual verification
-    const [testSig, keyDebug, testMessage] = await buildSig(publicKey, 'GET', privateKey)
-
     // 2. Load locations with droptop_operation_id mapped
     const admin = createClient(supabaseUrl, serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
@@ -206,9 +203,6 @@ Deno.serve(async (req) => {
 
     let locations: any[]
     {
-      // Use admin (service_role) to bypass RLS — RLS helper get_my_company_id()
-      // queries the old profiles table, not platform.user_profiles, so caller JWT
-      // would return 0 rows. Requires 20260708b_edge_function_schema_grants.sql applied.
       let q = (admin as any)
         .schema('core').from('locations')
         .select('id, droptop_operation_id')
@@ -224,15 +218,95 @@ Deno.serve(async (req) => {
       return ok({ error: 'No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.' })
     }
 
-    // 3. Load existing product_usage rows to dedup (match by location_id + product_id)
+    // ── Alerts mode: scan adjustment activity against thresholds ────────────
+    if (mode === 'alerts') {
+      const { data: rules, error: rulesErr } = await (admin as any)
+        .schema('inventory').from('alert_thresholds')
+        .select('id, product_id, category, max_adjustment')
+        .eq('company_id', me.company_id)
+        .eq('enabled', true)
+      if (rulesErr) return ok({ error: `Thresholds query failed: ${rulesErr.message}` })
+      if (!rules?.length) {
+        return ok({ error: 'No enabled alert thresholds configured. Add rules in the Inventory Alerts section first.' })
+      }
+
+      const matchRule = (productId: string, productType: string): any | null => {
+        for (const r of rules) {
+          const pidOk = !r.product_id || r.product_id.trim().toLowerCase() === productId.toLowerCase()
+          const catOk = !r.category || productType.toLowerCase().includes(r.category.trim().toLowerCase())
+          if (pidOk && catOk) return r
+        }
+        return null
+      }
+
+      const alertRows: Record<string, unknown>[] = []
+      let operationsScanned = 0
+      const opErrors: string[] = []
+
+      for (const loc of locations) {
+        try {
+          const changes = await fetchChanges(loc.droptop_operation_id, startUnix, endUnix, publicKey, privateKey)
+          for (const c of changes) {
+            const type: string = c.change_type ?? ''
+            if (!type.startsWith('adjustment')) continue
+            const qty = Math.abs(parseFloat(c.quantity_change || '0'))
+            const rule = matchRule(c.product_id ?? '', c.product_type ?? '')
+            if (!rule || qty < Number(rule.max_adjustment)) continue
+            alertRows.push({
+              company_id: me.company_id,
+              location_id: loc.id,
+              operation_id: loc.droptop_operation_id,
+              product_id: c.product_id,
+              category: c.product_type ?? null,
+              change_type: type,
+              quantity_change: parseFloat(c.quantity_change || '0'),
+              threshold_id: rule.id,
+              inventory_change_id: c.inventory_change_id,
+              event_timestamp: c.created_timestamp
+                ? new Date(Number(c.created_timestamp) * 1000).toISOString()
+                : null,
+            })
+          }
+          operationsScanned++
+        } catch (opErr: unknown) {
+          opErrors.push(`${loc.droptop_operation_id}: ${opErr instanceof Error ? opErr.message : String(opErr)}`)
+        }
+      }
+
+      let alertsCreated = 0
+      if (alertRows.length) {
+        // ignoreDuplicates: re-scans of the same window must not duplicate alerts
+        const { data: inserted, error: insErr } = await (admin as any)
+          .schema('inventory').from('inventory_alerts')
+          .upsert(alertRows, { onConflict: 'inventory_change_id', ignoreDuplicates: true })
+          .select('id')
+        if (insErr) return ok({ error: `Alert insert failed: ${insErr.message}` })
+        alertsCreated = inserted?.length ?? 0
+      }
+
+      if (operationsScanned === 0 && opErrors.length > 0) {
+        return ok({ error: opErrors.join(' | ') })
+      }
+      return ok({
+        success: true,
+        operations_synced: operationsScanned,
+        alerts_created: alertsCreated,
+        ...(opErrors.length > 0 ? { warnings: opErrors } : {}),
+      })
+    }
+
+    // ── Sync modes: inventory / usage / both ────────────────────────────────
+
+    // 3. Load existing product_usage rows — used both to dedup (id match) and,
+    // for partial modes, to carry over the side we aren't pulling.
     const { data: existingRows } = await (admin as any)
       .schema('inventory').from('product_usage')
-      .select('id, location_id, product_id')
+      .select('id, location_id, product_id, category, daily_usage, on_hands')
       .eq('company_id', me.company_id)
 
-    const existingMap = new Map<string, string>()
+    const existingMap = new Map<string, any>()
     for (const r of (existingRows ?? [])) {
-      existingMap.set(`${r.location_id ?? ''}|${String(r.product_id).toLowerCase()}`, r.id)
+      existingMap.set(`${r.location_id ?? ''}|${String(r.product_id).toLowerCase()}`, r)
     }
 
     // 4. Sync each location
@@ -244,15 +318,19 @@ Deno.serve(async (req) => {
       try {
         const opId: string = loc.droptop_operation_id
 
-        // Pull sales changes (paginated) + current inventory in parallel
-        const [sales, inventory] = await Promise.all([
-          fetchSalesChanges(opId, startUnix, endUnix, publicKey, privateKey),
-          fetchInventory(opId, publicKey, privateKey),
+        const [changes, inventory] = await Promise.all([
+          mode !== 'inventory'
+            ? fetchChanges(opId, startUnix, endUnix, publicKey, privateKey)
+            : Promise.resolve([]),
+          mode !== 'usage'
+            ? fetchInventory(opId, publicKey, privateKey)
+            : Promise.resolve([]),
         ])
 
         // Aggregate sales by product_id
         const salesByProduct = new Map<string, number>()
-        for (const change of sales) {
+        for (const change of changes) {
+          if (change.change_type !== 'sale') continue
           if (!matchesCategory(change.product_type)) continue
           const pid: string = change.product_id
           const qty = Math.abs(parseFloat(change.quantity_change || '0'))
@@ -269,26 +347,30 @@ Deno.serve(async (req) => {
           })
         }
 
-        // Union of product IDs seen in either dataset
+        // Products touched by the side(s) we pulled
         const productIds = new Set([...salesByProduct.keys(), ...invByProduct.keys()])
 
         for (const productId of productIds) {
-          const totalSold = salesByProduct.get(productId) ?? null
+          const dedupeKey = `${loc.id ?? ''}|${productId.toLowerCase()}`
+          const existing = existingMap.get(dedupeKey)
           const invData = invByProduct.get(productId)
-          const dailyUsage = totalSold != null ? totalSold / daysBack : null
-          const onHands = invData ? invData.on_hands : null
+
+          // Pulled side wins; other side carries over from the existing row.
+          const dailyUsage = mode !== 'inventory'
+            ? (salesByProduct.has(productId) ? (salesByProduct.get(productId)! / daysBack) : null)
+            : (existing?.daily_usage ?? null)
+          const onHands = mode !== 'usage'
+            ? (invData ? invData.on_hands : null)
+            : (existing?.on_hands ?? null)
           const daysOfSupply =
             dailyUsage && dailyUsage > 0 && onHands != null ? onHands / dailyUsage : null
 
-          const dedupeKey = `${loc.id ?? ''}|${productId.toLowerCase()}`
-          const existingId = existingMap.get(dedupeKey)
-
           allUpsertRows.push({
-            ...(existingId ? { id: existingId } : {}),
+            ...(existing ? { id: existing.id } : {}),
             company_id: me.company_id,
             location_id: loc.id,
             product_id: productId,
-            category: invData?.product_type || null,
+            category: invData?.product_type || existing?.category || null,
             daily_usage: dailyUsage,
             on_hands: onHands,
             days_of_supply: daysOfSupply,
@@ -329,16 +411,14 @@ Deno.serve(async (req) => {
 
     // If every location failed, surface the errors instead of returning 0/0 success.
     if (operationsSynced === 0 && opErrors.length > 0) {
-      return ok({ error: opErrors.join(' | '), keyDebug, testMessage, testSig })
+      return ok({ error: opErrors.join(' | ') })
     }
 
     return ok({
       success: true,
+      mode,
       operations_synced: operationsSynced,
       products_upserted: productsUpserted,
-      keyDebug,
-      testMessage,
-      testSig,
       ...(opErrors.length > 0 ? { warnings: opErrors } : {}),
     })
   } catch (err: unknown) {

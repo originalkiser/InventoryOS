@@ -18,6 +18,28 @@ import toast from 'react-hot-toast'
 
 export const EXCLUDE_NOT_IN_ORDER_KEY = 'product_usage.excludeNotInOrderConfig'
 
+type DroptopMode = 'both' | 'inventory' | 'usage'
+
+interface AlertThreshold {
+  id: string
+  product_id: string | null
+  category: string | null
+  max_adjustment: number
+  enabled: boolean
+}
+
+interface InventoryAlert {
+  id: string
+  location_id: string | null
+  product_id: string | null
+  category: string | null
+  change_type: string | null
+  quantity_change: number | null
+  event_timestamp: string | null
+  acknowledged_at: string | null
+  created_at: string
+}
+
 function parseNum(v: string): number | null {
   const t = v.trim()
   if (!t) return null
@@ -143,15 +165,12 @@ export function ProductUsageTab() {
   const [dataSource, setDataSource] = useState<ExistingDataSource | null>(null)
 
   // Droptop sync
-  const [droptopSyncing, setDroptopSyncing] = useState(false)
+  const [droptopSyncing, setDroptopSyncing] = useState<DroptopMode | null>(null)
   const [droptopDaysBack, setDroptopDaysBack] = useState(30)
   const [droptopCategories, setDroptopCategories] = useState('Engine Oil, Additive')
   const [droptopLocationId, setDroptopLocationId] = useState<string>('')
-  const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number; keyDebug?: string } | null>(null)
+  const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number } | null>(null)
   const [droptopError, setDroptopError] = useState<string | null>(null)
-  const [droptopKeyDebug, setDroptopKeyDebug] = useState<string | null>(null)
-  const [droptopTestMessage, setDroptopTestMessage] = useState<string | null>(null)
-  const [droptopTestSig, setDroptopTestSig] = useState<string | null>(null)
 
   const droptopLocations = useMemo(
     () => loc.locations.filter((l: any) => l.droptop_operation_id),
@@ -278,21 +297,19 @@ export function ProductUsageTab() {
   }
 
   // ---- Droptop sync ----
-  async function syncFromDroptop() {
-    setDroptopSyncing(true)
+  async function syncFromDroptop(mode: DroptopMode) {
+    setDroptopSyncing(mode)
     setDroptopError(null)
     setDroptopResult(null)
-    setDroptopKeyDebug(null)
-    setDroptopTestMessage(null)
-    setDroptopTestSig(null)
     const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
       body: {
+        mode,
         daysBack: droptopDaysBack,
         ...(droptopLocationId ? { locationId: droptopLocationId } : {}),
         categories: droptopCategories.split(',').map((c) => c.trim()).filter(Boolean),
       },
     })
-    setDroptopSyncing(false)
+    setDroptopSyncing(null)
     if (error) {
       setDroptopError(error.message)
       toast.error('Droptop sync failed')
@@ -303,16 +320,12 @@ export function ProductUsageTab() {
         ? 'Droptop API keys not configured — add DROPTOP_PUBLIC_KEY and DROPTOP_PRIVATE_KEY to Supabase secrets.'
         : data.error
       setDroptopError(msg)
-      if (data.keyDebug) setDroptopKeyDebug(data.keyDebug)
-      if (data.testMessage) setDroptopTestMessage(data.testMessage)
-      if (data.testSig) setDroptopTestSig(data.testSig)
       toast.error('Droptop sync failed')
       return
     }
     setDroptopResult({
       operations_synced: data.operations_synced ?? 0,
       products_upserted: data.products_upserted ?? 0,
-      keyDebug: data.keyDebug,
     })
     toast.success(`Synced ${(data.products_upserted ?? 0).toLocaleString()} products from Droptop`)
     loadRpc()
@@ -460,17 +473,15 @@ export function ProductUsageTab() {
               </label>
             )}
             <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Usage window</span>
-              <select
+              <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Usage window (days)</span>
+              <input
+                type="number"
+                min={1}
+                max={365}
                 value={droptopDaysBack}
-                onChange={(e) => setDroptopDaysBack(Number(e.target.value))}
-                className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]"
-              >
-                <option value={7}>Last 7 days</option>
-                <option value={14}>Last 14 days</option>
-                <option value={30}>Last 30 days</option>
-                <option value={90}>Last 90 days</option>
-              </select>
+                onChange={(e) => setDroptopDaysBack(Math.min(Math.max(Number(e.target.value) || 1, 1), 365))}
+                className="w-24 rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]"
+              />
             </label>
             <label className="flex flex-col gap-0.5">
               <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Categories (comma-separated, blank = all)</span>
@@ -482,36 +493,31 @@ export function ProductUsageTab() {
                 className="w-56 rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]"
               />
             </label>
-            <Button size="sm" onClick={syncFromDroptop} disabled={droptopSyncing}>
-              {droptopSyncing ? 'Syncing…' : 'Sync from Droptop'}
+            <Button size="sm" onClick={() => syncFromDroptop('both')} disabled={droptopSyncing != null}>
+              {droptopSyncing === 'both' ? 'Syncing…' : 'Full Sync'}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => syncFromDroptop('inventory')} disabled={droptopSyncing != null}>
+              {droptopSyncing === 'inventory' ? 'Syncing…' : 'On-Hands Only'}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => syncFromDroptop('usage')} disabled={droptopSyncing != null}>
+              {droptopSyncing === 'usage' ? 'Syncing…' : 'Usage Only'}
             </Button>
           </div>
+          <p className="text-[10px] font-mono text-inky/50">
+            On-Hands Only = 1 API call per location (cheap, schedule daily). Usage Only pages through change events for the window (heavier — run less often). Partial syncs keep the other side's existing values.
+          </p>
           {droptopResult && (
-            <div className="flex flex-col gap-0.5">
-              <p className="text-xs font-mono text-inky">
-                Synced {droptopResult.operations_synced} location{droptopResult.operations_synced !== 1 ? 's' : ''} · {droptopResult.products_upserted.toLocaleString()} products updated
-              </p>
-              {droptopResult.keyDebug && (
-                <p className="text-[10px] font-mono text-inky/50">Key debug: {droptopResult.keyDebug}</p>
-              )}
-            </div>
+            <p className="text-xs font-mono text-inky">
+              Synced {droptopResult.operations_synced} location{droptopResult.operations_synced !== 1 ? 's' : ''} · {droptopResult.products_upserted.toLocaleString()} products updated
+            </p>
           )}
           {droptopError && (
-            <div className="flex flex-col gap-1">
-              <p className="text-xs font-mono text-[#C0392B]">{droptopError}</p>
-              {droptopKeyDebug && (
-                <p className="text-[10px] font-mono text-inky/50">Key: {droptopKeyDebug}</p>
-              )}
-              {droptopTestMessage && (
-                <p className="text-[10px] font-mono text-inky/50 break-all">Message: {droptopTestMessage}</p>
-              )}
-              {droptopTestSig && (
-                <p className="text-[10px] font-mono text-inky/50 break-all">Sig: {droptopTestSig}</p>
-              )}
-            </div>
+            <p className="text-xs font-mono text-[#C0392B]">{droptopError}</p>
           )}
         </div>
       </div>
+
+      <InventoryAlertsSection locationLabel={(id) => loc.labelOf(id)} />
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Product Usage' : 'Add Product Usage'} size="lg">
         <div className="flex flex-col gap-3">
@@ -533,6 +539,203 @@ export function ProductUsageTab() {
           </div>
         </div>
       </Modal>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Inventory activity alerts: threshold rules by product ID / category, and the
+// alerts raised when Droptop adjustment events exceed a rule.
+// Requires migration 20260710_inventory_alerts.sql.
+function InventoryAlertsSection({ locationLabel }: { locationLabel: (id: string | null) => string }) {
+  const { profile } = useAuthStore()
+  const sb = supabase as any
+
+  const [rules, setRules] = useState<AlertThreshold[]>([])
+  const [alerts, setAlerts] = useState<InventoryAlert[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [newRule, setNewRule] = useState({ product_id: '', category: '', max_adjustment: '' })
+  const [scanDays, setScanDays] = useState(1)
+  const [scanning, setScanning] = useState(false)
+  const [scanResult, setScanResult] = useState<string | null>(null)
+  const [scanError, setScanError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!profile?.company_id) return
+    setLoading(true)
+    const [r, a] = await Promise.all([
+      sb.schema('inventory').from('alert_thresholds')
+        .select('id, product_id, category, max_adjustment, enabled')
+        .eq('company_id', profile.company_id).order('created_at'),
+      sb.schema('inventory').from('inventory_alerts')
+        .select('id, location_id, product_id, category, change_type, quantity_change, event_timestamp, acknowledged_at, created_at')
+        .eq('company_id', profile.company_id).is('acknowledged_at', null)
+        .order('created_at', { ascending: false }).limit(100),
+    ])
+    if (r.error) {
+      setLoadError('Alert tables not found — apply migration 20260710_inventory_alerts.sql')
+    } else {
+      setRules((r.data ?? []) as AlertThreshold[])
+      setAlerts((a.data ?? []) as InventoryAlert[])
+      setLoadError(null)
+    }
+    setLoading(false)
+  }, [profile?.company_id])
+
+  useEffect(() => { load() }, [load])
+
+  async function addRule() {
+    if (!profile?.company_id) return
+    const max = Number(newRule.max_adjustment)
+    if (!newRule.product_id.trim() && !newRule.category.trim()) {
+      toast.error('Enter a product ID and/or category')
+      return
+    }
+    if (!max || max <= 0) {
+      toast.error('Enter a max adjustment greater than 0')
+      return
+    }
+    const { error } = await sb.schema('inventory').from('alert_thresholds').insert({
+      company_id: profile.company_id,
+      product_id: newRule.product_id.trim() || null,
+      category: newRule.category.trim() || null,
+      max_adjustment: max,
+      updated_by: profile.id,
+      last_change_source: 'manual',
+    })
+    if (error) { toast.error('Unable to save rule'); return }
+    setNewRule({ product_id: '', category: '', max_adjustment: '' })
+    toast.success('Rule added')
+    load()
+  }
+
+  async function toggleRule(rule: AlertThreshold) {
+    const { error } = await sb.schema('inventory').from('alert_thresholds')
+      .update({ enabled: !rule.enabled, updated_at: new Date().toISOString(), updated_by: profile?.id })
+      .eq('id', rule.id)
+    if (error) { toast.error('Unable to update rule'); return }
+    load()
+  }
+
+  async function deleteRule(id: string) {
+    const { error } = await sb.schema('inventory').from('alert_thresholds').delete().eq('id', id)
+    if (error) { toast.error('Unable to delete rule'); return }
+    load()
+  }
+
+  async function acknowledgeAlert(id: string) {
+    const { error } = await sb.schema('inventory').from('inventory_alerts')
+      .update({ acknowledged_at: new Date().toISOString(), acknowledged_by: profile?.id })
+      .eq('id', id)
+    if (error) { toast.error('Unable to acknowledge'); return }
+    setAlerts((prev) => prev.filter((a) => a.id !== id))
+  }
+
+  async function scanActivity() {
+    setScanning(true)
+    setScanError(null)
+    setScanResult(null)
+    const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
+      body: { mode: 'alerts', daysBack: scanDays },
+    })
+    setScanning(false)
+    if (error) { setScanError(error.message); toast.error('Alert scan failed'); return }
+    if (data?.error) { setScanError(data.error); toast.error('Alert scan failed'); return }
+    const n = data.alerts_created ?? 0
+    setScanResult(`Scanned ${data.operations_synced ?? 0} locations - ${n} new alert${n !== 1 ? 's' : ''}`)
+    if (n > 0) toast.success(`${n} new inventory alert${n !== 1 ? 's' : ''}`)
+    else toast.success('No unusual activity found')
+    load()
+  }
+
+  return (
+    <div className="border-t border-navy/10 pt-4">
+      <div className="flex flex-col gap-3">
+        <div>
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Inventory Alerts</h3>
+          <p className="text-xs text-inky/60 mt-0.5">
+            Flag unusual Droptop adjustment activity. A rule matches by product ID (exact) and/or category (contains); an alert fires when an adjustment event meets or exceeds the max quantity.
+          </p>
+        </div>
+
+        {loading && <p className="text-xs font-mono text-inky/60">Loading alert rules…</p>}
+        {loadError && <p className="text-xs font-mono text-[#C0392B]">{loadError}</p>}
+
+        {!loading && !loadError && (
+          <>
+            {/* Rules */}
+            <div className="flex flex-col gap-1.5">
+              {rules.map((r) => (
+                <div key={r.id} className="flex items-center gap-3 text-xs font-mono">
+                  <Toggle checked={r.enabled} onChange={() => toggleRule(r)} />
+                  <span className={r.enabled ? 'text-navy dark:text-cream' : 'text-inky/50'}>
+                    {r.product_id ? `Product ${r.product_id}` : ''}
+                    {r.product_id && r.category ? ' + ' : ''}
+                    {r.category ? `Category "${r.category}"` : ''}
+                    {' — adjustment ≥ '}{r.max_adjustment}
+                  </span>
+                  <button onClick={() => deleteRule(r.id)} className="text-inky/50 hover:text-[#C0392B] text-[10px] uppercase">Delete</button>
+                </div>
+              ))}
+              {rules.length === 0 && <p className="text-xs font-mono text-inky/50">No rules yet.</p>}
+              <div className="flex items-end gap-2 flex-wrap mt-1">
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Product ID</span>
+                  <input type="text" value={newRule.product_id} onChange={(e) => setNewRule({ ...newRule, product_id: e.target.value })}
+                    placeholder="Any product"
+                    className="w-36 rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]" />
+                </label>
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Category contains</span>
+                  <input type="text" value={newRule.category} onChange={(e) => setNewRule({ ...newRule, category: e.target.value })}
+                    placeholder="Any category"
+                    className="w-36 rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]" />
+                </label>
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Max adjustment qty</span>
+                  <input type="number" min={0} step="0.01" value={newRule.max_adjustment} onChange={(e) => setNewRule({ ...newRule, max_adjustment: e.target.value })}
+                    className="w-28 rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]" />
+                </label>
+                <Button size="sm" variant="secondary" onClick={addRule}>Add Rule</Button>
+              </div>
+            </div>
+
+            {/* Scan */}
+            <div className="flex items-end gap-3 flex-wrap">
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Scan window (days)</span>
+                <input type="number" min={1} max={365} value={scanDays}
+                  onChange={(e) => setScanDays(Math.min(Math.max(Number(e.target.value) || 1, 1), 365))}
+                  className="w-24 rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none dark:bg-[#0e2638]" />
+              </label>
+              <Button size="sm" onClick={scanActivity} disabled={scanning || rules.filter((r) => r.enabled).length === 0}>
+                {scanning ? 'Scanning…' : 'Scan Activity'}
+              </Button>
+            </div>
+            {scanResult && <p className="text-xs font-mono text-inky">{scanResult}</p>}
+            {scanError && <p className="text-xs font-mono text-[#C0392B]">{scanError}</p>}
+
+            {/* Open alerts */}
+            {alerts.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Open alerts ({alerts.length})</span>
+                <div className="max-h-64 overflow-y-auto flex flex-col gap-0.5">
+                  {alerts.map((a) => (
+                    <div key={a.id} className="flex items-center gap-3 text-xs font-mono bg-[#E67E22]/10 border border-[#E67E22]/30 rounded px-2 py-1">
+                      <span className="text-navy dark:text-cream">
+                        {locationLabel(a.location_id)} · {a.product_id} · {a.change_type} {a.quantity_change}
+                        {a.event_timestamp ? ` · ${format(new Date(a.event_timestamp), 'MMM d h:mm a')}` : ''}
+                      </span>
+                      <button onClick={() => acknowledgeAlert(a.id)} className="ml-auto text-inky/60 hover:text-navy text-[10px] uppercase shrink-0">Acknowledge</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
