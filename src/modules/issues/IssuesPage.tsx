@@ -30,13 +30,43 @@ function daysOpen(start: string | null) {
   return String(differenceInDays(new Date(), new Date(start)))
 }
 
-const statusColor = (name: string | undefined) => {
+// Badge tokens users can assign to a status. A saved custom color wins;
+// otherwise fall back to keyword defaults.
+const STATUS_COLOR_CHOICES = ['navy', 'inky', 'sky', 'cream', 'red', 'green', 'orange'] as const
+const SWATCH_CLASS: Record<string, string> = {
+  navy: 'bg-navy', inky: 'bg-inky', sky: 'bg-sky',
+  cream: 'bg-cream border border-navy/40',
+  red: 'bg-[#C0392B]', green: 'bg-[#2ECC71]', orange: 'bg-[#E67E22]',
+}
+
+const statusColor = (name: string | undefined, custom?: string | null) => {
+  if (custom && custom in SWATCH_CLASS) return custom
   if (!name) return 'gray'
   const lower = name.toLowerCase()
+  if (lower.includes('overdue')) return 'red'
   if (lower.includes('resolved') || lower.includes('closed')) return 'green'
   if (lower.includes('pending') || lower.includes('open')) return 'magenta'
   if (lower.includes('progress')) return 'amber'
   return 'cyan'
+}
+
+// Past target date, not resolved, and not in a done-type status.
+function isOverdueRow(r: IssueRow): boolean {
+  if (!r.target_resolution_date || r.resolved_date) return false
+  const s = r.status_name?.toLowerCase() ?? ''
+  if (s.includes('resolved') || s.includes('closed') || s.includes('complete')) return false
+  return r.target_resolution_date < new Date().toISOString().split('T')[0]
+}
+
+// color may not exist until 20260715_issue_status_colors.sql is applied —
+// retry without it so the page keeps working.
+async function fetchStatuses(companyId: string): Promise<StatusOpt[]> {
+  const sb = supabase as any
+  let res = await sb.schema('inventory').from('issue_statuses').select('id, name, color').eq('company_id', companyId)
+  if (res.error) {
+    res = await sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId)
+  }
+  return (res.data ?? []) as StatusOpt[]
 }
 
 const CUSTOM_STATUS_OPTIONS = ['Not Started', 'In Progress', 'Blocked', 'Complete']
@@ -75,7 +105,7 @@ function InlineText({ value, type, onSave }: { value: string | null; type?: 'tex
   )
 }
 
-function InlineDate({ value, onSave }: { value: string | null; onSave: (v: string | null) => void }) {
+function InlineDate({ value, onSave, overdue = false }: { value: string | null; onSave: (v: string | null) => void; overdue?: boolean }) {
   const [editing, setEditing] = useState(false)
   if (editing) {
     return (
@@ -90,7 +120,8 @@ function InlineDate({ value, onSave }: { value: string | null; onSave: (v: strin
     )
   }
   return (
-    <button onClick={() => setEditing(true)} className="text-xs font-mono text-left px-1 hover:text-navy w-full">
+    <button onClick={() => setEditing(true)}
+      className={`text-xs font-mono text-left px-1 w-full ${overdue ? 'text-[#C0392B] font-semibold' : 'hover:text-navy'}`}>
       {value ? format(new Date(value + 'T00:00:00'), 'MMM d, yyyy') : <span className="text-inky/30">—</span>}
     </button>
   )
@@ -332,17 +363,26 @@ function CustomColHeader({ col: c, onMove, onPin, onDelete }: {
   )
 }
 
-interface StatusOpt { id: string; name: string }
+interface StatusOpt { id: string; name: string; color?: string | null }
 
-function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | undefined; statuses: StatusOpt[]; onChange: (statusId: string) => void; onAdd: (name: string) => Promise<string | null> }) {
+function IssueStatusCell({ name, badgeColor, statuses, onChange, onAdd, onSetColor }: {
+  name: string | undefined
+  badgeColor: string
+  statuses: StatusOpt[]
+  onChange: (statusId: string) => void
+  onAdd: (name: string) => Promise<string | null>
+  onSetColor: (statusId: string, color: string) => void
+}) {
   const [open, setOpen] = useState(false)
   const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [colorPickId, setColorPickId] = useState<string | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   function toggle() {
     if (!open && btnRef.current) { const r = btnRef.current.getBoundingClientRect(); setRect({ left: r.left, top: r.bottom + 4 }) }
     setOpen(o => !o)
+    setColorPickId(null)
   }
   async function handleCreate() {
     const n = newName.trim()
@@ -352,15 +392,31 @@ function IssueStatusCell({ name, statuses, onChange, onAdd }: { name: string | u
   }
   return (
     <>
-      <button ref={btnRef} onClick={toggle}><Badge color={statusColor(name)}>{name ?? '—'}</Badge></button>
+      <button ref={btnRef} onClick={toggle}><Badge color={badgeColor as any}>{name ?? '—'}</Badge></button>
       {open && rect && (
         <>
-          <div className="fixed inset-0 z-[60]" onClick={() => { setOpen(false); setCreating(false) }} />
-          <div className="fixed z-[61] w-44 rounded border border-navy/30 bg-cream py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
+          <div className="fixed inset-0 z-[60]" onClick={() => { setOpen(false); setCreating(false); setColorPickId(null) }} />
+          <div className="fixed z-[61] w-48 rounded border border-navy/30 bg-cream py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
             {statuses.map(s => (
-              <button key={s.id} onClick={() => { onChange(s.id); setOpen(false) }} className="flex w-full px-2 py-1 hover:bg-navy/5">
-                <Badge color={statusColor(s.name)}>{s.name}</Badge>
-              </button>
+              <div key={s.id}>
+                <div className="flex items-center w-full hover:bg-navy/5">
+                  <button onClick={() => { onChange(s.id); setOpen(false) }} className="flex flex-1 min-w-0 px-2 py-1">
+                    <Badge color={statusColor(s.name, s.color) as any}>{s.name}</Badge>
+                  </button>
+                  <button title="Set color"
+                    onClick={e => { e.stopPropagation(); setColorPickId(p => (p === s.id ? null : s.id)) }}
+                    className={`h-3.5 w-3.5 mr-2 shrink-0 rounded-full ${SWATCH_CLASS[statusColor(s.name, s.color)] ?? 'bg-inky/40'} hover:ring-2 hover:ring-sky`} />
+                </div>
+                {colorPickId === s.id && (
+                  <div className="flex gap-1.5 px-2 py-1.5 bg-navy/5" onClick={e => e.stopPropagation()}>
+                    {STATUS_COLOR_CHOICES.map(c => (
+                      <button key={c} title={c}
+                        onClick={() => { onSetColor(s.id, c); setColorPickId(null) }}
+                        className={`h-4 w-4 rounded-full ${SWATCH_CLASS[c]} ${s.color === c ? 'ring-2 ring-sky' : ''}`} />
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
             <div className="border-t border-navy/10 mt-0.5" />
             {creating ? (
@@ -467,11 +523,11 @@ export function IssuesPage() {
       delQ = delQ.eq('department_id', selectedDeptId).neq('visibility', 'private')
     }
 
-    const [liveRes, delRes, locRes, catRes, statusRes] = await Promise.all([
+    const [liveRes, delRes, locRes, catRes, statusRows] = await Promise.all([
       liveQ, delQ,
       sb.schema('core').from('locations').select('id, name, shop_city').eq('company_id', profile.company_id).order('name'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', profile.company_id),
-      sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id),
+      fetchStatuses(profile.company_id),
     ])
 
     if (liveRes.error) { toast.error(`Failed to load issues: ${liveRes.error.message}`); setLoading(false); return }
@@ -479,7 +535,8 @@ export function IssuesPage() {
 
     const locMap: Record<string, string> = Object.fromEntries((locRes.data ?? []).map((l: any) => [l.id, l.shop_city ?? l.name]))
     const catMap: Record<string, string> = Object.fromEntries((catRes.data ?? []).map((c: any) => [c.id, c.name]))
-    const statusMap: Record<string, string> = Object.fromEntries((statusRes.data ?? []).map((s: any) => [s.id, s.name]))
+    const statusMap: Record<string, string> = Object.fromEntries(statusRows.map((s) => [s.id, s.name]))
+    setStatuses(statusRows)
 
     // Update refs so InlineCombobox cells pick up fresh options without re-mounting
     locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: l.shop_city ?? l.name }))
@@ -553,9 +610,18 @@ export function IssuesPage() {
 
   useEffect(() => {
     if (!profile?.company_id) return
-    ;(supabase as any).schema('inventory').from('issue_statuses').select('id, name').eq('company_id', profile.company_id)
-      .then(({ data }: any) => setStatuses((data ?? []) as StatusOpt[]))
+    fetchStatuses(profile.company_id).then(setStatuses)
   }, [profile?.company_id])
+
+  const setStatusColor = useCallback(async (statusId: string, color: string) => {
+    const { error } = await (supabase as any).schema('inventory').from('issue_statuses')
+      .update({ color }).eq('id', statusId)
+    if (error) {
+      toast.error('Could not save color — apply migration 20260715_issue_status_colors.sql')
+      return
+    }
+    setStatuses(prev => prev.map(s => (s.id === statusId ? { ...s, color } : s)))
+  }, [])
 
   const addStatus = useCallback(async (name: string): Promise<string | null> => {
     if (!profile?.company_id) return null
@@ -642,18 +708,24 @@ export function IssuesPage() {
       status: hiddenCols.has('status') ? null : {
         id: 'status', header: 'Status', enableColumnFilter: false,
         accessorFn: (r: IssueRow) => r.status_name ?? '',
-        cell: (i: any) => (
-          <IssueStatusCell name={i.row.original.status_name} statuses={statuses} onAdd={addStatus}
-            onChange={sid => {
-              const statusName = statuses.find(s => s.id === sid)?.name ?? ''
-              if (statusName.toLowerCase().includes('resolved')) {
-                setResolvePrompt({ issueId: i.row.original.id, statusId: sid, statusName, resolvedDate: i.row.original.resolved_date ?? null })
-                setResolveNotes(i.row.original.resolution_notes ?? '')
-                return
-              }
-              updateIssue(i.row.original.id, { status_id: sid }, { status_name: statusName })
-            }} />
-        ),
+        cell: (i: any) => {
+          const row = i.row.original as IssueRow
+          const st = statuses.find(s => s.name === row.status_name)
+          const badgeColor = isOverdueRow(row) ? 'red' : statusColor(row.status_name, st?.color)
+          return (
+            <IssueStatusCell name={row.status_name} badgeColor={badgeColor} statuses={statuses}
+              onAdd={addStatus} onSetColor={setStatusColor}
+              onChange={sid => {
+                const statusName = statuses.find(s => s.id === sid)?.name ?? ''
+                if (statusName.toLowerCase().includes('resolved')) {
+                  setResolvePrompt({ issueId: row.id, statusId: sid, statusName, resolvedDate: row.resolved_date ?? null })
+                  setResolveNotes(row.resolution_notes ?? '')
+                  return
+                }
+                updateIssue(row.id, { status_id: sid }, { status_name: statusName })
+              }} />
+          )
+        },
       },
       start_date: hiddenCols.has('start_date') ? null : {
         id: 'start_date', header: 'Start', enableColumnFilter: false,
@@ -663,7 +735,7 @@ export function IssuesPage() {
       target_resolution_date: hiddenCols.has('target_resolution_date') ? null : {
         id: 'target_resolution_date', header: 'Target', enableColumnFilter: false,
         accessorFn: (r: IssueRow) => r.target_resolution_date ?? '',
-        cell: (i: any) => <InlineDate value={i.row.original.target_resolution_date} onSave={v => updateIssue(i.row.original.id, { target_resolution_date: v })} />,
+        cell: (i: any) => <InlineDate value={i.row.original.target_resolution_date} overdue={isOverdueRow(i.row.original)} onSave={v => updateIssue(i.row.original.id, { target_resolution_date: v })} />,
       },
       resolved_date: hiddenCols.has('resolved_date') ? null : {
         id: 'resolved_date', header: 'Resolved', enableColumnFilter: false,
@@ -705,7 +777,7 @@ export function IssuesPage() {
 
     return [titleCol, ...orderedBuiltins, ...customs].filter(Boolean) as any[]
   }, [openEdit, customColumns, valueFor, setValue, moveColumn, togglePin, removeColumn,
-    updateVendor, updateIssue, updateLinks, statuses, addStatus, addCategory,
+    updateVendor, updateIssue, updateLinks, statuses, addStatus, addCategory, setStatusColor,
     profile?.company_id, hiddenCols, builtinOrder, deptMap])
 
   const allTable = useTable(issues, columns)
