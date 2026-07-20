@@ -9,7 +9,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab } from '@/modules/config/useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
-import { useLocationExclusions } from '@/hooks/useLocationExclusions'
+import { useLocationExclusions, locExclusionValue } from '@/hooks/useLocationExclusions'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { DataTable } from '@/components/shared/DataTable'
 import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
@@ -31,14 +31,9 @@ const LOC_FILTER_HIERARCHY = [
 const LS_DROP_FILTERS = 'locations.page.dropFilters'
 const LS_HIDDEN_DROPS = 'locations.page.hiddenDropdowns'
 
-function locFieldValue(loc: Location, field: string): string {
-  if (field === 'meta:regional_director') {
-    // support both 'regional_director' and 'director' key variants
-    return String((loc.metadata as any)?.regional_director ?? (loc.metadata as any)?.director ?? '')
-  }
-  if (field.startsWith('meta:')) return String((loc.metadata as any)?.[field.slice(5)] ?? '')
-  return String((loc as any)[field] ?? '')
-}
+// Base-column-first resolution (with metadata fallback) so this read-only view
+// mirrors the Global Config locations list. See locExclusionValue.
+const locFieldValue = locExclusionValue
 
 const PINNED: string[] = []
 
@@ -133,30 +128,39 @@ export function LocationsPage() {
       col.accessor('shop_city', { id: 'shop_city', header: 'Shop # / City' }),
       col.accessor('region', { id: 'region', header: 'Region', cell: (i) => i.getValue() ?? '—' }),
       {
+        id: 'owner',
+        header: 'Owner',
+        accessorFn: (r: Location) => locFieldValue(r, 'owner'),
+        cell: (i: any) => i.getValue() || '—',
+      },
+      {
         id: 'market',
         header: 'Market',
-        accessorFn: (r: Location) => r.market ?? (r.metadata as any)?.market ?? '',
+        accessorFn: (r: Location) => locFieldValue(r, 'market'),
         cell: (i: any) => i.getValue() || '—',
       },
       {
         id: 'area_manager',
         header: 'Area Manager',
-        accessorFn: (r: Location) => (r.metadata as any)?.area_manager ?? '',
+        accessorFn: (r: Location) => locFieldValue(r, 'area_manager'),
         cell: (i: any) => i.getValue() || '—',
       },
       {
         id: 'director',
-        header: 'Director',
-        accessorFn: (r: Location) => (r.metadata as any)?.director ?? '',
+        header: 'Regional Director',
+        accessorFn: (r: Location) => locFieldValue(r, 'director'),
         cell: (i: any) => i.getValue() || '—',
       },
     ]
     for (const f of customFields) {
-      if (['region', 'market', 'area_manager', 'director'].includes(f.field_key)) continue
+      if (['region', 'owner', 'market', 'area_manager', 'director', 'regional_director'].includes(f.field_key)) continue
       cols.push({
         id: `cf_${f.field_key}`,
         header: f.label,
-        accessorFn: (r: Location) => (r.metadata as any)?.[f.field_key] ?? '',
+        // Base-column-first: a custom field whose key matches a Global Config
+        // base column (address, city, am_email, …) shows the real value;
+        // metadata-only fields (delivery_day, …) still resolve from metadata.
+        accessorFn: (r: Location) => locFieldValue(r, f.field_key),
         cell: (i: any) => i.getValue() || '—',
       })
     }

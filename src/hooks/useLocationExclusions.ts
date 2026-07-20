@@ -26,14 +26,21 @@ export const EXCLUDABLE_COLUMNS: { field: string; label: string }[] = [
   { field: 'shop_city', label: 'City' },
 ]
 
-// Resolve a location's value for a field (base column or meta:key). Mirrors the
-// resolver used by the Locations page so exclusion matches the visible values.
+// Resolve a location's value for a field. owner/market/area_manager/director
+// are base columns in core.locations (managed by Global Config), but older data
+// lived in `metadata`. Resolve base-column-first with a metadata fallback so
+// listings mirror Global Config regardless of where the value is stored. A
+// "meta:" prefix is accepted (and stripped) for backward compatibility.
 export function locExclusionValue(loc: Location, field: string): string {
-  if (field === 'meta:regional_director') {
-    return String((loc.metadata as any)?.regional_director ?? (loc.metadata as any)?.director ?? '')
+  const key = field.startsWith('meta:') ? field.slice(5) : field
+  const meta = (loc.metadata ?? {}) as Record<string, any>
+  if (key === 'regional_director' || key === 'director') {
+    return String((loc as any).director ?? meta.regional_director ?? meta.director ?? '')
   }
-  if (field.startsWith('meta:')) return String((loc.metadata as any)?.[field.slice(5)] ?? '')
-  return String((loc as any)[field] ?? '')
+  const base = (loc as any)[key]
+  if (base != null && String(base) !== '') return String(base)
+  const m = meta[key]
+  return m == null ? '' : String(m)
 }
 
 // Shared store so every surface (profile editor, Locations page, Lookup,
