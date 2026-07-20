@@ -132,14 +132,17 @@ export function MeetingNotesPage() {
         .order('meeting_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false }),
       sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).order('project_name'),
-      sb.schema('platform').from('user_profiles').select('id, full_name, email, department').eq('company_id', companyId).order('full_name'),
+      // platform.user_profiles has no `department` column — selecting it made
+      // the whole query error and left the share picker with zero users.
+      sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).is('deleted_at', null).order('full_name'),
     ])
     if (meetRes.error) toast.error(meetRes.error.message)
     else setMeetings((meetRes.data ?? []) as MeetingNote[])
+    if (usersRes.error) toast.error(`Could not load users: ${usersRes.error.message}`)
     setProjects((projRes.data ?? []) as Project[])
     setAllUsers(
-      ((usersRes.data ?? []) as { id: string; full_name: string | null; email: string | null; department?: string | null }[])
-        .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email ?? '', department: u.department ?? null }))
+      ((usersRes.data ?? []) as { id: string; full_name: string | null; email: string | null }[])
+        .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email ?? '', department: null }))
     )
     setLoading(false)
   }, [companyId])
