@@ -135,6 +135,11 @@ export function TasksPage() {
   // Assignee confirmation before checking off another user's task
   const [pendingComplete, setPendingComplete] = useState<{ task: UnifiedTask; done: boolean } | null>(null)
 
+  // Tasks checked off during this visit stay visible (marked done) until the
+  // user leaves and returns — the set resets on remount, so on the next visit
+  // they filter into the completed section normally.
+  const [sessionCompleted, setSessionCompleted] = useState<Set<string>>(new Set())
+
   // Delete confirmation modal
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; source: TaskSource; title: string } | null>(null)
 
@@ -233,9 +238,11 @@ export function TasksPage() {
   }, [projectTasks, calendarTasks, standaloneTasks, projectById, profileById])
 
   const displayed = useMemo(() => {
-    const filtered = showCompleted ? unified : unified.filter((t) => !t.completed)
+    const filtered = showCompleted
+      ? unified
+      : unified.filter((t) => !t.completed || sessionCompleted.has(t.key))
     return sortTasks(filtered, sort)
-  }, [unified, sort, showCompleted])
+  }, [unified, sort, showCompleted, sessionCompleted])
 
   const completedCount = unified.filter((t) => t.completed).length
   const totalCount = unified.length
@@ -249,8 +256,30 @@ export function TasksPage() {
     void markComplete(task, done)
   }
 
+  // Reflect completion in local state so the row updates in place (checked +
+  // strikethrough) without a full refetch/loader flash.
+  function applyLocalComplete(task: UnifiedTask, done: boolean) {
+    const nowIso = new Date().toISOString()
+    if (task.source === 'project') {
+      setProjectTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, done } : t)))
+    } else if (task.source === 'calendar') {
+      setCalendarTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, completed: done, completed_at: done ? nowIso : null } : t)))
+    } else {
+      setStandaloneTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, completed: done, completed_at: done ? nowIso : null, completed_by: done ? myId : null } : t)))
+    }
+  }
+
   async function markComplete(task: UnifiedTask, done: boolean) {
     const sb = supabase as any
+    // Optimistic: update the row in place and keep it visible for this visit.
+    applyLocalComplete(task, done)
+    setSessionCompleted((prev) => {
+      const next = new Set(prev)
+      if (done) next.add(task.key)
+      else next.delete(task.key)
+      return next
+    })
+
     let error: { message: string } | null = null
     if (task.source === 'project') {
       ;({ error } = await sb.schema('inventory').from('project_tasks').update({
@@ -269,8 +298,8 @@ export function TasksPage() {
         completed_by: done ? myId : null,
       }).eq('id', task.id))
     }
-    if (error) { toast.error(error.message); return }
-    loadAll()
+    // On failure, reconcile with the server (undoes the optimistic change).
+    if (error) { toast.error(error.message); loadAll(); return }
   }
 
   async function togglePublic(task: UnifiedTask) {
