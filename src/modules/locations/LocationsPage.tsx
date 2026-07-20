@@ -1,15 +1,11 @@
 import { useMemo, useState, useRef, useEffect } from 'react'
-import {
-  DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
-} from '@dnd-kit/core'
-import {
-  SortableContext, useSortable, arrayMove, verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab } from '@/modules/config/useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useLocationExclusions, locExclusionValue } from '@/hooks/useLocationExclusions'
+import { LOCATION_FIELDS, LOCATION_FIELD_KEYS, DEFAULT_VISIBLE_LOCATION_COLUMNS } from '@/lib/locationFields'
+import { ColumnManagerModal, type ColItem } from './ColumnManagerModal'
+import type { VisibilityState } from '@tanstack/react-table'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { DataTable } from '@/components/shared/DataTable'
 import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
@@ -33,56 +29,17 @@ const LS_HIDDEN_DROPS = 'locations.page.hiddenDropdowns'
 
 // Base-column-first resolution (with metadata fallback) so this read-only view
 // mirrors the Global Config locations list. See locExclusionValue.
-const locFieldValue = locExclusionValue
+function locFieldValue(loc: Location, field: string): string {
+  return locExclusionValue(loc, field)
+}
 
 const PINNED: string[] = []
-
-// Drag-to-reorder row inside the Columns popover
-function SortableColRow({
-  id,
-  label,
-  visible,
-  onToggle,
-}: {
-  id: string
-  label: string
-  visible: boolean
-  onToggle: (event: unknown) => void
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
-  return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`flex items-center gap-2 px-2 py-1.5 rounded select-none ${isDragging ? 'opacity-50 bg-navy/5' : 'hover:bg-navy/5'}`}
-    >
-      <span
-        {...attributes}
-        {...listeners}
-        className="text-inky/30 hover:text-inky/60 cursor-grab active:cursor-grabbing flex-shrink-0"
-        title="Drag to reorder"
-      >
-        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M7 4a1 1 0 100-2 1 1 0 000 2zm6 0a1 1 0 100-2 1 1 0 000 2zM7 8a1 1 0 100-2 1 1 0 000 2zm6 0a1 1 0 100-2 1 1 0 000 2zM7 12a1 1 0 100-2 1 1 0 000 2zm6 0a1 1 0 100-2 1 1 0 000 2zM7 16a1 1 0 100-2 1 1 0 000 2zm6 0a1 1 0 100-2 1 1 0 000 2z" />
-        </svg>
-      </span>
-      <input
-        type="checkbox"
-        checked={visible}
-        onChange={onToggle}
-        className="accent-navy w-3.5 h-3.5 rounded flex-shrink-0"
-      />
-      <span className="text-xs font-mono text-navy truncate">{label}</span>
-    </div>
-  )
-}
 
 export function LocationsPage() {
   const { data, loading } = useConfigTab<Location>('locations', 'core')
   const { filterLocations } = useLocationExclusions()
   const { active: customFields } = useCustomFields('locations')
   const [colsOpen, setColsOpen] = useState(false)
-  const popoverRef = useRef<HTMLDivElement>(null)
 
   // Contextual dropdown filter state
   const [dropFilters, setDropFilters] = useState<Record<string, string[]>>(() => {
@@ -105,15 +62,6 @@ export function LocationsPage() {
   useEffect(() => { localStorage.setItem(LS_HIDDEN_DROPS, JSON.stringify([...hiddenDropdowns])) }, [hiddenDropdowns])
 
   useEffect(() => {
-    if (!colsOpen) return
-    function handleClick(e: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) setColsOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [colsOpen])
-
-  useEffect(() => {
     if (!dropSettingsOpen) return
     function handleClick(e: MouseEvent) {
       if (dropSettingsRef.current && !dropSettingsRef.current.contains(e.target as Node)) setDropSettingsOpen(false)
@@ -122,44 +70,30 @@ export function LocationsPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [dropSettingsOpen])
 
+  // Full Global Config field set → read-only columns (base-column-first
+  // resolution), plus any custom metadata fields, plus active + updated_at.
   const baseColumns = useMemo(() => {
-    const cols: any[] = [
-      col.accessor('name', { id: 'name', header: 'Code' }),
-      col.accessor('shop_city', { id: 'shop_city', header: 'Shop # / City' }),
-      col.accessor('region', { id: 'region', header: 'Region', cell: (i) => i.getValue() ?? '—' }),
-      {
-        id: 'owner',
-        header: 'Owner',
-        accessorFn: (r: Location) => locFieldValue(r, 'owner'),
+    const cols: any[] = []
+    for (const f of LOCATION_FIELDS) {
+      if (f.name === 'region') {
+        cols.push(col.accessor('region', { id: 'region', header: 'Region', cell: (i) => i.getValue() ?? '—' }))
+        continue
+      }
+      cols.push({
+        id: f.name,
+        header: f.label,
+        accessorFn: (r: Location) => locFieldValue(r, f.name),
         cell: (i: any) => i.getValue() || '—',
-      },
-      {
-        id: 'market',
-        header: 'Market',
-        accessorFn: (r: Location) => locFieldValue(r, 'market'),
-        cell: (i: any) => i.getValue() || '—',
-      },
-      {
-        id: 'area_manager',
-        header: 'Area Manager',
-        accessorFn: (r: Location) => locFieldValue(r, 'area_manager'),
-        cell: (i: any) => i.getValue() || '—',
-      },
-      {
-        id: 'director',
-        header: 'Regional Director',
-        accessorFn: (r: Location) => locFieldValue(r, 'director'),
-        cell: (i: any) => i.getValue() || '—',
-      },
-    ]
+      })
+    }
+    // Custom metadata fields — skip any that duplicate a base field by key or label.
+    const schemaLabels = new Set(LOCATION_FIELDS.map((f) => f.label.toLowerCase()))
     for (const f of customFields) {
-      if (['region', 'owner', 'market', 'area_manager', 'director', 'regional_director'].includes(f.field_key)) continue
+      if (LOCATION_FIELD_KEYS.has(f.field_key)) continue
+      if (schemaLabels.has((f.label ?? '').toLowerCase())) continue
       cols.push({
         id: `cf_${f.field_key}`,
         header: f.label,
-        // Base-column-first: a custom field whose key matches a Global Config
-        // base column (address, city, am_email, …) shows the real value;
-        // metadata-only fields (delivery_day, …) still resolve from metadata.
         accessorFn: (r: Location) => locFieldValue(r, f.field_key),
         cell: (i: any) => i.getValue() || '—',
       })
@@ -184,6 +118,17 @@ export function LocationsPage() {
     }))
     return cols
   }, [customFields])
+
+  // Default view: key base columns + any custom fields visible; the rest of
+  // the Global Config schema hidden (available to add via Manage Columns).
+  // Only base columns are enumerated here — they're known synchronously, so
+  // useTable's initial snapshot hides them from the first render. Custom
+  // fields load async and stay visible by default (matches prior behavior).
+  const initialVisibility = useMemo<VisibilityState>(() => {
+    const vis: VisibilityState = {}
+    for (const f of LOCATION_FIELDS) if (!DEFAULT_VISIBLE_LOCATION_COLUMNS.includes(f.name)) vis[f.name] = false
+    return vis
+  }, [])
 
   // Rows passing all filters ABOVE a given hierarchy index (for per-dropdown option counts)
   function rowsAbove(fi: number): Location[] {
@@ -221,46 +166,45 @@ export function LocationsPage() {
     return vals.size >= 2
   })
 
-  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(filteredData, baseColumns)
-  useColumnPrefs('core.locations', table, columnVisibility, columnOrder, setColumnOrder)
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(filteredData, baseColumns, { initialVisibility })
+  // v2 key: the column set expanded to the full Global Config schema, so old
+  // saved prefs (which predate those columns) are intentionally not reused.
+  useColumnPrefs('core.locations.v2', table, columnVisibility, columnOrder, setColumnOrder)
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+  const colLabel = (c: ReturnType<typeof table.getAllLeafColumns>[number]) =>
+    typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id
 
-  // All non-pinned columns, in current order
-  const manageableCols = useMemo(() => {
-    const all = table.getAllLeafColumns().filter((c) => !PINNED.includes(c.id))
-    if (columnOrder.length > 0) {
-      const ordered = [...all].sort((a, b) => {
-        const ia = columnOrder.indexOf(a.id)
-        const ib = columnOrder.indexOf(b.id)
-        if (ia === -1 && ib === -1) return 0
-        if (ia === -1) return 1
-        if (ib === -1) return -1
-        return ia - ib
-      })
-      return ordered
-    }
-    return all
+  // Every manageable column (id + label) for the column manager.
+  const allColItems = useMemo<ColItem[]>(
+    () => table.getAllLeafColumns()
+      .filter((c) => !PINNED.includes(c.id))
+      .map((c) => ({ id: c.id, label: colLabel(c) })),
+    [table, columnVisibility], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  // Ordered ids of currently-visible columns (what the table renders, left→right).
+  const shownOrder = useMemo(() => {
+    const visible = table.getAllLeafColumns().filter((c) => !PINNED.includes(c.id) && c.getIsVisible()).map((c) => c.id)
+    if (!columnOrder.length) return visible
+    const rank = (id: string) => { const i = columnOrder.indexOf(id); return i === -1 ? Number.MAX_SAFE_INTEGER : i }
+    return [...visible].sort((a, b) => rank(a) - rank(b))
   }, [table, columnOrder, columnVisibility]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    const ids = manageableCols.map((c) => c.id)
-    const oldIdx = ids.indexOf(String(active.id))
-    const newIdx = ids.indexOf(String(over.id))
-    const reordered = arrayMove(ids, oldIdx, newIdx)
-    const allIds = [...PINNED, ...reordered]
-    setColumnOrder(allIds)
+  // Apply a new shown/ordered set from the manager: order = shown then hidden,
+  // visibility = explicit true/false for every column (so prefs round-trip).
+  function applyShown(shown: string[]) {
+    const shownSet = new Set(shown)
+    const hidden = allColItems.map((c) => c.id).filter((id) => !shownSet.has(id))
+    setColumnOrder([...PINNED, ...shown, ...hidden])
+    const vis: VisibilityState = {}
+    for (const c of allColItems) vis[c.id] = shownSet.has(c.id)
+    table.setColumnVisibility(vis)
   }
 
   function resetToDefault() {
     setColumnOrder([])
-    table.resetColumnVisibility()
+    table.setColumnVisibility(initialVisibility)
   }
-
-  const colLabel = (c: ReturnType<typeof table.getAllLeafColumns>[number]) =>
-    typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id
 
   return (
     <div className="flex flex-col gap-6">
@@ -352,50 +296,29 @@ export function LocationsPage() {
           loading={loading}
           hideColumnControl
           actions={
-            <div className="relative" ref={popoverRef}>
-              <button
-                onClick={() => setColsOpen((v) => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-                </svg>
-                Columns
-              </button>
-              {colsOpen && (
-                <div className="absolute right-0 top-full mt-1 z-20 w-56 bg-cream border border-navy/20 rounded shadow-lg p-2 flex flex-col gap-1">
-                  <div className="flex items-center justify-between px-1 pb-1 border-b border-navy/10 mb-0.5">
-                    <span className="text-[10px] font-mono text-inky/50 uppercase tracking-wide">Drag to reorder · Toggle to show/hide</span>
-                  </div>
-                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                    <SortableContext items={manageableCols.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-                      {manageableCols.map((column) => (
-                        <SortableColRow
-                          key={column.id}
-                          id={column.id}
-                          label={colLabel(column)}
-                          visible={column.getIsVisible()}
-                          onToggle={column.getToggleVisibilityHandler()}
-                        />
-                      ))}
-                    </SortableContext>
-                  </DndContext>
-                  <div className="border-t border-navy/10 mt-1 pt-1">
-                    <button
-                      onClick={resetToDefault}
-                      className="w-full text-left px-2 py-1 text-[10px] font-mono text-inky/50 hover:text-navy transition-colors rounded hover:bg-navy/5"
-                    >
-                      Reset to Default
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <button
+              onClick={() => setColsOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+              </svg>
+              Columns
+            </button>
           }
         />
       </div>
         </TabsContent>
       </Tabs>
+
+      <ColumnManagerModal
+        open={colsOpen}
+        onClose={() => setColsOpen(false)}
+        all={allColItems}
+        shown={shownOrder}
+        onChange={applyShown}
+        onReset={resetToDefault}
+      />
     </div>
   )
 }
