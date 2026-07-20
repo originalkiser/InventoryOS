@@ -5,6 +5,8 @@ import { useAppSetting } from '@/hooks/useAppSetting'
 import { Badge, Button, Input, Modal, SbLoader } from '@/components/ui'
 import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
+import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 import type { Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -131,6 +133,13 @@ export function TasksPage() {
   const [editSource, setEditSource] = useState<TaskSource | null>(null)
   const [form, setForm] = useState({ ...EMPTY_FORM })
   const [saving, setSaving] = useState(false)
+
+  // Task edit popup is a draggable/resizable floating panel (like Location
+  // Lookup / Inventory) rather than a centered modal. `addOpen` controls
+  // visibility; mode (float vs dock) and width persist across opens.
+  const isMobile = useMediaQuery('(max-width: 640px)')
+  const [panelMode, setPanelMode] = useState<PanelMode>('floating')
+  const [panelWidth, setPanelWidth] = useState<number>(() => Number(localStorage.getItem('tasks.editPanel.width')) || 420)
 
   // Assignee confirmation before checking off another user's task
   const [pendingComplete, setPendingComplete] = useState<{ task: UnifiedTask; done: boolean } | null>(null)
@@ -657,77 +666,84 @@ export function TasksPage() {
         </ul>
       )}
 
-      {/* Add / Edit task modal */}
-      <Modal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        title={editTaskId ? 'Edit Task' : 'Add Task'}
-        size="md"
-      >
-        <div className="flex flex-col gap-3">
-          <Input
-            label="Task *"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            placeholder="What needs to be done?"
-          />
-
-          {editSource !== 'calendar' && (
-            <AssigneeComboInput
-              label="Assign to"
-              value={form.assignee_input}
-              profiles={orgProfiles}
-              onChange={(name) => setForm({ ...form, assignee_input: name })}
+      {/* Add / Edit task — floating panel (draggable / dockable), stays open
+          while you scroll the list */}
+      {addOpen && (
+        <FloatingPanel
+          title={editTaskId ? 'Edit Task' : 'Add Task'}
+          prefix="tasks.editPanel"
+          mode={panelMode}
+          width={panelWidth}
+          mobile={isMobile}
+          onModeChange={setPanelMode}
+          onWidthChange={(w) => { setPanelWidth(w); localStorage.setItem('tasks.editPanel.width', String(w)) }}
+          onClose={() => setAddOpen(false)}
+        >
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pr-1">
+            <Input
+              label="Task *"
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              placeholder="What needs to be done?"
             />
-          )}
 
-          {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && (
+            {editSource !== 'calendar' && (
+              <AssigneeComboInput
+                label="Assign to"
+                value={form.assignee_input}
+                profiles={orgProfiles}
+                onChange={(name) => setForm({ ...form, assignee_input: name })}
+              />
+            )}
+
+            {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-mono text-inky uppercase tracking-wide">Link to Project</label>
+                <select
+                  value={form.project_id}
+                  onChange={(e) => setForm({ ...form, project_id: e.target.value })}
+                  className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
+                >
+                  <option value="">No project</option>
+                  {openProjects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.project_name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <Input
+              label={dateFieldLabel}
+              type="date"
+              value={form.target_date}
+              onChange={(e) => setForm({ ...form, target_date: e.target.value })}
+            />
+
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-mono text-inky uppercase tracking-wide">Link to Project</label>
-              <select
-                value={form.project_id}
-                onChange={(e) => setForm({ ...form, project_id: e.target.value })}
-                className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
-              >
-                <option value="">No project</option>
-                {openProjects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.project_name}</option>
-                ))}
-              </select>
+              <label className="text-xs font-mono text-inky uppercase tracking-wide">Notes</label>
+              <RichTextEditor
+                value={form.notes}
+                onChange={(html) => setForm({ ...form, notes: html })}
+                placeholder="Optional notes…"
+                minHeight={100}
+              />
             </div>
-          )}
 
-          <Input
-            label={dateFieldLabel}
-            type="date"
-            value={form.target_date}
-            onChange={(e) => setForm({ ...form, target_date: e.target.value })}
-          />
-
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-mono text-inky uppercase tracking-wide">Notes</label>
-            <RichTextEditor
-              value={form.notes}
-              onChange={(html) => setForm({ ...form, notes: html })}
-              placeholder="Optional notes…"
-              minHeight={100}
-            />
+            {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && isEditOwner && (
+              <label className="flex items-center gap-2 cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  checked={form.is_public}
+                  onChange={(e) => setForm({ ...form, is_public: e.target.checked })}
+                  className="accent-inky w-4 h-4"
+                />
+                <span className="text-xs font-mono text-inky">Visible to entire org</span>
+                <span className="text-[10px] font-mono text-inky/40">(private by default)</span>
+              </label>
+            )}
           </div>
 
-          {(editSource === null || editSource === 'standalone' || editSource === 'meeting') && isEditOwner && (
-            <label className="flex items-center gap-2 cursor-pointer pt-1">
-              <input
-                type="checkbox"
-                checked={form.is_public}
-                onChange={(e) => setForm({ ...form, is_public: e.target.checked })}
-                className="accent-inky w-4 h-4"
-              />
-              <span className="text-xs font-mono text-inky">Visible to entire org</span>
-              <span className="text-[10px] font-mono text-inky/40">(private by default)</span>
-            </label>
-          )}
-
-          <div className="flex justify-between gap-2 pt-2">
+          <div className="flex justify-between gap-2 pt-3 mt-1 border-t border-navy/10">
             <div>{canDelete && <Button variant="danger" size="sm" onClick={onDeleteClick}>Delete</Button>}</div>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" onClick={() => setAddOpen(false)}>Discard</Button>
@@ -736,8 +752,8 @@ export function TasksPage() {
               </Button>
             </div>
           </div>
-        </div>
-      </Modal>
+        </FloatingPanel>
+      )}
 
       {/* Assignee confirmation */}
       {pendingComplete && (
