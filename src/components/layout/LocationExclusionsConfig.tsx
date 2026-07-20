@@ -6,8 +6,8 @@ import {
   locExclusionValue,
 } from '@/hooks/useLocationExclusions'
 
-// Profile-panel section: choose a column, then pick or type values to hide
-// matching locations from the Locations page, Lookup panel, and dashboard.
+// Profile-panel section: choose a column, then multi-select or type values to
+// hide matching locations from the Locations page, Lookup panel, and dashboard.
 export function LocationExclusionsConfig() {
   const { locations } = useLocations()
   const { rules, setRules, isExcluded } = useLocationExclusions()
@@ -19,42 +19,49 @@ export function LocationExclusionsConfig() {
     [rules, field],
   )
 
-  // Distinct values present for the selected column, minus ones already excluded.
-  const distinct = useMemo(() => {
-    const set = new Set<string>()
+  // All distinct values for the selected column (with a count of matching
+  // locations), unioned with any already-excluded values so typed-in entries
+  // still appear as checked options.
+  const options = useMemo(() => {
+    const counts = new Map<string, number>()
     for (const l of locations) {
       const v = locExclusionValue(l, field).trim()
-      if (v) set.add(v)
+      if (v) counts.set(v, (counts.get(v) ?? 0) + 1)
     }
-    return Array.from(set)
-      .filter((v) => !currentValues.some((cv) => cv.toLowerCase() === v.toLowerCase()))
-      .sort((a, b) => a.localeCompare(b))
+    for (const v of currentValues) if (!counts.has(v)) counts.set(v, 0)
+    return Array.from(counts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([value, count]) => ({ value, count }))
   }, [locations, field, currentValues])
 
   const hiddenCount = useMemo(() => locations.filter(isExcluded).length, [locations, isExcluded])
   const labelFor = (f: string) => EXCLUDABLE_COLUMNS.find((c) => c.field === f)?.label ?? f
 
-  function addValue(f: string, value: string) {
-    const v = value.trim()
-    if (!v) return
-    const next = [...rules]
-    const idx = next.findIndex((r) => r.field === f)
-    if (idx >= 0) {
-      if (!next[idx].values.some((x) => x.toLowerCase() === v.toLowerCase())) {
-        next[idx] = { ...next[idx], values: [...next[idx].values, v] }
-      }
+  // Replace the selected column's excluded values (drop the rule if empty).
+  function setValuesForField(f: string, values: string[]) {
+    const others = rules.filter((r) => r.field !== f)
+    setRules(values.length ? [...others, { field: f, values }] : others)
+  }
+
+  function toggleValue(value: string) {
+    if (currentValues.some((x) => x.toLowerCase() === value.toLowerCase())) {
+      setValuesForField(field, currentValues.filter((x) => x.toLowerCase() !== value.toLowerCase()))
     } else {
-      next.push({ field: f, values: [v] })
+      setValuesForField(field, [...currentValues, value])
     }
-    setRules(next)
+  }
+
+  function addCustom() {
+    const v = custom.trim()
+    if (!v) return
+    if (!currentValues.some((x) => x.toLowerCase() === v.toLowerCase())) {
+      setValuesForField(field, [...currentValues, v])
+    }
+    setCustom('')
   }
 
   function removeValue(f: string, value: string) {
-    setRules(
-      rules
-        .map((r) => (r.field === f ? { ...r, values: r.values.filter((x) => x !== value) } : r))
-        .filter((r) => r.values.length > 0),
-    )
+    setValuesForField(f, (rules.find((r) => r.field === f)?.values ?? []).filter((x) => x !== value))
   }
 
   const inputCls =
@@ -69,7 +76,7 @@ export function LocationExclusionsConfig() {
         Hide locations from the Locations page, Lookup, and dashboard. Orders, counts, and config are unaffected.
       </p>
 
-      {/* Active rules */}
+      {/* Active rules across all columns */}
       {rules.length > 0 && (
         <div className="flex flex-col gap-2 mb-3">
           {rules.map((r) => (
@@ -94,7 +101,7 @@ export function LocationExclusionsConfig() {
         </div>
       )}
 
-      {/* Add rule: column + value dropdown / free text */}
+      {/* Add / edit: column + multi-select values + free text */}
       <div className="flex flex-col gap-2">
         <select value={field} onChange={(e) => setField(e.target.value)} className={inputCls}>
           {EXCLUDABLE_COLUMNS.map((c) => (
@@ -102,28 +109,36 @@ export function LocationExclusionsConfig() {
           ))}
         </select>
 
-        <select
-          value=""
-          onChange={(e) => { if (e.target.value) addValue(field, e.target.value) }}
-          className={inputCls}
-          disabled={distinct.length === 0}
-        >
-          <option value="">{distinct.length ? 'Exclude a value…' : 'No values available'}</option>
-          {distinct.map((v) => (
-            <option key={v} value={v}>{v}</option>
-          ))}
-        </select>
+        {/* Inline multi-select checklist — check every value to exclude */}
+        {options.length > 0 ? (
+          <div className="max-h-40 overflow-y-auto rounded border border-navy/30 dark:border-[#F2F1E6]/20 bg-cream dark:bg-[#0e2638] p-1 flex flex-col gap-px">
+            {options.map((o) => (
+              <label key={o.value} className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer hover:bg-navy/5 dark:hover:bg-[#F2F1E6]/5 select-none">
+                <input
+                  type="checkbox"
+                  checked={currentValues.some((x) => x.toLowerCase() === o.value.toLowerCase())}
+                  onChange={() => toggleValue(o.value)}
+                  className="accent-navy w-3.5 h-3.5 shrink-0"
+                />
+                <span className="text-xs font-mono text-navy dark:text-[#F2F1E6] flex-1 truncate">{o.value}</span>
+                <span className="text-[10px] font-mono text-inky/40 shrink-0">{o.count}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="text-[10px] font-mono text-inky/50 dark:text-[#F2F1E6]/40 px-1">No values available for this column.</p>
+        )}
 
         <div className="flex items-center gap-2">
           <input
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { addValue(field, custom); setCustom('') } }}
+            onKeyDown={(e) => { if (e.key === 'Enter') addCustom() }}
             placeholder="…or type a value to exclude"
             className={`${inputCls} flex-1`}
           />
           <button
-            onClick={() => { addValue(field, custom); setCustom('') }}
+            onClick={addCustom}
             disabled={!custom.trim()}
             className="rounded bg-navy px-3 py-1.5 text-[10px] font-heading uppercase tracking-wide text-cream hover:bg-inky disabled:opacity-40"
           >
