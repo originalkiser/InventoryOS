@@ -8,6 +8,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
+import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format } from 'date-fns'
 import { differenceInDays } from 'date-fns'
@@ -124,6 +125,10 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   const pillSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const allPillPrefsRef = useRef<Record<string, unknown>>({})
   const [checklistOpen, setChecklistOpen] = useState(false)
+  // Today's Tasks is a draggable/pinnable floating panel (same shell as
+  // Location Lookup / Inventory). mode + width persist across opens.
+  const [checklistMode, setChecklistMode] = useState<PanelMode>('floating')
+  const [checklistWidth, setChecklistWidth] = useState<number>(() => Number(localStorage.getItem('todaysTasks.width')) || 360)
   const [filterUserId, setFilterUserId] = useState('')
   type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task' | 'standalone'; notes: string; assignedTo: string[] | null; startTime?: string | null; reminderMinutes?: number | null }
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
@@ -574,48 +579,48 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
         {!mobile && 'End Day'}
       </button>
 
-      {/* Checklist popover */}
+      {/* Today's Tasks — draggable / pinnable floating panel */}
       {checklistOpen && (
-        <div className="absolute top-full right-3 mt-2 w-80 max-w-[calc(100vw-1.5rem)] bg-cream border border-navy/40 rounded-lg shadow-xl z-30">
-          <div className="px-4 py-3 border-b border-navy/20 flex items-center justify-between gap-2">
-            <span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">
-              Today's Tasks
-            </span>
-            <div className="flex items-center gap-2 ml-auto">
-              <select
-                value={filterUserId}
-                onChange={(e) => setFilterUserId(e.target.value)}
-                className="text-[10px] font-mono border border-navy/20 rounded px-1.5 py-0.5 bg-cream text-inky focus:outline-none focus:border-[#00e5ff]/60 max-w-[110px] truncate"
-              >
-                <option value="">All</option>
-                {orgProfiles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.full_name ?? p.email}</option>
-                ))}
-              </select>
-              <button onClick={() => setChecklistOpen(false)} className="text-inky hover:text-navy transition-colors">
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          </div>
+        <FloatingPanel
+          title="Today's Tasks"
+          prefix="todaysTasks"
+          mode={checklistMode}
+          width={checklistWidth}
+          mobile={mobile}
+          onModeChange={setChecklistMode}
+          onWidthChange={(w) => { setChecklistWidth(w); localStorage.setItem('todaysTasks.width', String(w)) }}
+          onClose={() => setChecklistOpen(false)}
+          headerActions={
+            <select
+              value={filterUserId}
+              onChange={(e) => setFilterUserId(e.target.value)}
+              onMouseDown={(e) => e.stopPropagation()}
+              className="text-[10px] font-mono border border-[#F2F1E6]/30 rounded px-1.5 py-0.5 bg-[#1a5c87] text-[#F2F1E6] focus:outline-none focus:border-sky max-w-[110px] truncate"
+            >
+              <option value="">All</option>
+              {orgProfiles.map((p) => (
+                <option key={p.id} value={p.id}>{p.full_name ?? p.email}</option>
+              ))}
+            </select>
+          }
+        >
           {(() => {
             const visible = filterUserId
               ? checklistItems.filter((i) => i.kind === 'task' || i.kind === 'standalone' || i.assignedTo?.includes(filterUserId))
               : checklistItems
             return visible.length === 0 ? (
-              <div className="px-4 py-3 text-xs text-inky font-body italic">
+              <div className="py-3 text-xs text-inky font-body italic">
                 {filterUserId ? 'No items assigned to that person today' : 'No checklist items today'}
               </div>
             ) : (
-              <div className="divide-y divide-navy/10 max-h-80 overflow-auto">
+              <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-navy/10 -mx-3">
                 {visible.map((item) => {
                   const assigneeNames = (item.assignedTo ?? [])
                     .map((id) => orgProfiles.find((p) => p.id === id))
                     .filter(Boolean)
                     .map((p) => p!.full_name ?? p!.email ?? '')
                   return (
-                    <div key={`${item.kind}-${item.id}`} className="px-4 py-2.5">
+                    <div key={`${item.kind}-${item.id}`} className="px-3 py-2.5">
                       <div className="flex items-center gap-3">
                         <input
                           type="checkbox"
@@ -660,7 +665,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
               </div>
             )
           })()}
-        </div>
+        </FloatingPanel>
       )}
 
       <EndDayModal
