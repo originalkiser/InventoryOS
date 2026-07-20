@@ -19,6 +19,7 @@ export type Transform =
   | { kind: 'datetime' } // → ISO timestamp
   | { kind: 'currency' } // strip symbols → numeric string
   | { kind: 'strip_leading_zeros' } // "001" → "1", "007.5" → "7.5"
+  | { kind: 'remove_comma_space' } // "j, o, h, n" → "john" (strip every ", ")
 
 export type TransformChainKind = Transform['kind']
 
@@ -36,6 +37,7 @@ export const TRANSFORM_CATALOG: { kind: TransformChainKind; label: string; opera
   { kind: 'datetime', label: 'Date & time' },
   { kind: 'currency', label: 'Currency (numeric)' },
   { kind: 'strip_leading_zeros', label: 'Strip leading zeros (001 → 1)' },
+  { kind: 'remove_comma_space', label: 'Remove ", " (comma + space)' },
 ]
 
 function toNum(v: string): number {
@@ -104,6 +106,9 @@ function applyOne(value: string, t: Transform): string {
       if (/^\d+\.\d+$/.test(trimmed)) return String(Number(trimmed))
       return v
     }
+    // Files that arrive with a ", " between every character
+    // ("j, o, h, n, @, x, ., c, o, m") → collapse back to "john@x.com".
+    case 'remove_comma_space': return v.replace(/, /g, '').trim()
     default: return v
   }
 }
@@ -134,5 +139,6 @@ export function describeTransform(t: Transform): string {
     case 'datetime': return 'date+time'
     case 'currency': return '$'
     case 'strip_leading_zeros': return '0-strip'
+    case 'remove_comma_space': return 'rm ", "'
   }
 }
