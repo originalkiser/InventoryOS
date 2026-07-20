@@ -660,6 +660,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
   const [skipWeekends, setSkipWeekends] = useState(profile?.skip_weekends_holidays ?? false)
   const [schedSaving, setSchedSaving] = useState(false)
   const [schedSaved, setSchedSaved] = useState(false)
+  const [showTasksFab,     setShowTasksFab]     = useState(() => localStorage.getItem('sb:fab:tasks')     !== 'false')
   const [showMeetingFab,   setShowMeetingFab]   = useState(() => localStorage.getItem('sb:fab:meeting')   !== 'false')
   const [showLookupFab,    setShowLookupFab]    = useState(() => localStorage.getItem('sb:fab:lookup')    !== 'false')
   const [showInventoryFab, setShowInventoryFab] = useState(() => localStorage.getItem('sb:fab:inventory') !== 'false')
@@ -797,6 +798,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex flex-col gap-2.5">
             {([
+              { label: 'Tasks',     key: 'sb:fab:tasks',     val: showTasksFab,     set: setShowTasksFab },
               { label: 'Meeting',   key: 'sb:fab:meeting',   val: showMeetingFab,   set: setShowMeetingFab },
               { label: 'Lookup',    key: 'sb:fab:lookup',    val: showLookupFab,    set: setShowLookupFab },
               { label: 'Inventory', key: 'sb:fab:inventory', val: showInventoryFab, set: setShowInventoryFab },

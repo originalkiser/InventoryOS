@@ -10,8 +10,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
-import { format } from 'date-fns'
-import { differenceInDays } from 'date-fns'
+import { format, differenceInDays, endOfWeek, endOfMonth, parseISO } from 'date-fns'
 import type { Profile } from '@/types'
 
 interface TopBarStats {
@@ -98,9 +97,28 @@ function SortablePillRow({ id, label, visible, onToggle }: {
 interface TopBarProps {
   mobile: boolean
   onMobileMenuOpen: () => void
+  tasksMode: PanelMode
+  tasksWidth: number
+  tasksTopOffset: number
+  tasksSidebarWidth: number
+  onTasksModeChange: (m: PanelMode) => void
+  onTasksWidthChange: (w: number) => void
+  onToggleTasks: () => void
+  onOpenTasks: () => void
 }
 
-export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
+type TaskRange = 'today' | 'week' | 'month'
+const TASK_RANGES: { key: TaskRange; label: string }[] = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This Week' },
+  { key: 'month', label: 'This Month' },
+]
+
+export function TopBar({
+  mobile, onMobileMenuOpen,
+  tasksMode, tasksWidth, tasksTopOffset, tasksSidebarWidth,
+  onTasksModeChange, onTasksWidthChange, onToggleTasks, onOpenTasks,
+}: TopBarProps) {
   const navigate = useNavigate()
   const { profile } = useAuthStore()
   useDarkMode() // keep dark-mode class applied
@@ -124,18 +142,22 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   const pillConfigRef = useRef<HTMLDivElement>(null)
   const pillSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const allPillPrefsRef = useRef<Record<string, unknown>>({})
-  const [checklistOpen, setChecklistOpen] = useState(false)
-  // Today's Tasks is a draggable/pinnable floating panel (same shell as
-  // Location Lookup / Inventory). mode + width persist across opens.
-  const [checklistMode, setChecklistMode] = useState<PanelMode>('floating')
-  const [checklistWidth, setChecklistWidth] = useState<number>(() => Number(localStorage.getItem('todaysTasks.width')) || 360)
+  // Tasks panel visibility/mode/width are owned by AppShell (props) so the
+  // bottom FAB can toggle it alongside Meeting / Lookup / Inventory.
+  const checklistOpen = tasksMode !== 'hidden'
   const [filterUserId, setFilterUserId] = useState('')
-  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task' | 'standalone'; notes: string; assignedTo: string[] | null; startTime?: string | null; reminderMinutes?: number | null }
+  const [taskRange, setTaskRange] = useState<TaskRange>(() => (localStorage.getItem('tasks.range') as TaskRange) || 'today')
+  const taskRangeRef = useRef<TaskRange>(taskRange)
+  type ChecklistItem = { id: string; title: string; completed: boolean; kind: 'event' | 'task' | 'standalone'; notes: string; assignedTo: string[] | null; date: string | null; startTime?: string | null; reminderMinutes?: number | null }
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   const [openNote, setOpenNote] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
   const checklistItemsRef = useRef<ChecklistItem[]>([])
+  // Quick add-task form inside the panel
+  const [addingTask, setAddingTask] = useState(false)
+  const [newTaskTitle, setNewTaskTitle] = useState('')
+  const [newTaskDate, setNewTaskDate] = useState('')
 
   const companyId = profile?.company_id
 
@@ -214,7 +236,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
           const key = `reminder_${item.id}_${dk}`
           if (!localStorage.getItem(key)) {
             localStorage.setItem(key, '1')
-            setChecklistOpen(true)
+            onOpenTasks()
           }
         }
       }
@@ -360,19 +382,53 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
   async function loadTodayChecklists() {
     if (!companyId) return
     const today = format(new Date(), 'yyyy-MM-dd')
+    const range = taskRangeRef.current
+    // Upper bound on due/target date. Overdue items always show (they fall
+    // at/below any of these); a wider range pulls in more upcoming work.
+    const rangeEnd =
+      range === 'week' ? format(endOfWeek(new Date()), 'yyyy-MM-dd')
+      : range === 'month' ? format(endOfMonth(new Date()), 'yyyy-MM-dd')
+      : today
     const sb = supabase as any
     const [ev, tk, st] = await Promise.all([
-      sb.schema('platform').from('schedule_events').select('id, title, completed, notes, assigned_to, start_time, reminder_minutes').eq('company_id', companyId).eq('start_date', today).eq('is_checklist', true),
-      sb.schema('inventory').from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', today),
-      sb.schema('core').from('tasks').select('id, title, notes, target_date, completed, assignee_id, assignee_name').eq('company_id', companyId).eq('completed', false).lte('target_date', today).is('deleted_at', null),
+      sb.schema('platform').from('schedule_events').select('id, title, completed, notes, assigned_to, start_date, start_time, reminder_minutes').eq('company_id', companyId).eq('is_checklist', true).gte('start_date', today).lte('start_date', rangeEnd),
+      sb.schema('inventory').from('project_tasks').select('id, task_name, done, notes, due_date').eq('company_id', companyId).eq('done', false).lte('due_date', rangeEnd),
+      sb.schema('core').from('tasks').select('id, title, notes, target_date, completed, assignee_id, assignee_name').eq('company_id', companyId).eq('completed', false).lte('target_date', rangeEnd).is('deleted_at', null),
     ])
     const items: ChecklistItem[] = [
-      ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '', assignedTo: e.assigned_to ?? null, startTime: e.start_time ?? null, reminderMinutes: e.reminder_minutes ?? null })),
-      ...((tk.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.task_name || '(untitled task)', completed: false, kind: 'task' as const, notes: t.notes ?? '', assignedTo: null })),
-      ...((st.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.title || '(untitled task)', completed: false, kind: 'standalone' as const, notes: t.notes ?? '', assignedTo: t.assignee_id ? [t.assignee_id] : null })),
+      ...((ev.data ?? []) as any[]).map((e) => ({ id: e.id, title: e.title || '(untitled)', completed: !!e.completed, kind: 'event' as const, notes: e.notes ?? '', assignedTo: e.assigned_to ?? null, date: e.start_date ?? null, startTime: e.start_time ?? null, reminderMinutes: e.reminder_minutes ?? null })),
+      ...((tk.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.task_name || '(untitled task)', completed: false, kind: 'task' as const, notes: t.notes ?? '', assignedTo: null, date: t.due_date ?? null })),
+      ...((st.data ?? []) as any[]).map((t) => ({ id: t.id, title: t.title || '(untitled task)', completed: false, kind: 'standalone' as const, notes: t.notes ?? '', assignedTo: t.assignee_id ? [t.assignee_id] : null, date: t.target_date ?? null })),
     ]
+    // Sort by date (undated last), then keep a stable order.
+    items.sort((a, b) => (a.date ?? '9999').localeCompare(b.date ?? '9999'))
     setChecklistItems(items)
-    setStats((s) => ({ ...s, todayChecklists: items.filter((i) => !i.completed).length }))
+    // Pill stays a today/overdue count regardless of the panel's range.
+    setStats((s) => ({ ...s, todayChecklists: items.filter((i) => !i.completed && i.date != null && i.date <= today).length }))
+  }
+
+  // Reload the panel when the date range changes.
+  useEffect(() => {
+    taskRangeRef.current = taskRange
+    localStorage.setItem('tasks.range', taskRange)
+    if (companyId) loadTodayChecklists()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskRange])
+
+  async function createTaskFromPanel() {
+    const title = newTaskTitle.trim()
+    if (!companyId || !title) return
+    const { error } = await (supabase as any).schema('core').from('tasks').insert({
+      company_id: companyId,
+      title,
+      target_date: newTaskDate || format(new Date(), 'yyyy-MM-dd'),
+      source: 'manual',
+      created_by: profile?.id ?? null,
+      is_public: false,
+    })
+    if (error) { console.error('[TopBar] create task failed:', error.message); return }
+    setNewTaskTitle(''); setNewTaskDate(''); setAddingTask(false)
+    loadTodayChecklists()
   }
 
   async function toggleChecklist(item: ChecklistItem) {
@@ -425,7 +481,7 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
       label: "Today's Tasks",
       value: stats.todayChecklists,
       highlight: stats.todayChecklists > 0,
-      onClick: () => setChecklistOpen((v) => !v),
+      onClick: onToggleTasks,
     },
     next_count_date: {
       label: 'Next Count',
@@ -579,17 +635,19 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
         {!mobile && 'End Day'}
       </button>
 
-      {/* Today's Tasks — draggable / pinnable floating panel */}
+      {/* Tasks — draggable / pinnable floating panel */}
       {checklistOpen && (
         <FloatingPanel
-          title="Today's Tasks"
+          title="Tasks"
           prefix="todaysTasks"
-          mode={checklistMode}
-          width={checklistWidth}
+          mode={tasksMode}
+          width={tasksWidth}
           mobile={mobile}
-          onModeChange={setChecklistMode}
-          onWidthChange={(w) => { setChecklistWidth(w); localStorage.setItem('todaysTasks.width', String(w)) }}
-          onClose={() => setChecklistOpen(false)}
+          topOffset={tasksTopOffset}
+          sidebarWidth={tasksSidebarWidth}
+          onModeChange={onTasksModeChange}
+          onWidthChange={onTasksWidthChange}
+          onClose={() => onTasksModeChange('hidden')}
           headerActions={
             <select
               value={filterUserId}
@@ -604,13 +662,69 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
             </select>
           }
         >
+          {/* Range selector + add task */}
+          <div className="flex items-center gap-2 mb-2">
+            <div className="flex rounded border border-navy/30 overflow-hidden">
+              {TASK_RANGES.map((r) => (
+                <button
+                  key={r.key}
+                  onClick={() => setTaskRange(r.key)}
+                  className={[
+                    'px-2 py-1 text-[10px] font-mono transition-colors',
+                    taskRange === r.key ? 'bg-navy/10 text-navy font-bold' : 'text-inky hover:text-navy',
+                  ].join(' ')}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => { setAddingTask((v) => !v); setNewTaskTitle(''); setNewTaskDate('') }}
+              className="ml-auto text-[10px] font-mono text-navy hover:text-sky uppercase tracking-wide"
+              title="Add a task"
+            >
+              {addingTask ? '✕ Cancel' : '＋ Add task'}
+            </button>
+          </div>
+
+          {addingTask && (
+            <div className="flex flex-col gap-1.5 mb-2 p-2 rounded border border-navy/20 bg-navy/[0.03]">
+              <input
+                autoFocus
+                value={newTaskTitle}
+                onChange={(e) => setNewTaskTitle(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') createTaskFromPanel(); if (e.key === 'Escape') setAddingTask(false) }}
+                placeholder="What needs to be done?"
+                className="w-full rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
+              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={newTaskDate}
+                  onChange={(e) => setNewTaskDate(e.target.value)}
+                  className="rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy focus:border-sky focus:outline-none"
+                />
+                <button
+                  onClick={createTaskFromPanel}
+                  disabled={!newTaskTitle.trim()}
+                  className="ml-auto rounded bg-navy px-3 py-1 text-[10px] font-heading uppercase tracking-wide text-cream hover:bg-inky disabled:opacity-40"
+                >
+                  Add
+                </button>
+              </div>
+              <span className="text-[10px] font-mono text-inky/40">Defaults to today if no date is set.</span>
+            </div>
+          )}
+
           {(() => {
+            const today = format(new Date(), 'yyyy-MM-dd')
             const visible = filterUserId
               ? checklistItems.filter((i) => i.kind === 'task' || i.kind === 'standalone' || i.assignedTo?.includes(filterUserId))
               : checklistItems
+            const rangeWord = taskRange === 'today' ? 'today' : taskRange === 'week' ? 'this week' : 'this month'
             return visible.length === 0 ? (
               <div className="py-3 text-xs text-inky font-body italic">
-                {filterUserId ? 'No items assigned to that person today' : 'No checklist items today'}
+                {filterUserId ? `No items assigned to that person ${rangeWord}` : `No tasks ${rangeWord}`}
               </div>
             ) : (
               <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-navy/10 -mx-3">
@@ -619,6 +733,10 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
                     .map((id) => orgProfiles.find((p) => p.id === id))
                     .filter(Boolean)
                     .map((p) => p!.full_name ?? p!.email ?? '')
+                  const overdue = item.date != null && item.date < today && !item.completed
+                  const dateLabel = item.date == null ? null
+                    : item.date === today ? 'Today'
+                    : format(parseISO(item.date), 'MMM d')
                   return (
                     <div key={`${item.kind}-${item.id}`} className="px-3 py-2.5">
                       <div className="flex items-center gap-3">
@@ -638,6 +756,11 @@ export function TopBar({ mobile, onMobileMenuOpen }: TopBarProps) {
                           {item.kind === 'standalone' && <span className="ml-1.5 text-[10px] text-inky">· task</span>}
                           {item.notes && <span className="ml-1 text-inky/60">✎</span>}
                         </button>
+                        {dateLabel && (
+                          <span className={['text-[10px] font-mono flex-shrink-0', overdue ? 'text-[#C0392B] font-bold' : 'text-inky/50'].join(' ')}>
+                            {overdue ? '⚠ ' : ''}{dateLabel}
+                          </span>
+                        )}
                       </div>
                       {assigneeNames.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1 ml-6">
