@@ -9,6 +9,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab } from '@/modules/config/useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
+import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { DataTable } from '@/components/shared/DataTable'
 import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
@@ -83,6 +84,7 @@ function SortableColRow({
 
 export function LocationsPage() {
   const { data, loading } = useConfigTab<Location>('locations', 'core')
+  const { filterLocations } = useLocationExclusions()
   const { active: customFields } = useCustomFields('locations')
   const [colsOpen, setColsOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -190,13 +192,13 @@ export function LocationsPage() {
   }
 
   const filteredData = useMemo(() => {
-    let r = data
+    let r = filterLocations(data)
     for (const { field } of LOC_FILTER_HIERARCHY) {
       const vals = dropFilters[field] ?? []
       if (vals.length) r = r.filter(loc => vals.includes(locFieldValue(loc, field)))
     }
     return r
-  }, [data, dropFilters])
+  }, [data, dropFilters, filterLocations])
 
   function setDropFilter(field: string, vals: string[], fi: number) {
     setDropFilters(prev => {

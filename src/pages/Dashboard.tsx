@@ -6,6 +6,8 @@ import { Card, CardHeader, CardBody, Badge, SbLoader } from '@/components/ui'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { format, endOfWeek } from 'date-fns'
 import { useInventory } from '@/hooks/useInventory'
+import { useLocations } from '@/hooks/useLocations'
+import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { InventoryView } from '@/components/inventory/InventoryView'
 import { FLAG_HEX } from '@/lib/flagScale'
 
@@ -91,6 +93,14 @@ export function DashboardPage() {
   const [countView, setCountView] = useTileView('count_progress', 'graph')
   const [invView, setInvView] = useTileView('inventory', 'list')
   const inv = useInventory()
+  const { locations } = useLocations()
+  const { isExcluded } = useLocationExclusions()
+
+  // Active-shop count reflects the user's location exclusions once locations
+  // load; falls back to the raw query count before then.
+  const activeShopsDisplay = locations.length
+    ? locations.filter((l) => l.active && !isExcluded(l)).length
+    : stats.activeShops
 
   useEffect(() => {
     if (!profile?.company_id) return
@@ -184,7 +194,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card onClick={() => navigate('/config')} className="p-4 hover:border-navy cursor-pointer">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Active Shops</div>
-          <div className="text-2xl font-heading font-bold text-navy">{stats.activeShops}</div>
+          <div className="text-2xl font-heading font-bold text-navy">{activeShopsDisplay}</div>
         </Card>
         <Card className="p-4">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Count Completion</div>

@@ -28,6 +28,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useSidebarPrefs } from '@/hooks/useSidebarPrefs'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
+import { LocationExclusionsConfig } from './LocationExclusionsConfig'
 import { isAdminOrDeveloper, getRoleLabel } from '@/lib/roles'
 import sbLogo from '@/assets/logo-cream.png'
 import sbIcon from '@/assets/SBOC-IconCream.png'
@@ -815,6 +816,9 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         </div>
+
+        {/* Location Exclusions */}
+        <LocationExclusionsConfig />
 
         {/* Daily Schedule */}
         <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">

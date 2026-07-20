@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { EXCLUDE_NOT_IN_ORDER_KEY } from '@/modules/config/tabs/ProductUsageTab'
 import { DEFAULT_FLAG_CONFIG, flagColorFor, isLow, type FlagColor, type FlagConfig } from '@/lib/flagScale'
@@ -26,6 +27,7 @@ export function useInventory() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
+  const { isExcluded } = useLocationExclusions()
   const [flagConfig, setFlagConfig] = useAppSetting<FlagConfig>('flag_config', DEFAULT_FLAG_CONFIG)
   const [exclude] = useAppSetting<boolean>(EXCLUDE_NOT_IN_ORDER_KEY, false)
   const [usage, setUsage] = useState<ProductUsage[]>([])
@@ -46,17 +48,20 @@ export function useInventory() {
 
   useEffect(() => { load() }, [load])
 
-  const rows = useMemo<InventoryRow[]>(() => usage.map((u) => {
-    const inOrderConfig = orderKeys.has(`${u.location_id ?? ''}|${String(u.product_id ?? '').toLowerCase()}`)
-    // When excluding, products not in the order config are not flagged.
-    const flaggable = !exclude || inOrderConfig
-    const flag = flaggable ? flagColorFor(u.days_of_supply, flagConfig) : null
-    return {
-      id: u.id, location_id: u.location_id, location_label: loc.labelOf(u.location_id),
-      product_id: u.product_id, daily_usage: u.daily_usage, on_hands: u.on_hands, days_of_supply: u.days_of_supply,
-      flag, low: flaggable && isLow(u.days_of_supply, flagConfig), inOrderConfig,
-    }
-  }), [usage, orderKeys, exclude, flagConfig, loc])
+  const rows = useMemo<InventoryRow[]>(() => usage
+    // Hide rows for locations the user has excluded (listing/dashboard scope).
+    .filter((u) => { const l = loc.byId(u.location_id); return !l || !isExcluded(l) })
+    .map((u) => {
+      const inOrderConfig = orderKeys.has(`${u.location_id ?? ''}|${String(u.product_id ?? '').toLowerCase()}`)
+      // When excluding, products not in the order config are not flagged.
+      const flaggable = !exclude || inOrderConfig
+      const flag = flaggable ? flagColorFor(u.days_of_supply, flagConfig) : null
+      return {
+        id: u.id, location_id: u.location_id, location_label: loc.labelOf(u.location_id),
+        product_id: u.product_id, daily_usage: u.daily_usage, on_hands: u.on_hands, days_of_supply: u.days_of_supply,
+        flag, low: flaggable && isLow(u.days_of_supply, flagConfig), inOrderConfig,
+      }
+    }), [usage, orderKeys, exclude, flagConfig, loc, isExcluded])
 
   // D4 callout aggregates.
   const stats = useMemo(() => {

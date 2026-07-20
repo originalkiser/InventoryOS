@@ -8,6 +8,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { Badge, Button } from '@/components/ui'
 
@@ -596,10 +597,13 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
 }) {
   const { profile } = useAuthStore()
   const loc = useLocations()
+  const { filterLocations } = useLocationExclusions()
   const [fetchedRows, setFetchedRows] = useState<Record<string, any>[]>([])
   const [colsOpen, setColsOpen] = useState(false)
   const isLocations = block.source === 'locations'
-  const rows = isLocations ? (loc.locations as unknown as Record<string, any>[]) : fetchedRows
+  const rows = isLocations
+    ? (filterLocations(loc.locations) as unknown as Record<string, any>[])
+    : fetchedRows
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const allCols = useMemo(() => deriveAllCols(rows, block.source), [rows, block.source])
   const stateKey = `lookup.block.${block.id}.state`
