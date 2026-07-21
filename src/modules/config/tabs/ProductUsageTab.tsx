@@ -2,6 +2,7 @@
 import { createColumnHelper } from '@tanstack/react-table'
 import { type ImportMode } from '../useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
+import { invalidateInventoryCache } from '@/hooks/useInventory'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
@@ -11,6 +12,9 @@ import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { DataSourceLinker, type ExistingDataSource } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
+import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
+import type { VisibilityState } from '@tanstack/react-table'
 import { mappedValue } from '@/lib/columnTransform'
 import type { ProductUsage, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
@@ -150,6 +154,8 @@ function CategoryDropdown({
 // ---------------------------------------------------------------------------
 const col = createColumnHelper<ProductUsage>()
 const EMPTY = { locationId: '', product_id: '', category: '', daily_usage: '', on_hands: '', package_capacity: '' }
+// Columns not offered in the column manager (always shown, kept out of ordering).
+const UNMANAGED_COLS = new Set(['edit'])
 
 export function ProductUsageTab() {
   const { profile } = useAuthStore()
@@ -163,6 +169,10 @@ export function ProductUsageTab() {
   const [importing, setImporting] = useState(false)
   const [form, setForm] = useState({ ...EMPTY })
   const [dataSource, setDataSource] = useState<ExistingDataSource | null>(null)
+  const [colsOpen, setColsOpen] = useState(false)
+  // Package Capacity is sourced from the Global Config → Order Config table
+  // (capacity per location + product), not from product_usage itself.
+  const [capacityMap, setCapacityMap] = useState<Map<string, number>>(new Map())
 
   // Droptop sync
   const [droptopSyncing, setDroptopSyncing] = useState<DroptopMode | null>(null)
@@ -186,10 +196,18 @@ export function ProductUsageTab() {
     [data]
   )
 
+  // Override each row's package_capacity with the Order Config capacity for the
+  // same location + product; fall back to any value already on the row.
+  const resolvedData = useMemo(() =>
+    data.map((r) => {
+      const cap = capacityMap.get(`${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}`)
+      return cap != null ? { ...r, package_capacity: cap } : r
+    }), [data, capacityMap])
+
   const displayData = useMemo(() => {
-    if (!excludeZeroPC) return data
-    return data.filter((r) => (r.package_capacity ?? 0) > 0 || includedZeroCats.includes(r.category ?? ''))
-  }, [data, excludeZeroPC, includedZeroCats])
+    if (!excludeZeroPC) return resolvedData
+    return resolvedData.filter((r) => (r.package_capacity ?? 0) > 0 || includedZeroCats.includes(r.category ?? ''))
+  }, [resolvedData, excludeZeroPC, includedZeroCats])
 
   const zeroExcludedCount = data.length - displayData.length
 
@@ -216,13 +234,39 @@ export function ProductUsageTab() {
     setDataSource((link as ExistingDataSource) ?? null)
   }, [profile?.company_id])
 
-  useEffect(() => { loadRpc(); loadDataSource() }, [loadRpc, loadDataSource])
+  // Package Capacity comes from Order Config; page through it (1000/req) so the
+  // map covers the whole table regardless of the server row cap.
+  const loadCapacities = useCallback(async () => {
+    if (!profile?.company_id) return
+    const sb = supabase as any
+    const PAGE = 1000
+    let from = 0
+    const m = new Map<string, number>()
+    for (;;) {
+      const { data: rows, error } = await sb
+        .schema('inventory').from('location_order_config')
+        .select('location_id, product_id, capacity').eq('company_id', profile.company_id)
+        .order('id', { ascending: true }).range(from, from + PAGE - 1)
+      if (error) break
+      const batch = (rows ?? []) as any[]
+      for (const r of batch) {
+        if (r.capacity == null) continue
+        m.set(`${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}`, Number(r.capacity))
+      }
+      if (batch.length < PAGE) break
+      from += PAGE
+    }
+    setCapacityMap(m)
+  }, [profile?.company_id])
+
+  useEffect(() => { loadRpc(); loadDataSource(); loadCapacities() }, [loadRpc, loadDataSource, loadCapacities])
 
   async function clearAll() {
     if (!profile?.company_id) return
     const { error } = await (supabase as any).schema('inventory').from('product_usage').delete().eq('company_id', profile.company_id)
     if (error) { toast.error(error.message); return }
     toast.success('Table cleared')
+    invalidateInventoryCache()
     await loadRpc()
   }
 
@@ -239,7 +283,37 @@ export function ProductUsageTab() {
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductUsage)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { table, globalFilter, setGlobalFilter } = useTable(displayData, columns)
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(displayData, columns)
+  useColumnPrefs('inventory.product_usage', table, columnVisibility, columnOrder, setColumnOrder)
+
+  const colLabel = (c: ReturnType<typeof table.getAllLeafColumns>[number]) =>
+    typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id
+
+  const allColItems = useMemo<ColItem[]>(
+    () => table.getAllLeafColumns().filter((c) => !UNMANAGED_COLS.has(c.id)).map((c) => ({ id: c.id, label: colLabel(c) })),
+    [table, columnVisibility], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  const shownOrder = useMemo(() => {
+    const visible = table.getAllLeafColumns().filter((c) => !UNMANAGED_COLS.has(c.id) && c.getIsVisible()).map((c) => c.id)
+    if (!columnOrder.length) return visible
+    const rank = (id: string) => { const i = columnOrder.indexOf(id); return i === -1 ? Number.MAX_SAFE_INTEGER : i }
+    return [...visible].sort((a, b) => rank(a) - rank(b))
+  }, [table, columnOrder, columnVisibility]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function applyShown(shown: string[]) {
+    const shownSet = new Set(shown)
+    const hidden = allColItems.map((c) => c.id).filter((id) => !shownSet.has(id))
+    setColumnOrder([...shown, ...hidden])
+    const vis: VisibilityState = {}
+    for (const c of allColItems) vis[c.id] = shownSet.has(c.id)
+    table.setColumnVisibility(vis)
+  }
+
+  function resetColumns() {
+    setColumnOrder([])
+    table.setColumnVisibility({})
+  }
 
   // ---- Form helpers ----
   function resetForm() { setForm({ ...EMPTY }) }
@@ -283,6 +357,7 @@ export function ProductUsageTab() {
     if (error) { toast.error(error.message); return }
     toast.success(editId ? 'Updated' : 'Saved')
     resetForm(); setAddOpen(false); setEditId(null)
+    invalidateInventoryCache()
     await loadRpc()
   }
 
@@ -293,6 +368,7 @@ export function ProductUsageTab() {
     if (error) { toast.error(error.message); return }
     toast.success('Deleted')
     resetForm(); setAddOpen(false); setEditId(null)
+    invalidateInventoryCache()
     await loadRpc()
   }
 
@@ -328,6 +404,7 @@ export function ProductUsageTab() {
       products_upserted: data.products_upserted ?? 0,
     })
     toast.success(`Synced ${(data.products_upserted ?? 0).toLocaleString()} products from Droptop`)
+    invalidateInventoryCache()
     loadRpc()
   }
 
@@ -379,6 +456,7 @@ export function ProductUsageTab() {
     }
 
     setImporting(false)
+    invalidateInventoryCache()
     loadRpc().catch(() => {})
   }
 
@@ -423,14 +501,25 @@ export function ProductUsageTab() {
         exportFilename="product_usage.csv"
         exportData={displayData}
         loading={loading}
+        hideColumnControl
         actions={<>
           <ClearTableButton clearAll={clearAll} />
           <label className="flex items-center gap-2 text-xs font-mono text-inky">
             <Toggle checked={exclude} onChange={setExclude} size="sm" color="amber" />
             Exclude products not in order config
           </label>
+          <Button size="sm" variant="secondary" onClick={() => setColsOpen(true)}>Columns</Button>
           <Button size="sm" onClick={openAdd}>+ Add Row</Button>
         </>}
+      />
+
+      <ColumnManagerModal
+        open={colsOpen}
+        onClose={() => setColsOpen(false)}
+        all={allColItems}
+        shown={shownOrder}
+        onChange={applyShown}
+        onReset={resetColumns}
       />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -23,6 +23,42 @@ export interface InventoryRow {
   inOrderConfig: boolean
 }
 
+// Page through a query in 1000-row chunks so we get the FULL table regardless of
+// PostgREST's db-max-rows cap (a single .range(0, 99999) is silently truncated
+// to the server limit). Requires a stable sort key (id) for correct paging.
+const PAGE = 1000
+async function fetchAll(table: string, columns: string, companyId: string): Promise<any[]> {
+  let from = 0
+  const all: any[] = []
+  for (;;) {
+    const { data, error } = await sb
+      .schema('inventory').from(table)
+      .select(columns).eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) throw error
+    const batch = (data ?? []) as any[]
+    all.push(...batch)
+    if (batch.length < PAGE) break
+    from += PAGE
+  }
+  return all
+}
+
+// Module-level cache shared across every useInventory consumer (Dashboard,
+// On Hand, InventoryView). Survives route changes so returning to a page is
+// instant; a manual reload() or the 5-minute TTL forces a fresh pull.
+interface InvCache { companyId: string; usage: ProductUsage[]; orderRows: any[]; fetchedAt: number }
+let invCache: InvCache | null = null
+const CACHE_TTL = 5 * 60 * 1000
+
+// Drop the cached inventory so the next useInventory mount (Dashboard / On Hand)
+// pulls fresh. Call after any product_usage or order-config write.
+export function invalidateInventoryCache() { invCache = null }
+
+const orderKeySet = (rows: any[]) =>
+  new Set(rows.map((r) => `${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}`))
+
 export function useInventory() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -30,20 +66,32 @@ export function useInventory() {
   const { isExcluded } = useLocationExclusions()
   const [flagConfig, setFlagConfig] = useAppSetting<FlagConfig>('flag_config', DEFAULT_FLAG_CONFIG)
   const [exclude] = useAppSetting<boolean>(EXCLUDE_NOT_IN_ORDER_KEY, false)
-  const [usage, setUsage] = useState<ProductUsage[]>([])
-  const [orderKeys, setOrderKeys] = useState<Set<string>>(new Set())
-  const [loading, setLoading] = useState(true)
+  const fresh = invCache?.companyId === companyId
+  const [usage, setUsage] = useState<ProductUsage[]>(fresh ? invCache!.usage : [])
+  const [orderKeys, setOrderKeys] = useState<Set<string>>(fresh ? orderKeySet(invCache!.orderRows) : new Set())
+  const [loading, setLoading] = useState(!fresh)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     if (!companyId) return
+    // Serve from cache when fresh unless a reload is forced.
+    if (!force && invCache?.companyId === companyId && Date.now() - invCache.fetchedAt < CACHE_TTL) {
+      setUsage(invCache.usage)
+      setOrderKeys(orderKeySet(invCache.orderRows))
+      setLoading(false)
+      return
+    }
     setLoading(true)
-    const [pu, oc] = await Promise.all([
-      sb.schema('inventory').from('product_usage').select('*').eq('company_id', companyId).range(0, 99999),
-      sb.schema('inventory').from('location_order_config').select('location_id, product_id').eq('company_id', companyId),
-    ])
-    setUsage((pu.data ?? []) as ProductUsage[])
-    setOrderKeys(new Set(((oc.data ?? []) as any[]).map((r) => `${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}`)))
-    setLoading(false)
+    try {
+      const [pu, oc] = await Promise.all([
+        fetchAll('product_usage', '*', companyId),
+        fetchAll('location_order_config', 'id, location_id, product_id', companyId),
+      ])
+      invCache = { companyId, usage: pu as ProductUsage[], orderRows: oc, fetchedAt: Date.now() }
+      setUsage(pu as ProductUsage[])
+      setOrderKeys(orderKeySet(oc))
+    } finally {
+      setLoading(false)
+    }
   }, [companyId])
 
   useEffect(() => { load() }, [load])
@@ -81,5 +129,6 @@ export function useInventory() {
     }
   }, [rows])
 
-  return { rows, stats, flagConfig, setFlagConfig, exclude, loading, reload: load }
+  const reload = useCallback(() => load(true), [load])
+  return { rows, stats, flagConfig, setFlagConfig, exclude, loading, reload }
 }

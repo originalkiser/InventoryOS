@@ -10,7 +10,7 @@ import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
-import { Button, Input, Modal, Combobox } from '@/components/ui'
+import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
@@ -22,6 +22,11 @@ const NUM_FIELDS = ['capacity', 'order_trigger', 'order_limit']
 function num(v: string): number | null {
   const t = v.trim(); if (!t) return null
   const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n
+}
+
+// VMI (vendor-managed inventory) is a Yes/blank flag stored on metadata.vmi.
+function isYes(v: string): boolean {
+  const t = v.trim().toLowerCase(); return t === 'yes' || t === 'y' || t === 'true' || t === '1' || t === 'x'
 }
 
 const col = createColumnHelper<LocationOrderConfig>()
@@ -54,7 +59,7 @@ export function OrderConfigTab() {
   const ownFields = customFields.filter((f) => !f.linked_section)
   const linkedFields = customFields.filter((f) => f.linked_section)
 
-  const [form, setForm] = useState({ vendorId: '', locationId: '', product_id: '', uom: '', capacity: '', order_trigger: '', order_limit: '' })
+  const [form, setForm] = useState({ vendorId: '', locationId: '', product_id: '', uom: '', capacity: '', order_trigger: '', order_limit: '', vmi: false })
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
   const columns = useMemo(() => {
@@ -66,6 +71,7 @@ export function OrderConfigTab() {
       col.accessor('capacity', { header: 'Capacity', cell: (i) => i.getValue() ?? '—' }),
       col.accessor('order_trigger', { header: 'Trigger', cell: (i) => i.getValue() ?? '—' }),
       col.accessor('order_limit', { header: 'Limit (0 = inactive)', cell: (i) => i.getValue() ?? '—' }),
+      { id: 'vmi', header: 'VMI', accessorFn: (r: LocationOrderConfig) => ((r.metadata as any)?.vmi ?? ''), cell: (i: any) => i.getValue() || '—' },
     ]
     for (const f of customFields) {
       cols.push({
@@ -92,6 +98,7 @@ export function OrderConfigTab() {
     { name: 'capacity', label: 'Capacity' },
     { name: 'order_trigger', label: 'Order Trigger' },
     { name: 'order_limit', label: 'Order Limit (0 = inactive)' },
+    { name: 'vmi', label: 'VMI (Yes/blank)' },
     ...ownFields.map((f) => ({ name: f.field_key, label: f.label })),
   ]
 
@@ -105,6 +112,7 @@ export function OrderConfigTab() {
         const raw = mappedValue(row, m, maps)
         if (m.fieldName === 'location') out.location_id = loc.resolveId(raw)
         else if (m.fieldName === 'uom') meta.uom = raw || null
+        else if (m.fieldName === 'vmi') meta.vmi = isYes(raw) ? 'Yes' : null
         else if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)
         else if (ownKeys.has(m.fieldName)) meta[m.fieldName] = raw || null
         else out[m.fieldName] = raw || null
@@ -118,13 +126,14 @@ export function OrderConfigTab() {
     setImporting(false)
   }
 
-  function resetForm() { setForm({ vendorId: '', locationId: '', product_id: '', uom: '', capacity: '', order_trigger: '', order_limit: '' }); setCustomVals({}) }
+  function resetForm() { setForm({ vendorId: '', locationId: '', product_id: '', uom: '', capacity: '', order_trigger: '', order_limit: '', vmi: false }); setCustomVals({}) }
   function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
   function openEdit(r: LocationOrderConfig) {
     setEditId(r.id)
     setForm({
       vendorId: r.vendor_id ?? '', locationId: r.location_id ?? '', product_id: r.product_id ?? '', uom: ((r.metadata as any)?.uom ?? '') as string,
       capacity: r.capacity?.toString() ?? '', order_trigger: r.order_trigger?.toString() ?? '', order_limit: r.order_limit?.toString() ?? '',
+      vmi: isYes(String((r.metadata as any)?.vmi ?? '')),
     })
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     setCustomVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
@@ -136,6 +145,7 @@ export function OrderConfigTab() {
     const meta: Record<string, unknown> = {}
     for (const f of ownFields) meta[f.field_key] = customVals[f.field_key] || null
     if (form.uom.trim()) meta.uom = form.uom.trim()
+    meta.vmi = form.vmi ? 'Yes' : null
     const payload = {
       vendor_id: form.vendorId || null,
       location_id: form.locationId, product_id: form.product_id.trim(),
@@ -191,6 +201,10 @@ export function OrderConfigTab() {
               <Input key={f.id} label={f.label} value={customVals[f.field_key] ?? ''} onChange={(e) => setCustomVals({ ...customVals, [f.field_key]: e.target.value })} />
             ))}
           </div>
+          <label className="flex items-center gap-2 text-xs font-mono text-inky">
+            <Toggle checked={form.vmi} onChange={(v) => setForm({ ...form, vmi: v })} size="sm" />
+            VMI — vendor-managed inventory (excluded from self-generated orders)
+          </label>
           {linkedFields.length > 0 && (
             <p className="text-xs font-mono text-inky/70">Linked columns ({linkedFields.map((f) => f.label).join(', ')}) are pulled from the selected location automatically.</p>
           )}

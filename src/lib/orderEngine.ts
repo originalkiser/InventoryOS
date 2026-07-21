@@ -376,6 +376,11 @@ export function generateOrder(
     const cfg = config.locationConfigs.find(
       (c) => c.product_id === product && (locationId ? c.location_id === locationId : true)
     )
+
+    // VMI (vendor-managed inventory) products are replenished by the vendor, so
+    // they must never appear in a self-generated order (keep-fill semantics).
+    if (cfg && String((cfg.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes') continue
+
     const rowMin = toNum(row.min_on_hand)
     const rowMax = toNum(row.max_on_hand)
     const trigger = params.triggerOverride ?? (!isNaN(rowMin) ? rowMin : (cfg?.order_trigger ?? null)) // min / reorder point

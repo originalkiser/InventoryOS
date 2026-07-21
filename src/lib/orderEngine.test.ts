@@ -90,6 +90,21 @@ describe('generateOrder (min/max model)', () => {
   })
 })
 
+describe('generateOrder — VMI exclusion', () => {
+  it('drops products flagged vendor-managed (metadata.vmi = "Yes")', () => {
+    const vmiConfig: OrderConfigData = {
+      ...config,
+      locationConfigs: [
+        { company_id: 'co', location_id: 'loc-1', product_id: 'P1', order_trigger: 10, capacity: 50, order_limit: null, active: true, metadata: { vmi: 'Yes' } },
+        { company_id: 'co', location_id: 'loc-1', product_id: 'P2', order_trigger: 5, capacity: 100, order_limit: 20, active: true },
+      ] as unknown as LocationOrderConfig[],
+    }
+    const lines = generateOrder(inventoryRows, vmiConfig, minMaxParams)
+    // P1 would normally order (below trigger) but is VMI → excluded; P2 remains.
+    expect(lines.map((l) => l.product_id).sort()).toEqual(['P2'])
+  })
+})
+
 describe('applyMinOrderRules (flexible MOQ engine)', () => {
   const gen = generateOrder(inventoryRows, config, minMaxParams)
   const rules = [

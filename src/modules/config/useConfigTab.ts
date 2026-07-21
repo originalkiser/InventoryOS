@@ -1,7 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { invalidateInventoryCache } from '@/hooks/useInventory'
 import toast from 'react-hot-toast'
+
+// Config tables whose writes must also drop the shared inventory cache
+// (Dashboard / On Hand read them via useInventory).
+const INVENTORY_SOURCE_TABLES = new Set(['location_order_config', 'product_usage'])
 
 export type ImportMode = 'merge' | 'replace'
 
@@ -119,6 +124,7 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
 
   function invalidate() {
     if (profile?.company_id) tabCache.delete(cacheKey(profile.company_id, tableName))
+    if (INVENTORY_SOURCE_TABLES.has(tableName)) invalidateInventoryCache()
   }
 
   function stamp(row: Record<string, unknown>, source: string) {
