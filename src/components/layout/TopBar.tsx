@@ -8,6 +8,8 @@ import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
+import { useLocations } from '@/hooks/useLocations'
+import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format, differenceInDays, endOfWeek, endOfMonth, parseISO } from 'date-fns'
@@ -122,6 +124,8 @@ export function TopBar({
   const navigate = useNavigate()
   const { profile } = useAuthStore()
   useDarkMode() // keep dark-mode class applied
+  const { locations } = useLocations()
+  const { isExcluded } = useLocationExclusions()
   const [endDayOpen, setEndDayOpen] = useState(false)
   const [eodGlow, setEodGlow] = useState(false)
   const [stats, setStats] = useState<TopBarStats>({
@@ -470,6 +474,12 @@ export function TopBar({
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v)
   }
 
+  // Shops count reflects the user's location exclusions once locations load;
+  // falls back to the raw active-count query before then.
+  const visibleShops = locations.length
+    ? locations.filter((l) => l.active && !isExcluded(l)).length
+    : stats.activeShops
+
   const ALL_PILLS: Record<PillKey, { label: string; value: string | number; highlight?: boolean; accent?: string; onClick: () => void }> = {
     open_issues: {
       label: 'Issues',
@@ -495,7 +505,7 @@ export function TopBar({
     },
     shop_count: {
       label: 'Shops',
-      value: stats.activeShops,
+      value: visibleShops,
       onClick: () => navigate('/locations'),
     },
     pending_orders: {

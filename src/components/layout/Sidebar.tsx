@@ -750,6 +750,8 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        {/* Scrollable content — grows with the number of profile options */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
         {/* User info */}
         <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10 flex items-start gap-3">
           <div className="w-12 h-12 rounded-full bg-navy dark:bg-[#4F7489] flex items-center justify-center text-cream text-sm font-heading flex-shrink-0">
@@ -1005,6 +1007,7 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
             </svg>
             Sign out
           </button>
+        </div>
         </div>
       </div>
     </>
