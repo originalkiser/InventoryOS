@@ -81,6 +81,17 @@ export interface GenerationParams {
   uom?: UomConfig | null // UoM conversion config (calc.js getUomConversion)
   pending?: Map<string, number> | null // already-ordered qty by `loc|product` (calc.js buildPendingIndex)
   ignoreMax?: { products?: string[]; categories?: string[] } | null // skip max-on-hand cap for these
+  vmiExcluded?: VmiExclusion[] // optional sink — generateOrder pushes VMI-skipped rows here for the review UI
+}
+
+/** A product/location dropped from generation because its order config is flagged VMI. */
+export interface VmiExclusion {
+  product_id: string
+  location_id: string | null
+  location_label: string
+  raw_location: string
+  category: string | null
+  on_hand: number | null
 }
 
 export interface GeneratedLineItem {
@@ -379,7 +390,21 @@ export function generateOrder(
 
     // VMI (vendor-managed inventory) products are replenished by the vendor, so
     // they must never appear in a self-generated order (keep-fill semantics).
-    if (cfg && String((cfg.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes') continue
+    // Report the skip to the optional sink so the review UI can show it.
+    if (cfg && String((cfg.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes') {
+      if (params.vmiExcluded) {
+        const oh = toNum(row.on_hand)
+        params.vmiExcluded.push({
+          product_id: product,
+          location_id: locationId,
+          location_label: locLabel(locationId, rawLoc, config.locations),
+          raw_location: rawLoc,
+          category: row.category ?? null,
+          on_hand: isNaN(oh) ? null : oh,
+        })
+      }
+      continue
+    }
 
     const rowMin = toNum(row.min_on_hand)
     const rowMax = toNum(row.max_on_hand)

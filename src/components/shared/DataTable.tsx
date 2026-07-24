@@ -20,6 +20,8 @@ interface DataTableProps<T> {
   attachmentEntityType?: 'issue' | 'project'
   /** Suppress the built-in column visibility dropdown (use when the caller provides its own) */
   hideColumnControl?: boolean
+  /** Suppress the built-in Export dropdown (use when the caller provides its own export UI) */
+  hideExport?: boolean
   /** Called whenever the internal row-selection Set changes */
   onSelectionChange?: (ids: Set<string>) => void
   /** Increment to imperatively clear the current selection */
@@ -109,6 +111,7 @@ export function DataTable<T>({
   actions,
   attachmentEntityType,
   hideColumnControl,
+  hideExport,
   onSelectionChange,
   clearSelectionToken,
 }: DataTableProps<T>) {
@@ -279,7 +282,7 @@ export function DataTable<T>({
         )}
 
         {/* Export button + dropdown */}
-        {exportFilename && (
+        {exportFilename && !hideExport && (
           <div ref={exportMenuRef} className="relative">
             <Button
               variant="secondary"

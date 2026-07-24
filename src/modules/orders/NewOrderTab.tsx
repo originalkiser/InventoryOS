@@ -11,7 +11,7 @@ import { OrderDocuments } from './OrderDocuments'
 import {
   generateOrder, applyMinOrderRules, buildExport, DEFAULT_EXPORT_COLUMNS,
   buildPendingIndex, autoPendingColMap, detectPrefixSuffixPatterns,
-  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig, type PrefixSuffixRule, type GeneratedLineItem,
+  TRIGGER_REASON_LABELS, type InventoryRow, type OrderConfigData, type UomConfig, type PrefixSuffixRule, type GeneratedLineItem, type VmiExclusion,
 } from '@/lib/orderEngine'
 import { CONSTANT_SOURCE } from '@/types'
 import type {
@@ -129,12 +129,15 @@ export function NewOrderTab({ mode = 'config' }: { mode?: OrderMode }) {
     const uom: UomConfig | null = packRules.length
       ? { ...(uomConfig ?? {}), prefixSuffixRules: packRules }
       : uomConfig
-    const gen = generateOrder(rows, config, { ...store.params, pending, uom })
+    const vmiExcluded: VmiExclusion[] = []
+    const gen = generateOrder(rows, config, { ...store.params, pending, uom, vmiExcluded })
     const selected = minRules.filter((r) => store.selectedMinRuleIds.includes(r.id))
     const withRules = applyMinOrderRules(gen, selected)
     store.setLineItems(withRules)
+    store.setVmiExcluded(vmiExcluded)
     setStage('review')
-    toast.success(`Generated ${withRules.length} order lines`)
+    const vmiNote = vmiExcluded.length ? ` · ${vmiExcluded.length} VMI excluded` : ''
+    toast.success(`Generated ${withRules.length} order lines${vmiNote}`)
   }
 
   async function exportAndSave() {
@@ -861,6 +864,55 @@ function NavigatorCard({
 }
 
 // ---------------------------------------------------------------------------
+// Indicator for products the engine dropped because their order config is VMI
+// (vendor-managed inventory). Collapsed by default; expands to list the rows.
+function VmiExcludedCard({ items }: { items: VmiExclusion[] }) {
+  const [open, setOpen] = useState(false)
+  if (items.length === 0) return null
+  const products = new Set(items.map((i) => i.product_id)).size
+  return (
+    <div className="rounded border border-[#E67E22]/40 bg-[#E67E22]/10">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left"
+      >
+        <span className="flex items-center gap-2 text-xs font-mono text-navy">
+          <span className="inline-block w-2 h-2 rounded-full bg-[#E67E22] flex-shrink-0" />
+          <span className="font-bold">{items.length}</span> VMI line{items.length !== 1 ? 's' : ''}
+          {' '}excluded from this order
+          <span className="text-inky/60">· {products} product{products !== 1 ? 's' : ''} · vendor-managed, not self-ordered</span>
+        </span>
+        <span className="text-[10px] font-mono text-inky/60 flex-shrink-0">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className="max-h-52 overflow-auto border-t border-[#E67E22]/30">
+          <table className="w-full text-xs font-mono">
+            <thead className="sticky top-0 bg-[#E67E22]/15 text-inky uppercase tracking-wide">
+              <tr>
+                <th className="px-3 py-1.5 text-left">Location</th>
+                <th className="px-3 py-1.5 text-left">Product</th>
+                <th className="px-3 py-1.5 text-left">Category</th>
+                <th className="px-3 py-1.5 text-right">On Hand</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, i) => (
+                <tr key={i} className="border-t border-[#E67E22]/20">
+                  <td className="px-3 py-1 text-navy">{it.location_label}</td>
+                  <td className="px-3 py-1 text-navy">{it.product_id}</td>
+                  <td className="px-3 py-1 text-inky">{it.category ?? '—'}</td>
+                  <td className="px-3 py-1 text-right text-inky">{it.on_hand ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
   const store = useOrderStore()
 
@@ -913,6 +965,9 @@ function ReviewStage({ onBack, onContinue }: { onBack: () => void; onContinue: (
 
   return (
     <div className="flex flex-col gap-4">
+      {/* VMI exclusions indicator */}
+      <VmiExcludedCard items={store.vmiExcluded} />
+
       {/* Navigator panels */}
       {store.lineItems.length > 0 && (
         <div className="grid grid-cols-2 gap-3">

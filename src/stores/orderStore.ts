@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { GeneratedLineItem, GenerationParams, InventoryRow } from '@/lib/orderEngine'
+import type { GeneratedLineItem, GenerationParams, InventoryRow, VmiExclusion } from '@/lib/orderEngine'
 import type { ColumnMapping } from '@/types'
 
 export type SourceMode = 'manual' | 'file' | 'live'
@@ -20,6 +20,7 @@ interface OrderState {
   params: GenerationParams
   mapping: ColumnMapping[] // file column mapping (snapshotted by profiles)
   lineItems: GeneratedLineItem[] // generated + edited
+  vmiExcluded: VmiExclusion[] // products dropped from generation because their order config is VMI
   selectedMinRuleIds: string[]
   dirty: boolean
 
@@ -30,6 +31,7 @@ interface OrderState {
   setParams: (p: Partial<GenerationParams>) => void
   setMapping: (m: ColumnMapping[]) => void
   setLineItems: (items: GeneratedLineItem[]) => void
+  setVmiExcluded: (items: VmiExclusion[]) => void
   setSelectedMinRuleIds: (ids: string[]) => void
   updateFinalQty: (index: number, qty: number) => void // flips manual_override semantics in UI
   reset: () => void
@@ -43,6 +45,7 @@ export const useOrderStore = create<OrderState>((set) => ({
   params: { ...DEFAULT_PARAMS },
   mapping: [],
   lineItems: [],
+  vmiExcluded: [],
   selectedMinRuleIds: [],
   dirty: false,
 
@@ -53,6 +56,7 @@ export const useOrderStore = create<OrderState>((set) => ({
   setParams: (p) => set((s) => ({ params: { ...s.params, ...p }, dirty: true })),
   setMapping: (mapping) => set({ mapping, dirty: true }),
   setLineItems: (lineItems) => set({ lineItems, dirty: true }),
+  setVmiExcluded: (vmiExcluded) => set({ vmiExcluded }),
   setSelectedMinRuleIds: (selectedMinRuleIds) => set({ selectedMinRuleIds, dirty: true }),
   updateFinalQty: (index, qty) => set((s) => ({
     lineItems: s.lineItems.map((li, i) => (i === index ? { ...li, final_qty: Math.max(0, qty) } : li)),
@@ -66,6 +70,7 @@ export const useOrderStore = create<OrderState>((set) => ({
     params: { ...DEFAULT_PARAMS },
     mapping: [],
     lineItems: [],
+    vmiExcluded: [],
     selectedMinRuleIds: [],
     dirty: false,
   }),

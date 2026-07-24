@@ -12,6 +12,7 @@ import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
 import { IssueFormModal } from './IssueFormModal'
 import { AddIssueColumnModal } from './AddIssueColumnModal'
 import { IssueImportModal } from './IssueImportModal'
+import { IssueExportModal } from './IssueExportModal'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import type { Issue, IssueColumnType, IssueTrackerColumn, Department } from '@/types'
 import { differenceInDays, format } from 'date-fns'
@@ -447,7 +448,7 @@ function IssuesTable({ table, filter, onFilterChange, issues, loading, actions, 
   return (
     <DataTable table={table} globalFilter={filter} onGlobalFilterChange={onFilterChange}
       exportFilename="issues.csv" exportData={issues} loading={loading} actions={actions}
-      attachmentEntityType="issue" hideColumnControl onSelectionChange={onSelectionChange}
+      attachmentEntityType="issue" hideColumnControl hideExport onSelectionChange={onSelectionChange}
       clearSelectionToken={clearSelectionToken} />
   )
 }
@@ -467,6 +468,7 @@ export function IssuesPage() {
   const [editIssue, setEditIssue] = useState<IssueRow | null>(null)
   const [addColOpen, setAddColOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [statuses, setStatuses] = useState<StatusOpt[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [selectedDeptId, setSelectedDeptId] = useState<string>('')
@@ -896,6 +898,7 @@ export function IssuesPage() {
       )}
       <Button size="sm" onClick={onNew}>+ New Issue</Button>
       <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>+ Import</Button>
+      <Button size="sm" variant="secondary" onClick={() => setExportOpen(true)}>Export ▾</Button>
       <div className="relative">
         <button onClick={() => setColMenuOpen(o => !o)}
           className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-mono text-navy hover:bg-navy/5 whitespace-nowrap">
@@ -1041,6 +1044,7 @@ export function IssuesPage() {
       />
       <AddIssueColumnModal open={addColOpen} onClose={() => setAddColOpen(false)} existingColumns={customColumns} onAdd={issueCols.addColumn} />
       <IssueImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={loadIssues} departments={departments} defaultDepartmentId={selectedDeptId === PERSONAL_DEPT_ID ? '' : selectedDeptId} />
+      <IssueExportModal open={exportOpen} onClose={() => setExportOpen(false)} issues={issues} deptMap={deptMap} selectedIds={selectedRows} companyId={profile?.company_id ?? ''} />
 
       <Modal open={!!resolvePrompt} onClose={() => setResolvePrompt(null)} title="Mark as Resolved">
         <div className="flex flex-col gap-4">

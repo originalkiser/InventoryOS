@@ -103,6 +103,21 @@ describe('generateOrder — VMI exclusion', () => {
     // P1 would normally order (below trigger) but is VMI → excluded; P2 remains.
     expect(lines.map((l) => l.product_id).sort()).toEqual(['P2'])
   })
+
+  it('reports excluded rows to the vmiExcluded sink for the review UI', () => {
+    const vmiConfig: OrderConfigData = {
+      ...config,
+      locationConfigs: [
+        { company_id: 'co', location_id: 'loc-1', product_id: 'P1', order_trigger: 10, capacity: 50, order_limit: null, active: true, metadata: { vmi: 'Yes' } },
+        { company_id: 'co', location_id: 'loc-1', product_id: 'P2', order_trigger: 5, capacity: 100, order_limit: 20, active: true },
+      ] as unknown as LocationOrderConfig[],
+    }
+    const vmiExcluded: import('./orderEngine').VmiExclusion[] = []
+    generateOrder(inventoryRows, vmiConfig, { ...minMaxParams, vmiExcluded })
+    expect(vmiExcluded.map((v) => v.product_id)).toEqual(['P1'])
+    expect(vmiExcluded[0].raw_location).toBe('S1')
+    expect(vmiExcluded[0].on_hand).toBe(3)
+  })
 })
 
 describe('applyMinOrderRules (flexible MOQ engine)', () => {
