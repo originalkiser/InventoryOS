@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useInventory, type InventoryRow } from '@/hooks/useInventory'
 import { useLocations } from '@/hooks/useLocations'
+import { formatUsage } from '@/lib/formatNumber'
 import { FLAG_HEX, type FlagColor } from '@/lib/flagScale'
 import { Modal, Button } from '@/components/ui'
 import { FlagScaleEditor } from '@/components/inventory/InventoryView'
@@ -311,7 +312,7 @@ export function OnHandPage() {
                   </td>
                 ))}
                 <td className="px-2 py-1 text-right text-inky">{r.on_hands ?? '—'}</td>
-                <td className="px-2 py-1 text-right text-inky">{r.daily_usage ?? '—'}</td>
+                <td className="px-2 py-1 text-right text-inky">{formatUsage(r.daily_usage)}</td>
                 <td
                   className="px-2 py-1 text-right font-semibold"
                   style={{ color: r.flag ? FLAG_HEX[r.flag] : '#9ca3af' }}

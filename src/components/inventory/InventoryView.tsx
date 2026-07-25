@@ -2,6 +2,7 @@
 import { Modal, Button } from '@/components/ui'
 import { useInventory, type InventoryRow } from '@/hooks/useInventory'
 import { FLAG_HEX, type FlagColor, type FlagConfig } from '@/lib/flagScale'
+import { formatUsage } from '@/lib/formatNumber'
 
 function dosText(d: number | null, onHands: number | null): string {
   if (d == null) return onHands != null && onHands > 0 ? '∞' : '—'
@@ -67,7 +68,7 @@ export function InventoryView({ maxHeight = '60vh', withScaleEditor = true }: { 
                 <td className="px-2 py-1 text-navy">{r.location_label}</td>
                 <td className="px-2 py-1 text-navy">{r.product_id}</td>
                 <td className="px-2 py-1 text-right text-inky">{r.on_hands ?? '—'}</td>
-                <td className="px-2 py-1 text-right text-inky">{r.daily_usage ?? '—'}</td>
+                <td className="px-2 py-1 text-right text-inky">{formatUsage(r.daily_usage)}</td>
                 <td className="px-2 py-1 text-right font-semibold" style={{ color: r.flag ? FLAG_HEX[r.flag] : '#9ca3af' }}>{dosText(r.days_of_supply, r.on_hands)}</td>
               </tr>
             ))}

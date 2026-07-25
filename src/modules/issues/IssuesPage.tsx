@@ -449,7 +449,7 @@ function IssuesTable({ table, filter, onFilterChange, issues, loading, actions, 
   return (
     <DataTable table={table} globalFilter={filter} onGlobalFilterChange={onFilterChange}
       exportFilename="issues.csv" exportData={issues} loading={loading} actions={actions}
-      attachmentEntityType="issue" hideColumnControl hideExport onSelectionChange={onSelectionChange}
+      attachmentEntityType="issue" hideColumnControl hideExport mobileCards onSelectionChange={onSelectionChange}
       clearSelectionToken={clearSelectionToken} />
   )
 }

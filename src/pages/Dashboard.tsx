@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { Card, CardHeader, CardBody, Badge, SbLoader } from '@/components/ui'
+import { Card, CardHeader, CardBody, Badge, SbLoader, Toggle } from '@/components/ui'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { format, endOfWeek } from 'date-fns'
 import { useInventory } from '@/hooks/useInventory'
@@ -55,12 +55,78 @@ function CompactList({ columns, rows }: { columns: string[]; rows: (string | num
   )
 }
 
+// Relevance settings for the Inventory Health / Days of Supply cards.
+function InventorySettings({ onlyConfig, setOnlyConfig, categories, excludedCategories, setExcludedCategories }: {
+  onlyConfig: boolean
+  setOnlyConfig: (v: boolean) => void
+  categories: string[]
+  excludedCategories: string[]
+  setExcludedCategories: (v: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open])
+
+  function toggleCat(c: string) {
+    setExcludedCategories(excludedCategories.includes(c) ? excludedCategories.filter((x) => x !== c) : [...excludedCategories, c])
+  }
+  const activeCount = (onlyConfig ? 1 : 0) + (excludedCategories.length > 0 ? 1 : 0)
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen((o) => !o)} title="Inventory health settings"
+        className="flex items-center gap-1 rounded border border-navy/30 px-2 py-1 text-[10px] font-mono text-inky hover:text-navy hover:border-navy transition-colors">
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        Settings{activeCount > 0 ? ` · ${activeCount}` : ''}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-30 w-72 rounded border border-navy/30 bg-cream dark:bg-[#0e2638] shadow-xl p-3 flex flex-col gap-3">
+          <label className="flex items-center gap-2 text-xs font-mono text-navy dark:text-cream cursor-pointer">
+            <Toggle checked={onlyConfig} onChange={setOnlyConfig} size="sm" />
+            Only products in order config
+          </label>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Exclude categories</span>
+              {excludedCategories.length > 0 && (
+                <button onClick={() => setExcludedCategories([])} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">clear</button>
+              )}
+            </div>
+            {categories.length === 0 ? (
+              <p className="text-xs font-body italic text-inky/50">No categories in data.</p>
+            ) : (
+              <div className="max-h-44 overflow-y-auto flex flex-col gap-0.5 rounded border border-navy/10 p-1">
+                {categories.map((c) => (
+                  <label key={c} className="flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer hover:bg-navy/5">
+                    <input type="checkbox" checked={excludedCategories.includes(c)} onChange={() => toggleCat(c)} className="accent-inky" />
+                    <span className="text-xs font-body text-navy dark:text-cream">{c}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="text-[10px] font-mono text-inky/50">Checked categories are hidden from Inventory Health &amp; Days of Supply.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface DashStats {
   openIssuesByCategory: { name: string; count: number }[]
   upcomingEvents: Array<{ id: string; title: string; start_date: string; event_type: string }>
   recentOrders: Array<{ id: string; status: string; created_at: string }>
   activeShops: number
   submittedThisMonth: number
+  submittedLocationIds: string[]
   totalShops: number
 }
 
@@ -83,6 +149,7 @@ export function DashboardPage() {
     recentOrders: [],
     activeShops: 0,
     submittedThisMonth: 0,
+    submittedLocationIds: [],
     totalShops: 0,
   })
   const [loading, setLoading] = useState(true)
@@ -142,7 +209,7 @@ export function DashboardPage() {
 
     const locs = locsRes.data ?? []
     const activeShops = locs.filter((l: any) => l.active).length
-    const submittedLocIds = new Set((monthCountsRes.data ?? []).map((m: any) => m.location_id))
+    const submittedLocIds = new Set<string>((monthCountsRes.data ?? []).map((m: any) => m.location_id as string))
 
     setStats({
       openIssuesByCategory,
@@ -150,6 +217,7 @@ export function DashboardPage() {
       recentOrders: ordersRes.data ?? [],
       activeShops,
       submittedThisMonth: submittedLocIds.size,
+      submittedLocationIds: [...submittedLocIds],
       totalShops: locs.length,
     })
     setLoading(false)
@@ -163,9 +231,17 @@ export function DashboardPage() {
     )
   }
 
-  const notSubmitted = stats.totalShops - stats.submittedThisMonth
-  const completionPct = stats.totalShops > 0
-    ? Math.round((stats.submittedThisMonth / stats.totalShops) * 100)
+  // Monthly-count completion disregards the user's excluded shops (both the
+  // denominator and the submitted set). Falls back to raw stats before
+  // locations load.
+  const excludedIds = new Set(locations.filter((l) => isExcluded(l)).map((l) => l.id))
+  const totalShopsDisplay = locations.length ? locations.filter((l) => !isExcluded(l)).length : stats.totalShops
+  const submittedDisplay = locations.length
+    ? stats.submittedLocationIds.filter((id) => !excludedIds.has(id)).length
+    : stats.submittedThisMonth
+  const notSubmitted = Math.max(0, totalShopsDisplay - submittedDisplay)
+  const completionPct = totalShopsDisplay > 0
+    ? Math.round((submittedDisplay / totalShopsDisplay) * 100)
     : 0
 
   const flaggedByShop = Object.entries(inv.rows.filter((r) => r.flag === 'red' || r.flag === 'amber').reduce((m, r) => { m[r.location_label] = (m[r.location_label] ?? 0) + 1; return m }, {} as Record<string, number>))
@@ -199,7 +275,7 @@ export function DashboardPage() {
         <Card className="p-4">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Count Completion</div>
           <div className="text-2xl font-heading font-bold text-navy">{completionPct}%</div>
-          <div className="text-xs text-inky/70 font-body mt-1">{stats.submittedThisMonth}/{stats.totalShops} submitted</div>
+          <div className="text-xs text-inky/70 font-body mt-1">{submittedDisplay}/{totalShopsDisplay} submitted</div>
         </Card>
         <Card onClick={() => navigate('/issues?tab=pending')} className="p-4 hover:border-navy cursor-pointer">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Open Issues</div>
@@ -216,7 +292,16 @@ export function DashboardPage() {
 
       {/* Inventory Health callout */}
       <Card>
-        <CardHeader><span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">Inventory Health</span></CardHeader>
+        <CardHeader className="flex items-center justify-between">
+          <span className="text-xs font-heading font-bold text-navy uppercase tracking-wide">Inventory Health</span>
+          <InventorySettings
+            onlyConfig={inv.onlyConfig}
+            setOnlyConfig={inv.setOnlyConfig}
+            categories={inv.categories}
+            excludedCategories={inv.excludedCategories}
+            setExcludedCategories={inv.setExcludedCategories}
+          />
+        </CardHeader>
         <CardBody>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <div>
@@ -382,12 +467,12 @@ export function DashboardPage() {
           </CardHeader>
           <CardBody>
             {countView === 'list' ? (
-              <CompactList columns={['Metric', 'Count']} rows={[['Submitted', stats.submittedThisMonth], ['Not Submitted', notSubmitted], ['Total Shops', stats.totalShops]]} />
+              <CompactList columns={['Metric', 'Count']} rows={[['Submitted', submittedDisplay], ['Not Submitted', notSubmitted], ['Total Shops', totalShopsDisplay]]} />
             ) : (
               <div className="flex flex-col gap-3">
                 <div className="flex justify-between text-xs font-body text-inky">
                   <span>Submitted</span>
-                  <span className="text-navy font-medium">{stats.submittedThisMonth} / {stats.totalShops}</span>
+                  <span className="text-navy font-medium">{submittedDisplay} / {totalShopsDisplay}</span>
                 </div>
                 <div className="w-full h-2 bg-inky/20 rounded-full overflow-hidden">
                   <div

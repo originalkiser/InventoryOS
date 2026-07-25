@@ -109,6 +109,7 @@ export interface ProductUsage {
   daily_usage: number | null
   on_hands: number | null
   package_capacity: number | null
+  cost_per_unit: number | null
   days_of_supply: number | null
   updated_by: string | null
   last_change_source: string | null

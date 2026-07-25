@@ -22,6 +22,8 @@ interface DataTableProps<T> {
   hideColumnControl?: boolean
   /** Suppress the built-in Export dropdown (use when the caller provides its own export UI) */
   hideExport?: boolean
+  /** Below the `sm` breakpoint, render each row as a stacked card instead of a wide scrolling table */
+  mobileCards?: boolean
   /** Called whenever the internal row-selection Set changes */
   onSelectionChange?: (ids: Set<string>) => void
   /** Increment to imperatively clear the current selection */
@@ -112,6 +114,7 @@ export function DataTable<T>({
   attachmentEntityType,
   hideColumnControl,
   hideExport,
+  mobileCards,
   onSelectionChange,
   clearSelectionToken,
 }: DataTableProps<T>) {
@@ -345,8 +348,63 @@ export function DataTable<T>({
         {actions}
       </div>
 
+      {/* Mobile: stacked cards (opt-in) — a wide column table is unreadable on phones */}
+      {mobileCards && (
+        <div className="sm:hidden flex flex-col gap-2">
+          {loading ? (
+            <div className="py-8 flex justify-center"><SbLoader size={32} /></div>
+          ) : table.getRowModel().rows.length === 0 ? (
+            <p className="py-8 text-center text-inky font-body italic text-sm">No entries yet. Add one to get started.</p>
+          ) : (
+            table.getRowModel().rows.map((row) => {
+              const selected = selectedIds.has(rowKey(row))
+              const cells = row.getVisibleCells()
+              const [first, ...rest] = cells
+              return (
+                <div
+                  key={row.id}
+                  className={[
+                    'rounded border p-3 flex flex-col gap-2',
+                    selected ? 'border-sky bg-sky/10' : 'border-inky/20 bg-cream dark:bg-[#0D2035]',
+                  ].join(' ')}
+                >
+                  <div className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleRow(row)}
+                      className="accent-sky cursor-pointer mt-0.5 shrink-0"
+                      aria-label="Select row"
+                    />
+                    {first && (
+                      <div className="flex-1 min-w-0 text-sm font-body text-navy">
+                        {flexRender(first.column.columnDef.cell, first.getContext())}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1.5 pl-6">
+                    {rest.map((cell) => {
+                      const h = cell.column.columnDef.header
+                      const label = typeof h === 'string' ? h : ''
+                      return (
+                        <div key={cell.id} className="flex flex-col gap-0.5">
+                          {label && <span className="text-[10px] font-heading uppercase tracking-wide text-inky/50">{label}</span>}
+                          <div className="text-xs font-body text-navy break-words">
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+
       {/* Table */}
-      <div className="overflow-auto rounded border border-inky/20 max-h-[calc(100vh-300px)]">
+      <div className={`overflow-auto rounded border border-inky/20 max-h-[calc(100vh-300px)]${mobileCards ? ' hidden sm:block' : ''}`}>
         <table
           className={`text-xs font-body table-fixed${hasFill ? ' w-full' : ''}`}
           style={hasFill ? { minWidth: table.getTotalSize() + SEL_W } : { width: table.getTotalSize() + SEL_W }}
@@ -354,10 +412,10 @@ export function DataTable<T>({
           <thead className="sticky top-0 z-20">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="border-b border-inky/20 bg-[#002745]">
-                {/* Select-all checkbox */}
+                {/* Select-all checkbox — frozen to the left like the pinned columns */}
                 <th
-                  style={{ width: SEL_W, minWidth: SEL_W }}
-                  className="px-2 py-2 text-center"
+                  style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 30 }}
+                  className="px-2 py-2 text-center bg-[#002745]"
                 >
                   <input
                     ref={selectAllRef}
@@ -430,10 +488,13 @@ export function DataTable<T>({
                         : i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]',
                     ].join(' ')}
                   >
-                    {/* Row checkbox */}
+                    {/* Row checkbox — frozen to the left like the pinned columns */}
                     <td
-                      style={{ width: SEL_W, minWidth: SEL_W }}
-                      className="px-2 py-2 text-center"
+                      style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 10 }}
+                      className={[
+                        'px-2 py-2 text-center',
+                        selected || i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]',
+                      ].join(' ')}
                     >
                       <input
                         type="checkbox"

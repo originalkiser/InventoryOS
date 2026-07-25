@@ -16,6 +16,8 @@ import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import type { VisibilityState } from '@tanstack/react-table'
 import { mappedValue } from '@/lib/columnTransform'
+import { formatCurrency } from '@/lib/transforms'
+import { formatUsage } from '@/lib/formatNumber'
 import type { ProductUsage, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -69,6 +71,7 @@ const REQUIRED_FIELDS = [
   { name: 'daily_usage', label: 'Daily Usage' },
   { name: 'on_hands', label: 'On Hands' },
   { name: 'package_capacity', label: 'Package Capacity' },
+  { name: 'cost_per_unit', label: 'Cost / Unit' },
 ]
 
 const BATCH = 2000
@@ -153,7 +156,7 @@ function CategoryDropdown({
 
 // ---------------------------------------------------------------------------
 const col = createColumnHelper<ProductUsage>()
-const EMPTY = { locationId: '', product_id: '', category: '', daily_usage: '', on_hands: '', package_capacity: '' }
+const EMPTY = { locationId: '', product_id: '', category: '', daily_usage: '', on_hands: '', package_capacity: '', cost_per_unit: '' }
 // Columns not offered in the column manager (always shown, kept out of ordering).
 const UNMANAGED_COLS = new Set(['edit'])
 
@@ -211,15 +214,37 @@ export function ProductUsageTab() {
 
   const zeroExcludedCount = data.length - displayData.length
 
-  // ---- RPC data loader ----
+  // ---- Data loader ----
+  // Direct paginated select instead of the get_product_usage RPC: a single
+  // .range() is capped by PostgREST's db-max-rows (~1000). We count first, then
+  // fetch all pages (6 at a time) so the whole table loads even at ~300k rows.
   const loadRpc = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
-    const { data: rows, error } = await (supabase as any)
-      .rpc('get_product_usage', { p_company_id: profile.company_id })
-      .range(0, 99999)
-    if (error) toast.error('Product usage load failed — run the latest DB migration')
-    else setData((rows ?? []) as ProductUsage[])
+    const sb = supabase as any
+    const PAGE = 1000, CONCURRENCY = 6
+    const fetchPage = (p: number) => sb.schema('inventory').from('product_usage')
+      .select('*').eq('company_id', profile.company_id)
+      .order('id', { ascending: true }).range(p * PAGE, p * PAGE + PAGE - 1)
+    const { count, error: cErr } = await sb.schema('inventory').from('product_usage')
+      .select('id', { count: 'exact', head: true }).eq('company_id', profile.company_id)
+    if (cErr) { toast.error('Product usage load failed'); setLoading(false); return }
+    const total = count ?? 0
+    const pages = Math.ceil(total / PAGE)
+    const all: ProductUsage[] = []
+    let failed = false
+    for (let i = 0; i < pages && !failed; i += CONCURRENCY) {
+      const group = Array.from({ length: Math.min(CONCURRENCY, pages - i) }, (_, j) => i + j)
+      const results = await Promise.all(group.map((p) => fetchPage(p)))
+      for (const { data: rows, error } of results) {
+        if (error) { failed = true; break }
+        for (const r of (rows ?? []) as ProductUsage[]) {
+          all.push({ ...r, category: (String(r.category ?? '').trim() || null) })
+        }
+      }
+    }
+    if (failed) toast.error('Product usage load failed')
+    else setData(all)
     setLoading(false)
   }, [profile?.company_id])
 
@@ -275,9 +300,13 @@ export function ProductUsageTab() {
     { id: 'location', header: 'Location', accessorFn: (r: ProductUsage) => loc.codeOf(r.location_id), cell: (i: any) => i.getValue() || '—' },
     col.accessor('product_id', { header: 'Product ID' }),
     col.accessor('category', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('daily_usage', { header: 'Daily Usage', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('daily_usage', { header: 'Daily Usage', cell: (i) => formatUsage(i.getValue()) }),
     col.accessor('on_hands', { header: 'On Hands', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('package_capacity', { header: 'Package Capacity', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('cost_per_unit', { header: 'Cost / Unit', cell: (i) => { const v = i.getValue(); return v == null ? '—' : formatCurrency(v) } }),
+    { id: 'total_cost', header: 'Total Cost',
+      accessorFn: (r: ProductUsage) => (r.cost_per_unit == null ? null : (r.on_hands ?? 0) * r.cost_per_unit),
+      cell: (i: any) => { const v = i.getValue(); return v == null ? '—' : formatCurrency(v) } },
     col.accessor('days_of_supply', { header: 'Days of Supply', cell: (i) => { const r = i.row.original as ProductUsage; return dosDisplay(i.getValue(), r.on_hands) } }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductUsage)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
@@ -327,6 +356,7 @@ export function ProductUsageTab() {
       daily_usage: r.daily_usage?.toString() ?? '',
       on_hands: r.on_hands?.toString() ?? '',
       package_capacity: r.package_capacity?.toString() ?? '',
+      cost_per_unit: r.cost_per_unit?.toString() ?? '',
     })
     setAddOpen(true)
   }
@@ -334,7 +364,9 @@ export function ProductUsageTab() {
   // ---- Single-row mutations ----
   async function onSubmit() {
     if (!profile?.company_id || !form.product_id.trim()) return
-    const du = parseNum(form.daily_usage), oh = parseNum(form.on_hands), pc = parseNum(form.package_capacity)
+    const du = parseNum(form.daily_usage), oh = parseNum(form.on_hands), pc = parseNum(form.package_capacity), cpu = parseNum(form.cost_per_unit)
+    // Core columns (guaranteed to exist). cost_per_unit is saved best-effort
+    // afterward so add/edit still works if the cost migration isn't applied yet.
     const payload: Record<string, unknown> = {
       company_id: profile.company_id,
       location_id: form.locationId || null,
@@ -349,12 +381,17 @@ export function ProductUsageTab() {
     }
     const sb = supabase as any
     let error: { message: string } | null
+    let savedId: string | null = editId
     if (editId) {
       ;({ error } = await sb.schema('inventory').from('product_usage').update(payload).eq('id', editId))
     } else {
-      ;({ error } = await sb.schema('inventory').from('product_usage').insert(payload))
+      const res = await sb.schema('inventory').from('product_usage').insert(payload).select('id').single()
+      error = res.error
+      savedId = res.data?.id ?? null
     }
     if (error) { toast.error(error.message); return }
+    // best-effort: cost_per_unit column may be pending migration
+    if (savedId) sb.schema('inventory').from('product_usage').update({ cost_per_unit: cpu }).eq('id', savedId).then(() => {})
     toast.success(editId ? 'Updated' : 'Saved')
     resetForm(); setAddOpen(false); setEditId(null)
     invalidateInventoryCache()
@@ -413,11 +450,14 @@ export function ProductUsageTab() {
     if (!profile?.company_id) return
     setImporting(true)
     const sb = supabase as any
+    // Only send cost_per_unit when the file actually maps it, so imports without
+    // a cost column still work if the cost migration isn't applied yet.
+    const hasCost = maps.some((m) => m.fieldName === 'cost_per_unit')
 
     const payload = rows.map((row) => {
       let location_id: string | null = null
       let product_id = '', category: string | null = null
-      let daily_usage: number | null = null, on_hands: number | null = null, package_capacity: number | null = null
+      let daily_usage: number | null = null, on_hands: number | null = null, package_capacity: number | null = null, cost_per_unit: number | null = null
       for (const m of maps) {
         const v = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
@@ -426,8 +466,9 @@ export function ProductUsageTab() {
         else if (m.fieldName === 'daily_usage') daily_usage = parseNum(v)
         else if (m.fieldName === 'on_hands') on_hands = parseNum(v)
         else if (m.fieldName === 'package_capacity') package_capacity = parseNum(v)
+        else if (m.fieldName === 'cost_per_unit') cost_per_unit = parseNum(v)
       }
-      return { location_id, product_id, category, daily_usage, on_hands, package_capacity, days_of_supply: daysOfSupply(on_hands, daily_usage) }
+      return { location_id, product_id, category, daily_usage, on_hands, package_capacity, days_of_supply: daysOfSupply(on_hands, daily_usage), ...(hasCost ? { cost_per_unit } : {}) }
     }).filter((r) => r.product_id)
 
     if (mode === 'replace') {
@@ -617,8 +658,14 @@ export function ProductUsageTab() {
             <Input label="Daily Usage" type="number" step="0.01" value={form.daily_usage} onChange={(e) => setForm({ ...form, daily_usage: e.target.value })} />
             <Input label="On Hands" type="number" step="0.01" value={form.on_hands} onChange={(e) => setForm({ ...form, on_hands: e.target.value })} />
             <Input label="Package Capacity" type="number" step="0.01" value={form.package_capacity} onChange={(e) => setForm({ ...form, package_capacity: e.target.value })} />
+            <Input label="Cost / Unit" type="number" step="0.01" value={form.cost_per_unit} onChange={(e) => setForm({ ...form, cost_per_unit: e.target.value })} />
           </div>
-          <p className="text-xs font-mono text-inky">Days of Supply: <span className="text-inky">{dosDisplay(daysOfSupply(parseNum(form.on_hands), parseNum(form.daily_usage)), parseNum(form.on_hands))}</span></p>
+          <div className="flex items-center gap-6">
+            <p className="text-xs font-mono text-inky">Days of Supply: <span className="text-inky">{dosDisplay(daysOfSupply(parseNum(form.on_hands), parseNum(form.daily_usage)), parseNum(form.on_hands))}</span></p>
+            {parseNum(form.cost_per_unit) != null && (
+              <p className="text-xs font-mono text-inky">Total Cost: <span className="text-navy">{formatCurrency((parseNum(form.on_hands) ?? 0) * (parseNum(form.cost_per_unit) ?? 0))}</span></p>
+            )}
+          </div>
           <div className="flex justify-between gap-2 pt-2">
             <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
             <div className="flex gap-2">
