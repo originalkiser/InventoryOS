@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { byNaturalLabel } from '@/lib/naturalSort'
 import type { Location, PosLocationMap } from '@/types'
 
 // Loads the company's locations and provides id <-> code/name resolution,
@@ -77,7 +78,9 @@ export function useLocations() {
     return v == null ? '' : String(v)
   }
 
-  const options = locations.filter((l) => l.active).map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
+  const options = locations.filter((l) => l.active)
+    .map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
+    .sort(byNaturalLabel)
 
   // Resolve to a location name (code) string (for tables that key on code).
   function codeOf(id: string | null): string {

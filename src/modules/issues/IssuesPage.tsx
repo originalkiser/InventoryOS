@@ -14,6 +14,7 @@ import { AddIssueColumnModal } from './AddIssueColumnModal'
 import { IssueImportModal } from './IssueImportModal'
 import { IssueExportModal } from './IssueExportModal'
 import { isAdminOrDeveloper } from '@/lib/roles'
+import { byNaturalLabel } from '@/lib/naturalSort'
 import type { Issue, IssueColumnType, IssueTrackerColumn, Department } from '@/types'
 import { differenceInDays, format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -541,7 +542,9 @@ export function IssuesPage() {
     setStatuses(statusRows)
 
     // Update refs so InlineCombobox cells pick up fresh options without re-mounting
-    locOptionsRef.current = (locRes.data ?? []).map((l: any) => ({ value: l.id, label: l.shop_city ?? l.name }))
+    locOptionsRef.current = (locRes.data ?? [])
+      .map((l: any) => ({ value: l.id, label: l.shop_city ?? l.name }))
+      .sort(byNaturalLabel)
     catOptionsRef.current = (catRes.data ?? []).map((c: any) => ({ value: c.id, label: c.name }))
 
     const mapRow = (data: any[]) => (data ?? []).map((r: any) => ({

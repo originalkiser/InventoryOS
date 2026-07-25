@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
-import * as XLSX from 'xlsx'
 import JSZip from 'jszip'
 import { differenceInDays, format } from 'date-fns'
 import { supabase } from '@/lib/supabase'
 import { Modal, Button, Toggle } from '@/components/ui'
 import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
+import { naturalCompare } from '@/lib/naturalSort'
 import type { Issue } from '@/types'
 import toast from 'react-hot-toast'
 
@@ -76,7 +76,7 @@ export function IssueExportModal({ open, onClose, issues, deptMap, selectedIds, 
       if (!v) continue
       m.set(v, (m.get(v) ?? 0) + 1)
     }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([value, count]) => ({ value, count }))
+    return [...m.entries()].sort((a, b) => naturalCompare(a[0], b[0])).map(([value, count]) => ({ value, count }))
   }
   const vendorOpts = useMemo(() => countOpts((r) => r.vendor ?? ''), [issues])
   const catOpts = useMemo(() => countOpts((r) => r.category_name ?? ''), [issues])
@@ -112,19 +112,45 @@ export function IssueExportModal({ open, onClose, issues, deptMap, selectedIds, 
     return [headers, ...rows]
   }
 
-  function buildXlsxBuffer(): ArrayBuffer {
-    const aoa = buildAoa()
-    const ws = XLSX.utils.aoa_to_sheet(aoa)
-    // Column widths tuned to content (capped), so it reads as a clean table.
-    ws['!cols'] = cols.map((c) => {
-      const bodyMax = filtered.reduce((m, r) => Math.max(m, c.get(r).split('\n')[0].length), c.header.length)
-      return { wch: Math.min(c.max, Math.max(10, bodyMax + 2)) }
+  // SB brand palette (ARGB — alpha first) for the styled export.
+  const SB = { navy: 'FF002745', cream: 'FFF2F1E6', band: 'FFECEBD8', inky: 'FF4F7489' }
+  const WRAP_COLS = new Set(['Title', 'Issue Notes', 'Resolution Notes', 'Helpful Links'])
+
+  async function buildXlsxBuffer(): Promise<ArrayBuffer> {
+    // Lazy-load ExcelJS (~1 MB) only when a styled export is actually run.
+    const ExcelJS = (await import('exceljs')).default
+    const wb = new ExcelJS.Workbook()
+    // Freeze the header row so it stays visible while scrolling.
+    const ws = wb.addWorksheet('Issues', { views: [{ state: 'frozen', ySplit: 1 }] })
+    ws.columns = cols.map((c) => ({ header: c.header, width: c.max }))
+    for (const r of filtered) ws.addRow(cols.map((c) => c.get(r)))
+
+    // Header — navy fill, cream bold text.
+    const header = ws.getRow(1)
+    header.height = 20
+    header.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SB.navy } }
+      cell.font = { bold: true, color: { argb: SB.cream }, name: 'Arial', size: 11 }
+      cell.alignment = { vertical: 'middle', horizontal: 'left' }
     })
-    // Auto-filter across the header row → sortable/filterable table in Excel.
-    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: cols.length - 1 } }) }
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Issues')
-    return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+
+    // Body — brand row banding, navy text, wrap the long text columns.
+    for (let i = 0; i < filtered.length; i++) {
+      const row = ws.getRow(i + 2)
+      const banded = i % 2 === 1
+      row.eachCell((cell, colNumber) => {
+        if (banded) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SB.band } }
+        cell.font = { color: { argb: SB.navy }, name: 'Arial', size: 10 }
+        const headerName = cols[colNumber - 1]?.header
+        cell.alignment = { vertical: 'top', wrapText: headerName ? WRAP_COLS.has(headerName) : false }
+        cell.border = { bottom: { style: 'hair', color: { argb: SB.inky } } }
+      })
+    }
+
+    // Sortable/filterable table over the full range.
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: filtered.length + 1, column: cols.length } }
+
+    return (await wb.xlsx.writeBuffer()) as ArrayBuffer
   }
 
   function buildCsv(): string {
@@ -142,7 +168,7 @@ export function IssueExportModal({ open, onClose, issues, deptMap, selectedIds, 
         // Bundle the spreadsheet + each issue's attachment files into a zip.
         const zip = new JSZip()
         if (format_ === 'csv') zip.file(`${name}.csv`, buildCsv())
-        else zip.file(`${name}.xlsx`, buildXlsxBuffer())
+        else zip.file(`${name}.xlsx`, await buildXlsxBuffer())
 
         const ids = filtered.map((r) => r.id).filter(Boolean)
         let fetched = 0
@@ -166,8 +192,9 @@ export function IssueExportModal({ open, onClose, issues, deptMap, selectedIds, 
         triggerDownload(new Blob([buildCsv()], { type: 'text/csv;charset=utf-8;' }), `${name}.csv`)
         toast.success(`${name}.csv — ${filtered.length} issues`)
       } else {
+        const xbuf = await buildXlsxBuffer()
         triggerDownload(
-          new Blob([buildXlsxBuffer()], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          new Blob([xbuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
           `${name}.xlsx`,
         )
         toast.success(`${name}.xlsx — ${filtered.length} issues`)

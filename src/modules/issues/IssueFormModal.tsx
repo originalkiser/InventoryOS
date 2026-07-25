@@ -5,11 +5,17 @@ import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/compo
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { byNaturalLabel } from '@/lib/naturalSort'
 import type { Issue, Location, IssueCategory, IssueStatus, Profile, Department } from '@/types'
 import type { ComboboxOption } from '@/components/ui'
 import toast from 'react-hot-toast'
 
 const PERSONAL_VALUE = '__personal__'
+
+// Vendor code slug (matches Vendor Parts config) for new vendors created inline.
+function slugCode(name: string) {
+  return name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32) || 'VENDOR'
+}
 
 interface IssueFormModalProps {
   open: boolean
@@ -26,6 +32,7 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
   const [locations, setLocations] = useState<ComboboxOption[]>([])
   const [categories, setCategories] = useState<ComboboxOption[]>([])
   const [statuses, setStatuses] = useState<ComboboxOption[]>([])
+  const [vendors, setVendors] = useState<ComboboxOption[]>([])
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   const [deptOptions, setDeptOptions] = useState<ComboboxOption[]>([])
 
@@ -99,17 +106,21 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
 
   async function loadOptions() {
     const sb = supabase as any
-    const [locs, cats, stats, profs, depts, memberships] = await Promise.all([
+    const [locs, cats, stats, vends, profs, depts, memberships] = await Promise.all([
       sb.schema('core').from('locations').select('id, name, shop_city').eq('company_id', companyId!).order('name'),
       sb.schema('inventory').from('issue_categories').select('id, name').eq('company_id', companyId!),
       sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId!),
+      sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId!).order('name'),
       sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId!).is('deleted_at', null).order('full_name'),
       sb.schema('platform').from('departments').select('id, name').eq('company_id', companyId!),
       sb.schema('platform').from('user_department_memberships').select('user_id, department_id').eq('company_id', companyId!),
     ])
-    setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: l.shop_city ?? l.name })))
+    // Locations sort numerically ("2-City" before "11-City"), not lexicographically.
+    setLocations((locs.data ?? []).map((l: any) => ({ value: l.id, label: l.shop_city ?? l.name })).sort(byNaturalLabel))
     setCategories((cats.data ?? []).map((c: IssueCategory) => ({ value: c.id, label: c.name })))
     setStatuses((stats.data ?? []).map((s: IssueStatus) => ({ value: s.id, label: s.name })))
+    // Vendor is stored as a name string on issues, so option value = name.
+    setVendors((vends.data ?? []).map((v: any) => ({ value: v.name, label: v.name })))
 
     // Build dept id → name lookup, then user id → dept names[] for VisibilitySelector
     const deptNameById: Record<string, string> = Object.fromEntries(
@@ -162,6 +173,23 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
     setStatuses((prev) => [...prev, opt])
     return opt
   }
+
+  async function createVendor(name: string): Promise<ComboboxOption> {
+    const { data, error } = await (supabase as any)
+      .schema('core').from('vendors')
+      .insert({ company_id: companyId!, name: name.trim(), vendor_code: slugCode(name) })
+      .select().single()
+    if (error) { toast.error(error.message); throw error }
+    // Vendor value is the name (issues.vendor is a text column).
+    const opt = { value: data.name, label: data.name }
+    setVendors((prev) => [...prev, opt])
+    return opt
+  }
+
+  // Show the current vendor even if it's a legacy free-text value not in the list.
+  const vendorOptions = vendor && !vendors.some((v) => v.value === vendor)
+    ? [{ value: vendor, label: vendor }, ...vendors]
+    : vendors
 
   function toggleSharedDept(id: string) {
     setSharedDeptIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -258,7 +286,9 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
         <Input label="Target Resolution" type="date" value={targetDate}
           onChange={(e) => setTargetDate(e.target.value)} />
 
-        <Input label="Vendor" value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Vendor name" />
+        <Combobox label="Vendor" options={vendorOptions} value={vendor}
+          onChange={(v) => setVendor(v)} placeholder="Select or create..."
+          allowCreate onCreateOption={createVendor} />
 
         <AssigneeComboInput
           label="Assignee"
