@@ -88,31 +88,40 @@ function InventorySettings({ onlyConfig, setOnlyConfig, categories, excludedCate
         Settings{activeCount > 0 ? ` · ${activeCount}` : ''}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-30 w-72 rounded border border-navy/30 bg-cream dark:bg-[#0e2638] shadow-xl p-3 flex flex-col gap-3">
-          <label className="flex items-center gap-2 text-xs font-mono text-navy dark:text-cream cursor-pointer">
+        <div className="absolute right-0 top-full mt-1 z-30 w-72 rounded border border-navy/30 bg-cream shadow-xl p-3 flex flex-col gap-3">
+          <label className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
             <Toggle checked={onlyConfig} onChange={setOnlyConfig} size="sm" />
             Only products in order config
           </label>
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">Exclude categories</span>
+              <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Exclude categories</span>
               {excludedCategories.length > 0 && (
-                <button onClick={() => setExcludedCategories([])} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">clear</button>
+                <button onClick={() => setExcludedCategories([])} className="text-[10px] font-mono text-inky hover:text-navy underline">clear</button>
               )}
             </div>
             {categories.length === 0 ? (
-              <p className="text-xs font-body italic text-inky/50">No categories in data.</p>
+              <p className="text-xs font-body italic text-inky">No categories in data.</p>
             ) : (
-              <div className="max-h-44 overflow-y-auto flex flex-col gap-0.5 rounded border border-navy/10 p-1">
+              <div className="max-h-44 overflow-y-auto flex flex-col gap-0.5 rounded border border-navy/15 p-1">
+                <label className="flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer hover:bg-navy/5 border-b border-navy/10 mb-0.5">
+                  <input
+                    type="checkbox"
+                    checked={excludedCategories.length === categories.length}
+                    onChange={() => setExcludedCategories(excludedCategories.length === categories.length ? [] : [...categories])}
+                    className="accent-inky"
+                  />
+                  <span className="text-xs font-mono text-inky">Select all</span>
+                </label>
                 {categories.map((c) => (
                   <label key={c} className="flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer hover:bg-navy/5">
                     <input type="checkbox" checked={excludedCategories.includes(c)} onChange={() => toggleCat(c)} className="accent-inky" />
-                    <span className="text-xs font-body text-navy dark:text-cream">{c}</span>
+                    <span className="text-xs font-body text-navy">{c}</span>
                   </label>
                 ))}
               </div>
             )}
-            <p className="text-[10px] font-mono text-inky/50">Checked categories are hidden from Inventory Health &amp; Days of Supply.</p>
+            <p className="text-[10px] font-mono text-inky">Checked categories are hidden from Inventory Health &amp; Days of Supply.</p>
           </div>
         </div>
       )}
@@ -270,22 +279,22 @@ export function DashboardPage() {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card onClick={() => navigate('/config')} className="p-4 hover:border-navy cursor-pointer">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Active Shops</div>
-          <div className="text-2xl font-heading font-bold text-navy">{activeShopsDisplay}</div>
+          <div className="text-2xl font-heading font-bold text-navy">{activeShopsDisplay.toLocaleString()}</div>
         </Card>
         <Card className="p-4">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Count Completion</div>
           <div className="text-2xl font-heading font-bold text-navy">{completionPct}%</div>
-          <div className="text-xs text-inky/70 font-body mt-1">{submittedDisplay}/{totalShopsDisplay} submitted</div>
+          <div className="text-xs text-inky/70 font-body mt-1">{submittedDisplay.toLocaleString()}/{totalShopsDisplay.toLocaleString()} submitted</div>
         </Card>
         <Card onClick={() => navigate('/issues?tab=pending')} className="p-4 hover:border-navy cursor-pointer">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Open Issues</div>
           <div className="text-2xl font-heading font-bold text-navy">
-            {stats.openIssuesByCategory.reduce((s, c) => s + c.count, 0)}
+            {stats.openIssuesByCategory.reduce((s, c) => s + c.count, 0).toLocaleString()}
           </div>
         </Card>
         <Card className="p-4">
           <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Not Submitted</div>
-          <div className="text-2xl font-heading font-bold text-navy">{notSubmitted}</div>
+          <div className="text-2xl font-heading font-bold text-navy">{notSubmitted.toLocaleString()}</div>
           <div className="text-xs text-inky/70 font-body mt-1">this month</div>
         </Card>
       </div>
@@ -306,12 +315,12 @@ export function DashboardPage() {
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <div>
               <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Critical Shops</div>
-              <div className="text-2xl font-heading font-bold" style={{ color: FLAG_HEX.red }}>{inv.stats.shopsWithCritical}</div>
+              <div className="text-2xl font-heading font-bold" style={{ color: FLAG_HEX.red }}>{inv.stats.shopsWithCritical.toLocaleString()}</div>
             </div>
             <div>
               <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Products Tracked</div>
-              <div className="text-2xl font-heading font-bold text-navy">{inv.stats.totalProducts}</div>
-              <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.flaggedProducts} flagged</div>
+              <div className="text-2xl font-heading font-bold text-navy">{inv.stats.totalProducts.toLocaleString()}</div>
+              <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.flaggedProducts.toLocaleString()} flagged</div>
             </div>
             <div>
               <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Avg Flagged / Shop</div>
@@ -320,7 +329,7 @@ export function DashboardPage() {
             <div>
               <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Worst Shop</div>
               <div className="text-sm font-heading font-bold text-navy truncate">{inv.stats.worstShop}</div>
-              <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.worstCount} flagged</div>
+              <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.worstCount.toLocaleString()} flagged</div>
             </div>
           </div>
         </CardBody>
