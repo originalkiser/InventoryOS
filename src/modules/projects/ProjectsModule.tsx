@@ -34,18 +34,36 @@ const COLUMN_DEFS: (ColumnDef & { type: CellType })[] = [
 ]
 const TYPE_OF = Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.type])) as Record<string, CellType>
 
-const STATUS_OPTIONS = ['Not Started', 'In Progress', 'Stuck (Vendor)', 'Blocked', 'Complete']
+const STATUS_OPTIONS = ['Not Started', 'In Progress', 'On Hold', 'Stuck (Vendor)', 'Blocked', 'Complete']
 type PillColor = 'gray' | 'cyan' | 'red' | 'green' | 'amber' | 'magenta'
 // Generalized so custom statuses still get a sensible color.
 function colorForStatus(s: string): PillColor {
   const v = (s || '').toLowerCase()
   if (v.includes('complete') || v.includes('done')) return 'green'
+  if (v.includes('hold')) return 'amber' // On Hold → orange
   if (v.includes('progress')) return 'cyan'
   if (v.includes('stuck') || v.includes('block')) return 'red'
   if (v.includes('not started') || v === '') return 'gray'
   return 'magenta'
 }
+
+// Palette users can assign to any status (incl. custom ones) via the picker.
+const STATUS_COLOR_CHOICES: PillColor[] = ['gray', 'cyan', 'green', 'amber', 'red', 'magenta']
+const SWATCH_CLASS: Record<PillColor, string> = {
+  gray: 'bg-inky/70', cyan: 'bg-sky', green: 'bg-[#2ECC71]',
+  amber: 'bg-[#E67E22]', red: 'bg-[#C0392B]', magenta: 'bg-navy',
+}
 const CTRL_W = 64
+
+// A project counts as "complete" / "on hold" by its status label (custom too).
+function isComplete(status: string | null): boolean {
+  const v = (status || '').toLowerCase()
+  return v.includes('complete') || v.includes('done')
+}
+function isOnHold(status: string | null): boolean {
+  return (status || '').toLowerCase().includes('hold')
+}
+type ProjectTab = 'active' | 'all' | 'onhold' | 'complete'
 
 // Sub-task column widths — persisted independently of project columns.
 const SUBTASK_COL_DEFAULTS: Record<string, number> = {
@@ -145,15 +163,17 @@ function ExpandableTextCell({ value, onSave, placeholder, autoEdit = false, show
 }
 
 // ---------------------------------------------------------------------------
-function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf, onAddOption }: {
+function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf, onAddOption, onSetColor }: {
   value: string | null
   onChange: (v: string) => void
   options?: string[]
   colorOf?: (s: string) => PillColor
   onAddOption?: (name: string) => void
+  onSetColor?: (status: string, color: PillColor) => void
 }) {
   const [open, setOpen] = useState(false)
   const [rect, setRect] = useState<{ left: number; top: number } | null>(null)
+  const [colorPickFor, setColorPickFor] = useState<string | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   const v = value ?? 'Not Started'
   const color = (s: string) => (colorOf ? colorOf(s) : colorForStatus(s))
@@ -162,6 +182,7 @@ function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf, onAddO
       const r = btnRef.current.getBoundingClientRect()
       setRect({ left: r.left, top: r.bottom + 4 })
     }
+    setColorPickFor(null)
     setOpen((o) => !o)
   }
   function addCustom() {
@@ -174,13 +195,31 @@ function StatusPill({ value, onChange, options = STATUS_OPTIONS, colorOf, onAddO
       <button ref={btnRef} onClick={toggle}><Badge color={color(v)}>{v}</Badge></button>
       {open && rect && (
         <>
-          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-[60]" onClick={() => { setOpen(false); setColorPickFor(null) }} />
           {/* fixed so the menu isn't clipped by the grid's overflow container */}
-          <div className="fixed z-[61] w-44 rounded border border-navy/30 bg-cream py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
+          <div className="fixed z-[61] w-52 rounded border border-navy/30 bg-cream py-1 shadow-xl" style={{ left: rect.left, top: rect.top }}>
             {options.map((s) => (
-              <button key={s} onClick={() => { onChange(s); setOpen(false) }} className="flex w-full items-center px-2 py-1 hover:bg-navy/5">
-                <Badge color={color(s)}>{s}</Badge>
-              </button>
+              <div key={s}>
+                <div className="flex w-full items-center hover:bg-navy/5">
+                  <button onClick={() => { onChange(s); setOpen(false) }} className="flex flex-1 min-w-0 items-center px-2 py-1">
+                    <Badge color={color(s)}>{s}</Badge>
+                  </button>
+                  {onSetColor && (
+                    <button title="Set color"
+                      onClick={(e) => { e.stopPropagation(); setColorPickFor((p) => (p === s ? null : s)) }}
+                      className={`h-3.5 w-3.5 mr-2 shrink-0 rounded-full ${SWATCH_CLASS[color(s)]} hover:ring-2 hover:ring-sky`} />
+                  )}
+                </div>
+                {onSetColor && colorPickFor === s && (
+                  <div className="flex gap-1.5 px-2 py-1.5 bg-navy/5" onClick={(e) => e.stopPropagation()}>
+                    {STATUS_COLOR_CHOICES.map((c) => (
+                      <button key={c} title={c}
+                        onClick={() => { onSetColor(s, c); setColorPickFor(null) }}
+                        className={`h-4 w-4 rounded-full ${SWATCH_CLASS[c]} ${color(s) === c ? 'ring-2 ring-sky' : ''}`} />
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
             {onAddOption && (
               <button onClick={addCustom} className="flex w-full items-center px-2 py-1 text-xs font-mono text-inky hover:bg-navy/5">＋ custom…</button>
@@ -308,7 +347,7 @@ function LinkedTaskRow({ task, subColWidths, onToggle }: {
   )
 }
 
-function SubTasks({ projectId, tasks, linkedTasks, onAdd, onUpdate, onDelete, onReorder, onToggleLinked, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
+function SubTasks({ projectId, tasks, linkedTasks, onAdd, onUpdate, onDelete, onReorder, onToggleLinked, statusOptions, onAddStatus, colorOf, subColWidths, onSubColResize, profiles }: {
   projectId: string
   tasks: ProjectTask[]
   linkedTasks: Task[]
@@ -319,6 +358,7 @@ function SubTasks({ projectId, tasks, linkedTasks, onAdd, onUpdate, onDelete, on
   onToggleLinked: (id: string, done: boolean) => void
   statusOptions: string[]
   onAddStatus: (name: string) => void
+  colorOf: (s: string) => PillColor
   subColWidths: Record<string, number>
   onSubColResize: (key: string, w: number) => void
   profiles: Profile[]
@@ -349,7 +389,7 @@ function SubTasks({ projectId, tasks, linkedTasks, onAdd, onUpdate, onDelete, on
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
               <tbody>
-                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} profiles={profiles} />)}
+                {tasks.map((t) => <SubTaskRow key={t.id} task={t} onUpdate={onUpdate} onDelete={onDelete} statusOptions={statusOptions} onAddStatus={onAddStatus} colorOf={colorOf} subColWidths={subColWidths} profiles={profiles} />)}
                 {tasks.length === 0 && (
                   <tr><td colSpan={8} className="px-2 py-2 text-inky/70">No tasks yet.</td></tr>
                 )}
@@ -375,7 +415,7 @@ function SubTasks({ projectId, tasks, linkedTasks, onAdd, onUpdate, onDelete, on
   )
 }
 
-function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subColWidths, profiles }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void; statusOptions: string[]; onAddStatus: (name: string) => void; subColWidths: Record<string, number>; profiles: Profile[] }) {
+function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, colorOf, subColWidths, profiles }: { task: ProjectTask; onUpdate: (id: string, patch: Partial<ProjectTask>) => void; onDelete: (id: string) => void; statusOptions: string[]; onAddStatus: (name: string) => void; colorOf: (s: string) => PillColor; subColWidths: Record<string, number>; profiles: Profile[] }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
   function tdStyle(key: string): React.CSSProperties {
     const w = subColWidths[key] ?? SUBTASK_COL_DEFAULTS[key as keyof typeof SUBTASK_COL_DEFAULTS]
@@ -390,7 +430,7 @@ function SubTaskRow({ task, onUpdate, onDelete, statusOptions, onAddStatus, subC
           onChange={(e) => onUpdate(task.id, { done: e.target.checked, status: e.target.checked ? 'Complete' : task.status })} />
       </td>
       <td style={tdStyle('task')}><EditableCell value={task.task_name} type="text" placeholder="Task name…" onSave={(v) => onUpdate(task.id, { task_name: v })} /></td>
-      <td style={tdStyle('status')}><StatusPill value={task.status} onChange={(v) => onUpdate(task.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={onAddStatus} /></td>
+      <td style={tdStyle('status')}><StatusPill value={task.status} onChange={(v) => onUpdate(task.id, { status: v })} options={statusOptions} colorOf={colorOf} onAddOption={onAddStatus} /></td>
       <td style={tdStyle('assignee')}><AssigneeCell taskId={task.id} value={task.assignee} profiles={profiles} onSave={(v) => onUpdate(task.id, { assignee: v || null })} /></td>
       <td style={tdStyle('due')}><EditableCell value={task.due_date} type="date" onSave={(v) => onUpdate(task.id, { due_date: v || null })} /></td>
       <td style={tdStyle('notes')}><ExpandableTextCell value={task.notes} placeholder="—" onSave={(v) => onUpdate(task.id, { notes: v || null })} /></td>
@@ -573,6 +613,7 @@ export function ProjectsModule() {
   }
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [tab, setTab] = useState<ProjectTab>('active')
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null)
   const [groupBy, setGroupBy] = useState<'none' | 'status' | 'category'>('none')
@@ -589,6 +630,11 @@ export function ProjectsModule() {
   const statusOptions = useMemo(() => [...STATUS_OPTIONS, ...customStatuses.filter((s) => !STATUS_OPTIONS.includes(s))], [customStatuses])
   const addStatus = (name: string) => { if (!statusOptions.includes(name)) setCustomStatuses([...customStatuses, name]) }
 
+  // User-assigned status colors (any status, incl. custom); falls back to defaults.
+  const [statusColors, setStatusColors] = useAppSetting<Record<string, PillColor>>('project_status_colors', {})
+  const statusColor = useCallback((s: string): PillColor => statusColors[s] ?? colorForStatus(s), [statusColors])
+  const setStatusColor = useCallback((status: string, color: PillColor) => setStatusColors({ ...statusColors, [status]: color }), [statusColors, setStatusColors])
+
   const visible = useMemo(() => columns.filter((c) => c.visible), [columns])
   const ordered = useMemo(() => [...visible.filter((c) => c.pinned), ...visible.filter((c) => !c.pinned)], [visible])
   const leftOffsets = useMemo(() => {
@@ -599,8 +645,21 @@ export function ProjectsModule() {
   }, [ordered])
   const totalCols = ordered.length + 2 // control + data + actions
 
+  // Counts for the Active / All / On Hold / Complete tabs.
+  const tabCounts = useMemo(() => {
+    let complete = 0, onhold = 0
+    for (const p of projects) {
+      if (isComplete(p.status)) complete++
+      else if (isOnHold(p.status)) onhold++
+    }
+    return { all: projects.length, complete, onhold, active: projects.length - complete - onhold }
+  }, [projects])
+
   const rows = useMemo(() => {
     let r = projects
+    if (tab === 'active') r = r.filter((p) => !isComplete(p.status) && !isOnHold(p.status))
+    else if (tab === 'complete') r = r.filter((p) => isComplete(p.status))
+    else if (tab === 'onhold') r = r.filter((p) => isOnHold(p.status))
     const q = search.trim().toLowerCase()
     if (q) {
       r = r.filter((p) => visible.some((c) => String((p as any)[c.key] ?? '').toLowerCase().includes(q)))
@@ -613,7 +672,7 @@ export function ProjectsModule() {
       })
     }
     return r
-  }, [projects, search, sort, visible])
+  }, [projects, tab, search, sort, visible])
 
   const grouped = useMemo(() => {
     if (groupBy === 'none') return [{ label: null as string | null, items: rows }]
@@ -649,7 +708,7 @@ export function ProjectsModule() {
 
   function renderCell(p: Project, key: string) {
     const type = TYPE_OF[key]
-    if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={colorForStatus} onAddOption={addStatus} />
+    if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={statusColor} onAddOption={addStatus} onSetColor={setStatusColor} />
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
     if (type === 'links') return <LinksCell links={p.helpful_links ?? []} onSave={(links) => updateProject(p.id, { helpful_links: links })} />
     if (type === 'attachments') return <AttachmentsCell entityType="project" entityId={p.id} companyId={companyId!} />
@@ -700,6 +759,16 @@ export function ProjectsModule() {
           </ul>
         </div>
       )}
+
+      {/* All / Active / Complete tabs */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {([['active', 'Active'], ['all', 'All'], ['onhold', 'On Hold'], ['complete', 'Complete']] as const).map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)}
+            className={['px-2.5 py-1 rounded text-xs font-mono transition-colors', tab === key ? 'bg-navy text-cream' : 'bg-navy/10 text-navy/70 hover:bg-navy/20'].join(' ')}>
+            {label} <span className={tab === key ? 'text-cream/70' : 'text-inky/60'}>({tabCounts[key].toLocaleString()})</span>
+          </button>
+        ))}
+      </div>
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
@@ -768,11 +837,18 @@ export function ProjectsModule() {
                       linkedTasks={linkedTasks.filter((t) => t.project_id === p.id)}
                       onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks}
                       onToggleLinked={toggleLinkedTask}
-                      statusOptions={statusOptions} onAddStatus={addStatus}
+                      statusOptions={statusOptions} onAddStatus={addStatus} colorOf={statusColor}
                       subColWidths={subColWidths} onSubColResize={setSubColWidth} profiles={orgProfiles} />
                   ))}
                 </GroupBlock>
               ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={totalCols} className="px-3 py-10 text-center text-xs font-mono text-inky/60">
+                    No {tab === 'complete' ? 'completed' : tab === 'onhold' ? 'on-hold' : tab === 'active' ? 'active' : ''} projects{search ? ' match your search' : ''}.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -809,7 +885,7 @@ function GroupBlock({ label, count, totalCols, children }: { label: string | nul
   )
 }
 
-function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, linkedTasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, onToggleLinked, statusOptions, onAddStatus, subColWidths, onSubColResize, profiles }: {
+function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, linkedTasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, onToggleLinked, statusOptions, onAddStatus, colorOf, subColWidths, onSubColResize, profiles }: {
   project: Project
   ordered: { key: string; width: number; pinned: boolean }[]
   leftOffsets: Record<string, number>
@@ -828,6 +904,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
   statusOptions: string[]
   profiles: Profile[]
   onAddStatus: (name: string) => void
+  colorOf: (s: string) => PillColor
   subColWidths: Record<string, number>
   onSubColResize: (key: string, w: number) => void
 }) {
@@ -858,7 +935,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
         <tr>
           <td />
           <td colSpan={totalCols - 1} className="p-0">
-            <SubTasks projectId={project.id} tasks={tasks} linkedTasks={linkedTasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} onToggleLinked={onToggleLinked} statusOptions={statusOptions} onAddStatus={onAddStatus} subColWidths={subColWidths} onSubColResize={onSubColResize} profiles={profiles} />
+            <SubTasks projectId={project.id} tasks={tasks} linkedTasks={linkedTasks} onAdd={onAddTask} onUpdate={onUpdateTask} onDelete={onDeleteTask} onReorder={onReorderTask} onToggleLinked={onToggleLinked} statusOptions={statusOptions} onAddStatus={onAddStatus} colorOf={colorOf} subColWidths={subColWidths} onSubColResize={onSubColResize} profiles={profiles} />
           </td>
         </tr>
       )}
