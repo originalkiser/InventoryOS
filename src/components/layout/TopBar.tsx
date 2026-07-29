@@ -10,6 +10,8 @@ import { useAuthStore } from '@/stores/authStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
+import { useNotifications, NOTIF_PROMPT_DISMISSED_KEY, type NotifType } from '@/hooks/useNotifications'
+import toast from 'react-hot-toast'
 import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format, differenceInDays, endOfWeek, endOfMonth, parseISO } from 'date-fns'
@@ -126,6 +128,9 @@ export function TopBar({
   useDarkMode() // keep dark-mode class applied
   const { locations } = useLocations()
   const { isExcluded } = useLocationExclusions()
+  const { canNotify, permission, prefs: notifPrefs, setPrefs: setNotifPrefs, requestPermission, notify } = useNotifications()
+  const [notifMenuOpen, setNotifMenuOpen] = useState(false)
+  const notifMenuRef = useRef<HTMLDivElement>(null)
   const [endDayOpen, setEndDayOpen] = useState(false)
   const [eodGlow, setEodGlow] = useState(false)
   const [stats, setStats] = useState<TopBarStats>({
@@ -195,16 +200,19 @@ export function TopBar({
       const dk = todayKey()
       const reviewed = !!localStorage.getItem(`eod_reviewed_${dk}`)
       setEodGlow(isPast && !reviewed)
-      if (isPast && !reviewed && !localStorage.getItem(`eod_prompted_${dk}`)) {
-        localStorage.setItem(`eod_prompted_${dk}`, '1')
-        setEndDayOpen(true)
+      if (isPast && !reviewed) {
+        notify('eod', `eod:${dk}`, 'End-of-day review', { body: 'Time to review and end your day.', onClick: () => setEndDayOpen(true) })
+        if (!localStorage.getItem(`eod_prompted_${dk}`)) {
+          localStorage.setItem(`eod_prompted_${dk}`, '1')
+          setEndDayOpen(true)
+        }
       }
     }
 
     check()
     const id = setInterval(check, 60_000)
     return () => clearInterval(id)
-  }, [profile?.eod_review_enabled, profile?.eod_review_time, profile?.popup_timezone])
+  }, [profile?.eod_review_enabled, profile?.eod_review_time, profile?.popup_timezone, notify])
 
   // Checklist event reminders: open Today's Tasks N minutes before a timed checklist event starts.
   // Uses checklistItemsRef so the interval closure always sees fresh data without re-creating.
@@ -242,6 +250,7 @@ export function TopBar({
             localStorage.setItem(key, '1')
             onOpenTasks()
           }
+          notify('events', `event:${item.id}:${dk}`, item.title, { body: `Starting at ${item.startTime}`, onClick: onOpenTasks })
         }
       }
     }
@@ -249,7 +258,7 @@ export function TopBar({
     checkReminders()
     const remId = setInterval(checkReminders, 60_000)
     return () => clearInterval(remId)
-  }, [profile?.popup_timezone, profile?.task_popups_enabled])
+  }, [profile?.popup_timezone, profile?.task_popups_enabled, notify, onOpenTasks])
 
   useEffect(() => {
     if (!companyId) return
@@ -303,6 +312,41 @@ export function TopBar({
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [pillConfigOpen])
+
+  // Click-outside to close the notifications menu
+  useEffect(() => {
+    if (!notifMenuOpen) return
+    function onDown(e: MouseEvent) {
+      if (notifMenuRef.current && !notifMenuRef.current.contains(e.target as Node)) setNotifMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [notifMenuOpen])
+
+  // One-time launch prompt to enable desktop notifications (requested from the
+  // toast's button click — a user gesture, which browsers require).
+  useEffect(() => {
+    if (!canNotify || permission !== 'default') return
+    if (localStorage.getItem(NOTIF_PROMPT_DISMISSED_KEY)) return
+    const id = setTimeout(() => {
+      toast((t) => (
+        <div className="flex flex-col gap-2">
+          <span className="text-xs font-body text-navy">Enable desktop notifications for tasks, calendar events & end-of-day?</span>
+          <div className="flex gap-2 justify-end">
+            <button
+              onClick={() => { localStorage.setItem(NOTIF_PROMPT_DISMISSED_KEY, '1'); toast.dismiss(t.id) }}
+              className="px-2 py-1 text-[10px] font-mono text-inky hover:text-navy"
+            >Not now</button>
+            <button
+              onClick={async () => { localStorage.setItem(NOTIF_PROMPT_DISMISSED_KEY, '1'); toast.dismiss(t.id); await requestPermission() }}
+              className="px-2.5 py-1 text-[10px] font-heading uppercase tracking-wide rounded bg-navy text-cream hover:bg-inky"
+            >Enable</button>
+          </div>
+        </div>
+      ), { duration: 15_000 })
+    }, 2_500)
+    return () => clearTimeout(id)
+  }, [canNotify, permission, requestPermission])
 
   function savePillPrefs(prefs: PillPrefs) {
     setPillPrefs(prefs)
@@ -408,7 +452,12 @@ export function TopBar({
     items.sort((a, b) => (a.date ?? '9999').localeCompare(b.date ?? '9999'))
     setChecklistItems(items)
     // Pill stays a today/overdue count regardless of the panel's range.
-    setStats((s) => ({ ...s, todayChecklists: items.filter((i) => !i.completed && i.date != null && i.date <= today).length }))
+    const todayCount = items.filter((i) => !i.completed && i.date != null && i.date <= today).length
+    setStats((s) => ({ ...s, todayChecklists: todayCount }))
+    // Morning summary — once per day, only when something is due.
+    if (todayCount > 0) {
+      notify('tasks', `tasks:${today}`, `${todayCount} task${todayCount !== 1 ? 's' : ''} due today`, { body: 'Open Tasks to review.', onClick: onOpenTasks })
+    }
   }
 
   // Reload the panel when the date range changes.
@@ -627,6 +676,63 @@ export function TopBar({
           )}
         </div>
       </div>
+
+      {/* Notifications */}
+      {canNotify && (
+        <div className="relative flex-shrink-0" ref={notifMenuRef}>
+          <button
+            onClick={() => setNotifMenuOpen((v) => !v)}
+            title="Notifications"
+            className={[
+              'flex items-center justify-center w-7 h-7 rounded border transition-all',
+              permission === 'granted' && notifPrefs.enabled
+                ? 'border-[#F2F1E6]/20 text-sky hover:text-[#F2F1E6]'
+                : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
+            ].join(' ')}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+          </button>
+          {notifMenuOpen && (
+            <div className="absolute right-0 top-full mt-1 z-40 w-60 bg-[#002745] border border-[#F2F1E6]/20 rounded shadow-xl p-2 flex flex-col gap-1.5">
+              <div className="px-1 pb-1 border-b border-[#F2F1E6]/10">
+                <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Notifications</span>
+              </div>
+              {permission === 'denied' ? (
+                <p className="px-1 py-1 text-[10px] font-mono text-[#F2F1E6]/60 leading-relaxed">
+                  Blocked in your browser. Enable notifications for this site in your browser settings, then reload.
+                </p>
+              ) : permission !== 'granted' ? (
+                <button
+                  onClick={async () => { await requestPermission() }}
+                  className="mx-1 my-0.5 rounded bg-sky/20 border border-sky/40 px-2 py-1.5 text-[11px] font-heading uppercase tracking-wide text-[#F2F1E6] hover:bg-sky/30"
+                >
+                  Enable desktop notifications
+                </button>
+              ) : (
+                <>
+                  <label className="flex items-center gap-2 px-1 py-1 cursor-pointer hover:bg-[#F2F1E6]/5 rounded">
+                    <input type="checkbox" checked={notifPrefs.enabled}
+                      onChange={() => setNotifPrefs({ ...notifPrefs, enabled: !notifPrefs.enabled })}
+                      className="accent-sky w-3.5 h-3.5" />
+                    <span className="text-xs font-mono text-[#F2F1E6]/80">All notifications</span>
+                  </label>
+                  <div className="border-t border-[#F2F1E6]/10 my-0.5" />
+                  {([['eod', 'End of Day'], ['tasks', "Today's Tasks"], ['events', 'Calendar Events']] as [NotifType, string][]).map(([key, label]) => (
+                    <label key={key} className={['flex items-center gap-2 px-1 py-1 rounded', notifPrefs.enabled ? 'cursor-pointer hover:bg-[#F2F1E6]/5' : 'opacity-40'].join(' ')}>
+                      <input type="checkbox" disabled={!notifPrefs.enabled} checked={notifPrefs.types[key]}
+                        onChange={() => setNotifPrefs({ ...notifPrefs, types: { ...notifPrefs.types, [key]: !notifPrefs.types[key] } })}
+                        className="accent-sky w-3.5 h-3.5 ml-3" />
+                      <span className="text-xs font-mono text-[#F2F1E6]/70">{label}</span>
+                    </label>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* End Day */}
       <button
