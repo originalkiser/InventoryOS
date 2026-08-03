@@ -467,6 +467,19 @@ function colLabel(c: string): string {
   return c.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
+// Collapse column keys that resolve to the same display label (e.g. `meta:market`,
+// `meta:Market`, and a promoted base `market` all render as "Market"). Keeps the
+// first occurrence so a stale saved view with duplicate labels can be hidden as one.
+function dedupeByLabel(keys: string[]): string[] {
+  const seen = new Set<string>()
+  return keys.filter((c) => {
+    const lbl = colLabel(c).toLowerCase()
+    if (seen.has(lbl)) return false
+    seen.add(lbl)
+    return true
+  })
+}
+
 // Contextual filter hierarchy for locations
 const LOC_FILTER_HIERARCHY = ['meta:owner', 'region', 'meta:market', 'meta:area_manager', 'meta:regional_director']
 
@@ -515,7 +528,16 @@ function ManageColsPortal({ allCols, cols, onClose, onSave }: {
     setVisible((v) => v.includes(c) ? v.filter((x) => x !== c) : [...v, c])
   }
 
-  const hidden = allCols.filter((c) => !visible.includes(c))
+  // Hidden = every column not visible, collapsed by label and excluding labels the
+  // visible list already covers (so a duplicate "Market" key can't reappear here).
+  const seenLabels = new Set(visible.map((c) => colLabel(c).toLowerCase()))
+  const hidden = allCols.filter((c) => {
+    if (visible.includes(c)) return false
+    const lbl = colLabel(c).toLowerCase()
+    if (seenLabels.has(lbl)) return false
+    seenLabels.add(lbl)
+    return true
+  })
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-center justify-center">
@@ -649,9 +671,12 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
   const valueOf = (r: Record<string, any>, c: string) =>
     c === '__pos__' && isLocations ? loc.posStringFor(r.id) : cellVal(r, c)
 
-  // Deduplicate: drop meta:X if X is already present (handles stale saved views)
+  // Deduplicate: drop meta:X if X is already present, then collapse any remaining
+  // keys that share a display label (handles stale saved views with dup "Market" etc.)
   const rawCols = block.columns.length ? block.columns : allCols.slice(0, 4)
-  const cols = rawCols.filter((c, _, arr) => !c.startsWith('meta:') || !arr.includes(c.slice(5)))
+  const cols = dedupeByLabel(
+    rawCols.filter((c, _, arr) => !c.startsWith('meta:') || !arr.includes(c.slice(5)))
+  )
 
   // Which filter fields from the hierarchy actually exist in this dataset
   const filterFields = useMemo(
