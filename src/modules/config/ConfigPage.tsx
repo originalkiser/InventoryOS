@@ -5,6 +5,9 @@ import { UomMappingsTab } from './tabs/UomMappingsTab'
 import { ProductUsageTab } from './tabs/ProductUsageTab'
 import { TankMonitorTab } from './tabs/TankMonitorTab'
 import { EndingBalancesTab } from './tabs/EndingBalancesTab'
+import { CategorySimplificationTab } from './tabs/CategorySimplificationTab'
+import { CategoryExpectationsTab } from './tabs/CategoryExpectationsTab'
+import { LocationCpdTab } from './tabs/LocationCpdTab'
 
 export function ConfigPage() {
   const { profile } = useAuthStore()
@@ -35,12 +38,18 @@ export function ConfigPage() {
           <TabsTrigger value="product-usage">Product Usage</TabsTrigger>
           <TabsTrigger value="tank-monitor">Tank Monitor</TabsTrigger>
           <TabsTrigger value="ending-balances">Month End Ending Balance</TabsTrigger>
+          <TabsTrigger value="category-simplification">Category Simplification</TabsTrigger>
+          <TabsTrigger value="category-expectations">Expected On Hand</TabsTrigger>
+          <TabsTrigger value="location-cpd">Location CPD</TabsTrigger>
         </TabsList>
 
         <TabsContent value="uom-mappings"><UomMappingsTab /></TabsContent>
         <TabsContent value="product-usage"><ProductUsageTab /></TabsContent>
         <TabsContent value="tank-monitor"><TankMonitorTab /></TabsContent>
         <TabsContent value="ending-balances"><EndingBalancesTab /></TabsContent>
+        <TabsContent value="category-simplification"><CategorySimplificationTab /></TabsContent>
+        <TabsContent value="category-expectations"><CategoryExpectationsTab /></TabsContent>
+        <TabsContent value="location-cpd"><LocationCpdTab /></TabsContent>
       </Tabs>
     </div>
   )

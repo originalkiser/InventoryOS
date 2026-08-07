@@ -91,6 +91,8 @@ export type DraftThresholds = Pick<
   RecountConfig,
   | 'low_adj_threshold'
   | 'high_adj_threshold'
+  | 'oil_low_adj_threshold'
+  | 'oil_high_adj_threshold'
   | 'low_balance_threshold'
   | 'high_balance_threshold'
   | 'variance_to_median_pct'

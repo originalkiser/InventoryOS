@@ -18,9 +18,9 @@ import type { ParseResult } from '@/lib/fileParser'
 import { format } from 'date-fns'
 
 const RECOMMENDED = [
-  { label: 'Food', field_type: 'number' as const },
-  { label: 'Beverage', field_type: 'number' as const },
-  { label: 'Paper & Supplies', field_type: 'number' as const },
+  { label: 'Parts', field_type: 'number' as const },
+  { label: 'Oil', field_type: 'number' as const },
+  { label: 'Additives', field_type: 'number' as const },
 ]
 
 const fmt = (v: number | null) =>
@@ -183,6 +183,8 @@ export function EndingBalancesTab() {
         </>}
       />
 
+      <CategoryBalanceComparison data={data} categories={categories} />
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File (Tall Format)</h3>
@@ -235,6 +237,91 @@ export function EndingBalancesTab() {
       <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Ending-Balance Categories" size="lg">
         <CustomFieldsEditor section="ending_balance" recommended={RECOMMENDED} />
       </Modal>
+    </div>
+  )
+}
+
+// Month-over-month rollup by category (Parts / Oil / Additives …). Sums each
+// category across all locations per month and shows the change vs the prior month
+// so wild swings in a category stand out.
+function CategoryBalanceComparison({
+  data, categories,
+}: { data: MonthlyEndingBalance[]; categories: { field_key: string; label: string }[] }) {
+  const rows = useMemo(() => {
+    const byMonth = new Map<string, { total: number; cats: Record<string, number> }>()
+    for (const r of data) {
+      if (!r.month) continue
+      const m = byMonth.get(r.month) ?? { total: 0, cats: {} }
+      m.total += Number(r.ending_balance ?? 0)
+      for (const c of categories) {
+        const v = Number((r.metadata as any)?.[c.field_key])
+        if (!isNaN(v)) m.cats[c.field_key] = (m.cats[c.field_key] ?? 0) + v
+      }
+      byMonth.set(r.month, m)
+    }
+    // Most recent month first
+    return [...byMonth.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+  }, [data, categories])
+
+  if (categories.length === 0 || rows.length === 0) return null
+
+  // Delta cell vs the prior month (the next row in the desc-sorted list).
+  function Delta({ curr, prev }: { curr: number; prev: number | undefined }) {
+    if (prev === undefined || prev === 0) return null
+    const d = curr - prev
+    if (d === 0) return <span className="text-[10px] font-mono text-inky/40">—</span>
+    const pct = (d / Math.abs(prev)) * 100
+    const up = d > 0
+    return (
+      <span className={`text-[10px] font-mono ${up ? 'text-[#2ECC71]' : 'text-[#C0392B]'}`}>
+        {up ? '▲' : '▼'} {fmt(Math.abs(d))} ({pct > 0 ? '+' : ''}{pct.toFixed(1)}%)
+      </span>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Category Comparison — Month over Month</h3>
+      <div className="overflow-auto rounded border border-navy/30">
+        <table className="w-full text-xs font-mono">
+          <thead className="sticky top-0">
+            <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+              <th className="px-3 py-2 text-left">Month</th>
+              {categories.map((c) => <th key={c.field_key} className="px-3 py-2 text-right">{c.label}</th>)}
+              <th className="px-3 py-2 text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([month, agg], i) => {
+              const prev = rows[i + 1]?.[1]
+              let monthLabel = month
+              try { monthLabel = format(new Date(month + 'T00:00:00'), 'MMM yyyy') } catch { /* keep raw */ }
+              return (
+                <tr key={month} className="border-b border-navy/20">
+                  <td className="px-3 py-2 text-navy">{monthLabel}</td>
+                  {categories.map((c) => {
+                    const v = agg.cats[c.field_key] ?? 0
+                    return (
+                      <td key={c.field_key} className="px-3 py-2 text-right">
+                        <div className="flex flex-col items-end leading-tight">
+                          <span className="text-navy">{fmt(v)}</span>
+                          <Delta curr={v} prev={prev?.cats[c.field_key]} />
+                        </div>
+                      </td>
+                    )
+                  })}
+                  <td className="px-3 py-2 text-right">
+                    <div className="flex flex-col items-end leading-tight">
+                      <span className="text-navy font-bold">{fmt(agg.total)}</span>
+                      <Delta curr={agg.total} prev={prev?.total} />
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

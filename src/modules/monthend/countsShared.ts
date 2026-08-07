@@ -15,6 +15,7 @@ export const SUMMARY_FIELDS: MapField[] = [
   { name: 'count_date', label: 'Count Date', date: true },
   { name: 'count_type', label: 'Count Type' },
   { name: 'total_adjustments', label: 'Total Adjustments', numeric: true },
+  { name: 'oil_adjustments', label: 'Oil Adjustments', numeric: true },
   { name: 'adjustment_value', label: 'Adjustment Value', numeric: true },
   { name: 'abs_adjustment_value', label: 'Abs Adjustment Value', numeric: true },
   { name: 'ending_inventory_cost', label: 'Ending Inventory Cost', required: true, numeric: true },

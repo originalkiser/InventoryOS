@@ -20,6 +20,8 @@ function flagsToReason(flags: string[]): string {
   if (flags.includes('low_ending_balance')) return 'End balance too low'
   if (flags.includes('low_adjustments')) return 'Too few adjustments'
   if (flags.includes('high_adjustments')) return 'Too many adjustments'
+  if (flags.includes('low_oil_adjustments')) return 'Too few oil adjustments'
+  if (flags.includes('high_oil_adjustments')) return 'Too many oil adjustments'
   if (flags.includes('variance_vs_median')) return 'Unexpected ending balance'
   if (flags.includes('variance_vs_last_month')) return 'Unexpected ending balance'
   return flags.join(', ')
@@ -42,6 +44,7 @@ export function RecountLogicTab() {
 
   // Rule enable toggles
   const [adjEnabled, setAdjEnabled] = useState(false)
+  const [oilAdjEnabled, setOilAdjEnabled] = useState(false)
   const [balEnabled, setBalEnabled] = useState(false)
   const [varMedEnabled, setVarMedEnabled] = useState(false)
   const [varLastEnabled, setVarLastEnabled] = useState(false)
@@ -49,6 +52,8 @@ export function RecountLogicTab() {
   // Threshold inputs (strings)
   const [lowAdj, setLowAdj] = useState('')
   const [highAdj, setHighAdj] = useState('')
+  const [lowOilAdj, setLowOilAdj] = useState('')
+  const [highOilAdj, setHighOilAdj] = useState('')
   const [lowBal, setLowBal] = useState('')
   const [highBal, setHighBal] = useState('')
   const [varMed, setVarMed] = useState('')
@@ -80,11 +85,14 @@ export function RecountLogicTab() {
       if (!c) return
       setConfigId(c.id)
       setAdjEnabled(c.low_adj_threshold != null || c.high_adj_threshold != null)
+      setOilAdjEnabled(c.oil_low_adj_threshold != null || c.oil_high_adj_threshold != null)
       setBalEnabled(c.low_balance_threshold != null || c.high_balance_threshold != null)
       setVarMedEnabled(c.variance_to_median_pct != null)
       setVarLastEnabled(c.variance_to_last_month_pct != null)
       setLowAdj(c.low_adj_threshold?.toString() ?? '')
       setHighAdj(c.high_adj_threshold?.toString() ?? '')
+      setLowOilAdj(c.oil_low_adj_threshold?.toString() ?? '')
+      setHighOilAdj(c.oil_high_adj_threshold?.toString() ?? '')
       setLowBal(c.low_balance_threshold?.toString() ?? '')
       setHighBal(c.high_balance_threshold?.toString() ?? '')
       setVarMed(c.variance_to_median_pct?.toString() ?? '')
@@ -113,8 +121,8 @@ export function RecountLogicTab() {
     }, 1500)
     return () => clearTimeout(autoSaveTimerRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adjEnabled, balEnabled, varMedEnabled, varLastEnabled,
-      lowAdj, highAdj, lowBal, highBal, varMed, varLast,
+  }, [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled,
+      lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast,
       lookback, varMedThresholdType, varLastThresholdType])
 
   // Load period data for the live preview (once per period)
@@ -131,6 +139,8 @@ export function RecountLogicTab() {
   const draft: DraftThresholds = useMemo(() => ({
     low_adj_threshold: adjEnabled ? numOrNull(lowAdj) : null,
     high_adj_threshold: adjEnabled ? numOrNull(highAdj) : null,
+    oil_low_adj_threshold: oilAdjEnabled ? numOrNull(lowOilAdj) : null,
+    oil_high_adj_threshold: oilAdjEnabled ? numOrNull(highOilAdj) : null,
     low_balance_threshold: balEnabled ? numOrNull(lowBal) : null,
     high_balance_threshold: balEnabled ? numOrNull(highBal) : null,
     variance_to_median_pct: varMedEnabled ? numOrNull(varMed) : null,
@@ -138,7 +148,7 @@ export function RecountLogicTab() {
     median_months_lookback: lookbackN,
     var_med_threshold_type: varMedThresholdType,
     var_last_threshold_type: varLastThresholdType,
-  }), [adjEnabled, balEnabled, varMedEnabled, varLastEnabled, lowAdj, highAdj, lowBal, highBal, varMed, varLast, lookbackN, varMedThresholdType, varLastThresholdType])
+  }), [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled, lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, lookbackN, varMedThresholdType, varLastThresholdType])
 
   // Live evaluation against the draft rules
   const evaluated = useMemo(() => {
@@ -151,9 +161,12 @@ export function RecountLogicTab() {
 
   async function saveLogic(): Promise<string | null> {
     if (!companyId) return null
+    // Oil adjustment thresholds live behind migration 20260807 — save them
+    // best-effort so an unapplied migration can't break the core recount config.
+    const { oil_low_adj_threshold, oil_high_adj_threshold, ...core } = draft
     const payload = {
       company_id: companyId,
-      ...draft,
+      ...core,
       var_med_threshold_type: varMedThresholdType,
       var_last_threshold_type: varLastThresholdType,
       threshold_type: varMedThresholdType,
@@ -172,7 +185,14 @@ export function RecountLogicTab() {
       savedId = data.id
       setConfigId(data.id)
     }
-    setRecountConfig({ id: savedId!, ...payload } as unknown as RecountConfig)
+    // best-effort: oil adjustment threshold columns (may not exist in prod yet)
+    if (savedId) {
+      sb.schema('inventory').from('recount_config')
+        .update({ oil_low_adj_threshold, oil_high_adj_threshold })
+        .eq('id', savedId)
+        .then(() => {})
+    }
+    setRecountConfig({ id: savedId!, ...payload, oil_low_adj_threshold, oil_high_adj_threshold } as unknown as RecountConfig)
     return savedId
   }
 
@@ -253,6 +273,18 @@ export function RecountLogicTab() {
           <div className="grid grid-cols-2 gap-3">
             <Input label="Low (flag if fewer)" value={lowAdj} onChange={(e) => setLowAdj(e.target.value)} placeholder="blank = off" />
             <Input label="High (flag if more)" value={highAdj} onChange={(e) => setHighAdj(e.target.value)} placeholder="blank = off" />
+          </div>
+        </RuleCard>
+
+        <RuleCard
+          title="Oil Adjustment Count"
+          enabled={oilAdjEnabled}
+          onToggle={setOilAdjEnabled}
+          preview={oilAdjPreview(lowOilAdj, highOilAdj)}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Low (flag if fewer)" value={lowOilAdj} onChange={(e) => setLowOilAdj(e.target.value)} placeholder="blank = off" />
+            <Input label="High (flag if more)" value={highOilAdj} onChange={(e) => setHighOilAdj(e.target.value)} placeholder="blank = off" />
           </div>
         </RuleCard>
 
@@ -415,6 +447,14 @@ function adjPreview(low: string, high: string): string {
   if (high.trim()) parts.push(`more than ${high}`)
   if (!parts.length) return 'Set a low and/or high adjustment count to enable.'
   return `Flag shops with ${parts.join(' or ')} adjustments.`
+}
+
+function oilAdjPreview(low: string, high: string): string {
+  const parts: string[] = []
+  if (low.trim()) parts.push(`fewer than ${low}`)
+  if (high.trim()) parts.push(`more than ${high}`)
+  if (!parts.length) return 'Set a low and/or high oil adjustment count to enable.'
+  return `Flag shops with ${parts.join(' or ')} oil adjustments.`
 }
 
 function balPreview(low: string, high: string): string {

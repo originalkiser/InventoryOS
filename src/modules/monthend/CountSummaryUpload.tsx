@@ -272,6 +272,7 @@ function ManualSummaryForm({
   const [locationId, setLocationId] = useState('')
   const [countType, setCountType] = useState('')
   const [totalAdj, setTotalAdj] = useState('')
+  const [oilAdj, setOilAdj] = useState('')
   const [adjValue, setAdjValue] = useState('')
   const [absAdjValue, setAbsAdjValue] = useState('')
   const [endingCost, setEndingCost] = useState('')
@@ -287,6 +288,8 @@ function ManualSummaryForm({
       count_date: target.defaultCountDateISO,
       count_type: countType || null,
       total_adjustments: toNumber(totalAdj),
+      // oil_adjustments lives behind migration 20260807 — only include when set
+      ...(oilAdj.trim() ? { oil_adjustments: toNumber(oilAdj) } : {}),
       adjustment_value: toNumber(adjValue),
       abs_adjustment_value: toNumber(absAdjValue),
       ending_inventory_cost: toNumber(endingCost),
@@ -297,7 +300,7 @@ function ManualSummaryForm({
     if (error) toast.error(error.message)
     else {
       toast.success('Count saved')
-      setLocationId(''); setCountType(''); setTotalAdj(''); setAdjValue(''); setAbsAdjValue(''); setEndingCost('')
+      setLocationId(''); setCountType(''); setTotalAdj(''); setOilAdj(''); setAdjValue(''); setAbsAdjValue(''); setEndingCost('')
       onSaved()
     }
   }
@@ -314,6 +317,7 @@ function ManualSummaryForm({
       <div className="grid grid-cols-2 gap-3">
         <Input label="Count Type" value={countType} onChange={(e) => setCountType(e.target.value)} />
         <Input label="Total Adjustments" value={totalAdj} onChange={(e) => setTotalAdj(e.target.value)} />
+        <Input label="Oil Adjustments" value={oilAdj} onChange={(e) => setOilAdj(e.target.value)} />
         <Input label="Adjustment Value" value={adjValue} onChange={(e) => setAdjValue(e.target.value)} />
         <Input label="Abs Adjustment Value" value={absAdjValue} onChange={(e) => setAbsAdjValue(e.target.value)} />
       </div>

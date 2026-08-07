@@ -59,13 +59,14 @@ function isSet(v: number | null | undefined): v is number {
  * Any threshold left blank/undefined disables that trigger.
  */
 export function evaluateRecountFlags(
-  countRow: Pick<MonthlyCount, 'total_adjustments' | 'ending_inventory_cost'>,
+  countRow: Pick<MonthlyCount, 'total_adjustments' | 'oil_adjustments' | 'ending_inventory_cost'>,
   prevMonthBalance: number | null,
   median: number,
   config: RecountConfig | null
 ): RecountEvaluation {
   const flags: string[] = []
   const adj = Number(countRow.total_adjustments ?? 0)
+  const oilAdj = Number(countRow.oil_adjustments ?? 0)
   const ending = Number(countRow.ending_inventory_cost ?? 0)
 
   const varVsLastMonth =
@@ -80,6 +81,14 @@ export function evaluateRecountFlags(
   }
   if (isSet(config.high_adj_threshold) && adj > config.high_adj_threshold) {
     flags.push('high_adjustments')
+  }
+
+  // Oil-specific adjustment count bounds
+  if (isSet(config.oil_low_adj_threshold) && oilAdj < config.oil_low_adj_threshold) {
+    flags.push('low_oil_adjustments')
+  }
+  if (isSet(config.oil_high_adj_threshold) && oilAdj > config.oil_high_adj_threshold) {
+    flags.push('high_oil_adjustments')
   }
 
   // Ending balance bounds
@@ -127,6 +136,8 @@ export function getMissingShops(
 export const RECOUNT_FLAG_LABELS: Record<string, string> = {
   low_adjustments: 'Low adjustment count',
   high_adjustments: 'High adjustment count',
+  low_oil_adjustments: 'Low oil adjustment count',
+  high_oil_adjustments: 'High oil adjustment count',
   low_ending_balance: 'Low ending balance',
   high_ending_balance: 'High ending balance',
   variance_vs_median: 'Variance vs median',

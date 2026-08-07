@@ -503,6 +503,7 @@ export interface MonthlyCount {
   count_month: string | null
   count_type: string | null
   total_adjustments: number | null
+  oil_adjustments: number | null
   adjustment_value: number | null
   abs_adjustment_value: number | null
   ending_inventory_cost: number | null
@@ -548,6 +549,8 @@ export interface RecountConfig {
   company_id: string
   low_adj_threshold: number | null
   high_adj_threshold: number | null
+  oil_low_adj_threshold: number | null
+  oil_high_adj_threshold: number | null
   low_balance_threshold: number | null
   high_balance_threshold: number | null
   variance_to_median_pct: number | null
