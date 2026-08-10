@@ -658,7 +658,7 @@ function TableBlock({ block, editing, search, activeFilter, onChange, onSaveColu
       const pageCount = Math.ceil(count / PAGE)
       const results = await Promise.all(
         Array.from({ length: pageCount }, (_, i) =>
-          sb.from(block.source).select('*').eq('company_id', profile.company_id).range(i * PAGE, (i + 1) * PAGE - 1)
+          sb.from(block.source).select('*').eq('company_id', profile.company_id).order('id', { ascending: true }).range(i * PAGE, (i + 1) * PAGE - 1)
         )
       )
       if (cancelled) return

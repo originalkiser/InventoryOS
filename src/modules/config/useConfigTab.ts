@@ -74,13 +74,17 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       return
     }
 
-    // Fire all pages concurrently — Promise.all preserves insertion order
+    // Fire all pages concurrently — Promise.all preserves insertion order.
+    // `id` is a required tiebreaker: bulk uploads share a created_at, and without
+    // a unique secondary sort the concurrent range windows overlap/gap at page
+    // boundaries — duplicating one chunk of rows and dropping another.
     const pageCount = Math.ceil(count / PAGE)
     const results = await Promise.all(
       Array.from({ length: pageCount }, (_, i) =>
         tbl().select('*')
           .eq('company_id', profile.company_id)
           .order('created_at', { ascending: false })
+          .order('id', { ascending: true })
           .range(i * PAGE, (i + 1) * PAGE - 1)
       )
     )
