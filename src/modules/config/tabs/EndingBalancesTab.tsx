@@ -46,6 +46,14 @@ function num(v: string): number | null {
 // Sentinel for "don't import this sheet" in the workbook mapper.
 const SHEET_SKIP = '__skip__'
 
+// Stable merge key for an ending-balance row. Resolved shops key on location_id;
+// unresolved (inactive / absent) shops key on their raw uploaded name so each
+// keeps a distinct row instead of collapsing onto one shared null key.
+function ebKey(locationId: string | null, rawLoc: string, month: string | null | undefined): string {
+  const locKey = locationId ?? `raw:${rawLoc.trim().toLowerCase()}`
+  return `${locKey}|${month ?? ''}`
+}
+
 // Parse a pivot column header into a first-of-month key. Accepts:
 //   "Aug-25"            → 2025-08-01
 //   "07/31/2026"        → 2026-07-01  (MM/DD/YYYY, 2- or 4-digit year)
@@ -94,10 +102,40 @@ export function EndingBalancesTab() {
 
   const [form, setForm] = useState({ locationId: '', month: '', ending_balance: '' })
   const [catVals, setCatVals] = useState<Record<string, string>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  // Display an inactive (present but not active) or absent shop with an
+  // "(Inactive)" prefix, falling back to the uploaded name for absent shops.
+  function locDisplay(r: MonthlyEndingBalance): string {
+    const l = loc.byId(r.location_id)
+    const raw = (r.metadata as any)?._raw_location as string | undefined
+    if (l && l.active) return `${l.name} — ${l.shop_city ?? ''}`
+    if (l) return `(Inactive) ${l.name} — ${l.shop_city ?? ''}`
+    return `(Inactive) ${raw ?? loc.labelOf(r.location_id)}`
+  }
+
+  // Subtotal of the currently-selected rows — filter to a month + select all to
+  // reconcile against the upload file / monthly summary.
+  const selectionSubtotal = useMemo(() => {
+    if (selectedIds.size === 0) return null
+    let total = 0
+    let count = 0
+    const cats: Record<string, number> = {}
+    for (const r of data) {
+      if (!selectedIds.has(r.id)) continue
+      count++
+      total += Number(r.ending_balance ?? 0)
+      for (const c of categories) {
+        const v = Number((r.metadata as any)?.[c.field_key])
+        if (!isNaN(v)) cats[c.field_key] = (cats[c.field_key] ?? 0) + v
+      }
+    }
+    return { count, total, cats }
+  }, [selectedIds, data, categories])
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      { id: 'location', header: 'Location', accessorFn: (r: MonthlyEndingBalance) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
+      { id: 'location', header: 'Location', accessorFn: (r: MonthlyEndingBalance) => locDisplay(r), cell: (i: any) => i.getValue() },
       col.accessor('month', { header: 'Month', cell: (i) => { try { return format(new Date(i.getValue() + 'T00:00:00'), 'MMM yyyy') } catch { return i.getValue() } } }),
       col.accessor('ending_balance', { header: 'Ending Balance', cell: (i) => fmt(i.getValue()) }),
     ]
@@ -124,20 +162,23 @@ export function EndingBalancesTab() {
     const payload = rows.map((row) => {
       const meta: Record<string, unknown> = {}
       let location_id: string | null = null
+      let rawLoc = ''
       let month: string | null = null
       let ending_balance: number | null = null
       for (const m of maps) {
         const raw = mappedValue(row, m, maps)
-        if (m.fieldName === 'location') location_id = loc.resolveId(raw)
+        if (m.fieldName === 'location') { rawLoc = raw.trim(); location_id = loc.resolveId(raw) }
         else if (m.fieldName === 'month') month = monthKey(raw)
         else if (m.fieldName === 'ending_balance') ending_balance = num(raw)
         else if (catKeys.has(m.fieldName)) meta[m.fieldName] = num(raw)
       }
+      if (rawLoc) meta._raw_location = rawLoc
       return { location_id, month, ending_balance: ending_balance ?? 0, metadata: meta } as Partial<MonthlyEndingBalance>
     }).filter((r) => r.month)
     // Stack monthly: match on location + month so re-uploading a month updates it
-    // while all prior months stay.
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.month}` })
+    // while all prior months stay. Unresolved shops key on their raw name so they
+    // don't collapse onto one shared null row.
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => ebKey(r.location_id ?? null, (r.metadata as any)?._raw_location ?? '', r.month) })
     setImporting(false)
   }
 
@@ -150,7 +191,7 @@ export function EndingBalancesTab() {
     // Existing rows keyed by location|month so a pivot import merges into the
     // stored row rather than replacing it (preserves total + other categories).
     const existingByKey = new Map<string, MonthlyEndingBalance>()
-    for (const r of data) existingByKey.set(`${r.location_id ?? ''}|${r.month}`, r)
+    for (const r of data) existingByKey.set(ebKey(r.location_id ?? null, (r.metadata as any)?._raw_location ?? '', r.month), r)
     const payload: Partial<MonthlyEndingBalance>[] = []
     for (const row of rows) {
       const locRaw = (row[locationCol] ?? '').trim()
@@ -161,8 +202,8 @@ export function EndingBalancesTab() {
         if (!month) continue
         const value = num(row[col] ?? '')
         if (value === null) continue
-        const existing = existingByKey.get(`${location_id ?? ''}|${month}`)
-        const baseMeta = (existing?.metadata ?? {}) as Record<string, unknown>
+        const existing = existingByKey.get(ebKey(location_id, locRaw, month))
+        const baseMeta = { ...((existing?.metadata ?? {}) as Record<string, unknown>), _raw_location: locRaw }
         if (pivotTarget === '') {
           // Total ending balance — keep any category metadata already stored.
           payload.push({ location_id, month, ending_balance: value, metadata: baseMeta as any })
@@ -172,7 +213,7 @@ export function EndingBalancesTab() {
         }
       }
     }
-    await importRows(payload, { mode: 'merge', source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.month}` })
+    await importRows(payload, { mode: 'merge', source: 'upload', keyOf: (r: any) => ebKey(r.location_id ?? null, (r.metadata as any)?._raw_location ?? '', r.month) })
     setPivotParsed(null)
     setPivotImporting(false)
   }
@@ -204,21 +245,21 @@ export function EndingBalancesTab() {
     if (!workbookSheets) return
     setWorkbookImporting(true)
     const existingByKey = new Map<string, MonthlyEndingBalance>()
-    for (const r of data) existingByKey.set(`${r.location_id ?? ''}|${r.month}`, r)
+    for (const r of data) existingByKey.set(ebKey(r.location_id ?? null, (r.metadata as any)?._raw_location ?? '', r.month), r)
 
     type Acc = { location_id: string | null; month: string; ending_balance: number; metadata: Record<string, unknown> }
     const acc = new Map<string, Acc>()
     // Seed a row from the stored one the first time it's touched, so mapping one
     // sheet never drops the total or the other categories already on that row.
-    const ensure = (location_id: string | null, month: string): Acc => {
-      const key = `${location_id ?? ''}|${month}`
+    const ensure = (location_id: string | null, rawLoc: string, month: string): Acc => {
+      const key = ebKey(location_id, rawLoc, month)
       let e = acc.get(key)
       if (!e) {
         const existing = existingByKey.get(key)
         e = {
           location_id, month,
           ending_balance: Number(existing?.ending_balance ?? 0),
-          metadata: { ...((existing?.metadata as Record<string, unknown>) ?? {}) },
+          metadata: { ...((existing?.metadata as Record<string, unknown>) ?? {}), _raw_location: rawLoc },
         }
         acc.set(key, e)
       }
@@ -240,7 +281,7 @@ export function EndingBalancesTab() {
           if (!month) continue
           const value = num(row[c] ?? '')
           if (value === null) continue
-          const e = ensure(location_id, month)
+          const e = ensure(location_id, locRaw, month)
           if (target === '') e.ending_balance = value
           else e.metadata[target] = value
         }
@@ -255,7 +296,7 @@ export function EndingBalancesTab() {
     const payload = [...acc.values()].map((e) => ({
       location_id: e.location_id, month: e.month, ending_balance: e.ending_balance, metadata: e.metadata as any,
     })) as Partial<MonthlyEndingBalance>[]
-    await importRows(payload, { mode: 'merge', source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.month}` })
+    await importRows(payload, { mode: 'merge', source: 'upload', keyOf: (r: any) => ebKey(r.location_id ?? null, (r.metadata as any)?._raw_location ?? '', r.month) })
     setWorkbookSheets(null); setSheetTargets({}); setWorkbookImporting(false)
   }
 
@@ -295,12 +336,29 @@ export function EndingBalancesTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="month_end_ending_balance.csv" exportData={data} loading={loading}
+        onSelectionChange={setSelectedIds}
         actions={<>
           <ClearTableButton clearAll={clearAll} />
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Categories</Button>
           <Button size="sm" onClick={openAdd}>+ Add Balance</Button>
         </>}
       />
+
+      {selectionSubtotal && selectionSubtotal.count > 0 && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded border border-sky/60 bg-sky/10 px-4 py-2.5">
+          <span className="text-xs font-heading uppercase tracking-wide text-navy">
+            Subtotal · {selectionSubtotal.count} selected
+          </span>
+          {categories.map((c) => (
+            <span key={c.field_key} className="text-xs font-mono text-inky">
+              {c.label}: <span className="text-navy font-bold">{fmt(selectionSubtotal.cats[c.field_key] ?? 0)}</span>
+            </span>
+          ))}
+          <span className="text-xs font-mono text-inky">
+            Total: <span className="text-navy font-bold">{fmt(selectionSubtotal.total)}</span>
+          </span>
+        </div>
+      )}
 
       <CategoryBalanceComparison data={data} categories={categories} />
 
