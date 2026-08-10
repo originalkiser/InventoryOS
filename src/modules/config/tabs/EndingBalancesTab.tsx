@@ -10,7 +10,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
-import { Button, Input, Modal, Combobox } from '@/components/ui'
+import { Button, Input, Modal, Combobox, Select } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { MonthlyEndingBalance, ColumnMapping } from '@/types'
@@ -66,6 +66,8 @@ export function EndingBalancesTab() {
   const [importing, setImporting] = useState(false)
   const [pivotParsed, setPivotParsed] = useState<ParseResult | null>(null)
   const [pivotImporting, setPivotImporting] = useState(false)
+  // '' = Total ending balance; otherwise a category field_key (Parts/Oil/Additives).
+  const [pivotTarget, setPivotTarget] = useState('')
 
   const [form, setForm] = useState({ locationId: '', month: '', ending_balance: '' })
   const [catVals, setCatVals] = useState<Record<string, string>>({})
@@ -122,6 +124,10 @@ export function EndingBalancesTab() {
     const { headers, rows } = pivotParsed
     const locationCol = headers[0]
     const monthCols = headers.slice(1).filter((h) => parsePivotMonth(h) !== null)
+    // Existing rows keyed by location|month so a pivot import merges into the
+    // stored row rather than replacing it (preserves total + other categories).
+    const existingByKey = new Map<string, MonthlyEndingBalance>()
+    for (const r of data) existingByKey.set(`${r.location_id ?? ''}|${r.month}`, r)
     const payload: Partial<MonthlyEndingBalance>[] = []
     for (const row of rows) {
       const locRaw = (row[locationCol] ?? '').trim()
@@ -130,9 +136,17 @@ export function EndingBalancesTab() {
       for (const col of monthCols) {
         const month = parsePivotMonth(col)
         if (!month) continue
-        const ending_balance = num(row[col] ?? '')
-        if (ending_balance === null) continue
-        payload.push({ location_id, month, ending_balance, metadata: {} })
+        const value = num(row[col] ?? '')
+        if (value === null) continue
+        const existing = existingByKey.get(`${location_id ?? ''}|${month}`)
+        const baseMeta = (existing?.metadata ?? {}) as Record<string, unknown>
+        if (pivotTarget === '') {
+          // Total ending balance — keep any category metadata already stored.
+          payload.push({ location_id, month, ending_balance: value, metadata: baseMeta as any })
+        } else {
+          // Category pivot — set only this category; keep total + other categories.
+          payload.push({ location_id, month, ending_balance: existing?.ending_balance ?? 0, metadata: { ...baseMeta, [pivotTarget]: value } as any })
+        }
       }
     }
     await importRows(payload, { mode: 'merge', source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.month}` })
@@ -199,6 +213,14 @@ export function EndingBalancesTab() {
           <p className="text-[11px] font-mono text-inky/60 mt-0.5">
             First column = Location code · Remaining columns = months in "Aug-25" format · Values = dollar amounts
           </p>
+        </div>
+        <div className="w-64">
+          <Select
+            label="This file's balances are"
+            options={[{ value: '', label: 'Total Ending Balance' }, ...categories.map((c) => ({ value: c.field_key, label: c.label }))]}
+            value={pivotTarget}
+            onChange={(e) => setPivotTarget(e.target.value)}
+          />
         </div>
         {!pivotParsed ? (
           <div className="max-w-lg">
