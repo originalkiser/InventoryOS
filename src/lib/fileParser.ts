@@ -33,6 +33,26 @@ export async function parseFile(file: File): Promise<ParseResult> {
   throw new Error(`Unsupported file type: .${ext}`)
 }
 
+export interface SheetParseResult { name: string; result: ParseResult }
+
+// Parse every sheet in a workbook (CSV = one implicit sheet). Used by uploads
+// that map each sheet to a different target (e.g. Parts / Oil / Additives / Total).
+export async function parseAllSheets(file: File): Promise<SheetParseResult[]> {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  if (ext === 'csv') {
+    return [{ name: 'Sheet1', result: await parseCsv(file) }]
+  } else if (ext === 'xlsx' || ext === 'xls') {
+    const buffer = await readFileAsArrayBuffer(file)
+    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
+    return workbook.SheetNames.map((name) => {
+      const sheet = workbook.Sheets[name]
+      const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true })
+      return { name, result: processRawRows(raw) }
+    })
+  }
+  throw new Error(`Unsupported file type: .${ext}`)
+}
+
 function parseCsv(file: File): Promise<ParseResult> {
   return new Promise((resolve, reject) => {
     Papa.parse(file, {

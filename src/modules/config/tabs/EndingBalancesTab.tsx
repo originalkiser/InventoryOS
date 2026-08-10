@@ -14,8 +14,9 @@ import { Button, Input, Modal, Combobox, Select } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { MonthlyEndingBalance, ColumnMapping } from '@/types'
-import type { ParseResult } from '@/lib/fileParser'
+import { parseAllSheets, type ParseResult, type SheetParseResult } from '@/lib/fileParser'
 import { format } from 'date-fns'
+import toast from 'react-hot-toast'
 
 const RECOMMENDED = [
   { label: 'Parts', field_type: 'number' as const },
@@ -42,14 +43,32 @@ function num(v: string): number | null {
   const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n
 }
 
-// Parse pivot column header "Aug-25" → "2025-08-01"
+// Sentinel for "don't import this sheet" in the workbook mapper.
+const SHEET_SKIP = '__skip__'
+
+// Parse a pivot column header into a first-of-month key. Accepts:
+//   "Aug-25"            → 2025-08-01
+//   "07/31/2026"        → 2026-07-01  (MM/DD/YYYY, 2- or 4-digit year)
+//   ISO / other Date-parseable strings (e.g. a real date cell) as a fallback.
 const PIVOT_MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
 function parsePivotMonth(header: string): string | null {
-  const match = /^([A-Za-z]{3})-(\d{2})$/.exec(header.trim())
-  if (!match) return null
-  const idx = PIVOT_MONTHS.indexOf(match[1].toLowerCase())
-  if (idx === -1) return null
-  return `${2000 + parseInt(match[2], 10)}-${String(idx + 1).padStart(2, '0')}-01`
+  const t = header.trim()
+  if (!t) return null
+  const abbr = /^([A-Za-z]{3})-(\d{2})$/.exec(t)
+  if (abbr) {
+    const idx = PIVOT_MONTHS.indexOf(abbr[1].toLowerCase())
+    if (idx !== -1) return `${2000 + parseInt(abbr[2], 10)}-${String(idx + 1).padStart(2, '0')}-01`
+  }
+  const slash = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(t)
+  if (slash) {
+    const mo = parseInt(slash[1], 10)
+    let yr = parseInt(slash[3], 10)
+    if (yr < 100) yr += 2000
+    if (mo >= 1 && mo <= 12) return `${yr}-${String(mo).padStart(2, '0')}-01`
+  }
+  const d = new Date(t)
+  if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+  return null
 }
 
 const col = createColumnHelper<MonthlyEndingBalance>()
@@ -68,6 +87,10 @@ export function EndingBalancesTab() {
   const [pivotImporting, setPivotImporting] = useState(false)
   // '' = Total ending balance; otherwise a category field_key (Parts/Oil/Additives).
   const [pivotTarget, setPivotTarget] = useState('')
+  // Multi-sheet workbook upload (one sheet per category + a Total sheet).
+  const [workbookSheets, setWorkbookSheets] = useState<SheetParseResult[] | null>(null)
+  const [sheetTargets, setSheetTargets] = useState<Record<string, string>>({})
+  const [workbookImporting, setWorkbookImporting] = useState(false)
 
   const [form, setForm] = useState({ locationId: '', month: '', ending_balance: '' })
   const [catVals, setCatVals] = useState<Record<string, string>>({})
@@ -154,6 +177,88 @@ export function EndingBalancesTab() {
     setPivotImporting(false)
   }
 
+  // Guess a sheet's target from its name (e.g. "Oil" → oil category, "Total" → total).
+  function autoTarget(sheetName: string): string {
+    const n = sheetName.trim().toLowerCase()
+    if (/total|ending|grand/.test(n)) return ''
+    const hit = categories.find((c) => {
+      const l = c.label.trim().toLowerCase()
+      return l === n || n.includes(l)
+    })
+    return hit ? hit.field_key : SHEET_SKIP
+  }
+
+  async function onWorkbookFile(file: File) {
+    try {
+      const sheets = await parseAllSheets(file)
+      setWorkbookSheets(sheets)
+      const t: Record<string, string> = {}
+      for (const s of sheets) t[s.name] = autoTarget(s.name)
+      setSheetTargets(t)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to read workbook')
+    }
+  }
+
+  async function handleWorkbookImport() {
+    if (!workbookSheets) return
+    setWorkbookImporting(true)
+    const existingByKey = new Map<string, MonthlyEndingBalance>()
+    for (const r of data) existingByKey.set(`${r.location_id ?? ''}|${r.month}`, r)
+
+    type Acc = { location_id: string | null; month: string; ending_balance: number; metadata: Record<string, unknown> }
+    const acc = new Map<string, Acc>()
+    // Seed a row from the stored one the first time it's touched, so mapping one
+    // sheet never drops the total or the other categories already on that row.
+    const ensure = (location_id: string | null, month: string): Acc => {
+      const key = `${location_id ?? ''}|${month}`
+      let e = acc.get(key)
+      if (!e) {
+        const existing = existingByKey.get(key)
+        e = {
+          location_id, month,
+          ending_balance: Number(existing?.ending_balance ?? 0),
+          metadata: { ...((existing?.metadata as Record<string, unknown>) ?? {}) },
+        }
+        acc.set(key, e)
+      }
+      return e
+    }
+
+    for (const sheet of workbookSheets) {
+      const target = sheetTargets[sheet.name]
+      if (target === SHEET_SKIP || target === undefined) continue
+      const { headers, rows } = sheet.result
+      const locationCol = headers[0]
+      const monthCols = headers.slice(1).filter((h) => parsePivotMonth(h) !== null)
+      for (const row of rows) {
+        const locRaw = (row[locationCol] ?? '').trim()
+        if (!locRaw) continue
+        const location_id = loc.resolveId(locRaw)
+        for (const c of monthCols) {
+          const month = parsePivotMonth(c)
+          if (!month) continue
+          const value = num(row[c] ?? '')
+          if (value === null) continue
+          const e = ensure(location_id, month)
+          if (target === '') e.ending_balance = value
+          else e.metadata[target] = value
+        }
+      }
+    }
+
+    if (acc.size === 0) {
+      setWorkbookImporting(false)
+      toast.error('No month columns detected across the mapped sheets')
+      return
+    }
+    const payload = [...acc.values()].map((e) => ({
+      location_id: e.location_id, month: e.month, ending_balance: e.ending_balance, metadata: e.metadata as any,
+    })) as Partial<MonthlyEndingBalance>[]
+    await importRows(payload, { mode: 'merge', source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.month}` })
+    setWorkbookSheets(null); setSheetTargets({}); setWorkbookImporting(false)
+  }
+
   function resetForm() { setForm({ locationId: '', month: '', ending_balance: '' }); setCatVals({}) }
   function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
   function openEdit(r: MonthlyEndingBalance) {
@@ -233,6 +338,49 @@ export function EndingBalancesTab() {
             onImport={handlePivotImport}
             onCancel={() => setPivotParsed(null)}
           />
+        )}
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div>
+          <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Workbook Upload — One Sheet per Category</h3>
+          <p className="text-[11px] font-mono text-inky/60 mt-0.5">
+            One Excel workbook with a sheet for Total, Parts, Oil, and Additives. Each sheet: shops in the first column,
+            month columns (e.g. "Jul-26" or "07/31/2026"). Sheets are matched to categories by name — adjust below if needed.
+          </p>
+        </div>
+        {!workbookSheets ? (
+          <div className="max-w-lg">
+            <FileUploadZone onParsed={(_r, file) => onWorkbookFile(file)} label="Drop a multi-sheet workbook here, or click to browse" />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 max-w-xl border border-navy/20 rounded-lg p-4 bg-navy/[0.02]">
+            <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest">Map each sheet</p>
+            {workbookSheets.map((s) => {
+              const monthCount = s.result.headers.slice(1).filter((h) => parsePivotMonth(h) !== null).length
+              return (
+                <div key={s.name} className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-navy w-40 truncate" title={s.name}>{s.name}</span>
+                  <span className="text-[10px] font-mono text-inky/50 w-20">{monthCount} mo</span>
+                  <div className="flex-1">
+                    <Select
+                      options={[
+                        { value: '', label: 'Total Ending Balance' },
+                        ...categories.map((c) => ({ value: c.field_key, label: c.label })),
+                        { value: SHEET_SKIP, label: '— Skip —' },
+                      ]}
+                      value={sheetTargets[s.name] ?? SHEET_SKIP}
+                      onChange={(e) => setSheetTargets({ ...sheetTargets, [s.name]: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+            <div className="flex gap-2 pt-1">
+              <Button size="sm" loading={workbookImporting} onClick={handleWorkbookImport}>Import Workbook</Button>
+              <Button size="sm" variant="secondary" onClick={() => { setWorkbookSheets(null); setSheetTargets({}) }} disabled={workbookImporting}>Cancel</Button>
+            </div>
+          </div>
         )}
       </div>
 
