@@ -18,6 +18,7 @@ interface UnifiedTask {
   title: string
   notes: string | null
   targetDate: string | null
+  targetDateEnd: string | null
   completed: boolean
   completedAt: string | null
   source: TaskSource
@@ -40,6 +41,21 @@ function sourceColor(s: TaskSource): 'navy' | 'sky' | 'orange' | 'inky' {
 function dateLabel(d: string | null): string {
   if (!d) return ''
   try { return format(parseISO(d), 'MMM d, yyyy') } catch { return d }
+}
+
+// The effective deadline drives overdue/banding/sort. For a ranged task it's the
+// end date, so the task sits under its deadline and isn't overdue mid-window.
+function taskDeadline(t: { targetDate: string | null; targetDateEnd: string | null }): string | null {
+  return t.targetDateEnd ?? t.targetDate
+}
+
+// Human label for a task's date: single date, a range, or "by <end>".
+function taskDateLabel(t: { targetDate: string | null; targetDateEnd: string | null }): string {
+  if (t.targetDate && t.targetDateEnd && t.targetDate !== t.targetDateEnd) {
+    return `${dateLabel(t.targetDate)} – ${dateLabel(t.targetDateEnd)}`
+  }
+  if (!t.targetDate && t.targetDateEnd) return `by ${dateLabel(t.targetDateEnd)}`
+  return dateLabel(t.targetDate)
 }
 
 function completedLabel(d: string | null): string {
@@ -67,7 +83,7 @@ function groupTasksByDate(tasks: UnifiedTask[]): { label: string; tasks: Unified
   const groups: { label: string; tasks: UnifiedTask[] }[] = []
   const indexMap = new Map<string, number>()
   for (const task of tasks) {
-    const label = bandLabel(task.targetDate)
+    const label = bandLabel(taskDeadline(task))
     if (!indexMap.has(label)) {
       indexMap.set(label, groups.length)
       groups.push({ label, tasks: [] })
@@ -80,10 +96,11 @@ function groupTasksByDate(tasks: UnifiedTask[]): { label: string; tasks: Unified
 function sortTasks(tasks: UnifiedTask[], key: SortKey): UnifiedTask[] {
   return [...tasks].sort((a, b) => {
     if (key === 'date') {
-      if (!a.targetDate && !b.targetDate) return 0
-      if (!a.targetDate) return 1
-      if (!b.targetDate) return -1
-      return a.targetDate < b.targetDate ? -1 : 1
+      const ad = taskDeadline(a), bd = taskDeadline(b)
+      if (!ad && !bd) return 0
+      if (!ad) return 1
+      if (!bd) return -1
+      return ad < bd ? -1 : 1
     }
     if (key === 'source') {
       const order: TaskSource[] = ['project', 'calendar', 'meeting', 'standalone']
@@ -100,7 +117,7 @@ function sortTasks(tasks: UnifiedTask[], key: SortKey): UnifiedTask[] {
 }
 
 const EMPTY_FORM = {
-  title: '', notes: '', target_date: '', project_id: '', assignee_input: '', is_public: false,
+  title: '', notes: '', target_date: '', target_date_end: '', project_id: '', assignee_input: '', is_public: false,
 }
 
 // Purge deleted tasks older than 30 days (client-side lazy purge).
@@ -183,6 +200,7 @@ export function TasksPage() {
         title: t.task_name,
         notes: t.notes,
         targetDate: t.due_date,
+        targetDateEnd: null,
         completed: t.done,
         completedAt: null,
         source: 'project' as const,
@@ -207,6 +225,7 @@ export function TasksPage() {
           title: t.title,
           notes: t.notes ?? null,
           targetDate: t.start_date,
+          targetDateEnd: null,
           completed: t.completed,
           completedAt: t.completed_at ?? null,
           source: 'calendar' as const,
@@ -223,6 +242,7 @@ export function TasksPage() {
         title: t.title,
         notes: t.notes,
         targetDate: t.target_date,
+        targetDateEnd: t.target_date_end ?? null,
         completed: t.completed,
         completedAt: t.completed_at ?? null,
         source: (t.source === 'meeting' ? 'meeting' : 'standalone') as TaskSource,
@@ -326,6 +346,7 @@ export function TasksPage() {
         title: pt?.task_name ?? task.title,
         notes: pt?.notes ?? '',
         target_date: pt?.due_date ?? '',
+        target_date_end: '',
         project_id: '',
         assignee_input: pt?.assignee ?? '',
         is_public: false,
@@ -336,6 +357,7 @@ export function TasksPage() {
         title: ct?.title ?? task.title,
         notes: ct?.notes ?? '',
         target_date: ct?.start_date ?? '',
+        target_date_end: '',
         project_id: '',
         assignee_input: '',
         is_public: false,
@@ -349,6 +371,7 @@ export function TasksPage() {
         title: raw.title,
         notes: raw.notes ?? '',
         target_date: raw.target_date ?? '',
+        target_date_end: raw.target_date_end ?? '',
         project_id: raw.project_id ?? '',
         assignee_input: assigneeInput,
         is_public: raw.is_public,
@@ -399,14 +422,22 @@ export function TasksPage() {
         assignee_name: matchedProfile ? null : (form.assignee_input.trim() || null),
         is_public: form.is_public,
       }
+      // target_date_end lives behind migration 20260808 — save best-effort so an
+      // unapplied migration can't break core task create/edit.
+      const endDate = form.target_date_end || null
+      let savedId = editTaskId
       if (editTaskId) {
         const { error } = await sb.schema('core').from('tasks').update(payload).eq('id', editTaskId)
         if (error) { toast.error(error.message); setSaving(false); return }
         toast.success('Task updated')
       } else {
-        const { error } = await sb.schema('core').from('tasks').insert({ ...payload, source: 'manual', created_by: myId })
+        const { data, error } = await sb.schema('core').from('tasks').insert({ ...payload, source: 'manual', created_by: myId }).select('id').single()
         if (error) { toast.error(error.message); setSaving(false); return }
+        savedId = data?.id ?? null
         toast.success('Task added')
+      }
+      if (savedId) {
+        sb.schema('core').from('tasks').update({ target_date_end: endDate }).eq('id', savedId).then(() => {})
       }
     }
     setSaving(false)
@@ -568,7 +599,7 @@ export function TasksPage() {
                 </li>
               )}
               {group.map((task) => {
-                const overdue = isOverdue(task.targetDate, task.completed)
+                const overdue = isOverdue(taskDeadline(task), task.completed)
                 const isMine = task.createdBy === myId
                 const isStandaloneOrMeeting = task.source === 'standalone' || task.source === 'meeting'
                 return (
@@ -619,9 +650,9 @@ export function TasksPage() {
                           <span className="text-[11px] font-mono text-green-600">
                             ✓ {completedLabel(task.completedAt)}
                           </span>
-                        ) : task.targetDate ? (
+                        ) : (task.targetDate || task.targetDateEnd) ? (
                           <span className={['text-[11px] font-mono', overdue ? 'text-[#C0392B] font-bold' : 'text-inky/60'].join(' ')}>
-                            {overdue ? '⚠ ' : ''}{dateLabel(task.targetDate)}
+                            {overdue ? '⚠ ' : ''}{taskDateLabel(task)}
                           </span>
                         ) : (
                           <span className="text-[11px] font-mono text-inky/30">No date</span>
@@ -697,12 +728,34 @@ export function TasksPage() {
             </div>
           )}
 
-          <Input
-            label={dateFieldLabel}
-            type="date"
-            value={form.target_date}
-            onChange={(e) => setForm({ ...form, target_date: e.target.value })}
-          />
+          {(editSource === null || editSource === 'standalone' || editSource === 'meeting') ? (
+            <div className="flex flex-col gap-1">
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Start date"
+                  type="date"
+                  value={form.target_date}
+                  onChange={(e) => setForm({ ...form, target_date: e.target.value })}
+                />
+                <Input
+                  label="Due by (optional)"
+                  type="date"
+                  value={form.target_date_end}
+                  onChange={(e) => setForm({ ...form, target_date_end: e.target.value })}
+                />
+              </div>
+              <p className="text-[10px] font-mono text-inky/50">
+                Set a "Due by" date to give the task a window — it won't flag overdue until that date passes.
+              </p>
+            </div>
+          ) : (
+            <Input
+              label={dateFieldLabel}
+              type="date"
+              value={form.target_date}
+              onChange={(e) => setForm({ ...form, target_date: e.target.value })}
+            />
+          )}
 
           <div className="flex flex-col gap-1">
             <label className="text-xs font-mono text-inky uppercase tracking-wide">Notes</label>

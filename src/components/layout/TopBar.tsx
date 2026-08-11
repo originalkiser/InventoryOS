@@ -388,8 +388,9 @@ export function TopBar({
     const today = format(new Date(), 'yyyy-MM-dd')
     const sb = supabase as any
     const safe = (p: any) => Promise.resolve(p).catch((e: unknown) => { console.error('[TopBar] query threw:', e); return { data: null, error: null } })
-    const [issuesRes, scheduleRes, balancesRes, locationsRes, ordersRes, tasksRes, formsDueRes, recountRes] = await Promise.all([
-      safe(sb.schema('platform').from('issues').select('id').eq('company_id', companyId).is('deleted_at', null)),
+    const [issuesRes, issueStatusRes, scheduleRes, balancesRes, locationsRes, ordersRes, tasksRes, formsDueRes, recountRes] = await Promise.all([
+      safe(sb.schema('platform').from('issues').select('id, status_id').eq('company_id', companyId).is('deleted_at', null)),
+      safe(sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId)),
       safe(sb.schema('platform').from('schedule_events').select('id, title, start_date, event_type').eq('company_id', companyId).gte('start_date', today).order('start_date')),
       safe(sb.schema('inventory').from('monthly_ending_balances').select('ending_balance, month').eq('company_id', companyId).order('month', { ascending: false })),
       safe(sb.schema('core').from('locations').select('id, active').eq('company_id', companyId)),
@@ -400,7 +401,14 @@ export function TopBar({
     ])
     console.log('[TopBar] issues:', issuesRes.data?.length ?? null, issuesRes.error?.message ?? null, '| locs:', locationsRes.data?.length ?? null, locationsRes.error?.message ?? null, '| bal:', balancesRes.data?.length ?? null, balancesRes.error?.message ?? null)
 
-    const pendingIssues = issuesRes.data?.length ?? 0
+    // "Pending" mirrors the Issues page Pending tab: status name contains
+    // "pending" or "open". Issues with no/other status are not counted.
+    const pendingStatusIds = new Set(
+      (issueStatusRes.data ?? [])
+        .filter((s: any) => { const n = String(s.name ?? '').toLowerCase(); return n.includes('pending') || n.includes('open') })
+        .map((s: any) => s.id)
+    )
+    const pendingIssues = (issuesRes.data ?? []).filter((i: any) => pendingStatusIds.has(i.status_id)).length
 
     const nextCount = scheduleRes.data?.find((e: any) => e.event_type === 'monthly_count' && e.start_date > today)
     const nextCountDays = nextCount

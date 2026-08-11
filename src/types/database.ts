@@ -67,6 +67,7 @@ export interface Task {
   title: string
   notes: string | null
   target_date: string | null
+  target_date_end: string | null
   completed: boolean
   completed_at: string | null
   completed_by: string | null
