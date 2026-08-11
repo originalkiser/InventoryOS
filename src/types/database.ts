@@ -746,6 +746,8 @@ export interface ScheduleEvent {
   completed_by: string | null
   assigned_to: string[] | null
   notes: string | null
+  color: string | null
+  checklist_lead_days: number | null
   created_at: string
   updated_at: string
 }
@@ -757,6 +759,8 @@ export interface EventChecklistItem {
   title: string
   target_date: string | null
   target_date_end: string | null
+  start_offset_days: number | null
+  end_offset_days: number | null
   completed: boolean
   completed_at: string | null
   completed_by: string | null

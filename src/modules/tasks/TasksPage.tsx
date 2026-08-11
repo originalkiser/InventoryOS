@@ -6,7 +6,7 @@ import { Badge, Button, Input, Modal, SbLoader } from '@/components/ui'
 import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import type { EventChecklistItem, Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
 
 type SortKey = 'date' | 'source' | 'title' | 'completed'
@@ -137,7 +137,7 @@ export function TasksPage() {
   const [projectTasks, setProjectTasks] = useState<ProjectTask[]>([])
   const [calendarTasks, setCalendarTasks] = useState<ScheduleEvent[]>([])
   const [standaloneTasks, setStandaloneTasks] = useState<Task[]>([])
-  const [checklistItems, setChecklistItems] = useState<(EventChecklistItem & { parentTitle: string; parentStart: string | null })[]>([])
+  const [checklistItems, setChecklistItems] = useState<(EventChecklistItem & { parentTitle: string; parentStart: string | null; parentLead: number | null })[]>([])
   const [deletedTasks, setDeletedTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -186,12 +186,15 @@ export function TasksPage() {
     // Checklist items → enrich with their parent event's title/date for display.
     const eci = (eciRes.data ?? []) as EventChecklistItem[]
     const evIds = [...new Set(eci.map((i) => i.event_id))]
-    let evMap = new Map<string, { title: string; start_date: string | null }>()
+    let evMap = new Map<string, { title: string; start_date: string | null; lead: number | null }>()
     if (evIds.length) {
-      const { data: evs } = await sb.schema('platform').from('schedule_events').select('id, title, start_date').in('id', evIds)
-      evMap = new Map(((evs ?? []) as any[]).map((e) => [e.id, { title: e.title, start_date: e.start_date }]))
+      const { data: evs } = await sb.schema('platform').from('schedule_events').select('id, title, start_date, checklist_lead_days').in('id', evIds)
+      evMap = new Map(((evs ?? []) as any[]).map((e) => [e.id, { title: e.title, start_date: e.start_date, lead: e.checklist_lead_days ?? null }]))
     }
-    setChecklistItems(eci.map((i) => ({ ...i, parentTitle: evMap.get(i.event_id)?.title ?? 'Event', parentStart: evMap.get(i.event_id)?.start_date ?? null })))
+    setChecklistItems(eci.map((i) => {
+      const ev = evMap.get(i.event_id)
+      return { ...i, parentTitle: ev?.title ?? 'Event', parentStart: ev?.start_date ?? null, parentLead: ev?.lead ?? null }
+    }))
     setLoading(false)
   }, [companyId])
 
@@ -267,7 +270,14 @@ export function TasksPage() {
         isPublic: t.is_public,
         deletedAt: t.deleted_at ?? null,
       })),
-      ...checklistItems.map((it) => ({
+      ...checklistItems.filter((it) => {
+        // Lead-time reveal: hide an item until N days before its event's date
+        // (default 5). Completed items always show.
+        if (it.completed || !it.parentStart) return true
+        const today = new Date().toISOString().slice(0, 10)
+        const reveal = format(subDays(parseISO(it.parentStart), it.parentLead ?? 5), 'yyyy-MM-dd')
+        return today >= reveal
+      }).map((it) => ({
         key: `eci-${it.id}`,
         id: it.id,
         title: it.title,

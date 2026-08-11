@@ -213,7 +213,7 @@ export function SchedulePage() {
       meeting: '#ff00ff',
       other: '#6b7280',
     }
-    const color = colors[e.event_type] ?? colors.other
+    const color = (e as any).color || colors[e.event_type] || colors.other
     return {
       style: {
         backgroundColor: `${color}20`,

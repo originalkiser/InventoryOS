@@ -9,6 +9,11 @@ import toast from 'react-hot-toast'
 
 const EVENT_TYPES = ['order', 'monthly_count', 'weekly_count', 'meeting', 'other']
 const RECURRENCE_OPTIONS = ['none', 'daily', 'weekly', 'monthly']
+const DEFAULT_LEAD_DAYS = 5
+
+// Curated calendar color choices (the calendar already renders custom hex per
+// event). Empty selection falls back to the event-type default color.
+const EVENT_COLOR_CHOICES = ['#002745', '#00e5ff', '#2ECC71', '#ffb300', '#E67E22', '#C0392B', '#ff00ff', '#6b7280']
 
 // Safety cap so an open-ended recurrence can't insert unbounded rows.
 const MAX_OCCURRENCES = 366
@@ -126,8 +131,10 @@ function ProfileMultiPicker({
 interface ChecklistItemDraft {
   id?: string
   title: string
-  target_date: string
+  target_date: string       // single-event: absolute date
   target_date_end: string
+  start_offset_days: string  // recurring: days from each occurrence's date
+  end_offset_days: string
   completed: boolean
 }
 
@@ -167,6 +174,8 @@ export function ScheduleEventModal({
   // Multiple checklist items per event, each with its own optional date window.
   const [items, setItems] = useState<ChecklistItemDraft[]>([])
   const [deletedItemIds, setDeletedItemIds] = useState<string[]>([])
+  const [color, setColor] = useState('')
+  const [checklistLeadDays, setChecklistLeadDays] = useState(String(DEFAULT_LEAD_DAYS))
 
   useEffect(() => {
     if (!profile?.company_id) return
@@ -203,6 +212,8 @@ export function ScheduleEventModal({
       setStartTime((existing as any).start_time ?? '09:00')
       setEndTime((existing as any).end_time ?? '10:00')
       setReminderMinutes(String((existing as any).reminder_minutes ?? 15))
+      setColor((existing as any).color ?? '')
+      setChecklistLeadDays(String((existing as any).checklist_lead_days ?? DEFAULT_LEAD_DAYS))
     } else {
       setTitle('')
       setEventType('other')
@@ -215,6 +226,8 @@ export function ScheduleEventModal({
       setAssignedTo([])
       setNotes('')
       setVisibility('private')
+      setColor('')
+      setChecklistLeadDays(String(DEFAULT_LEAD_DAYS))
       const isTimedSlot = defaultDate && (defaultDate.getHours() !== 0 || defaultDate.getMinutes() !== 0)
       setIsAllDay(!isTimedSlot)
       if (isTimedSlot && defaultDate) {
@@ -237,14 +250,16 @@ export function ScheduleEventModal({
       ;(supabase as any).schema('platform').from('event_checklist_items')
         .select('*').eq('event_id', existing.id).order('sort_order')
         .then(({ data }: any) => setItems((data ?? []).map((r: any): ChecklistItemDraft => ({
-          id: r.id, title: r.title, target_date: r.target_date ?? '', target_date_end: r.target_date_end ?? '', completed: r.completed,
+          id: r.id, title: r.title, target_date: r.target_date ?? '', target_date_end: r.target_date_end ?? '',
+          start_offset_days: r.start_offset_days != null ? String(r.start_offset_days) : '', end_offset_days: r.end_offset_days != null ? String(r.end_offset_days) : '',
+          completed: r.completed,
         }))))
     } else {
       setItems([])
     }
   }, [existing?.id, open])
 
-  function addItem() { setItems((prev) => [...prev, { title: '', target_date: '', target_date_end: '', completed: false }]) }
+  function addItem() { setItems((prev) => [...prev, { title: '', target_date: '', target_date_end: '', start_offset_days: '', end_offset_days: '', completed: false }]) }
   function updateItem(i: number, patch: Partial<ChecklistItemDraft>) { setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, ...patch } : it))) }
   function removeItem(i: number) {
     setItems((prev) => {
@@ -357,16 +372,42 @@ export function ScheduleEventModal({
         const del = await sb.schema('platform').from('schedule_events').delete().eq('id', existing.id)
         error = del.error
       }
+      let occRows: { id: string; start_date: string }[] = []
       if (!error) {
-        const ins = await sb.schema('platform').from('schedule_events').insert(rows)
+        const ins = await sb.schema('platform').from('schedule_events').insert(rows).select('id, start_date')
         error = ins.error
+        occRows = (ins.data ?? []) as { id: string; start_date: string }[]
       }
 
       if (error) toast.error(error.message)
       else {
-        // Best-effort: stamp created_by on all series rows (requires migration 20260707)
+        const cleanItems = items.filter((it) => it.title.trim())
+        const leadDays = cleanItems.length ? (Number(checklistLeadDays) || DEFAULT_LEAD_DAYS) : null
+        // Best-effort: stamp created_by + color + lead-days on all series rows (requires migrations 20260707/20260811)
         sb.schema('platform').from('schedule_events')
-          .update({ created_by: profile.id }).eq('series_id', seriesId).then(() => {})
+          .update({ created_by: profile.id, color: color || null, checklist_lead_days: leadDays }).eq('series_id', seriesId).then(() => {})
+
+        // Recurring checklist items: one row per occurrence, dates computed from
+        // each occurrence's date + the item's start/end day offsets. Best-effort.
+        if (cleanItems.length && occRows.length) {
+          const itemRows: Record<string, unknown>[] = []
+          for (const o of occRows) {
+            const anchor = parseISO(o.start_date)
+            cleanItems.forEach((it, i) => {
+              const so = parseInt(it.start_offset_days || '0', 10) || 0
+              const eo = parseInt(it.end_offset_days || '0', 10) || 0
+              itemRows.push({
+                company_id: profile.company_id, event_id: o.id, title: it.title.trim(),
+                target_date: format(addDays(anchor, so), 'yyyy-MM-dd'),
+                target_date_end: format(addDays(anchor, eo), 'yyyy-MM-dd'),
+                start_offset_days: so, end_offset_days: eo,
+                completed: false, sort_order: i, created_by: profile.id,
+              })
+            })
+          }
+          sb.schema('platform').from('event_checklist_items').insert(itemRows).then(() => {})
+        }
+
         const capped = rows.length >= MAX_OCCURRENCES && !endDate
         toast.success(`Scheduled ${rows.length} occurrence${rows.length > 1 ? 's' : ''}${capped ? ' (capped — set an end date for more)' : ''}`)
         onSaved(); onClose()
@@ -440,6 +481,8 @@ export function ScheduleEventModal({
           is_all_day: isAllDay,
           reminder_minutes: (isChecklist && !isAllDay && Number(reminderMinutes) > 0)
             ? Number(reminderMinutes) : null,
+          color: color || null,
+          checklist_lead_days: items.filter((it) => it.title.trim()).length ? (Number(checklistLeadDays) || DEFAULT_LEAD_DAYS) : null,
         })
         .eq('id', savedId)
         .then(() => {})
@@ -550,6 +593,22 @@ export function ScheduleEventModal({
           </>
         )}
 
+        {/* Custom calendar color */}
+        <div className="col-span-2 flex flex-col gap-1.5">
+          <label className="text-xs font-mono text-inky uppercase tracking-wide">Calendar Color</label>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button type="button" onClick={() => setColor('')} title="Default (by event type)"
+              className={['w-6 h-6 rounded-full border-2 flex items-center justify-center text-[9px] font-mono', color === '' ? 'border-navy' : 'border-navy/20'].join(' ')}>
+              <span className="text-inky/60">A</span>
+            </button>
+            {EVENT_COLOR_CHOICES.map((c) => (
+              <button key={c} type="button" onClick={() => setColor(c)} title={c}
+                style={{ backgroundColor: c }}
+                className={['w-6 h-6 rounded-full border-2', color === c ? 'border-navy ring-2 ring-sky' : 'border-transparent'].join(' ')} />
+            ))}
+          </div>
+        </div>
+
         <div className="flex flex-col gap-2">
           <Toggle
             checked={isChecklist}
@@ -595,41 +654,69 @@ export function ScheduleEventModal({
           </div>
         )}
 
-        {/* Checklist items — multiple per event, each with its own date window */}
-        {!willGenerateSeries && (
-          <div className="col-span-2 flex flex-col gap-2 border-t border-navy/20 pt-3">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-mono text-inky uppercase tracking-wide">Checklist Items</label>
+        {/* Checklist items — multiple per event, each with its own date window.
+            Recurring events use day-offsets from each occurrence's date. */}
+        <div className="col-span-2 flex flex-col gap-2 border-t border-navy/20 pt-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <label className="text-xs font-mono text-inky uppercase tracking-wide">Checklist Items</label>
+            <div className="flex items-center gap-3">
+              {items.some((it) => it.title.trim()) && (
+                <label className="flex items-center gap-1.5 text-[10px] font-mono text-inky">
+                  Reveal
+                  <input type="number" min="0" value={checklistLeadDays} onChange={(e) => setChecklistLeadDays(e.target.value)}
+                    className="w-14 text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
+                  days before
+                </label>
+              )}
               <button type="button" onClick={addItem} className="text-xs font-mono text-sky hover:underline">+ Add item</button>
             </div>
-            <p className="text-[10px] font-mono text-inky/60">
-              Each item is its own task with an optional date window (start → due-by). Leave dates blank to use the event&apos;s date. Won&apos;t flag overdue until the due-by passes.
-            </p>
-            {items.length === 0 ? (
-              <p className="text-[11px] font-mono text-inky/40 italic">No items — add one to turn this event into a multi-step checklist.</p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {items.map((it, i) => (
-                  <div key={it.id ?? `new-${i}`} className="flex items-center gap-2 rounded border border-navy/20 bg-cream px-2 py-1.5">
-                    <input type="checkbox" checked={it.completed} onChange={(e) => updateItem(i, { completed: e.target.checked })} className="accent-inky flex-shrink-0" />
-                    <input
-                      value={it.title}
-                      onChange={(e) => updateItem(i, { title: e.target.value })}
-                      placeholder="Checklist item…"
-                      className="flex-1 min-w-0 bg-transparent text-xs font-mono text-navy placeholder-inky/40 focus:outline-none"
-                    />
-                    <input type="date" value={it.target_date} onChange={(e) => updateItem(i, { target_date: e.target.value })} title="Start date"
-                      className="text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
-                    <span className="text-inky/40 text-xs">→</span>
-                    <input type="date" value={it.target_date_end} onChange={(e) => updateItem(i, { target_date_end: e.target.value })} title="Due by"
-                      className="text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
-                    <button type="button" onClick={() => removeItem(i)} title="Remove item" className="text-inky/40 hover:text-red-400 text-xs flex-shrink-0">✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
-        )}
+          <p className="text-[10px] font-mono text-inky/60">
+            {willGenerateSeries
+              ? 'Each item becomes a task on every occurrence. Set day offsets from the occurrence date (negative = before, e.g. start −3, end −1 = a window three-to-one days before).'
+              : 'Each item is its own task with an optional date window (start → due-by). Leave dates blank to use the event’s date. Won’t flag overdue until the due-by passes.'}
+          </p>
+          {items.length === 0 ? (
+            <p className="text-[11px] font-mono text-inky/40 italic">No items — add one to turn this event into a multi-step checklist.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {items.map((it, i) => (
+                <div key={it.id ?? `new-${i}`} className="flex items-center gap-2 rounded border border-navy/20 bg-cream px-2 py-1.5">
+                  {!willGenerateSeries && (
+                    <input type="checkbox" checked={it.completed} onChange={(e) => updateItem(i, { completed: e.target.checked })} className="accent-inky flex-shrink-0" />
+                  )}
+                  <input
+                    value={it.title}
+                    onChange={(e) => updateItem(i, { title: e.target.value })}
+                    placeholder="Checklist item…"
+                    className="flex-1 min-w-0 bg-transparent text-xs font-mono text-navy placeholder-inky/40 focus:outline-none"
+                  />
+                  {willGenerateSeries ? (
+                    <>
+                      <span className="text-[10px] font-mono text-inky/50">start</span>
+                      <input type="number" value={it.start_offset_days} onChange={(e) => updateItem(i, { start_offset_days: e.target.value })} title="Days from occurrence date" placeholder="0"
+                        className="w-14 text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
+                      <span className="text-inky/40 text-xs">→</span>
+                      <span className="text-[10px] font-mono text-inky/50">end</span>
+                      <input type="number" value={it.end_offset_days} onChange={(e) => updateItem(i, { end_offset_days: e.target.value })} title="Days from occurrence date" placeholder="0"
+                        className="w-14 text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
+                      <span className="text-[10px] font-mono text-inky/40">d</span>
+                    </>
+                  ) : (
+                    <>
+                      <input type="date" value={it.target_date} onChange={(e) => updateItem(i, { target_date: e.target.value })} title="Start date"
+                        className="text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
+                      <span className="text-inky/40 text-xs">→</span>
+                      <input type="date" value={it.target_date_end} onChange={(e) => updateItem(i, { target_date_end: e.target.value })} title="Due by"
+                        className="text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
+                    </>
+                  )}
+                  <button type="button" onClick={() => removeItem(i)} title="Remove item" className="text-inky/40 hover:text-red-400 text-xs flex-shrink-0">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Visibility */}
         <div className="col-span-2 flex flex-col gap-2">
