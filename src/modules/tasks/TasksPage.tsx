@@ -5,12 +5,12 @@ import { useAppSetting } from '@/hooks/useAppSetting'
 import { Badge, Button, Input, Modal, SbLoader } from '@/components/ui'
 import { AssigneeComboInput } from '@/components/shared/AssigneeComboInput'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
-import type { Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types'
+import type { EventChecklistItem, Profile, Project, ProjectTask, ScheduleEvent, Task } from '@/types'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
 type SortKey = 'date' | 'source' | 'title' | 'completed'
-type TaskSource = 'project' | 'calendar' | 'meeting' | 'standalone'
+type TaskSource = 'project' | 'calendar' | 'meeting' | 'standalone' | 'checklist'
 
 interface UnifiedTask {
   key: string
@@ -34,6 +34,7 @@ interface UnifiedTask {
 function sourceColor(s: TaskSource): 'navy' | 'sky' | 'orange' | 'inky' {
   if (s === 'project') return 'navy'
   if (s === 'calendar') return 'sky'
+  if (s === 'checklist') return 'sky'
   if (s === 'meeting') return 'orange'
   return 'inky'
 }
@@ -136,6 +137,7 @@ export function TasksPage() {
   const [projectTasks, setProjectTasks] = useState<ProjectTask[]>([])
   const [calendarTasks, setCalendarTasks] = useState<ScheduleEvent[]>([])
   const [standaloneTasks, setStandaloneTasks] = useState<Task[]>([])
+  const [checklistItems, setChecklistItems] = useState<(EventChecklistItem & { parentTitle: string; parentStart: string | null })[]>([])
   const [deletedTasks, setDeletedTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -165,13 +167,14 @@ export function TasksPage() {
     setLoading(true)
     void purgeExpired(companyId)
     const sb = supabase as any
-    const [profRes, projRes, ptRes, ctRes, stRes, delRes] = await Promise.all([
+    const [profRes, projRes, ptRes, ctRes, stRes, delRes, eciRes] = await Promise.all([
       sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).order('full_name'),
       sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId),
       sb.schema('inventory').from('project_tasks').select('*').eq('company_id', companyId).order('sort_order'),
       sb.schema('platform').from('schedule_events').select('*').eq('company_id', companyId).eq('is_checklist', true).order('start_date'),
       sb.schema('core').from('tasks').select('*').eq('company_id', companyId).is('deleted_at', null).or(`created_by.eq.${myId},assignee_id.eq.${myId},is_public.eq.true`).order('sort_order').order('created_at'),
       sb.schema('core').from('tasks').select('*').eq('company_id', companyId).not('deleted_at', 'is', null).or(`created_by.eq.${myId},assignee_id.eq.${myId},is_public.eq.true`).order('deleted_at', { ascending: false }),
+      sb.schema('platform').from('event_checklist_items').select('*').eq('company_id', companyId).order('sort_order'),
     ])
     setOrgProfiles((profRes.data ?? []) as Profile[])
     setProjects((projRes.data ?? []) as Project[])
@@ -179,6 +182,16 @@ export function TasksPage() {
     setCalendarTasks((ctRes.data ?? []) as ScheduleEvent[])
     setStandaloneTasks((stRes.data ?? []) as Task[])
     setDeletedTasks((delRes.data ?? []) as Task[])
+
+    // Checklist items → enrich with their parent event's title/date for display.
+    const eci = (eciRes.data ?? []) as EventChecklistItem[]
+    const evIds = [...new Set(eci.map((i) => i.event_id))]
+    let evMap = new Map<string, { title: string; start_date: string | null }>()
+    if (evIds.length) {
+      const { data: evs } = await sb.schema('platform').from('schedule_events').select('id, title, start_date').in('id', evIds)
+      evMap = new Map(((evs ?? []) as any[]).map((e) => [e.id, { title: e.title, start_date: e.start_date }]))
+    }
+    setChecklistItems(eci.map((i) => ({ ...i, parentTitle: evMap.get(i.event_id)?.title ?? 'Event', parentStart: evMap.get(i.event_id)?.start_date ?? null })))
     setLoading(false)
   }, [companyId])
 
@@ -254,8 +267,26 @@ export function TasksPage() {
         isPublic: t.is_public,
         deletedAt: t.deleted_at ?? null,
       })),
+      ...checklistItems.map((it) => ({
+        key: `eci-${it.id}`,
+        id: it.id,
+        title: it.title,
+        notes: null,
+        // Item's own window; falls back to the parent event's date if unset.
+        targetDate: it.target_date ?? it.parentStart,
+        targetDateEnd: it.target_date_end,
+        completed: it.completed,
+        completedAt: it.completed_at ?? null,
+        source: 'checklist' as const,
+        sourceLabel: it.parentTitle,
+        createdBy: it.created_by,
+        assigneeId: null,
+        assigneeDisplay: null,
+        isPublic: true,
+        deletedAt: null,
+      })),
     ]
-  }, [projectTasks, calendarTasks, standaloneTasks, projectById, profileById])
+  }, [projectTasks, calendarTasks, standaloneTasks, checklistItems, projectById, profileById])
 
   const displayed = useMemo(() => {
     const filtered = showCompleted
@@ -284,6 +315,8 @@ export function TasksPage() {
       setProjectTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, done } : t)))
     } else if (task.source === 'calendar') {
       setCalendarTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, completed: done, completed_at: done ? nowIso : null } : t)))
+    } else if (task.source === 'checklist') {
+      setChecklistItems((prev) => prev.map((t) => (t.id === task.id ? { ...t, completed: done, completed_at: done ? nowIso : null } : t)))
     } else {
       setStandaloneTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, completed: done, completed_at: done ? nowIso : null, completed_by: done ? myId : null } : t)))
     }
@@ -307,6 +340,12 @@ export function TasksPage() {
       }).eq('id', task.id))
     } else if (task.source === 'calendar') {
       ;({ error } = await sb.schema('platform').from('schedule_events').update({
+        completed: done,
+        completed_at: done ? new Date().toISOString() : null,
+        completed_by: done ? myId : null,
+      }).eq('id', task.id))
+    } else if (task.source === 'checklist') {
+      ;({ error } = await sb.schema('platform').from('event_checklist_items').update({
         completed: done,
         completed_at: done ? new Date().toISOString() : null,
         completed_by: done ? myId : null,
@@ -616,16 +655,18 @@ export function TasksPage() {
                         <span className={['text-sm font-body', task.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
                           {task.title}
                         </span>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openEdit(task) }}
-                          title="Edit task"
-                          className="opacity-0 group-hover/title:opacity-100 transition-opacity p-0.5 rounded hover:bg-navy/10 text-inky/60 hover:text-navy flex-shrink-0"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
+                        {task.source !== 'checklist' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openEdit(task) }}
+                            title="Edit task"
+                            className="opacity-0 group-hover/title:opacity-100 transition-opacity p-0.5 rounded hover:bg-navy/10 text-inky/60 hover:text-navy flex-shrink-0"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                        )}
                         <Badge color={sourceColor(task.source)}>
                           <span className="text-[10px]">{task.sourceLabel}</span>
                         </Badge>

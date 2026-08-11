@@ -750,6 +750,22 @@ export interface ScheduleEvent {
   updated_at: string
 }
 
+export interface EventChecklistItem {
+  id: string
+  company_id: string
+  event_id: string
+  title: string
+  target_date: string | null
+  target_date_end: string | null
+  completed: boolean
+  completed_at: string | null
+  completed_by: string | null
+  sort_order: number
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface CountUploadBatch {
   id: string
   company_id: string

@@ -123,6 +123,14 @@ function ProfileMultiPicker({
   )
 }
 
+interface ChecklistItemDraft {
+  id?: string
+  title: string
+  target_date: string
+  target_date_end: string
+  completed: boolean
+}
+
 interface ScheduleEventModalProps {
   open: boolean
   onClose: () => void
@@ -156,6 +164,9 @@ export function ScheduleEventModal({
   const [deleting, setDeleting] = useState(false)
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
   const [userDepts, setUserDepts] = useState<string[]>([])
+  // Multiple checklist items per event, each with its own optional date window.
+  const [items, setItems] = useState<ChecklistItemDraft[]>([])
+  const [deletedItemIds, setDeletedItemIds] = useState<string[]>([])
 
   useEffect(() => {
     if (!profile?.company_id) return
@@ -217,6 +228,60 @@ export function ScheduleEventModal({
     }
   }, [existing, defaultDate, open])
 
+
+  // Load this event's checklist items when editing.
+  useEffect(() => {
+    setDeletedItemIds([])
+    if (!open) return
+    if (existing?.id) {
+      ;(supabase as any).schema('platform').from('event_checklist_items')
+        .select('*').eq('event_id', existing.id).order('sort_order')
+        .then(({ data }: any) => setItems((data ?? []).map((r: any): ChecklistItemDraft => ({
+          id: r.id, title: r.title, target_date: r.target_date ?? '', target_date_end: r.target_date_end ?? '', completed: r.completed,
+        }))))
+    } else {
+      setItems([])
+    }
+  }, [existing?.id, open])
+
+  function addItem() { setItems((prev) => [...prev, { title: '', target_date: '', target_date_end: '', completed: false }]) }
+  function updateItem(i: number, patch: Partial<ChecklistItemDraft>) { setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, ...patch } : it))) }
+  function removeItem(i: number) {
+    setItems((prev) => {
+      const it = prev[i]
+      if (it?.id) setDeletedItemIds((d) => [...d, it.id!])
+      return prev.filter((_, idx) => idx !== i)
+    })
+  }
+
+  // Persist checklist items against the saved event. Best-effort so an unapplied
+  // migration can't break the event save itself.
+  async function persistChecklistItems(eventId: string) {
+    if (!profile?.company_id) return
+    const sb = supabase as any
+    try {
+      if (deletedItemIds.length) await sb.schema('platform').from('event_checklist_items').delete().in('id', deletedItemIds)
+      const clean = items.filter((it) => it.title.trim())
+      for (let i = 0; i < clean.length; i++) {
+        const it = clean[i]
+        const row = {
+          company_id: profile.company_id,
+          event_id: eventId,
+          title: it.title.trim(),
+          target_date: it.target_date || null,
+          target_date_end: it.target_date_end || null,
+          completed: it.completed,
+          completed_at: it.completed ? new Date().toISOString() : null,
+          completed_by: it.completed ? profile.id : null,
+          sort_order: i,
+        }
+        if (it.id) await sb.schema('platform').from('event_checklist_items').update(row).eq('id', it.id)
+        else await sb.schema('platform').from('event_checklist_items').insert({ ...row, created_by: profile.id })
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Checklist items could not be saved')
+    }
+  }
 
   const resolvedEventType = eventType === 'other' && customType.trim() ? customType.trim() : eventType
 
@@ -380,6 +445,8 @@ export function ScheduleEventModal({
         .then(() => {})
     }
 
+    if (savedId) await persistChecklistItems(savedId)
+
     toast.success('Saved')
     if (addToBlocked && startDate && profile?.id) {
       const current = normalizeBlockedDays(profile.blocked_days)
@@ -525,6 +592,42 @@ export function ScheduleEventModal({
               selected={assignedTo}
               onChange={setAssignedTo}
             />
+          </div>
+        )}
+
+        {/* Checklist items — multiple per event, each with its own date window */}
+        {!willGenerateSeries && (
+          <div className="col-span-2 flex flex-col gap-2 border-t border-navy/20 pt-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-mono text-inky uppercase tracking-wide">Checklist Items</label>
+              <button type="button" onClick={addItem} className="text-xs font-mono text-sky hover:underline">+ Add item</button>
+            </div>
+            <p className="text-[10px] font-mono text-inky/60">
+              Each item is its own task with an optional date window (start → due-by). Leave dates blank to use the event&apos;s date. Won&apos;t flag overdue until the due-by passes.
+            </p>
+            {items.length === 0 ? (
+              <p className="text-[11px] font-mono text-inky/40 italic">No items — add one to turn this event into a multi-step checklist.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {items.map((it, i) => (
+                  <div key={it.id ?? `new-${i}`} className="flex items-center gap-2 rounded border border-navy/20 bg-cream px-2 py-1.5">
+                    <input type="checkbox" checked={it.completed} onChange={(e) => updateItem(i, { completed: e.target.checked })} className="accent-inky flex-shrink-0" />
+                    <input
+                      value={it.title}
+                      onChange={(e) => updateItem(i, { title: e.target.value })}
+                      placeholder="Checklist item…"
+                      className="flex-1 min-w-0 bg-transparent text-xs font-mono text-navy placeholder-inky/40 focus:outline-none"
+                    />
+                    <input type="date" value={it.target_date} onChange={(e) => updateItem(i, { target_date: e.target.value })} title="Start date"
+                      className="text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
+                    <span className="text-inky/40 text-xs">→</span>
+                    <input type="date" value={it.target_date_end} onChange={(e) => updateItem(i, { target_date_end: e.target.value })} title="Due by"
+                      className="text-[11px] font-mono border border-navy/20 rounded px-1 py-0.5 bg-cream text-navy focus:border-sky focus:outline-none" />
+                    <button type="button" onClick={() => removeItem(i)} title="Remove item" className="text-inky/40 hover:text-red-400 text-xs flex-shrink-0">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
