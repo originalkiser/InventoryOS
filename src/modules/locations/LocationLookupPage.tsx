@@ -159,7 +159,7 @@ export function LocationLookupPage() {
                 <dl className="flex flex-col gap-1 mt-1">
                   {sidebar.map((f) => (
                     <div key={f.label} className="flex flex-col">
-                      <dt className="text-[10px] font-mono uppercase tracking-wide text-inky/50">{f.label}</dt>
+                      <dt className="text-[10px] font-mono font-semibold uppercase tracking-wide text-navy/70">{f.label}</dt>
                       <dd className="text-xs font-body text-navy break-words">{f.value || '—'}</dd>
                     </div>
                   ))}

@@ -64,8 +64,8 @@ export function OrderConfigTab() {
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      { id: 'vendor', header: 'Vendor', accessorFn: (r: LocationOrderConfig) => vendorName(r.vendor_id), cell: (i: any) => i.getValue() },
-      { id: 'location', header: 'Location', accessorFn: (r: LocationOrderConfig) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
+      { id: 'vendor', header: 'Vendor', accessorFn: (r: LocationOrderConfig) => vendorName(r.vendor_id ?? (r.metadata as any)?.vendor_id ?? null), cell: (i: any) => i.getValue() },
+      { id: 'location', header: 'Location', accessorFn: (r: LocationOrderConfig) => loc.labelOf(r.location_id ?? (r.metadata as any)?.location_id ?? null), cell: (i: any) => i.getValue() },
       col.accessor('product_id', { header: 'Product ID' }),
       { id: 'uom', header: 'UoM', accessorFn: (r: LocationOrderConfig) => (r.metadata as any)?.uom ?? '', cell: (i: any) => i.getValue() || '—' },
       col.accessor('capacity', { header: 'Capacity', cell: (i) => i.getValue() ?? '—' }),
@@ -117,6 +117,10 @@ export function OrderConfigTab() {
         else if (ownKeys.has(m.fieldName)) meta[m.fieldName] = raw || null
         else out[m.fieldName] = raw || null
       }
+      // Mirror vendor/location into metadata so they survive reload even if the
+      // relocated table's base columns don't persist them.
+      meta.vendor_id = (out.vendor_id as string) ?? null
+      meta.location_id = (out.location_id as string) ?? null
       out.metadata = meta
       return out as Partial<LocationOrderConfig>
     }).filter((r: any) => r.product_id)
@@ -131,7 +135,7 @@ export function OrderConfigTab() {
   function openEdit(r: LocationOrderConfig) {
     setEditId(r.id)
     setForm({
-      vendorId: r.vendor_id ?? '', locationId: r.location_id ?? '', product_id: r.product_id ?? '', uom: ((r.metadata as any)?.uom ?? '') as string,
+      vendorId: r.vendor_id ?? (r.metadata as any)?.vendor_id ?? '', locationId: r.location_id ?? (r.metadata as any)?.location_id ?? '', product_id: r.product_id ?? '', uom: ((r.metadata as any)?.uom ?? '') as string,
       capacity: r.capacity?.toString() ?? '', order_trigger: r.order_trigger?.toString() ?? '', order_limit: r.order_limit?.toString() ?? '',
       vmi: isYes(String((r.metadata as any)?.vmi ?? '')),
     })
@@ -146,6 +150,9 @@ export function OrderConfigTab() {
     for (const f of ownFields) meta[f.field_key] = customVals[f.field_key] || null
     if (form.uom.trim()) meta.uom = form.uom.trim()
     meta.vmi = form.vmi ? 'Yes' : null
+    // Mirror vendor/location into metadata (resilient persistence — see columns).
+    meta.vendor_id = form.vendorId || null
+    meta.location_id = form.locationId || null
     const payload = {
       vendor_id: form.vendorId || null,
       location_id: form.locationId, product_id: form.product_id.trim(),
