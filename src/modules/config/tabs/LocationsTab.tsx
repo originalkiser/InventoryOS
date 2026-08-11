@@ -13,6 +13,7 @@ import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
+import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Location, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
@@ -599,6 +600,13 @@ export function LocationsTab() {
       col.accessor('droptop_num',                { header: 'Droptop #',                cell: v }),
       col.accessor('droptop_operation_id',       { header: 'Droptop Op ID',            cell: v }),
       col.accessor('reladyne_delivery_day',      { header: 'Reladyne Delivery Day',    cell: v }),
+      {
+        id: 'reladyne_order_day',
+        header: 'Reladyne Order Day',
+        // Computed: delivery day − 3 business days (Thu delivery → Mon order).
+        accessorFn: (r: Location) => orderDayFromDelivery(r.reladyne_delivery_day),
+        cell: (i: any) => i.getValue() || '—',
+      },
       col.accessor('ai_call_center',             { header: 'AI Call Center',           cell: v }),
       col.accessor('ai_call_center_phone',       { header: 'AI CC Phone',              cell: v }),
       col.accessor('mighty_fz',                  { header: 'Mighty FZ',               cell: v }),
