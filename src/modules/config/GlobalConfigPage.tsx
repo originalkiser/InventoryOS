@@ -2,6 +2,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import { LocationsTab } from './tabs/LocationsTab'
+import { SupplementalLocationTab } from './tabs/SupplementalLocationTab'
 import { VendorPartsTab } from './tabs/VendorPartsTab'
 import { OrderConfigTab } from './tabs/OrderConfigTab'
 import { ProductMappingTab } from './tabs/ProductMappingTab'
@@ -35,6 +36,7 @@ export function GlobalConfigPage() {
       <Tabs defaultValue="locations">
         <TabsList>
           <TabsTrigger value="locations">Locations</TabsTrigger>
+          <TabsTrigger value="supplemental">Supplemental Data</TabsTrigger>
           <TabsTrigger value="vendor-parts">Vendor Parts</TabsTrigger>
           <TabsTrigger value="order-config">Order Config</TabsTrigger>
           <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
@@ -44,6 +46,7 @@ export function GlobalConfigPage() {
         </TabsList>
 
         <TabsContent value="locations"><LocationsTab /></TabsContent>
+        <TabsContent value="supplemental"><SupplementalLocationTab /></TabsContent>
         <TabsContent value="vendor-parts"><VendorPartsTab /></TabsContent>
         <TabsContent value="order-config"><OrderConfigTab /></TabsContent>
         <TabsContent value="product-mapping"><ProductMappingTab /></TabsContent>

@@ -6,7 +6,9 @@ import { useLocations } from '@/hooks/useLocations'
 import { Badge, Card, CardBody, Combobox, SbLoader } from '@/components/ui'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Location } from '@/types'
-import { format } from 'date-fns'
+import { format, differenceInCalendarDays } from 'date-fns'
+
+const LAST_SHOP_KEY = 'location-lookup:last-shop'
 
 interface TankRow {
   id: string; product_id: string | null; value: number | null; unit: string | null
@@ -40,7 +42,8 @@ export function LocationLookupPage() {
   const loc = useLocations()
   const companyId = profile?.company_id ?? null
 
-  const [shopId, setShopId] = useState('')
+  const [shopId, setShopId] = useState<string>(() => { try { return localStorage.getItem(LAST_SHOP_KEY) ?? '' } catch { return '' } })
+  const [supplemental, setSupplemental] = useState<Record<string, string> | null>(null)
   const [tanks, setTanks] = useState<TankRow[]>([])
   const [configs, setConfigs] = useState<ConfigRow[]>([])
   const [vendorNames, setVendorNames] = useState<Record<string, string>>({})
@@ -56,18 +59,21 @@ export function LocationLookupPage() {
     setLoading(true); setError(null)
     const sb = supabase as any
     try {
-      const [tankRes, cfgRes, vendRes, issRes, statRes] = await Promise.all([
+      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
         sb.schema('platform').from('issues').select('id, title, status_id, issue_notes, start_date, target_resolution_date, resolved_date').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
+        // Supplemental data — best-effort (table may be pre-migration).
+        sb.schema('core').from('location_supplemental').select('data').eq('company_id', companyId).eq('location_id', shopId).maybeSingle().then((r: any) => r).catch(() => ({ data: null })),
       ])
       setTanks((tankRes.data ?? []) as TankRow[])
       setConfigs((cfgRes.data ?? []) as ConfigRow[])
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
+      setSupplemental((supRes?.data?.data ?? null) as Record<string, string> | null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load location detail')
     } finally {
@@ -76,6 +82,9 @@ export function LocationLookupPage() {
   }, [companyId, shopId])
 
   useEffect(() => { load() }, [load])
+
+  // Remember the last-selected shop across navigation.
+  useEffect(() => { try { if (shopId) localStorage.setItem(LAST_SHOP_KEY, shopId) } catch { /* ignore */ } }, [shopId])
 
   // Group order configs by vendor name (RelaDyne / Valvoline surface automatically).
   const configsByVendor = useMemo(() => {
@@ -93,26 +102,32 @@ export function LocationLookupPage() {
   const pendingIssues = issues.filter((i) => isPending(statusNames[i.status_id ?? ''] ?? ''))
   const resolvedIssues = issues.filter((i) => isResolved(statusNames[i.status_id ?? ''] ?? ''))
 
-  // Sidebar field list — label + resolved value.
+  // RD Distributor from supplemental data (first key containing "distributor"),
+  // falling back to a location base/metadata field.
+  const rdDistributor = useMemo(() => {
+    if (supplemental) {
+      const k = Object.keys(supplemental).find((key) => key.includes('distributor'))
+      if (k && supplemental[k]) return String(supplemental[k])
+    }
+    return locVal(location, 'rd_distributor')
+  }, [supplemental, location])
+
+  // Sidebar field list — fixed order. NC Inspection Station shows only for NC shops.
+  const stateVal = locVal(location, 'state')
+  const inNC = ['nc', 'north carolina'].includes(stateVal.trim().toLowerCase())
   const sidebar: { label: string; value: string }[] = location ? [
-    { label: 'Shop #', value: locVal(location, 'name') },
-    { label: 'Shop / City', value: locVal(location, 'shop_city') },
+    { label: 'Location', value: locVal(location, 'shop_city') || loc.labelOf(shopId) },
     { label: 'Area Manager', value: locVal(location, 'area_manager') },
     { label: 'AM Cell', value: locVal(location, 'am_phone') },
     { label: 'RDO', value: locVal(location, 'director') },
-    { label: 'RD Delivery Day', value: locVal(location, 'reladyne_delivery_day') },
     { label: 'RD Order Day', value: orderDayFromDelivery(location.reladyne_delivery_day) },
-    { label: 'Custom Delivery Notes', value: locVal(location, 'custom_delivery_notes') },
+    { label: 'RD Delivery Day', value: locVal(location, 'reladyne_delivery_day') },
+    { label: 'RD Distributor', value: rdDistributor },
     { label: 'Address', value: [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') },
     { label: 'Shop Phone', value: locVal(location, 'store_phone') },
-    { label: 'RD Distributor', value: locVal(location, 'rd_distributor') },
-    { label: 'Former FZ #', value: locVal(location, 'former_fz_store_num') },
     { label: 'Acquisition Date', value: locVal(location, 'acquisition_date') },
-    { label: 'NC Inspection Station', value: locVal(location, 'inspection_station_id') },
-    { label: 'Mighty PO Uploadable', value: locVal(location, 'mighty_po_upload') },
-    { label: 'Droptop Op ID', value: locVal(location, 'droptop_operation_id') },
-    { label: 'AZ Account Pin - Type', value: locVal(location, 'az_account_pin') },
-  ].filter((f) => f.value) : []
+    ...(inNC ? [{ label: 'NC Inspection Station', value: locVal(location, 'inspection_station_id') }] : []),
+  ] : []
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
@@ -145,25 +160,40 @@ export function LocationLookupPage() {
                   {sidebar.map((f) => (
                     <div key={f.label} className="flex flex-col">
                       <dt className="text-[10px] font-mono uppercase tracking-wide text-inky/50">{f.label}</dt>
-                      <dd className="text-xs font-body text-navy break-words">{f.value}</dd>
+                      <dd className="text-xs font-body text-navy break-words">{f.value || '—'}</dd>
                     </div>
                   ))}
                 </dl>
               </CardBody>
             </Card>
 
-            {/* Issues callouts */}
-            <div className={['rounded-lg border px-4 py-3', pendingIssues.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
-              <button onClick={() => navigate(`/issues?tab=pending`)} className="w-full text-left">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Pending Issues</span>
-                  <span className={['text-lg font-heading font-bold', pendingIssues.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pendingIssues.length}</span>
-                </div>
-                {pendingIssues.slice(0, 4).map((i) => (
-                  <div key={i.id} className="text-xs font-body text-navy truncate mt-0.5">• {i.title}</div>
-                ))}
-                <span className="text-[10px] font-mono text-sky mt-1 inline-block">Open Issues →</span>
-              </button>
+            {/* Pending issues — detail with days open + past-due callout */}
+            <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', pendingIssues.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Pending Issues</span>
+                <span className={['text-lg font-heading font-bold', pendingIssues.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pendingIssues.length}</span>
+              </div>
+              {pendingIssues.length === 0 ? (
+                <span className="text-xs font-body text-inky/50">None</span>
+              ) : pendingIssues.map((i) => {
+                const start = i.start_date ? new Date(i.start_date + 'T00:00:00') : null
+                const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
+                const pastDue = !!i.target_resolution_date && differenceInCalendarDays(new Date(), new Date(i.target_resolution_date + 'T00:00:00')) > 0
+                return (
+                  <div key={i.id} className="rounded border border-navy/15 bg-cream/70 px-2 py-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-body text-navy flex-1 truncate">{i.title}</span>
+                      {pastDue && <Badge color="red">Past due</Badge>}
+                    </div>
+                    <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
+                      <span>Start {dateShort(i.start_date)}</span>
+                      <span>Target {dateShort(i.target_resolution_date)}</span>
+                      {daysOpen != null && <span className={pastDue ? 'text-[#C0392B] font-bold' : ''}>{daysOpen}d open</span>}
+                    </div>
+                  </div>
+                )
+              })}
+              <button onClick={() => navigate('/issues?tab=pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Open Issues →</button>
             </div>
 
             <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3">
@@ -215,12 +245,16 @@ export function LocationLookupPage() {
               </CardBody>
             </Card>
 
-            {/* Order configs per vendor */}
+            {/* Order configs per vendor — side by side when 2+ vendors */}
             {configsByVendor.length === 0 ? (
               <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
-            ) : configsByVendor.map(([vendor, rows]) => (
-              <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} />
-            ))}
+            ) : (
+              <div className={configsByVendor.length >= 2 ? 'grid grid-cols-1 xl:grid-cols-2 gap-4 items-start' : 'flex flex-col gap-4'}>
+                {configsByVendor.map(([vendor, rows]) => (
+                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -249,7 +283,6 @@ function OrderConfigBlock({ vendor, rows }: { vendor: string; rows: ConfigRow[] 
                 <th className="px-3 py-2 text-left">Part</th>
                 <th className="px-3 py-2 text-left">UOM</th>
                 <th className="px-3 py-2 text-right">Capacity</th>
-                <th className="px-3 py-2 text-right">Trigger</th>
                 <th className="px-3 py-2 text-right">Max</th>
                 {metaKeys.map((k) => <th key={k} className="px-3 py-2 text-left">{label(k)}</th>)}
                 <th className="px-3 py-2 text-center">VMI</th>
@@ -261,7 +294,6 @@ function OrderConfigBlock({ vendor, rows }: { vendor: string; rows: ConfigRow[] 
                   <td className="px-3 py-1.5 text-navy">{r.product_id ?? '—'}</td>
                   <td className="px-3 py-1.5 text-inky">{String((r.metadata as any)?.uom ?? '—')}</td>
                   <td className="px-3 py-1.5 text-right text-navy">{num(r.capacity)}</td>
-                  <td className="px-3 py-1.5 text-right text-inky">{num(r.order_trigger)}</td>
                   <td className="px-3 py-1.5 text-right text-inky">{num(r.order_limit)}</td>
                   {metaKeys.map((k) => <td key={k} className="px-3 py-1.5 text-inky">{String((r.metadata as any)?.[k] ?? '—')}</td>)}
                   <td className="px-3 py-1.5 text-center">
