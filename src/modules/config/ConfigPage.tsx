@@ -8,6 +8,10 @@ import { EndingBalancesTab } from './tabs/EndingBalancesTab'
 import { CategorySimplificationTab } from './tabs/CategorySimplificationTab'
 import { CategoryExpectationsTab } from './tabs/CategoryExpectationsTab'
 import { LocationCpdTab } from './tabs/LocationCpdTab'
+import { VendorPartsTab } from './tabs/VendorPartsTab'
+import { OrderConfigTab } from './tabs/OrderConfigTab'
+import { ProductMappingTab } from './tabs/ProductMappingTab'
+import { GlobalProductsTab } from './tabs/GlobalProductsTab'
 
 export function ConfigPage() {
   const { profile } = useAuthStore()
@@ -35,6 +39,10 @@ export function ConfigPage() {
       <Tabs defaultValue="uom-mappings">
         <TabsList>
           <TabsTrigger value="uom-mappings">UoM Conversions</TabsTrigger>
+          <TabsTrigger value="vendor-parts">Vendor Parts</TabsTrigger>
+          <TabsTrigger value="order-config">Order Config</TabsTrigger>
+          <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
+          <TabsTrigger value="global-products">Global Products</TabsTrigger>
           <TabsTrigger value="product-usage">Product Usage</TabsTrigger>
           <TabsTrigger value="tank-monitor">Tank Monitor</TabsTrigger>
           <TabsTrigger value="ending-balances">Month End Ending Balance</TabsTrigger>
@@ -44,6 +52,10 @@ export function ConfigPage() {
         </TabsList>
 
         <TabsContent value="uom-mappings"><UomMappingsTab /></TabsContent>
+        <TabsContent value="vendor-parts"><VendorPartsTab /></TabsContent>
+        <TabsContent value="order-config"><OrderConfigTab /></TabsContent>
+        <TabsContent value="product-mapping"><ProductMappingTab /></TabsContent>
+        <TabsContent value="global-products"><GlobalProductsTab /></TabsContent>
         <TabsContent value="product-usage"><ProductUsageTab /></TabsContent>
         <TabsContent value="tank-monitor"><TankMonitorTab /></TabsContent>
         <TabsContent value="ending-balances"><EndingBalancesTab /></TabsContent>

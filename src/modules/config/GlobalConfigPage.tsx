@@ -3,10 +3,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import { LocationsTab } from './tabs/LocationsTab'
 import { SupplementalLocationTab } from './tabs/SupplementalLocationTab'
-import { VendorPartsTab } from './tabs/VendorPartsTab'
-import { OrderConfigTab } from './tabs/OrderConfigTab'
-import { ProductMappingTab } from './tabs/ProductMappingTab'
-import { GlobalProductsTab } from './tabs/GlobalProductsTab'
 import { PosLocationMapTab } from './tabs/PosLocationMapTab'
 import { CompanyHolidaysTab } from './tabs/CompanyHolidaysTab'
 
@@ -37,20 +33,12 @@ export function GlobalConfigPage() {
         <TabsList>
           <TabsTrigger value="locations">Locations</TabsTrigger>
           <TabsTrigger value="supplemental">Supplemental Data</TabsTrigger>
-          <TabsTrigger value="vendor-parts">Vendor Parts</TabsTrigger>
-          <TabsTrigger value="order-config">Order Config</TabsTrigger>
-          <TabsTrigger value="product-mapping">Product Mapping</TabsTrigger>
-          <TabsTrigger value="global-products">Global Products</TabsTrigger>
           <TabsTrigger value="pos-map">Location Mapping</TabsTrigger>
           <TabsTrigger value="holidays">Holidays</TabsTrigger>
         </TabsList>
 
         <TabsContent value="locations"><LocationsTab /></TabsContent>
         <TabsContent value="supplemental"><SupplementalLocationTab /></TabsContent>
-        <TabsContent value="vendor-parts"><VendorPartsTab /></TabsContent>
-        <TabsContent value="order-config"><OrderConfigTab /></TabsContent>
-        <TabsContent value="product-mapping"><ProductMappingTab /></TabsContent>
-        <TabsContent value="global-products"><GlobalProductsTab /></TabsContent>
         <TabsContent value="pos-map"><PosLocationMapTab /></TabsContent>
         <TabsContent value="holidays"><CompanyHolidaysTab /></TabsContent>
       </Tabs>

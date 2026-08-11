@@ -19,9 +19,27 @@ import toast from 'react-hot-toast'
 
 const NUM_FIELDS = ['bulk_minimum', 'individual_minimum']
 
+// New fields stored in the vendor_parts.metadata jsonb (no schema change).
+const NEW_META = [
+  { key: 'item_category', label: 'Item Category', numeric: false },
+  { key: 'package_qty_gallons', label: 'Package Qty (Gal)', numeric: true },
+  { key: 'price_per_gallon', label: 'Price / Gal', numeric: true },
+  { key: 'base_item', label: 'Base Item', numeric: false },
+] as const
+const NEW_META_KEYS = new Set<string>(NEW_META.map((f) => f.key))
+const NEW_META_NUM = new Set<string>(NEW_META.filter((f) => f.numeric).map((f) => f.key))
+
 function num(v: string): number | null {
   const t = v.trim(); if (!t) return null
   const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n
+}
+const fmtMoney = (v: any) => { const n = Number(v); return v === '' || v == null || isNaN(n) ? '—' : `$${n.toFixed(2)}` }
+const fmtNum = (v: any) => (v === '' || v == null ? '—' : String(v))
+// Price per package = gallons per case × price per gallon.
+function pkgPrice(r: VendorPart): number | '' {
+  const g = Number((r.metadata as any)?.package_qty_gallons)
+  const p = Number((r.metadata as any)?.price_per_gallon)
+  return g && p && !isNaN(g) && !isNaN(p) ? g * p : ''
 }
 function slugCode(name: string) {
   return name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32) || 'VENDOR'
@@ -42,7 +60,7 @@ export function VendorPartsTab() {
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
 
-  const [form, setForm] = useState({ vendorId: '', part_number: '', our_part_number: '', description: '', unit_of_measure: '', package_type: '', bulk_minimum: '', individual_minimum: '' })
+  const [form, setForm] = useState({ vendorId: '', part_number: '', our_part_number: '', description: '', item_category: '', unit_of_measure: '', package_type: '', package_qty_gallons: '', price_per_gallon: '', base_item: '', bulk_minimum: '', individual_minimum: '' })
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
   const loadVendors = useCallback(async () => {
@@ -69,8 +87,13 @@ export function VendorPartsTab() {
       col.accessor('part_number', { header: 'Vendor Part #' }),
       col.accessor('our_part_number', { header: 'Our Part #', cell: (i) => i.getValue() ?? '—' }),
       col.accessor('description', { header: 'Description', cell: (i) => i.getValue() ?? '—' }),
+      { id: 'item_category', header: 'Item Category', accessorFn: (r: VendorPart) => (r.metadata as any)?.item_category ?? '', cell: (i: any) => i.getValue() || '—' },
       col.accessor('unit_of_measure', { header: 'UoM', cell: (i) => i.getValue() ?? '—' }),
-      col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('package_type', { header: 'Package Type', cell: (i) => i.getValue() ?? '—' }),
+      { id: 'package_qty_gallons', header: 'Package Qty (Gal)', accessorFn: (r: VendorPart) => (r.metadata as any)?.package_qty_gallons ?? '', cell: (i: any) => fmtNum(i.getValue()) },
+      { id: 'price_per_gallon', header: 'Price / Gal', accessorFn: (r: VendorPart) => (r.metadata as any)?.price_per_gallon ?? '', cell: (i: any) => fmtMoney(i.getValue()) },
+      { id: 'price_per_package', header: 'Price / Package', accessorFn: (r: VendorPart) => pkgPrice(r), cell: (i: any) => fmtMoney(i.getValue()) },
+      { id: 'base_item', header: 'Base Item', accessorFn: (r: VendorPart) => (r.metadata as any)?.base_item ?? '', cell: (i: any) => i.getValue() || '—' },
       col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
       col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
     ]
@@ -86,8 +109,12 @@ export function VendorPartsTab() {
     { name: 'part_number', label: 'Vendor Part #', required: true },
     { name: 'our_part_number', label: 'Our Part #' },
     { name: 'description', label: 'Description' },
+    { name: 'item_category', label: 'Item Category' },
     { name: 'unit_of_measure', label: 'Unit of Measure' },
     { name: 'package_type', label: 'Package Type' },
+    { name: 'package_qty_gallons', label: 'Package Qty (Gal)' },
+    { name: 'price_per_gallon', label: 'Price / Gal' },
+    { name: 'base_item', label: 'Base Item' },
     { name: 'bulk_minimum', label: 'Bulk Minimum' },
     { name: 'individual_minimum', label: 'Individual Minimum' },
     ...customFields.map((f) => ({ name: f.field_key, label: f.label })),
@@ -103,6 +130,7 @@ export function VendorPartsTab() {
       for (const m of maps) {
         const raw = mappedValue(row, m, maps)
         if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)
+        else if (NEW_META_KEYS.has(m.fieldName)) meta[m.fieldName] = NEW_META_NUM.has(m.fieldName) ? num(raw) : (raw || null)
         else if (customKeys.has(m.fieldName)) meta[m.fieldName] = raw || null
         else out[m.fieldName] = raw || null
       }
@@ -116,15 +144,18 @@ export function VendorPartsTab() {
   }
 
   function resetForm() {
-    setForm({ vendorId: '', part_number: '', our_part_number: '', description: '', unit_of_measure: '', package_type: '', bulk_minimum: '', individual_minimum: '' })
+    setForm({ vendorId: '', part_number: '', our_part_number: '', description: '', item_category: '', unit_of_measure: '', package_type: '', package_qty_gallons: '', price_per_gallon: '', base_item: '', bulk_minimum: '', individual_minimum: '' })
     setCustomVals({})
   }
   function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
   function openEdit(r: VendorPart) {
     setEditId(r.id)
+    const m = (r.metadata ?? {}) as Record<string, unknown>
+    const ms = (k: string) => (m[k] == null ? '' : String(m[k]))
     setForm({
       vendorId: r.vendor_id ?? '', part_number: r.part_number ?? '', our_part_number: r.our_part_number ?? '',
-      description: r.description ?? '', unit_of_measure: r.unit_of_measure ?? '', package_type: r.package_type ?? '',
+      description: r.description ?? '', item_category: ms('item_category'), unit_of_measure: r.unit_of_measure ?? '', package_type: r.package_type ?? '',
+      package_qty_gallons: ms('package_qty_gallons'), price_per_gallon: ms('price_per_gallon'), base_item: ms('base_item'),
       bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '',
     })
     const meta = (r.metadata ?? {}) as Record<string, unknown>
@@ -136,6 +167,10 @@ export function VendorPartsTab() {
     if (!form.part_number.trim()) { toast.error('Vendor Part # is required'); return }
     const meta: Record<string, unknown> = {}
     for (const f of customFields) meta[f.field_key] = customVals[f.field_key] || null
+    meta.item_category = form.item_category.trim() || null
+    meta.package_qty_gallons = num(form.package_qty_gallons)
+    meta.price_per_gallon = num(form.price_per_gallon)
+    meta.base_item = form.base_item.trim() || null
     const payload = {
       vendor_id: form.vendorId || null,
       part_number: form.part_number.trim(),
@@ -188,8 +223,13 @@ export function VendorPartsTab() {
             <Input label="Vendor Part # *" value={form.part_number} onChange={(e) => setForm({ ...form, part_number: e.target.value })} />
             <Input label="Our Part #" value={form.our_part_number} onChange={(e) => setForm({ ...form, our_part_number: e.target.value })} />
             <Input label="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            <Input label="Item Category" value={form.item_category} onChange={(e) => setForm({ ...form, item_category: e.target.value })} />
             <Input label="Unit of Measure" value={form.unit_of_measure} onChange={(e) => setForm({ ...form, unit_of_measure: e.target.value })} />
             <Input label="Package Type" value={form.package_type} onChange={(e) => setForm({ ...form, package_type: e.target.value })} />
+            <Input label="Package Qty (Gal)" type="number" value={form.package_qty_gallons} onChange={(e) => setForm({ ...form, package_qty_gallons: e.target.value })} />
+            <Input label="Price / Gal" type="number" step="0.01" value={form.price_per_gallon} onChange={(e) => setForm({ ...form, price_per_gallon: e.target.value })} />
+            <Input label="Price / Package (calc)" value={(() => { const g = num(form.package_qty_gallons); const p = num(form.price_per_gallon); return g != null && p != null ? `$${(g * p).toFixed(2)}` : '—' })()} onChange={() => {}} disabled />
+            <Input label="Base Item" value={form.base_item} onChange={(e) => setForm({ ...form, base_item: e.target.value })} />
             <Input label="Bulk Minimum" value={form.bulk_minimum} onChange={(e) => setForm({ ...form, bulk_minimum: e.target.value })} />
             <Input label="Individual Minimum" value={form.individual_minimum} onChange={(e) => setForm({ ...form, individual_minimum: e.target.value })} />
             {customFields.map((f) => (
