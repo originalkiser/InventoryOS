@@ -436,7 +436,12 @@ function SortableSection({
   const baseItems = overrideItems ?? SECTION_ITEMS[sectionKey] ?? []
   const items =
     itemOrder.length > 0
-      ? itemOrder.map((k) => baseItems.find((i) => i.key === k)).filter((i): i is NavItem => !!i)
+      // Saved order first, then any newer items not yet in the saved order so
+      // newly-added nav entries aren't dropped for users with custom ordering.
+      ? [
+          ...itemOrder.map((k) => baseItems.find((i) => i.key === k)).filter((i): i is NavItem => !!i),
+          ...baseItems.filter((i) => !itemOrder.includes(i.key)),
+        ]
       : baseItems
 
   const prevCollapsedRef = useRef(collapsed)
