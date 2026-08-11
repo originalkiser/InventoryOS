@@ -26,7 +26,7 @@ export async function fetchPeriodEvalData(
   const [locRes, countRes, balRes] = await Promise.all([
     sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
     sb.schema('inventory').from('counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
-    sb.schema('inventory').from('ending_balances').select('*').eq('company_id', companyId)
+    sb.schema('inventory').from('monthly_ending_balances').select('*').eq('company_id', companyId)
       .gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
   ])
 

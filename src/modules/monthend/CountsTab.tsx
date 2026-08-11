@@ -44,7 +44,7 @@ export function CountsTab() {
       // RPC does GROUP BY on the server — avoids shipping 256k+ raw rows to the client
       sb.rpc('get_aggregated_monthly_products', { p_company_id: companyId, p_count_month: countMonth }),
       sb.schema('inventory').from('count_batches').select('*').eq('company_id', companyId).eq('module', 'monthly').eq('count_month', countMonth).order('created_at', { ascending: false }),
-      sb.schema('inventory').from('ending_balances').select('*').eq('company_id', companyId).gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
+      sb.schema('inventory').from('monthly_ending_balances').select('*').eq('company_id', companyId).gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
       sb.schema('platform').from('user_profiles').select('id, full_name').eq('company_id', companyId),
     ])
 
