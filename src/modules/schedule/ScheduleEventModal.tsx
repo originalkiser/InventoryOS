@@ -4,12 +4,18 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { normalizeBlockedDays, upsertBlockedDay } from '@/utils/blockedDays'
 import type { Profile, ScheduleEvent } from '@/types'
-import { format, parseISO, addDays, addWeeks, addMonths } from 'date-fns'
+import { format, parseISO, addDays, differenceInCalendarDays } from 'date-fns'
+import { generateOccurrences, recurrenceOptions, type RecurrenceMode } from '@/lib/recurrence'
 import toast from 'react-hot-toast'
 
 const EVENT_TYPES = ['order', 'monthly_count', 'weekly_count', 'meeting', 'other']
-const RECURRENCE_OPTIONS = ['none', 'daily', 'weekly', 'monthly']
 const DEFAULT_LEAD_DAYS = 5
+
+// Map legacy recurrence type values stored on old events to current modes.
+function normalizeMode(t: string | undefined): string {
+  if (t === 'monthly') return 'monthly_date'
+  return t ?? 'none'
+}
 
 // Curated calendar color choices (the calendar already renders custom hex per
 // event). Empty selection falls back to the event-type default color.
@@ -17,26 +23,6 @@ const EVENT_COLOR_CHOICES = ['#002745', '#00e5ff', '#2ECC71', '#ffb300', '#E67E2
 
 // Safety cap so an open-ended recurrence can't insert unbounded rows.
 const MAX_OCCURRENCES = 366
-
-function stepDate(d: Date, type: string): Date {
-  if (type === 'weekly') return addWeeks(d, 1)
-  if (type === 'monthly') return addMonths(d, 1)
-  return addDays(d, 1) // daily (and fallback)
-}
-
-// Expand a recurrence into individual occurrence dates (yyyy-MM-dd), from
-// `start` through `until` inclusive. Open-ended recurrences (no until) are
-// capped at one year out so we never generate forever.
-function occurrenceDates(start: string, until: string | null, type: string): string[] {
-  const out: string[] = []
-  let d = parseISO(start)
-  const horizon = until ? parseISO(until) : addMonths(parseISO(start), 12)
-  while (d <= horizon && out.length < MAX_OCCURRENCES) {
-    out.push(format(d, 'yyyy-MM-dd'))
-    d = stepDate(d, type)
-  }
-  return out
-}
 
 function ProfileMultiPicker({
   profiles,
@@ -156,6 +142,8 @@ export function ScheduleEventModal({
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [recurrence, setRecurrence] = useState('none')
+  const [repeatUntil, setRepeatUntil] = useState('')
+  const [anchorOnEnd, setAnchorOnEnd] = useState(false)
   const [isChecklist, setIsChecklist] = useState(false)
   const [completed, setCompleted] = useState(false)
   const [assignedTo, setAssignedTo] = useState<string[]>([])
@@ -202,7 +190,9 @@ export function ScheduleEventModal({
       setCustomType(EVENT_TYPES.includes(existing.event_type) ? '' : existing.event_type)
       setStartDate(existing.start_date)
       setEndDate(existing.end_date ?? '')
-      setRecurrence((existing.recurrence as any)?.type ?? 'none')
+      setRecurrence(normalizeMode((existing.recurrence as any)?.type))
+      setRepeatUntil((existing.recurrence as any)?.until ?? '')
+      setAnchorOnEnd((existing.recurrence as any)?.anchor === 'end')
       setIsChecklist(existing.is_checklist)
       setCompleted(existing.completed)
       setAssignedTo(existing.assigned_to ?? [])
@@ -221,6 +211,8 @@ export function ScheduleEventModal({
       setStartDate(defaultDate ? format(defaultDate, 'yyyy-MM-dd') : '')
       setEndDate('')
       setRecurrence('none')
+      setRepeatUntil('')
+      setAnchorOnEnd(false)
       setIsChecklist(false)
       setCompleted(false)
       setAssignedTo([])
@@ -342,29 +334,37 @@ export function ScheduleEventModal({
     const sb = supabase as any
 
     // Recurring: explode into one row per occurrence so it shows up everywhere
-    // (calendar, dashboard, top-bar reminders). end_date is the "repeat until".
+    // (calendar, dashboard, top-bar reminders). Repeat-Until is the horizon;
+    // each occurrence keeps the event's start→end length. The pattern anchors on
+    // the start date by default, or the end date when toggled.
     if (willGenerateSeries) {
-      const dates = occurrenceDates(startDate, endDate || null, recurrence)
-      if (dates.length === 0) {
+      const durationDays = (startDate && endDate) ? Math.max(0, differenceInCalendarDays(parseISO(endDate), parseISO(startDate))) : 0
+      const anchorStart = anchorOnEnd ? (endDate || startDate) : startDate
+      const anchors = generateOccurrences(anchorStart, repeatUntil || null, recurrence as RecurrenceMode, MAX_OCCURRENCES)
+      if (anchors.length === 0) {
         toast.error('No occurrences fall in that range')
         setSaving(false)
         return
       }
       const seriesId = crypto.randomUUID()
-      const rows = dates.map((d) => ({
-        ...base,
-        start_date: d,
-        end_date: d, // each occurrence is a single day
-        recurrence: { type: recurrence, until: endDate || null },
-        series_id: seriesId,
-        is_all_day: isAllDay,
-        start_time: isAllDay ? null : startTime || null,
-        end_time: isAllDay ? null : endTime || null,
-        reminder_minutes: (isChecklist && !isAllDay && Number(reminderMinutes) > 0) ? Number(reminderMinutes) : null,
-        completed: false,
-        completed_at: null,
-        completed_by: null,
-      }))
+      const rows = anchors.map((a) => {
+        const occStart = anchorOnEnd ? format(addDays(parseISO(a), -durationDays), 'yyyy-MM-dd') : a
+        const occEnd = anchorOnEnd ? a : format(addDays(parseISO(a), durationDays), 'yyyy-MM-dd')
+        return {
+          ...base,
+          start_date: occStart,
+          end_date: occEnd,
+          recurrence: { type: recurrence, until: repeatUntil || null, anchor: anchorOnEnd ? 'end' : 'start' },
+          series_id: seriesId,
+          is_all_day: isAllDay,
+          start_time: isAllDay ? null : startTime || null,
+          end_time: isAllDay ? null : endTime || null,
+          reminder_minutes: (isChecklist && !isAllDay && Number(reminderMinutes) > 0) ? Number(reminderMinutes) : null,
+          completed: false,
+          completed_at: null,
+          completed_by: null,
+        }
+      })
 
       // Converting an existing standalone event into a series: drop the original.
       let error: { message: string } | null = null
@@ -372,11 +372,11 @@ export function ScheduleEventModal({
         const del = await sb.schema('platform').from('schedule_events').delete().eq('id', existing.id)
         error = del.error
       }
-      let occRows: { id: string; start_date: string }[] = []
+      let occRows: { id: string; start_date: string; end_date: string | null }[] = []
       if (!error) {
-        const ins = await sb.schema('platform').from('schedule_events').insert(rows).select('id, start_date')
+        const ins = await sb.schema('platform').from('schedule_events').insert(rows).select('id, start_date, end_date')
         error = ins.error
-        occRows = (ins.data ?? []) as { id: string; start_date: string }[]
+        occRows = (ins.data ?? []) as { id: string; start_date: string; end_date: string | null }[]
       }
 
       if (error) toast.error(error.message)
@@ -392,14 +392,16 @@ export function ScheduleEventModal({
         if (cleanItems.length && occRows.length) {
           const itemRows: Record<string, unknown>[] = []
           for (const o of occRows) {
-            const anchor = parseISO(o.start_date)
+            const startAnchor = parseISO(o.start_date)
+            const endAnchor = parseISO(o.end_date ?? o.start_date)
             cleanItems.forEach((it, i) => {
               const so = parseInt(it.start_offset_days || '0', 10) || 0
               const eo = parseInt(it.end_offset_days || '0', 10) || 0
               itemRows.push({
                 company_id: profile.company_id, event_id: o.id, title: it.title.trim(),
-                target_date: format(addDays(anchor, so), 'yyyy-MM-dd'),
-                target_date_end: format(addDays(anchor, eo), 'yyyy-MM-dd'),
+                // start offset measured from the occurrence's start, end offset from its end
+                target_date: format(addDays(startAnchor, so), 'yyyy-MM-dd'),
+                target_date_end: format(addDays(endAnchor, eo), 'yyyy-MM-dd'),
                 start_offset_days: so, end_offset_days: eo,
                 completed: false, sort_order: i, created_by: profile.id,
               })
@@ -408,8 +410,8 @@ export function ScheduleEventModal({
           sb.schema('platform').from('event_checklist_items').insert(itemRows).then(() => {})
         }
 
-        const capped = rows.length >= MAX_OCCURRENCES && !endDate
-        toast.success(`Scheduled ${rows.length} occurrence${rows.length > 1 ? 's' : ''}${capped ? ' (capped — set an end date for more)' : ''}`)
+        const capped = rows.length >= MAX_OCCURRENCES && !repeatUntil
+        toast.success(`Scheduled ${rows.length} occurrence${rows.length > 1 ? 's' : ''}${capped ? ' (capped — set a repeat-until date for more)' : ''}`)
         onSaved(); onClose()
       }
       setSaving(false)
@@ -557,10 +559,10 @@ export function ScheduleEventModal({
             disabled={isSeriesMember}
             className="bg-cream border border-navy/30 rounded px-3 py-2 text-sm font-mono text-navy focus:outline-none focus:border-[#00e5ff] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {RECURRENCE_OPTIONS.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
+            {recurrenceOptions(startDate || null).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
           {willGenerateSeries && (
-            <p className="text-[10px] font-mono text-inky">Generates one task per {recurrence === 'daily' ? 'day' : recurrence === 'weekly' ? 'week' : 'month'} until the repeat-until date.</p>
+            <p className="text-[10px] font-mono text-inky">Repeats on this pattern until the repeat-until date; each occurrence keeps the event&apos;s start→end length.</p>
           )}
           {isSeriesMember && (
             <p className="text-[10px] font-mono text-inky">Part of a recurring series — recurrence is locked. Use “Delete Series” to remove all.</p>
@@ -568,12 +570,28 @@ export function ScheduleEventModal({
         </div>
 
         <Input label="Start Date *" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        <Input
-          label={willGenerateSeries ? 'Repeat Until' : 'End Date'}
-          type="date"
-          value={endDate}
-          onChange={(e) => setEndDate(e.target.value)}
-        />
+        <Input label="End Date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+
+        {/* Recurring: separate repeat-until horizon + anchor choice */}
+        {willGenerateSeries && (
+          <>
+            <Input label="Repeat Until" type="date" value={repeatUntil} onChange={(e) => setRepeatUntil(e.target.value)} />
+            <div className="flex items-end">
+              <Toggle
+                checked={anchorOnEnd}
+                onChange={setAnchorOnEnd}
+                label="Anchor recurrence on end date"
+                color="cyan"
+                size="sm"
+              />
+            </div>
+            <p className="col-span-2 text-[10px] font-mono text-inky/60 -mt-1">
+              {anchorOnEnd
+                ? 'Each occurrence’s END lands on the pattern; the start is derived from the event length.'
+                : 'Each occurrence’s START lands on the pattern; the end follows by the event length (default).'}
+            </p>
+          </>
+        )}
 
         {/* All-day toggle */}
         <div className="col-span-2">
