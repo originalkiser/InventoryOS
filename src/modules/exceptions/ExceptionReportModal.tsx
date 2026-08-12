@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Modal, Button, Combobox, Select, Input, Toggle } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
-import { supabase } from '@/lib/supabase'
-import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
-import { RichTextEditor } from '@/components/shared/RichTextEditor'
-import { REPORT_TYPES, DEFAULT_ISSUES, EXCEPTION_STATUSES, type ExceptionReport } from './exceptions'
+import { useExceptionConfig } from './useExceptionConfig'
+import { DEFAULT_STATUS, EXCEPTION_STATUSES, type ExceptionReport } from './exceptions'
 import toast from 'react-hot-toast'
 
 interface Props {
@@ -13,19 +11,17 @@ interface Props {
   onClose: () => void
   existing?: Partial<ExceptionReport> | null
   // Persistence is owned by the parent so its data/cache reloads consistently.
-  // Called with the domain fields (no audit stamps) and the id when editing.
   onSubmit: (fields: Partial<ExceptionReport>, id?: string) => Promise<void>
   onDelete?: (id: string) => void
 }
 
 const today = () => new Date().toISOString().split('T')[0]
+const stripHtml = (s: string | null | undefined) => (s ? s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '')
 
 export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDelete }: Props) {
-  const { profile } = useAuthStore()
   const loc = useLocations()
-  const companyId = profile?.company_id
+  const { config, save: saveConfig } = useExceptionConfig()
 
-  const [customIssues, setCustomIssues] = useState<{ report_type: string; value: string }[]>([])
   const [locationId, setLocationId] = useState('')
   const [areaManager, setAreaManager] = useState('')
   const [dateFinding, setDateFinding] = useState('')
@@ -42,15 +38,6 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
 
-  // Load custom issue options on open.
-  useEffect(() => {
-    if (!open || !companyId) return
-    ;(supabase as any).schema('inventory').from('exception_issue_option')
-      .select('report_type, value').eq('company_id', companyId)
-      .then((r: any) => setCustomIssues((r.data ?? []) as any[]))
-  }, [open, companyId])
-
-  // Seed form from `existing` each open.
   useEffect(() => {
     if (!open) return
     setLocationId(existing?.location_id ?? '')
@@ -59,44 +46,40 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
     setDateAction(existing?.date_of_shop_action ?? '')
     setReportType(existing?.report_type ?? '')
     setIssue(existing?.issue ?? '')
-    setDetails(existing?.details ?? '')
+    setDetails(stripHtml(existing?.details))
     setContacted(!!existing?.contacted)
     setContactedDate(existing?.contacted_date ?? '')
     setResponse(existing?.response ?? '')
     setRdIfNo(existing?.rd_if_no ?? '')
-    setResponseNotes(existing?.response_notes ?? '')
-    setStatus(existing?.status ?? '')
+    setResponseNotes(stripHtml(existing?.response_notes))
+    setStatus(existing?.status ?? (existing?.id ? '' : DEFAULT_STATUS))
     setDeleteConfirm(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing, open])
 
-  // Auto-fill area manager from the selected location's metadata (only if empty).
+  // Auto-fill area manager + regional director from the location's metadata (only if empty).
   function onLocationChange(id: string) {
     setLocationId(id)
-    if (!areaManager) {
-      const am = loc.fieldValue(id, 'area_manager')
-      if (am) setAreaManager(am)
-    }
+    if (!areaManager) { const am = loc.fieldValue(id, 'area_manager'); if (am) setAreaManager(am) }
+    if (!rdIfNo) { const rd = loc.fieldValue(id, 'regional_director') || loc.fieldValue(id, 'director'); if (rd) setRdIfNo(rd) }
   }
 
   const issueOptions: ComboboxOption[] = useMemo(() => {
-    const base = DEFAULT_ISSUES[reportType] ?? []
-    const customs = customIssues.filter((c) => c.report_type === reportType).map((c) => c.value)
-    const all = [...new Set([...base, ...customs, ...(issue ? [issue] : [])])]
+    const base = config.issues[reportType] ?? []
+    const all = [...new Set([...base, ...(issue ? [issue] : [])])]
     return all.map((v) => ({ value: v, label: v }))
-  }, [reportType, customIssues, issue])
+  }, [config.issues, reportType, issue])
 
+  // "Add to list" — append a new issue option for this type and persist to config.
   async function createIssueOption(value: string): Promise<ComboboxOption> {
-    if (!companyId || !reportType) return { value, label: value }
-    const { error } = await (supabase as any).schema('inventory').from('exception_issue_option')
-      .insert({ company_id: companyId, report_type: reportType, value })
-    if (error && !String(error.message).includes('duplicate')) toast.error(error.message)
-    else setCustomIssues((prev) => [...prev, { report_type: reportType, value }])
+    if (reportType) {
+      const cur = config.issues[reportType] ?? []
+      if (!cur.includes(value)) saveConfig({ ...config, issues: { ...config.issues, [reportType]: [...cur, value] } })
+    }
     return { value, label: value }
   }
 
   async function save() {
-    if (!companyId) return
     if (!locationId) { toast.error('Pick a shop for this exception'); return }
     setSaving(true)
     const fields: Partial<ExceptionReport> = {
@@ -106,12 +89,12 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
       date_of_shop_action: dateAction || null,
       report_type: reportType || null,
       issue: issue || null,
-      details: details || null,
+      details: details.trim() || null,
       contacted,
       contacted_date: contactedDate || null,
       response: response.trim() || null,
       rd_if_no: rdIfNo.trim() || null,
-      response_notes: responseNotes || null,
+      response_notes: responseNotes.trim() || null,
       status: status || null,
     }
     try {
@@ -121,6 +104,9 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
       setSaving(false)
     }
   }
+
+  const typeOptions = [{ value: '', label: 'Select type…' }, ...config.types.map((t) => ({ value: t, label: t }))]
+  const statusList = [...new Set([...EXCEPTION_STATUSES, ...(status ? [status] : [])])]
 
   return (
     <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Exception Report' : 'New Exception Report'} size="lg">
@@ -132,15 +118,15 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
         <Input label="Date of Finding" type="date" value={dateFinding} onChange={(e) => setDateFinding(e.target.value)} />
         <Input label="Area Manager" value={areaManager} onChange={(e) => setAreaManager(e.target.value)} placeholder="Auto-fills from shop" />
 
-        <Select label="Exception Report Type" value={reportType} onChange={(e) => setReportType(e.target.value)}
-          options={[{ value: '', label: 'Select type…' }, ...REPORT_TYPES.map((t) => ({ value: t, label: t }))]} />
+        <Select label="Exception Report Type" value={reportType} onChange={(e) => setReportType(e.target.value)} options={typeOptions} />
         <Combobox label="ER Issue" options={issueOptions} value={issue} onChange={setIssue}
-          placeholder={reportType ? 'Select or add…' : 'Pick a type first'}
-          allowCreate onCreateOption={createIssueOption} />
+          placeholder={reportType ? 'Select or add…' : 'Pick a type first'} allowCreate onCreateOption={createIssueOption} />
 
         <div className="col-span-2">
-          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Details</label>
-          <RichTextEditor value={details} onChange={setDetails} placeholder="What was found…" minHeight={80} />
+          <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Details</label>
+          <textarea value={details} onChange={(e) => setDetails(e.target.value)} rows={3}
+            className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy focus:outline-none focus:ring-2 focus:ring-sky"
+            placeholder="What was found…" />
         </div>
 
         <div className="flex items-end gap-3">
@@ -152,17 +138,19 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
         <Input label="Date of Shop Action" type="date" value={dateAction} onChange={(e) => setDateAction(e.target.value)} />
 
         <div className="col-span-2">
-          <Input label="RelaDyne Escalation (if no response)" value={rdIfNo} onChange={(e) => setRdIfNo(e.target.value)} />
+          <Input label="Regional Director (if no response)" value={rdIfNo} onChange={(e) => setRdIfNo(e.target.value)} placeholder="Auto-fills from shop" />
         </div>
 
         <div className="col-span-2">
-          <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Response Notes</label>
-          <RichTextEditor value={responseNotes} onChange={setResponseNotes} placeholder="Follow-up notes…" minHeight={80} />
+          <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Response Notes</label>
+          <textarea value={responseNotes} onChange={(e) => setResponseNotes(e.target.value)} rows={3}
+            className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy focus:outline-none focus:ring-2 focus:ring-sky"
+            placeholder="Follow-up notes…" />
         </div>
 
         <div className="col-span-2">
           <Select label="Status" value={status} onChange={(e) => setStatus(e.target.value)}
-            options={[{ value: '', label: 'Select status…' }, ...EXCEPTION_STATUSES.map((s) => ({ value: s, label: s }))]} />
+            options={[{ value: '', label: 'Select status…' }, ...statusList.map((s) => ({ value: s, label: s }))]} />
         </div>
       </div>
 

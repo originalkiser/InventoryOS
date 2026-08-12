@@ -49,6 +49,37 @@ export const EXCEPTION_STATUSES = [
   'Closed',
 ] as const
 
+export const DEFAULT_STATUS = 'Pending Shop/AM Response'
+
+// Editable config persisted per-company in platform.app_settings (key 'exception_config').
+export interface ExceptionConfig {
+  types: string[]
+  issues: Record<string, string[]>
+  responseDays: number
+}
+export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
+  types: [...REPORT_TYPES],
+  issues: { ...DEFAULT_ISSUES },
+  responseDays: 3,
+}
+
+// A response counts as "yes" when it starts affirmatively (matches the sheet's "Yes 8/5").
+export function isYesResponse(response: string | null | undefined): boolean {
+  return /^(y|yes|true|1)\b/i.test((response ?? '').trim())
+}
+
+// Response state given the response-days window: 'yes' | 'no' (overdue, no yes) | 'pending'.
+export function responseState(
+  r: { response: string | null; contacted_date: string | null; date_of_finding: string | null },
+  responseDays: number,
+): 'yes' | 'no' | 'pending' {
+  if (isYesResponse(r.response)) return 'yes'
+  const start = r.contacted_date || r.date_of_finding
+  if (!start) return 'pending'
+  const days = Math.floor((Date.now() - new Date(start + 'T00:00:00').getTime()) / 86400000)
+  return days > responseDays ? 'no' : 'pending'
+}
+
 // Parse the sheet's "Contacted?" cell ("Yes 8/5", "Yes 8/4") into a flag + date.
 // Returns { contacted, contacted_date(YYYY-MM-DD | null) }.
 export function parseContacted(raw: string, fallbackYear: number): { contacted: boolean; contacted_date: string | null } {
