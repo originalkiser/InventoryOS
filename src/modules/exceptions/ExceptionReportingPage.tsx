@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Pencil, Filter } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -6,6 +6,7 @@ import { useConfigTab, type ImportMode } from '@/modules/config/useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
+import { EditText, EditDate, EditSelect, AutoTextarea, inputCls } from '@/components/shared/InlineCells'
 import { Button, Input, Card, CardBody, Tabs, TabsTrigger, TabsContent, SbLoader } from '@/components/ui'
 import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
@@ -23,8 +24,6 @@ import toast from 'react-hot-toast'
 const toDate = (v: string) => applyTransforms(v, [{ kind: 'date' }]) || null
 const stripHtml = (s: string | null) => (s ? s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '')
 const dShort = (d: string | null) => { if (!d) return '—'; try { return format(new Date(d + 'T00:00:00'), 'MMM d, yyyy') } catch { return d } }
-// Transparent bg so the row banding shows through inputs/selects.
-const inputCls = 'bg-transparent border border-navy/30 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky'
 
 const UPLOAD_FIELDS = [
   { name: 'shop', label: 'Shop', required: true },
@@ -302,45 +301,6 @@ function ResponseCell({ value, onSet }: { value: string | null; onSet: (v: strin
         )
       })}
     </div>
-  )
-}
-
-function EditText({ value, onSave, placeholder, className = '' }: { value: string | null; onSave: (v: string | null) => void; placeholder?: string; className?: string }) {
-  const [v, setV] = useState(value ?? '')
-  return (
-    <input value={v} onChange={(e) => setV(e.target.value)} onFocus={() => setV(value ?? '')}
-      onBlur={() => { if ((v.trim() || '') !== (value ?? '')) onSave(v.trim() || null) }}
-      placeholder={placeholder} className={`${inputCls} ${className}`} />
-  )
-}
-
-function EditDate({ value, onSave }: { value: string | null; onSave: (v: string | null) => void }) {
-  return <input type="date" value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={inputCls} />
-}
-
-function EditSelect({ value, options, onSave, placeholder, allowCurrent, className = '' }: {
-  value: string | null; options: string[]; onSave: (v: string | null) => void; placeholder?: string; allowCurrent?: boolean; className?: string
-}) {
-  const opts = allowCurrent && value && !options.includes(value) ? [value, ...options] : options
-  return (
-    <select value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={`${inputCls} ${className}`}>
-      <option value="">{placeholder ?? '—'}</option>
-      {opts.map((o) => <option key={o} value={o}>{o}</option>)}
-    </select>
-  )
-}
-
-// Auto-grows to fit its content (so the row height expands); width is user-resizable.
-function AutoTextarea({ value, onSave }: { value: string; onSave: (v: string | null) => void }) {
-  const [v, setV] = useState(value)
-  const ref = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => { setV(value) }, [value])
-  useLayoutEffect(() => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` } }, [v])
-  return (
-    <textarea ref={ref} value={v} rows={1}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={() => { if ((v.trim() || '') !== (value ?? '')) onSave(v.trim() || null) }}
-      className={`${inputCls} resize-x w-48 min-w-[8rem] overflow-hidden leading-snug align-top`} />
   )
 }
 

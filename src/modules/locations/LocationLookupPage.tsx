@@ -436,47 +436,36 @@ export function LocationLookupPage() {
 }
 
 function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; resolved: IssueRow[]; onManage: (v: 'pending' | 'resolved') => void }) {
+  const top = pending[0]
+  const start = top?.start_date ? new Date(top.start_date + 'T00:00:00') : null
+  const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
+  const pastDue = !!top?.target_resolution_date && differenceInCalendarDays(new Date(), new Date(top.target_resolution_date + 'T00:00:00')) > 0
   return (
-    <div className="flex flex-col gap-3">
-      <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', pending.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Pending Issues</span>
-          <span className={['text-lg font-heading font-bold', pending.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pending.length}</span>
+    <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', pending.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Issues</span>
+        <div className="flex items-center gap-3">
+          <span className={['text-sm font-heading font-bold', pending.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pending.length} <span className="text-[10px] font-mono font-normal text-inky/60">open</span></span>
+          <span className="text-sm font-heading font-bold text-[#2ECC71]">{resolved.length} <span className="text-[10px] font-mono font-normal text-inky/60">resolved</span></span>
         </div>
-        {pending.length === 0 ? (
-          <span className="text-xs font-body text-inky/50">None</span>
-        ) : pending.map((i) => {
-          const start = i.start_date ? new Date(i.start_date + 'T00:00:00') : null
-          const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
-          const pastDue = !!i.target_resolution_date && differenceInCalendarDays(new Date(), new Date(i.target_resolution_date + 'T00:00:00')) > 0
-          return (
-            <div key={i.id} className="rounded border border-navy/15 bg-cream/70 px-2 py-1.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-body text-navy flex-1 truncate">{i.title}</span>
-                {pastDue && <Badge color="red">Past due</Badge>}
-              </div>
-              <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
-                <span>Start {dateShort(i.start_date)}</span>
-                <span>Target {dateShort(i.target_resolution_date)}</span>
-                {daysOpen != null && <span className={pastDue ? 'text-[#C0392B] font-bold' : ''}>{daysOpen}d open</span>}
-              </div>
-            </div>
-          )
-        })}
-        <button onClick={() => onManage('pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Manage Issues →</button>
       </div>
-
-      <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Last Resolved</span>
-          <span className="text-lg font-heading font-bold text-[#2ECC71]">{resolved.length}</span>
-        </div>
-        {resolved.slice(0, 4).map((i) => (
-          <div key={i.id} className="text-xs font-body text-inky/70 truncate mt-0.5">✓ {i.title} <span className="text-inky/40">{dateShort(i.resolved_date)}</span></div>
-        ))}
-        {resolved.length === 0 && <div className="text-xs font-body text-inky/40 mt-0.5">None</div>}
-        <button onClick={() => onManage('resolved')} className="text-[10px] font-mono text-sky text-left hover:underline mt-1.5">Manage Issues →</button>
-      </div>
+      {top ? (
+        <button onClick={() => onManage('pending')} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-cream px-2 py-1.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-body text-navy flex-1 truncate">{top.title}</span>
+            {pastDue && <Badge color="red">Past due</Badge>}
+          </div>
+          <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
+            <span>Start {dateShort(top.start_date)}</span>
+            <span>Target {dateShort(top.target_resolution_date)}</span>
+            {daysOpen != null && <span className={pastDue ? 'text-[#C0392B] font-bold' : ''}>{daysOpen}d open</span>}
+          </div>
+        </button>
+      ) : (
+        <span className="text-xs font-body text-inky/50">No open issues</span>
+      )}
+      {pending.length > 1 && <span className="text-[10px] font-mono text-inky/50">+{pending.length - 1} more open</span>}
+      <button onClick={() => onManage('pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Manage Issues →</button>
     </div>
   )
 }
