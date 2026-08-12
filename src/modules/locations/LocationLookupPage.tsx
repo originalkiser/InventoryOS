@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
-import { Badge, Button, Card, CardBody, Combobox, SbLoader } from '@/components/ui'
+import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader } from '@/components/ui'
+import { IssueFormModal } from '@/modules/issues/IssueFormModal'
 import { orderDayFromDelivery } from '@/lib/orderDay'
-import type { Location } from '@/types'
+import type { Issue, Location } from '@/types'
 import { format, differenceInCalendarDays } from 'date-fns'
+import toast from 'react-hot-toast'
 
 const LAST_SHOP_KEY = 'location-lookup:last-shop'
 const VIEW_KEY = 'location-lookup:view'
@@ -77,6 +79,11 @@ export function LocationLookupPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customizeOpen, setCustomizeOpen] = useState(false)
+  // Issues modal: list toggle (pending/resolved) + inline editor.
+  // editIssue: undefined = editor closed, null = new issue, object = edit existing.
+  const [issuesModalOpen, setIssuesModalOpen] = useState(false)
+  const [modalView, setModalView] = useState<'pending' | 'resolved'>('pending')
+  const [editIssue, setEditIssue] = useState<Partial<Issue> | null | undefined>(undefined)
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
     try { const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [] } }
     catch { return { sidebar: [], tank: [], config: [] } }
@@ -96,7 +103,7 @@ export function LocationLookupPage() {
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
-        sb.schema('platform').from('issues').select('id, title, status_id, issue_notes, start_date, target_resolution_date, resolved_date').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
+        sb.schema('platform').from('issues').select('*').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
         sb.schema('core').from('location_supplemental').select('data').eq('company_id', companyId).eq('location_id', shopId).maybeSingle().then((r: any) => r).catch(() => ({ data: null })),
       ])
@@ -137,6 +144,21 @@ export function LocationLookupPage() {
   const isResolved = (s: string) => { const n = s.toLowerCase(); return n.includes('resolved') || n.includes('closed') || n.includes('complete') }
   const pendingIssues = issues.filter((i) => isPending(statusNames[i.status_id ?? ''] ?? ''))
   const resolvedIssues = issues.filter((i) => isResolved(statusNames[i.status_id ?? ''] ?? ''))
+
+  // Keepfill tanks first, then non-keepfill — each alpha-sorted by product.
+  const sortedTanks = useMemo(() => {
+    const byProduct = (a: TankRow, b: TankRow) =>
+      (a.product_id ?? '').localeCompare(b.product_id ?? '', undefined, { sensitivity: 'base' })
+    return [...tanks.filter((t) => t.keep_fill).sort(byProduct), ...tanks.filter((t) => !t.keep_fill).sort(byProduct)]
+  }, [tanks])
+
+  function openIssues(view: 'pending' | 'resolved') { setModalView(view); setEditIssue(undefined); setIssuesModalOpen(true) }
+  async function deleteIssue(id: string) {
+    const { error: delErr } = await (supabase as any).schema('platform').from('issues')
+      .update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    if (delErr) { toast.error('Failed to delete issue'); return }
+    toast.success('Issue deleted'); load()
+  }
 
   const rdDistributor = useMemo(() => {
     if (supplemental) {
@@ -243,7 +265,7 @@ export function LocationLookupPage() {
                   </div>
                 )
               })}
-              <button onClick={() => navigate('/issues?tab=pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Open Issues →</button>
+              <button onClick={() => openIssues('pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Manage Issues →</button>
             </div>
 
             <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3">
@@ -255,6 +277,7 @@ export function LocationLookupPage() {
                 <div key={i.id} className="text-xs font-body text-inky/70 truncate mt-0.5">✓ {i.title} <span className="text-inky/40">{dateShort(i.resolved_date)}</span></div>
               ))}
               {resolvedIssues.length === 0 && <div className="text-xs font-body text-inky/40 mt-0.5">None</div>}
+              <button onClick={() => openIssues('resolved')} className="text-[10px] font-mono text-sky text-left hover:underline mt-1.5">Manage Issues →</button>
             </div>
           </div>
 
@@ -279,7 +302,7 @@ export function LocationLookupPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {tanks.map((t) => (
+                        {sortedTanks.map((t) => (
                           <tr key={t.id} className="border-b border-navy/20">
                             {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)}`}>{c.render(t)}</td>)}
                           </tr>
@@ -302,6 +325,55 @@ export function LocationLookupPage() {
             )}
           </div>
         </div>
+      )}
+
+      {/* Issues list — toggle pending/resolved, edit inline without leaving the page. */}
+      <Modal open={issuesModalOpen && editIssue === undefined} onClose={() => setIssuesModalOpen(false)} title={`Issues — ${loc.labelOf(shopId)}`} size="lg">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="inline-flex rounded-lg border border-navy/20 overflow-hidden text-xs font-mono">
+            {(['pending', 'resolved'] as const).map((v) => (
+              <button key={v} onClick={() => setModalView(v)}
+                className={['px-3 py-1.5 uppercase tracking-wide transition-colors', modalView === v ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}>
+                {v === 'pending' ? `Pending (${pendingIssues.length})` : `Resolved (${resolvedIssues.length})`}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" onClick={() => setEditIssue({ location_id: shopId } as Partial<Issue>)}>+ New Issue</Button>
+        </div>
+        <div className="flex flex-col gap-2 max-h-[60vh] overflow-auto">
+          {(modalView === 'pending' ? pendingIssues : resolvedIssues).map((i) => {
+            const pastDue = modalView === 'pending' && !!i.target_resolution_date &&
+              differenceInCalendarDays(new Date(), new Date(i.target_resolution_date + 'T00:00:00')) > 0
+            return (
+              <button key={i.id} onClick={() => setEditIssue(i as unknown as Partial<Issue>)}
+                className="text-left rounded-lg border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-body text-navy flex-1 truncate">{i.title || 'Untitled issue'}</span>
+                  <Badge color={modalView === 'pending' ? 'amber' : 'green'}>{statusNames[i.status_id ?? ''] ?? '—'}</Badge>
+                  {pastDue && <Badge color="red">Past due</Badge>}
+                </div>
+                <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-1">
+                  <span>Start {dateShort(i.start_date)}</span>
+                  <span>Target {dateShort(i.target_resolution_date)}</span>
+                  {modalView === 'resolved' && <span>Resolved {dateShort(i.resolved_date)}</span>}
+                </div>
+              </button>
+            )
+          })}
+          {(modalView === 'pending' ? pendingIssues : resolvedIssues).length === 0 && (
+            <p className="text-xs font-mono text-inky/50 py-6 text-center">No {modalView} issues for this shop.</p>
+          )}
+        </div>
+      </Modal>
+
+      {editIssue !== undefined && (
+        <IssueFormModal
+          open
+          existing={editIssue}
+          onClose={() => setEditIssue(undefined)}
+          onSaved={() => { setEditIssue(undefined); load() }}
+          onDelete={deleteIssue}
+        />
       )}
     </div>
   )
