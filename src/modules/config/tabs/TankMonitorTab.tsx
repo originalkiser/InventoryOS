@@ -41,7 +41,10 @@ export function TankMonitorTab() {
   const [form, setForm] = useState({ ...EMPTY })
 
   const columns = useMemo(() => [
-    { id: 'location', header: 'Location', accessorFn: (r: TankMonitor) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
+    // Resolve the label in the cell (live each render) — react-table caches the
+    // accessor result per row, which showed a stale "—" from before the
+    // locations list finished loading.
+    { id: 'location', header: 'Location', accessorFn: (r: TankMonitor) => loc.labelOf(r.location_id), cell: (i: any) => loc.labelOf((i.row.original as TankMonitor).location_id) },
     col.accessor('product_id', { header: 'Product', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('keep_fill', { header: 'Keep-fill', cell: (i) => (i.getValue() ? '✓' : '—') }),
     { id: 'inventory_time', header: 'Inventory Time', accessorFn: (r: TankMonitor) => r.inventory_time ?? r.reading_date, cell: (i: any) => { const v = i.getValue(); if (!v) return '—'; try { return format(new Date(v), 'MMM d, yyyy h:mm a') } catch { return String(v) } } },

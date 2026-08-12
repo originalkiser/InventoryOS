@@ -46,7 +46,6 @@ interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'
 
 const TANK_COLS: Col<TankRow>[] = [
   { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—' },
-  { id: 'level', label: 'Current Level', align: 'right', render: (t) => `${num(t.value)} ${t.unit ?? ''}` },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand) },
   { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="green">yes</Badge> : <span className="text-inky/40">—</span>) },
   { id: 'updated', label: 'Last Update', align: 'left', render: (t) => dateShort(t.inventory_time ?? t.reading_date) },

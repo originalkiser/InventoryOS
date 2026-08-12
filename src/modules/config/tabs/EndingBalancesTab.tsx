@@ -135,7 +135,7 @@ export function EndingBalancesTab() {
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      { id: 'location', header: 'Location', accessorFn: (r: MonthlyEndingBalance) => locDisplay(r), cell: (i: any) => i.getValue() },
+      { id: 'location', header: 'Location', accessorFn: (r: MonthlyEndingBalance) => locDisplay(r), cell: (i: any) => locDisplay(i.row.original as MonthlyEndingBalance) },
       col.accessor('month', { header: 'Month', cell: (i) => { try { return format(new Date(i.getValue() + 'T00:00:00'), 'MMM yyyy') } catch { return i.getValue() } } }),
       col.accessor('ending_balance', { header: 'Ending Balance', cell: (i) => fmt(i.getValue()) }),
     ]

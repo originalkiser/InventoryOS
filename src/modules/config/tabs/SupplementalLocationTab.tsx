@@ -38,7 +38,7 @@ export function SupplementalLocationTab() {
   }, [data])
 
   const columns = useMemo(() => [
-    { id: 'location', header: 'Location', accessorFn: (r: Supplemental) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
+    { id: 'location', header: 'Location', accessorFn: (r: Supplemental) => loc.labelOf(r.location_id), cell: (i: any) => loc.labelOf((i.row.original as Supplemental).location_id) },
     ...dataKeys.map((k) => ({
       id: `d_${k}`, header: titleCase(k),
       accessorFn: (r: Supplemental) => (r.data as any)?.[k] ?? '',

@@ -48,7 +48,7 @@ export function LocationCpdTab() {
   const [form, setForm] = useState({ locationId: '', cpd: '', month: '' })
 
   const columns = useMemo(() => [
-    { id: 'location', header: 'Location', accessorFn: (r: LocationCpd) => loc.labelOf(r.location_id), cell: (i: any) => i.getValue() },
+    { id: 'location', header: 'Location', accessorFn: (r: LocationCpd) => loc.labelOf(r.location_id), cell: (i: any) => loc.labelOf((i.row.original as LocationCpd).location_id) },
     col.accessor('cpd', { header: 'Cars / Day', cell: (i) => (i.getValue() == null ? '—' : i.getValue()!.toLocaleString()) }),
     col.accessor('cpd', {
       id: 'tier', header: 'Tier',
