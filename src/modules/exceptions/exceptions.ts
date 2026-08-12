@@ -88,9 +88,10 @@ export function businessDaysSince(startISO: string | null | undefined): number {
 // Was the regional director escalated? Explicit "Yes (after RD added)"/"No", or an
 // overdue no-response (response window passed with no yes).
 export function isRdAdded(
-  r: { response: string | null; contacted_date: string | null; date_of_finding: string | null },
+  r: { response: string | null; contacted: boolean; contacted_date: string | null; date_of_finding: string | null },
   responseDays: number,
 ): boolean {
+  if (!r.contacted) return false
   if (r.response === RESPONSE_YES_RD || r.response === RESPONSE_NO) return true
   if (isYesResponse(r.response)) return false
   return businessDaysSince(r.contacted_date || r.date_of_finding) > responseDays
@@ -102,9 +103,10 @@ export function isRdAdded(
 //  - 'rd'   : window passed (or escalated) — show the RD name
 export interface RdCell { mode: 'none' | 'left' | 'rd'; daysLeft?: number }
 export function rdCell(
-  r: { response: string | null; contacted_date: string | null; date_of_finding: string | null },
+  r: { response: string | null; contacted: boolean; contacted_date: string | null; date_of_finding: string | null },
   responseDays: number,
 ): RdCell {
+  if (!r.contacted) return { mode: 'none' }
   if (r.response === RESPONSE_YES) return { mode: 'none' }
   if (r.response === RESPONSE_YES_RD || r.response === RESPONSE_NO) return { mode: 'rd' }
   const start = r.contacted_date || r.date_of_finding

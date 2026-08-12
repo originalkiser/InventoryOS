@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Pencil } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Pencil, Filter } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useConfigTab, type ImportMode } from '@/modules/config/useConfigTab'
@@ -23,7 +23,8 @@ import toast from 'react-hot-toast'
 const toDate = (v: string) => applyTransforms(v, [{ kind: 'date' }]) || null
 const stripHtml = (s: string | null) => (s ? s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '')
 const dShort = (d: string | null) => { if (!d) return '—'; try { return format(new Date(d + 'T00:00:00'), 'MMM d, yyyy') } catch { return d } }
-const inputCls = 'bg-cream border border-navy/30 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky'
+// Transparent bg so the row banding shows through inputs/selects.
+const inputCls = 'bg-transparent border border-navy/30 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky'
 
 const UPLOAD_FIELDS = [
   { name: 'shop', label: 'Shop', required: true },
@@ -53,7 +54,6 @@ export function ExceptionReportingPage() {
   const [editing, setEditing] = useState<Partial<ExceptionReport> | null>(null)
   const [importing, setImporting] = useState(false)
   const [statusFilter, setStatusFilter] = useState('All')
-  const [more, setMore] = useState<{ id: string; field: 'details' | 'response_notes'; label: string; value: string } | null>(null)
 
   const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
   const regionalDirector = (id: string | null) => loc.fieldValue(id, 'regional_director') || loc.fieldValue(id, 'director')
@@ -139,14 +139,14 @@ export function ExceptionReportingPage() {
                 </button>
               ))}
             </div>
-            <Button size="sm" onClick={openAdd}>+ Add</Button>
+            <Button size="sm" onClick={openAdd}>+ New Exception</Button>
           </div>
 
           {loading ? (
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : (
             <ExceptionTable rows={rows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
-              onSet={set} onEdit={openEdit} onMore={(r, field, label) => setMore({ id: r.id, field, label, value: stripHtml((r as any)[field]) })} />
+              onSet={set} onEdit={openEdit} />
           )}
         </TabsContent>
 
@@ -154,11 +154,6 @@ export function ExceptionReportingPage() {
           <SettingsView config={config} saveConfig={saveConfig} onImport={handleImport} importing={importing} clearAll={clearAll} />
         </TabsContent>
       </Tabs>
-
-      {more && (
-        <MoreEditor label={more.label} value={more.value} onClose={() => setMore(null)}
-          onSave={(v) => { silentUpdate(more.id, { [more.field]: v.trim() || null } as Partial<ExceptionReport>); setMore(null) }} />
-      )}
 
       <ExceptionReportModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
         onSubmit={async (fields, id) => { if (id) silentUpdate(id, fields); else await insert(fields) }}
@@ -168,79 +163,126 @@ export function ExceptionReportingPage() {
 }
 
 // ── Inline-editable table ────────────────────────────────────────────────────
-function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEdit, onMore }: {
+interface ColDef { id: string; label: string; filter: boolean; sticky?: 'status' | 'shop' }
+const COLS: ColDef[] = [
+  { id: 'status', label: 'Status', filter: true, sticky: 'status' },
+  { id: 'shop', label: 'Shop', filter: true, sticky: 'shop' },
+  { id: 'finding', label: 'Finding', filter: true },
+  { id: 'area_manager', label: 'Area Manager', filter: true },
+  { id: 'type', label: 'Type', filter: true },
+  { id: 'issue', label: 'Issue', filter: true },
+  { id: 'details', label: 'Details', filter: true },
+  { id: 'contacted', label: 'Contacted', filter: false },
+  { id: 'response', label: 'Response', filter: true },
+  { id: 'response_date', label: 'Response Date', filter: false },
+  { id: 'rd', label: 'Regional Director', filter: false },
+  { id: 'response_notes', label: 'Response Notes', filter: true },
+]
+
+function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEdit }: {
   rows: ExceptionReport[]
   config: ExceptionConfig
   shopLabel: (id: string | null) => string
   regionalDirector: (id: string | null) => string
   onSet: (r: ExceptionReport, patch: Partial<ExceptionReport>) => void
   onEdit: (r: ExceptionReport) => void
-  onMore: (row: ExceptionReport, field: 'details' | 'response_notes', label: string) => void
 }) {
+  const [filtersOn, setFiltersOn] = useState(false)
+  const [filters, setFilters] = useState<Record<string, string>>({})
   const thBase = 'px-2 py-2 text-left font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30 bg-cream sticky top-0 z-20'
   const tdBase = 'px-2 py-1 align-top border-b border-navy/15 whitespace-nowrap'
 
+  const cellText = (r: ExceptionReport, col: string): string => {
+    switch (col) {
+      case 'status': return r.status ?? ''
+      case 'shop': return shopLabel(r.location_id)
+      case 'finding': return dShort(r.date_of_finding)
+      case 'area_manager': return r.area_manager ?? ''
+      case 'type': return r.report_type ?? ''
+      case 'issue': return r.issue ?? ''
+      case 'details': return stripHtml(r.details)
+      case 'response': return r.response ?? ''
+      case 'response_notes': return stripHtml(r.response_notes)
+      default: return ''
+    }
+  }
+  const filtered = useMemo(() => rows.filter((r) =>
+    Object.entries(filters).every(([c, val]) => !val || cellText(r, c).toLowerCase().includes(val.toLowerCase()))),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [rows, filters, shopLabel])
+
   if (!rows.length) return <p className="text-xs font-mono text-inky/50 py-8">No exception reports for this filter.</p>
 
+  const thClass = (c: ColDef) => c.sticky === 'status' ? `${thBase} left-0 z-30 w-[230px] min-w-[230px]` : c.sticky === 'shop' ? `${thBase} left-[230px] z-30` : thBase
+
   return (
-    <div className="overflow-auto max-h-[calc(100vh-15rem)] rounded border border-navy/30">
-      <table className="text-xs font-mono border-collapse">
-        <thead>
-          <tr>
-            <th className={`${thBase} left-0 z-30 w-[230px] min-w-[230px]`}>Status</th>
-            <th className={`${thBase} left-[230px] z-30`}>Shop</th>
-            <th className={thBase}>Finding</th>
-            <th className={thBase}>Area Manager</th>
-            <th className={thBase}>Type</th>
-            <th className={thBase}>Issue</th>
-            <th className={thBase}>Details</th>
-            <th className={thBase}>Contacted</th>
-            <th className={thBase}>Response</th>
-            <th className={thBase}>Response Date</th>
-            <th className={thBase}>Regional Director</th>
-            <th className={thBase}>Response Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, idx) => {
-            const zebra = idx % 2 ? 'bg-navy/[0.03]' : ''
-            const info = rdCell(r, config.responseDays)
-            const issueOpts = config.issues[r.report_type ?? ''] ?? []
-            return (
-              <tr key={r.id} className={`${zebra} hover:bg-navy/[0.05]`}>
-                <td className={`${tdBase} sticky left-0 z-10 bg-cream w-[230px] min-w-[230px]`}>
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                    <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+    <div className="flex flex-col gap-2">
+      <div className="flex justify-end">
+        <button onClick={() => setFiltersOn((o) => !o)}
+          className={['inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border transition-colors', filtersOn ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
+          <Filter className="w-3 h-3" /> {filtersOn ? 'Hide Filters' : 'Filter Columns'}
+        </button>
+      </div>
+      <div className="overflow-auto max-h-[calc(100vh-16rem)] rounded border border-navy/30">
+        <table className="text-xs font-mono border-collapse">
+          <thead>
+            <tr>
+              {COLS.map((c) => (
+                <th key={c.id} className={thClass(c)}>
+                  <div className="flex flex-col gap-1">
+                    <span>{c.label}</span>
+                    {filtersOn && c.filter && (
+                      <input value={filters[c.id] ?? ''} onChange={(e) => setFilters((f) => ({ ...f, [c.id]: e.target.value }))} placeholder="filter…"
+                        className="bg-cream border border-navy/30 rounded px-1 py-0.5 text-[10px] font-mono text-navy font-normal normal-case tracking-normal w-full focus:outline-none focus:ring-1 focus:ring-sky" />
+                    )}
                   </div>
-                </td>
-                <td className={`${tdBase} sticky left-[230px] z-10 bg-cream text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
-                <td className={tdBase}><EditDate value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} /></td>
-                <td className={tdBase}><EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} /></td>
-                <td className={tdBase}><EditSelect value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} /></td>
-                <td className={tdBase}><EditSelect value={r.issue} options={issueOpts} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} /></td>
-                <td className={`${tdBase} whitespace-normal`}><InlineMore value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} onMore={() => onMore(r, 'details', 'Details')} /></td>
-                <td className={tdBase}>
-                  <div className="flex items-center gap-1">
-                    <input type="checkbox" checked={r.contacted} onChange={(e) => onSet(r, { contacted: e.target.checked })} className="accent-sky" />
-                    {r.contacted && <EditDate value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
-                  </div>
-                </td>
-                <td className={tdBase}><ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} /></td>
-                <td className={tdBase}>
-                  {isYesResponse(r.response) ? <EditDate value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} /> : <span className="text-inky/30">—</span>}
-                </td>
-                <td className={tdBase}>
-                  {info.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info.daysLeft}d left</span>
-                    : info.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
-                    : <span className="text-inky/40">—</span>}
-                </td>
-                <td className={`${tdBase} whitespace-normal`}><InlineMore value={stripHtml(r.response_notes)} onSave={(v) => onSet(r, { response_notes: v })} onMore={() => onMore(r, 'response_notes', 'Response Notes')} /></td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr><td colSpan={COLS.length} className="px-2 py-6 text-center text-inky/50">No rows match the filters.</td></tr>
+            ) : filtered.map((r, idx) => {
+              const band = idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
+              const info = rdCell(r, config.responseDays)
+              const issueOpts = config.issues[r.report_type ?? ''] ?? []
+              return (
+                <tr key={r.id} className={band}>
+                  <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
+                      <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                    </div>
+                  </td>
+                  <td className={`${tdBase} sticky left-[230px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
+                  <td className={tdBase}><EditDate value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} /></td>
+                  <td className={tdBase}><EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} /></td>
+                  <td className={tdBase}><EditSelect value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} /></td>
+                  <td className={tdBase}><EditSelect value={r.issue} options={issueOpts} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} /></td>
+                  <td className={`${tdBase} whitespace-normal`}><AutoTextarea value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} /></td>
+                  <td className={tdBase}>
+                    <div className="flex items-center gap-1">
+                      <input type="checkbox" checked={r.contacted} onChange={(e) => onSet(r, { contacted: e.target.checked })} className="accent-sky" />
+                      {r.contacted && <EditDate value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
+                    </div>
+                  </td>
+                  <td className={tdBase}><ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} /></td>
+                  <td className={tdBase}>
+                    {isYesResponse(r.response) ? <EditDate value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} /> : <span className="text-inky/30">—</span>}
+                  </td>
+                  <td className={tdBase}>
+                    {info.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info.daysLeft}d left</span>
+                      : info.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
+                      : <span className="text-inky/40">—</span>}
+                  </td>
+                  <td className={`${tdBase} whitespace-normal`}><AutoTextarea value={stripHtml(r.response_notes)} onSave={(v) => onSet(r, { response_notes: v })} /></td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -254,7 +296,7 @@ function ResponseCell({ value, onSet }: { value: string | null; onSet: (v: strin
         const active = val === RESPONSE_NO ? 'bg-[#C0392B] text-cream' : 'bg-[#2ECC71] text-navy'
         return (
           <button key={val} title={val} onClick={() => onSet(on ? null : val)}
-            className={['px-1.5 py-0.5 text-[10px] font-mono border-r border-navy/20 last:border-r-0', on ? active : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}>
+            className={['px-1.5 py-0.5 text-[10px] font-mono border-r border-navy/20 last:border-r-0', on ? active : 'bg-transparent text-inky hover:bg-navy/10'].join(' ')}>
             {label}
           </button>
         )
@@ -288,29 +330,17 @@ function EditSelect({ value, options, onSave, placeholder, allowCurrent, classNa
   )
 }
 
-function InlineMore({ value, onSave, onMore }: { value: string; onSave: (v: string | null) => void; onMore: () => void }) {
-  return (
-    <div className="flex items-center gap-1 max-w-[16rem]">
-      <EditText value={value} onSave={onSave} className="w-full min-w-[9rem]" />
-      <button onClick={onMore} title="Expand" className="text-sky hover:text-navy flex-shrink-0 leading-none">⋯</button>
-    </div>
-  )
-}
-
-function MoreEditor({ label, value, onClose, onSave }: { label: string; value: string; onClose: () => void; onSave: (v: string) => void }) {
+// Auto-grows to fit its content (so the row height expands); width is user-resizable.
+function AutoTextarea({ value, onSave }: { value: string; onSave: (v: string | null) => void }) {
   const [v, setV] = useState(value)
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => { setV(value) }, [value])
+  useLayoutEffect(() => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` } }, [v])
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="bg-cream rounded-lg border border-navy/40 shadow-xl w-full max-w-xl p-4" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-xs font-mono uppercase tracking-wide text-inky mb-2">{label}</h3>
-        <textarea value={v} onChange={(e) => setV(e.target.value)} rows={8} autoFocus
-          className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy focus:outline-none focus:ring-2 focus:ring-sky" />
-        <div className="flex justify-end gap-2 mt-3">
-          <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={() => onSave(v)}>Save</Button>
-        </div>
-      </div>
-    </div>
+    <textarea ref={ref} value={v} rows={1}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => { if ((v.trim() || '') !== (value ?? '')) onSave(v.trim() || null) }}
+      className={`${inputCls} resize-x w-48 min-w-[8rem] overflow-hidden leading-snug align-top`} />
   )
 }
 
