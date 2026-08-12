@@ -5,6 +5,8 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader } from '@/components/ui'
 import { IssueFormModal } from '@/modules/issues/IssueFormModal'
+import { ExceptionReportModal } from '@/modules/exceptions/ExceptionReportModal'
+import type { ExceptionReport } from '@/modules/exceptions/exceptions'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location } from '@/types'
 import { format, differenceInCalendarDays } from 'date-fns'
@@ -104,6 +106,9 @@ export function LocationLookupPage() {
   const [vendorNames, setVendorNames] = useState<Record<string, string>>({})
   const [issues, setIssues] = useState<IssueRow[]>([])
   const [statusNames, setStatusNames] = useState<Record<string, string>>({})
+  const [exceptions, setExceptions] = useState<ExceptionReport[]>([])
+  const [excModalOpen, setExcModalOpen] = useState(false)
+  const [editingExc, setEditingExc] = useState<Partial<ExceptionReport> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customizeOpen, setCustomizeOpen] = useState(false)
@@ -127,13 +132,14 @@ export function LocationLookupPage() {
     setLoading(true); setError(null)
     const sb = supabase as any
     try {
-      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes] = await Promise.all([
+      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
         sb.schema('platform').from('issues').select('*').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
         sb.schema('core').from('location_supplemental').select('data').eq('company_id', companyId).eq('location_id', shopId).maybeSingle().then((r: any) => r).catch(() => ({ data: null })),
+        sb.schema('inventory').from('exception_reports').select('*').eq('company_id', companyId).eq('location_id', shopId).order('date_of_finding', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       setTanks((tankRes.data ?? []) as TankRow[])
       setConfigs((cfgRes.data ?? []) as ConfigRow[])
@@ -141,6 +147,7 @@ export function LocationLookupPage() {
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
       setSupplemental((supRes?.data?.data ?? null) as Record<string, string> | null)
+      setExceptions((excRes?.data ?? []) as ExceptionReport[])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load location detail')
     } finally {
@@ -193,6 +200,24 @@ export function LocationLookupPage() {
     if (delErr) { toast.error('Failed to delete issue'); return }
     toast.success('Issue deleted'); load()
   }
+
+  // Exceptions write the same inventory.exception_reports the Exception Reporting page reads.
+  async function saveException(fields: Partial<ExceptionReport>, id?: string) {
+    const sb = supabase as any
+    const base = { ...fields, company_id: companyId, updated_by: profile?.id ?? null, last_change_source: 'manual', updated_at: new Date().toISOString() }
+    const { error: sErr } = id
+      ? await sb.schema('inventory').from('exception_reports').update(base).eq('id', id)
+      : await sb.schema('inventory').from('exception_reports').insert(base)
+    if (sErr) { toast.error(sErr.message); return }
+    toast.success(id ? 'Exception updated' : 'Exception logged'); load()
+  }
+  async function deleteException(id: string) {
+    const { error: delErr } = await (supabase as any).schema('inventory').from('exception_reports').delete().eq('id', id)
+    if (delErr) { toast.error('Failed to delete exception'); return }
+    toast.success('Exception deleted'); load()
+  }
+  function openAddException() { setEditingExc({ location_id: shopId }); setExcModalOpen(true) }
+  function openEditException(e: ExceptionReport) { setEditingExc(e); setExcModalOpen(true) }
 
   const rdDistributor = useMemo(() => {
     if (supplemental) {
@@ -311,7 +336,10 @@ export function LocationLookupPage() {
                 )}
               </CardBody>
               </Card>
-              <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
+              <div className="flex flex-col gap-3 flex-1 min-w-[260px] w-full xl:w-auto">
+                <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
+                <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />
+              </div>
             </div>
 
             {configsByVendor.length === 0 ? (
@@ -382,13 +410,16 @@ export function LocationLookupPage() {
           onDelete={deleteIssue}
         />
       )}
+
+      <ExceptionReportModal open={excModalOpen} onClose={() => setExcModalOpen(false)} existing={editingExc}
+        onSubmit={saveException} onDelete={deleteException} />
     </div>
   )
 }
 
 function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; resolved: IssueRow[]; onManage: (v: 'pending' | 'resolved') => void }) {
   return (
-    <div className="flex flex-col gap-3 flex-1 min-w-[260px] w-full xl:w-auto">
+    <div className="flex flex-col gap-3">
       <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', pending.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Pending Issues</span>
@@ -428,6 +459,31 @@ function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; re
         {resolved.length === 0 && <div className="text-xs font-body text-inky/40 mt-0.5">None</div>}
         <button onClick={() => onManage('resolved')} className="text-[10px] font-mono text-sky text-left hover:underline mt-1.5">Manage Issues →</button>
       </div>
+    </div>
+  )
+}
+
+function ExceptionsBox({ exceptions, onAdd, onEdit }: { exceptions: ExceptionReport[]; onAdd: () => void; onEdit: (e: ExceptionReport) => void }) {
+  const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
+  const open = exceptions.filter((e) => !isClosed(e.status))
+  return (
+    <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', open.length ? 'border-[#C0392B]/40 bg-[#C0392B]/5' : 'border-navy/20 bg-cream'].join(' ')}>
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Exception Reports</span>
+        <span className={['text-lg font-heading font-bold', open.length ? 'text-[#C0392B]' : 'text-navy'].join(' ')}>{open.length}</span>
+      </div>
+      {exceptions.length === 0 ? (
+        <span className="text-xs font-body text-inky/50">None</span>
+      ) : exceptions.slice(0, 5).map((e) => (
+        <button key={e.id} onClick={() => onEdit(e)} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-body text-navy flex-1 truncate">{[e.report_type, e.issue].filter(Boolean).join(' · ') || 'Exception'}</span>
+            {e.status && <Badge color={isClosed(e.status) ? 'green' : 'amber'}>{e.status}</Badge>}
+          </div>
+          <div className="text-[10px] font-mono text-inky/60 mt-0.5">Found {dateShort(e.date_of_finding)}</div>
+        </button>
+      ))}
+      <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Exception</button>
     </div>
   )
 }

@@ -20,6 +20,7 @@ import { ConfigPage } from '@/modules/config/ConfigPage'
 import { GlobalConfigPage } from '@/modules/config/GlobalConfigPage'
 import { LocationsPage } from '@/modules/locations/LocationsPage'
 import { LocationLookupPage } from '@/modules/locations/LocationLookupPage'
+import { ExceptionReportingPage } from '@/modules/exceptions/ExceptionReportingPage'
 import { DevHubPage } from '@/modules/dev-hub/DevHubPage'
 import { MonthEndPage } from '@/modules/monthend/MonthEndPage'
 import { WeeklyPage } from '@/modules/weekly/WeeklyPage'
@@ -136,6 +137,7 @@ export default function App() {
           <Route path="global-config" element={<GlobalConfigPage />} />
           <Route path="locations" element={<LocationsPage />} />
           <Route path="location-lookup" element={<LocationLookupPage />} />
+          <Route path="exception-reporting" element={<ExceptionReportingPage />} />
           <Route path="dev-hub" element={<RequireAdminOrDev><DevHubPage /></RequireAdminOrDev>} />
           <Route path="monthend" element={<MonthEndPage />} />
           <Route path="month-end" element={<Navigate to="/monthend" replace />} />
