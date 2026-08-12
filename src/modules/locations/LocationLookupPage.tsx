@@ -32,8 +32,35 @@ interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[] }
 
 const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 }))
 const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy') } catch { return d } }
+const dateTime = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy · h:mm a') } catch { return d } }
 const alignCls = (a: string) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left')
 const metaLabel = (k: string) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+// Normalize a tank unit string to a compact label. Tanks default to gallons.
+const normUnit = (u: string | null | undefined): string | null => {
+  if (!u) return null
+  const s = u.trim().toLowerCase()
+  if (s.startsWith('gal')) return 'Gal'
+  if (s.startsWith('q')) return 'Qts'
+  return null
+}
+
+// Relative callout for a weekday name vs today ("today" / "tomorrow" / "in 3 days" / "2 days ago").
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+function relativeDay(dayName: string): string | null {
+  if (!dayName) return null
+  const s = dayName.trim().toLowerCase()
+  let target = WEEKDAYS.indexOf(s)
+  if (target < 0) target = WEEKDAYS.findIndex((w) => w.startsWith(s.slice(0, 3)))
+  if (target < 0) return null
+  const today = new Date().getDay()
+  const ahead = (target - today + 7) % 7 // days until next occurrence (0 = today)
+  const ago = (today - target + 7) % 7 // days since last occurrence
+  if (ahead === 0) return 'today'
+  if (ahead === 1) return 'tomorrow'
+  if (ago === 1) return 'yesterday'
+  return ahead <= ago ? `in ${ahead} days` : `${ago} days ago`
+}
 
 // Read a location field: base column first, then metadata fallback.
 function locVal(loc: Location | undefined, key: string): string {
@@ -49,8 +76,8 @@ interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'
 const TANK_COLS: Col<TankRow>[] = [
   { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—' },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand) },
-  { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="green">yes</Badge> : <span className="text-inky/40">—</span>) },
-  { id: 'updated', label: 'Last Update', align: 'left', render: (t) => dateShort(t.inventory_time ?? t.reading_date) },
+  { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>) },
+  { id: 'updated', label: 'Last Update', align: 'left', render: (t) => dateTime(t.inventory_time ?? t.reading_date) },
 ]
 
 const CONFIG_FIXED: Col<ConfigRow>[] = [
@@ -152,6 +179,12 @@ export function LocationLookupPage() {
     return [...tanks.filter((t) => t.keep_fill).sort(byProduct), ...tanks.filter((t) => !t.keep_fill).sort(byProduct)]
   }, [tanks])
 
+  // Unit shown on the On Hand header: use a shared row unit if present, else default to gallons.
+  const tankUnit = useMemo(() => {
+    const units = new Set(tanks.map((t) => normUnit(t.unit)).filter(Boolean) as string[])
+    return units.size === 1 ? [...units][0] : units.size === 0 ? 'Gal' : null
+  }, [tanks])
+
   function openIssues(view: 'pending' | 'resolved') { setModalView(view); setEditIssue(undefined); setIssuesModalOpen(true) }
   async function deleteIssue(id: string) {
     const { error: delErr } = await (supabase as any).schema('platform').from('issues')
@@ -170,13 +203,15 @@ export function LocationLookupPage() {
 
   const stateVal = locVal(location, 'state')
   const inNC = ['nc', 'north carolina'].includes(stateVal.trim().toLowerCase())
-  const sidebar: { label: string; value: string }[] = location ? [
+  const rdOrderDay = location ? orderDayFromDelivery(location.reladyne_delivery_day) : ''
+  const rdDeliveryDay = locVal(location, 'reladyne_delivery_day')
+  const sidebar: { label: string; value: string; note?: string }[] = location ? [
     { label: 'Location', value: locVal(location, 'shop_city') || loc.labelOf(shopId) },
     { label: 'Area Manager', value: locVal(location, 'area_manager') },
     { label: 'AM Cell', value: locVal(location, 'am_phone') },
     { label: 'RDO', value: locVal(location, 'director') },
-    { label: 'RD Order Day', value: orderDayFromDelivery(location.reladyne_delivery_day) },
-    { label: 'RD Delivery Day', value: locVal(location, 'reladyne_delivery_day') },
+    { label: 'RD Order Day', value: rdOrderDay, note: relativeDay(rdOrderDay) ?? undefined },
+    { label: 'RD Delivery Day', value: rdDeliveryDay, note: relativeDay(rdDeliveryDay) ?? undefined },
     { label: 'RD Distributor', value: rdDistributor },
     { label: 'Address', value: [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') },
     { label: 'Shop Phone', value: locVal(location, 'store_phone') },
@@ -197,7 +232,6 @@ export function LocationLookupPage() {
           <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>
         </div>
         <div className="flex items-center gap-2">
-          {shopId && <Button size="sm" variant="secondary" onClick={() => setCustomizeOpen((o) => !o)}>{customizeOpen ? 'Done' : 'Customize'}</Button>}
           <div className="w-80"><Combobox options={loc.options} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
         </div>
       </div>
@@ -232,7 +266,10 @@ export function LocationLookupPage() {
                   {visibleSidebar.map((f) => (
                     <div key={f.label} className="flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
                       <dt className="text-[10px] font-mono font-semibold uppercase tracking-wide text-navy/70">{f.label}</dt>
-                      <dd className="text-xs font-body text-navy break-words">{f.value || '—'}</dd>
+                      <dd className="text-xs font-body text-navy break-words">
+                        {f.value || '—'}
+                        {f.note && <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/40 text-navy">{f.note}</span>}
+                      </dd>
                     </div>
                   ))}
                 </dl>
@@ -294,11 +331,11 @@ export function LocationLookupPage() {
                 ) : visibleTankCols.length === 0 ? (
                   <p className="text-xs font-mono text-inky/60">All tank columns hidden — enable some under Customize.</p>
                 ) : (
-                  <div className="overflow-auto rounded border border-navy/30">
-                    <table className="w-full text-xs font-mono">
+                  <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+                    <table className="text-xs font-mono">
                       <thead>
                         <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                          {visibleTankCols.map((c) => <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>{c.label}</th>)}
+                          {visibleTankCols.map((c) => <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>{c.id === 'on_hand' && tankUnit ? `${c.label} (${tankUnit})` : c.label}</th>)}
                         </tr>
                       </thead>
                       <tbody>
@@ -325,6 +362,13 @@ export function LocationLookupPage() {
             )}
           </div>
         </div>
+      )}
+
+      {shopId && (
+        <button onClick={() => setCustomizeOpen((o) => !o)}
+          className="fixed bottom-6 right-6 z-30 rounded-full bg-navy text-cream px-5 py-2.5 text-xs font-mono uppercase tracking-wide shadow-lg hover:bg-navy/90 transition-colors">
+          {customizeOpen ? 'Done' : 'Customize'}
+        </button>
       )}
 
       {/* Issues list — toggle pending/resolved, edit inline without leaving the page. */}
