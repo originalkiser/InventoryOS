@@ -63,21 +63,54 @@ export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   responseDays: 3,
 }
 
-// A response counts as "yes" when it starts affirmatively (matches the sheet's "Yes 8/5").
+// Fixed response values (the table renders these as buttons).
+export const RESPONSE_YES = 'Yes'
+export const RESPONSE_YES_RD = 'Yes (after RD added)'
+export const RESPONSE_NO = 'No'
+export const RESPONSE_OPTIONS = [RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO] as const
+
+// A response counts as "yes" when affirmative (covers both Yes variants + legacy "Yes 8/5").
 export function isYesResponse(response: string | null | undefined): boolean {
   return /^(y|yes|true|1)\b/i.test((response ?? '').trim())
 }
 
-// Response state given the response-days window: 'yes' | 'no' (overdue, no yes) | 'pending'.
-export function responseState(
+// Business days (Mon–Fri) strictly after `start` through today.
+export function businessDaysSince(startISO: string | null | undefined): number {
+  if (!startISO) return 0
+  const start = new Date(startISO + 'T00:00:00')
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  let count = 0
+  const d = new Date(start); d.setDate(d.getDate() + 1)
+  while (d <= today) { const wd = d.getDay(); if (wd !== 0 && wd !== 6) count++; d.setDate(d.getDate() + 1) }
+  return count
+}
+
+// Was the regional director escalated? Explicit "Yes (after RD added)"/"No", or an
+// overdue no-response (response window passed with no yes).
+export function isRdAdded(
   r: { response: string | null; contacted_date: string | null; date_of_finding: string | null },
   responseDays: number,
-): 'yes' | 'no' | 'pending' {
-  if (isYesResponse(r.response)) return 'yes'
+): boolean {
+  if (r.response === RESPONSE_YES_RD || r.response === RESPONSE_NO) return true
+  if (isYesResponse(r.response)) return false
+  return businessDaysSince(r.contacted_date || r.date_of_finding) > responseDays
+}
+
+// What the "Regional Director" cell should show:
+//  - 'none' : responded plainly / no start date
+//  - 'left' : still inside the window — daysLeft business days remaining
+//  - 'rd'   : window passed (or escalated) — show the RD name
+export interface RdCell { mode: 'none' | 'left' | 'rd'; daysLeft?: number }
+export function rdCell(
+  r: { response: string | null; contacted_date: string | null; date_of_finding: string | null },
+  responseDays: number,
+): RdCell {
+  if (r.response === RESPONSE_YES) return { mode: 'none' }
+  if (r.response === RESPONSE_YES_RD || r.response === RESPONSE_NO) return { mode: 'rd' }
   const start = r.contacted_date || r.date_of_finding
-  if (!start) return 'pending'
-  const days = Math.floor((Date.now() - new Date(start + 'T00:00:00').getTime()) / 86400000)
-  return days > responseDays ? 'no' : 'pending'
+  if (!start) return { mode: 'none' }
+  const left = responseDays - businessDaysSince(start)
+  return left > 0 ? { mode: 'left', daysLeft: left } : { mode: 'rd' }
 }
 
 // Parse the sheet's "Contacted?" cell ("Yes 8/5", "Yes 8/4") into a flag + date.

@@ -3,7 +3,7 @@ import { Modal, Button, Combobox, Select, Input, Toggle } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
 import { useExceptionConfig } from './useExceptionConfig'
-import { DEFAULT_STATUS, EXCEPTION_STATUSES, type ExceptionReport } from './exceptions'
+import { DEFAULT_STATUS, EXCEPTION_STATUSES, RESPONSE_OPTIONS, type ExceptionReport } from './exceptions'
 import toast from 'react-hot-toast'
 
 interface Props {
@@ -134,8 +134,9 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
         </div>
         <Input label="Contacted Date" type="date" value={contactedDate} onChange={(e) => setContactedDate(e.target.value)} disabled={!contacted} />
 
-        <Input label="Response from Shop/AM" value={response} onChange={(e) => setResponse(e.target.value)} placeholder="e.g. Yes / details" />
-        <Input label="Date of Shop Action" type="date" value={dateAction} onChange={(e) => setDateAction(e.target.value)} />
+        <Select label="Response from Shop/AM" value={response} onChange={(e) => setResponse(e.target.value)}
+          options={[{ value: '', label: 'No response yet' }, ...RESPONSE_OPTIONS.map((r) => ({ value: r, label: r }))]} />
+        <Input label="Response Date" type="date" value={dateAction} onChange={(e) => setDateAction(e.target.value)} />
 
         <div className="col-span-2">
           <Input label="Regional Director (if no response)" value={rdIfNo} onChange={(e) => setRdIfNo(e.target.value)} placeholder="Auto-fills from shop" />

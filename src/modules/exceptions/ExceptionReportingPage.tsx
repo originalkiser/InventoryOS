@@ -1,20 +1,24 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Pencil } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/authStore'
 import { useConfigTab, type ImportMode } from '@/modules/config/useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
-import { Button, Input, Card, CardBody, Tabs, TabsList, TabsTrigger, TabsContent, SbLoader } from '@/components/ui'
+import { Button, Input, Card, CardBody, Tabs, TabsTrigger, TabsContent, SbLoader } from '@/components/ui'
 import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
 import {
-  EXCEPTION_STATUSES, parseContacted, isYesResponse, responseState,
+  EXCEPTION_STATUSES, RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO,
+  parseContacted, isYesResponse, isRdAdded, rdCell,
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
 import { ExceptionReportModal } from './ExceptionReportModal'
-import { format } from 'date-fns'
+import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
+import toast from 'react-hot-toast'
 
 const toDate = (v: string) => applyTransforms(v, [{ kind: 'date' }]) || null
 const stripHtml = (s: string | null) => (s ? s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '')
@@ -24,7 +28,7 @@ const inputCls = 'bg-cream border border-navy/30 rounded px-1.5 py-1 text-xs fon
 const UPLOAD_FIELDS = [
   { name: 'shop', label: 'Shop', required: true },
   { name: 'date_of_finding', label: 'Date of Finding' },
-  { name: 'date_of_shop_action', label: 'Date of Shop Action' },
+  { name: 'date_of_shop_action', label: 'Response Date' },
   { name: 'area_manager', label: 'Area Manager' },
   { name: 'report_type', label: 'Exception Report (Type)' },
   { name: 'issue', label: 'Issue' },
@@ -36,35 +40,44 @@ const UPLOAD_FIELDS = [
 ]
 
 export function ExceptionReportingPage() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<ExceptionReport>('exception_reports', 'inventory')
+  const { profile } = useAuthStore()
+  const { data, loading, insert, remove, importRows, clearAll } = useConfigTab<ExceptionReport>('exception_reports', 'inventory')
   const loc = useLocations()
   const { config, save: saveConfig } = useExceptionConfig()
+
+  // Local mirror so inline edits apply instantly without waiting on a reload.
+  const [rowsAll, setRowsAll] = useState<ExceptionReport[]>([])
+  useEffect(() => { setRowsAll(data) }, [data])
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Partial<ExceptionReport> | null>(null)
   const [importing, setImporting] = useState(false)
   const [statusFilter, setStatusFilter] = useState('All')
-  const [more, setMore] = useState<{ row: ExceptionReport; field: 'details' | 'response_notes'; label: string } | null>(null)
+  const [more, setMore] = useState<{ id: string; field: 'details' | 'response_notes'; label: string; value: string } | null>(null)
 
-  // Shop label without the doubled location number (shop_city already includes it).
   const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
-  const set = (r: ExceptionReport, patch: Partial<ExceptionReport>) => update(r.id, patch)
+  const regionalDirector = (id: string | null) => loc.fieldValue(id, 'regional_director') || loc.fieldValue(id, 'director')
+
+  // Optimistic local patch + direct silent write (no reload → no focus loss / wait).
+  function silentUpdate(id: string, patch: Partial<ExceptionReport>) {
+    setRowsAll((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)))
+    ;(supabase as any).schema('inventory').from('exception_reports')
+      .update({ ...patch, updated_by: profile?.id ?? null, last_change_source: 'manual', updated_at: new Date().toISOString() })
+      .eq('id', id).then(({ error }: any) => { if (error) toast.error(error.message) })
+  }
+  const set = (r: ExceptionReport, patch: Partial<ExceptionReport>) => silentUpdate(r.id, patch)
 
   function openAdd() { setEditing(null); setModalOpen(true) }
   function openEdit(r: ExceptionReport) { setEditing(r); setModalOpen(true) }
 
-  // Status chips present in the data (+ All), with counts.
   const statusChips = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const r of data) { const s = r.status || 'No Status'; counts.set(s, (counts.get(s) ?? 0) + 1) }
+    for (const r of rowsAll) { const s = r.status || 'No Status'; counts.set(s, (counts.get(s) ?? 0) + 1) }
     const present = [...counts.keys()].sort((a, b) => EXCEPTION_STATUSES.indexOf(a as any) - EXCEPTION_STATUSES.indexOf(b as any))
-    return [{ key: 'All', count: data.length }, ...present.map((s) => ({ key: s, count: counts.get(s)! }))]
-  }, [data])
+    return [{ key: 'All', count: rowsAll.length }, ...present.map((s) => ({ key: s, count: counts.get(s)! }))]
+  }, [rowsAll])
 
-  const rows = useMemo(() => {
-    if (statusFilter === 'All') return data
-    return data.filter((r) => (r.status || 'No Status') === statusFilter)
-  }, [data, statusFilter])
+  const rows = useMemo(() => (statusFilter === 'All' ? rowsAll : rowsAll.filter((r) => (r.status || 'No Status') === statusFilter)), [rowsAll, statusFilter])
 
   async function handleImport(inRows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
@@ -98,18 +111,22 @@ export function ExceptionReportingPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Exception Reporting</h1>
-        <p className="text-xs text-inky mt-0.5">Inventory findings (PO match, activity, on-hand). Every cell is editable inline; use the pencil for full detail.</p>
-      </div>
+    <div className="flex flex-col">
+      <Tabs defaultValue="summary">
+        {/* Pinned header + tabs */}
+        <div className="sticky top-0 z-40 bg-cream pt-1 pb-2">
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Exception Reporting</h1>
+          <p className="text-xs text-inky mt-0.5 mb-2">Inventory findings (PO match, activity, on-hand). Every cell is editable inline; the pencil opens full detail.</p>
+          <div className="flex gap-1 border-b border-navy/30">
+            <TabsTrigger value="summary">Summary</TabsTrigger>
+            <TabsTrigger value="reports">Reports</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
+          </div>
+        </div>
 
-      <Tabs defaultValue="reports">
-        <TabsList>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
-          <TabsTrigger value="summary">Summary</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
-        </TabsList>
+        <TabsContent value="summary">
+          <SummaryView data={rowsAll} config={config} />
+        </TabsContent>
 
         <TabsContent value="reports">
           <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
@@ -128,12 +145,9 @@ export function ExceptionReportingPage() {
           {loading ? (
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : (
-            <ExceptionTable rows={rows} config={config} shopLabel={shopLabel} onSet={set} onEdit={openEdit} onMore={(row, field, label) => setMore({ row, field, label })} />
+            <ExceptionTable rows={rows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
+              onSet={set} onEdit={openEdit} onMore={(r, field, label) => setMore({ id: r.id, field, label, value: stripHtml((r as any)[field]) })} />
           )}
-        </TabsContent>
-
-        <TabsContent value="summary">
-          <SummaryView data={data} config={config} />
         </TabsContent>
 
         <TabsContent value="settings">
@@ -141,93 +155,87 @@ export function ExceptionReportingPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Full-content editor for long text cells */}
       {more && (
-        <MoreEditor label={more.label} value={stripHtml((more.row as any)[more.field])}
-          onClose={() => setMore(null)}
-          onSave={(v) => { update(more.row.id, { [more.field]: v.trim() || null } as Partial<ExceptionReport>); setMore(null) }} />
+        <MoreEditor label={more.label} value={more.value} onClose={() => setMore(null)}
+          onSave={(v) => { silentUpdate(more.id, { [more.field]: v.trim() || null } as Partial<ExceptionReport>); setMore(null) }} />
       )}
 
       <ExceptionReportModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
-        onSubmit={async (fields, id) => { if (id) await update(id, fields); else await insert(fields) }}
+        onSubmit={async (fields, id) => { if (id) silentUpdate(id, fields); else await insert(fields) }}
         onDelete={(id) => remove(id)} />
     </div>
   )
 }
 
 // ── Inline-editable table ────────────────────────────────────────────────────
-function ExceptionTable({ rows, config, shopLabel, onSet, onEdit, onMore }: {
+function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEdit, onMore }: {
   rows: ExceptionReport[]
   config: ExceptionConfig
   shopLabel: (id: string | null) => string
+  regionalDirector: (id: string | null) => string
   onSet: (r: ExceptionReport, patch: Partial<ExceptionReport>) => void
   onEdit: (r: ExceptionReport) => void
   onMore: (row: ExceptionReport, field: 'details' | 'response_notes', label: string) => void
 }) {
-  const stickyStatus = 'sticky left-0 z-10 bg-cream'
-  const stickyShop = 'sticky left-[230px] z-10 bg-cream'
-  const th = 'px-2 py-2 text-left font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30'
-  const td = 'px-2 py-1 align-top border-b border-navy/15 whitespace-nowrap'
+  const thBase = 'px-2 py-2 text-left font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30 bg-cream sticky top-0 z-20'
+  const tdBase = 'px-2 py-1 align-top border-b border-navy/15 whitespace-nowrap'
 
   if (!rows.length) return <p className="text-xs font-mono text-inky/50 py-8">No exception reports for this filter.</p>
 
   return (
-    <div className="overflow-x-auto rounded border border-navy/30">
+    <div className="overflow-auto max-h-[calc(100vh-15rem)] rounded border border-navy/30">
       <table className="text-xs font-mono border-collapse">
         <thead>
-          <tr className="bg-cream">
-            <th className={`${th} ${stickyStatus} w-[230px] min-w-[230px]`}>Status</th>
-            <th className={`${th} ${stickyShop}`}>Shop</th>
-            <th className={th}>Finding</th>
-            <th className={th}>Area Manager</th>
-            <th className={th}>Type</th>
-            <th className={th}>Issue</th>
-            <th className={th}>Details</th>
-            <th className={th}>Contacted</th>
-            <th className={th}>Response</th>
-            <th className={th}>Regional Director</th>
-            <th className={th}>Response Notes</th>
-            <th className={th}>Shop Action</th>
+          <tr>
+            <th className={`${thBase} left-0 z-30 w-[230px] min-w-[230px]`}>Status</th>
+            <th className={`${thBase} left-[230px] z-30`}>Shop</th>
+            <th className={thBase}>Finding</th>
+            <th className={thBase}>Area Manager</th>
+            <th className={thBase}>Type</th>
+            <th className={thBase}>Issue</th>
+            <th className={thBase}>Details</th>
+            <th className={thBase}>Contacted</th>
+            <th className={thBase}>Response</th>
+            <th className={thBase}>Response Date</th>
+            <th className={thBase}>Regional Director</th>
+            <th className={thBase}>Response Notes</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => {
-            const rs = responseState(r, config.responseDays)
+          {rows.map((r, idx) => {
+            const zebra = idx % 2 ? 'bg-navy/[0.03]' : ''
+            const info = rdCell(r, config.responseDays)
             const issueOpts = config.issues[r.report_type ?? ''] ?? []
             return (
-              <tr key={r.id} className="hover:bg-navy/[0.02]">
-                <td className={`${td} ${stickyStatus} w-[230px] min-w-[230px]`}>
+              <tr key={r.id} className={`${zebra} hover:bg-navy/[0.05]`}>
+                <td className={`${tdBase} sticky left-0 z-10 bg-cream w-[230px] min-w-[230px]`}>
                   <div className="flex items-center gap-1">
                     <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
                     <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
                   </div>
                 </td>
-                <td className={`${td} ${stickyShop}`}>
-                  <select value={r.location_id ?? ''} onChange={() => { /* shop change via pencil modal */ }} disabled
-                    className={`${inputCls} max-w-[16rem] opacity-100 disabled:opacity-100 cursor-default`} title={shopLabel(r.location_id)}>
-                    <option>{shopLabel(r.location_id)}</option>
-                  </select>
-                </td>
-                <td className={td}><EditDate value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} /></td>
-                <td className={td}><EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} /></td>
-                <td className={td}><EditSelect value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} /></td>
-                <td className={td}><EditSelect value={r.issue} options={issueOpts} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} /></td>
-                <td className={`${td} whitespace-normal`}><MoreCell text={stripHtml(r.details)} onMore={() => onMore(r, 'details', 'Details')} /></td>
-                <td className={td}>
+                <td className={`${tdBase} sticky left-[230px] z-10 bg-cream text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
+                <td className={tdBase}><EditDate value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} /></td>
+                <td className={tdBase}><EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} /></td>
+                <td className={tdBase}><EditSelect value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} /></td>
+                <td className={tdBase}><EditSelect value={r.issue} options={issueOpts} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} /></td>
+                <td className={`${tdBase} whitespace-normal`}><InlineMore value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} onMore={() => onMore(r, 'details', 'Details')} /></td>
+                <td className={tdBase}>
                   <div className="flex items-center gap-1">
                     <input type="checkbox" checked={r.contacted} onChange={(e) => onSet(r, { contacted: e.target.checked })} className="accent-sky" />
                     {r.contacted && <EditDate value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
                   </div>
                 </td>
-                <td className={td}>
-                  <div className="flex flex-col gap-0.5">
-                    <EditText value={r.response} onSave={(v) => onSet(r, { response: v })} placeholder="yes / no" />
-                    {!isYesResponse(r.response) && <span className={rs === 'no' ? 'text-[10px] text-[#C0392B]' : 'text-[10px] text-inky/50'}>{rs === 'no' ? 'no response' : 'awaiting'}</span>}
-                  </div>
+                <td className={tdBase}><ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} /></td>
+                <td className={tdBase}>
+                  {isYesResponse(r.response) ? <EditDate value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} /> : <span className="text-inky/30">—</span>}
                 </td>
-                <td className={td}><EditText value={r.rd_if_no} onSave={(v) => onSet(r, { rd_if_no: v })} placeholder="RD name" /></td>
-                <td className={`${td} whitespace-normal`}><MoreCell text={stripHtml(r.response_notes)} onMore={() => onMore(r, 'response_notes', 'Response Notes')} /></td>
-                <td className={td}><EditDate value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} /></td>
+                <td className={tdBase}>
+                  {info.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info.daysLeft}d left</span>
+                    : info.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
+                    : <span className="text-inky/40">—</span>}
+                </td>
+                <td className={`${tdBase} whitespace-normal`}><InlineMore value={stripHtml(r.response_notes)} onSave={(v) => onSet(r, { response_notes: v })} onMore={() => onMore(r, 'response_notes', 'Response Notes')} /></td>
               </tr>
             )
           })}
@@ -237,9 +245,26 @@ function ExceptionTable({ rows, config, shopLabel, onSet, onEdit, onMore }: {
   )
 }
 
+function ResponseCell({ value, onSet }: { value: string | null; onSet: (v: string | null) => void }) {
+  const opts: [string, string][] = [['Yes', RESPONSE_YES], ['+RD', RESPONSE_YES_RD], ['No', RESPONSE_NO]]
+  return (
+    <div className="inline-flex rounded overflow-hidden border border-navy/30">
+      {opts.map(([label, val]) => {
+        const on = value === val
+        const active = val === RESPONSE_NO ? 'bg-[#C0392B] text-cream' : 'bg-[#2ECC71] text-navy'
+        return (
+          <button key={val} title={val} onClick={() => onSet(on ? null : val)}
+            className={['px-1.5 py-0.5 text-[10px] font-mono border-r border-navy/20 last:border-r-0', on ? active : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}>
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function EditText({ value, onSave, placeholder, className = '' }: { value: string | null; onSave: (v: string | null) => void; placeholder?: string; className?: string }) {
   const [v, setV] = useState(value ?? '')
-  // Reset to the row's value on focus so edits always start from the latest saved state.
   return (
     <input value={v} onChange={(e) => setV(e.target.value)} onFocus={() => setV(value ?? '')}
       onBlur={() => { if ((v.trim() || '') !== (value ?? '')) onSave(v.trim() || null) }}
@@ -263,11 +288,11 @@ function EditSelect({ value, options, onSave, placeholder, allowCurrent, classNa
   )
 }
 
-function MoreCell({ text, onMore }: { text: string; onMore: () => void }) {
+function InlineMore({ value, onSave, onMore }: { value: string; onSave: (v: string | null) => void; onMore: () => void }) {
   return (
-    <div className="max-w-[18rem]">
-      <span className="block line-clamp-2 text-navy">{text || '—'}</span>
-      {text && text.length > 60 && <button onClick={onMore} className="text-[10px] font-mono text-sky hover:underline">More</button>}
+    <div className="flex items-center gap-1 max-w-[16rem]">
+      <EditText value={value} onSave={onSave} className="w-full min-w-[9rem]" />
+      <button onClick={onMore} title="Expand" className="text-sky hover:text-navy flex-shrink-0 leading-none">⋯</button>
     </div>
   )
 }
@@ -298,31 +323,58 @@ function mode(arr: string[]): string | null {
 }
 const pct = (n: number, d: number) => (d ? Math.round((100 * n) / d) : 0)
 
+type RangeKey = 'current_month' | 'current_week' | 'last_7' | 'last_month' | 'custom'
+const RANGE_KEY = 'exception-summary-range'
+const RANGE_LABELS: Record<RangeKey, string> = { current_month: 'This Month', current_week: 'This Week', last_7: 'Last 7 Days', last_month: 'Last Month', custom: 'Custom' }
+
+function rangeDates(r: { key: RangeKey; from: string; to: string }): [Date, Date] {
+  const now = new Date(); now.setHours(0, 0, 0, 0)
+  switch (r.key) {
+    case 'current_week': return [startOfWeek(now, { weekStartsOn: 1 }), endOfWeek(now, { weekStartsOn: 1 })]
+    case 'last_7': return [subDays(now, 6), now]
+    case 'last_month': { const p = subMonths(now, 1); return [startOfMonth(p), endOfMonth(p)] }
+    case 'custom': return [r.from ? new Date(r.from + 'T00:00:00') : startOfMonth(now), r.to ? new Date(r.to + 'T00:00:00') : now]
+    default: return [startOfMonth(now), endOfMonth(now)]
+  }
+}
+
 function SummaryView({ data, config }: { data: ExceptionReport[]; config: ExceptionConfig }) {
+  const [range, setRange] = useState<{ key: RangeKey; from: string; to: string }>(() => {
+    try { const p = JSON.parse(localStorage.getItem(RANGE_KEY) || ''); if (p?.key) return p } catch { /* ignore */ }
+    return { key: 'current_month', from: '', to: '' }
+  })
+  useEffect(() => { try { localStorage.setItem(RANGE_KEY, JSON.stringify(range)) } catch { /* ignore */ } }, [range])
+
+  const [from, to] = rangeDates(range)
+  const inRange = useMemo(() => data.filter((r) => {
+    if (!r.date_of_finding) return false
+    const d = new Date(r.date_of_finding + 'T00:00:00')
+    return d >= from && d <= to
+  }), [data, from, to])
+
   const s = useMemo(() => {
-    const contactedRows = data.filter((r) => r.contacted)
-    const yesOf = (rows: ExceptionReport[]) => rows.filter((r) => isYesResponse(r.response)).length
-    const noRD = contactedRows.filter((r) => !r.rd_if_no)
-    const withRD = contactedRows.filter((r) => !!r.rd_if_no)
-    const perType = config.types.map((t) => ({ type: t, count: data.filter((r) => r.report_type === t).length, topIssue: mode(data.filter((r) => r.report_type === t && r.issue).map((r) => r.issue!)) }))
-    const times = data
+    const contactedRows = inRange.filter((r) => r.contacted)
+    const yesOf = (rs: ExceptionReport[]) => rs.filter((r) => isYesResponse(r.response)).length
+    const noRD = contactedRows.filter((r) => !isRdAdded(r, config.responseDays))
+    const withRD = contactedRows.filter((r) => isRdAdded(r, config.responseDays))
+    const perType = config.types.map((t) => ({ type: t, count: inRange.filter((r) => r.report_type === t).length, topIssue: mode(inRange.filter((r) => r.report_type === t && r.issue).map((r) => r.issue!)) }))
+    const times = inRange
       .filter((r) => r.date_of_finding && r.date_of_shop_action && isYesResponse(r.response))
       .map((r) => (new Date(r.date_of_shop_action! + 'T00:00:00').getTime() - new Date(r.date_of_finding! + 'T00:00:00').getTime()) / 86400000)
       .filter((d) => d >= 0)
+    const overdue = inRange.filter((r) => !isYesResponse(r.response) && rdCell(r, config.responseDays).mode === 'rd').length
     return {
-      total: data.length,
+      total: inRange.length,
       shopsContacted: new Set(contactedRows.map((r) => r.location_id)).size,
-      perType,
+      perType, overdue,
       rateOverall: pct(yesOf(contactedRows), contactedRows.length),
       rateNoRD: pct(yesOf(noRD), noRD.length),
       rateRD: pct(yesOf(withRD), withRD.length),
       avgTime: times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : '—',
     }
-  }, [data, config])
+  }, [inRange, config])
 
-  const responded = data.filter((r) => r.contacted).filter((r) => !isYesResponse(r.response) && responseState(r, config.responseDays) === 'no')
-
-  const Tile =({ label, value, sub }: { label: string; value: string | number; sub?: string }) => (
+  const Tile = ({ label, value, sub }: { label: string; value: string | number; sub?: string }) => (
     <Card><CardBody className="py-3">
       <div className="text-[10px] font-mono uppercase tracking-widest text-inky/60">{label}</div>
       <div className="text-2xl font-heading font-bold text-navy">{value}</div>
@@ -332,28 +384,45 @@ function SummaryView({ data, config }: { data: ExceptionReport[]; config: Except
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {(['current_month', 'current_week', 'last_7', 'last_month', 'custom'] as RangeKey[]).map((k) => (
+          <button key={k} onClick={() => setRange((p) => ({ ...p, key: k }))}
+            className={['px-2.5 py-1 rounded-full text-[11px] font-mono border transition-colors', range.key === k ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
+            {RANGE_LABELS[k]}
+          </button>
+        ))}
+        {range.key === 'custom' && (
+          <div className="flex items-center gap-1">
+            <input type="date" value={range.from} onChange={(e) => setRange((p) => ({ ...p, from: e.target.value }))} className={inputCls} />
+            <span className="text-inky/50 text-xs">–</span>
+            <input type="date" value={range.to} onChange={(e) => setRange((p) => ({ ...p, to: e.target.value }))} className={inputCls} />
+          </div>
+        )}
+        <span className="text-[10px] font-mono text-inky/50 ml-1">{format(from, 'MMM d')} – {format(to, 'MMM d, yyyy')}</span>
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Tile label="Total Exceptions" value={s.total} />
         <Tile label="Shops Contacted" value={s.shopsContacted} />
         <Tile label="Response Rate" value={`${s.rateOverall}%`} sub="of contacted" />
-        <Tile label="Avg Response Time" value={s.avgTime === '—' ? '—' : `${s.avgTime}d`} sub="finding → shop action" />
-        <Tile label="Rate — no RD added" value={`${s.rateNoRD}%`} />
-        <Tile label="Rate — after RD added" value={`${s.rateRD}%`} />
-        <Tile label="Overdue (no response)" value={responded.length} sub={`> ${config.responseDays} days`} />
+        <Tile label="Avg Response Time" value={s.avgTime === '—' ? '—' : `${s.avgTime}d`} sub="finding → response" />
+        <Tile label="Response Rate — No RD Added" value={`${s.rateNoRD}%`} />
+        <Tile label="Response Rate — After RD Added" value={`${s.rateRD}%`} />
+        <Tile label="Overdue (no response)" value={s.overdue} sub={`> ${config.responseDays} business days`} />
       </div>
 
-      <Card><CardBody>
+      <Card><CardBody className="inline-block w-auto">
         <div className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-2">By Type</div>
-        <table className="w-full text-xs font-mono">
+        <table className="text-xs font-mono w-auto">
           <thead><tr className="text-inky uppercase tracking-wide border-b border-navy/30">
-            <th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Count</th><th className="text-left px-2 py-1">Most Common Issue</th>
+            <th className="text-left px-2 py-0.5">Type</th><th className="text-right px-2 py-0.5">Count</th><th className="text-left px-2 py-0.5 pl-4">Most Common Issue</th>
           </tr></thead>
           <tbody>
             {s.perType.map((t) => (
-              <tr key={t.type} className="border-b border-navy/15">
-                <td className="px-2 py-1 text-navy">{t.type}</td>
-                <td className="px-2 py-1 text-right text-navy">{t.count}</td>
-                <td className="px-2 py-1 text-navy">{t.topIssue ?? '—'}</td>
+              <tr key={t.type} className="border-b border-navy/10">
+                <td className="px-2 py-0.5 text-navy whitespace-nowrap">{t.type}</td>
+                <td className="px-2 py-0.5 text-right text-navy">{t.count}</td>
+                <td className="px-2 py-0.5 pl-4 text-navy whitespace-nowrap">{t.topIssue ?? '—'}</td>
               </tr>
             ))}
           </tbody>
@@ -388,7 +457,7 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
           <input type="number" min={1} value={config.responseDays}
             onChange={(e) => saveConfig({ ...config, responseDays: Math.max(1, Number(e.target.value) || 1) })}
             className={`${inputCls} w-16`} />
-          <span className="text-xs font-body text-inky">days without a yes response.</span>
+          <span className="text-xs font-body text-inky">business days (Mon–Fri) without a yes response.</span>
         </div>
       </CardBody></Card>
 
