@@ -7,6 +7,8 @@ import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader } from '@/comp
 import { IssueFormModal } from '@/modules/issues/IssueFormModal'
 import { ExceptionReportModal } from '@/modules/exceptions/ExceptionReportModal'
 import type { ExceptionReport } from '@/modules/exceptions/exceptions'
+import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
+import type { LocationComm } from '@/modules/comms/comms'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location } from '@/types'
 import { format, differenceInCalendarDays } from 'date-fns'
@@ -109,6 +111,9 @@ export function LocationLookupPage() {
   const [exceptions, setExceptions] = useState<ExceptionReport[]>([])
   const [excModalOpen, setExcModalOpen] = useState(false)
   const [editingExc, setEditingExc] = useState<Partial<ExceptionReport> | null>(null)
+  const [comms, setComms] = useState<LocationComm[]>([])
+  const [commModalOpen, setCommModalOpen] = useState(false)
+  const [editingComm, setEditingComm] = useState<Partial<LocationComm> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customizeOpen, setCustomizeOpen] = useState(false)
@@ -132,7 +137,7 @@ export function LocationLookupPage() {
     setLoading(true); setError(null)
     const sb = supabase as any
     try {
-      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes] = await Promise.all([
+      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes, commRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
@@ -140,6 +145,7 @@ export function LocationLookupPage() {
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
         sb.schema('core').from('location_supplemental').select('data').eq('company_id', companyId).eq('location_id', shopId).maybeSingle().then((r: any) => r).catch(() => ({ data: null })),
         sb.schema('inventory').from('exception_reports').select('*').eq('company_id', companyId).eq('location_id', shopId).order('date_of_finding', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
+        sb.schema('inventory').from('location_comms').select('*').eq('company_id', companyId).eq('location_id', shopId).order('comm_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       setTanks((tankRes.data ?? []) as TankRow[])
       setConfigs((cfgRes.data ?? []) as ConfigRow[])
@@ -148,6 +154,7 @@ export function LocationLookupPage() {
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
       setSupplemental((supRes?.data?.data ?? null) as Record<string, string> | null)
       setExceptions((excRes?.data ?? []) as ExceptionReport[])
+      setComms((commRes?.data ?? []) as LocationComm[])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load location detail')
     } finally {
@@ -218,6 +225,13 @@ export function LocationLookupPage() {
   }
   function openAddException() { setEditingExc({ location_id: shopId }); setExcModalOpen(true) }
   function openEditException(e: ExceptionReport) { setEditingExc(e); setExcModalOpen(true) }
+  function openAddComm() { setEditingComm({ location_id: shopId }); setCommModalOpen(true) }
+  function openEditComm(c: LocationComm) { setEditingComm(c); setCommModalOpen(true) }
+  async function deleteComm(id: string) {
+    const { error: delErr } = await (supabase as any).schema('inventory').from('location_comms').delete().eq('id', id)
+    if (delErr) { toast.error('Failed to delete communication'); return }
+    toast.success('Communication deleted'); load()
+  }
 
   const rdDistributor = useMemo(() => {
     if (supplemental) {
@@ -339,6 +353,7 @@ export function LocationLookupPage() {
               <div className="flex flex-col gap-3 flex-1 min-w-[260px] w-full xl:w-auto">
                 <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
                 <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />
+                <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />
               </div>
             </div>
 
@@ -413,6 +428,9 @@ export function LocationLookupPage() {
 
       <ExceptionReportModal open={excModalOpen} onClose={() => setExcModalOpen(false)} existing={editingExc}
         onSubmit={saveException} onDelete={deleteException} />
+
+      <LocationCommsModal open={commModalOpen} onClose={() => setCommModalOpen(false)} existing={editingComm}
+        lockedLocationId={shopId} onSaved={load} onDelete={deleteComm} />
     </div>
   )
 }
@@ -484,6 +502,31 @@ function ExceptionsBox({ exceptions, onAdd, onEdit }: { exceptions: ExceptionRep
         </button>
       ))}
       <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Exception</button>
+    </div>
+  )
+}
+
+function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () => void; onEdit: (c: LocationComm) => void }) {
+  const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
+  const open = comms.filter((c) => !isClosed(c.status))
+  return (
+    <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Location Comms</span>
+        <span className="text-lg font-heading font-bold text-navy">{open.length}</span>
+      </div>
+      {comms.length === 0 ? (
+        <span className="text-xs font-body text-inky/50">None</span>
+      ) : comms.slice(0, 5).map((c) => (
+        <button key={c.id} onClick={() => onEdit(c)} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-body text-navy flex-1 truncate">{[c.comm_type, c.contact_method].filter(Boolean).join(' · ') || 'Communication'}</span>
+            {c.status && <Badge color={isClosed(c.status) ? 'green' : 'amber'}>{c.status}</Badge>}
+          </div>
+          <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(c.comm_date)}{(c.products ?? []).length ? ` · ${(c.products ?? []).length} product(s)` : ''}</div>
+        </button>
+      ))}
+      <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Communication</button>
     </div>
   )
 }
