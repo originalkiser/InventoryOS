@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
@@ -6,9 +7,13 @@ import { SupplementalLocationTab } from './tabs/SupplementalLocationTab'
 import { PosLocationMapTab } from './tabs/PosLocationMapTab'
 import { CompanyHolidaysTab } from './tabs/CompanyHolidaysTab'
 
+const GLOBAL_TABS = ['locations', 'supplemental', 'pos-map', 'holidays']
+
 export function GlobalConfigPage() {
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
+  const [searchParams] = useSearchParams()
+  const initialTab = GLOBAL_TABS.includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'locations'
 
   return (
     <div className="flex flex-col gap-6">
@@ -29,7 +34,7 @@ export function GlobalConfigPage() {
         </div>
       )}
 
-      <Tabs defaultValue="locations">
+      <Tabs defaultValue={initialTab}>
         <TabsList>
           <TabsTrigger value="locations">Locations</TabsTrigger>
           <TabsTrigger value="supplemental">Supplemental Data</TabsTrigger>

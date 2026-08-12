@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
@@ -13,9 +14,13 @@ import { OrderConfigTab } from './tabs/OrderConfigTab'
 import { ProductMappingTab } from './tabs/ProductMappingTab'
 import { GlobalProductsTab } from './tabs/GlobalProductsTab'
 
+const CONFIG_TABS = ['uom-mappings', 'vendor-parts', 'order-config', 'product-mapping', 'global-products', 'product-usage', 'tank-monitor', 'ending-balances', 'category-simplification', 'category-expectations', 'location-cpd']
+
 export function ConfigPage() {
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
+  const [searchParams] = useSearchParams()
+  const initialTab = CONFIG_TABS.includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'uom-mappings'
 
   return (
     <div className="flex flex-col gap-6">
@@ -36,7 +41,7 @@ export function ConfigPage() {
         </div>
       )}
 
-      <Tabs defaultValue="uom-mappings">
+      <Tabs defaultValue={initialTab}>
         <TabsList>
           <TabsTrigger value="uom-mappings">UoM Conversions</TabsTrigger>
           <TabsTrigger value="vendor-parts">Vendor Parts</TabsTrigger>

@@ -203,7 +203,10 @@ export function LocationLookupPage() {
           <div className="flex flex-col gap-3">
             <Card>
               <CardBody className="flex flex-col gap-2">
-                <span className="text-sm font-heading font-bold text-navy">{loc.labelOf(shopId)}</span>
+                <button onClick={() => navigate('/global-config?tab=locations')} title="Open Locations config"
+                  className="text-sm font-heading font-bold text-navy hover:text-sky transition-colors text-left inline-flex items-center gap-1">
+                  {loc.labelOf(shopId)} <span className="text-[10px] text-inky/50">↗</span>
+                </button>
                 <dl className="flex flex-col gap-1.5 mt-1">
                   {visibleSidebar.map((f) => (
                     <div key={f.label} className="flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
@@ -260,7 +263,10 @@ export function LocationLookupPage() {
           <div className="flex flex-col gap-4">
             <Card>
               <CardBody className="flex flex-col gap-2">
-                <span className="text-xs font-mono text-navy uppercase tracking-wide">Tank Monitors ({tanks.length})</span>
+                <button onClick={() => navigate('/config?tab=tank-monitor')} title="Open Tank Monitor config"
+                  className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1 self-start">
+                  Tank Monitors ({tanks.length}) <span className="text-[10px] text-inky/50">↗</span>
+                </button>
                 {tanks.length === 0 ? (
                   <p className="text-xs font-mono text-inky/60">No tank monitor readings for this shop.</p>
                 ) : visibleTankCols.length === 0 ? (
@@ -291,7 +297,7 @@ export function LocationLookupPage() {
             ) : (
               <div className={configsByVendor.length >= 2 ? 'grid grid-cols-1 xl:grid-cols-2 gap-4 items-start' : 'flex flex-col gap-4'}>
                 {configsByVendor.map(([vendor, rows]) => (
-                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} hidden={prefs.config} />
+                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} hidden={prefs.config} onOpenConfig={() => navigate('/config?tab=order-config')} />
                 ))}
               </div>
             )}
@@ -316,7 +322,7 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
   )
 }
 
-function OrderConfigBlock({ vendor, rows, hidden }: { vendor: string; rows: ConfigRow[]; hidden: string[] }) {
+function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: string; rows: ConfigRow[]; hidden: string[]; onOpenConfig: () => void }) {
   const columns = useMemo(() => {
     const metaKeys = new Set<string>()
     for (const r of rows) for (const k of Object.keys(r.metadata ?? {})) if (!CONFIG_META_EXCLUDE.has(k)) metaKeys.add(k)
@@ -330,7 +336,10 @@ function OrderConfigBlock({ vendor, rows, hidden }: { vendor: string; rows: Conf
   return (
     <Card>
       <CardBody className="flex flex-col gap-2">
-        <span className="text-xs font-mono text-navy uppercase tracking-wide">{vendor} Order Config ({rows.length})</span>
+        <button onClick={onOpenConfig} title="Open Order Config"
+          className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1 self-start">
+          {vendor} Order Config ({rows.length}) <span className="text-[10px] text-inky/50">↗</span>
+        </button>
         {columns.length === 0 ? (
           <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
         ) : (
