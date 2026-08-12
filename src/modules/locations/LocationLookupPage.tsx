@@ -15,7 +15,7 @@ const VIEW_KEY = 'location-lookup:view'
 
 interface TankRow {
   id: string; product_id: string | null; value: number | null; unit: string | null
-  on_hand: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
+  on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
 }
 interface ConfigRow {
   id: string; vendor_id: string | null; product_id: string | null
@@ -76,6 +76,7 @@ interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'
 const TANK_COLS: Col<TankRow>[] = [
   { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—' },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand) },
+  { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity) },
   { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>) },
   { id: 'updated', label: 'Last Update', align: 'left', render: (t) => dateTime(t.inventory_time ?? t.reading_date) },
 ]
@@ -275,52 +276,12 @@ export function LocationLookupPage() {
                 </dl>
               </CardBody>
             </Card>
-
-            {/* Pending issues */}
-            <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', pendingIssues.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Pending Issues</span>
-                <span className={['text-lg font-heading font-bold', pendingIssues.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pendingIssues.length}</span>
-              </div>
-              {pendingIssues.length === 0 ? (
-                <span className="text-xs font-body text-inky/50">None</span>
-              ) : pendingIssues.map((i) => {
-                const start = i.start_date ? new Date(i.start_date + 'T00:00:00') : null
-                const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
-                const pastDue = !!i.target_resolution_date && differenceInCalendarDays(new Date(), new Date(i.target_resolution_date + 'T00:00:00')) > 0
-                return (
-                  <div key={i.id} className="rounded border border-navy/15 bg-cream/70 px-2 py-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-body text-navy flex-1 truncate">{i.title}</span>
-                      {pastDue && <Badge color="red">Past due</Badge>}
-                    </div>
-                    <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
-                      <span>Start {dateShort(i.start_date)}</span>
-                      <span>Target {dateShort(i.target_resolution_date)}</span>
-                      {daysOpen != null && <span className={pastDue ? 'text-[#C0392B] font-bold' : ''}>{daysOpen}d open</span>}
-                    </div>
-                  </div>
-                )
-              })}
-              <button onClick={() => openIssues('pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Manage Issues →</button>
-            </div>
-
-            <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Last Resolved</span>
-                <span className="text-lg font-heading font-bold text-[#2ECC71]">{resolvedIssues.length}</span>
-              </div>
-              {resolvedIssues.slice(0, 4).map((i) => (
-                <div key={i.id} className="text-xs font-body text-inky/70 truncate mt-0.5">✓ {i.title} <span className="text-inky/40">{dateShort(i.resolved_date)}</span></div>
-              ))}
-              {resolvedIssues.length === 0 && <div className="text-xs font-body text-inky/40 mt-0.5">None</div>}
-              <button onClick={() => openIssues('resolved')} className="text-[10px] font-mono text-sky text-left hover:underline mt-1.5">Manage Issues →</button>
-            </div>
           </div>
 
           {/* Main */}
           <div className="flex flex-col gap-4">
-            <Card>
+            <div className="flex flex-col xl:flex-row gap-4 items-start">
+              <Card className="w-fit max-w-full">
               <CardBody className="flex flex-col gap-2">
                 <button onClick={() => navigate('/config?tab=tank-monitor')} title="Open Tank Monitor config"
                   className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1 self-start">
@@ -335,7 +296,7 @@ export function LocationLookupPage() {
                     <table className="text-xs font-mono">
                       <thead>
                         <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                          {visibleTankCols.map((c) => <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>{c.id === 'on_hand' && tankUnit ? `${c.label} (${tankUnit})` : c.label}</th>)}
+                          {visibleTankCols.map((c) => <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</th>)}
                         </tr>
                       </thead>
                       <tbody>
@@ -349,7 +310,9 @@ export function LocationLookupPage() {
                   </div>
                 )}
               </CardBody>
-            </Card>
+              </Card>
+              <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
+            </div>
 
             {configsByVendor.length === 0 ? (
               <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
@@ -419,6 +382,52 @@ export function LocationLookupPage() {
           onDelete={deleteIssue}
         />
       )}
+    </div>
+  )
+}
+
+function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; resolved: IssueRow[]; onManage: (v: 'pending' | 'resolved') => void }) {
+  return (
+    <div className="flex flex-col gap-3 flex-1 min-w-[260px] w-full xl:w-auto">
+      <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', pending.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Pending Issues</span>
+          <span className={['text-lg font-heading font-bold', pending.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pending.length}</span>
+        </div>
+        {pending.length === 0 ? (
+          <span className="text-xs font-body text-inky/50">None</span>
+        ) : pending.map((i) => {
+          const start = i.start_date ? new Date(i.start_date + 'T00:00:00') : null
+          const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
+          const pastDue = !!i.target_resolution_date && differenceInCalendarDays(new Date(), new Date(i.target_resolution_date + 'T00:00:00')) > 0
+          return (
+            <div key={i.id} className="rounded border border-navy/15 bg-cream/70 px-2 py-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-body text-navy flex-1 truncate">{i.title}</span>
+                {pastDue && <Badge color="red">Past due</Badge>}
+              </div>
+              <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
+                <span>Start {dateShort(i.start_date)}</span>
+                <span>Target {dateShort(i.target_resolution_date)}</span>
+                {daysOpen != null && <span className={pastDue ? 'text-[#C0392B] font-bold' : ''}>{daysOpen}d open</span>}
+              </div>
+            </div>
+          )
+        })}
+        <button onClick={() => onManage('pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Manage Issues →</button>
+      </div>
+
+      <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Last Resolved</span>
+          <span className="text-lg font-heading font-bold text-[#2ECC71]">{resolved.length}</span>
+        </div>
+        {resolved.slice(0, 4).map((i) => (
+          <div key={i.id} className="text-xs font-body text-inky/70 truncate mt-0.5">✓ {i.title} <span className="text-inky/40">{dateShort(i.resolved_date)}</span></div>
+        ))}
+        {resolved.length === 0 && <div className="text-xs font-body text-inky/40 mt-0.5">None</div>}
+        <button onClick={() => onManage('resolved')} className="text-[10px] font-mono text-sky text-left hover:underline mt-1.5">Manage Issues →</button>
+      </div>
     </div>
   )
 }

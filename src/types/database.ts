@@ -93,6 +93,7 @@ export interface TankMonitor {
   reading_date: string
   inventory_time: string | null
   on_hand: number | null
+  available_capacity: number | null
   value: number | null
   unit: string | null
   updated_by: string | null
