@@ -64,8 +64,10 @@ export function OrderConfigTab() {
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      { id: 'vendor', header: 'Vendor', accessorFn: (r: LocationOrderConfig) => vendorName(r.vendor_id ?? (r.metadata as any)?.vendor_id ?? null), cell: (i: any) => i.getValue() },
-      { id: 'location', header: 'Location', accessorFn: (r: LocationOrderConfig) => loc.labelOf(r.location_id ?? (r.metadata as any)?.location_id ?? null), cell: (i: any) => i.getValue() },
+      // Display the stored name/label string first (survives reload regardless of
+      // id resolution); fall back to resolving the id if only that's present.
+      { id: 'vendor', header: 'Vendor', accessorFn: (r: LocationOrderConfig) => (r.metadata as any)?.vendor_name || vendorName(r.vendor_id ?? (r.metadata as any)?.vendor_id ?? null), cell: (i: any) => i.getValue() },
+      { id: 'location', header: 'Location', accessorFn: (r: LocationOrderConfig) => (r.metadata as any)?.location_label || loc.labelOf(r.location_id ?? (r.metadata as any)?.location_id ?? null), cell: (i: any) => i.getValue() },
       col.accessor('product_id', { header: 'Product ID' }),
       { id: 'uom', header: 'UoM', accessorFn: (r: LocationOrderConfig) => (r.metadata as any)?.uom ?? '', cell: (i: any) => i.getValue() || '—' },
       col.accessor('capacity', { header: 'Capacity', cell: (i) => i.getValue() ?? '—' }),
@@ -105,22 +107,27 @@ export function OrderConfigTab() {
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
     const ownKeys = new Set(ownFields.map((f) => f.field_key))
+    const vName = vendors.find((v) => v.id === uploadVendorId)?.name ?? null
     const payload = rows.map((row) => {
       const out: Record<string, unknown> = { vendor_id: uploadVendorId || null, active: true }
       const meta: Record<string, unknown> = {}
+      let locRaw = ''
       for (const m of maps) {
         const raw = mappedValue(row, m, maps)
-        if (m.fieldName === 'location') out.location_id = loc.resolveId(raw)
+        if (m.fieldName === 'location') { locRaw = raw; out.location_id = loc.resolveId(raw) }
         else if (m.fieldName === 'uom') meta.uom = raw || null
         else if (m.fieldName === 'vmi') meta.vmi = isYes(raw) ? 'Yes' : null
         else if (NUM_FIELDS.includes(m.fieldName)) out[m.fieldName] = num(raw)
         else if (ownKeys.has(m.fieldName)) meta[m.fieldName] = raw || null
         else out[m.fieldName] = raw || null
       }
-      // Mirror vendor/location into metadata so they survive reload even if the
-      // relocated table's base columns don't persist them.
+      // Mirror vendor/location into metadata (id + display string) so they survive
+      // reload even if the relocated table's base columns don't persist them.
+      const locId = out.location_id as string | null
       meta.vendor_id = (out.vendor_id as string) ?? null
-      meta.location_id = (out.location_id as string) ?? null
+      meta.location_id = locId ?? null
+      meta.vendor_name = vName
+      meta.location_label = locId ? loc.labelOf(locId) : (locRaw.trim() || null)
       out.metadata = meta
       return out as Partial<LocationOrderConfig>
     }).filter((r: any) => r.product_id)
@@ -150,9 +157,11 @@ export function OrderConfigTab() {
     for (const f of ownFields) meta[f.field_key] = customVals[f.field_key] || null
     if (form.uom.trim()) meta.uom = form.uom.trim()
     meta.vmi = form.vmi ? 'Yes' : null
-    // Mirror vendor/location into metadata (resilient persistence — see columns).
+    // Mirror vendor/location into metadata (id + display string — see columns).
     meta.vendor_id = form.vendorId || null
     meta.location_id = form.locationId || null
+    meta.vendor_name = form.vendorId ? (vendors.find((v) => v.id === form.vendorId)?.name ?? null) : null
+    meta.location_label = form.locationId ? loc.labelOf(form.locationId) : null
     const payload = {
       vendor_id: form.vendorId || null,
       location_id: form.locationId, product_id: form.product_id.trim(),
