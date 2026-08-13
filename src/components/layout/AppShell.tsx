@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
 import { InventoryOverlay } from '@/components/inventory/InventoryOverlay'
+import { MeetingModal } from '@/modules/meetings/MeetingModal'
 import type { PanelMode } from '@/components/shared/FloatingPanel'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 
@@ -17,7 +18,6 @@ const TASKS_WIDTH_KEY = 'todaysTasks.width'
 
 export function AppShell() {
   const mobile = useMediaQuery('(max-width: 640px)')
-  const navigate = useNavigate()
   const [lookupMode, setLookupMode] = useState<PanelMode>(() => (localStorage.getItem(LOOKUP_MODE_KEY) as PanelMode) || 'hidden')
   const [lookupWidth, setLookupWidth] = useState(() => Number(localStorage.getItem(LOOKUP_WIDTH_KEY)) || 420)
   const [invMode, setInvMode] = useState<PanelMode>(() => (localStorage.getItem(INV_MODE_KEY) as PanelMode) || 'hidden')
@@ -26,6 +26,7 @@ export function AppShell() {
   const [tasksWidth, setTasksWidth] = useState(() => Number(localStorage.getItem(TASKS_WIDTH_KEY)) || 360)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [quickMeetingOpen, setQuickMeetingOpen] = useState(false)
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
@@ -51,7 +52,7 @@ export function AppShell() {
     const handler = (e: Event) => {
       const action = (e as CustomEvent).detail as string
       if (action === 'tasks') toggleTasks()
-      else if (action === 'meeting') navigate('/meetings?quick=1')
+      else if (action === 'meeting') setQuickMeetingOpen(true)
       else if (action === 'lookup') setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')
       else if (action === 'inventory') setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')
     }
@@ -154,6 +155,7 @@ export function AppShell() {
         mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
         onModeChange={setInvModeP} onToggle={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')} onWidthChange={setInvWidthP}
       />
+      <MeetingModal open={quickMeetingOpen} quick onClose={() => setQuickMeetingOpen(false)} />
     </div>
   )
 }

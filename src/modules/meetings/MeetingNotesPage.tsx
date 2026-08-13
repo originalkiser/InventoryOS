@@ -3,17 +3,15 @@ import { useSearchParams } from 'react-router-dom'
 import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { isAdminOrDeveloper } from '@/lib/roles'
 import { DataTable } from '@/components/shared/DataTable'
-import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
-import { RichTextEditor, RichTextDisplay } from '@/components/shared/RichTextEditor'
-import { Button, Input, Modal } from '@/components/ui'
+import { type VisibilityValue } from '@/components/shared/VisibilitySelector'
+import { RichTextDisplay } from '@/components/shared/RichTextEditor'
+import { Button } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import type { MeetingNote, Project, Task } from '@/types'
+import { MeetingModal } from './MeetingModal'
+import type { MeetingNote } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
-
-interface MeetingLink { label: string; url: string }
 
 const VISIBILITY_OPTIONS: { value: VisibilityValue; label: string; icon: string }[] = [
   { value: 'private', label: 'Private', icon: '🔒' },
@@ -21,18 +19,6 @@ const VISIBILITY_OPTIONS: { value: VisibilityValue; label: string; icon: string 
   { value: 'attendees', label: 'Attendees', icon: '🤝' },
   { value: 'specific_users', label: 'Specific Users', icon: '👥' },
 ]
-
-const EMPTY_FORM = {
-  title: 'Untitled Meeting',
-  meeting_date: '',
-  meeting_time: '',
-  vendor: '',
-  category: '',
-  notes: '',
-  visibility: 'private' as VisibilityValue,
-  links: [] as MeetingLink[],
-}
-const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
 const col = createColumnHelper<MeetingNote>()
 
@@ -78,27 +64,10 @@ function ExpandableDisplay({ value, clamp = 1, isHtml = false }: { value: string
   )
 }
 
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2 pt-1">
-      <span className="text-[10px] font-mono text-inky/60 uppercase tracking-widest whitespace-nowrap">{children}</span>
-      <div className="flex-1 border-t border-navy/15" />
-    </div>
-  )
-}
-
 function to12hr(time: string): string {
   const [h, m] = time.slice(0, 5).split(':').map(Number)
   const ampm = h < 12 ? 'AM' : 'PM'
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
-}
-
-function formatDateTime(date: string | null, time: string | null): string {
-  if (!date) return '—'
-  try {
-    const d = format(new Date(date + 'T00:00:00'), 'MMM d, yyyy')
-    return time ? `${d} ${to12hr(time)}` : d
-  } catch { return date }
 }
 
 export function MeetingNotesPage() {
@@ -107,78 +76,29 @@ export function MeetingNotesPage() {
   const myId = profile?.id ?? null
   const [searchParams, setSearchParams] = useSearchParams()
   const [meetings, setMeetings] = useState<MeetingNote[]>([])
-  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
-  const [editId, setEditId] = useState<string | null>(null)
-  const [editCreatedBy, setEditCreatedBy] = useState<string | null>(null)
-  const [form, setForm] = useState({ ...EMPTY_FORM })
-  const [saving, setSaving] = useState(false)
-
-  const [meetingTasks, setMeetingTasks] = useState<Task[]>([])
-  const [taskForm, setTaskForm] = useState({ ...EMPTY_TASK })
-
+  const [editing, setEditing] = useState<MeetingNote | null>(null)
+  const [quick, setQuick] = useState(false)
   const [viewFilter, setViewFilter] = useState<'all' | 'mine' | 'shared'>('all')
-  const [participants, setParticipants] = useState<SlimUser[]>([])
-  const [specificUsers, setSpecificUsers] = useState<SlimUser[]>([])
-  const [allUsers, setAllUsers] = useState<SlimUser[]>([])
 
   const load = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
-    const sb = supabase as any
-    const [meetRes, projRes, usersRes] = await Promise.all([
-      sb.schema('inventory').from('meeting_notes').select('*').eq('company_id', companyId)
-        .order('meeting_date', { ascending: false, nullsFirst: false })
-        .order('created_at', { ascending: false }),
-      sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).order('project_name'),
-      // platform.user_profiles has no `department` column — selecting it made
-      // the whole query error and left the share picker with zero users.
-      sb.schema('platform').from('user_profiles').select('id, full_name, email').eq('company_id', companyId).is('deleted_at', null).order('full_name'),
-    ])
-    if (meetRes.error) toast.error(meetRes.error.message)
-    else setMeetings((meetRes.data ?? []) as MeetingNote[])
-    if (usersRes.error) toast.error(`Could not load users: ${usersRes.error.message}`)
-    setProjects((projRes.data ?? []) as Project[])
-    setAllUsers(
-      ((usersRes.data ?? []) as { id: string; full_name: string | null; email: string | null }[])
-        .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email ?? '', department: null }))
-    )
+    const { data, error } = await (supabase as any).schema('inventory').from('meeting_notes').select('*').eq('company_id', companyId)
+      .order('meeting_date', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+    if (error) toast.error(error.message)
+    else setMeetings((data ?? []) as MeetingNote[])
     setLoading(false)
   }, [companyId])
 
   useEffect(() => { load() }, [load])
 
-  const openProjects = useMemo(
-    () => projects.filter((p) => p.status !== 'Complete' && p.status !== 'Cancelled'),
-    [projects]
-  )
-  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p.project_name])), [projects])
+  function openNew(isQuick = false) { setEditing(null); setQuick(isQuick); setModalOpen(true) }
+  const openEdit = useCallback((m: MeetingNote) => { setEditing(m); setQuick(false); setModalOpen(true) }, [])
 
-  async function loadMeetingTasks(meetingId: string) {
-    const { data } = await (supabase as any)
-      .schema('core').from('tasks').select('*').eq('meeting_id', meetingId)
-      .order('sort_order').order('created_at')
-    setMeetingTasks((data ?? []) as Task[])
-  }
-
-  function openNew(quick = false) {
-    setEditId(null)
-    setEditCreatedBy(myId)
-    const now = new Date()
-    setForm({
-      ...EMPTY_FORM,
-      meeting_date: format(now, 'yyyy-MM-dd'),
-      meeting_time: quick ? format(now, 'HH:mm') : '',
-    })
-    setMeetingTasks([])
-    setTaskForm({ ...EMPTY_TASK })
-    setParticipants([])
-    setSpecificUsers([])
-    setModalOpen(true)
-  }
-
-  // Auto-open a quick meeting if navigated to with ?quick=1 (including repeat clicks from FAB)
+  // Auto-open a quick meeting if navigated to with ?quick=1
   useEffect(() => {
     if (searchParams.get('quick') === '1') {
       setSearchParams({}, { replace: true })
@@ -187,113 +107,7 @@ export function MeetingNotesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  const openEdit = useCallback((m: MeetingNote) => {
-    setEditId(m.id)
-    setEditCreatedBy(m.created_by)
-    setParticipants([])
-    setSpecificUsers([])
-    const visibility: VisibilityValue = (m as any).visibility ?? (m.shared ? 'department' : 'private')
-    setForm({
-      title: m.title,
-      meeting_date: m.meeting_date ?? '',
-      meeting_time: m.meeting_time ?? '',
-      vendor: m.vendor ?? '',
-      category: m.category ?? '',
-      notes: m.notes ?? '',
-      visibility,
-      links: ((m as any).links ?? []) as MeetingLink[],
-    })
-    setTaskForm({ ...EMPTY_TASK })
-    loadMeetingTasks(m.id)
-    setModalOpen(true)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const isOwner = !editId || editCreatedBy === myId
-
-  async function onSave() {
-    if (!companyId || !form.title.trim()) return
-    setSaving(true)
-    const corePayload = {
-      company_id: companyId,
-      title: form.title.trim(),
-      meeting_date: form.meeting_date || null,
-      meeting_time: form.meeting_time || null,
-      vendor: form.vendor.trim() || null,
-      category: form.category.trim() || null,
-      notes: form.notes || null,
-      visibility: isOwner ? form.visibility : undefined,
-      shared: isOwner ? form.visibility !== 'private' : undefined,
-    }
-    const sb = supabase as any
-    let savedId = editId
-    if (editId) {
-      const { error } = await sb.schema('inventory').from('meeting_notes').update(corePayload).eq('id', editId)
-      if (error) { toast.error(error.message); setSaving(false); return }
-      toast.success('Meeting saved')
-    } else {
-      const { data, error } = await sb.schema('inventory').from('meeting_notes').insert({ ...corePayload, created_by: myId }).select().single()
-      if (error) { toast.error(error.message); setSaving(false); return }
-      savedId = data.id
-      setEditId(data.id)
-      setEditCreatedBy(myId)
-      toast.success('Meeting created')
-    }
-    // Best-effort: save links separately (column may not exist in all environments yet)
-    if (savedId) {
-      sb.schema('inventory').from('meeting_notes')
-        .update({ links: form.links })
-        .eq('id', savedId)
-        .then(() => {})
-    }
-    setSaving(false)
-    load()
-  }
-
-  async function onDelete() {
-    if (!editId || !isOwner || !confirm('Delete this meeting and its tasks?')) return
-    const { error } = await (supabase as any).schema('inventory').from('meeting_notes').delete().eq('id', editId)
-    if (error) { toast.error(error.message); return }
-    toast.success('Meeting deleted')
-    setModalOpen(false)
-    setEditId(null)
-    load()
-  }
-
-  async function addTask() {
-    if (!editId || !taskForm.title.trim() || !companyId) return
-    const { error } = await (supabase as any).schema('core').from('tasks').insert({
-      company_id: companyId,
-      title: taskForm.title.trim(),
-      target_date: taskForm.target_date || null,
-      project_id: taskForm.project_id || null,
-      source: 'meeting',
-      meeting_id: editId,
-      created_by: myId,
-    })
-    if (error) { toast.error(error.message); return }
-    setTaskForm({ ...EMPTY_TASK })
-    loadMeetingTasks(editId)
-  }
-
-  async function toggleTask(task: Task) {
-    const done = !task.completed
-    const { error } = await (supabase as any).schema('core').from('tasks').update({
-      completed: done,
-      completed_at: done ? new Date().toISOString() : null,
-      completed_by: done ? myId : null,
-    }).eq('id', task.id)
-    if (error) { toast.error(error.message); return }
-    if (editId) loadMeetingTasks(editId)
-  }
-
-  async function deleteTask(taskId: string) {
-    await (supabase as any).schema('core').from('tasks').delete().eq('id', taskId)
-    if (editId) loadMeetingTasks(editId)
-  }
-
   const visibleMeetings = useMemo(() => {
-    // Never expose private notes belonging to another user
     const accessible = meetings.filter((m) => {
       const vis: VisibilityValue = (m as any).visibility ?? (m.shared ? 'department' : 'private')
       return vis !== 'private' || m.created_by === myId
@@ -302,15 +116,6 @@ export function MeetingNotesPage() {
     if (viewFilter === 'shared') return accessible.filter((m) => m.created_by !== myId)
     return accessible
   }, [meetings, viewFilter, myId])
-
-  const distinctCategories = useMemo(
-    () => Array.from(new Set(meetings.map((m) => m.category).filter(Boolean))).sort() as string[],
-    [meetings]
-  )
-  const distinctVendors = useMemo(
-    () => Array.from(new Set(meetings.map((m) => m.vendor).filter(Boolean))).sort() as string[],
-    [meetings]
-  )
 
   const columns = useMemo(() => [
     col.accessor('title', {
@@ -367,7 +172,7 @@ export function MeetingNotesPage() {
       },
     }),
     col.accessor('notes', { header: 'Notes', size: 200, meta: { noClip: true, fill: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} isHtml /> }),
-  ], [openEdit]) // eslint-disable-line react-hooks/exhaustive-deps
+  ], [openEdit])
 
   const { table, globalFilter, setGlobalFilter } = useTable(visibleMeetings, columns)
 
@@ -387,9 +192,7 @@ export function MeetingNotesPage() {
             onClick={() => setViewFilter(f)}
             className={[
               'px-4 py-2 text-xs font-heading uppercase tracking-wide transition-colors border-b-2',
-              viewFilter === f
-                ? 'border-sky text-navy'
-                : 'border-transparent text-inky/50 hover:text-navy',
+              viewFilter === f ? 'border-sky text-navy' : 'border-transparent text-inky/50 hover:text-navy',
             ].join(' ')}
           >
             {f === 'all' ? 'All' : f === 'mine' ? 'My Notes' : 'Shared with Me'}
@@ -407,201 +210,13 @@ export function MeetingNotesPage() {
         actions={<Button size="sm" onClick={() => openNew()}>+ New Meeting</Button>}
       />
 
-      <Modal
+      <MeetingModal
         open={modalOpen}
-        onClose={() => { setModalOpen(false); setEditId(null); load() }}
-        title={editId ? 'Edit Meeting' : 'New Meeting'}
-        size="xl"
-      >
-        <div className="flex flex-col gap-4">
-          <div className="flex items-start gap-3">
-            <Input
-              label="Meeting Name *"
-              value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              className="flex-1"
-            />
-            {/* Visibility selector — four-option, only creator can change */}
-            <div className="flex-shrink-0">
-              <VisibilitySelector
-                value={form.visibility}
-                onChange={(v) => setForm({ ...form, visibility: v })}
-                participants={participants}
-                onParticipantsChange={setParticipants}
-                specificUsers={specificUsers}
-                onSpecificUsersChange={setSpecificUsers}
-                allUsers={allUsers}
-                departmentName={(profile as any)?.department ?? null}
-                departments={[...new Set(allUsers.map((u) => (u as any).department).filter(Boolean) as string[])]}
-                label="Visibility"
-                disabled={!isOwner}
-              />
-            </div>
-          </div>
-
-          <SectionHeader>Meeting Details</SectionHeader>
-          <div className="grid grid-cols-2 gap-3">
-            <Input label="Meeting Date" type="date" value={form.meeting_date} onChange={(e) => setForm({ ...form, meeting_date: e.target.value })} />
-            <Input label="Meeting Time" type="time" value={form.meeting_time} onChange={(e) => setForm({ ...form, meeting_time: e.target.value })} />
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-mono text-inky uppercase tracking-wide">Vendor</label>
-              <input
-                value={form.vendor}
-                onChange={(e) => setForm({ ...form, vendor: e.target.value })}
-                list="meeting-vendors"
-                placeholder="Type or select…"
-                className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
-              />
-              <datalist id="meeting-vendors">
-                {distinctVendors.map((v) => <option key={v} value={v} />)}
-              </datalist>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-mono text-inky uppercase tracking-wide">Category</label>
-              <input
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
-                list="meeting-categories"
-                placeholder="Type or select…"
-                className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy placeholder-inky/50 focus:border-sky focus:ring-1 focus:ring-sky focus:outline-none"
-              />
-              <datalist id="meeting-categories">
-                {distinctCategories.map((c) => <option key={c} value={c} />)}
-              </datalist>
-            </div>
-          </div>
-
-          <SectionHeader>Meeting Notes</SectionHeader>
-          <RichTextEditor
-            value={form.notes}
-            onChange={(html) => setForm({ ...form, notes: html })}
-            placeholder="Meeting notes, agenda items, decisions made…"
-            minHeight={200}
-            disabled={!isOwner}
-          />
-
-          {/* Links */}
-          <SectionHeader>Links</SectionHeader>
-          <div className="flex flex-col gap-2">
-            {form.links.map((link, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <input
-                  value={link.label}
-                  onChange={(e) => {
-                    const next = [...form.links]
-                    next[i] = { ...next[i], label: e.target.value }
-                    setForm({ ...form, links: next })
-                  }}
-                  placeholder="Label (optional)"
-                  className="w-32 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy placeholder-inky/40 focus:border-sky focus:outline-none"
-                />
-                <input
-                  value={link.url}
-                  onChange={(e) => {
-                    const next = [...form.links]
-                    next[i] = { ...next[i], url: e.target.value }
-                    setForm({ ...form, links: next })
-                  }}
-                  placeholder="https://…"
-                  className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy placeholder-inky/40 focus:border-sky focus:outline-none"
-                />
-                <button
-                  onClick={() => setForm({ ...form, links: form.links.filter((_, idx) => idx !== i) })}
-                  className="text-inky/40 hover:text-[#C0392B] text-xs flex-shrink-0"
-                >✕</button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={() => setForm({ ...form, links: [...form.links, { label: '', url: '' }] })}
-              className="self-start text-xs font-mono text-inky hover:text-navy border border-navy/20 rounded px-2 py-1"
-            >
-              + Add Link
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between gap-2">
-            <div>{editId && isOwner && <Button variant="danger" size="sm" onClick={onDelete}>Delete Meeting</Button>}</div>
-            <Button size="sm" onClick={onSave} disabled={saving || !form.title.trim()}>
-              {saving ? 'Saving…' : editId ? 'Save Changes' : 'Create Meeting'}
-            </Button>
-          </div>
-
-          {editId ? (
-            <div className="flex flex-col gap-3">
-              <SectionHeader>Action Items</SectionHeader>
-              {meetingTasks.length === 0 && (
-                <p className="text-xs font-body italic text-inky/50">No action items yet.</p>
-              )}
-              <ul className="flex flex-col gap-1.5">
-                {meetingTasks.map((t) => (
-                  <li key={t.id} className="flex items-center gap-2 group">
-                    <input
-                      type="checkbox"
-                      checked={t.completed}
-                      onChange={() => toggleTask(t)}
-                      className="accent-inky flex-shrink-0"
-                    />
-                    <span className={['flex-1 text-sm font-body', t.completed ? 'line-through text-inky/40' : 'text-navy'].join(' ')}>
-                      {t.title}
-                    </span>
-                    {t.project_id && (
-                      <span className="text-[10px] font-mono text-inky/60 bg-navy/5 border border-navy/20 rounded px-1.5 py-0.5 flex-shrink-0">
-                        {projectById.get(t.project_id) ?? 'Project'}
-                      </span>
-                    )}
-                    {t.target_date && (
-                      <span className="text-xs font-mono text-inky/50 flex-shrink-0">
-                        {format(new Date(t.target_date + 'T00:00:00'), 'MMM d')}
-                      </span>
-                    )}
-                    <button
-                      onClick={() => deleteTask(t.id)}
-                      className="text-inky/30 hover:text-[#C0392B] opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 text-xs"
-                    >✕</button>
-                  </li>
-                ))}
-              </ul>
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  value={taskForm.title}
-                  onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
-                  onKeyDown={(e) => { if (e.key === 'Enter') addTask() }}
-                  placeholder="New action item…"
-                  className="flex-1 rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-body text-navy placeholder-inky/40 focus:border-sky focus:outline-none"
-                />
-                <select
-                  value={taskForm.project_id}
-                  onChange={(e) => setTaskForm({ ...taskForm, project_id: e.target.value })}
-                  className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none"
-                >
-                  <option value="">No project</option>
-                  {openProjects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.project_name}</option>
-                  ))}
-                </select>
-                <input
-                  type="date"
-                  value={taskForm.target_date}
-                  onChange={(e) => setTaskForm({ ...taskForm, target_date: e.target.value })}
-                  className="rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-body text-navy focus:border-sky focus:outline-none"
-                />
-                <button
-                  onClick={addTask}
-                  disabled={!taskForm.title.trim()}
-                  className="rounded border border-inky/30 px-3 py-1.5 text-xs font-heading text-inky hover:border-navy hover:text-navy uppercase disabled:opacity-40"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-          ) : (
-            <p className="text-xs font-body italic text-inky/50 border-t border-navy/10 pt-3">
-              Save the meeting first to add action items.
-            </p>
-          )}
-        </div>
-      </Modal>
+        existing={editing}
+        quick={quick}
+        onClose={() => { setModalOpen(false); setEditing(null); load() }}
+        onSaved={load}
+      />
     </div>
   )
 }

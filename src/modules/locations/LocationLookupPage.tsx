@@ -360,7 +360,7 @@ export function LocationLookupPage() {
             {configsByVendor.length === 0 ? (
               <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
             ) : (
-              <div className={configsByVendor.length >= 2 ? 'grid grid-cols-1 xl:grid-cols-2 gap-4 items-start' : 'flex flex-col gap-4'}>
+              <div className="flex flex-col gap-4">
                 {configsByVendor.map(([vendor, rows]) => (
                   <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} hidden={prefs.config} onOpenConfig={() => navigate('/config?tab=order-config')} />
                 ))}
