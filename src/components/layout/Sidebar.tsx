@@ -37,7 +37,7 @@ import {
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
   Database, Users, AlertTriangle, MessageSquare, Lightbulb,
   CheckCircle2, FileText, MapPin, GripVertical, ChevronRight,
-  ChevronsLeft, ChevronsRight,
+  ChevronsLeft, ChevronsRight, Pin,
 } from 'lucide-react'
 
 // ── Icons ──────────────────────────────────────────────────────────────────
@@ -645,6 +645,70 @@ function ProfileButton({ onOpen, collapsed }: { onOpen: () => void; collapsed: b
   )
 }
 
+// ── Quick Access grid (2×2) — triggers the overlay/nav actions in AppShell ──
+const QUICK_ACCESS = [
+  { id: 'tasks', label: 'Tasks' },
+  { id: 'lookup', label: 'Lookup' },
+  { id: 'meeting', label: 'Meeting' },
+  { id: 'inventory', label: 'Inventory' },
+] as const
+const QA_ICON: Record<string, JSX.Element> = {
+  tasks: <CheckCircle2 className="w-4 h-4" />,
+  lookup: <MapPin className="w-4 h-4" />,
+  meeting: <MessageSquare className="w-4 h-4" />,
+  inventory: <Package className="w-4 h-4" />,
+}
+
+function QuickAccessGrid({ onNavClick }: { onNavClick?: () => void }) {
+  const [expanded, setExpanded] = useState(() => localStorage.getItem('sb:qa:expanded') !== 'false')
+  const [pinned, setPinned] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sb:qa:pinned') || '[]') } catch { return [] }
+  })
+  useEffect(() => { localStorage.setItem('sb:qa:expanded', String(expanded)) }, [expanded])
+  useEffect(() => { localStorage.setItem('sb:qa:pinned', JSON.stringify(pinned)) }, [pinned])
+  const togglePin = (id: string) => setPinned((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
+  const trigger = (id: string) => { window.dispatchEvent(new CustomEvent('sb-quick-access', { detail: id })); onNavClick?.() }
+
+  const items = expanded ? [...QUICK_ACCESS] : QUICK_ACCESS.filter((i) => pinned.includes(i.id))
+
+  return (
+    <div className="border-t border-[#F2F1E6]/8 px-2 py-2 flex flex-col gap-1.5">
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        className="flex items-center justify-between w-full px-1 text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest hover:text-[#F2F1E6]/60 transition-colors"
+      >
+        <span>Quick Access</span>
+        <ChevronRight className={['w-3.5 h-3.5 transition-transform', expanded ? 'rotate-90' : ''].join(' ')} />
+      </button>
+      {items.length > 0 && (
+        <div className="grid grid-cols-2 gap-1.5">
+          {items.map((item) => (
+            <div key={item.id} className="relative">
+              <button
+                onClick={() => trigger(item.id)}
+                title={item.label}
+                className="w-full flex flex-col items-center justify-center gap-1 rounded-lg py-2.5 border border-[#F2F1E6]/10 text-[11px] font-heading text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-all"
+              >
+                {QA_ICON[item.id]}
+                <span>{item.label}</span>
+              </button>
+              {expanded && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); togglePin(item.id) }}
+                  title={pinned.includes(item.id) ? 'Unpin' : 'Pin'}
+                  className="absolute top-1 right-1"
+                >
+                  <Pin className={['w-3 h-3 transition-colors', pinned.includes(item.id) ? 'text-sky fill-current' : 'text-[#4F7489]/50 hover:text-[#F2F1E6]'].join(' ')} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const TIMEZONES = [
   'America/New_York',
   'America/Chicago',
@@ -672,10 +736,6 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
   const [skipWeekends, setSkipWeekends] = useState(profile?.skip_weekends_holidays ?? false)
   const [schedSaving, setSchedSaving] = useState(false)
   const [schedSaved, setSchedSaved] = useState(false)
-  const [showTasksFab,     setShowTasksFab]     = useState(() => localStorage.getItem('sb:fab:tasks')     !== 'false')
-  const [showMeetingFab,   setShowMeetingFab]   = useState(() => localStorage.getItem('sb:fab:meeting')   !== 'false')
-  const [showLookupFab,    setShowLookupFab]    = useState(() => localStorage.getItem('sb:fab:lookup')    !== 'false')
-  const [showInventoryFab, setShowInventoryFab] = useState(() => localStorage.getItem('sb:fab:inventory') !== 'false')
   const [blockedDays, setBlockedDays] = useState(() => normalizeBlockedDays(profile?.blocked_days))
   const [newBlockedDate, setNewBlockedDate] = useState('')
   const [newBlockedNote, setNewBlockedNote] = useState('')
@@ -701,11 +761,6 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
     setProfile({ ...profile, ...data })
     setSchedSaved(true)
     setTimeout(() => setSchedSaved(false), 2000)
-  }
-
-  function toggleFab(key: string, value: boolean) {
-    localStorage.setItem(key, String(value))
-    window.dispatchEvent(new Event('fab-prefs-changed'))
   }
 
   async function addBlockedDay() {
@@ -802,31 +857,6 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
                 dark ? 'translate-x-[18px]' : 'translate-x-0.5',
               ].join(' ')} />
             </button>
-          </div>
-        </div>
-
-        {/* Floating Buttons */}
-        <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
-            Floating Buttons
-          </div>
-          <div className="flex flex-col gap-2.5">
-            {([
-              { label: 'Tasks',     key: 'sb:fab:tasks',     val: showTasksFab,     set: setShowTasksFab },
-              { label: 'Meeting',   key: 'sb:fab:meeting',   val: showMeetingFab,   set: setShowMeetingFab },
-              { label: 'Lookup',    key: 'sb:fab:lookup',    val: showLookupFab,    set: setShowLookupFab },
-              { label: 'Inventory', key: 'sb:fab:inventory', val: showInventoryFab, set: setShowInventoryFab },
-            ] as const).map(({ label, key, val, set }) => (
-              <div key={key} className="flex items-center justify-between">
-                <span className="text-xs font-mono text-navy dark:text-[#F2F1E6]">{label}</span>
-                <button
-                  onClick={() => { const next = !val; set(next as any); toggleFab(key, next) }}
-                  className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none', val ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}
-                >
-                  <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', val ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
-                </button>
-              </div>
-            ))}
           </div>
         </div>
 
@@ -1229,7 +1259,7 @@ function ExpandedSidebar({
       {/* Collapse toggle — above quick access */}
       {onToggleCollapsed && (
         <div className="flex items-center justify-between px-3 py-1.5 border-t border-[#F2F1E6]/8">
-          <span className="text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest">Quick Access</span>
+          <span className="text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest">Shortcuts</span>
           <button
             onClick={onToggleCollapsed}
             title="Collapse sidebar"
@@ -1246,8 +1276,11 @@ function ExpandedSidebar({
       {/* Profile button */}
       <ProfileButton onOpen={() => setProfileOpen(true)} collapsed={false} />
 
+      {/* Quick Access grid — between profile and logo */}
+      <QuickAccessGrid onNavClick={onNavClick} />
+
       {/* Logo watermark */}
-      <div className="px-3 py-2 flex justify-center border-t border-[#F2F1E6]/8">
+      <div className="px-3 py-3 flex justify-center border-t border-[#F2F1E6]/8">
         <img src={sbLogo} alt="Strickland Brothers" className="w-full max-w-[100px] opacity-40" />
       </div>
 

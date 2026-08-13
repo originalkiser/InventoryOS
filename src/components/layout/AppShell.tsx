@@ -15,16 +15,6 @@ const INV_WIDTH_KEY = 'inventory.width'
 const TASKS_MODE_KEY = 'tasks.mode'
 const TASKS_WIDTH_KEY = 'todaysTasks.width'
 
-const FAB_KEYS = { meeting: 'sb:fab:meeting', lookup: 'sb:fab:lookup', inventory: 'sb:fab:inventory', tasks: 'sb:fab:tasks' }
-function readFabPrefs() {
-  return {
-    meeting:   localStorage.getItem(FAB_KEYS.meeting)   !== 'false',
-    lookup:    localStorage.getItem(FAB_KEYS.lookup)    !== 'false',
-    inventory: localStorage.getItem(FAB_KEYS.inventory) !== 'false',
-    tasks:     localStorage.getItem(FAB_KEYS.tasks)     !== 'false',
-  }
-}
-
 export function AppShell() {
   const mobile = useMediaQuery('(max-width: 640px)')
   const navigate = useNavigate()
@@ -36,7 +26,6 @@ export function AppShell() {
   const [tasksWidth, setTasksWidth] = useState(() => Number(localStorage.getItem(TASKS_WIDTH_KEY)) || 360)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [fabPrefs, setFabPrefs] = useState(readFabPrefs)
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
@@ -57,12 +46,19 @@ export function AppShell() {
   // Close mobile nav on every route change
   useEffect(() => { setMobileNavOpen(false) }, [location.pathname])
 
-  // Re-read FAB prefs when ProfilePanel writes them
+  // Sidebar Quick Access grid triggers the overlay/nav actions.
   useEffect(() => {
-    const handler = () => setFabPrefs(readFabPrefs())
-    window.addEventListener('fab-prefs-changed', handler)
-    return () => window.removeEventListener('fab-prefs-changed', handler)
-  }, [])
+    const handler = (e: Event) => {
+      const action = (e as CustomEvent).detail as string
+      if (action === 'tasks') toggleTasks()
+      else if (action === 'meeting') navigate('/meetings?quick=1')
+      else if (action === 'lookup') setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')
+      else if (action === 'inventory') setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')
+    }
+    window.addEventListener('sb-quick-access', handler as EventListener)
+    return () => window.removeEventListener('sb-quick-access', handler as EventListener)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lookupMode, invMode])
 
   // Only one panel can be docked at a time (they share the right-edge push).
   function undockOthers(except: 'lookup' | 'inv' | 'tasks') {
@@ -149,57 +145,6 @@ export function AppShell() {
           <div className="h-16" />
         </div>
       </div>
-
-      {/* Floating action buttons — bottom-left, anchored next to sidebar, always above map/content */}
-      {(fabPrefs.meeting || fabPrefs.lookup || fabPrefs.inventory || fabPrefs.tasks) && (
-        <div
-          className="fixed bottom-4 z-[1000] flex items-center gap-2 transition-[left] duration-200"
-          style={{ left: mobile ? '1rem' : sidebarCollapsed ? '4.25rem' : '16.75rem' }}
-        >
-          {fabPrefs.tasks && (
-            <button
-              onClick={toggleTasks}
-              className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-              title="Tasks"
-            >
-              {tasksMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
-              {!mobile && 'Tasks'}
-              {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
-            </button>
-          )}
-          {fabPrefs.meeting && (
-            <button
-              onClick={() => navigate('/meetings?quick=1')}
-              className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-              title="Quick Meeting — opens notes with date + time pre-filled"
-            >
-              Meeting
-            </button>
-          )}
-          {fabPrefs.lookup && (
-            <button
-              onClick={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')}
-              className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-              title="Location Lookup (Ctrl/Cmd+L)"
-            >
-              {lookupMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
-              {!mobile && 'Lookup'}
-              {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>}
-            </button>
-          )}
-          {fabPrefs.inventory && (
-            <button
-              onClick={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')}
-              className="flex items-center gap-1.5 rounded-full border border-navy/40 bg-navy px-3 py-2 font-heading text-xs text-cream shadow-lg hover:bg-inky uppercase tracking-wide"
-              title="Inventory — all locations (Ctrl/Cmd+I)"
-            >
-              {invMode !== 'hidden' && <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_3px_rgba(74,222,128,0.7)]" />}
-              {!mobile && 'Inventory'}
-              {mobile && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 10V7" /></svg>}
-            </button>
-          )}
-        </div>
-      )}
 
       <LocationLookupOverlay
         mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
