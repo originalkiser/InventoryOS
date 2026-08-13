@@ -567,14 +567,12 @@ function SortableSection({
 
 function UtilityNav({
   order,
-  showLabels,
   onNavClick,
-  hideLabel,
+  onToggleCollapsed,
 }: {
   order: string[]
-  showLabels: boolean
   onNavClick?: () => void
-  hideLabel?: boolean
+  onToggleCollapsed?: () => void
 }) {
   const orderedItems = order
     .map((k) => UTILITY_ITEMS.find((i) => i.key === k))
@@ -583,31 +581,64 @@ function UtilityNav({
   const missing = UTILITY_ITEMS.filter((i) => !order.includes(i.key))
   const items = [...orderedItems, ...missing]
 
+  const [expanded, setExpanded] = useState(() => localStorage.getItem('sb:sc:expanded') !== 'false')
+  const [pinned, setPinned] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sb:sc:pinned') || '[]') } catch { return [] }
+  })
+  useEffect(() => { localStorage.setItem('sb:sc:expanded', String(expanded)) }, [expanded])
+  useEffect(() => { localStorage.setItem('sb:sc:pinned', JSON.stringify(pinned)) }, [pinned])
+  const togglePin = (key: string) => setPinned((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]))
+
+  const shown = expanded ? items : items.filter((i) => pinned.includes(i.key))
+
   return (
-    <div className="pt-1 pb-1">
-      {showLabels && !hideLabel && (
-        <div className="px-3 pt-1 pb-0.5 text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest">
-          Quick Access
-        </div>
-      )}
-      {items.map((item) => (
-        item.to ? (
-          <NavLink
-            key={item.key}
-            to={item.to}
-            onClick={onNavClick}
-            className={({ isActive }) =>
-              [
-                'flex items-center gap-2.5 px-2 py-1.5 mx-1 rounded text-xs font-heading transition-all duration-100',
-                isActive
-                  ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]'
-                  : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
-              ].join(' ')
-            }
+    <div className="pt-1 pb-1 border-t border-[#F2F1E6]/8">
+      <div className="flex items-center justify-between px-2 py-1">
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="flex items-center gap-1 text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest hover:text-[#F2F1E6]/60 transition-colors"
+        >
+          <span>Shortcuts</span>
+          <ChevronRight className={['w-3.5 h-3.5 transition-transform', expanded ? 'rotate-90' : ''].join(' ')} />
+        </button>
+        {onToggleCollapsed && (
+          <button
+            onClick={onToggleCollapsed}
+            title="Collapse sidebar"
+            className="text-[#4F7489] hover:text-[#F2F1E6] transition-colors px-1 py-0.5 rounded hover:bg-[#F2F1E6]/5"
           >
-            {ICONS[item.key] ?? ICONS.dashboard}
-            {showLabels && <span className="truncate">{item.label}</span>}
-          </NavLink>
+            <ChevronsLeft className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+      {shown.map((item) => (
+        item.to ? (
+          <div key={item.key} className="relative group">
+            <NavLink
+              to={item.to}
+              onClick={onNavClick}
+              className={({ isActive }) =>
+                [
+                  'flex items-center gap-2.5 px-2 py-1.5 mx-1 rounded text-xs font-heading transition-all duration-100',
+                  isActive
+                    ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]'
+                    : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                ].join(' ')
+              }
+            >
+              {ICONS[item.key] ?? ICONS.dashboard}
+              <span className="truncate flex-1 pr-4">{item.label}</span>
+            </NavLink>
+            {expanded && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); togglePin(item.key) }}
+                title={pinned.includes(item.key) ? 'Unpin' : 'Pin'}
+                className={['absolute right-2 top-1/2 -translate-y-1/2 transition-opacity', pinned.includes(item.key) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'].join(' ')}
+              >
+                <Pin className={['w-3 h-3', pinned.includes(item.key) ? 'text-sky fill-current' : 'text-[#4F7489]/60 hover:text-[#F2F1E6]'].join(' ')} />
+              </button>
+            )}
+          </div>
         ) : null
       ))}
     </div>
@@ -1256,22 +1287,8 @@ function ExpandedSidebar({
         </DndContext>
       </div>
 
-      {/* Collapse toggle — above quick access */}
-      {onToggleCollapsed && (
-        <div className="flex items-center justify-between px-3 py-1.5 border-t border-[#F2F1E6]/8">
-          <span className="text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest">Shortcuts</span>
-          <button
-            onClick={onToggleCollapsed}
-            title="Collapse sidebar"
-            className="flex items-center gap-1 text-[#4F7489] hover:text-[#F2F1E6] transition-colors px-1.5 py-1 rounded hover:bg-[#F2F1E6]/5"
-          >
-            <ChevronsLeft className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* Utility nav */}
-      <UtilityNav order={utilityNavOrder} showLabels onNavClick={onNavClick} hideLabel />
+      {/* Shortcuts — collapsible + pinnable, with the sidebar-collapse control */}
+      <UtilityNav order={utilityNavOrder} onNavClick={onNavClick} onToggleCollapsed={onToggleCollapsed} />
 
       {/* Profile button */}
       <ProfileButton onOpen={() => setProfileOpen(true)} collapsed={false} />
