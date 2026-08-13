@@ -62,7 +62,8 @@ export function TankMonitorsPage() {
   const [amFilter, setAmFilter] = useState('')
   const [offlineVmiOnly, setOfflineVmiOnly] = useState(true)
   const [ignored, setIgnored] = useAppSetting<string[]>('tank_low_vmi_ignore', [])
-  const [matchIgnore, setMatchIgnore] = useAppSetting<string[]>('tank_match_ignore', [])
+  const [matchIgnore, setMatchIgnore, matchIgnoreLoaded] = useAppSetting<string[]>('tank_match_ignore', [])
+  const [showIgnored, setShowIgnored] = useState(false)
 
   // Location is hidden if the user excluded it (shared with the rest of the app).
   const isHidden = useCallback((id: string | null) => { const l = loc.byId(id); return !!l && isExcluded(l) }, [loc, isExcluded])
@@ -71,11 +72,26 @@ export function TankMonitorsPage() {
     if (!companyId) return
     setLoading(true)
     const sb = supabase as any
-    const [monRes, partRes] = await Promise.all([
-      sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId),
+    const PAGE = 1000
+    // Count first, then fetch every page — a single select() is capped at 1000
+    // rows, which silently dropped shops (and broke the VMI counts).
+    const [{ count }, partRes] = await Promise.all([
+      sb.schema('inventory').from('tank_monitors').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
       sb.schema('inventory').from('vendor_parts').select('part_number, our_part_number').eq('company_id', companyId),
     ])
-    setMonitors((monRes.data ?? []) as TankMonitor[])
+    const pages = Math.max(1, Math.ceil((count ?? 0) / PAGE))
+    const results = await Promise.all(Array.from({ length: pages }, (_, i) =>
+      sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).order('id', { ascending: true }).range(i * PAGE, i * PAGE + PAGE - 1)))
+    const all = results.flatMap((r: any) => (r.data ?? []) as TankMonitor[])
+    // Collapse history to the latest reading per tank so counts reflect current
+    // state (one row per tank), not every daily reading.
+    const latest = new Map<string, TankMonitor>()
+    for (const m of all) {
+      const key = `${m.location_id ?? m.source_location ?? ''}|${m.system_tank_id ?? m.serial_rtu_id ?? m.product_id ?? ''}`
+      const ex = latest.get(key)
+      if (!ex || (readingTime(m) ?? 0) > (readingTime(ex) ?? 0)) latest.set(key, m)
+    }
+    setMonitors([...latest.values()])
     setParts((partRes.data ?? []) as VendorPart[])
     setLoading(false)
   }, [companyId])
@@ -138,8 +154,24 @@ export function TankMonitorsPage() {
         </TabsList>
 
         <TabsContent value="all">
-          {loading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div> : (
+          {loading || !matchIgnoreLoaded ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div> : (
             <div className="flex flex-col gap-4">
+              {matchIgnore.length > 0 && (
+                <div className="text-[11px] font-mono">
+                  <button onClick={() => setShowIgnored((o) => !o)} className="text-inky hover:text-navy hover:underline">
+                    {matchIgnore.length} unassigned shop{matchIgnore.length !== 1 ? 's' : ''} ignored {showIgnored ? '▾' : '▸'}
+                  </button>
+                  {showIgnored && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {matchIgnore.map((s) => (
+                        <span key={s} className="inline-flex items-center gap-1 rounded-full bg-navy/[0.06] border border-navy/15 px-2 py-0.5 text-navy">
+                          {s || '(blank)'}<button onClick={() => setMatchIgnore(matchIgnore.filter((x) => x !== s))} title="Un-ignore" className="text-inky/50 hover:text-[#C0392B]">✕</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {unassigned.length > 0 && <UnassignedMatcher rows={unassigned} shopOptions={shopOptions} companyId={companyId} onMatched={load} onReloadLocations={loc.reload} matchIgnore={matchIgnore} setMatchIgnore={setMatchIgnore} />}
               <MonitorTable rows={filtered} ctx={ctx} shopOf={ctx.shopOf} />
             </div>
@@ -323,9 +355,6 @@ function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLo
             </div>
           ))}
         </div>
-        {matchIgnore.length > 0 && (
-          <div className="text-[10px] font-mono text-inky/50 mt-1">Ignored: {matchIgnore.join(', ')}<button onClick={() => setMatchIgnore([])} className="ml-2 text-inky hover:text-navy hover:underline">reset</button></div>
-        )}
       </CardBody>
     </Card>
   )
