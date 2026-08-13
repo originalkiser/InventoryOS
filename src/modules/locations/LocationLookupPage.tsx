@@ -11,7 +11,7 @@ import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location } from '@/types'
-import { format, differenceInCalendarDays } from 'date-fns'
+import { format, differenceInCalendarDays, differenceInMonths } from 'date-fns'
 import toast from 'react-hot-toast'
 
 const LAST_SHOP_KEY = 'location-lookup:last-shop'
@@ -39,6 +39,18 @@ const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try 
 const dateTime = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy · h:mm a') } catch { return d } }
 const alignCls = (a: string) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left')
 const metaLabel = (k: string) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+// "2y 3m" / "8m" since a date — used for acquisition age.
+function sinceLabel(dateStr: string): string | null {
+  if (!dateStr) return null
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return null
+  const months = differenceInMonths(new Date(), d)
+  if (months < 0) return null
+  const y = Math.floor(months / 12), m = months % 12
+  if (y && m) return `${y}y ${m}m`
+  return y ? `${y}y` : `${m}m`
+}
 
 // Normalize a tank unit string to a compact label. Tanks default to gallons.
 const normUnit = (u: string | null | undefined): string | null => {
@@ -75,15 +87,34 @@ function locVal(loc: Location | undefined, key: string): string {
   return meta == null ? '' : String(meta)
 }
 
-interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode }
+interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null }
+
+type SortState = { id: string; dir: 'asc' | 'desc' } | null
+function applySort<T>(rows: T[], cols: Col<T>[], sort: SortState): T[] {
+  if (!sort) return rows
+  const col = cols.find((c) => c.id === sort.id)
+  if (!col?.sort) return rows
+  const get = col.sort
+  return [...rows].sort((a, b) => {
+    const av = get(a), bv = get(b)
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv), undefined, { numeric: true })
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
+}
+const nextSort = (cur: SortState, id: string): SortState => (cur?.id === id ? (cur.dir === 'asc' ? { id, dir: 'desc' } : null) : { id, dir: 'asc' })
+const sortArrow = (sort: SortState, id: string) => (sort?.id === id ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '')
 
 const TANK_COLS: Col<TankRow>[] = [
-  { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—' },
-  { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand) },
-  { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity) },
-  { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>) },
+  { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—', sort: (t) => t.product_id },
+  { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand), sort: (t) => t.on_hand },
+  { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity), sort: (t) => t.available_capacity },
+  { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>), sort: (t) => (t.keep_fill ? 1 : 0) },
   {
     id: 'updated', label: 'Last Update', align: 'left',
+    sort: (t) => { const d = t.inventory_time ?? t.reading_date; return d ? new Date(d).getTime() : null },
     render: (t) => {
       const d = t.inventory_time ?? t.reading_date
       // A monitor that hasn't reported in > 2 days reads as offline.
@@ -94,11 +125,11 @@ const TANK_COLS: Col<TankRow>[] = [
 ]
 
 const CONFIG_FIXED: Col<ConfigRow>[] = [
-  { id: 'part', label: 'Part', align: 'left', render: (r) => r.product_id ?? '—' },
-  { id: 'uom', label: 'UOM', align: 'left', render: (r) => String((r.metadata as any)?.uom ?? '—') },
-  { id: 'capacity', label: 'Capacity', align: 'right', render: (r) => num(r.capacity) },
-  { id: 'max', label: 'Max', align: 'right', render: (r) => num(r.order_limit) },
-  { id: 'vmi', label: 'VMI', align: 'center', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>) },
+  { id: 'part', label: 'Part', align: 'left', render: (r) => r.product_id ?? '—', sort: (r) => r.product_id },
+  { id: 'uom', label: 'UOM', align: 'left', render: (r) => String((r.metadata as any)?.uom ?? '—'), sort: (r) => String((r.metadata as any)?.uom ?? '') },
+  { id: 'capacity', label: 'Capacity', align: 'right', render: (r) => num(r.capacity), sort: (r) => r.capacity },
+  { id: 'max', label: 'Max', align: 'right', render: (r) => num(r.order_limit), sort: (r) => r.order_limit },
+  { id: 'vmi', label: 'VMI', align: 'center', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? 1 : 0) },
 ]
 // Metadata keys that are plumbing, not config attributes — never shown as columns.
 const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', 'vendor_name', 'location_label'])
@@ -122,6 +153,7 @@ export function LocationLookupPage() {
   const [comms, setComms] = useState<LocationComm[]>([])
   const [commModalOpen, setCommModalOpen] = useState(false)
   const [editingComm, setEditingComm] = useState<Partial<LocationComm> | null>(null)
+  const [tankSort, setTankSort] = useState<SortState>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customizeOpen, setCustomizeOpen] = useState(false)
@@ -271,7 +303,7 @@ export function LocationLookupPage() {
     { label: 'RD Distributor', value: rdDistributor },
     { label: 'Address', value: [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') },
     { label: 'Shop Phone', value: locVal(location, 'store_phone') },
-    { label: 'Acquisition Date', value: locVal(location, 'acquisition_date') },
+    { label: 'Acquisition Date', value: locVal(location, 'acquisition_date'), note: sinceLabel(locVal(location, 'acquisition_date')) ?? undefined },
     ...(inNC ? [{ label: 'NC Inspection Station', value: locVal(location, 'inspection_station_id') }] : []),
   ] : []
 
@@ -354,11 +386,17 @@ export function LocationLookupPage() {
                     <table className="text-xs font-mono">
                       <thead>
                         <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                          {visibleTankCols.map((c) => <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</th>)}
+                          {visibleTankCols.map((c) => (
+                            <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>
+                              <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
+                                {(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}{sortArrow(tankSort, c.id)}
+                              </button>
+                            </th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedTanks.map((t) => (
+                        {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t) => (
                           <tr key={t.id} className="border-b border-navy/20">
                             {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)}`}>{c.render(t)}</td>)}
                           </tr>
@@ -554,15 +592,18 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
 }
 
 function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: string; rows: ConfigRow[]; hidden: string[]; onOpenConfig: () => void }) {
+  const [sort, setSort] = useState<SortState>(null)
   const columns = useMemo(() => {
     const metaKeys = new Set<string>()
     for (const r of rows) for (const k of Object.keys(r.metadata ?? {})) if (!CONFIG_META_EXCLUDE.has(k)) metaKeys.add(k)
-    const metaCols: Col<ConfigRow>[] = [...metaKeys].sort().map((k) => ({ id: `meta:${k}`, label: metaLabel(k), align: 'left', render: (r) => String((r.metadata as any)?.[k] ?? '—') }))
+    const metaCols: Col<ConfigRow>[] = [...metaKeys].sort().map((k) => ({ id: `meta:${k}`, label: metaLabel(k), align: 'left', render: (r) => String((r.metadata as any)?.[k] ?? '—'), sort: (r) => String((r.metadata as any)?.[k] ?? '') }))
     // part, uom, capacity, max, [meta…], vmi — then drop hidden columns.
     const vmi = CONFIG_FIXED.find((c) => c.id === 'vmi')!
     const ordered = [...CONFIG_FIXED.filter((c) => c.id !== 'vmi'), ...metaCols, vmi]
     return ordered.filter((c) => !hidden.includes(c.id))
   }, [rows, hidden])
+
+  const sortedRows = useMemo(() => applySort(rows, columns, sort), [rows, columns, sort])
 
   return (
     <Card>
@@ -578,11 +619,17 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                  {columns.map((c) => <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>{c.label}</th>)}
+                  {columns.map((c) => (
+                    <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>
+                      <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
+                        {c.label}{sortArrow(sort, c.id)}
+                      </button>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {sortedRows.map((r) => (
                   <tr key={r.id} className="border-b border-navy/20">
                     {columns.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)}`}>{c.render(r)}</td>)}
                   </tr>
