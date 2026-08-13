@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode, type CSSProperties } from 'react'
-import { GripVertical } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { GripVertical, Copy } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { Card, CardBody, Combobox, SbLoader, Badge, Button, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Card, CardBody, Combobox, SbLoader, Badge, Button, Toggle, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import type { TankMonitor, Location, VendorPart } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -50,13 +52,20 @@ export function TankMonitorsPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
+  const navigate = useNavigate()
+  const { isExcluded } = useLocationExclusions()
 
   const [monitors, setMonitors] = useState<TankMonitor[]>([])
   const [parts, setParts] = useState<VendorPart[]>([])
   const [loading, setLoading] = useState(true)
   const [shopFilter, setShopFilter] = useState('')
   const [amFilter, setAmFilter] = useState('')
+  const [offlineVmiOnly, setOfflineVmiOnly] = useState(true)
   const [ignored, setIgnored] = useAppSetting<string[]>('tank_low_vmi_ignore', [])
+  const [matchIgnore, setMatchIgnore] = useAppSetting<string[]>('tank_match_ignore', [])
+
+  // Location is hidden if the user excluded it (shared with the rest of the app).
+  const isHidden = useCallback((id: string | null) => { const l = loc.byId(id); return !!l && isExcluded(l) }, [loc, isExcluded])
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -83,8 +92,8 @@ export function TankMonitorsPage() {
     internalOf: (pid) => (pid ? (internalMap.get(pid.toLowerCase()) ?? pid) : '—'),
   }), [loc, internalMap])
 
-  const assigned = useMemo(() => monitors.filter((m) => m.location_id), [monitors])
-  const unassigned = useMemo(() => monitors.filter((m) => !m.location_id), [monitors])
+  const assigned = useMemo(() => monitors.filter((m) => m.location_id && !isHidden(m.location_id)), [monitors, isHidden])
+  const unassigned = useMemo(() => monitors.filter((m) => !m.location_id && !matchIgnore.includes(m.source_location || '(blank)')), [monitors, matchIgnore])
 
   // Filters (shop / area manager) applied to assigned monitors.
   const filtered = useMemo(() => assigned.filter((m) => {
@@ -95,7 +104,10 @@ export function TankMonitorsPage() {
 
   // Offline = last reading > 1 day behind the freshest reading in the dataset.
   const latestReading = useMemo(() => Math.max(0, ...monitors.map((m) => readingTime(m) ?? 0)), [monitors])
-  const offline = useMemo(() => filtered.filter((m) => { const t = readingTime(m); return t != null && latestReading - t > 86400000 }), [filtered, latestReading])
+  const offline = useMemo(() => filtered.filter((m) => {
+    if (offlineVmiOnly && !m.keep_fill) return false
+    const t = readingTime(m); return t != null && latestReading - t > 86400000
+  }), [filtered, latestReading, offlineVmiOnly])
 
   const areaManagers = useMemo(() => [...new Set(loc.locations.map((l) => metaOf(l, 'area_manager')).filter(Boolean))].sort(), [loc.locations])
   const shopOptions = useMemo(() => loc.locations.filter((l) => l.active).map((l) => ({ value: l.id, label: l.shop_city || l.name })).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })), [loc.locations])
@@ -104,9 +116,12 @@ export function TankMonitorsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Tank Monitors</h1>
-        <p className="text-xs text-inky mt-0.5">All monitors across shops. Match unassigned shops, spot offline monitors, and find low VMI coverage.</p>
+      <div className="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Tank Monitors</h1>
+          <p className="text-xs text-inky mt-0.5">All monitors across shops. Match unassigned shops, spot offline monitors, and find low VMI coverage.</p>
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => navigate('/config?tab=tank-monitor')}>Upload / Update Data ↗</Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -125,20 +140,24 @@ export function TankMonitorsPage() {
         <TabsContent value="all">
           {loading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div> : (
             <div className="flex flex-col gap-4">
-              {unassigned.length > 0 && <UnassignedMatcher rows={unassigned} shopOptions={shopOptions} companyId={companyId} onMatched={load} onReloadLocations={loc.reload} />}
+              {unassigned.length > 0 && <UnassignedMatcher rows={unassigned} shopOptions={shopOptions} companyId={companyId} onMatched={load} onReloadLocations={loc.reload} matchIgnore={matchIgnore} setMatchIgnore={setMatchIgnore} />}
               <MonitorTable rows={filtered} ctx={ctx} shopOf={ctx.shopOf} />
             </div>
           )}
         </TabsContent>
 
         <TabsContent value="offline">
+          <div className="flex items-center gap-3 mb-3">
+            <Toggle checked={offlineVmiOnly} onChange={setOfflineVmiOnly} label="VMI/keepfill only" color="cyan" />
+            <span className="text-[11px] font-mono text-inky/50">Non-VMI tanks going quiet usually don't matter.</span>
+          </div>
           {loading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
             : offline.length === 0 ? <p className="text-xs font-mono text-inky/50 py-8">No offline monitors — all reported within 1 day of the latest upload.</p>
             : <MonitorTable rows={offline} ctx={ctx} shopOf={ctx.shopOf} />}
         </TabsContent>
 
         <TabsContent value="lowvmi">
-          <LowVmiView monitors={filtered} loc={loc} shopFilter={shopFilter} amFilter={amFilter} ignored={ignored} setIgnored={setIgnored} ctx={ctx} />
+          <LowVmiView monitors={filtered} loc={loc} isExcluded={isExcluded} shopFilter={shopFilter} amFilter={amFilter} ignored={ignored} setIgnored={setIgnored} ctx={ctx} />
         </TabsContent>
       </Tabs>
     </div>
@@ -188,11 +207,27 @@ function MonitorTable({ rows, ctx, shopOf }: { rows: TankMonitor[]; ctx: Ctx; sh
   const tdBase = 'px-2 py-1.5 border-b border-navy/15 whitespace-nowrap text-navy'
   const stickyShop = 'sticky left-0 z-30 w-[170px] min-w-[170px]'
 
+  const cellText = (id: string, m: TankMonitor): string => {
+    if (id === 'keepfill') return m.keep_fill ? 'VMI' : ''
+    if (id === 'internal') return ctx.internalOf(m.product_id)
+    if (id === 'inventory_time') return dt(m.inventory_time ?? m.reading_date)
+    if (id === 'updated_at') return dt(m.updated_at)
+    const c = colOf(id); const v = c.sort ? c.sort(m, ctx) : null
+    return v == null ? '' : String(v)
+  }
+  async function copyTable() {
+    const header = ['Shop', ...visible.map((id) => colOf(id).label)].join('\t')
+    const body = sorted.map((m) => [shopOf(m.location_id), ...visible.map((id) => cellText(id, m))].join('\t'))
+    try { await navigator.clipboard.writeText([header, ...body].join('\n')); toast.success('Copied to clipboard') }
+    catch { toast.error('Copy failed') }
+  }
+
   if (!rows.length) return <p className="text-xs font-mono text-inky/50 py-8">No monitors for this view.</p>
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="relative flex justify-end">
+      <div className="relative flex justify-end gap-2">
+        <button onClick={copyTable} title="Copy table for email" className="inline-flex items-center gap-1 text-[11px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy"><Copy className="w-3 h-3" /> Copy</button>
         <button onClick={() => setColMenu((o) => !o)} className="text-[11px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Columns</button>
         {colMenu && (
           <div className="absolute right-0 top-8 z-40 bg-cream border border-navy/30 rounded-lg shadow-xl p-3 flex flex-col gap-1 max-h-72 overflow-auto">
@@ -247,8 +282,9 @@ function MonitorTable({ rows, ctx, shopOf }: { rows: TankMonitor[]; ctx: Ctx; sh
 }
 
 // ── Unassigned shop matcher ─────────────────────────────────────────────────
-function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLocations }: {
+function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLocations, matchIgnore, setMatchIgnore }: {
   rows: TankMonitor[]; shopOptions: { value: string; label: string }[]; companyId: string; onMatched: () => void; onReloadLocations: () => void
+  matchIgnore: string[]; setMatchIgnore: (v: string[]) => void
 }) {
   const groups = useMemo(() => {
     const m = new Map<string, number>()
@@ -283,17 +319,21 @@ function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLo
               <span className="text-[10px] font-mono text-inky/50">{count} monitor(s)</span>
               <div className="w-56"><Combobox options={shopOptions} value={pick[source] ?? ''} onChange={(v) => setPick((p) => ({ ...p, [source]: v }))} placeholder="Match to shop…" /></div>
               <Button size="sm" loading={busy === source} onClick={() => match(source)} disabled={!pick[source]}>Match</Button>
+              <button onClick={() => setMatchIgnore([...matchIgnore, source])} className="text-[11px] font-mono text-inky hover:text-navy hover:underline" title="Temp hold — not a real location">Ignore</button>
             </div>
           ))}
         </div>
+        {matchIgnore.length > 0 && (
+          <div className="text-[10px] font-mono text-inky/50 mt-1">Ignored: {matchIgnore.join(', ')}<button onClick={() => setMatchIgnore([])} className="ml-2 text-inky hover:text-navy hover:underline">reset</button></div>
+        )}
       </CardBody>
     </Card>
   )
 }
 
 // ── Low VMI coverage ────────────────────────────────────────────────────────
-function LowVmiView({ monitors, loc, shopFilter, amFilter, ignored, setIgnored, ctx }: {
-  monitors: TankMonitor[]; loc: ReturnType<typeof useLocations>; shopFilter: string; amFilter: string; ignored: string[]; setIgnored: (v: string[]) => void; ctx: Ctx
+function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, setIgnored, ctx }: {
+  monitors: TankMonitor[]; loc: ReturnType<typeof useLocations>; isExcluded: (l: Location) => boolean; shopFilter: string; amFilter: string; ignored: string[]; setIgnored: (v: string[]) => void; ctx: Ctx
 }) {
   const byShop = useMemo(() => {
     const m = new Map<string, TankMonitor[]>()
@@ -302,12 +342,12 @@ function LowVmiView({ monitors, loc, shopFilter, amFilter, ignored, setIgnored, 
   }, [monitors])
 
   const shops = useMemo(() => loc.locations.filter((l) => {
-    if (!l.active) return false
+    if (!l.active || isExcluded(l)) return false
     if (shopFilter && l.id !== shopFilter) return false
     if (amFilter && metaOf(l, 'area_manager') !== amFilter) return false
     const keepfill = (byShop.get(l.id) ?? []).filter((mo) => mo.keep_fill).length
     return keepfill < 4
-  }).sort((a, b) => (a.shop_city || a.name).localeCompare(b.shop_city || b.name, undefined, { numeric: true })), [loc.locations, byShop, shopFilter, amFilter])
+  }).sort((a, b) => (a.shop_city || a.name).localeCompare(b.shop_city || b.name, undefined, { numeric: true })), [loc.locations, byShop, shopFilter, amFilter, isExcluded])
 
   const visible = shops.filter((l) => !ignored.includes(l.id))
   const toggleIgnore = (id: string) => setIgnored(ignored.includes(id) ? ignored.filter((x) => x !== id) : [...ignored, id])

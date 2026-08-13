@@ -189,7 +189,13 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       const id = existingId ?? crypto.randomUUID()
       return { ...base, id }
     })
-    const error = await writeInBatches(payload, 'upsert')
+    // Collapse duplicate ids (two incoming rows mapping to the same existing row)
+    // — otherwise Postgres errors "ON CONFLICT DO UPDATE cannot affect row a
+    // second time". Last write wins.
+    const byIdMerge = new Map<string, Record<string, unknown>>()
+    for (const p of payload) byIdMerge.set(String((p as any).id), p)
+    const dedupedPayload = [...byIdMerge.values()]
+    const error = await writeInBatches(dedupedPayload, 'upsert')
     if (error) { toast.error(error.message); return }
     const updated = payload.filter((p: any) => p.id).length
     toast.success(`Imported ${rows.length.toLocaleString()} rows (${updated.toLocaleString()} updated, ${(rows.length - updated).toLocaleString()} new)`)

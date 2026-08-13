@@ -14,7 +14,7 @@ import type { TankMonitor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
-const truthy = (v: string) => ['true', '1', 'yes', 'y', 'keep', 'enabled'].includes(v.trim().toLowerCase())
+const truthy = (v: string) => ['true', '1', 'yes', 'y', 'keep', 'keepfill', 'keep fill', 'keep-fill', 'enabled', 'vmi', 'kf', 'managed', 'vendor managed', 'x'].includes(v.trim().toLowerCase())
 // Safe parse a date/time value (handles Excel serials, rejects absurd years).
 const toIso = (v: string) => applyTransforms(v, [{ kind: 'datetime' }]) || null
 const toDate = (v: string) => applyTransforms(v, [{ kind: 'date' }]) || null
@@ -22,7 +22,7 @@ const toDate = (v: string) => applyTransforms(v, [{ kind: 'date' }]) || null
 const REQUIRED_FIELDS = [
   { name: 'location', label: 'Location', required: true },
   { name: 'product_id', label: 'Product' },
-  { name: 'keep_fill', label: 'Keep-fill enabled?' },
+  { name: 'keep_fill', label: 'VMI / Keep-fill' },
   { name: 'inventory_time', label: 'Inventory Time (date & time)' },
   { name: 'on_hand', label: 'On Hand (Gross)' },
   { name: 'available_capacity', label: 'Available Capacity' },
@@ -57,8 +57,18 @@ export function TankMonitorTab() {
     col.accessor('product_id', { header: 'Product', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('keep_fill', { header: 'Keep-fill', cell: (i) => (i.getValue() ? '✓' : '—') }),
     { id: 'inventory_time', header: 'Inventory Time', accessorFn: (r: TankMonitor) => r.inventory_time ?? r.reading_date, cell: (i: any) => { const v = i.getValue(); if (!v) return '—'; try { return format(new Date(v), 'MMM d, yyyy h:mm a') } catch { return String(v) } } },
-    col.accessor('on_hand', { header: 'On Hand', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('on_hand', { header: 'On Hand (Gross)', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('available_capacity', { header: 'Available Capacity', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('total_capacity', { header: 'Total Capacity', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('level_inches', { header: 'Level (in)', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('height', { header: 'Height', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('low_set_point_pct', { header: 'Low Set Point (%)', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('volume_alarm_status', { header: 'Volume Alarm', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('battery_pct', { header: "Bat' (%)", cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('serial_rtu_id', { header: 'Serial # (RTU ID)', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('system_tank_id', { header: 'System Tank ID', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('key_note', { header: 'Key Note', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('source_location', { header: 'Source Shop (raw)', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => i.getValue() ? format(new Date(i.getValue()), 'MMM d, yyyy') : '—' }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as TankMonitor)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
@@ -99,8 +109,9 @@ export function TankMonitorTab() {
       // Keep unmatched rows too (location_id null) so they can be matched later.
       return { location_id, source_location, product_id: product_id || null, keep_fill, inventory_time, reading_date, on_hand, available_capacity, ...extra } as Partial<TankMonitor>
     }).filter((r: any) => r.location_id || r.source_location || r.product_id)
-    // One reading per location (or raw shop) + product + date.
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? r.source_location ?? ''}|${String(r.product_id ?? '').toLowerCase()}|${r.reading_date}` })
+    // One reading per location (or raw shop) + product + tank + date — the tank
+    // id keeps multiple tanks of the same product distinct.
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? r.source_location ?? ''}|${String(r.product_id ?? '').toLowerCase()}|${r.system_tank_id ?? r.serial_rtu_id ?? ''}|${r.reading_date}` })
     setImporting(false)
   }
 

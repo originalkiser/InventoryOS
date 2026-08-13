@@ -18,7 +18,7 @@ const LAST_SHOP_KEY = 'location-lookup:last-shop'
 const VIEW_KEY = 'location-lookup:view'
 
 interface TankRow {
-  id: string; product_id: string | null; value: number | null; unit: string | null
+  id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null
   on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
 }
 interface ConfigRow {
@@ -109,6 +109,7 @@ const sortArrow = (sort: SortState, id: string) => (sort?.id === id ? (sort.dir 
 
 const TANK_COLS: Col<TankRow>[] = [
   { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—', sort: (t) => t.product_id },
+  { id: 'serial', label: 'Serial #', align: 'left', render: (t) => t.serial_rtu_id ?? '—', sort: (t) => t.serial_rtu_id },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand), sort: (t) => t.on_hand },
   { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity), sort: (t) => t.available_capacity },
   { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>), sort: (t) => (t.keep_fill ? 1 : 0) },
