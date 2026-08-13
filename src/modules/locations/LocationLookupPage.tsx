@@ -311,6 +311,31 @@ export function LocationLookupPage() {
   const visibleSidebar = sidebar.filter((f) => !prefs.sidebar.includes(f.label))
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
 
+  // Copy the (sorted, visible) tank table as TSV for pasting into an email.
+  async function copyTanks() {
+    const cols = visibleTankCols
+    const rows = tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks
+    const label = (c: Col<TankRow>) => ((c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label)
+    const text = (c: Col<TankRow>, t: TankRow): string => {
+      switch (c.id) {
+        case 'product': return t.product_id ?? ''
+        case 'serial': return t.serial_rtu_id ?? ''
+        case 'on_hand': return t.on_hand == null ? '' : String(t.on_hand)
+        case 'available': return t.available_capacity == null ? '' : String(t.available_capacity)
+        case 'keepfill': return t.keep_fill ? 'yes' : ''
+        case 'updated': return dateTime(t.inventory_time ?? t.reading_date)
+        default: return ''
+      }
+    }
+    const lines = [
+      `${shopLabel(shopId)} — Tank Monitors`,
+      cols.map(label).join('\t'),
+      ...rows.map((t) => cols.map((c) => text(c, t)).join('\t')),
+    ]
+    try { await navigator.clipboard.writeText(lines.join('\n')); toast.success('Copied to clipboard') }
+    catch { toast.error('Copy failed') }
+  }
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
@@ -374,10 +399,15 @@ export function LocationLookupPage() {
             <div className="flex flex-col xl:flex-row gap-4 items-start">
               <Card className="w-fit max-w-full">
               <CardBody className="flex flex-col gap-2">
-                <button onClick={() => navigate('/config?tab=tank-monitor')} title="Open Tank Monitor config"
-                  className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1 self-start">
-                  Tank Monitors ({tanks.length}) <span className="text-[10px] text-inky/50">↗</span>
-                </button>
+                <div className="flex items-center gap-3 self-start">
+                  <button onClick={() => navigate('/config?tab=tank-monitor')} title="Open Tank Monitor config"
+                    className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1">
+                    Tank Monitors ({tanks.length}) <span className="text-[10px] text-inky/50">↗</span>
+                  </button>
+                  {tanks.length > 0 && (
+                    <button onClick={copyTanks} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
+                  )}
+                </div>
                 {tanks.length === 0 ? (
                   <p className="text-xs font-mono text-inky/60">No tank monitor readings for this shop.</p>
                 ) : visibleTankCols.length === 0 ? (
