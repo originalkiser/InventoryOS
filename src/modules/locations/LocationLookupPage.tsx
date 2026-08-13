@@ -311,7 +311,8 @@ export function LocationLookupPage() {
   const visibleSidebar = sidebar.filter((f) => !prefs.sidebar.includes(f.label))
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
 
-  // Copy the (sorted, visible) tank table as TSV for pasting into an email.
+  // Copy the (sorted, visible) tank table as a formatted HTML table (with a
+  // plain-text fallback) so it pastes into email with gridlines + banded rows.
   async function copyTanks() {
     const cols = visibleTankCols
     const rows = tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks
@@ -327,13 +328,32 @@ export function LocationLookupPage() {
         default: return ''
       }
     }
-    const lines = [
-      `${shopLabel(shopId)} — Tank Monitors`,
-      cols.map(label).join('\t'),
-      ...rows.map((t) => cols.map((c) => text(c, t)).join('\t')),
-    ]
-    try { await navigator.clipboard.writeText(lines.join('\n')); toast.success('Copied to clipboard') }
-    catch { toast.error('Copy failed') }
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const align = (c: Col<TankRow>) => (c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left')
+
+    const title = `${shopLabel(shopId)} — Tank Monitors`
+    const thStyle = (c: Col<TankRow>) => `border:1px solid #002745;background:#002745;color:#F2F1E6;padding:4px 8px;text-align:${align(c)};font-weight:bold;`
+    const head = `<tr>${cols.map((c) => `<th style="${thStyle(c)}">${esc(label(c))}</th>`).join('')}</tr>`
+    const body = rows.map((t, i) => {
+      const bg = i % 2 ? '#F2F1E6' : '#FFFFFF'
+      return `<tr>${cols.map((c) => `<td style="border:1px solid #4F7489;padding:3px 8px;text-align:${align(c)};background:${bg};">${esc(text(c, t))}</td>`).join('')}</tr>`
+    }).join('')
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#002745;">`
+      + `<div style="font-weight:bold;margin-bottom:4px;">${esc(title)}</div>`
+      + `<table style="border-collapse:collapse;font-size:12px;"><thead>${head}</thead><tbody>${body}</tbody></table></div>`
+    const plain = [title, cols.map(label).join('\t'), ...rows.map((t) => cols.map((c) => text(c, t)).join('\t'))].join('\n')
+
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+        })])
+      } else {
+        await navigator.clipboard.writeText(plain)
+      }
+      toast.success('Copied to clipboard')
+    } catch { toast.error('Copy failed') }
   }
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
