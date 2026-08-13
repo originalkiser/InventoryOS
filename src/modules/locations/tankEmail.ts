@@ -108,21 +108,12 @@ export function renderBodyPlain(
     plainBlocks[k] != null ? plainBlocks[k] : values[k] ?? '')
 }
 
-export interface MonitorRow {
-  product: string
-  serial: string
-  height: string
-  capacity: string
-}
+export interface TableCol { key: string; label: string }
+export type TableRow = Record<string, string>
 
-// HTML monitor table styled to paste into Outlook with gridlines + banded rows.
-export function monitorTableHtml(rows: MonitorRow[]): string {
-  const cols: { key: keyof MonitorRow; label: string }[] = [
-    { key: 'product', label: 'Product' },
-    { key: 'serial', label: 'Serial #' },
-    { key: 'height', label: 'Height' },
-    { key: 'capacity', label: 'Capacity' },
-  ]
+// HTML table styled to paste into Outlook with gridlines + banded rows. Empty
+// cells render blank (not "—") so the caller can intentionally leave fields out.
+export function tableHtml(cols: TableCol[], rows: TableRow[]): string {
   const th = (t: string) =>
     `<th style="border:1px solid #002745;background:#002745;color:#F2F1E6;padding:4px 10px;text-align:left;font-weight:bold;">${escapeHtml(t)}</th>`
   const head = `<tr>${cols.map((c) => th(c.label)).join('')}</tr>`
@@ -130,16 +121,27 @@ export function monitorTableHtml(rows: MonitorRow[]): string {
     .map((r, i) => {
       const bg = i % 2 ? '#F2F1E6' : '#FFFFFF'
       return `<tr>${cols
-        .map((c) => `<td style="border:1px solid #4F7489;padding:3px 10px;background:${bg};">${escapeHtml(r[c.key] || '—')}</td>`)
+        .map((c) => `<td style="border:1px solid #4F7489;padding:3px 10px;background:${bg};">${escapeHtml(r[c.key] ?? '')}</td>`)
         .join('')}</tr>`
     })
     .join('')
   return `<table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#002745;"><thead>${head}</thead><tbody>${body}</tbody></table>`
 }
 
-export function monitorTablePlain(rows: MonitorRow[]): string {
-  const header = ['Product', 'Serial #', 'Height', 'Capacity'].join('\t')
-  return [header, ...rows.map((r) => [r.product, r.serial, r.height, r.capacity].map((v) => v || '—').join('\t'))].join('\n')
+export function tablePlain(cols: TableCol[], rows: TableRow[]): string {
+  const header = cols.map((c) => c.label).join('\t')
+  return [header, ...rows.map((r) => cols.map((c) => r[c.key] ?? '').join('\t'))].join('\n')
+}
+
+// Resolve "word(s)" fragments in a rendered draft to the singular or plural form
+// based on the item count — so "tank monitor(s)" reads "monitor" for one and
+// "monitors" for many, with no dangling "(s)". Words ending in s/x/z/ch/sh get
+// "es"; everything else gets "s".
+export function pluralizeParens(text: string, count: number): string {
+  return text.replace(/([A-Za-z]+)\(s\)/g, (_m, word: string) => {
+    if (count === 1) return word
+    return /(?:s|x|z|ch|sh)$/i.test(word) ? `${word}es` : `${word}s`
+  })
 }
 
 export function magnetImageHtml(dataUri: string | null | undefined): string {

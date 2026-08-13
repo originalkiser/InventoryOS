@@ -7,9 +7,9 @@ import { useLocations } from '@/hooks/useLocations'
 import { DEFAULT_STATUS } from '@/modules/exceptions/exceptions'
 import type { TankMonitor } from '@/types'
 import {
-  type TankEmailKind, type TankEmailTemplate, type MonitorRow,
-  renderText, renderBodyHtml, renderBodyPlain,
-  monitorTableHtml, monitorTablePlain, magnetImageHtml,
+  type TankEmailKind, type TankEmailTemplate, type TableCol, type TableRow,
+  renderText, renderBodyHtml, renderBodyPlain, pluralizeParens,
+  tableHtml, tablePlain, magnetImageHtml,
 } from './tankEmail'
 import toast from 'react-hot-toast'
 
@@ -57,28 +57,65 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
       am_email: field(id, 'am_email'),
       rd_email: field(id, 'rd_email'),
     }
-    const rows: MonitorRow[] = target.monitors.map((m) => ({
-      product: internalOf(m.product_id) || m.product_id || '',
-      serial: m.serial_rtu_id || m.system_tank_id || '',
-      height: num(m.height),
-      capacity: num(m.total_capacity ?? ((m.on_hand ?? 0) + (m.available_capacity ?? 0))),
-    }))
+    const cap = (m: TankMonitor) => m.total_capacity ?? ((m.on_hand ?? 0) + (m.available_capacity ?? 0))
+    const gte11 = (v: number | null | undefined) => (v != null && v >= 11 ? num(v) : '')
+    const isWater = (s: string) => /water/i.test(s)
+
+    let cols: TableCol[]
+    let rows: TableRow[]
+    if (kind === 'lowvmi') {
+      // Shop #, serial (filled), product (blank if water), tank shape (blank),
+      // height (blank if < 11), capacity (blank if < 11).
+      cols = [
+        { key: 'shop', label: 'Shop #' },
+        { key: 'serial', label: 'Serial #' },
+        { key: 'product', label: 'Product' },
+        { key: 'shape', label: 'Tank Shape' },
+        { key: 'height', label: 'Height' },
+        { key: 'capacity', label: 'Capacity' },
+      ]
+      rows = target.monitors.map((m) => {
+        const prod = internalOf(m.product_id) || m.product_id || ''
+        return {
+          shop: shopNumber,
+          serial: m.serial_rtu_id || m.system_tank_id || '',
+          product: isWater(prod) || isWater(m.product_id || '') ? '' : prod,
+          shape: '',
+          height: gte11(m.height),
+          capacity: gte11(cap(m)),
+        }
+      })
+    } else {
+      cols = [
+        { key: 'product', label: 'Product' },
+        { key: 'serial', label: 'Serial #' },
+        { key: 'height', label: 'Height' },
+        { key: 'capacity', label: 'Capacity' },
+      ]
+      rows = target.monitors.map((m) => ({
+        product: internalOf(m.product_id) || m.product_id || '',
+        serial: m.serial_rtu_id || m.system_tank_id || '',
+        height: num(m.height),
+        capacity: num(cap(m)),
+      }))
+    }
+    const count = target.monitors.length
     const htmlBlocks: Record<string, string> = {
-      monitor_table: monitorTableHtml(rows),
+      monitor_table: tableHtml(cols, rows),
       magnet_image: magnetImageHtml(template.magnetImage),
     }
     const plainBlocks: Record<string, string> = {
-      monitor_table: monitorTablePlain(rows),
+      monitor_table: tablePlain(cols, rows),
       magnet_image: template.magnetImage ? '[see attached magnet photo]' : '',
     }
     return {
       id,
       shopLabel: shopCity || loc.codeOf(id) || '—',
-      to: renderText(template.to, values),
-      subject: renderText(template.subject, values),
-      bodyHtml: renderBodyHtml(template.body, values, htmlBlocks),
-      bodyPlain: renderBodyPlain(template.body, values, plainBlocks),
-      rowCount: rows.length,
+      to: pluralizeParens(renderText(template.to, values), count),
+      subject: pluralizeParens(renderText(template.subject, values), count),
+      bodyHtml: pluralizeParens(renderBodyHtml(template.body, values, htmlBlocks), count),
+      bodyPlain: pluralizeParens(renderBodyPlain(template.body, values, plainBlocks), count),
+      rowCount: count,
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, template, internalOf, loc])
