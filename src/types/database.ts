@@ -96,6 +96,16 @@ export interface TankMonitor {
   available_capacity: number | null
   value: number | null
   unit: string | null
+  volume_alarm_status: string | null
+  key_note: string | null
+  battery_pct: number | null
+  serial_rtu_id: string | null
+  system_tank_id: string | null
+  level_inches: number | null
+  low_set_point_pct: number | null
+  height: number | null
+  total_capacity: number | null
+  source_location: string | null
   updated_by: string | null
   last_change_source: string | null
   created_at: string

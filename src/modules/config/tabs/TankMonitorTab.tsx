@@ -24,8 +24,16 @@ const REQUIRED_FIELDS = [
   { name: 'product_id', label: 'Product' },
   { name: 'keep_fill', label: 'Keep-fill enabled?' },
   { name: 'inventory_time', label: 'Inventory Time (date & time)' },
-  { name: 'on_hand', label: 'On Hand' },
+  { name: 'on_hand', label: 'On Hand (Gross)' },
   { name: 'available_capacity', label: 'Available Capacity' },
+  { name: 'volume_alarm_status', label: 'Volume Alarm Status' },
+  { name: 'key_note', label: 'Key Note' },
+  { name: 'battery_pct', label: "Bat' (%)" },
+  { name: 'serial_rtu_id', label: 'Serial # (RTU ID)' },
+  { name: 'system_tank_id', label: 'System Tank ID' },
+  { name: 'level_inches', label: 'Level (inches)' },
+  { name: 'low_set_point_pct', label: 'Low Set Point (%)' },
+  { name: 'height', label: 'Height' },
 ]
 const col = createColumnHelper<TankMonitor>()
 const today = () => format(new Date(), 'yyyy-MM-dd')
@@ -68,21 +76,31 @@ export function TankMonitorTab() {
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
     const payload = rows.map((row) => {
-      let location_id: string | null = null, product_id = '', keep_fill = false, inventory_time: string | null = null, reading_date: string | null = null, on_hand: number | null = null, available_capacity: number | null = null
+      let location_id: string | null = null, source_location: string | null = null, product_id = '', keep_fill = false, inventory_time: string | null = null, reading_date: string | null = null, on_hand: number | null = null, available_capacity: number | null = null
+      const extra: Record<string, unknown> = {}
       for (const m of maps) {
         const v = mappedValue(row, m, maps)
-        if (m.fieldName === 'location') location_id = loc.resolveId(v)
+        if (m.fieldName === 'location') { location_id = loc.resolveId(v); source_location = v.trim() || null }
         else if (m.fieldName === 'product_id') product_id = v
         else if (m.fieldName === 'keep_fill') keep_fill = truthy(v)
         else if (m.fieldName === 'inventory_time') { inventory_time = toIso(v); reading_date = toDate(v) }
         else if (m.fieldName === 'on_hand') on_hand = num(v)
         else if (m.fieldName === 'available_capacity') available_capacity = num(v)
+        else if (m.fieldName === 'volume_alarm_status') extra.volume_alarm_status = v.trim() || null
+        else if (m.fieldName === 'key_note') extra.key_note = v.trim() || null
+        else if (m.fieldName === 'battery_pct') extra.battery_pct = num(v)
+        else if (m.fieldName === 'serial_rtu_id') extra.serial_rtu_id = v.trim() || null
+        else if (m.fieldName === 'system_tank_id') extra.system_tank_id = v.trim() || null
+        else if (m.fieldName === 'level_inches') extra.level_inches = num(v)
+        else if (m.fieldName === 'low_set_point_pct') extra.low_set_point_pct = num(v)
+        else if (m.fieldName === 'height') extra.height = num(v)
       }
       if (!reading_date) reading_date = today()
-      return { location_id, product_id: product_id || null, keep_fill, inventory_time, reading_date, on_hand, available_capacity } as Partial<TankMonitor>
-    }).filter((r: any) => r.location_id || r.product_id)
-    // One reading per location + product + date.
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}|${r.reading_date}` })
+      // Keep unmatched rows too (location_id null) so they can be matched later.
+      return { location_id, source_location, product_id: product_id || null, keep_fill, inventory_time, reading_date, on_hand, available_capacity, ...extra } as Partial<TankMonitor>
+    }).filter((r: any) => r.location_id || r.source_location || r.product_id)
+    // One reading per location (or raw shop) + product + date.
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? r.source_location ?? ''}|${String(r.product_id ?? '').toLowerCase()}|${r.reading_date}` })
     setImporting(false)
   }
 
