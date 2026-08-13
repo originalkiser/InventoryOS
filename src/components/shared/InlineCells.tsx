@@ -29,6 +29,17 @@ export function EditSelect({ value, options, onSave, placeholder, allowCurrent, 
   )
 }
 
+// Fixed compact height (keeps rows small); user can drag taller. Scrolls internally.
+export function CappedTextarea({ value, onSave, rows = 2 }: { value: string; onSave: (v: string | null) => void; rows?: number }) {
+  const [v, setV] = useState(value)
+  useEffect(() => { setV(value) }, [value])
+  return (
+    <textarea value={v} rows={rows} onChange={(e) => setV(e.target.value)}
+      onBlur={() => { if ((v.trim() || '') !== (value ?? '')) onSave(v.trim() || null) }}
+      className={`${inputCls} w-52 resize-y max-h-24 overflow-auto leading-snug align-top`} />
+  )
+}
+
 // Auto-grows to fit its content (row height expands); width is user-resizable.
 export function AutoTextarea({ value, onSave }: { value: string; onSave: (v: string | null) => void }) {
   const [v, setV] = useState(value)

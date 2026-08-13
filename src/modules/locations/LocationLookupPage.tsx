@@ -82,7 +82,15 @@ const TANK_COLS: Col<TankRow>[] = [
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand) },
   { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity) },
   { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>) },
-  { id: 'updated', label: 'Last Update', align: 'left', render: (t) => dateTime(t.inventory_time ?? t.reading_date) },
+  {
+    id: 'updated', label: 'Last Update', align: 'left',
+    render: (t) => {
+      const d = t.inventory_time ?? t.reading_date
+      // A monitor that hasn't reported in > 2 days reads as offline.
+      const stale = !!d && Date.now() - new Date(d).getTime() > 2 * 86400000
+      return <span className={stale ? 'text-[#C0392B] font-bold' : ''} title={stale ? 'No reading in over 2 days — monitor may be offline' : undefined}>{dateTime(d)}{stale ? ' ⚠' : ''}</span>
+    },
+  },
 ]
 
 const CONFIG_FIXED: Col<ConfigRow>[] = [
@@ -90,7 +98,7 @@ const CONFIG_FIXED: Col<ConfigRow>[] = [
   { id: 'uom', label: 'UOM', align: 'left', render: (r) => String((r.metadata as any)?.uom ?? '—') },
   { id: 'capacity', label: 'Capacity', align: 'right', render: (r) => num(r.capacity) },
   { id: 'max', label: 'Max', align: 'right', render: (r) => num(r.order_limit) },
-  { id: 'vmi', label: 'VMI', align: 'center', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="amber">VMI</Badge> : <span className="text-inky/40">—</span>) },
+  { id: 'vmi', label: 'VMI', align: 'center', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>) },
 ]
 // Metadata keys that are plumbing, not config attributes — never shown as columns.
 const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', 'vendor_name', 'location_label'])
@@ -200,6 +208,14 @@ export function LocationLookupPage() {
     return units.size === 1 ? [...units][0] : units.size === 0 ? 'Gal' : null
   }, [tanks])
 
+  // Shop display + options use shop_city only ("234-Stockbridge") — no "### —" prefix.
+  const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
+  const shopOptions = useMemo(
+    () => loc.locations.filter((l) => l.active).map((l) => ({ value: l.id, label: l.shop_city || l.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
+    [loc.locations],
+  )
+
   function openIssues(view: 'pending' | 'resolved') { setModalView(view); setEditIssue(undefined); setIssuesModalOpen(true) }
   async function deleteIssue(id: string) {
     const { error: delErr } = await (supabase as any).schema('platform').from('issues')
@@ -246,7 +262,7 @@ export function LocationLookupPage() {
   const rdOrderDay = location ? orderDayFromDelivery(location.reladyne_delivery_day) : ''
   const rdDeliveryDay = locVal(location, 'reladyne_delivery_day')
   const sidebar: { label: string; value: string; note?: string }[] = location ? [
-    { label: 'Location', value: locVal(location, 'shop_city') || loc.labelOf(shopId) },
+    { label: 'Location', value: locVal(location, 'shop_city') || shopLabel(shopId) },
     { label: 'Area Manager', value: locVal(location, 'area_manager') },
     { label: 'AM Cell', value: locVal(location, 'am_phone') },
     { label: 'RDO', value: locVal(location, 'director') },
@@ -266,14 +282,16 @@ export function LocationLookupPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-end justify-between flex-wrap gap-3">
+      <div className="sticky top-0 z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Inventory Location Lookup</h1>
-          <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>
+          {shopId
+            ? <p className="text-sm font-heading font-bold text-navy mt-0.5">{shopLabel(shopId)}</p>
+            : <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-80"><Combobox options={loc.options} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
-        </div>
+        {!shopId && (
+          <div className="w-80"><Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
+        )}
       </div>
 
       {shopId && customizeOpen && (
@@ -293,15 +311,12 @@ export function LocationLookupPage() {
       ) : error ? (
         <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">{error}</div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
-          {/* Sidebar */}
-          <div className="flex flex-col gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 items-start">
+          {/* Left info — frozen while the tables/issues scroll */}
+          <div className="lg:sticky lg:top-[4.5rem] self-start flex flex-col gap-3">
             <Card>
               <CardBody className="flex flex-col gap-2">
-                <button onClick={() => navigate('/global-config?tab=locations')} title="Open Locations config"
-                  className="text-sm font-heading font-bold text-navy hover:text-sky transition-colors text-left inline-flex items-center gap-1">
-                  {loc.labelOf(shopId)} <span className="text-[10px] text-inky/50">↗</span>
-                </button>
+                <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />
                 <dl className="flex flex-col gap-1.5 mt-1">
                   {visibleSidebar.map((f) => (
                     <div key={f.label} className="flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
@@ -313,6 +328,10 @@ export function LocationLookupPage() {
                     </div>
                   ))}
                 </dl>
+                <button onClick={() => navigate('/global-config?tab=locations')} title="Open Locations config"
+                  className="mt-1 self-start text-[11px] font-mono text-inky hover:text-sky transition-colors text-left inline-flex items-center gap-1">
+                  Open Locations Config <span className="text-[10px]">↗</span>
+                </button>
               </CardBody>
             </Card>
           </div>

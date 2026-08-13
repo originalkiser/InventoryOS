@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Pencil, Filter } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode, type CSSProperties } from 'react'
+import { Pencil, Filter, GripVertical } from 'lucide-react'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, horizontalListSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useConfigTab, type ImportMode } from '@/modules/config/useConfigTab'
@@ -162,21 +165,37 @@ export function ExceptionReportingPage() {
 }
 
 // ── Inline-editable table ────────────────────────────────────────────────────
-interface ColDef { id: string; label: string; filter: boolean; sticky?: 'status' | 'shop' }
-const COLS: ColDef[] = [
-  { id: 'status', label: 'Status', filter: true, sticky: 'status' },
-  { id: 'shop', label: 'Shop', filter: true, sticky: 'shop' },
-  { id: 'finding', label: 'Finding', filter: true },
-  { id: 'area_manager', label: 'Area Manager', filter: true },
-  { id: 'type', label: 'Type', filter: true },
-  { id: 'issue', label: 'Issue', filter: true },
-  { id: 'details', label: 'Details', filter: true },
-  { id: 'contacted', label: 'Contacted', filter: false },
-  { id: 'response', label: 'Response', filter: true },
-  { id: 'response_date', label: 'Response Date', filter: false },
-  { id: 'rd', label: 'Regional Director', filter: false },
-  { id: 'response_notes', label: 'Response Notes', filter: true },
-]
+// Status + Shop stay pinned-left; the rest are reorderable.
+const COL_META: Record<string, { label: string; filter: boolean; wrap?: boolean }> = {
+  finding: { label: 'Finding', filter: true },
+  area_manager: { label: 'Area Manager', filter: true },
+  type: { label: 'Type', filter: true },
+  issue: { label: 'Issue', filter: true },
+  details: { label: 'Details', filter: true, wrap: true },
+  contacted: { label: 'Contacted', filter: false },
+  response: { label: 'Response', filter: true },
+  response_date: { label: 'Response Date', filter: false },
+  rd: { label: 'Regional Director', filter: false },
+  response_notes: { label: 'Response Notes', filter: true, wrap: true },
+}
+const DEFAULT_ORDER = Object.keys(COL_META)
+const COL_ORDER_KEY = 'exc:colorder'
+
+function SortableHeaderCell({ id, thBase, children }: { id: string; thBase: string; children: ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const style: CSSProperties = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
+  return (
+    <th ref={setNodeRef} style={style} className={thBase}>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-1">
+          <button {...attributes} {...listeners} title="Drag to reorder" className="cursor-grab active:cursor-grabbing text-inky/40 hover:text-navy flex-shrink-0"><GripVertical className="w-3 h-3" /></button>
+          <span>{COL_META[id].label}</span>
+        </div>
+        {children}
+      </div>
+    </th>
+  )
+}
 
 function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEdit }: {
   rows: ExceptionReport[]
@@ -188,6 +207,24 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
 }) {
   const [filtersOn, setFiltersOn] = useState(false)
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [order, setOrder] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(COL_ORDER_KEY) || 'null')
+      if (Array.isArray(saved)) {
+        const known = saved.filter((id: string) => DEFAULT_ORDER.includes(id))
+        return [...known, ...DEFAULT_ORDER.filter((id) => !known.includes(id))]
+      }
+    } catch { /* ignore */ }
+    return DEFAULT_ORDER
+  })
+  useEffect(() => { localStorage.setItem(COL_ORDER_KEY, JSON.stringify(order)) }, [order])
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    setOrder((o) => arrayMove(o, o.indexOf(String(active.id)), o.indexOf(String(over.id))))
+  }
+
   const thBase = 'px-2 py-2 text-left font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30 bg-cream sticky top-0 z-20'
   const tdBase = 'px-2 py-1 align-top border-b border-navy/15 whitespace-nowrap'
 
@@ -212,7 +249,36 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
 
   if (!rows.length) return <p className="text-xs font-mono text-inky/50 py-8">No exception reports for this filter.</p>
 
-  const thClass = (c: ColDef) => c.sticky === 'status' ? `${thBase} left-0 z-30 w-[230px] min-w-[230px]` : c.sticky === 'shop' ? `${thBase} left-[230px] z-30` : thBase
+  const filterInput = (id: string) => (
+    <input value={filters[id] ?? ''} onChange={(e) => setFilters((f) => ({ ...f, [id]: e.target.value }))} placeholder="filter…"
+      className="bg-cream border border-navy/30 rounded px-1 py-0.5 text-[10px] font-mono text-navy font-normal normal-case tracking-normal w-full focus:outline-none focus:ring-1 focus:ring-sky" />
+  )
+
+  function renderCell(id: string, r: ExceptionReport): ReactNode {
+    const info = id === 'rd' ? rdCell(r, config.responseDays) : null
+    switch (id) {
+      case 'finding': return <EditDate value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} />
+      case 'area_manager': return <EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} />
+      case 'type': return <EditSelect value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} />
+      case 'issue': return <EditSelect value={r.issue} options={config.issues[r.report_type ?? ''] ?? []} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} />
+      case 'details': return <AutoTextarea value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} />
+      case 'contacted': return (
+        <div className="flex items-center gap-1">
+          <input type="checkbox" checked={r.contacted} onChange={(e) => onSet(r, { contacted: e.target.checked })} className="accent-sky" />
+          {r.contacted && <EditDate value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
+        </div>
+      )
+      case 'response': return <ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} />
+      case 'response_date': return isYesResponse(r.response)
+        ? <EditDate value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} />
+        : <span className="text-inky/30">—</span>
+      case 'rd': return info!.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info!.daysLeft}d left</span>
+        : info!.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
+        : <span className="text-inky/40">—</span>
+      case 'response_notes': return <AutoTextarea value={stripHtml(r.response_notes)} onSave={(v) => onSet(r, { response_notes: v })} />
+      default: return null
+    }
+  }
 
   return (
     <div className="flex flex-col gap-2">
@@ -223,64 +289,48 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
         </button>
       </div>
       <div className="overflow-auto max-h-[calc(100vh-16rem)] rounded border border-navy/30">
-        <table className="text-xs font-mono border-collapse">
-          <thead>
-            <tr>
-              {COLS.map((c) => (
-                <th key={c.id} className={thClass(c)}>
-                  <div className="flex flex-col gap-1">
-                    <span>{c.label}</span>
-                    {filtersOn && c.filter && (
-                      <input value={filters[c.id] ?? ''} onChange={(e) => setFilters((f) => ({ ...f, [c.id]: e.target.value }))} placeholder="filter…"
-                        className="bg-cream border border-navy/30 rounded px-1 py-0.5 text-[10px] font-mono text-navy font-normal normal-case tracking-normal w-full focus:outline-none focus:ring-1 focus:ring-sky" />
-                    )}
-                  </div>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <table className="text-xs font-mono border-collapse">
+            <thead>
+              <tr>
+                <th className={`${thBase} left-0 z-30 w-[230px] min-w-[230px]`}>
+                  <div className="flex flex-col gap-1"><span>Status</span>{filtersOn && filterInput('status')}</div>
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr><td colSpan={COLS.length} className="px-2 py-6 text-center text-inky/50">No rows match the filters.</td></tr>
-            ) : filtered.map((r, idx) => {
-              const band = idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
-              const info = rdCell(r, config.responseDays)
-              const issueOpts = config.issues[r.report_type ?? ''] ?? []
-              return (
-                <tr key={r.id} className={band}>
-                  <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                      <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
-                    </div>
-                  </td>
-                  <td className={`${tdBase} sticky left-[230px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
-                  <td className={tdBase}><EditDate value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} /></td>
-                  <td className={tdBase}><EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} /></td>
-                  <td className={tdBase}><EditSelect value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} /></td>
-                  <td className={tdBase}><EditSelect value={r.issue} options={issueOpts} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} /></td>
-                  <td className={`${tdBase} whitespace-normal`}><AutoTextarea value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} /></td>
-                  <td className={tdBase}>
-                    <div className="flex items-center gap-1">
-                      <input type="checkbox" checked={r.contacted} onChange={(e) => onSet(r, { contacted: e.target.checked })} className="accent-sky" />
-                      {r.contacted && <EditDate value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
-                    </div>
-                  </td>
-                  <td className={tdBase}><ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} /></td>
-                  <td className={tdBase}>
-                    {isYesResponse(r.response) ? <EditDate value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} /> : <span className="text-inky/30">—</span>}
-                  </td>
-                  <td className={tdBase}>
-                    {info.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info.daysLeft}d left</span>
-                      : info.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
-                      : <span className="text-inky/40">—</span>}
-                  </td>
-                  <td className={`${tdBase} whitespace-normal`}><AutoTextarea value={stripHtml(r.response_notes)} onSave={(v) => onSet(r, { response_notes: v })} /></td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+                <th className={`${thBase} left-[230px] z-30`}>
+                  <div className="flex flex-col gap-1"><span>Shop</span>{filtersOn && filterInput('shop')}</div>
+                </th>
+                <SortableContext items={order} strategy={horizontalListSortingStrategy}>
+                  {order.map((id) => (
+                    <SortableHeaderCell key={id} id={id} thBase={thBase}>
+                      {filtersOn && COL_META[id].filter ? filterInput(id) : null}
+                    </SortableHeaderCell>
+                  ))}
+                </SortableContext>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr><td colSpan={order.length + 2} className="px-2 py-6 text-center text-inky/50">No rows match the filters.</td></tr>
+              ) : filtered.map((r, idx) => {
+                const band = idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
+                return (
+                  <tr key={r.id} className={band}>
+                    <td className={`${tdBase} sticky left-0 z-10 bg-cream w-[230px] min-w-[230px]`}>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
+                        <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                      </div>
+                    </td>
+                    <td className={`${tdBase} sticky left-[230px] z-10 bg-cream text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
+                    {order.map((id) => (
+                      <td key={id} className={COL_META[id].wrap ? `${tdBase} whitespace-normal` : tdBase}>{renderCell(id, r)}</td>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </DndContext>
       </div>
     </div>
   )
@@ -312,6 +362,8 @@ function mode(arr: string[]): string | null {
   return best
 }
 const pct = (n: number, d: number) => (d ? Math.round((100 * n) / d) : 0)
+// Brand + flag palette (all existing hex) cycled for chart issue segments.
+const CHART_COLORS = ['#002745', '#4F7489', '#B7E0DE', '#2ECC71', '#E67E22', '#C0392B']
 
 type RangeKey = 'current_month' | 'current_week' | 'last_7' | 'last_month' | 'custom'
 const RANGE_KEY = 'exception-summary-range'
@@ -347,7 +399,12 @@ function SummaryView({ data, config }: { data: ExceptionReport[]; config: Except
     const yesOf = (rs: ExceptionReport[]) => rs.filter((r) => isYesResponse(r.response)).length
     const noRD = contactedRows.filter((r) => !isRdAdded(r, config.responseDays))
     const withRD = contactedRows.filter((r) => isRdAdded(r, config.responseDays))
-    const perType = config.types.map((t) => ({ type: t, count: inRange.filter((r) => r.report_type === t).length, topIssue: mode(inRange.filter((r) => r.report_type === t && r.issue).map((r) => r.issue!)) }))
+    const perType = config.types.map((t) => {
+      const typeRows = inRange.filter((r) => r.report_type === t)
+      const counts = new Map<string, number>()
+      for (const r of typeRows) { const k = r.issue || 'Unspecified'; counts.set(k, (counts.get(k) ?? 0) + 1) }
+      return { type: t, count: typeRows.length, topIssue: mode(typeRows.filter((r) => r.issue).map((r) => r.issue!)), segments: [...counts.entries()].sort((a, b) => b[1] - a[1]) }
+    })
     const times = inRange
       .filter((r) => r.date_of_finding && r.date_of_shop_action && isYesResponse(r.response))
       .map((r) => (new Date(r.date_of_shop_action! + 'T00:00:00').getTime() - new Date(r.date_of_finding! + 'T00:00:00').getTime()) / 86400000)
@@ -401,23 +458,62 @@ function SummaryView({ data, config }: { data: ExceptionReport[]; config: Except
         <Tile label="Overdue (no response)" value={s.overdue} sub={`> ${config.responseDays} business days`} />
       </div>
 
-      <Card><CardBody className="inline-block w-auto">
-        <div className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-2">By Type</div>
-        <table className="text-xs font-mono w-auto">
-          <thead><tr className="text-inky uppercase tracking-wide border-b border-navy/30">
-            <th className="text-left px-2 py-0.5">Type</th><th className="text-right px-2 py-0.5">Count</th><th className="text-left px-2 py-0.5 pl-4">Most Common Issue</th>
-          </tr></thead>
-          <tbody>
-            {s.perType.map((t) => (
-              <tr key={t.type} className="border-b border-navy/10">
-                <td className="px-2 py-0.5 text-navy whitespace-nowrap">{t.type}</td>
-                <td className="px-2 py-0.5 text-right text-navy">{t.count}</td>
-                <td className="px-2 py-0.5 pl-4 text-navy whitespace-nowrap">{t.topIssue ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </CardBody></Card>
+      <div className="flex flex-wrap gap-3 items-start">
+        <Card className="w-fit"><CardBody>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-2">By Type</div>
+          <table className="text-xs font-mono w-auto">
+            <thead><tr className="text-inky uppercase tracking-wide border-b border-navy/30">
+              <th className="text-left px-2 py-0.5">Type</th><th className="text-right px-2 py-0.5">Count</th><th className="text-left px-2 py-0.5 pl-4">Most Common Issue</th>
+            </tr></thead>
+            <tbody>
+              {s.perType.map((t) => (
+                <tr key={t.type} className="border-b border-navy/10">
+                  <td className="px-2 py-0.5 text-navy whitespace-nowrap">{t.type}</td>
+                  <td className="px-2 py-0.5 text-right text-navy">{t.count}</td>
+                  <td className="px-2 py-0.5 pl-4 text-navy whitespace-nowrap">{t.topIssue ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardBody></Card>
+
+        <Card className="flex-1 min-w-[280px]"><CardBody>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-3">Issues by Type</div>
+          <IssuesByTypeChart perType={s.perType} />
+        </CardBody></Card>
+      </div>
+    </div>
+  )
+}
+
+// Horizontal stacked bars — one per report type, segmented by issue. Bar length
+// is comparable across types; segments show each issue's share.
+function IssuesByTypeChart({ perType }: { perType: { type: string; count: number; segments: [string, number][] }[] }) {
+  const maxCount = Math.max(1, ...perType.map((t) => t.count))
+  const issues = [...new Set(perType.flatMap((t) => t.segments.map(([i]) => i)))]
+  const colorOf = (issue: string) => CHART_COLORS[issues.indexOf(issue) % CHART_COLORS.length]
+  if (!perType.some((t) => t.count)) return <p className="text-xs font-mono text-inky/50">No data in range.</p>
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2">
+        {perType.map((t) => (
+          <div key={t.type}>
+            <div className="flex justify-between text-[10px] font-mono text-inky/70 mb-0.5"><span className="uppercase tracking-wide">{t.type}</span><span>{t.count}</span></div>
+            <div className="h-5 w-full rounded bg-navy/5 overflow-hidden flex">
+              {t.segments.map(([issue, cnt]) => (
+                <div key={issue} title={`${issue}: ${cnt}`} className="h-full" style={{ width: `${(cnt / maxCount) * 100}%`, background: colorOf(issue) }} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {issues.map((issue) => (
+          <span key={issue} className="inline-flex items-center gap-1 text-[10px] font-mono text-inky/70">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: colorOf(issue) }} />{issue}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }

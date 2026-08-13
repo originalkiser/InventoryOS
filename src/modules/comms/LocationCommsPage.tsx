@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { Button, SbLoader } from '@/components/ui'
-import { EditDate, EditSelect, AutoTextarea } from '@/components/shared/InlineCells'
+import { EditDate, EditSelect, CappedTextarea } from '@/components/shared/InlineCells'
 import { LocationCommsModal } from './LocationCommsModal'
 import { useCommsConfig } from './useCommsConfig'
 import type { LocationComm } from './comms'
@@ -162,13 +162,13 @@ export function LocationCommsPage() {
                 const band = idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
                 return (
                   <tr key={r.id} className={band}>
-                    <td className={`${tdBase} sticky left-0 z-10 ${band} w-[200px] min-w-[200px]`}>
+                    <td className={`${tdBase} sticky left-0 z-10 bg-cream w-[200px] min-w-[200px]`}>
                       <div className="flex items-center gap-1">
                         <button onClick={() => { setEditing(r); setModalOpen(true) }} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
                         <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => set(r, { status: v })} className="min-w-[150px]" />
                       </div>
                     </td>
-                    <td className={`${tdBase} sticky left-[200px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
+                    <td className={`${tdBase} sticky left-[200px] z-10 bg-cream text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
                     <td className={tdBase}><EditDate value={r.comm_date} onSave={(v) => set(r, { comm_date: v })} /></td>
                     <td className={tdBase}><EditSelect value={r.comm_type} options={config.commTypes} placeholder="—" allowCurrent onSave={(v) => set(r, { comm_type: v })} /></td>
                     <td className={tdBase}><EditSelect value={r.contact_method} options={config.contactMethods} placeholder="—" allowCurrent onSave={(v) => set(r, { contact_method: v })} /></td>
@@ -177,7 +177,7 @@ export function LocationCommsPage() {
                       {(r.products ?? []).length ? (r.products ?? []).map((p) => p.product_id).join(', ') : '—'}
                     </td>
                     <td className={tdBase}><EditSelect value={r.action_taken} options={config.actionTaken} placeholder="—" allowCurrent onSave={(v) => set(r, { action_taken: v })} /></td>
-                    <td className={`${tdBase} whitespace-normal`}><AutoTextarea value={r.notes ?? ''} onSave={(v) => set(r, { notes: v })} /></td>
+                    <td className={`${tdBase} whitespace-normal`}><CappedTextarea value={r.notes ?? ''} onSave={(v) => set(r, { notes: v })} /></td>
                   </tr>
                 )
               })}

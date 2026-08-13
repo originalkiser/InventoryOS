@@ -31,7 +31,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   )
 }
 
-interface MeetingModalProps {
+interface MeetingFormProps {
   open: boolean
   onClose: () => void
   existing?: MeetingNote | null
@@ -39,7 +39,17 @@ interface MeetingModalProps {
   onSaved?: () => void
 }
 
-export function MeetingModal({ open, onClose, existing, quick, onSaved }: MeetingModalProps) {
+// Thin Modal wrapper for the Meetings page (centered dialog).
+export function MeetingModal({ open, onClose, existing, quick, onSaved }: MeetingFormProps) {
+  return (
+    <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Meeting' : quick ? 'Quick Meeting' : 'New Meeting'} size="xl">
+      <MeetingForm open={open} onClose={onClose} existing={existing} quick={quick} onSaved={onSaved} />
+    </Modal>
+  )
+}
+
+// The meeting body — reused inside the page Modal and the floating overlay.
+export function MeetingForm({ open, onClose, existing, quick, onSaved }: MeetingFormProps) {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const myId = profile?.id ?? null
@@ -175,7 +185,6 @@ export function MeetingModal({ open, onClose, existing, quick, onSaved }: Meetin
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={editId ? 'Edit Meeting' : quick ? 'Quick Meeting' : 'New Meeting'} size="xl">
       <div className="flex flex-col gap-4">
         <div className="flex items-start gap-3">
           <Input label="Meeting Name *" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="flex-1" />
@@ -273,6 +282,5 @@ export function MeetingModal({ open, onClose, existing, quick, onSaved }: Meetin
           <p className="text-xs font-body italic text-inky/50 border-t border-navy/10 pt-3">Save the meeting first to add action items.</p>
         )}
       </div>
-    </Modal>
   )
 }
