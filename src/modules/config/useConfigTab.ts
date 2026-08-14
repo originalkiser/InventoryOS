@@ -15,6 +15,9 @@ export interface ImportOptions<T> {
   // Natural-key extractor used to match incoming rows to existing ones (merge).
   keyOf?: (row: Partial<T>) => string
   source?: string // last_change_source value (default 'upload')
+  // When true, existing rows that share a natural key (true duplicates) are
+  // collapsed to one on merge — the extras are deleted after the upsert.
+  dedupeExisting?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -175,17 +178,25 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     // merge — attach existing id to matching rows so upsert updates them in place
     const keyOf = opts.keyOf
     const existingByKey = new Map<string, string>()
+    const dupeIds: string[] = []
     if (keyOf) {
       for (const d of data as Array<Partial<T> & { id?: string }>) {
-        if (d.id) existingByKey.set(keyOf(d), d.id)
+        if (!d.id) continue
+        const k = keyOf(d)
+        // First row per key is canonical (data is newest-first); any further
+        // existing rows sharing that key are redundant duplicates.
+        if (existingByKey.has(k)) { if (opts.dedupeExisting) dupeIds.push(d.id) }
+        else existingByKey.set(k, d.id)
       }
     }
+    let matched = 0
     const payload = rows.map((r) => {
       const base = stamp(r as Record<string, unknown>, source)
       const existingId = keyOf ? existingByKey.get(keyOf(r)) : undefined
       // Always supply an id — upsert with onConflict:'id' needs a PK present.
       // New rows get a fresh UUID; existing rows get their stored id so Postgres
       // resolves the conflict and updates in place rather than inserting.
+      if (existingId) matched++
       const id = existingId ?? crypto.randomUUID()
       return { ...base, id }
     })
@@ -197,8 +208,17 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     const dedupedPayload = [...byIdMerge.values()]
     const error = await writeInBatches(dedupedPayload, 'upsert')
     if (error) { toast.error(error.message); return }
-    const updated = payload.filter((p: any) => p.id).length
-    toast.success(`Imported ${rows.length.toLocaleString()} rows (${updated.toLocaleString()} updated, ${(rows.length - updated).toLocaleString()} new)`)
+    // Remove now-redundant duplicate rows that shared a natural key (opt-in).
+    if (opts.dedupeExisting && dupeIds.length) {
+      const CHUNK = 200
+      for (let i = 0; i < dupeIds.length; i += CHUNK) {
+        const { error: delErr } = await tbl().delete().eq('company_id', profile.company_id).in('id', dupeIds.slice(i, i + CHUNK))
+        if (delErr) { console.warn('[importRows] dedupe delete failed:', delErr.message); break }
+      }
+    }
+    const created = rows.length - matched
+    const extra = dupeIds.length ? `, ${dupeIds.length.toLocaleString()} duplicates removed` : ''
+    toast.success(`Imported ${rows.length.toLocaleString()} rows (${matched.toLocaleString()} updated, ${created.toLocaleString()} new${extra})`)
     invalidate(); load().catch(() => {})
   }
 

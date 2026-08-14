@@ -111,7 +111,16 @@ export function TankMonitorTab() {
     }).filter((r: any) => r.location_id || r.source_location || r.product_id)
     // One reading per location (or raw shop) + product + tank + date — the tank
     // id keeps multiple tanks of the same product distinct.
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? r.source_location ?? ''}|${String(r.product_id ?? '').toLowerCase()}|${r.system_tank_id ?? r.serial_rtu_id ?? ''}|${r.reading_date}` })
+    // Match on serial number (RTU ID) so a re-upload overwrites that tank's
+    // single row — no daily history. Serial-less rows fall back to
+    // location+product so they don't all collapse together.
+    await importRows(payload, {
+      mode, source: 'upload', dedupeExisting: true,
+      keyOf: (r: any) => {
+        const sn = String(r.serial_rtu_id ?? r.system_tank_id ?? '').trim().toLowerCase()
+        return sn ? `sn:${sn}` : `alt:${r.location_id ?? r.source_location ?? ''}|${String(r.product_id ?? '').toLowerCase()}`
+      },
+    })
     setImporting(false)
   }
 

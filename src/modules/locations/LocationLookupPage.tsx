@@ -194,7 +194,17 @@ export function LocationLookupPage() {
         sb.schema('inventory').from('exception_reports').select('*').eq('company_id', companyId).eq('location_id', shopId).order('date_of_finding', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('location_comms').select('*').eq('company_id', companyId).eq('location_id', shopId).order('comm_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
       ])
-      setTanks((tankRes.data ?? []) as TankRow[])
+      // Collapse to the newest reading per tank (serial, then system id, then
+      // row id) so leftover duplicate readings don't stack or inflate counts.
+      const rawTanks = (tankRes.data ?? []) as TankRow[]
+      const rtime = (t: TankRow) => { const v = t.inventory_time ?? t.reading_date; return v ? new Date(v).getTime() : 0 }
+      const latestByTank = new Map<string, TankRow>()
+      for (const t of rawTanks) {
+        const key = String(t.serial_rtu_id ?? (t as any).system_tank_id ?? t.id).toLowerCase().trim()
+        const ex = latestByTank.get(key)
+        if (!ex || rtime(t) > rtime(ex)) latestByTank.set(key, t)
+      }
+      setTanks([...latestByTank.values()])
       setConfigs((cfgRes.data ?? []) as ConfigRow[])
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
       setIssues((issRes.data ?? []) as IssueRow[])
