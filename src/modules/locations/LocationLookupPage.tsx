@@ -322,8 +322,12 @@ export function LocationLookupPage() {
 
   const rdDistributor = useMemo(() => {
     if (supplemental) {
-      const k = Object.keys(supplemental).find((key) => key.includes('distributor'))
-      if (k && supplemental[k]) return String(supplemental[k])
+      const keys = Object.keys(supplemental)
+      // Primary source: the supplemental "Confirmed Branch/AD Assignment" column.
+      const confirmed = keys.find((k) => k.includes('confirmed') && k.includes('branch'))
+      if (confirmed && supplemental[confirmed]) return String(supplemental[confirmed])
+      const dist = keys.find((k) => k.includes('distributor'))
+      if (dist && supplemental[dist]) return String(supplemental[dist])
     }
     return locVal(location, 'rd_distributor')
   }, [supplemental, location])

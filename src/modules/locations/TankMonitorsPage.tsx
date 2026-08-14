@@ -10,6 +10,7 @@ import { Card, CardBody, Combobox, SbLoader, Badge, Button, Toggle, Tabs, TabsLi
 import { ColumnManagerModal } from './ColumnManagerModal'
 import { TankEmailModal, type EmailTarget } from './TankEmailModal'
 import { TankEmailTemplates } from './TankEmailTemplates'
+import { TankProductMapping } from './TankProductMapping'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate } from './tankEmail'
 import type { TankMonitor, Location, VendorPart } from '@/types'
 import { format } from 'date-fns'
@@ -72,6 +73,7 @@ export function TankMonitorsPage() {
   const saveTpl = (kind: TankEmailKind, tpl: TankEmailTemplate) => (kind === 'offline' ? setOfflineTpl(tpl) : setLowvmiTpl(tpl))
   const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
   const [emailTargets, setEmailTargets] = useState<EmailTarget[]>([])
+  const [prodMap, setProdMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
 
   // Location is hidden if the user excluded it (shared with the rest of the app).
   const isHidden = useCallback((id: string | null) => { const l = loc.byId(id); return !!l && isExcluded(l) }, [loc, isExcluded])
@@ -122,8 +124,14 @@ export function TankMonitorsPage() {
   }, [parts])
   const ctx: Ctx = useMemo(() => ({
     shopOf: (id) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
-    internalOf: (pid) => (pid ? (internalMap.get(pid.toLowerCase().trim()) ?? pid) : '—'),
-  }), [loc, internalMap])
+    // Manual mapping (Product Mapping tab) wins, then the Vendor Parts match.
+    internalOf: (pid) => { if (!pid) return '—'; const k = pid.toLowerCase().trim(); return prodMap[k] || internalMap.get(k) || pid },
+  }), [loc, internalMap, prodMap])
+
+  // Distinct tank products + which of them still have no internal match.
+  const tankProducts = useMemo(() => [...new Set(monitors.map((m) => m.product_id).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [monitors])
+  const ourOptions = useMemo(() => [...new Set(parts.map((p) => p.our_part_number).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [parts])
+  const unmatchedProducts = useMemo(() => tankProducts.filter((p) => { const k = p.toLowerCase().trim(); return !prodMap[k] && !internalMap.has(k) }), [tankProducts, prodMap, internalMap])
 
   const assigned = useMemo(() => monitors.filter((m) => m.location_id && !isHidden(m.location_id)), [monitors, isHidden])
   const unassigned = useMemo(() => monitors.filter((m) => !m.location_id && !matchIgnore.includes(srcKey(m.source_location))), [monitors, matchIgnore])
@@ -176,6 +184,7 @@ export function TankMonitorsPage() {
           <TabsTrigger value="all">All Monitors ({filtered.length})</TabsTrigger>
           <TabsTrigger value="offline">Offline ({offline.length})</TabsTrigger>
           <TabsTrigger value="lowvmi">Low VMI Coverage</TabsTrigger>
+          <TabsTrigger value="mapping">Product Mapping{unmatchedProducts.length ? ` (${unmatchedProducts.length})` : ''}</TabsTrigger>
           <TabsTrigger value="templates">Email Templates</TabsTrigger>
         </TabsList>
 
@@ -222,6 +231,10 @@ export function TankMonitorsPage() {
         <TabsContent value="lowvmi">
           <LowVmiView monitors={filtered} loc={loc} isExcluded={isExcluded} shopFilter={shopFilter} amFilter={amFilter} ignored={ignored} setIgnored={setIgnored} ctx={ctx}
             onStartEmail={(targets) => { setEmailTargets(targets); setEmailKind('lowvmi') }} />
+        </TabsContent>
+
+        <TabsContent value="mapping">
+          <TankProductMapping map={prodMap} onChange={setProdMap} unmatched={unmatchedProducts} allTankProducts={tankProducts} ourOptions={ourOptions} />
         </TabsContent>
 
         <TabsContent value="templates">
