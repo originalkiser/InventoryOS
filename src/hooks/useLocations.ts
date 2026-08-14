@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { byNaturalLabel } from '@/lib/naturalSort'
 import type { Location, PosLocationMap } from '@/types'
 
@@ -11,6 +12,7 @@ import type { Location, PosLocationMap } from '@/types'
 export function useLocations() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
+  const { isExcluded } = useLocationExclusions()
   const [locations, setLocations] = useState<Location[]>([])
   const [posMaps, setPosMaps] = useState<PosLocationMap[]>([])
 
@@ -82,10 +84,17 @@ export function useLocations() {
     .map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
     .sort(byNaturalLabel)
 
+  // Exclusion-aware variants for listing/lookup dropdowns (config/operational
+  // flows keep using `locations`/`options`, which intentionally ignore these).
+  const included = locations.filter((l) => !isExcluded(l))
+  const includedOptions = included.filter((l) => l.active)
+    .map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
+    .sort(byNaturalLabel)
+
   // Resolve to a location name (code) string (for tables that key on code).
   function codeOf(id: string | null): string {
     return byId(id)?.name ?? ''
   }
 
-  return { locations, posMaps, options, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload }
+  return { locations, posMaps, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload }
 }

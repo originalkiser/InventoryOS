@@ -317,9 +317,9 @@ export function LocationLookupPage() {
   // Shop display + options use shop_city only ("234-Stockbridge") — no "### —" prefix.
   const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
   const shopOptions = useMemo(
-    () => loc.locations.filter((l) => l.active).map((l) => ({ value: l.id, label: l.shop_city || l.name }))
+    () => loc.locations.filter((l) => l.active && !loc.isExcluded(l)).map((l) => ({ value: l.id, label: l.shop_city || l.name }))
       .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
-    [loc.locations],
+    [loc.locations, loc.isExcluded],
   )
 
   function openIssues(view: 'pending' | 'resolved') { setModalView(view); setEditIssue(undefined); setIssuesModalOpen(true) }

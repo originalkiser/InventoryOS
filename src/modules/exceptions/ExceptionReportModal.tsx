@@ -112,7 +112,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
     <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Exception Report' : 'New Exception Report'} size="lg">
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2">
-          <Combobox label="Shop *" options={loc.options} value={locationId} onChange={onLocationChange} placeholder="Select shop…" />
+          <Combobox label="Shop *" options={loc.includedOptions} value={locationId} onChange={onLocationChange} placeholder="Select shop…" />
         </div>
 
         <Input label="Date of Finding" type="date" value={dateFinding} onChange={(e) => setDateFinding(e.target.value)} />

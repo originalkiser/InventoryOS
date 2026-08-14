@@ -172,7 +172,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
     <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Communication' : 'New Communication'} size="lg">
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2">
-          <Combobox label="Shop *" options={loc.options} value={locationId} onChange={setLocationId} placeholder="Select shop…" />
+          <Combobox label="Shop *" options={loc.includedOptions} value={locationId} onChange={setLocationId} placeholder="Select shop…" />
         </div>
 
         <Input label="Date" type="date" value={commDate} onChange={(e) => setCommDate(e.target.value)} />

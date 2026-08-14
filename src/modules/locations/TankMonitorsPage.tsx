@@ -163,8 +163,8 @@ export function TankMonitorsPage() {
     }).length
   }, [filtered, loc.locations, isExcluded, shopFilter, amFilter, ignored])
 
-  const areaManagers = useMemo(() => [...new Set(loc.locations.map((l) => metaOf(l, 'area_manager')).filter(Boolean))].sort(), [loc.locations])
-  const shopOptions = useMemo(() => loc.locations.filter((l) => l.active).map((l) => ({ value: l.id, label: l.shop_city || l.name })).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })), [loc.locations])
+  const areaManagers = useMemo(() => [...new Set(loc.locations.filter((l) => !isExcluded(l)).map((l) => metaOf(l, 'area_manager')).filter(Boolean))].sort(), [loc.locations, isExcluded])
+  const shopOptions = useMemo(() => loc.locations.filter((l) => l.active && !isExcluded(l)).map((l) => ({ value: l.id, label: l.shop_city || l.name })).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })), [loc.locations, isExcluded])
 
   // Group a monitor list into one email target per shop (sorted by shop label).
   const groupTargets = useCallback((rows: TankMonitor[]): EmailTarget[] => {
