@@ -114,18 +114,20 @@ export type TableRow = Record<string, string>
 // HTML table styled to paste into Outlook with gridlines + banded rows. Empty
 // cells render blank (not "—") so the caller can intentionally leave fields out.
 export function tableHtml(cols: TableCol[], rows: TableRow[]): string {
-  const th = (t: string) =>
-    `<th style="border:1px solid #002745;background:#002745;color:#F2F1E6;padding:4px 10px;text-align:left;font-weight:bold;">${escapeHtml(t)}</th>`
-  const head = `<tr>${cols.map((c) => th(c.label)).join('')}</tr>`
+  // Header cells are bold <td> (not <th>) with pure-white text — some email
+  // clients drop <th> color, and white maximizes contrast on the navy fill.
+  const headCell = (t: string) =>
+    `<td style="border:1px solid #002745;background:#002745;color:#ffffff;padding:5px 10px;text-align:left;font-weight:bold;">${escapeHtml(t)}</td>`
+  const head = `<tr>${cols.map((c) => headCell(c.label)).join('')}</tr>`
   const body = rows
     .map((r, i) => {
       const bg = i % 2 ? '#F2F1E6' : '#FFFFFF'
       return `<tr>${cols
-        .map((c) => `<td style="border:1px solid #4F7489;padding:3px 10px;background:${bg};">${escapeHtml(r[c.key] ?? '')}</td>`)
+        .map((c) => `<td style="border:1px solid #4F7489;padding:3px 10px;background:${bg};color:#002745;">${escapeHtml(r[c.key] ?? '')}</td>`)
         .join('')}</tr>`
     })
     .join('')
-  return `<table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#002745;"><thead>${head}</thead><tbody>${body}</tbody></table>`
+  return `<table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#002745;"><tbody>${head}${body}</tbody></table>`
 }
 
 export function tablePlain(cols: TableCol[], rows: TableRow[]): string {

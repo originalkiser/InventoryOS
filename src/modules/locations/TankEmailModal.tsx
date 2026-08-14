@@ -200,7 +200,7 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
               </button>
             </div>
             <div
-              className="rounded border border-navy/20 bg-white dark:bg-[#0e2638] p-3 max-h-72 overflow-auto text-sm text-navy dark:text-[#F2F1E6] [&_table]:my-2"
+              className="rounded border border-navy/20 bg-white p-3 max-h-72 overflow-auto text-sm text-[#002745] [&_table]:my-2"
               dangerouslySetInnerHTML={{ __html: draft.bodyHtml }}
             />
             <span className="text-[10px] font-mono text-inky/50">Copy pastes into Outlook with the table{template.magnetImage ? ' and photo' : ''} formatted.</span>
