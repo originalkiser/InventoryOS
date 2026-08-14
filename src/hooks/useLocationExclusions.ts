@@ -10,6 +10,21 @@ import type { Location } from '@/types'
 export interface ExclusionRule {
   field: string
   values: string[]
+  // 'exclude' (default): hide locations whose value is in `values`.
+  // 'only': hide locations whose value is NOT in `values` (exclude all but).
+  mode?: 'exclude' | 'only'
+}
+
+// Applied to every user unless they configure their own Owner rule: only
+// Corporate-owned locations are shown (franchise/other owners are hidden).
+export const DEFAULT_OWNER_RULE: ExclusionRule = { field: 'meta:owner', values: ['Corporate'], mode: 'only' }
+
+const isOwnerField = (field: string) => (field.startsWith('meta:') ? field.slice(5) : field) === 'owner'
+
+// The user's rules, plus the default Corporate-owner rule when they haven't set
+// an Owner rule of their own.
+export function effectiveRules(rules: ExclusionRule[]): ExclusionRule[] {
+  return rules.some((r) => isOwnerField(r.field)) ? rules : [...rules, DEFAULT_OWNER_RULE]
 }
 
 // Columns a user may exclude on. Base columns read straight off the row;
@@ -94,10 +109,12 @@ export function useLocationExclusions() {
   }, [user?.id, save])
 
   const isExcluded = useCallback((loc: Location): boolean => {
-    for (const rule of rules) {
+    for (const rule of effectiveRules(rules)) {
       if (!rule.values?.length) continue
       const v = locExclusionValue(loc, rule.field).trim().toLowerCase()
-      if (v && rule.values.some((rv) => rv.trim().toLowerCase() === v)) return true
+      const inList = rule.values.some((rv) => rv.trim().toLowerCase() === v)
+      if (rule.mode === 'only') { if (!inList) return true }       // exclude all but these
+      else if (v && inList) return true                            // exclude these
     }
     return false
   }, [rules])

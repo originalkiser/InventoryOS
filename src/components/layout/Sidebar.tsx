@@ -43,7 +43,7 @@ import {
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 
-const ICONS: Record<string, JSX.Element> = {
+export const ICONS: Record<string, JSX.Element> = {
   dashboard: <LayoutDashboard className="w-4 h-4 flex-shrink-0" />,
   'on-hand': <Package className="w-4 h-4 flex-shrink-0" />,
   monthend: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
@@ -84,13 +84,13 @@ const SECTION_ICONS: Record<string, JSX.Element> = {
 
 // ── Nav data ───────────────────────────────────────────────────────────────
 
-interface NavItem {
+export interface NavItem {
   key: string
   label: string
   to: string | null
 }
 
-const SECTION_ITEMS: Record<string, NavItem[]> = {
+export const SECTION_ITEMS: Record<string, NavItem[]> = {
   inventory: [
     { key: 'dashboard', label: 'Dashboard', to: '/dashboard' },
     { key: 'on-hand', label: 'On Hand', to: '/on-hand' },
@@ -180,7 +180,7 @@ function NavItemLink({
   dragStyle?: React.CSSProperties
 }) {
   const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
-  const alertCount = useInventoryAlertsStore((s) => s.count)
+  const alertCount = useInventoryAlertsStore((s) => s.derivedCount)
   const showAlertBadge = item.key === 'inventory-alerts' && alertCount > 0 && showLabel
 
   if (!item.to) {

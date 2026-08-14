@@ -9,6 +9,7 @@ import { useInventory } from '@/hooks/useInventory'
 import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { InventoryView } from '@/components/inventory/InventoryView'
+import { InventoryShortcuts } from '@/components/inventory/InventoryShortcuts'
 import { FLAG_HEX } from '@/lib/flagScale'
 
 type TileView = 'graph' | 'list'
@@ -274,6 +275,13 @@ export function DashboardPage() {
           {format(new Date(), 'EEEE, MMMM d, yyyy')}
         </p>
       </div>
+
+      {/* Quick access to inventory sub-pages (reorderable) */}
+      <Card>
+        <CardBody className="py-3">
+          <InventoryShortcuts />
+        </CardBody>
+      </Card>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 xl:grid-cols-4">

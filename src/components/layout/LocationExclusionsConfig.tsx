@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocations } from '@/hooks/useLocations'
 import {
   useLocationExclusions,
@@ -13,6 +13,9 @@ export function LocationExclusionsConfig() {
   const { rules, setRules, isExcluded } = useLocationExclusions()
   const [field, setField] = useState(EXCLUDABLE_COLUMNS[0].field)
   const [custom, setCustom] = useState('')
+  const [modeSel, setModeSel] = useState<'exclude' | 'only'>('exclude')
+  // Sync the mode toggle to the selected column's existing rule.
+  useEffect(() => { setModeSel(rules.find((r) => r.field === field)?.mode ?? 'exclude') }, [field, rules])
 
   const currentValues = useMemo(
     () => rules.find((r) => r.field === field)?.values ?? [],
@@ -38,9 +41,15 @@ export function LocationExclusionsConfig() {
   const labelFor = (f: string) => EXCLUDABLE_COLUMNS.find((c) => c.field === f)?.label ?? f
 
   // Replace the selected column's excluded values (drop the rule if empty).
-  function setValuesForField(f: string, values: string[]) {
+  function setValuesForField(f: string, values: string[], mode: 'exclude' | 'only' = modeSel) {
     const others = rules.filter((r) => r.field !== f)
-    setRules(values.length ? [...others, { field: f, values }] : others)
+    setRules(values.length ? [...others, { field: f, values, mode }] : others)
+  }
+
+  function changeMode(m: 'exclude' | 'only') {
+    setModeSel(m)
+    const cur = rules.find((r) => r.field === field)
+    if (cur && cur.values.length) setValuesForField(field, cur.values, m)
   }
 
   function toggleValue(value: string) {
@@ -82,7 +91,7 @@ export function LocationExclusionsConfig() {
           {rules.map((r) => (
             <div key={r.field} className="flex flex-col gap-1">
               <span className="text-[10px] font-mono text-navy/70 dark:text-[#F2F1E6]/70 uppercase tracking-wide">
-                {labelFor(r.field)}
+                {labelFor(r.field)} <span className="text-inky/40 normal-case">· {r.mode === 'only' ? 'keep only' : 'exclude'}</span>
               </span>
               <div className="flex flex-wrap gap-1">
                 {r.values.map((v) => (
@@ -108,6 +117,19 @@ export function LocationExclusionsConfig() {
             <option key={c.field} value={c.field}>{c.label}</option>
           ))}
         </select>
+
+        {/* Mode: exclude the checked values, or keep only the checked values. */}
+        <div className="flex items-center gap-1 text-[10px] font-mono">
+          {(['exclude', 'only'] as const).map((m) => (
+            <button key={m} onClick={() => changeMode(m)}
+              className={`flex-1 rounded border px-2 py-1 uppercase tracking-wide ${modeSel === m ? 'border-navy bg-navy text-cream' : 'border-navy/30 text-inky hover:border-navy'}`}>
+              {m === 'exclude' ? 'Exclude selected' : 'Keep only selected'}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] font-mono text-inky/50 dark:text-[#F2F1E6]/40">
+          Non-Corporate owners are hidden by default — set an Owner rule here to change it.
+        </p>
 
         {/* Inline multi-select checklist — check every value to exclude */}
         {options.length > 0 ? (
