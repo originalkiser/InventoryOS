@@ -40,7 +40,7 @@ export function InventoryNavBar() {
 
   return (
     <div className="sticky top-0 z-20 bg-cream/95 backdrop-blur border-b border-navy/15 flex items-center gap-2 px-3 sm:px-6 py-1.5">
-      <div className="flex items-center gap-1.5 overflow-x-auto flex-1">
+      <div className="flex items-center gap-1.5 overflow-x-auto flex-1 hover-scroll-x">
         <DndContext sensors={sensors} collisionDetection={closestCenter}
           onDragEnd={(e: DragEndEvent) => { const { active, over } = e; if (over && active.id !== over.id) persistOrder(arrayMove(order, order.indexOf(String(active.id)), order.indexOf(String(over.id)))) }}>
           <SortableContext items={visible.map((i) => i.key)} strategy={horizontalListSortingStrategy}>

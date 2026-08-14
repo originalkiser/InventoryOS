@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
+import { CheckCircle2, MapPin, MessageSquare, Package } from 'lucide-react'
 import { Sidebar, SECTION_ITEMS } from './Sidebar'
 import { TopBar } from './TopBar'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
@@ -165,6 +166,17 @@ export function AppShell() {
         </div>
       </div>
 
+      {/* Quick-access FABs — only when the sidebar is collapsed (the expanded
+          sidebar has its own quick-access grid). Sits beside a docked panel. */}
+      {sidebarCollapsed && !mobile && (
+        <div className="fixed z-30 flex flex-col gap-2 top-1/2 -translate-y-1/2" style={{ right: (pushWidth || 0) + 12 }}>
+          <QuickFab title="Today's Tasks" active={tasksMode !== 'hidden'} onClick={toggleTasks}><CheckCircle2 className="w-5 h-5" /></QuickFab>
+          <QuickFab title="Location Lookup" active={lookupMode !== 'hidden'} onClick={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')}><MapPin className="w-5 h-5" /></QuickFab>
+          <QuickFab title="Quick Meeting" active={meetingMode !== 'hidden'} onClick={() => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden')}><MessageSquare className="w-5 h-5" /></QuickFab>
+          <QuickFab title="Inventory" active={invMode !== 'hidden'} onClick={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')}><Package className="w-5 h-5" /></QuickFab>
+        </div>
+      )}
+
       <LocationLookupOverlay
         mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
         onModeChange={setLookupModeP} onToggle={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')} onWidthChange={setLookupWidthP}
@@ -178,5 +190,17 @@ export function AppShell() {
         onModeChange={setMeetingModeP} onWidthChange={setMeetingWidthP}
       />
     </div>
+  )
+}
+
+function QuickFab({ title, active, onClick, children }: { title: string; active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button onClick={onClick} title={title} aria-label={title}
+      className={[
+        'w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-colors',
+        active ? 'bg-sky text-navy' : 'bg-navy text-cream hover:bg-navy/90',
+      ].join(' ')}>
+      {children}
+    </button>
   )
 }

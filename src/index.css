@@ -61,6 +61,14 @@
 .app-scroll::-webkit-scrollbar { display: none; }
 .app-scroll { -ms-overflow-style: none; scrollbar-width: none; }
 
+/* Horizontal scroller that only reveals its scrollbar on hover (nav bar). */
+.hover-scroll-x { scrollbar-width: none; -ms-overflow-style: none; }
+.hover-scroll-x::-webkit-scrollbar { height: 0; background: transparent; }
+.hover-scroll-x:hover { scrollbar-width: thin; scrollbar-color: rgba(0,39,69,0.3) transparent; }
+.hover-scroll-x:hover::-webkit-scrollbar { height: 6px; }
+.hover-scroll-x:hover::-webkit-scrollbar-thumb { background: rgba(0,39,69,0.3); border-radius: 3px; }
+.hover-scroll-x:hover::-webkit-scrollbar-track { background: transparent; }
+
 * {
   box-sizing: border-box;
 }
