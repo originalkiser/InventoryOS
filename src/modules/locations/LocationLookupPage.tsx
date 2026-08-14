@@ -437,12 +437,14 @@ export function LocationLookupPage() {
                 </button>
               </CardBody>
             </Card>
+            <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
+            <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />
+            <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />
           </div>
 
           {/* Main */}
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col xl:flex-row gap-4 items-start">
-              <Card className="w-fit max-w-full">
+            <Card className="w-fit max-w-full">
               <CardBody className="flex flex-col gap-2">
                 <div className="flex items-center gap-3 self-start">
                   <button onClick={() => navigate('/config?tab=tank-monitor')} title="Open Tank Monitor config"
@@ -469,7 +471,7 @@ export function LocationLookupPage() {
                       <thead>
                         <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                           {visibleTankCols.map((c) => (
-                            <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>
+                            <th key={c.id} className={`px-3 py-2 whitespace-nowrap ${alignCls(c.align)}`}>
                               <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
                                 {(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}{sortArrow(tankSort, c.id)}
                               </button>
@@ -480,7 +482,7 @@ export function LocationLookupPage() {
                       <tbody>
                         {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t) => (
                           <tr key={t.id} className="border-b border-navy/20">
-                            {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)}`}>{c.render(t)}</td>)}
+                            {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)}`}>{c.render(t)}</td>)}
                           </tr>
                         ))}
                       </tbody>
@@ -488,13 +490,7 @@ export function LocationLookupPage() {
                   </div>
                 )}
               </CardBody>
-              </Card>
-              <div className="flex flex-col gap-3 flex-1 min-w-[260px] w-full xl:w-auto">
-                <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
-                <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />
-                <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />
-              </div>
-            </div>
+            </Card>
 
             {configsByVendor.length === 0 ? (
               <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
