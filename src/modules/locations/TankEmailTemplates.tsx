@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Card, CardBody, Button, Input } from '@/components/ui'
+import { Card, CardBody, Button, Input, Toggle } from '@/components/ui'
 import { TANK_EMAIL_TOKENS, type TankEmailKind, type TankEmailTemplate } from './tankEmail'
 import toast from 'react-hot-toast'
 
@@ -35,12 +35,13 @@ function TemplateEditor({ title, kind, tpl, onSave, withImage }: {
   const [to, setTo] = useState(tpl.to)
   const [body, setBody] = useState(tpl.body)
   const [image, setImage] = useState<string | null>(tpl.magnetImage ?? null)
+  const [vmiOnly, setVmiOnly] = useState(tpl.vmiOnly !== false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Re-sync when the stored template changes (e.g. after another device saves).
-  useEffect(() => { setSubject(tpl.subject); setTo(tpl.to); setBody(tpl.body); setImage(tpl.magnetImage ?? null) }, [tpl])
+  useEffect(() => { setSubject(tpl.subject); setTo(tpl.to); setBody(tpl.body); setImage(tpl.magnetImage ?? null); setVmiOnly(tpl.vmiOnly !== false) }, [tpl])
 
-  const dirty = subject !== tpl.subject || to !== tpl.to || body !== tpl.body || (image ?? null) !== (tpl.magnetImage ?? null)
+  const dirty = subject !== tpl.subject || to !== tpl.to || body !== tpl.body || (image ?? null) !== (tpl.magnetImage ?? null) || vmiOnly !== (tpl.vmiOnly !== false)
 
   function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]; if (!f) return
@@ -58,12 +59,16 @@ function TemplateEditor({ title, kind, tpl, onSave, withImage }: {
           <span className="text-sm font-heading font-bold text-navy">{title}</span>
           <div className="flex items-center gap-2">
             {dirty && <span className="text-[10px] font-mono text-[#E67E22]">unsaved</span>}
-            <Button size="sm" disabled={!dirty} onClick={() => { onSave(kind, { subject, to, body, magnetImage: image }); toast.success('Template saved') }}>Save</Button>
+            <Button size="sm" disabled={!dirty} onClick={() => { onSave(kind, { subject, to, body, magnetImage: image, vmiOnly }); toast.success('Template saved') }}>Save</Button>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Input label="To" value={to} onChange={(e) => setTo(e.target.value)} />
           <Input label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+        </div>
+        <div className="flex items-center gap-2">
+          <Toggle checked={vmiOnly} onChange={setVmiOnly} label="Only include VMI / keepfill tanks" color="cyan" />
+          <span className="text-[10px] font-mono text-inky/50">Non-VMI tanks are left out of the draft.</span>
         </div>
         <div>
           <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Body</label>

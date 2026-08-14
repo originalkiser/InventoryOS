@@ -10,6 +10,7 @@ export interface TankEmailTemplate {
   to: string
   body: string
   magnetImage?: string | null // data URI, embedded in the rendered body
+  vmiOnly?: boolean // when true (default), the draft only includes VMI/keepfill tanks
 }
 
 // Tokens the templates may reference. monitor_table + magnet_image are HTML
@@ -44,6 +45,7 @@ Below shows where to rub the magnet:
 
 Thank you,`,
   magnetImage: null,
+  vmiOnly: true,
 }
 
 export const LOWVMI_DEFAULT: TankEmailTemplate = {
@@ -59,6 +61,7 @@ Adding monitors to additional bulk products lets us keep you stocked automatical
 
 Thank you,`,
   magnetImage: null,
+  vmiOnly: true,
 }
 
 export const TANK_EMAIL_DEFAULT: Record<TankEmailKind, TankEmailTemplate> = {

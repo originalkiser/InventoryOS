@@ -57,6 +57,8 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
       am_email: field(id, 'am_email'),
       rd_email: field(id, 'rd_email'),
     }
+    // Default (vmiOnly) excludes non-VMI/keepfill tanks from the draft.
+    const mons = template.vmiOnly !== false ? target.monitors.filter((m) => m.keep_fill) : target.monitors
     const cap = (m: TankMonitor) => m.total_capacity ?? ((m.on_hand ?? 0) + (m.available_capacity ?? 0))
     const gte11 = (v: number | null | undefined) => (v != null && v >= 11 ? num(v) : '')
     const isWater = (s: string) => /water/i.test(s)
@@ -74,7 +76,7 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
         { key: 'height', label: 'Height' },
         { key: 'capacity', label: 'Capacity' },
       ]
-      rows = target.monitors.map((m) => {
+      rows = mons.map((m) => {
         const prod = internalOf(m.product_id) || m.product_id || ''
         return {
           shop: shopNumber,
@@ -95,14 +97,14 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
         { key: 'height', label: 'Height' },
         { key: 'capacity', label: 'Capacity' },
       ]
-      rows = target.monitors.map((m) => ({
+      rows = mons.map((m) => ({
         product: internalOf(m.product_id) || m.product_id || '',
         serial: m.serial_rtu_id || m.system_tank_id || '',
         height: num(m.height),
         capacity: num(cap(m)),
       }))
     }
-    const count = target.monitors.length
+    const count = mons.length
     const htmlBlocks: Record<string, string> = {
       monitor_table: tableHtml(cols, rows),
       magnet_image: magnetImageHtml(template.magnetImage),
