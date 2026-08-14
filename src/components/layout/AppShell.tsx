@@ -118,8 +118,10 @@ export function AppShell() {
   // w-14 collapsed (56px), w-64 expanded (256px)
   const sidebarWidth = mobile ? 0 : sidebarCollapsed ? 56 : 256
 
-  // Show the inventory quick-nav bar on inventory-section routes.
-  const isInventoryRoute = SECTION_ITEMS.inventory.some((i) => i.to && (location.pathname === i.to || location.pathname.startsWith(`${i.to}/`)))
+  // Show the inventory quick-nav bar on inventory-section routes — except the
+  // Dashboard, which has its own large shortcut buttons.
+  const isInventoryRoute = location.pathname !== '/dashboard' &&
+    SECTION_ITEMS.inventory.some((i) => i.to && (location.pathname === i.to || location.pathname.startsWith(`${i.to}/`)))
 
   return (
     <div className="flex h-screen overflow-hidden bg-cream font-body">

@@ -74,12 +74,23 @@ export const ICONS: Record<string, JSX.Element> = {
 }
 
 const SECTION_ICONS: Record<string, JSX.Element> = {
-  inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
-  'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
-  operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
-  finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
-  accounting: <TrendingUp className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
-  marketing: <Megaphone className="w-3.5 h-3.5 flex-shrink-0 text-sky/70" />,
+  inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
+  'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-[#F2F1E6]/70" />,
+  operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-[#E67E22]" />,
+  finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-[#2ECC71]" />,
+  accounting: <TrendingUp className="w-3.5 h-3.5 flex-shrink-0 text-inky" />,
+  marketing: <Megaphone className="w-3.5 h-3.5 flex-shrink-0 text-[#C0392B]" />,
+}
+
+// Subtle per-section tint + colored left accent so the section headers stand
+// apart from each other on the dark sidebar (brand tokens only).
+const SECTION_ACCENT: Record<string, string> = {
+  inventory: 'bg-sky/15 border-l-2 border-sky',
+  'global-config': 'bg-[#F2F1E6]/[0.08] border-l-2 border-[#F2F1E6]/40',
+  operations: 'bg-[#E67E22]/15 border-l-2 border-[#E67E22]',
+  finance: 'bg-[#2ECC71]/15 border-l-2 border-[#2ECC71]',
+  accounting: 'bg-inky/25 border-l-2 border-inky',
+  marketing: 'bg-[#C0392B]/15 border-l-2 border-[#C0392B]',
 }
 
 // ── Nav data ───────────────────────────────────────────────────────────────
@@ -507,7 +518,7 @@ function SortableSection({
   return (
     <div ref={setNodeRef} style={style} className="py-0.5">
       {/* Section header */}
-      <div className="flex items-center gap-1 px-2 py-1.5 group/section">
+      <div className={`flex items-center gap-1 px-2 py-1.5 group/section rounded-r ${SECTION_ACCENT[sectionKey] ?? ''}`}>
         {/* Drag handle for the section */}
         <span
           {...listeners}
@@ -523,7 +534,7 @@ function SortableSection({
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
         >
           {SECTION_ICONS[sectionKey]}
-          <span className="text-[10px] font-heading text-[#F2F1E6]/50 uppercase tracking-widest truncate flex-1">
+          <span className="text-[10px] font-heading text-[#F2F1E6]/80 uppercase tracking-widest truncate flex-1">
             {meta?.label}
           </span>
           <ChevronRight
