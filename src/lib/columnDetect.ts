@@ -37,18 +37,22 @@ export interface HeaderDetectionResult {
 }
 
 export function detectHeaderRow(rows: unknown[][]): HeaderDetectionResult {
-  // Among the first rows, pick the header CANDIDATE with the most filled cells —
-  // the real header row usually spans the most columns, so this skips short
-  // banner/title rows that would otherwise be chosen first.
+  // Collect the header CANDIDATES in the first rows with how many cells each
+  // fills. The real header usually spans (nearly) the most columns.
   const limit = Math.min(rows.length, 20)
-  let best = -1
-  let bestFilled = -1
+  const candidates: { index: number; filled: number }[] = []
   for (let i = 0; i < limit; i++) {
     const row = rows[i] ?? []
     if (isJunkRow(row) || !isHeaderCandidate(row)) continue
-    const filled = row.filter((v) => !isEmptyCell(v)).length
-    if (filled > bestFilled) { bestFilled = filled; best = i }
+    candidates.push({ index: i, filled: row.filter((v) => !isEmptyCell(v)).length })
   }
-  if (best >= 0) return { headerRowIndex: best, skippedRows: best }
-  return { headerRowIndex: 0, skippedRows: 0 }
+  if (candidates.length === 0) return { headerRowIndex: 0, skippedRows: 0 }
+
+  // Pick the EARLIEST candidate whose width is within ~20% of the widest. This
+  // skips short banner/title rows (few cells) but keeps a real header row at the
+  // top from being beaten by a lone data row that fills one extra column.
+  const maxFilled = Math.max(...candidates.map((c) => c.filled))
+  const threshold = maxFilled * 0.8
+  const best = candidates.find((c) => c.filled >= threshold) ?? candidates[0]
+  return { headerRowIndex: best.index, skippedRows: best.index }
 }

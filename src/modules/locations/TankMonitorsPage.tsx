@@ -85,7 +85,7 @@ export function TankMonitorsPage() {
     // rows, which silently dropped shops (and broke the VMI counts).
     const [{ count }, partRes] = await Promise.all([
       sb.schema('inventory').from('tank_monitors').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-      sb.schema('inventory').from('vendor_parts').select('part_number, our_part_number').eq('company_id', companyId),
+      sb.schema('inventory').from('vendor_parts').select('part_number, our_part_number, description').eq('company_id', companyId),
     ])
     const pages = Math.max(1, Math.ceil((count ?? 0) / PAGE))
     const results = await Promise.all(Array.from({ length: pages }, (_, i) =>
@@ -105,15 +105,24 @@ export function TankMonitorsPage() {
   }, [companyId])
   useEffect(() => { load() }, [load])
 
-  // Raw monitor product → internal our_part_number via vendor parts.
+  // Raw monitor product → internal our_part_number via vendor parts. Tank
+  // monitors report the vendor part DESCRIPTION (e.g. "DMX SB 5W20 BU"), so match
+  // on description first, then part number as a fallback.
   const internalMap = useMemo(() => {
     const m = new Map<string, string>()
-    for (const p of parts) { if (p.part_number && p.our_part_number) m.set(String(p.part_number).toLowerCase(), p.our_part_number) }
+    for (const p of parts) {
+      const our = p.our_part_number
+      if (!our) continue
+      const desc = p.description ? String(p.description).toLowerCase().trim() : ''
+      if (desc) m.set(desc, our)
+      const pn = p.part_number ? String(p.part_number).toLowerCase().trim() : ''
+      if (pn && !m.has(pn)) m.set(pn, our)
+    }
     return m
   }, [parts])
   const ctx: Ctx = useMemo(() => ({
     shopOf: (id) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
-    internalOf: (pid) => (pid ? (internalMap.get(pid.toLowerCase()) ?? pid) : '—'),
+    internalOf: (pid) => (pid ? (internalMap.get(pid.toLowerCase().trim()) ?? pid) : '—'),
   }), [loc, internalMap])
 
   const assigned = useMemo(() => monitors.filter((m) => m.location_id && !isHidden(m.location_id)), [monitors, isHidden])

@@ -70,7 +70,11 @@ export function VendorPartsTab() {
   }, [companyId])
   useEffect(() => { loadVendors() }, [loadVendors])
 
-  const vendorName = (id: string | null) => vendors.find((v) => v.id === id)?.name ?? '—'
+  // Map keyed by vendor id — resolving in the cell (below) from row.original
+  // avoids TanStack's per-row getValue cache, which otherwise sticks on the
+  // "—" computed before vendors finished loading.
+  const vendorMap = useMemo(() => new Map(vendors.map((v) => [v.id, v.name])), [vendors])
+  const vendorName = (id: string | null) => (id ? vendorMap.get(id) : '') || '—'
   const vendorOptions: ComboboxOption[] = vendors.map((v) => ({ value: v.id, label: v.name }))
 
   async function createVendor(name: string): Promise<ComboboxOption> {
@@ -83,7 +87,7 @@ export function VendorPartsTab() {
 
   const columns = useMemo(() => {
     const cols: any[] = [
-      { id: 'vendor', header: 'Vendor', accessorFn: (r: VendorPart) => vendorName(r.vendor_id), cell: (i: any) => i.getValue() },
+      { id: 'vendor', header: 'Vendor', accessorFn: (r: VendorPart) => vendorName(r.vendor_id), cell: (i: any) => vendorName((i.row.original as VendorPart).vendor_id) },
       col.accessor('part_number', { header: 'Vendor Part #' }),
       col.accessor('our_part_number', { header: 'Our Part #', cell: (i) => i.getValue() ?? '—' }),
       col.accessor('description', { header: 'Description', cell: (i) => i.getValue() ?? '—' }),
@@ -101,7 +105,7 @@ export function VendorPartsTab() {
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
     cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as VendorPart)} className="text-xs font-mono text-inky hover:underline">Edit</button> })
     return cols
-  }, [customFields, vendors])
+  }, [customFields, vendorMap])
 
   const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
 

@@ -7,6 +7,8 @@ export interface ParseResult {
   rows: Record<string, string>[]
   skippedRows: number
   totalRowsParsed: number
+  allRows: string[][]      // every raw row (stringified) — for header-row override
+  headerRowIndex: number   // detected (or forced) header row, 0-based
 }
 
 function normalizeHeader(h: unknown): string {
@@ -90,8 +92,11 @@ function isDuplicateHeaderRow(record: Record<string, string>, headers: string[])
   return nonEmpty.every(h => record[h].toLowerCase() === h.toLowerCase())
 }
 
-function processRawRows(raw: unknown[][]): ParseResult {
-  const { headerRowIndex, skippedRows } = detectHeaderRow(raw)
+// forcedHeaderIndex overrides auto-detection (used by the manual header picker).
+function processRawRows(raw: unknown[][], forcedHeaderIndex?: number): ParseResult {
+  const { headerRowIndex, skippedRows } = forcedHeaderIndex != null
+    ? { headerRowIndex: forcedHeaderIndex, skippedRows: forcedHeaderIndex }
+    : detectHeaderRow(raw)
   const headerRow = raw[headerRowIndex]
   const headers = (headerRow ?? []).map(normalizeHeader).filter(Boolean)
 
@@ -113,5 +118,12 @@ function processRawRows(raw: unknown[][]): ParseResult {
     rows.push(record)
   }
 
-  return { headers, rows, skippedRows: skippedRows + dupHeadersSkipped, totalRowsParsed: rows.length }
+  const allRows = raw.map((r) => (r as unknown[]).map((c) => String(c ?? '')))
+  return { headers, rows, skippedRows: skippedRows + dupHeadersSkipped, totalRowsParsed: rows.length, allRows, headerRowIndex }
+}
+
+// Re-derive a ParseResult from already-parsed raw rows using a chosen header
+// row — powers the "override the detected header row" control.
+export function reprocessRows(allRows: string[][], headerRowIndex: number): ParseResult {
+  return processRawRows(allRows, headerRowIndex)
 }

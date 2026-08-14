@@ -6,7 +6,7 @@ import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { Button, Select } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
-import type { ParseResult } from '@/lib/fileParser'
+import { reprocessRows, type ParseResult } from '@/lib/fileParser'
 import { format } from 'date-fns'
 
 interface Supplemental {
@@ -92,6 +92,17 @@ export function SupplementalLocationTab() {
           <FileUploadZone onParsed={(r) => { setParsed(r); setLocCol(r.headers[0] ?? '') }} label="Drop a CSV / Excel with a location column + any extra columns" />
         ) : (
           <div className="flex flex-col gap-3 border border-navy/30 rounded-lg p-4 bg-cream">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-mono text-inky uppercase tracking-wide">Header row</span>
+              <div className="w-72">
+                <Select
+                  options={parsed.allRows.slice(0, 20).map((r, i) => ({ value: String(i), label: `Row ${i + 1}: ${r.filter(Boolean).slice(0, 4).join(', ').slice(0, 45) || '(empty)'}` }))}
+                  value={String(parsed.headerRowIndex)}
+                  onChange={(e) => { const rp = reprocessRows(parsed.allRows, Number(e.target.value)); setParsed(rp); setLocCol(rp.headers[0] ?? '') }}
+                />
+              </div>
+              <span className="text-[11px] font-mono text-inky/60">Auto-detected row {parsed.headerRowIndex + 1} — override if wrong.</span>
+            </div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-mono text-inky uppercase tracking-wide">Location column</span>
               <div className="w-56">
