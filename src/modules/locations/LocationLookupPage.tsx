@@ -9,8 +9,11 @@ import { ExceptionReportModal } from '@/modules/exceptions/ExceptionReportModal'
 import type { ExceptionReport } from '@/modules/exceptions/exceptions'
 import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
+import { TankEmailModal } from './TankEmailModal'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate } from './tankEmail'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { orderDayFromDelivery } from '@/lib/orderDay'
-import type { Issue, Location } from '@/types'
+import type { Issue, Location, TankMonitor } from '@/types'
 import { format, differenceInCalendarDays, differenceInMonths } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -155,6 +158,9 @@ export function LocationLookupPage() {
   const [commModalOpen, setCommModalOpen] = useState(false)
   const [editingComm, setEditingComm] = useState<Partial<LocationComm> | null>(null)
   const [tankSort, setTankSort] = useState<SortState>(null)
+  const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
+  const [offlineTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_offline', TANK_EMAIL_DEFAULT.offline)
+  const [lowvmiTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_lowvmi', TANK_EMAIL_DEFAULT.lowvmi)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customizeOpen, setCustomizeOpen] = useState(false)
@@ -234,6 +240,15 @@ export function LocationLookupPage() {
       (a.product_id ?? '').localeCompare(b.product_id ?? '', undefined, { sensitivity: 'base' })
     return [...tanks.filter((t) => t.keep_fill).sort(byProduct), ...tanks.filter((t) => !t.keep_fill).sort(byProduct)]
   }, [tanks])
+
+  // Monitors not reporting in > 2 days read as offline (matches the ⚠ marker).
+  const offlineTanks = useMemo(() => {
+    const now = Date.now()
+    return tanks.filter((t) => { const d = t.inventory_time ?? t.reading_date; return d ? now - new Date(d).getTime() > 2 * 86400000 : false })
+  }, [tanks])
+  // Low VMI coverage: fewer than 4 monitors on keepfill (matches Tank Monitors page).
+  const keepfillTanks = useMemo(() => tanks.filter((t) => t.keep_fill), [tanks])
+  const lowVmiFlag = keepfillTanks.length < 4
 
   // Unit shown on the On Hand header: use a shared row unit if present, else default to gallons.
   const tankUnit = useMemo(() => {
@@ -427,6 +442,12 @@ export function LocationLookupPage() {
                   {tanks.length > 0 && (
                     <button onClick={copyTanks} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
                   )}
+                  {offlineTanks.length > 0 && (
+                    <button onClick={() => setEmailKind('offline')} title="Draft an email for offline monitors" className="text-[10px] font-mono text-[#C0392B] border border-[#C0392B]/40 rounded px-1.5 py-0.5 hover:border-[#C0392B] inline-flex items-center gap-1">✉ Offline ({offlineTanks.length})</button>
+                  )}
+                  {!loading && lowVmiFlag && (
+                    <button onClick={() => setEmailKind('lowvmi')} title="Draft a low VMI coverage email" className="text-[10px] font-mono text-[#E67E22] border border-[#E67E22]/40 rounded px-1.5 py-0.5 hover:border-[#E67E22] inline-flex items-center gap-1">✉ Low VMI</button>
+                  )}
                 </div>
                 {tanks.length === 0 ? (
                   <p className="text-xs font-mono text-inky/60">No tank monitor readings for this shop.</p>
@@ -539,6 +560,18 @@ export function LocationLookupPage() {
 
       <LocationCommsModal open={commModalOpen} onClose={() => setCommModalOpen(false)} existing={editingComm}
         lockedLocationId={shopId} onSaved={load} onDelete={deleteComm} />
+
+      {emailKind && shopId && (
+        <TankEmailModal
+          open
+          onClose={() => setEmailKind(null)}
+          kind={emailKind}
+          template={emailKind === 'offline' ? offlineTpl : lowvmiTpl}
+          targets={[{ locationId: shopId, monitors: (emailKind === 'offline' ? offlineTanks : keepfillTanks) as unknown as TankMonitor[] }]}
+          internalOf={(pid) => pid ?? ''}
+          onLogged={load}
+        />
+      )}
     </div>
   )
 }

@@ -85,6 +85,9 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
           capacity: gte11(cap(m)),
         }
       })
+      // No monitors assigned → give the shop 8 blank rows to fill in, seeded
+      // with their location number in the Shop # column.
+      if (rows.length === 0) rows = Array.from({ length: 8 }, () => ({ shop: shopNumber, serial: '', product: '', shape: '', height: '', capacity: '' }))
     } else {
       cols = [
         { key: 'product', label: 'Product' },
