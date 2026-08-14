@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
-import { Sidebar } from './Sidebar'
+import { Sidebar, SECTION_ITEMS } from './Sidebar'
 import { TopBar } from './TopBar'
+import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
 import { InventoryOverlay } from '@/components/inventory/InventoryOverlay'
@@ -117,6 +118,9 @@ export function AppShell() {
   // w-14 collapsed (56px), w-64 expanded (256px)
   const sidebarWidth = mobile ? 0 : sidebarCollapsed ? 56 : 256
 
+  // Show the inventory quick-nav bar on inventory-section routes.
+  const isInventoryRoute = SECTION_ITEMS.inventory.some((i) => i.to && (location.pathname === i.to || location.pathname.startsWith(`${i.to}/`)))
+
   return (
     <div className="flex h-screen overflow-hidden bg-cream font-body">
       <Sidebar
@@ -148,6 +152,7 @@ export function AppShell() {
           className="flex-1 overflow-auto app-scroll transition-[margin] duration-150"
           style={{ marginRight: pushWidth || undefined }}
         >
+          {isInventoryRoute && <InventoryNavBar />}
           <main className="p-3 sm:p-6">
             <ErrorBoundary key={location.pathname}>
               <Outlet />
