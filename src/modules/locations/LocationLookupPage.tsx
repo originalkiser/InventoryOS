@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MapPin } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -162,7 +162,10 @@ export function LocationLookupPage() {
   const loc = useLocations()
   const companyId = profile?.company_id ?? null
 
+  const [searchParams] = useSearchParams()
   const [shopId, setShopId] = useState<string>(() => { try { return localStorage.getItem(LAST_SHOP_KEY) ?? '' } catch { return '' } })
+  // Deep-link support: /location-lookup?shop=<id> (e.g. from Inventory Alerts).
+  useEffect(() => { const s = searchParams.get('shop'); if (s) setShopId(s) }, [searchParams])
   const [supplemental, setSupplemental] = useState<Record<string, string> | null>(null)
   const [tankRows, setTankRows] = useState<TankRow[]>([])
   const [vendorParts, setVendorParts] = useState<{ part_number: string | null; our_part_number: string | null; description: string | null }[]>([])
@@ -479,17 +482,17 @@ export function LocationLookupPage() {
                 <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />
                 <dl className="flex flex-col gap-1.5 mt-1">
                   {visibleSidebar.map((f) => (
-                    <div key={f.label} className="flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
+                    <div key={f.label} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
+                      {f.mapQuery && (
+                        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
+                          title="Open in Google Maps" className="absolute top-1.5 right-1.5 inline-flex items-center text-inky hover:text-sky">
+                          <MapPin className="w-4 h-4" />
+                        </a>
+                      )}
                       <dt className="text-[10px] font-mono font-semibold uppercase tracking-wide text-navy/70">{f.label}</dt>
                       <dd className="text-xs font-body text-navy break-words">
                         {f.value || '—'}
                         {f.note && <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/40 text-navy">{f.note}</span>}
-                        {f.mapQuery && (
-                          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
-                            title="Open in Google Maps" className="ml-1.5 inline-flex items-center align-middle text-inky hover:text-sky">
-                            <MapPin className="w-3.5 h-3.5" />
-                          </a>
-                        )}
                       </dd>
                     </div>
                   ))}

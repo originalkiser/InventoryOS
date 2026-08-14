@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { NavLink } from 'react-router-dom'
+import { useInventoryAlerts, useInventoryAlertsStore } from '@/hooks/useInventoryAlerts'
 import {
   normalizeBlockedDays,
   formatBlockedDayLabel,
@@ -65,6 +66,7 @@ const ICONS: Record<string, JSX.Element> = {
   'location-lookup': <MapPin className="w-4 h-4 flex-shrink-0" />,
   'am-rd-lookup': <Users className="w-4 h-4 flex-shrink-0" />,
   'tank-monitors': <Database className="w-4 h-4 flex-shrink-0" />,
+  'inventory-alerts': <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
   'exception-reporting': <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
   'location-comms': <MessageSquare className="w-4 h-4 flex-shrink-0" />,
   'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
@@ -100,6 +102,7 @@ const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'location-lookup', label: 'Location Lookup', to: '/location-lookup' },
     { key: 'am-rd-lookup', label: 'AM/RD Lookup', to: '/am-rd-lookup' },
     { key: 'tank-monitors', label: 'Tank Monitors', to: '/tank-monitors' },
+    { key: 'inventory-alerts', label: 'Inventory Alerts', to: '/inventory-alerts' },
     { key: 'exception-reporting', label: 'Exception Reporting', to: '/exception-reporting' },
     { key: 'location-comms', label: 'Location Comms', to: '/location-comms' },
   ],
@@ -177,6 +180,8 @@ function NavItemLink({
   dragStyle?: React.CSSProperties
 }) {
   const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
+  const alertCount = useInventoryAlertsStore((s) => s.count)
+  const showAlertBadge = item.key === 'inventory-alerts' && alertCount > 0 && showLabel
 
   if (!item.to) {
     return (
@@ -209,6 +214,9 @@ function NavItemLink({
         <span className="group-hover/row:hidden">{ICONS[item.key] ?? (item.key.startsWith('outlier-') ? ICONS.outlier : ICONS.dashboard)}</span>
         <span className="hidden group-hover/row:block">{ICONS[item.key] ?? (item.key.startsWith('outlier-') ? ICONS.outlier : ICONS.dashboard)}</span>
         {showLabel && <span className="truncate flex-1">{item.label}</span>}
+        {showAlertBadge && (
+          <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center">{alertCount}</span>
+        )}
         {showLabel && onToggleFavorite && (
           <StarButton
             active={!!isFavorite}
@@ -1311,6 +1319,7 @@ function ExpandedSidebar({
 }
 
 export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMobileClose }: SidebarProps) {
+  useInventoryAlerts() // load alert counts once for the nav badge
   const [profileOpen, setProfileOpen] = useState(false)
 
   // Mobile: fixed overlay drawer

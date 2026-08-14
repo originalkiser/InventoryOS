@@ -150,6 +150,19 @@ export function TankMonitorsPage() {
     const t = readingTime(m); return t != null && latestReading - t > 86400000
   }), [filtered, latestReading, offlineVmiOnly])
 
+  // Count of low-VMI shops (mirrors LowVmiView) for the tab badge.
+  const lowVmiCount = useMemo(() => {
+    const keepfillByShop = new Map<string, number>()
+    for (const m of filtered) { if (!m.location_id || !m.keep_fill) continue; keepfillByShop.set(m.location_id, (keepfillByShop.get(m.location_id) ?? 0) + 1) }
+    return loc.locations.filter((l) => {
+      if (!l.active || isExcluded(l)) return false
+      if (shopFilter && l.id !== shopFilter) return false
+      if (amFilter && metaOf(l, 'area_manager') !== amFilter) return false
+      if (ignored.includes(l.id)) return false
+      return (keepfillByShop.get(l.id) ?? 0) < 4
+    }).length
+  }, [filtered, loc.locations, isExcluded, shopFilter, amFilter, ignored])
+
   const areaManagers = useMemo(() => [...new Set(loc.locations.map((l) => metaOf(l, 'area_manager')).filter(Boolean))].sort(), [loc.locations])
   const shopOptions = useMemo(() => loc.locations.filter((l) => l.active).map((l) => ({ value: l.id, label: l.shop_city || l.name })).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })), [loc.locations])
 
@@ -183,7 +196,7 @@ export function TankMonitorsPage() {
         <TabsList>
           <TabsTrigger value="all">All Monitors ({filtered.length})</TabsTrigger>
           <TabsTrigger value="offline">Offline ({offline.length})</TabsTrigger>
-          <TabsTrigger value="lowvmi">Low VMI Coverage</TabsTrigger>
+          <TabsTrigger value="lowvmi">Low VMI Coverage{lowVmiCount ? ` (${lowVmiCount})` : ''}</TabsTrigger>
           <TabsTrigger value="mapping">Product Mapping{unmatchedProducts.length ? ` (${unmatchedProducts.length})` : ''}</TabsTrigger>
           <TabsTrigger value="templates">Email Templates</TabsTrigger>
         </TabsList>
@@ -405,6 +418,7 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
   monitors: TankMonitor[]; loc: ReturnType<typeof useLocations>; isExcluded: (l: Location) => boolean; shopFilter: string; amFilter: string; ignored: string[]; setIgnored: (v: string[]) => void; ctx: Ctx
   onStartEmail: (targets: EmailTarget[]) => void
 }) {
+  const [showIgnoredList, setShowIgnoredList] = useState(false)
   const byShop = useMemo(() => {
     const m = new Map<string, TankMonitor[]>()
     for (const mon of monitors) { if (!mon.location_id) continue; if (!m.has(mon.location_id)) m.set(mon.location_id, []); m.get(mon.location_id)!.push(mon) }
@@ -463,9 +477,21 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
         )
       })}
       {ignored.length > 0 && (
-        <div className="text-[11px] font-mono text-inky/50">
-          Ignored: {ignored.map((id) => loc.byId(id)?.shop_city || loc.byId(id)?.name || id).join(', ')}
-          <button onClick={() => setIgnored([])} className="ml-2 text-inky hover:text-navy hover:underline">reset</button>
+        <div className="text-[11px] font-mono">
+          <button onClick={() => setShowIgnoredList((o) => !o)} className="text-inky/60 hover:text-navy hover:underline">
+            {ignored.length} shop{ignored.length !== 1 ? 's' : ''} ignored {showIgnoredList ? '▾' : '▸'}
+          </button>
+          {showIgnoredList && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              {ignored.map((id) => (
+                <span key={id} className="inline-flex items-center gap-1 rounded-full bg-navy/[0.06] border border-navy/15 px-2 py-0.5 text-navy">
+                  {loc.byId(id)?.shop_city || loc.byId(id)?.name || id}
+                  <button onClick={() => setIgnored(ignored.filter((x) => x !== id))} title="Un-ignore this shop" className="text-inky/50 hover:text-[#C0392B]">✕</button>
+                </span>
+              ))}
+              <button onClick={() => setIgnored([])} className="text-inky/50 hover:text-navy hover:underline self-center">reset all</button>
+            </div>
+          )}
         </div>
       )}
     </div>

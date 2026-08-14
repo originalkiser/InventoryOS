@@ -22,6 +22,7 @@ import { LocationsPage } from '@/modules/locations/LocationsPage'
 import { LocationLookupPage } from '@/modules/locations/LocationLookupPage'
 import { AmRdLookupPage } from '@/modules/locations/AmRdLookupPage'
 import { TankMonitorsPage } from '@/modules/locations/TankMonitorsPage'
+import { InventoryAlertsPage } from '@/modules/inventory/InventoryAlertsPage'
 import { ExceptionReportingPage } from '@/modules/exceptions/ExceptionReportingPage'
 import { LocationCommsPage } from '@/modules/comms/LocationCommsPage'
 import { DevHubPage } from '@/modules/dev-hub/DevHubPage'
@@ -142,6 +143,7 @@ export default function App() {
           <Route path="location-lookup" element={<LocationLookupPage />} />
           <Route path="am-rd-lookup" element={<AmRdLookupPage />} />
           <Route path="tank-monitors" element={<TankMonitorsPage />} />
+          <Route path="inventory-alerts" element={<InventoryAlertsPage />} />
           <Route path="exception-reporting" element={<ExceptionReportingPage />} />
           <Route path="location-comms" element={<LocationCommsPage />} />
           <Route path="dev-hub" element={<RequireAdminOrDev><DevHubPage /></RequireAdminOrDev>} />
