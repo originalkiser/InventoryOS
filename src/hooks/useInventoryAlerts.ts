@@ -51,12 +51,16 @@ async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; l
   // "Valvoline #" is the base column valvoline_account_num on core.locations.
   const valvolineAcct = (l: any) => String(l.valvoline_account_num ?? (l.metadata as any)?.valvoline_account_num ?? '').trim()
 
+  const rdDeliveryDay = (l: any) => String(l.reladyne_delivery_day ?? (l.metadata as any)?.reladyne_delivery_day ?? '').trim()
+
   const rdLow: AlertShop[] = locations.flatMap((l) => { const n = rd.get(l.id)?.size ?? 0; return n < RELADYNE_MIN ? [{ id: l.id, label: labelOf(l), detail: `${n} configured` }] : [] }).sort(bySortLabel)
   const valLow: AlertShop[] = locations.flatMap((l) => { const n = val.get(l.id)?.size ?? 0; return n < VALVOLINE_MIN ? [{ id: l.id, label: labelOf(l), detail: `${n} configured` }] : [] }).sort(bySortLabel)
   const missingAcct: AlertShop[] = locations.flatMap((l) => valvolineAcct(l) ? [] : [{ id: l.id, label: labelOf(l), detail: 'No Valvoline Account #' }]).sort(bySortLabel)
+  const noRdDay: AlertShop[] = locations.flatMap((l) => rdDeliveryDay(l) ? [] : [{ id: l.id, label: labelOf(l), detail: 'No RelaDyne delivery day' }]).sort(bySortLabel)
 
   const rawGroups: AlertGroup[] = [
     { key: 'reladyne-low', title: `Shops with fewer than ${RELADYNE_MIN} RelaDyne products configured`, hint: 'Configure their RelaDyne order profile in Inventory Config → Order Config.', shops: rdLow },
+    { key: 'no-reladyne-delivery-day', title: 'Shops with no RelaDyne delivery day', hint: 'Set the Reladyne Delivery Day in Global Config → Locations.', shops: noRdDay },
     { key: 'valvoline-low', title: `Shops with fewer than ${VALVOLINE_MIN} Valvoline products configured`, hint: 'Add Valvoline products to their order config.', shops: valLow },
     { key: 'missing-valvoline-acct', title: 'Shops missing a Valvoline Account #', hint: 'Set the Valvoline # in Global Config → Locations.', shops: missingAcct },
   ]
