@@ -156,7 +156,7 @@ const CONFIG_FIXED: Col<ConfigRow>[] = [
 // Metadata keys that are plumbing, not config attributes — never shown as columns.
 const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', 'vendor_name', 'location_label'])
 
-export function LocationLookupPage() {
+export function LocationDetailView({ embedded = false }: { embedded?: boolean }) {
   const { profile } = useAuthStore()
   const navigate = useNavigate()
   const loc = useLocations()
@@ -438,17 +438,19 @@ export function LocationLookupPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="sticky top-0 z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Inventory Location Lookup</h1>
-          {shopId
-            ? <p className="text-sm font-heading font-bold text-navy mt-0.5">{shopLabel(shopId)}</p>
-            : <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>}
+      {!embedded && (
+        <div className="sticky top-0 z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Inventory Location Lookup</h1>
+            {shopId
+              ? <p className="text-sm font-heading font-bold text-navy mt-0.5">{shopLabel(shopId)}</p>
+              : <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>}
+          </div>
+          {!shopId && (
+            <div className="w-80"><Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
+          )}
         </div>
-        {!shopId && (
-          <div className="w-80"><Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
-        )}
-      </div>
+      )}
 
       {shopId && customizeOpen && (
         <Card>
@@ -468,15 +470,18 @@ export function LocationLookupPage() {
       )}
 
       {!shopId ? (
-        <p className="text-xs font-mono text-inky/60 py-8">Select a shop above to begin.</p>
+        <div className="flex flex-col gap-2 py-4">
+          {embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" />}
+          <p className="text-xs font-mono text-inky/60">{embedded ? 'Pick a shop to see its tanks, config, and issues.' : 'Select a shop above to begin.'}</p>
+        </div>
       ) : loading ? (
         <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
       ) : error ? (
         <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">{error}</div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 items-start">
+        <div className={`grid grid-cols-1 gap-4 items-start ${embedded ? '' : 'lg:grid-cols-[280px_1fr]'}`}>
           {/* Left info — frozen while the tables/issues scroll */}
-          <div className="lg:sticky lg:top-[4.5rem] self-start flex flex-col gap-3">
+          <div className={`self-start flex flex-col gap-3 ${embedded ? '' : 'lg:sticky lg:top-[4.5rem]'}`}>
             <Card>
               <CardBody className="flex flex-col gap-2">
                 <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />
@@ -576,7 +581,9 @@ export function LocationLookupPage() {
 
       {shopId && (
         <button onClick={() => setCustomizeOpen((o) => !o)}
-          className="fixed bottom-6 right-6 z-30 rounded-full bg-navy text-cream px-5 py-2.5 text-xs font-mono uppercase tracking-wide shadow-lg hover:bg-navy/90 transition-colors">
+          className={embedded
+            ? 'self-end rounded-full bg-navy text-cream px-3 py-1.5 text-[11px] font-mono uppercase tracking-wide hover:bg-navy/90 transition-colors'
+            : 'fixed bottom-6 right-6 z-30 rounded-full bg-navy text-cream px-5 py-2.5 text-xs font-mono uppercase tracking-wide shadow-lg hover:bg-navy/90 transition-colors'}>
           {customizeOpen ? 'Done' : 'Customize'}
         </button>
       )}
@@ -649,6 +656,11 @@ export function LocationLookupPage() {
       )}
     </div>
   )
+}
+
+// Full-page wrapper — the same detail view, with page chrome.
+export function LocationLookupPage() {
+  return <LocationDetailView />
 }
 
 function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; resolved: IssueRow[]; onManage: (v: 'pending' | 'resolved') => void }) {

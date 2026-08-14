@@ -11,6 +11,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { Badge, Button } from '@/components/ui'
+import { LocationDetailView } from './LocationLookupPage'
 
 type BadgeColor = 'navy' | 'inky' | 'sky' | 'red' | 'green' | 'orange'
 const COLORS: BadgeColor[] = ['navy', 'inky', 'sky', 'red', 'green', 'orange']
@@ -20,6 +21,7 @@ interface Pill { label: string; color: BadgeColor; source?: string; column?: str
 type Block =
   | { id: string; type: 'pills'; title: string; pills: Pill[] }
   | { id: string; type: 'table'; title: string; source: string; columns: string[] }
+  | { id: string; type: 'shop-detail'; title: string }
 interface ViewConfig { showSearch: boolean; blocks: Block[] }
 
 const SOURCES = [
@@ -163,10 +165,12 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
     })
   }
   function removeBlock(id: string) { setView((v) => ({ ...v, blocks: v.blocks.filter((b) => b.id !== id) })) }
-  function addBlock(type: 'pills' | 'table') {
+  function addBlock(type: 'pills' | 'table' | 'shop-detail') {
     const block: Block = type === 'pills'
       ? { id: uid(), type: 'pills', title: 'New Pills', pills: [] }
-      : { id: uid(), type: 'table', title: 'New Table', source: 'locations', columns: [] }
+      : type === 'table'
+      ? { id: uid(), type: 'table', title: 'New Table', source: 'locations', columns: [] }
+      : { id: uid(), type: 'shop-detail', title: 'Shop Detail' }
     setView((v) => ({ ...v, blocks: [...v.blocks, block] }))
   }
   function onDragEnd(e: DragEndEvent) {
@@ -241,7 +245,9 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
                   onConfig={() => setConfigId((c) => (c === b.id ? null : b.id))} onRemove={() => removeBlock(b.id)}>
                   {b.type === 'pills'
                     ? <PillsBlock block={b} editing={editing && configId === b.id} onChange={(p) => updateBlock(b.id, p)} onFilter={setActiveFilter} />
-                    : <TableBlock block={b} editing={editing && configId === b.id} search={search} activeFilter={activeFilter} onChange={(p) => updateBlock(b.id, p)} onSaveColumns={(cols) => saveColumns(b.id, cols)} />}
+                    : b.type === 'table'
+                    ? <TableBlock block={b} editing={editing && configId === b.id} search={search} activeFilter={activeFilter} onChange={(p) => updateBlock(b.id, p)} onSaveColumns={(cols) => saveColumns(b.id, cols)} />
+                    : <div className="flex flex-col gap-2"><div className="text-[11px] font-heading uppercase tracking-wide text-inky">{b.title}</div><LocationDetailView embedded /></div>}
                 </BlockWrap>
               ))}
               {view.blocks.length === 0 && <p className="py-6 text-center text-xs font-body italic text-inky">No blocks. Add one below.</p>}
@@ -267,7 +273,7 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
   )
 }
 
-function AddBlockMenu({ onAdd }: { onAdd: (t: 'pills' | 'table') => void }) {
+function AddBlockMenu({ onAdd }: { onAdd: (t: 'pills' | 'table' | 'shop-detail') => void }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="relative">
@@ -278,6 +284,7 @@ function AddBlockMenu({ onAdd }: { onAdd: (t: 'pills' | 'table') => void }) {
           <div className="absolute bottom-full z-50 mb-1 w-36 rounded border border-navy/40 bg-cream dark:bg-[#0e2638] py-1 shadow-xl">
             <button onClick={() => { onAdd('pills'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-body text-navy hover:bg-navy/5">Pill Group</button>
             <button onClick={() => { onAdd('table'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-body text-navy hover:bg-navy/5">Mini Table</button>
+            <button onClick={() => { onAdd('shop-detail'); setOpen(false) }} className="block w-full px-3 py-1.5 text-left text-xs font-body text-navy hover:bg-navy/5">Shop Detail</button>
           </div>
         </>
       )}
