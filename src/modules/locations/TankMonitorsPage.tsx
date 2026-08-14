@@ -326,10 +326,12 @@ function MonitorTable({ rows, ctx, shopOf }: { rows: TankMonitor[]; ctx: Ctx; sh
           </thead>
           <tbody>
             {sorted.map((m, idx) => {
-              const band = idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
+              // Opaque bands so the sticky Shop column can share them (a
+              // translucent band would let scrolled columns bleed through).
+              const band = idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
               return (
                 <tr key={m.id} className={band}>
-                  <td className={`${tdBase} sticky left-0 z-10 bg-cream ${stickyShop} font-semibold`} title={shopOf(m.location_id)}>{shopOf(m.location_id)}</td>
+                  <td className={`${tdBase} sticky left-0 z-10 ${band} ${stickyShop} font-semibold`} title={shopOf(m.location_id)}>{shopOf(m.location_id)}</td>
                   {shown.map((id) => <td key={id} className={tdBase}>{colOf(id).render(m, ctx)}</td>)}
                 </tr>
               )

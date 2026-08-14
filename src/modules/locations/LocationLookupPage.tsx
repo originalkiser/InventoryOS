@@ -23,6 +23,7 @@ const VIEW_KEY = 'location-lookup:view'
 interface TankRow {
   id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null
   on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
+  internal?: string // resolved internal product id (manual map → vendor parts)
 }
 interface ConfigRow {
   id: string; vendor_id: string | null; product_id: string | null
@@ -125,6 +126,7 @@ function usePersistedSort(key: string) {
 
 const TANK_COLS: Col<TankRow>[] = [
   { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—', sort: (t) => t.product_id },
+  { id: 'internal', label: 'Product ID (Internal)', align: 'left', render: (t) => t.internal || t.product_id || '—', sort: (t) => t.internal || t.product_id },
   { id: 'serial', label: 'Serial #', align: 'left', render: (t) => t.serial_rtu_id ?? '—', sort: (t) => t.serial_rtu_id },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand), sort: (t) => t.on_hand },
   { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity), sort: (t) => t.available_capacity },
@@ -134,9 +136,11 @@ const TANK_COLS: Col<TankRow>[] = [
     sort: (t) => { const d = t.inventory_time ?? t.reading_date; return d ? new Date(d).getTime() : null },
     render: (t) => {
       const d = t.inventory_time ?? t.reading_date
-      // A monitor that hasn't reported in > 2 days reads as offline.
+      // A monitor that hasn't reported in > 2 days reads as offline. Non-VMI
+      // tanks going offline are low-priority, so flag those orange, not red.
       const stale = !!d && Date.now() - new Date(d).getTime() > 2 * 86400000
-      return <span className={stale ? 'text-[#C0392B] font-bold' : ''} title={stale ? 'No reading in over 2 days — monitor may be offline' : undefined}>{dateTime(d)}{stale ? ' ⚠' : ''}</span>
+      const cls = stale ? (t.keep_fill ? 'text-[#C0392B] font-bold' : 'text-[#E67E22] font-bold') : ''
+      return <span className={cls} title={stale ? 'No reading in over 2 days — monitor may be offline' : undefined}>{dateTime(d)}{stale ? ' ⚠' : ''}</span>
     },
   },
 ]
@@ -159,7 +163,9 @@ export function LocationLookupPage() {
 
   const [shopId, setShopId] = useState<string>(() => { try { return localStorage.getItem(LAST_SHOP_KEY) ?? '' } catch { return '' } })
   const [supplemental, setSupplemental] = useState<Record<string, string> | null>(null)
-  const [tanks, setTanks] = useState<TankRow[]>([])
+  const [tankRows, setTankRows] = useState<TankRow[]>([])
+  const [vendorParts, setVendorParts] = useState<{ part_number: string | null; our_part_number: string | null; description: string | null }[]>([])
+  const [prodMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
   const [configs, setConfigs] = useState<ConfigRow[]>([])
   const [vendorNames, setVendorNames] = useState<Record<string, string>>({})
   const [issues, setIssues] = useState<IssueRow[]>([])
@@ -197,7 +203,7 @@ export function LocationLookupPage() {
     setLoading(true); setError(null)
     const sb = supabase as any
     try {
-      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes, commRes] = await Promise.all([
+      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
@@ -206,6 +212,7 @@ export function LocationLookupPage() {
         sb.schema('core').from('location_supplemental').select('data').eq('company_id', companyId).eq('location_id', shopId).maybeSingle().then((r: any) => r).catch(() => ({ data: null })),
         sb.schema('inventory').from('exception_reports').select('*').eq('company_id', companyId).eq('location_id', shopId).order('date_of_finding', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('location_comms').select('*').eq('company_id', companyId).eq('location_id', shopId).order('comm_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
+        sb.schema('core').from('vendor_parts').select('part_number, our_part_number, description').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       // Collapse to the newest reading per tank (serial, then system id, then
       // row id) so leftover duplicate readings don't stack or inflate counts.
@@ -217,7 +224,8 @@ export function LocationLookupPage() {
         const ex = latestByTank.get(key)
         if (!ex || rtime(t) > rtime(ex)) latestByTank.set(key, t)
       }
-      setTanks([...latestByTank.values()])
+      setTankRows([...latestByTank.values()])
+      setVendorParts((partsRes?.data ?? []) as any[])
       setConfigs((cfgRes.data ?? []) as ConfigRow[])
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
       setIssues((issRes.data ?? []) as IssueRow[])
@@ -256,6 +264,24 @@ export function LocationLookupPage() {
   const isResolved = (s: string) => { const n = s.toLowerCase(); return n.includes('resolved') || n.includes('closed') || n.includes('complete') }
   const pendingIssues = issues.filter((i) => isPending(statusNames[i.status_id ?? ''] ?? ''))
   const resolvedIssues = issues.filter((i) => isResolved(statusNames[i.status_id ?? ''] ?? ''))
+
+  // Resolve each tank's internal product id (manual Product Mapping first, then
+  // the Vendor Parts description/part match) and attach it to the rendered rows.
+  const internalMap = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of vendorParts) {
+      const our = p.our_part_number; if (!our) continue
+      const desc = p.description ? String(p.description).toLowerCase().trim() : ''
+      if (desc) m.set(desc, our)
+      const pn = p.part_number ? String(p.part_number).toLowerCase().trim() : ''
+      if (pn && !m.has(pn)) m.set(pn, our)
+    }
+    return m
+  }, [vendorParts])
+  const tanks = useMemo(() => tankRows.map((t) => {
+    const k = t.product_id ? t.product_id.toLowerCase().trim() : ''
+    return { ...t, internal: (k && (prodMap[k] || internalMap.get(k))) || t.product_id || '' }
+  }), [tankRows, internalMap, prodMap])
 
   // Keepfill tanks first, then non-keepfill — each alpha-sorted by product.
   const sortedTanks = useMemo(() => {

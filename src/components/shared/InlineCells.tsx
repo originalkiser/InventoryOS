@@ -2,7 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 // Shared inline-editable table cells (used by Exception Reporting + Location Comms).
 // Transparent bg so row banding shows through.
-export const inputCls = 'bg-transparent border border-navy/30 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky'
+const cellBase = 'bg-transparent rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky'
+export const inputCls = `${cellBase} border border-navy/30`
+// Borderless variant for constrained fields (date/select) — a subtle border
+// appears on hover so the cell still reads as editable.
+export const bareCls = `${cellBase} border border-transparent hover:border-navy/20`
 
 export function EditText({ value, onSave, placeholder, className = '' }: { value: string | null; onSave: (v: string | null) => void; placeholder?: string; className?: string }) {
   const [v, setV] = useState(value ?? '')
@@ -13,16 +17,16 @@ export function EditText({ value, onSave, placeholder, className = '' }: { value
   )
 }
 
-export function EditDate({ value, onSave }: { value: string | null; onSave: (v: string | null) => void }) {
-  return <input type="date" value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={inputCls} />
+export function EditDate({ value, onSave, bare }: { value: string | null; onSave: (v: string | null) => void; bare?: boolean }) {
+  return <input type="date" value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={bare ? bareCls : inputCls} />
 }
 
-export function EditSelect({ value, options, onSave, placeholder, allowCurrent, className = '' }: {
-  value: string | null; options: string[]; onSave: (v: string | null) => void; placeholder?: string; allowCurrent?: boolean; className?: string
+export function EditSelect({ value, options, onSave, placeholder, allowCurrent, className = '', bare }: {
+  value: string | null; options: string[]; onSave: (v: string | null) => void; placeholder?: string; allowCurrent?: boolean; className?: string; bare?: boolean
 }) {
   const opts = allowCurrent && value && !options.includes(value) ? [value, ...options] : options
   return (
-    <select value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={`${inputCls} ${className}`}>
+    <select value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={`${bare ? bareCls : inputCls} ${className}`}>
       <option value="">{placeholder ?? '—'}</option>
       {opts.map((o) => <option key={o} value={o}>{o}</option>)}
     </select>

@@ -18,6 +18,7 @@ export function TankProductMapping({ map, onChange, unmatched, allTankProducts, 
   const [parsed, setParsed] = useState<ParseResult | null>(null)
   const [tankCol, setTankCol] = useState('')
   const [ourCol, setOurCol] = useState('')
+  const [unmatchedOpen, setUnmatchedOpen] = useState(true)
 
   const ourOpts = useMemo(() => ourOptions.map((v) => ({ value: v, label: v })), [ourOptions])
   const rawByKey = useMemo(() => { const m = new Map<string, string>(); for (const p of allTankProducts) m.set(norm(p), p); return m }, [allTankProducts])
@@ -52,8 +53,10 @@ export function TankProductMapping({ map, onChange, unmatched, allTankProducts, 
       {/* Unmatched products — quick per-row matching */}
       <Card>
         <CardBody className="flex flex-col gap-2">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Unmatched Products ({unmatched.length})</div>
-          {unmatched.length === 0 ? (
+          <button onClick={() => setUnmatchedOpen((o) => !o)} className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-inky/60 hover:text-navy self-start">
+            Unmatched Products ({unmatched.length}) <span className="text-[9px]">{unmatchedOpen ? '▾' : '▸'}</span>
+          </button>
+          {unmatchedOpen && (unmatched.length === 0 ? (
             <p className="text-xs font-mono text-inky/50">Every tank product resolves to one of your product IDs. 🎉</p>
           ) : (
             <div className="flex flex-col gap-1.5">
@@ -68,7 +71,7 @@ export function TankProductMapping({ map, onChange, unmatched, allTankProducts, 
                 </div>
               ))}
             </div>
-          )}
+          ))}
         </CardBody>
       </Card>
 

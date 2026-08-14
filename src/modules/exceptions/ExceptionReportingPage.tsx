@@ -257,20 +257,20 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
   function renderCell(id: string, r: ExceptionReport): ReactNode {
     const info = id === 'rd' ? rdCell(r, config.responseDays) : null
     switch (id) {
-      case 'finding': return <EditDate value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} />
+      case 'finding': return <EditDate bare value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} />
       case 'area_manager': return <EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} />
-      case 'type': return <EditSelect value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} />
-      case 'issue': return <EditSelect value={r.issue} options={config.issues[r.report_type ?? ''] ?? []} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} />
+      case 'type': return <EditSelect bare value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} />
+      case 'issue': return <EditSelect bare value={r.issue} options={config.issues[r.report_type ?? ''] ?? []} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} />
       case 'details': return <AutoTextarea value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} />
       case 'contacted': return (
         <div className="flex items-center gap-1">
           <input type="checkbox" checked={r.contacted} onChange={(e) => onSet(r, { contacted: e.target.checked })} className="accent-sky" />
-          {r.contacted && <EditDate value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
+          {r.contacted && <EditDate bare value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
         </div>
       )
       case 'response': return <ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} />
       case 'response_date': return isYesResponse(r.response)
-        ? <EditDate value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} />
+        ? <EditDate bare value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} />
         : <span className="text-inky/30">—</span>
       case 'rd': return info!.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info!.daysLeft}d left</span>
         : info!.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
@@ -318,7 +318,7 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
                     <td className={`${tdBase} sticky left-0 z-10 bg-cream w-[230px] min-w-[230px]`}>
                       <div className="flex items-center gap-1">
                         <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                        <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                        <EditSelect bare value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
                       </div>
                     </td>
                     <td className={`${tdBase} sticky left-[230px] z-10 bg-cream text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
