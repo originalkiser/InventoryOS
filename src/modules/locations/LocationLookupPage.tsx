@@ -110,6 +110,19 @@ function applySort<T>(rows: T[], cols: Col<T>[], sort: SortState): T[] {
 const nextSort = (cur: SortState, id: string): SortState => (cur?.id === id ? (cur.dir === 'asc' ? { id, dir: 'desc' } : null) : { id, dir: 'asc' })
 const sortArrow = (sort: SortState, id: string) => (sort?.id === id ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '')
 
+// Sort state persisted per table key, so a chosen column/direction survives
+// refreshes and returns (localStorage — indefinite, not session-only).
+function usePersistedSort(key: string) {
+  const [sort, setSort] = useState<SortState>(() => {
+    try { const raw = localStorage.getItem(key); if (raw) { const v = JSON.parse(raw); if (v && typeof v.id === 'string' && (v.dir === 'asc' || v.dir === 'desc')) return v as SortState } } catch { /* ignore */ }
+    return null
+  })
+  useEffect(() => {
+    try { if (sort) localStorage.setItem(key, JSON.stringify(sort)); else localStorage.removeItem(key) } catch { /* ignore */ }
+  }, [key, sort])
+  return [sort, setSort] as const
+}
+
 const TANK_COLS: Col<TankRow>[] = [
   { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—', sort: (t) => t.product_id },
   { id: 'serial', label: 'Serial #', align: 'left', render: (t) => t.serial_rtu_id ?? '—', sort: (t) => t.serial_rtu_id },
@@ -157,7 +170,7 @@ export function LocationLookupPage() {
   const [comms, setComms] = useState<LocationComm[]>([])
   const [commModalOpen, setCommModalOpen] = useState(false)
   const [editingComm, setEditingComm] = useState<Partial<LocationComm> | null>(null)
-  const [tankSort, setTankSort] = useState<SortState>(null)
+  const [tankSort, setTankSort] = usePersistedSort('location-lookup:tank-sort')
   const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
   const [offlineTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_offline', TANK_EMAIL_DEFAULT.offline)
   const [lowvmiTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_lowvmi', TANK_EMAIL_DEFAULT.lowvmi)
@@ -598,10 +611,8 @@ function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; re
       </div>
       {top ? (
         <button onClick={() => onManage('pending')} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-cream px-2 py-1.5">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-body text-navy flex-1 truncate">{top.title}</span>
-            {pastDue && <Badge color="red">Past due</Badge>}
-          </div>
+          <div className="text-xs font-body text-navy break-words">{top.title}</div>
+          {pastDue && <div className="mt-0.5"><Badge color="red">Past due</Badge></div>}
           <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
             <span>Start {dateShort(top.start_date)}</span>
             <span>Target {dateShort(top.target_resolution_date)}</span>
@@ -630,10 +641,8 @@ function ExceptionsBox({ exceptions, onAdd, onEdit }: { exceptions: ExceptionRep
         <span className="text-xs font-body text-inky/50">None</span>
       ) : exceptions.slice(0, 5).map((e) => (
         <button key={e.id} onClick={() => onEdit(e)} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-body text-navy flex-1 truncate">{[e.report_type, e.issue].filter(Boolean).join(' · ') || 'Exception'}</span>
-            {e.status && <Badge color={isClosed(e.status) ? 'green' : 'amber'}>{e.status}</Badge>}
-          </div>
+          <div className="text-xs font-body text-navy break-words">{[e.report_type, e.issue].filter(Boolean).join(' · ') || 'Exception'}</div>
+          {e.status && <div className="mt-0.5"><Badge color={isClosed(e.status) ? 'green' : 'amber'}>{e.status}</Badge></div>}
           <div className="text-[10px] font-mono text-inky/60 mt-0.5">Found {dateShort(e.date_of_finding)}</div>
         </button>
       ))}
@@ -655,10 +664,8 @@ function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () =
         <span className="text-xs font-body text-inky/50">None</span>
       ) : comms.slice(0, 5).map((c) => (
         <button key={c.id} onClick={() => onEdit(c)} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-body text-navy flex-1 truncate">{[c.comm_type, c.contact_method].filter(Boolean).join(' · ') || 'Communication'}</span>
-            {c.status && <Badge color={isClosed(c.status) ? 'green' : 'amber'}>{c.status}</Badge>}
-          </div>
+          <div className="text-xs font-body text-navy break-words">{[c.comm_type, c.contact_method].filter(Boolean).join(' · ') || 'Communication'}</div>
+          {c.status && <div className="mt-0.5"><Badge color={isClosed(c.status) ? 'green' : 'amber'}>{c.status}</Badge></div>}
           <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(c.comm_date)}{(c.products ?? []).length ? ` · ${(c.products ?? []).length} product(s)` : ''}</div>
         </button>
       ))}
@@ -682,7 +689,7 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
 }
 
 function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: string; rows: ConfigRow[]; hidden: string[]; onOpenConfig: () => void }) {
-  const [sort, setSort] = useState<SortState>(null)
+  const [sort, setSort] = usePersistedSort(`location-lookup:config-sort:${vendor}`)
   const columns = useMemo(() => {
     const metaKeys = new Set<string>()
     for (const r of rows) for (const k of Object.keys(r.metadata ?? {})) if (!CONFIG_META_EXCLUDE.has(k)) metaKeys.add(k)

@@ -22,6 +22,18 @@ const EMPTY_FORM = {
 }
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
+// Quick-capture draft cache — survives an accidental close before saving.
+const QUICK_DRAFT_KEY = 'meeting:quick-draft'
+const stripHtml = (s: string) => (s || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim()
+function draftHasContent(f: typeof EMPTY_FORM): boolean {
+  return !!(
+    stripHtml(f.notes) ||
+    (f.title?.trim() && f.title.trim() !== EMPTY_FORM.title) ||
+    f.vendor?.trim() || f.category?.trim() ||
+    (f.links?.some((l) => l.label?.trim() || l.url?.trim()))
+  )
+}
+
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 pt-1">
@@ -110,11 +122,28 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
     } else {
       setEditId(null); setEditCreatedBy(myId)
       const now = new Date()
-      setForm({ ...EMPTY_FORM, meeting_date: format(now, 'yyyy-MM-dd'), meeting_time: quick ? format(now, 'HH:mm') : '' })
+      const base = { ...EMPTY_FORM, meeting_date: format(now, 'yyyy-MM-dd'), meeting_time: quick ? format(now, 'HH:mm') : '' }
+      // Restore an unsaved quick-capture draft if one was left behind.
+      let restored: typeof EMPTY_FORM | null = null
+      if (quick) {
+        try { const raw = localStorage.getItem(QUICK_DRAFT_KEY); if (raw) { const d = JSON.parse(raw); if (draftHasContent(d)) restored = { ...base, ...d } } } catch { /* ignore */ }
+      }
+      setForm(restored ?? base)
       setMeetingTasks([])
+      if (restored) toast('Restored your unsaved draft', { icon: '📝' })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, existing, quick])
+
+  // Cache the quick-capture draft so an accidental close keeps the notes.
+  // Only while it's a brand-new quick meeting (not editing / already saved).
+  useEffect(() => {
+    if (!open || !quick || editId) return
+    try {
+      if (draftHasContent(form)) localStorage.setItem(QUICK_DRAFT_KEY, JSON.stringify(form))
+      else localStorage.removeItem(QUICK_DRAFT_KEY)
+    } catch { /* ignore */ }
+  }, [form, open, quick, editId])
 
   async function onSave() {
     if (!companyId || !form.title.trim()) return
@@ -146,6 +175,8 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
     }
     // Best-effort: links column may not exist in all environments yet.
     if (savedId) sb.schema('inventory').from('meeting_notes').update({ links: form.links }).eq('id', savedId).then(() => {})
+    // Draft is now persisted server-side — drop the local quick-capture cache.
+    try { localStorage.removeItem(QUICK_DRAFT_KEY) } catch { /* ignore */ }
     setSaving(false)
     onSaved?.()
   }
