@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
-import { CheckCircle2, MapPin, MessageSquare, Package } from 'lucide-react'
+import { CheckCircle2, MapPin, MessageSquare, Package, ChevronUp, ChevronDown } from 'lucide-react'
 import { Sidebar, SECTION_ITEMS } from './Sidebar'
 import { TopBar } from './TopBar'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
@@ -32,6 +32,8 @@ export function AppShell() {
   const [meetingWidth, setMeetingWidth] = useState(() => Number(localStorage.getItem(MEETING_WIDTH_KEY)) || 460)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [fabCollapsed, setFabCollapsed] = useState(() => localStorage.getItem('quickfab:collapsed') === '1')
+  const setFabCollapsedP = (v: boolean) => { setFabCollapsed(v); localStorage.setItem('quickfab:collapsed', v ? '1' : '0') }
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
@@ -167,13 +169,20 @@ export function AppShell() {
       </div>
 
       {/* Quick-access FABs — only when the sidebar is collapsed (the expanded
-          sidebar has its own quick-access grid). Sits beside a docked panel. */}
+          sidebar has its own quick-access grid). Bottom-right stack, labels on
+          hover; a button hides while its panel is open; collapses to a nub. */}
       {sidebarCollapsed && !mobile && (
-        <div className="fixed z-30 flex flex-col gap-2 top-1/2 -translate-y-1/2" style={{ right: (pushWidth || 0) + 12 }}>
-          <QuickFab title="Today's Tasks" active={tasksMode !== 'hidden'} onClick={toggleTasks}><CheckCircle2 className="w-5 h-5" /></QuickFab>
-          <QuickFab title="Location Lookup" active={lookupMode !== 'hidden'} onClick={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')}><MapPin className="w-5 h-5" /></QuickFab>
-          <QuickFab title="Quick Meeting" active={meetingMode !== 'hidden'} onClick={() => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden')}><MessageSquare className="w-5 h-5" /></QuickFab>
-          <QuickFab title="Inventory" active={invMode !== 'hidden'} onClick={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')}><Package className="w-5 h-5" /></QuickFab>
+        <div className="fixed bottom-4 z-30 flex flex-col items-end gap-2" style={{ right: (pushWidth || 0) + 16 }}>
+          {!fabCollapsed && [
+            { t: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', on: toggleTasks },
+            { t: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', on: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
+            { t: 'Quick Meeting', icon: <MessageSquare className="w-5 h-5" />, open: meetingMode !== 'hidden', on: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
+            { t: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', on: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
+          ].filter((f) => !f.open).map((f) => <QuickFab key={f.t} title={f.t} onClick={f.on}>{f.icon}</QuickFab>)}
+          <button onClick={() => setFabCollapsedP(!fabCollapsed)} title={fabCollapsed ? 'Show quick access' : 'Hide quick access'} aria-label={fabCollapsed ? 'Show quick access' : 'Hide quick access'}
+            className="flex items-center justify-center w-10 h-6 rounded-full bg-navy/80 text-cream shadow-lg hover:bg-navy transition-colors">
+            {fabCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
         </div>
       )}
 
@@ -193,14 +202,12 @@ export function AppShell() {
   )
 }
 
-function QuickFab({ title, active, onClick, children }: { title: string; active: boolean; onClick: () => void; children: ReactNode }) {
+function QuickFab({ title, onClick, children }: { title: string; onClick: () => void; children: ReactNode }) {
   return (
     <button onClick={onClick} title={title} aria-label={title}
-      className={[
-        'w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-colors',
-        active ? 'bg-sky text-navy' : 'bg-navy text-cream hover:bg-navy/90',
-      ].join(' ')}>
+      className="group flex items-center h-10 rounded-full bg-navy text-cream shadow-lg px-2.5 hover:bg-navy/90 transition-colors">
       {children}
+      <span className="max-w-0 group-hover:max-w-[160px] overflow-hidden whitespace-nowrap text-xs font-heading transition-[max-width,margin] duration-200 group-hover:ml-2">{title}</span>
     </button>
   )
 }
