@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { MapPin } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -36,7 +37,7 @@ interface IssueRow {
 }
 
 // Per-device view customization: ids hidden from each section.
-interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[] }
+interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[]; nonVmiOfflineBtn?: boolean }
 
 const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 }))
 const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy') } catch { return d } }
@@ -189,11 +190,11 @@ export function LocationLookupPage() {
   const [modalView, setModalView] = useState<'pending' | 'resolved'>('pending')
   const [editIssue, setEditIssue] = useState<Partial<Issue> | null | undefined>(undefined)
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
-    try { const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [] } }
-    catch { return { sidebar: [], tank: [], config: [] } }
+    try { const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false } }
+    catch { return { sidebar: [], tank: [], config: [], nonVmiOfflineBtn: false } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
-  const toggleHidden = (group: keyof ViewPrefs, id: string) =>
+  const toggleHidden = (group: 'sidebar' | 'tank' | 'config', id: string) =>
     setPrefs((p) => ({ ...p, [group]: p[group].includes(id) ? p[group].filter((x) => x !== id) : [...p[group], id] }))
 
   const location = loc.byId(shopId)
@@ -298,6 +299,11 @@ export function LocationLookupPage() {
   // Low VMI coverage: fewer than 4 monitors on keepfill (matches Tank Monitors page).
   const keepfillTanks = useMemo(() => tanks.filter((t) => t.keep_fill), [tanks])
   const lowVmiFlag = keepfillTanks.length < 4
+  // Split offline tanks by VMI so the email button reflects urgency: VMI offline
+  // is red; non-VMI offline is only surfaced (orange) when opted in via Customize.
+  const vmiOffline = useMemo(() => offlineTanks.filter((t) => t.keep_fill), [offlineTanks])
+  const nonVmiOffline = useMemo(() => offlineTanks.filter((t) => !t.keep_fill), [offlineTanks])
+  const showOfflineBtn = vmiOffline.length > 0 || (!!prefs.nonVmiOfflineBtn && nonVmiOffline.length > 0)
 
   // Unit shown on the On Hand header: use a shared row unit if present, else default to gallons.
   const tankUnit = useMemo(() => {
@@ -362,7 +368,8 @@ export function LocationLookupPage() {
   const inNC = ['nc', 'north carolina'].includes(stateVal.trim().toLowerCase())
   const rdOrderDay = location ? orderDayFromDelivery(location.reladyne_delivery_day) : ''
   const rdDeliveryDay = locVal(location, 'reladyne_delivery_day')
-  const sidebar: { label: string; value: string; note?: string }[] = location ? [
+  const addressStr = location ? [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') : ''
+  const sidebar: { label: string; value: string; note?: string; mapQuery?: string }[] = location ? [
     { label: 'Location', value: locVal(location, 'shop_city') || shopLabel(shopId) },
     { label: 'Area Manager', value: locVal(location, 'area_manager') },
     { label: 'AM Cell', value: locVal(location, 'am_phone') },
@@ -370,7 +377,7 @@ export function LocationLookupPage() {
     { label: 'RD Order Day', value: rdOrderDay, note: relativeDay(rdOrderDay) ?? undefined },
     { label: 'RD Delivery Day', value: rdDeliveryDay, note: relativeDay(rdDeliveryDay) ?? undefined },
     { label: 'RD Distributor', value: rdDistributor },
-    { label: 'Address', value: [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') },
+    { label: 'Address', value: addressStr, mapQuery: addressStr || undefined },
     { label: 'Shop Phone', value: locVal(location, 'store_phone') },
     { label: 'Acquisition Date', value: locVal(location, 'acquisition_date'), note: sinceLabel(locVal(location, 'acquisition_date')) ?? undefined },
     ...(inNC ? [{ label: 'NC Inspection Station', value: locVal(location, 'inspection_station_id') }] : []),
@@ -446,6 +453,13 @@ export function LocationLookupPage() {
             <CheckGroup title="Left panel fields" items={sidebar.map((f) => ({ id: f.label, label: f.label }))} hidden={prefs.sidebar} onToggle={(id) => toggleHidden('sidebar', id)} />
             <CheckGroup title="Tank monitor columns" items={TANK_COLS.map((c) => ({ id: c.id, label: c.label }))} hidden={prefs.tank} onToggle={(id) => toggleHidden('tank', id)} />
             <CheckGroup title="Order config columns" items={[...CONFIG_FIXED.map((c) => ({ id: c.id, label: c.label })), ...allConfigMetaKeys.map((k) => ({ id: `meta:${k}`, label: metaLabel(k) }))]} hidden={prefs.config} onToggle={(id) => toggleHidden('config', id)} />
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Options</span>
+              <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer">
+                <input type="checkbox" checked={!!prefs.nonVmiOfflineBtn} onChange={() => setPrefs((p) => ({ ...p, nonVmiOfflineBtn: !p.nonVmiOfflineBtn }))} className="accent-sky" />
+                Use non-VMI tanks for offline email button
+              </label>
+            </div>
           </CardBody>
         </Card>
       )}
@@ -470,6 +484,12 @@ export function LocationLookupPage() {
                       <dd className="text-xs font-body text-navy break-words">
                         {f.value || '—'}
                         {f.note && <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/40 text-navy">{f.note}</span>}
+                        {f.mapQuery && (
+                          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
+                            title="Open in Google Maps" className="ml-1.5 inline-flex items-center align-middle text-inky hover:text-sky">
+                            <MapPin className="w-3.5 h-3.5" />
+                          </a>
+                        )}
                       </dd>
                     </div>
                   ))}
@@ -497,8 +517,11 @@ export function LocationLookupPage() {
                   {tanks.length > 0 && (
                     <button onClick={copyTanks} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
                   )}
-                  {offlineTanks.length > 0 && (
-                    <button onClick={() => setEmailKind('offline')} title="Draft an email for offline monitors" className="text-[10px] font-mono text-[#C0392B] border border-[#C0392B]/40 rounded px-1.5 py-0.5 hover:border-[#C0392B] inline-flex items-center gap-1">✉ Offline ({offlineTanks.length})</button>
+                  {showOfflineBtn && (
+                    <button onClick={() => setEmailKind('offline')} title="Draft an email for offline monitors"
+                      className={`text-[10px] font-mono border rounded px-1.5 py-0.5 inline-flex items-center gap-1 ${vmiOffline.length > 0 ? 'text-[#C0392B] border-[#C0392B]/40 hover:border-[#C0392B]' : 'text-[#E67E22] border-[#E67E22]/40 hover:border-[#E67E22]'}`}>
+                      ✉ Offline ({offlineTanks.length})
+                    </button>
                   )}
                   {!loading && lowVmiFlag && (
                     <button onClick={() => setEmailKind('lowvmi')} title="Draft a low VMI coverage email" className="text-[10px] font-mono text-[#E67E22] border border-[#E67E22]/40 rounded px-1.5 py-0.5 hover:border-[#E67E22] inline-flex items-center gap-1">✉ Low VMI</button>

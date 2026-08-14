@@ -312,16 +312,18 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
               {filtered.length === 0 ? (
                 <tr><td colSpan={order.length + 2} className="px-2 py-6 text-center text-inky/50">No rows match the filters.</td></tr>
               ) : filtered.map((r, idx) => {
-                const band = idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
+                // Opaque bands so the sticky Status/Shop columns share them
+                // (a translucent band lets scrolled columns bleed through).
+                const band = idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
                 return (
                   <tr key={r.id} className={band}>
-                    <td className={`${tdBase} sticky left-0 z-10 bg-cream w-[230px] min-w-[230px]`}>
+                    <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>
                       <div className="flex items-center gap-1">
                         <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
                         <EditSelect bare value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
                       </div>
                     </td>
-                    <td className={`${tdBase} sticky left-[230px] z-10 bg-cream text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
+                    <td className={`${tdBase} sticky left-[230px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
                     {order.map((id) => (
                       <td key={id} className={COL_META[id].wrap ? `${tdBase} whitespace-normal` : tdBase}>{renderCell(id, r)}</td>
                     ))}
