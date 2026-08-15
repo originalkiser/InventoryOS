@@ -438,6 +438,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
 
   return (
     <div className="flex flex-col gap-4">
+      {embedded && shopId && (
+        <div className="sticky top-0 z-20 bg-cream/95 dark:bg-[#0e2638]/95 backdrop-blur border-b border-navy/15 py-1.5 -mx-1 px-1">
+          <span className="text-sm font-heading font-bold text-navy">{shopLabel(shopId)}</span>
+        </div>
+      )}
       {!embedded && (
         <div className="sticky top-0 z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3">
           <div>

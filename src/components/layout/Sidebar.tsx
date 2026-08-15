@@ -155,16 +155,13 @@ function StarButton({ active, onClick }: { active: boolean; onClick: (e: React.M
   return (
     <button
       onClick={onClick}
-      title={active ? 'Remove from favorites' : 'Add to favorites'}
+      title={active ? 'Unpin' : 'Pin to top'}
       className={[
         'flex-shrink-0 transition-all duration-100 rounded p-0.5',
-        active ? 'text-yellow-400 opacity-100' : 'text-[#F2F1E6]/25 opacity-0 group-hover:opacity-100 hover:text-yellow-300',
+        active ? 'text-sky opacity-100' : 'text-[#F2F1E6]/25 opacity-0 group-hover:opacity-100 hover:text-sky',
       ].join(' ')}
     >
-      <svg className="w-3 h-3" fill={active ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-      </svg>
+      <Pin className="w-3.5 h-3.5" fill={active ? 'currentColor' : 'none'} />
     </button>
   )
 }
@@ -218,7 +215,7 @@ function NavItemLink({
             'flex-1 min-w-0',
             isActive
               ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-              : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+              : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
           ].join(' ')
         }
       >
@@ -297,8 +294,8 @@ function FavoritesSection({
   return (
     <div className="pb-1">
       {showLabels && (
-        <div className="px-3 pt-3 pb-1 text-[10px] font-heading text-[#F2F1E6]/35 uppercase tracking-widest">
-          ⭐ Favorites
+        <div className="px-3 pt-3 pb-1 text-[10px] font-heading text-[#F2F1E6]/45 uppercase tracking-widest flex items-center gap-1">
+          <Pin className="w-3 h-3" fill="currentColor" /> Pinned
         </div>
       )}
       {favItems.map((item) => (
@@ -371,7 +368,7 @@ function OutlierExpandableItem({
               'flex-1 min-w-0',
               isActive
                 ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-                : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
             ].join(' ')
           }
         >
@@ -387,7 +384,7 @@ function OutlierExpandableItem({
         {showLabel && reports.length > 0 && (
           <button
             onClick={() => setExpanded(v => !v)}
-            className="flex-shrink-0 mr-1 p-1 rounded text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
+            className="flex-shrink-0 mr-1 p-1 rounded text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
             title={expanded ? 'Collapse reports' : 'Expand reports'}
           >
             <ChevronRight
@@ -410,7 +407,7 @@ function OutlierExpandableItem({
                         'flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs font-heading transition-all duration-100',
                         isActive
                           ? 'text-[#F2F1E6] bg-[#F2F1E6]/8'
-                          : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                          : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
                       ].join(' ')
                     }
                   >
@@ -621,14 +618,14 @@ function UtilityNav({
           onClick={() => setExpanded((e) => !e)}
           className="flex items-center gap-1 text-[10px] font-heading text-[#F2F1E6]/30 uppercase tracking-widest hover:text-[#F2F1E6]/60 transition-colors"
         >
-          <span>Shortcuts</span>
+          <span>General</span>
           <ChevronRight className={['w-3.5 h-3.5 transition-transform', expanded ? 'rotate-90' : ''].join(' ')} />
         </button>
         {onToggleCollapsed && (
           <button
             onClick={onToggleCollapsed}
             title="Collapse sidebar"
-            className="text-[#4F7489] hover:text-[#F2F1E6] transition-colors px-1 py-0.5 rounded hover:bg-[#F2F1E6]/5"
+            className="text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-colors px-1 py-0.5 rounded hover:bg-[#F2F1E6]/5"
           >
             <ChevronsLeft className="w-4 h-4" />
           </button>
@@ -645,7 +642,7 @@ function UtilityNav({
                   'flex items-center gap-2.5 px-2 py-1.5 mx-1 rounded text-xs font-heading transition-all duration-100',
                   isActive
                     ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]'
-                    : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                    : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
                 ].join(' ')
               }
             >
@@ -741,7 +738,7 @@ function QuickAccessGrid({ onNavClick }: { onNavClick?: () => void }) {
               <button
                 onClick={() => trigger(item.id)}
                 title={item.label}
-                className="w-full flex flex-col items-center justify-center gap-1 rounded-lg py-2.5 border border-[#F2F1E6]/10 text-[11px] font-heading text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-all"
+                className="w-full flex flex-col items-center justify-center gap-1 rounded-lg py-2.5 border border-[#F2F1E6]/10 text-[11px] font-heading text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-all"
               >
                 {QA_ICON[item.id]}
                 <span>{item.label}</span>
@@ -1139,7 +1136,7 @@ function CollapsedNav({
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className="flex-1 overflow-y-auto hover-scroll py-2">
         {allItems.filter((i) => i.to).map((item) => (
           <NavLink
             key={item.key}
@@ -1151,7 +1148,7 @@ function CollapsedNav({
                 'flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100',
                 isActive
                   ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]'
-                  : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                  : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
               ].join(' ')
             }
           >
@@ -1165,7 +1162,7 @@ function CollapsedNav({
           <button
             onClick={onToggleCollapsed}
             title="Expand sidebar"
-            className="flex items-center justify-center w-8 h-8 rounded text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
+            className="flex items-center justify-center w-8 h-8 rounded text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 transition-colors"
           >
             <ChevronsRight className="w-4 h-4" />
           </button>
@@ -1185,7 +1182,7 @@ function CollapsedNav({
                   'flex items-center justify-center py-2 mx-1 rounded transition-all duration-100',
                   isActive
                     ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]'
-                    : 'text-[#4F7489] hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                    : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
                 ].join(' ')
               }
             >
@@ -1277,7 +1274,7 @@ function ExpandedSidebar({
       )}
 
       {/* Scrollable nav */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto hover-scroll">
         <FavoritesSection
           favorites={favorites}
           showLabels
@@ -1374,7 +1371,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMo
           <div className="flex items-center justify-center px-3 h-12 border-b border-[#F2F1E6]/8">
             <button
               onClick={onToggleCollapsed}
-              className="text-[#4F7489] hover:text-[#F2F1E6] transition-colors"
+              className="text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-colors"
               aria-label="Expand sidebar"
             >
               <img src={sbIcon} alt="SB" className="w-6 opacity-70" />
