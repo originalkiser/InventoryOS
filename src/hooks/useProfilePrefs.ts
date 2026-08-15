@@ -57,12 +57,18 @@ export function useProfilePref<T>(key: string, def: T): [T, (v: T) => void, bool
   useEffect(() => { if (userId) load(userId) }, [userId, load])
 
   // One-time migration: once the profile is loaded and has no value for this
-  // key, seed it from this device's localStorage so nothing is lost.
+  // key, seed it from this device's localStorage so nothing is lost. Otherwise
+  // mirror the profile value into localStorage so cache-reading consumers pick
+  // up changes made on other devices.
   useEffect(() => {
-    if (!userId || !loaded || prefs[key] !== undefined) return
-    try { const raw = localStorage.getItem(key); if (raw != null) setStore(userId, key, JSON.parse(raw)) } catch { /* ignore */ }
+    if (!userId || !loaded) return
+    if (prefs[key] === undefined) {
+      try { const raw = localStorage.getItem(key); if (raw != null) setStore(userId, key, JSON.parse(raw)) } catch { /* ignore */ }
+    } else {
+      try { localStorage.setItem(key, JSON.stringify(prefs[key])) } catch { /* ignore */ }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, loaded, key])
+  }, [userId, loaded, key, prefs])
 
   const value = (loaded && prefs[key] !== undefined) ? (prefs[key] as T) : cachedOr(key, def)
 

@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { Badge, Button } from '@/components/ui'
 import { LocationDetailView } from './LocationLookupPage'
 
@@ -114,6 +115,7 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
     try { return JSON.parse(localStorage.getItem(POS_KEY) || 'null') } catch { return null }
   })
   const [view, setView] = useState<ViewConfig>(loadView)
+  const [, setViewStored] = useProfilePref<ViewConfig>(VIEW_KEY, DEFAULT_VIEW) // profile-backed cross-device
   const [editing, setEditing] = useState(false)
   const [configId, setConfigId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -153,14 +155,14 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
 
-  function saveView() { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); setEditing(false); setConfigId(null) }
+  function saveView() { setViewStored(view); setEditing(false); setConfigId(null) }
   function updateBlock(id: string, patch: Partial<Block>) {
     setView((v) => ({ ...v, blocks: v.blocks.map((b) => (b.id === id ? { ...b, ...patch } as Block : b)) }))
   }
   function saveColumns(id: string, columns: string[]) {
     setView((v) => {
       const newView = { ...v, blocks: v.blocks.map((b) => b.id === id ? { ...b, columns } as Block : b) }
-      localStorage.setItem(VIEW_KEY, JSON.stringify(newView))
+      setViewStored(newView)
       return newView
     })
   }
