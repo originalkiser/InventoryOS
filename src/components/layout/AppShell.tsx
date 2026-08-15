@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { CheckCircle2, MapPin, MessageSquare, Package, ChevronUp, ChevronDown } from 'lucide-react'
-import { Sidebar, SECTION_ITEMS } from './Sidebar'
+import { Sidebar, SECTION_ITEMS, QUICK_FAB_DEFAULT } from './Sidebar'
 import { TopBar } from './TopBar'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
@@ -34,6 +34,7 @@ export function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [fabCollapsed, setFabCollapsedP] = useProfilePref<boolean>('quickfab:collapsed', false)
+  const [enabledFabs] = useProfilePref<string[]>('quickfab:enabled', QUICK_FAB_DEFAULT)
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
@@ -174,11 +175,11 @@ export function AppShell() {
       {!mobile && (
         <div className="fixed bottom-4 z-30 flex flex-col items-end gap-2" style={{ right: (pushWidth || 0) + 16 }}>
           {!fabCollapsed && [
-            { t: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', on: toggleTasks },
-            { t: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', on: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
-            { t: 'Quick Meeting', icon: <MessageSquare className="w-5 h-5" />, open: meetingMode !== 'hidden', on: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
-            { t: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', on: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
-          ].filter((f) => !f.open).map((f) => <QuickFab key={f.t} title={f.t} onClick={f.on}>{f.icon}</QuickFab>)}
+            { k: 'tasks', t: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', on: toggleTasks },
+            { k: 'lookup', t: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', on: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
+            { k: 'meeting', t: 'Quick Meeting', icon: <MessageSquare className="w-5 h-5" />, open: meetingMode !== 'hidden', on: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
+            { k: 'inventory', t: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', on: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
+          ].filter((f) => !f.open && enabledFabs.includes(f.k)).map((f) => <QuickFab key={f.k} title={f.t} onClick={f.on}>{f.icon}</QuickFab>)}
           <button onClick={() => setFabCollapsedP(!fabCollapsed)} title={fabCollapsed ? 'Show quick access' : 'Hide quick access'} aria-label={fabCollapsed ? 'Show quick access' : 'Hide quick access'}
             className="flex items-center justify-center w-10 h-6 rounded-full bg-navy/80 text-cream shadow-lg hover:bg-navy transition-colors">
             {fabCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}

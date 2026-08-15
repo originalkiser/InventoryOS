@@ -29,6 +29,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useSidebarPrefs } from '@/hooks/useSidebarPrefs'
 import { useDarkMode } from '@/hooks/useDarkMode'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { LocationExclusionsConfig } from './LocationExclusionsConfig'
 import { isAdminOrDeveloper, getRoleLabel } from '@/lib/roles'
@@ -773,9 +774,24 @@ const TIMEZONES = [
 
 // ── Profile Panel (slide-out drawer) ──────────────────────────────────────
 
+// Quick-access hover FABs the user can enable/disable (shown bottom-right).
+export const QUICK_FAB_META: { key: string; label: string }[] = [
+  { key: 'tasks', label: "Today's Tasks" },
+  { key: 'lookup', label: 'Location Lookup' },
+  { key: 'meeting', label: 'Quick Meeting' },
+  { key: 'inventory', label: 'Inventory' },
+]
+export const QUICK_FAB_DEFAULT = QUICK_FAB_META.map((f) => f.key)
+
 function ProfilePanel({ onClose }: { onClose: () => void }) {
   const { profile, setProfile } = useAuthStore()
   const { dark, toggle } = useDarkMode()
+  const isAdmin = isAdminOrDeveloper(profile?.role)
+  const allowedSections = useDeptAccess()
+  const [enabledFabs, setEnabledFabs] = useProfilePref<string[]>('quickfab:enabled', QUICK_FAB_DEFAULT)
+  const [hiddenSections, setHiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
+  const accessibleSections = Object.keys(SECTION_ITEMS).filter((k) => (k === 'global-config' ? isAdmin : allowedSections !== null ? allowedSections.has(k) : true))
+  const sectionLabel = (k: string) => k.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
   // Schedule state — initialized from profile
   const [workStart, setWorkStart] = useState(profile?.work_start_time?.slice(0, 5) ?? '08:00')
@@ -914,6 +930,34 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
 
         {/* Location Exclusions */}
         <LocationExclusionsConfig />
+
+        {/* Quick Access hover buttons */}
+        <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-1">Quick Access Buttons</div>
+          <p className="text-[10px] font-mono text-inky/60 dark:text-[#F2F1E6]/50 mb-2">Which hover buttons show in the bottom-right corner.</p>
+          <div className="flex flex-col gap-1.5">
+            {QUICK_FAB_META.map((f) => (
+              <label key={f.key} className="flex items-center gap-2 text-xs font-body text-navy dark:text-[#F2F1E6] cursor-pointer">
+                <input type="checkbox" checked={enabledFabs.includes(f.key)} onChange={() => setEnabledFabs(enabledFabs.includes(f.key) ? enabledFabs.filter((x) => x !== f.key) : [...enabledFabs, f.key])} className="accent-sky" />
+                {f.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Sidebar sections */}
+        <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
+          <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-1">Sidebar Sections</div>
+          <p className="text-[10px] font-mono text-inky/60 dark:text-[#F2F1E6]/50 mb-2">Uncheck a section to hide it from the sidebar.</p>
+          <div className="flex flex-col gap-1.5">
+            {accessibleSections.map((k) => (
+              <label key={k} className="flex items-center gap-2 text-xs font-body text-navy dark:text-[#F2F1E6] cursor-pointer">
+                <input type="checkbox" checked={!hiddenSections.includes(k)} onChange={() => setHiddenSections(hiddenSections.includes(k) ? hiddenSections.filter((x) => x !== k) : [...hiddenSections, k])} className="accent-sky" />
+                {sectionLabel(k)}
+              </label>
+            ))}
+          </div>
+        </div>
 
         {/* Daily Schedule */}
         <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
@@ -1121,11 +1165,13 @@ function CollapsedNav({
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
+  const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
   // Hover flyout label — rendered via portal so it escapes the sidebar's clip.
   const [flyout, setFlyout] = useState<{ label: string; top: number } | null>(null)
   const showFlyout = (e: React.MouseEvent, label: string) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setFlyout({ label, top: r.top + r.height / 2 }) }
   const allItems = Object.entries(SECTION_ITEMS)
     .filter(([k]) => {
+      if (hiddenSections.includes(k)) return false
       if (k === 'global-config') return isAdmin
       if (allowedSections !== null) return allowedSections.has(k)
       return true
@@ -1240,6 +1286,7 @@ function ExpandedSidebar({
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
+  const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
 
   const {
     sectionOrder,
@@ -1255,11 +1302,12 @@ function ExpandedSidebar({
 
   const visibleSectionOrder = useMemo(
     () => sectionOrder.filter((k) => {
+      if (hiddenSections.includes(k)) return false
       if (k === 'global-config') return isAdmin
       if (allowedSections !== null) return allowedSections.has(k)
       return true
     }),
-    [sectionOrder, isAdmin, allowedSections]
+    [sectionOrder, isAdmin, allowedSections, hiddenSections]
   )
 
   const sensors = useSensors(

@@ -16,6 +16,7 @@ export function LocationExclusionsConfig() {
   const [modeSel, setModeSel] = useState<'exclude' | 'only'>('exclude')
   // Sync the mode toggle to the selected column's existing rule.
   useEffect(() => { setModeSel(rules.find((r) => r.field === field)?.mode ?? 'exclude') }, [field, rules])
+  const [open, setOpen] = useState(false) // collapsed by default on profile open
 
   const currentValues = useMemo(
     () => rules.find((r) => r.field === field)?.values ?? [],
@@ -78,9 +79,14 @@ export function LocationExclusionsConfig() {
 
   return (
     <div className="px-4 py-4 border-b border-navy/10 dark:border-[#F2F1E6]/10">
-      <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-1">
-        Location Exclusions
-      </div>
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between gap-2 text-left">
+        <span className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest">Location Exclusions</span>
+        <span className="text-[10px] font-mono text-inky/50 dark:text-[#F2F1E6]/40 flex items-center gap-1">
+          {hiddenCount > 0 ? `${hiddenCount} hidden` : 'none hidden'} {open ? '▾' : '▸'}
+        </span>
+      </button>
+      {open && (
+      <div className="mt-3">
       <p className="text-[10px] font-mono text-inky/60 dark:text-[#F2F1E6]/50 mb-3">
         Hide locations from the Locations page, Lookup, and dashboard. Orders, counts, and config are unaffected.
       </p>
@@ -175,6 +181,8 @@ export function LocationExclusionsConfig() {
           </span>
         )}
       </div>
+      </div>
+      )}
     </div>
   )
 }
