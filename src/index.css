@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Shared UI animations (referenced via Tailwind arbitrary animate-[...]). */
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fabRise { from { opacity: 0; transform: translateY(10px) scale(0.9) } to { opacity: 1; transform: translateY(0) scale(1) } }
+@keyframes panelIn { from { opacity: 0; transform: translateY(8px) scale(0.98) } to { opacity: 1; transform: translateY(0) scale(1) } }
+
 @font-face {
   font-family: 'Chakra Petch';
   src: url('./assets/fonts/ChakraPetch-Regular.ttf') format('truetype');

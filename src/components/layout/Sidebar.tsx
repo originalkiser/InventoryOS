@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom'
 import { useInventoryAlerts, useInventoryAlertsStore } from '@/hooks/useInventoryAlerts'
 import {
@@ -1120,6 +1121,9 @@ function CollapsedNav({
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
+  // Hover flyout label — rendered via portal so it escapes the sidebar's clip.
+  const [flyout, setFlyout] = useState<{ label: string; top: number } | null>(null)
+  const showFlyout = (e: React.MouseEvent, label: string) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setFlyout({ label, top: r.top + r.height / 2 }) }
   const allItems = Object.entries(SECTION_ITEMS)
     .filter(([k]) => {
       if (k === 'global-config') return isAdmin
@@ -1142,7 +1146,8 @@ function CollapsedNav({
             key={item.key}
             to={item.to!}
             onClick={onNavClick}
-            title={item.label}
+            onMouseEnter={(e) => showFlyout(e, item.label)}
+            onMouseLeave={() => setFlyout(null)}
             className={({ isActive }) =>
               [
                 'flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100',
@@ -1176,7 +1181,8 @@ function CollapsedNav({
               key={item.key}
               to={item.to}
               onClick={onNavClick}
-              title={item.label}
+              onMouseEnter={(e) => showFlyout(e, item.label)}
+              onMouseLeave={() => setFlyout(null)}
               className={({ isActive }) =>
                 [
                   'flex items-center justify-center py-2 mx-1 rounded transition-all duration-100',
@@ -1200,6 +1206,13 @@ function CollapsedNav({
           {initials}
         </div>
       </button>
+      {flyout && createPortal(
+        <div style={{ top: flyout.top, left: 60 }}
+          className="fixed -translate-y-1/2 z-[60] bg-[#002745] text-[#F2F1E6] text-xs font-heading px-2.5 py-1 rounded-md shadow-xl border border-[#F2F1E6]/15 pointer-events-none whitespace-nowrap animate-[fadeIn_120ms_ease-out]">
+          {flyout.label}
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }

@@ -205,7 +205,7 @@ export function AppShell() {
 function QuickFab({ title, onClick, children }: { title: string; onClick: () => void; children: ReactNode }) {
   return (
     <button onClick={onClick} title={title} aria-label={title}
-      className="group flex items-center h-10 rounded-full bg-navy text-cream shadow-lg px-2.5 hover:bg-navy/90 transition-colors">
+      className="group flex items-center h-10 rounded-full bg-navy text-cream shadow-lg px-2.5 hover:bg-navy/90 transition-colors animate-[fabRise_200ms_ease-out]">
       {children}
       <span className="max-w-0 group-hover:max-w-[160px] overflow-hidden whitespace-nowrap text-xs font-heading transition-[max-width,margin] duration-200 group-hover:ml-2">{title}</span>
     </button>

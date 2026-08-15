@@ -190,7 +190,7 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
 
   return (
     <div ref={panelRef} style={panelStyle}
-      className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:bg-[#0e2638] dark:border-[#C4DAE6]/20 shadow-2xl">
+      className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:bg-[#0e2638] dark:border-[#C4DAE6]/20 shadow-2xl animate-[panelIn_160ms_ease-out]">
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
       {/* header */}

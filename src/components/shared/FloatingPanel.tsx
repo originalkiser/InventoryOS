@@ -74,7 +74,7 @@ export function FloatingPanel({
     : { position: 'fixed', right, bottom: clampedBottom, width, height: Math.min(height, maxPanelHeight), maxHeight: maxPanelHeight, zIndex: 65 }
 
   return (
-    <div style={style} className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:bg-[#0e2638] dark:border-[#C4DAE6]/20 shadow-2xl">
+    <div style={style} className="flex flex-col overflow-hidden rounded-lg border border-navy/40 bg-cream dark:bg-[#0e2638] dark:border-[#C4DAE6]/20 shadow-2xl animate-[panelIn_160ms_ease-out]">
       {!mobile && <div onMouseDown={startResize} className="absolute left-0 top-0 z-10 h-3 w-3 cursor-nwse-resize" title="Drag to resize" />}
 
       <div onMouseDown={startMove} className={['flex items-center justify-between bg-[#1a5c87] border-b border-[#1a5c87]/40 px-3 py-2', (mobile || docked) ? '' : 'cursor-move'].join(' ')}>
