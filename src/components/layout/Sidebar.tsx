@@ -1166,12 +1166,19 @@ function CollapsedNav({
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
   const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
+  const { sectionCollapsed } = useSidebarPrefs()
+  // Mirror the General (utility) section's expanded/pinned state so the collapsed
+  // rail shows exactly what was visible in the expanded sidebar.
+  const genExpanded = (() => { try { return localStorage.getItem('sb:sc:expanded') !== 'false' } catch { return true } })()
+  const genPinned: string[] = (() => { try { return JSON.parse(localStorage.getItem('sb:sc:pinned') || '[]') } catch { return [] } })()
+  const shownUtility = genExpanded ? UTILITY_ITEMS : UTILITY_ITEMS.filter((i) => genPinned.includes(i.key))
   // Hover flyout label — rendered via portal so it escapes the sidebar's clip.
   const [flyout, setFlyout] = useState<{ label: string; top: number } | null>(null)
   const showFlyout = (e: React.MouseEvent, label: string) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setFlyout({ label, top: r.top + r.height / 2 }) }
   const allItems = Object.entries(SECTION_ITEMS)
     .filter(([k]) => {
       if (hiddenSections.includes(k)) return false
+      if (sectionCollapsed[k]) return false // only show items from expanded sections
       if (k === 'global-config') return isAdmin
       if (allowedSections !== null) return allowedSections.has(k)
       return true
@@ -1221,7 +1228,7 @@ function CollapsedNav({
       )}
 
       <div className="border-t border-[#F2F1E6]/8 py-1">
-        {UTILITY_ITEMS.map((item) =>
+        {shownUtility.map((item) =>
           item.to ? (
             <NavLink
               key={item.key}

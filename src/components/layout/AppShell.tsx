@@ -174,12 +174,15 @@ export function AppShell() {
           its panel is open; collapses to a nub. */}
       {!mobile && (
         <div className="fixed bottom-4 z-30 flex flex-col items-end gap-2" style={{ right: (pushWidth || 0) + 16 }}>
-          {!fabCollapsed && [
-            { k: 'tasks', t: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', on: toggleTasks },
-            { k: 'lookup', t: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', on: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
-            { k: 'meeting', t: 'Quick Meeting', icon: <MessageSquare className="w-5 h-5" />, open: meetingMode !== 'hidden', on: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
-            { k: 'inventory', t: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', on: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
-          ].filter((f) => !f.open && enabledFabs.includes(f.k)).map((f) => <QuickFab key={f.k} title={f.t} onClick={f.on}>{f.icon}</QuickFab>)}
+          {/* Buttons stay mounted and slide down/up so collapse/expand animates. */}
+          <div className={`flex flex-col items-end gap-2 origin-bottom transition-all duration-200 ease-out ${fabCollapsed ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
+            {[
+              { k: 'tasks', t: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', on: toggleTasks },
+              { k: 'lookup', t: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', on: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
+              { k: 'meeting', t: 'Quick Meeting', icon: <MessageSquare className="w-5 h-5" />, open: meetingMode !== 'hidden', on: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
+              { k: 'inventory', t: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', on: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
+            ].filter((f) => !f.open && enabledFabs.includes(f.k)).map((f) => <QuickFab key={f.k} title={f.t} onClick={f.on}>{f.icon}</QuickFab>)}
+          </div>
           <button onClick={() => setFabCollapsedP(!fabCollapsed)} title={fabCollapsed ? 'Show quick access' : 'Hide quick access'} aria-label={fabCollapsed ? 'Show quick access' : 'Hide quick access'}
             className="flex items-center justify-center w-10 h-6 rounded-full bg-navy/80 text-cream shadow-lg hover:bg-navy transition-colors">
             {fabCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}

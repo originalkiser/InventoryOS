@@ -614,19 +614,12 @@ export function TopBar({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
-      ) : (
-        <>
-          <span className="font-heading font-bold text-[#F2F1E6] text-sm tracking-widest uppercase whitespace-nowrap">
-            Strickland Brothers
-          </span>
-          <div className="w-px h-5 bg-inky/40 flex-shrink-0" />
-        </>
-      )}
+      ) : null}
 
-      {/* Stat pills — scrollable on mobile, wrapping on desktop */}
+      {/* Stat pills — scrollable on mobile, centered + wrapping on desktop */}
       <div className={[
         'flex items-center gap-2 flex-1 min-w-0',
-        mobile ? 'overflow-x-auto flex-nowrap' : 'flex-wrap',
+        mobile ? 'overflow-x-auto flex-nowrap' : 'flex-wrap justify-center',
       ].join(' ')}>
         {visiblePills.map((pill) => (
           <button

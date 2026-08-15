@@ -439,7 +439,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   return (
     <div className="flex flex-col gap-4">
       {embedded && (
-        <div className="sticky top-0 z-30 bg-cream dark:bg-[#0e2638] border-b border-navy/20 -mt-2 -mx-2 px-2 py-2">
+        <div className="sticky top-0 z-30 bg-cream dark:bg-[#0e2638] border-b border-navy/20 shadow-sm -mt-2 -mx-2 px-2 pt-2 pb-2">
           <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" />
         </div>
       )}

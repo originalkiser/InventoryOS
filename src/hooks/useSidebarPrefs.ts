@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect } from 'react'
+import { create } from 'zustand'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -34,23 +35,35 @@ async function upsertPrefs(userId: string, data: Record<string, unknown>) {
   }
 }
 
-export function useSidebarPrefs() {
-  const { user } = useAuthStore()
-  const [prefs, setPrefs] = useState<SidebarPrefs>(DEFAULT_PREFS)
+// Shared store so prefs load ONCE per user. Previously this was per-hook state,
+// so re-mounting the sidebar (expand from collapsed) re-fetched from defaults and
+// briefly showed the wrong section-collapsed state before snapping to saved.
+interface State extends SidebarPrefs {
+  loadedFor: string | null
+  userId: string | null
+  load: (userId: string) => void
+  setSectionOrder: (v: string[]) => void
+  toggleSection: (key: string) => void
+  toggleFavorite: (key: string) => void
+  setFavoritesOrder: (v: string[]) => void
+  setUtilityNavOrder: (v: string[]) => void
+  setItemOrder: (sectionKey: string, items: string[]) => void
+}
 
-  useEffect(() => {
-    if (!user) return
+const useStore = create<State>((set, get) => ({
+  ...DEFAULT_PREFS,
+  loadedFor: null,
+  userId: null,
+  load: (userId) => {
+    if (get().loadedFor === userId) return
+    set({ loadedFor: userId, userId })
     const sb = supabase as any
-    sb.schema('core').from('user_sidebar_prefs')
-      .select('*')
-      .eq('user_id', user.id)
-      .maybeSingle()
+    sb.schema('core').from('user_sidebar_prefs').select('*').eq('user_id', userId).maybeSingle()
       .then(({ data }: any) => {
         if (!data) return
-        setPrefs({
+        set({
           sectionOrder: data.section_order?.length
             ? [
-                // Respect saved order; append any new default sections at the end
                 ...data.section_order.filter((k: string) => DEFAULT_SECTION_ORDER.includes(k)),
                 ...DEFAULT_SECTION_ORDER.filter((k) => !data.section_order.includes(k)),
               ]
@@ -62,60 +75,28 @@ export function useSidebarPrefs() {
         })
       })
       .catch(() => {})
-  }, [user?.id])
+  },
+  setSectionOrder: (sectionOrder) => { set({ sectionOrder }); const u = get().userId; if (u) upsertPrefs(u, { section_order: sectionOrder }) },
+  toggleSection: (key) => { const sectionCollapsed = { ...get().sectionCollapsed, [key]: !get().sectionCollapsed[key] }; set({ sectionCollapsed }); const u = get().userId; if (u) upsertPrefs(u, { section_collapsed: sectionCollapsed }) },
+  toggleFavorite: (itemKey) => { const cur = get().favorites; const favorites = cur.includes(itemKey) ? cur.filter((k) => k !== itemKey) : [...cur, itemKey]; set({ favorites }); const u = get().userId; if (u) upsertPrefs(u, { favorites }) },
+  setFavoritesOrder: (favorites) => { set({ favorites }); const u = get().userId; if (u) upsertPrefs(u, { favorites }) },
+  setUtilityNavOrder: (utilityNavOrder) => { set({ utilityNavOrder }); const u = get().userId; if (u) upsertPrefs(u, { utility_nav_order: utilityNavOrder }) },
+  setItemOrder: (sectionKey, items) => { const itemOrder = { ...get().itemOrder, [sectionKey]: items }; set({ itemOrder }); const u = get().userId; if (u) upsertPrefs(u, { item_order: itemOrder }) },
+}))
 
-  const setSectionOrder = useCallback((sectionOrder: string[]) => {
-    setPrefs((p) => ({ ...p, sectionOrder }))
-    if (user) upsertPrefs(user.id, { section_order: sectionOrder })
-  }, [user])
-
-  const toggleSection = useCallback((key: string) => {
-    setPrefs((p) => {
-      const sectionCollapsed = { ...p.sectionCollapsed, [key]: !p.sectionCollapsed[key] }
-      if (user) upsertPrefs(user.id, { section_collapsed: sectionCollapsed })
-      return { ...p, sectionCollapsed }
-    })
-  }, [user])
-
-  const toggleFavorite = useCallback((itemKey: string) => {
-    setPrefs((p) => {
-      const favorites = p.favorites.includes(itemKey)
-        ? p.favorites.filter((k) => k !== itemKey)
-        : [...p.favorites, itemKey]
-      if (user) upsertPrefs(user.id, { favorites })
-      return { ...p, favorites }
-    })
-  }, [user])
-
-  const setFavoritesOrder = useCallback((favorites: string[]) => {
-    setPrefs((p) => ({ ...p, favorites }))
-    if (user) upsertPrefs(user.id, { favorites })
-  }, [user])
-
-  const setUtilityNavOrder = useCallback((utilityNavOrder: string[]) => {
-    setPrefs((p) => ({ ...p, utilityNavOrder }))
-    if (user) upsertPrefs(user.id, { utility_nav_order: utilityNavOrder })
-  }, [user])
-
-  const setItemOrder = useCallback((sectionKey: string, items: string[]) => {
-    setPrefs((p) => {
-      const itemOrder = { ...p.itemOrder, [sectionKey]: items }
-      if (user) upsertPrefs(user.id, { item_order: itemOrder })
-      return { ...p, itemOrder }
-    })
-  }, [user])
-
-  return {
-    sectionOrder: prefs.sectionOrder,
-    sectionCollapsed: prefs.sectionCollapsed,
-    itemOrder: prefs.itemOrder,
-    favorites: prefs.favorites,
-    utilityNavOrder: prefs.utilityNavOrder,
-    setSectionOrder,
-    toggleSection,
-    toggleFavorite,
-    setFavoritesOrder,
-    setUtilityNavOrder,
-    setItemOrder,
-  }
+export function useSidebarPrefs() {
+  const { user } = useAuthStore()
+  useEffect(() => { if (user?.id) useStore.getState().load(user.id) }, [user?.id])
+  const sectionOrder = useStore((s) => s.sectionOrder)
+  const sectionCollapsed = useStore((s) => s.sectionCollapsed)
+  const itemOrder = useStore((s) => s.itemOrder)
+  const favorites = useStore((s) => s.favorites)
+  const utilityNavOrder = useStore((s) => s.utilityNavOrder)
+  const setSectionOrder = useStore((s) => s.setSectionOrder)
+  const toggleSection = useStore((s) => s.toggleSection)
+  const toggleFavorite = useStore((s) => s.toggleFavorite)
+  const setFavoritesOrder = useStore((s) => s.setFavoritesOrder)
+  const setUtilityNavOrder = useStore((s) => s.setUtilityNavOrder)
+  const setItemOrder = useStore((s) => s.setItemOrder)
+  return { sectionOrder, sectionCollapsed, itemOrder, favorites, utilityNavOrder, setSectionOrder, toggleSection, toggleFavorite, setFavoritesOrder, setUtilityNavOrder, setItemOrder }
 }

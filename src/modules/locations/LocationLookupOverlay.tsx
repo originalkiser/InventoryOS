@@ -237,8 +237,8 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
         </div>
       )}
 
-      {/* blocks */}
-      <div className="flex-1 overflow-auto p-3">
+      {/* blocks — no top padding so a sticky block header sits flush under the search bar */}
+      <div className="flex-1 overflow-auto px-3 pb-3 pt-0">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={view.blocks.map((b) => b.id)} strategy={verticalListSortingStrategy}>
             <div className="flex flex-col gap-3">
