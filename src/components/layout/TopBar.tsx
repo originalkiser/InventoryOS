@@ -635,47 +635,48 @@ export function TopBar({
           </button>
         ))}
 
-        {/* Pill config gear */}
-        <div className="relative flex-shrink-0" ref={pillConfigRef}>
-          <button
-            onClick={() => setPillConfigOpen((v) => !v)}
-            title="Customize pills"
-            className="flex items-center justify-center w-6 h-6 rounded text-[#F2F1E6]/30 hover:text-[#F2F1E6]/70 hover:bg-[#F2F1E6]/10 transition-all"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-          {pillConfigOpen && (
-            <div className="absolute left-0 top-full mt-1 z-40 w-52 bg-[#002745] border border-[#F2F1E6]/20 rounded shadow-xl p-2 flex flex-col gap-1">
-              <div className="px-1 pb-1 border-b border-[#F2F1E6]/10 mb-0.5">
-                <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Customize Pills</span>
-              </div>
-              <DndContext sensors={pillDndSensors} collisionDetection={closestCenter} onDragEnd={handlePillDragEnd}>
-                <SortableContext items={pillPrefs.order} strategy={verticalListSortingStrategy}>
-                  {pillPrefs.order.filter((k) => ALL_PILL_KEYS.includes(k)).map((key) => (
-                    <SortablePillRow
-                      key={key}
-                      id={key}
-                      label={PILL_LABELS[key]}
-                      visible={!pillPrefs.hidden.includes(key)}
-                      onToggle={() => togglePillHidden(key)}
-                    />
-                  ))}
-                </SortableContext>
-              </DndContext>
-              <div className="border-t border-[#F2F1E6]/10 mt-1 pt-1">
-                <button
-                  onClick={resetPillPrefs}
-                  className="w-full text-left px-2 py-1 text-[10px] font-mono text-[#F2F1E6]/40 hover:text-[#F2F1E6]/80 transition-colors rounded hover:bg-[#F2F1E6]/5"
-                >
-                  Reset to Default
-                </button>
-              </div>
+      </div>
+
+      {/* Pill config gear — next to notifications */}
+      <div className="relative flex-shrink-0" ref={pillConfigRef}>
+        <button
+          onClick={() => setPillConfigOpen((v) => !v)}
+          title="Customize pills"
+          className="flex items-center justify-center w-7 h-7 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-all"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+        {pillConfigOpen && (
+          <div className="absolute right-0 top-full mt-1 z-40 w-52 bg-[#002745] border border-[#F2F1E6]/20 rounded shadow-xl p-2 flex flex-col gap-1">
+            <div className="px-1 pb-1 border-b border-[#F2F1E6]/10 mb-0.5">
+              <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Customize Pills</span>
             </div>
-          )}
-        </div>
+            <DndContext sensors={pillDndSensors} collisionDetection={closestCenter} onDragEnd={handlePillDragEnd}>
+              <SortableContext items={pillPrefs.order} strategy={verticalListSortingStrategy}>
+                {pillPrefs.order.filter((k) => ALL_PILL_KEYS.includes(k)).map((key) => (
+                  <SortablePillRow
+                    key={key}
+                    id={key}
+                    label={PILL_LABELS[key]}
+                    visible={!pillPrefs.hidden.includes(key)}
+                    onToggle={() => togglePillHidden(key)}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+            <div className="border-t border-[#F2F1E6]/10 mt-1 pt-1">
+              <button
+                onClick={resetPillPrefs}
+                className="w-full text-left px-2 py-1 text-[10px] font-mono text-[#F2F1E6]/40 hover:text-[#F2F1E6]/80 transition-colors rounded hover:bg-[#F2F1E6]/5"
+              >
+                Reset to Default
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Notifications */}

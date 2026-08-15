@@ -1166,7 +1166,10 @@ function CollapsedNav({
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
   const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
-  const { sectionCollapsed } = useSidebarPrefs()
+  const { sectionCollapsed, favorites } = useSidebarPrefs()
+  // Pinned items stay visible on the collapsed rail too.
+  const itemByKey = useMemo(() => { const m = new Map<string, NavItem>(); for (const items of Object.values(SECTION_ITEMS)) for (const it of items) m.set(it.key, it); for (const it of UTILITY_ITEMS) m.set(it.key, it); return m }, [])
+  const favItems = favorites.map((k) => itemByKey.get(k)).filter((i): i is NavItem => !!i)
   // Mirror the General (utility) section's expanded/pinned state so the collapsed
   // rail shows exactly what was visible in the expanded sidebar.
   const genExpanded = (() => { try { return localStorage.getItem('sb:sc:expanded') !== 'false' } catch { return true } })()
@@ -1194,6 +1197,28 @@ function CollapsedNav({
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
       <div className="flex-1 overflow-y-auto hover-scroll py-2">
+        {favItems.length > 0 && (
+          <>
+            {favItems.filter((i) => i.to).map((item) => (
+              <NavLink
+                key={`fav-${item.key}`}
+                to={item.to!}
+                onClick={onNavClick}
+                onMouseEnter={(e) => showFlyout(e, item.label)}
+                onMouseLeave={() => setFlyout(null)}
+                className={({ isActive }) =>
+                  [
+                    'flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100',
+                    isActive ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]' : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                  ].join(' ')
+                }
+              >
+                {ICONS[item.key] ?? ICONS.dashboard}
+              </NavLink>
+            ))}
+            <div className="mx-2 my-1 border-t border-[#F2F1E6]/10" />
+          </>
+        )}
         {allItems.filter((i) => i.to).map((item) => (
           <NavLink
             key={item.key}
@@ -1336,8 +1361,8 @@ function ExpandedSidebar({
     <>
       {/* Header */}
       {showHeader && (
-        <div className="flex items-center px-3 h-12 border-b border-[#F2F1E6]/8 flex-shrink-0">
-          <span className="text-sm font-heading font-bold text-[#F2F1E6] tracking-wide uppercase">Strickland Brothers</span>
+        <div className="flex items-center px-3 h-12 border-b border-[#F2F1E6]/8 flex-shrink-0 overflow-hidden">
+          <span className="text-sm font-heading font-bold text-[#F2F1E6] tracking-wide uppercase whitespace-nowrap animate-[swipeRight_260ms_ease-out]">Strickland Brothers</span>
         </div>
       )}
 
