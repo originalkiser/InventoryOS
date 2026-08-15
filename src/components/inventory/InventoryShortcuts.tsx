@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
@@ -6,21 +6,20 @@ import { CSS } from '@dnd-kit/utilities'
 import { GripVertical } from 'lucide-react'
 import { SECTION_ITEMS, ICONS, type NavItem } from '@/components/layout/Sidebar'
 import { useInventoryAlertsStore } from '@/hooks/useInventoryAlerts'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 
-const ORDER_KEY = 'dashboard:inv-shortcuts'
 const ITEMS = SECTION_ITEMS.inventory.filter((i) => i.key !== 'dashboard' && i.to)
 const DEFAULT_ORDER = ITEMS.map((i) => i.key)
 const byKey = new Map(ITEMS.map((i) => [i.key, i]))
 
 // Reorderable quick-access buttons for the inventory sub-pages (Dashboard).
+// Order follows the user across devices (profile-backed).
 export function InventoryShortcuts() {
   const navigate = useNavigate()
   const [customize, setCustomize] = useState(false)
-  const [order, setOrder] = useState<string[]>(() => {
-    try { const s = JSON.parse(localStorage.getItem(ORDER_KEY) || 'null'); if (Array.isArray(s)) { const k = s.filter((x: string) => byKey.has(x)); return [...k, ...DEFAULT_ORDER.filter((x) => !k.includes(x))] } } catch { /* ignore */ }
-    return DEFAULT_ORDER
-  })
-  const persist = (next: string[]) => { setOrder(next); try { localStorage.setItem(ORDER_KEY, JSON.stringify(next)) } catch { /* ignore */ } }
+  const [orderPref, setOrderPref] = useProfilePref<string[]>('dashboard:inv-shortcuts', DEFAULT_ORDER)
+  const order = useMemo(() => { const k = orderPref.filter((x) => byKey.has(x)); return [...k, ...DEFAULT_ORDER.filter((x) => !k.includes(x))] }, [orderPref])
+  const persist = (next: string[]) => setOrderPref(next)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
   const shown = order.map((k) => byKey.get(k)).filter(Boolean) as NavItem[]
   const alertCount = useInventoryAlertsStore((s) => s.derivedCount)

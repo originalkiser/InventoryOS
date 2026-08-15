@@ -4,6 +4,7 @@ import { CheckCircle2, MapPin, MessageSquare, Package, ChevronUp, ChevronDown } 
 import { Sidebar, SECTION_ITEMS } from './Sidebar'
 import { TopBar } from './TopBar'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
 import { InventoryOverlay } from '@/components/inventory/InventoryOverlay'
@@ -32,8 +33,7 @@ export function AppShell() {
   const [meetingWidth, setMeetingWidth] = useState(() => Number(localStorage.getItem(MEETING_WIDTH_KEY)) || 460)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [fabCollapsed, setFabCollapsed] = useState(() => localStorage.getItem('quickfab:collapsed') === '1')
-  const setFabCollapsedP = (v: boolean) => { setFabCollapsed(v); localStorage.setItem('quickfab:collapsed', v ? '1' : '0') }
+  const [fabCollapsed, setFabCollapsedP] = useProfilePref<boolean>('quickfab:collapsed', false)
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
