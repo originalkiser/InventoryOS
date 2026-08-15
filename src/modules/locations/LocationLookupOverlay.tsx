@@ -247,7 +247,7 @@ function LookupPanel({ mode, width, mobile, topOffset = 48, sidebarWidth = 0, on
                     ? <PillsBlock block={b} editing={editing && configId === b.id} onChange={(p) => updateBlock(b.id, p)} onFilter={setActiveFilter} />
                     : b.type === 'table'
                     ? <TableBlock block={b} editing={editing && configId === b.id} search={search} activeFilter={activeFilter} onChange={(p) => updateBlock(b.id, p)} onSaveColumns={(cols) => saveColumns(b.id, cols)} />
-                    : <div className="flex flex-col gap-2"><div className="text-[11px] font-heading uppercase tracking-wide text-inky">{b.title}</div><LocationDetailView embedded /></div>}
+                    : <LocationDetailView embedded />}
                 </BlockWrap>
               ))}
               {view.blocks.length === 0 && <p className="py-6 text-center text-xs font-body italic text-inky">No blocks. Add one below.</p>}

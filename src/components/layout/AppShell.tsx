@@ -168,10 +168,10 @@ export function AppShell() {
         </div>
       </div>
 
-      {/* Quick-access FABs — only when the sidebar is collapsed (the expanded
-          sidebar has its own quick-access grid). Bottom-right stack, labels on
-          hover; a button hides while its panel is open; collapses to a nub. */}
-      {sidebarCollapsed && !mobile && (
+      {/* Quick-access FABs — always available on desktop now that the in-sidebar
+          grid is gone. Bottom-right stack, labels on hover; a button hides while
+          its panel is open; collapses to a nub. */}
+      {!mobile && (
         <div className="fixed bottom-4 z-30 flex flex-col items-end gap-2" style={{ right: (pushWidth || 0) + 16 }}>
           {!fabCollapsed && [
             { t: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', on: toggleTasks },

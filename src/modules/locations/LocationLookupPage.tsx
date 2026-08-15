@@ -438,9 +438,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
 
   return (
     <div className="flex flex-col gap-4">
-      {embedded && shopId && (
-        <div className="sticky top-0 z-20 bg-cream/95 dark:bg-[#0e2638]/95 backdrop-blur border-b border-navy/15 py-1.5 -mx-1 px-1">
-          <span className="text-sm font-heading font-bold text-navy">{shopLabel(shopId)}</span>
+      {embedded && (
+        <div className="sticky top-0 z-30 bg-cream dark:bg-[#0e2638] border-b border-navy/20 -mt-2 -mx-2 px-2 py-2">
+          <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" />
         </div>
       )}
       {!embedded && (
@@ -475,10 +475,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       )}
 
       {!shopId ? (
-        <div className="flex flex-col gap-2 py-4">
-          {embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" />}
-          <p className="text-xs font-mono text-inky/60">{embedded ? 'Pick a shop to see its tanks, config, and issues.' : 'Select a shop above to begin.'}</p>
-        </div>
+        <p className="text-xs font-mono text-inky/60 py-4">{embedded ? 'Pick a shop above to see its tanks, config, and issues.' : 'Select a shop above to begin.'}</p>
       ) : loading ? (
         <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
       ) : error ? (
@@ -489,7 +486,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           <div className={`self-start flex flex-col gap-3 ${embedded ? '' : 'lg:sticky lg:top-[4.5rem]'}`}>
             <Card>
               <CardBody className="flex flex-col gap-2">
-                <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />
+                {!embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />}
                 <dl className="flex flex-col gap-1.5 mt-1">
                   {visibleSidebar.map((f) => (
                     <div key={f.label} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">

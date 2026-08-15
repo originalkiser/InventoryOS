@@ -625,7 +625,7 @@ function UtilityNav({
           <button
             onClick={onToggleCollapsed}
             title="Collapse sidebar"
-            className="text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-colors px-1 py-0.5 rounded hover:bg-[#F2F1E6]/5"
+            className="flex items-center gap-1 text-[#F2F1E6]/70 hover:text-[#F2F1E6] border border-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 bg-[#F2F1E6]/5 hover:bg-[#F2F1E6]/10 transition-colors px-1.5 py-1 rounded"
           >
             <ChevronsLeft className="w-4 h-4" />
           </button>
@@ -1269,7 +1269,7 @@ function ExpandedSidebar({
       {/* Header */}
       {showHeader && (
         <div className="flex items-center px-3 h-12 border-b border-[#F2F1E6]/8 flex-shrink-0">
-          <span className="text-xs font-heading text-[#F2F1E6]/60 tracking-widest uppercase">SB Net</span>
+          <span className="text-sm font-heading font-bold text-[#F2F1E6] tracking-wide uppercase">Strickland Brothers</span>
         </div>
       )}
 
@@ -1313,12 +1313,10 @@ function ExpandedSidebar({
       {/* Profile button */}
       <ProfileButton onOpen={() => setProfileOpen(true)} collapsed={false} />
 
-      {/* Quick Access grid — between profile and logo */}
-      <QuickAccessGrid onNavClick={onNavClick} />
-
-      {/* Logo watermark */}
-      <div className="px-3 py-3 flex justify-center border-t border-[#F2F1E6]/8">
-        <img src={sbLogo} alt="Strickland Brothers" className="w-full max-w-[100px] opacity-40" />
+      {/* Logo watermark + SB Net wordmark */}
+      <div className="px-3 py-3 flex items-center justify-center gap-2 border-t border-[#F2F1E6]/8">
+        <img src={sbLogo} alt="Strickland Brothers" className="max-w-[80px] opacity-40" />
+        <span className="text-xs font-heading text-[#F2F1E6]/50 tracking-widest uppercase">SB Net</span>
       </div>
 
       {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} />}
