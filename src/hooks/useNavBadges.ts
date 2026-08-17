@@ -8,7 +8,9 @@ import { useInventoryAlertsStore } from './useInventoryAlerts'
 // per company and cached. `inventory-alerts` comes from useInventoryAlerts
 // (exclusion + ignore filtered); the rest are computed here.
 
-const isClosed = (s: string | null) => { const n = (s ?? '').toLowerCase(); return n.includes('closed') || n.includes('complete') || n.includes('resolved') }
+// A status counts as closed only when it reads as "closed" or "resolved";
+// anything else (incl. blank / any pending state) is treated as open.
+const isClosed = (s: string | null) => { const n = (s ?? '').toLowerCase(); return n.includes('closed') || n.includes('resolved') }
 
 async function computeTankOfflineShops(companyId: string): Promise<number> {
   const sb = supabase as any

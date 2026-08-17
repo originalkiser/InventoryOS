@@ -24,12 +24,13 @@ const VIEW_KEY = 'location-lookup:view'
 interface TankRow {
   id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null
   on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
+  updated_at?: string | null
   internal?: string // resolved internal product id (manual map → vendor parts)
 }
 interface ConfigRow {
   id: string; vendor_id: string | null; product_id: string | null
   capacity: number | null; order_trigger: number | null; order_limit: number | null
-  metadata: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null; updated_at?: string | null
 }
 interface IssueRow {
   id: string; title: string | null; status_id: string | null; issue_notes: string | null
@@ -44,6 +45,28 @@ const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try 
 const dateTime = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy · h:mm a') } catch { return d } }
 const alignCls = (a: string) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left')
 const metaLabel = (k: string) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+// Newest timestamp across a set of rows (checking several candidate columns),
+// returned as "MM-dd-yyyy" for the "last updated" card callouts. null if none.
+function lastUpdated(rows: Array<Record<string, any>>, keys: string[]): string | null {
+  let best = 0
+  for (const r of rows) for (const k of keys) {
+    const v = r?.[k]; if (!v) continue
+    const t = new Date(v).getTime(); if (!isNaN(t) && t > best) best = t
+  }
+  if (!best) return null
+  try { return format(new Date(best), 'MM-dd-yyyy') } catch { return null }
+}
+
+// Small "Updated MM-DD-YYYY" callout shown under a card header.
+function UpdatedCallout({ date }: { date: string | null }) {
+  if (!date) return null
+  return (
+    <span className="self-start inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/30 text-navy">
+      Updated {date}
+    </span>
+  )
+}
 
 // "2y 3m" / "8m" since a date — used for acquisition age.
 function sinceLabel(dateStr: string): string | null {
@@ -287,6 +310,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     return { ...t, internal: (k && (prodMap[k] || internalMap.get(k))) || t.product_id || '' }
   }), [tankRows, internalMap, prodMap])
 
+  // "Last updated" for the tank card = newest reading/write across its monitors.
+  const tanksUpdated = useMemo(() => lastUpdated(tankRows as any[], ['updated_at', 'inventory_time', 'reading_date']), [tankRows])
+
   // Keepfill tanks first, then non-keepfill — each alpha-sorted by product.
   const sortedTanks = useMemo(() => {
     const byProduct = (a: TankRow, b: TankRow) =>
@@ -367,6 +393,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     return locVal(location, 'rd_distributor')
   }, [supplemental, location])
 
+  const locUpdated = location ? lastUpdated([location as any], ['updated_at', 'last_synced_at']) : null
   const stateVal = locVal(location, 'state')
   const inNC = ['nc', 'north carolina'].includes(stateVal.trim().toLowerCase())
   const rdOrderDay = location ? orderDayFromDelivery(location.reladyne_delivery_day) : ''
@@ -508,6 +535,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   className="mt-1 self-start text-[11px] font-mono text-inky hover:text-sky transition-colors text-left inline-flex items-center gap-1">
                   Open Locations Config <span className="text-[10px]">↗</span>
                 </button>
+                <UpdatedCallout date={locUpdated} />
               </CardBody>
             </Card>
             <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
@@ -537,6 +565,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                     <button onClick={() => setEmailKind('lowvmi')} title="Draft a low VMI coverage email" className="text-[10px] font-mono text-[#E67E22] border border-[#E67E22]/40 rounded px-1.5 py-0.5 hover:border-[#E67E22] inline-flex items-center gap-1">✉ Low VMI</button>
                   )}
                 </div>
+                {tanks.length > 0 && <UpdatedCallout date={tanksUpdated} />}
                 {tanks.length === 0 ? (
                   <p className="text-xs font-mono text-inky/60">No tank monitor readings for this shop.</p>
                 ) : visibleTankCols.length === 0 ? (
@@ -771,6 +800,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
   }, [rows, hidden])
 
   const sortedRows = useMemo(() => applySort(rows, columns, sort), [rows, columns, sort])
+  const updated = useMemo(() => lastUpdated(rows as any[], ['updated_at']), [rows])
 
   return (
     <Card>
@@ -779,6 +809,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
           className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1 self-start">
           {vendor} Order Config ({rows.length}) <span className="text-[10px] text-inky/50">↗</span>
         </button>
+        <UpdatedCallout date={updated} />
         {columns.length === 0 ? (
           <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
         ) : (
