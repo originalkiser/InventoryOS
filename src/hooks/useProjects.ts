@@ -66,6 +66,15 @@ export function useProjects() {
     if (error) { setProjects(snapshot); toast.error(error.message) }
   }
 
+  // Best-effort: location_ids is a newer column that may not exist in
+  // production yet, so this stays decoupled from updateProject (which would
+  // otherwise surface a hard error toast for every project field).
+  function updateProjectLocations(id: string, locationIds: string[]) {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, location_ids: locationIds } : p)))
+    sb.schema('inventory').from('projects').update({ location_ids: locationIds }).eq('id', id)
+      .then(({ error }: any) => { if (error) console.warn('[projects] location_ids save failed (migration pending?):', error.message) })
+  }
+
   async function deleteProject(id: string) {
     const snapshot = projects
     setProjects((prev) => prev.filter((p) => p.id !== id))
@@ -147,7 +156,7 @@ export function useProjects() {
 
   return {
     projects, tasks, loading, companyId, load,
-    addProject, updateProject, deleteProject, restoreProject, hardDeleteProject, reorderProjects,
+    addProject, updateProject, updateProjectLocations, deleteProject, restoreProject, hardDeleteProject, reorderProjects,
     addTask, updateTask, deleteTask, reorderTasks,
   }
 }

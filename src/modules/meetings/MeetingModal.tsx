@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/components/shared/VisibilitySelector'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
+import { LocationMultiSelect } from '@/components/shared/LocationMultiSelect'
 import { Button, Input, Modal } from '@/components/ui'
 import type { MeetingNote, Project, Task } from '@/types'
 import { format } from 'date-fns'
@@ -19,6 +20,7 @@ const EMPTY_FORM = {
   notes: '',
   visibility: 'private' as VisibilityValue,
   links: [] as MeetingLink[],
+  location_ids: [] as string[],
 }
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
@@ -30,7 +32,8 @@ function draftHasContent(f: typeof EMPTY_FORM): boolean {
     stripHtml(f.notes) ||
     (f.title?.trim() && f.title.trim() !== EMPTY_FORM.title) ||
     f.vendor?.trim() || f.category?.trim() ||
-    (f.links?.some((l) => l.label?.trim() || l.url?.trim()))
+    (f.links?.some((l) => l.label?.trim() || l.url?.trim())) ||
+    (f.location_ids?.length ?? 0) > 0
   )
 }
 
@@ -117,6 +120,7 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
         title: existing.title, meeting_date: existing.meeting_date ?? '', meeting_time: existing.meeting_time ?? '',
         vendor: existing.vendor ?? '', category: existing.category ?? '', notes: existing.notes ?? '',
         visibility, links: ((existing as any).links ?? []) as MeetingLink[],
+        location_ids: existing.location_ids ?? [],
       })
       loadMeetingTasks(existing.id)
     } else {
@@ -173,8 +177,8 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
       setEditCreatedBy(myId)
       toast.success('Meeting created')
     }
-    // Best-effort: links column may not exist in all environments yet.
-    if (savedId) sb.schema('inventory').from('meeting_notes').update({ links: form.links }).eq('id', savedId).then(() => {})
+    // Best-effort: links + location_ids columns may not exist in all environments yet.
+    if (savedId) sb.schema('inventory').from('meeting_notes').update({ links: form.links, location_ids: form.location_ids }).eq('id', savedId).then(() => {})
     // Draft is now persisted server-side — drop the local quick-capture cache.
     try { localStorage.removeItem(QUICK_DRAFT_KEY) } catch { /* ignore */ }
     setSaving(false)
@@ -253,6 +257,9 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
             <datalist id="meeting-categories">{distinctCategories.map((c) => <option key={c} value={c} />)}</datalist>
           </div>
         </div>
+
+        <SectionHeader>Locations Discussed</SectionHeader>
+        <LocationMultiSelect selected={form.location_ids} onChange={(ids) => setForm({ ...form, location_ids: ids })} />
 
         <SectionHeader>Meeting Notes</SectionHeader>
         <RichTextEditor value={form.notes} onChange={(html) => setForm({ ...form, notes: html })}

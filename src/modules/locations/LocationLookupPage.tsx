@@ -14,7 +14,7 @@ import { TankEmailModal } from './TankEmailModal'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { orderDayFromDelivery } from '@/lib/orderDay'
-import type { Issue, Location, TankMonitor } from '@/types'
+import type { Issue, Location, MeetingNote, Project, TankMonitor } from '@/types'
 import { format, differenceInCalendarDays, differenceInMonths } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -212,6 +212,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [comms, setComms] = useState<LocationComm[]>([])
   const [commModalOpen, setCommModalOpen] = useState(false)
   const [editingComm, setEditingComm] = useState<Partial<LocationComm> | null>(null)
+  const [mentionedProjects, setMentionedProjects] = useState<Project[]>([])
+  const [mentionedMeetings, setMentionedMeetings] = useState<MeetingNote[]>([])
   const [tankSort, setTankSort] = usePersistedSort('location-lookup:tank-sort')
   const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
   const [offlineTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_offline', TANK_EMAIL_DEFAULT.offline)
@@ -239,7 +241,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     setLoading(true); setError(null)
     const sb = supabase as any
     try {
-      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes] = await Promise.all([
+      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
@@ -249,6 +251,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         sb.schema('inventory').from('exception_reports').select('*').eq('company_id', companyId).eq('location_id', shopId).order('date_of_finding', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('location_comms').select('*').eq('company_id', companyId).eq('location_id', shopId).order('comm_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('core').from('vendor_parts').select('part_number, our_part_number, description').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
+        // Best-effort: location_ids is a newer column that may not exist yet.
+        sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).is('deleted_at', null).contains('location_ids', [shopId]).then((r: any) => r).catch(() => ({ data: [] })),
+        sb.schema('inventory').from('meeting_notes').select('id, title, meeting_date').eq('company_id', companyId).contains('location_ids', [shopId]).order('meeting_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       // Collapse to the newest reading per tank (serial, then system id, then
       // row id) so leftover duplicate readings don't stack or inflate counts.
@@ -269,6 +274,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       setSupplemental((supRes?.data?.data ?? null) as Record<string, string> | null)
       setExceptions((excRes?.data ?? []) as ExceptionReport[])
       setComms((commRes?.data ?? []) as LocationComm[])
+      setMentionedProjects((projRes?.data ?? []) as Project[])
+      setMentionedMeetings((meetRes?.data ?? []) as MeetingNote[])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load location detail')
     } finally {
@@ -573,6 +580,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
             <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />
             <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />
+            <MentionedBox projects={mentionedProjects} meetings={mentionedMeetings}
+              onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
           </div>
 
           {/* Main */}
@@ -800,6 +809,39 @@ function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () =
         </button>
       ))}
       <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Communication</button>
+    </div>
+  )
+}
+
+function MentionedBox({ projects, meetings, onOpenProjects, onOpenMeetings }: {
+  projects: Project[]; meetings: MeetingNote[]; onOpenProjects: () => void; onOpenMeetings: () => void
+}) {
+  if (projects.length === 0 && meetings.length === 0) return null
+  return (
+    <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3 flex flex-col gap-2.5">
+      <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Mentioned</span>
+      {projects.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-mono text-inky/50">Projects ({projects.length})</span>
+          {projects.slice(0, 5).map((p) => (
+            <button key={p.id} onClick={onOpenProjects} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+              <div className="text-xs font-body text-navy break-words">{p.project_name || '(untitled project)'}</div>
+              {p.status && <div className="mt-0.5"><Badge color="cyan">{p.status}</Badge></div>}
+            </button>
+          ))}
+        </div>
+      )}
+      {meetings.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-mono text-inky/50">Meetings ({meetings.length})</span>
+          {meetings.slice(0, 5).map((m) => (
+            <button key={m.id} onClick={onOpenMeetings} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+              <div className="text-xs font-body text-navy break-words">{m.title || '(untitled meeting)'}</div>
+              <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(m.meeting_date)}</div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -56,6 +56,7 @@ export interface MeetingNote {
   category: string | null
   notes: string | null
   shared: boolean
+  location_ids?: string[]
   created_by: string | null
   created_at: string
   updated_at: string
@@ -160,6 +161,7 @@ export interface Project {
   vendor: string | null
   category: string | null
   helpful_links: string[]
+  location_ids?: string[]
   sort_order: number
   updated_by: string | null
   created_at: string

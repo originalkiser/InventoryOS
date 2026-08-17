@@ -12,13 +12,14 @@ import { Button, Badge, Modal, SbLoader } from '@/components/ui'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { LinksCell } from '@/components/shared/LinksCell'
 import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
+import { LocationMultiSelect } from '@/components/shared/LocationMultiSelect'
 import { useProjects } from '@/hooks/useProjects'
 import { useProjectColumns, type ColumnDef } from '@/hooks/useProjectColumns'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { supabase } from '@/lib/supabase'
 import type { Profile, Project, ProjectTask, Task } from '@/types'
 
-type CellType = 'text' | 'date' | 'status' | 'datetime' | 'links' | 'attachments'
+type CellType = 'text' | 'date' | 'status' | 'datetime' | 'links' | 'attachments' | 'locations'
 
 const COLUMN_DEFS: (ColumnDef & { type: CellType })[] = [
   { key: 'project_name', label: 'Project Name', defaultWidth: 220, type: 'text' },
@@ -29,6 +30,7 @@ const COLUMN_DEFS: (ColumnDef & { type: CellType })[] = [
   { key: 'description', label: 'Description', defaultWidth: 280, type: 'text' },
   { key: 'vendor', label: 'Vendor', defaultWidth: 150, type: 'text' },
   { key: 'category', label: 'Category', defaultWidth: 150, type: 'text' },
+  { key: 'location_ids', label: 'Locations', defaultWidth: 220, type: 'locations' },
   { key: 'helpful_links', label: 'Helpful Links', defaultWidth: 220, type: 'links' },
   { key: 'attachments', label: 'Attachments', defaultWidth: 120, type: 'attachments' },
 ]
@@ -455,7 +457,7 @@ function NewProjectModal({
 }: {
   open: boolean
   onClose: () => void
-  onSave: (data: Partial<Project>) => Promise<void>
+  onSave: (data: Partial<Project>, locationIds: string[]) => Promise<void>
 }) {
   const [name, setName] = useState('')
   const [status, setStatus] = useState('Not Started')
@@ -464,13 +466,14 @@ function NewProjectModal({
   const [description, setDescription] = useState('')
   const [vendor, setVendor] = useState('')
   const [category, setCategory] = useState('')
+  const [locationIds, setLocationIds] = useState<string[]>([])
   const [visibility, setVisibility] = useState<Visibility>('private')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (open) {
       setName(''); setStatus('Not Started'); setStartDate(''); setTargetEnd('')
-      setDescription(''); setVendor(''); setCategory(''); setVisibility('private')
+      setDescription(''); setVendor(''); setCategory(''); setLocationIds([]); setVisibility('private')
     }
   }, [open])
 
@@ -486,7 +489,7 @@ function NewProjectModal({
       vendor: vendor || null,
       category: category || null,
       visibility,
-    })
+    }, locationIds)
     setSaving(false)
     onClose()
   }
@@ -528,6 +531,9 @@ function NewProjectModal({
 
           <div className="col-span-2">
             {field('Vendor', inp(vendor, setVendor, 'text', 'Vendor name…'))}
+          </div>
+          <div className="col-span-2">
+            {field('Locations', <LocationMultiSelect selected={locationIds} onChange={setLocationIds} />)}
           </div>
           <div className="col-span-2">
             {field('Description', (
@@ -572,7 +578,7 @@ function NewProjectModal({
 
 // ---------------------------------------------------------------------------
 export function ProjectsModule() {
-  const { projects, tasks, loading, companyId, load: reloadProjects, addProject, updateProject, deleteProject, restoreProject, hardDeleteProject, addTask, updateTask, deleteTask, reorderTasks } = useProjects()
+  const { projects, tasks, loading, companyId, load: reloadProjects, addProject, updateProject, updateProjectLocations, deleteProject, restoreProject, hardDeleteProject, addTask, updateTask, deleteTask, reorderTasks } = useProjects()
   const { columns, setOrder, togglePin, toggleVisible, setWidth } = useProjectColumns(COLUMN_DEFS)
 
   const [orgProfiles, setOrgProfiles] = useState<Profile[]>([])
@@ -701,9 +707,12 @@ export function ProjectsModule() {
     setNewProjectOpen(true)
   }
 
-  async function handleCreateProject(data: Partial<Project>) {
+  async function handleCreateProject(data: Partial<Project>, locationIds: string[]) {
     const p = await addProject(data)
-    if (p) setExpanded((prev) => new Set([...prev, p.id]))
+    if (p) {
+      setExpanded((prev) => new Set([...prev, p.id]))
+      if (locationIds.length) updateProjectLocations(p.id, locationIds)
+    }
   }
 
   function renderCell(p: Project, key: string) {
@@ -711,6 +720,7 @@ export function ProjectsModule() {
     if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={statusColor} onAddOption={addStatus} onSetColor={setStatusColor} />
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
     if (type === 'links') return <LinksCell links={p.helpful_links ?? []} onSave={(links) => updateProject(p.id, { helpful_links: links })} />
+    if (type === 'locations') return <LocationMultiSelect compact selected={p.location_ids ?? []} onChange={(ids) => updateProjectLocations(p.id, ids)} />
     if (type === 'attachments') return <AttachmentsCell entityType="project" entityId={p.id} companyId={companyId!} />
     if (type === 'text') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'project_name' ? 'Project name…' : key === 'description' ? 'Description…' : '—'} autoEdit={key === 'project_name' && p.id === autoEditId} showPencil={key === 'project_name'} onSave={(v) => { if (key === 'project_name') setAutoEditId(null); updateProject(p.id, { [key]: v || null } as Partial<Project>) }} />
     return (
