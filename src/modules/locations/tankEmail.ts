@@ -189,3 +189,29 @@ export function buildMonitorEmailLog(
   }
   return byLoc
 }
+
+// A same-day "Offline Tank Monitor" comm logged with no specific serials
+// attached (a legacy row, or one logged by hand outside the email flow) still
+// almost certainly covers today's offline monitors at that shop — we just
+// can't say which serials specifically. Backfill: if such a comm exists for
+// today, treat every given serial not already in the log as covered as of
+// today, so the "last emailed" indicator picks it up.
+export function backfillTodayBlanket(
+  log: Map<string, string>,
+  rows: { comm_date: string | null; updated_at: string; products: unknown }[],
+  serials: (string | null | undefined)[],
+): Map<string, string> {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const hasBlanket = rows.some((r) => {
+    const list = Array.isArray(r.products) ? r.products : []
+    if (list.length > 0) return false
+    const d = (r.comm_date || r.updated_at || '').slice(0, 10)
+    return d === todayStr
+  })
+  if (!hasBlanket) return log
+  const next = new Map(log)
+  for (const serial of serials) {
+    if (serial && !next.has(serial)) next.set(serial, `${todayStr}T00:00:00`)
+  }
+  return next
+}

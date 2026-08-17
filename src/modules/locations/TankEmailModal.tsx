@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Copy, Check } from 'lucide-react'
 import { format } from 'date-fns'
 import { Modal, Button } from '@/components/ui'
@@ -11,7 +11,7 @@ import type { TankMonitor } from '@/types'
 import {
   type TankEmailKind, type TankEmailTemplate, type TableCol, type TableRow,
   renderText, renderBodyHtml, renderBodyPlain, pluralizeParens,
-  tableHtml, tablePlain, magnetImageHtml, greetingFor, buildMonitorEmailLog, DEFAULT_EMAIL_SKIP_DAYS,
+  tableHtml, tablePlain, magnetImageHtml, greetingFor, buildMonitorEmailLog, backfillTodayBlanket, DEFAULT_EMAIL_SKIP_DAYS,
 } from './tankEmail'
 import toast from 'react-hot-toast'
 
@@ -46,11 +46,17 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
   const [skipDays, setSkipDays] = useAppSetting<number>('tank_email_skip_days', DEFAULT_EMAIL_SKIP_DAYS)
   const [forceInclude, setForceInclude] = useState<Set<string>>(new Set())
   const [emailLog, setEmailLog] = useState<Map<string, Map<string, string>>>(new Map())
+  // Always-current targets for the async fetch below, without retriggering it
+  // on every render (targets is a fresh array/object literal from the caller).
+  const targetsRef = useRef(targets)
+  targetsRef.current = targets
 
   const targetIdsKey = targets.map((t) => t.locationId).join(',')
 
   // Per-shop, per-serial last-emailed dates for this email kind — powers the
-  // "recently emailed" panel and the auto-skip logic below.
+  // "recently emailed" panel and the auto-skip logic below. Same-day comms
+  // logged without specific serials (legacy rows, or logged by hand outside
+  // this flow) are backfilled to cover today's offline monitors per shop.
   useEffect(() => {
     if (!open || !companyId || !targetIdsKey) { setEmailLog(new Map()); return }
     let cancelled = false
@@ -63,7 +69,14 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
       .then(({ data, error }: any) => {
         if (cancelled) return
         if (error) return
-        setEmailLog(buildMonitorEmailLog(data ?? []))
+        const rows = (data ?? []) as { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown }[]
+        const byLoc = buildMonitorEmailLog(rows)
+        for (const t of targetsRef.current) {
+          const shopRows = rows.filter((r) => r.location_id === t.locationId)
+          const serials = t.monitors.map(monitorKey)
+          byLoc.set(t.locationId, backfillTodayBlanket(byLoc.get(t.locationId) ?? new Map(), shopRows, serials))
+        }
+        setEmailLog(byLoc)
       })
     return () => { cancelled = true }
   }, [open, companyId, targetIdsKey, kind])

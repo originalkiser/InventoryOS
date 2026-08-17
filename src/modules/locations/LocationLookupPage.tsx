@@ -11,7 +11,7 @@ import type { ExceptionReport } from '@/modules/exceptions/exceptions'
 import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
-import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog } from './tankEmail'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location, MeetingNote, Project, TankMonitor } from '@/types'
@@ -216,6 +216,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [mentionedMeetings, setMentionedMeetings] = useState<MeetingNote[]>([])
   const [tankSort, setTankSort] = usePersistedSort('location-lookup:tank-sort')
   const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
+  const [emailMonitorOverride, setEmailMonitorOverride] = useState<TankRow | null>(null)
+  const [callout, setCallout] = useState<{ x: number; y: number; text: string } | null>(null)
   const [offlineTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_offline', TANK_EMAIL_DEFAULT.offline)
   const [lowvmiTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_lowvmi', TANK_EMAIL_DEFAULT.lowvmi)
   const [loading, setLoading] = useState(false)
@@ -351,16 +353,22 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const showOfflineBtn = vmiOffline.length > 0 || (!!prefs.nonVmiOfflineBtn && nonVmiOffline.length > 0)
 
   // Per-serial last-emailed dates from the Offline Monitor email log for this
-  // shop — powers the "Last emailed …" hover on stale/offline readings below.
+  // shop — powers the "Last emailed …" callout on stale/offline readings below.
+  // A same-day comm logged without specific serials (legacy rows, or logged
+  // by hand outside the email flow) is backfilled to cover today's offline
+  // monitors, so the callout doesn't wrongly say "not yet emailed".
   const offlineLog = useMemo(() => {
     const rows = comms.filter((c) => c.comm_type === 'Offline Tank Monitor')
       .map((c) => ({ location_id: c.location_id, comm_date: c.comm_date, updated_at: c.updated_at, products: c.products }))
-    return buildMonitorEmailLog(rows).get(shopId) ?? new Map<string, string>()
-  }, [comms, shopId])
+    const bySerial = buildMonitorEmailLog(rows).get(shopId) ?? new Map<string, string>()
+    const serials = offlineTanks.map((t) => t.serial_rtu_id || t.system_tank_id || '')
+    return backfillTodayBlanket(bySerial, rows, serials)
+  }, [comms, shopId, offlineTanks])
 
   // Stale/offline "Last Update" cell — same red/orange flag as the plain
-  // render below, but the tooltip explains whether (and when) we emailed
-  // about it, or why we didn't (e.g. not on VMI, so the offline email skips it).
+  // render below. Hovering shows a fast, custom callout (not the native
+  // browser tooltip) with whether/when we emailed about it; clicking an
+  // offline reading opens the email draft scoped to just that monitor.
   function renderUpdatedCell(t: TankRow) {
     const d = t.inventory_time ?? t.reading_date
     const stale = !!d && Date.now() - new Date(d).getTime() > 2 * 86400000
@@ -373,7 +381,17 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       else if (offlineTpl.vmiOnly !== false && !t.keep_fill) title = 'Not emailed — not on VMI/keepfill'
       else title = 'Not yet emailed'
     }
-    return <span className={cls} title={title}>{dateTime(d)}{stale ? ' ⚠' : ''}</span>
+    return (
+      <span
+        className={`${cls} ${stale ? 'cursor-pointer hover:underline decoration-dotted' : ''}`}
+        onMouseEnter={(e) => title && setCallout({ x: e.clientX, y: e.clientY, text: title })}
+        onMouseMove={(e) => title && setCallout({ x: e.clientX, y: e.clientY, text: title })}
+        onMouseLeave={() => setCallout(null)}
+        onClick={() => { if (stale) { setEmailMonitorOverride(t); setEmailKind('offline') } }}
+      >
+        {dateTime(d)}{stale ? ' ⚠' : ''}
+      </span>
+    )
   }
 
   // Unit shown on the On Hand header: use a shared row unit if present, else default to gallons.
@@ -596,13 +614,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                     <button onClick={copyTanks} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
                   )}
                   {showOfflineBtn && (
-                    <button onClick={() => setEmailKind('offline')} title="Draft an email for offline monitors"
+                    <button onClick={() => { setEmailMonitorOverride(null); setEmailKind('offline') }} title="Draft an email for offline monitors"
                       className={`text-[10px] font-mono border rounded px-1.5 py-0.5 inline-flex items-center gap-1 ${vmiOffline.length > 0 ? 'text-[#C0392B] border-[#C0392B]/40 hover:border-[#C0392B]' : 'text-[#E67E22] border-[#E67E22]/40 hover:border-[#E67E22]'}`}>
                       ✉ Offline ({offlineTanks.length})
                     </button>
                   )}
                   {!loading && lowVmiFlag && (
-                    <button onClick={() => setEmailKind('lowvmi')} title="Draft a low VMI coverage email" className="text-[10px] font-mono text-[#E67E22] border border-[#E67E22]/40 rounded px-1.5 py-0.5 hover:border-[#E67E22] inline-flex items-center gap-1">✉ Low VMI</button>
+                    <button onClick={() => { setEmailMonitorOverride(null); setEmailKind('lowvmi') }} title="Draft a low VMI coverage email" className="text-[10px] font-mono text-[#E67E22] border border-[#E67E22]/40 rounded px-1.5 py-0.5 hover:border-[#E67E22] inline-flex items-center gap-1">✉ Low VMI</button>
                   )}
                 </div>
                 <UpdatedCallout date={tanks.length > 0 ? tanksUpdated : null} onOpen={() => navigate('/config?tab=tank-monitor')} openTitle="Open Tank Monitor config" />
@@ -717,13 +735,21 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       {emailKind && shopId && (
         <TankEmailModal
           open
-          onClose={() => setEmailKind(null)}
+          onClose={() => { setEmailKind(null); setEmailMonitorOverride(null) }}
           kind={emailKind}
           template={emailKind === 'offline' ? offlineTpl : lowvmiTpl}
-          targets={[{ locationId: shopId, monitors: (emailKind === 'offline' ? offlineTanks : keepfillTanks) as unknown as TankMonitor[] }]}
+          targets={[{ locationId: shopId, monitors: (emailMonitorOverride ? [emailMonitorOverride] : emailKind === 'offline' ? offlineTanks : keepfillTanks) as unknown as TankMonitor[] }]}
           internalOf={(pid) => pid ?? ''}
           onLogged={load}
         />
+      )}
+      {callout && (
+        <div
+          className="fixed z-[70] pointer-events-none rounded bg-navy text-cream text-[11px] font-mono px-2 py-1 shadow-lg max-w-[240px]"
+          style={{ left: callout.x + 14, top: callout.y + 14 }}
+        >
+          {callout.text}
+        </div>
       )}
     </div>
   )
