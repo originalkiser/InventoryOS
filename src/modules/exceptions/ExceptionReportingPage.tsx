@@ -21,6 +21,7 @@ import {
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
+import { isStaleRecord, bumpedUntilISO } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -324,13 +325,23 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
               ) : filtered.map((r, idx) => {
                 // Opaque bands so the sticky Status/Shop columns share them
                 // (a translucent band lets scrolled columns bleed through).
-                const band = idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
+                // Stale (needs-action, unbumped) rows override the band with
+                // a light red flag — this is what drives the nav badge count.
+                const stale = isStaleRecord(r.status, r.date_of_finding, r.metadata, config.staleDays)
+                const band = stale ? 'bg-[#C0392B]/10' : idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
                 return (
                   <tr key={r.id} className={band}>
                     <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>
                       <div className="flex items-center gap-1">
                         <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
                         <EditSelect bare value={r.status} options={config.statuses} placeholder="—" allowCurrent onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                        {stale && (
+                          <button onClick={() => onSet(r, { metadata: { ...(r.metadata ?? {}), bumped_until: bumpedUntilISO(config.bumpDays) } })}
+                            title={`Defer ${config.bumpDays} more day(s)`}
+                            className="flex-shrink-0 text-[10px] font-mono text-[#C0392B] border border-[#C0392B]/40 rounded px-1 py-0.5 hover:bg-[#C0392B]/10">
+                            Bump
+                          </button>
+                        )}
                       </div>
                     </td>
                     <td className={`${tdBase} sticky left-[230px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
@@ -561,6 +572,25 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
             onChange={(e) => saveConfig({ ...config, responseDays: Math.max(1, Number(e.target.value) || 1) })}
             className={`${inputCls} w-16`} />
           <span className="text-xs font-body text-inky">business days (Mon–Fri) without a yes response.</span>
+        </div>
+      </CardBody></Card>
+
+      <Card><CardBody className="flex flex-col gap-3">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Needs Action Highlighting</h3>
+        <p className="text-[11px] font-mono text-inky/60">Separate from the Response Window above. Drives the red row highlight and the nav badge count — closed reports never count, regardless of age.</p>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-body text-inky">Highlight red after</span>
+          <input type="number" min={1} value={config.staleDays}
+            onChange={(e) => saveConfig({ ...config, staleDays: Math.max(1, Number(e.target.value) || 1) })}
+            className={`${inputCls} w-16`} />
+          <span className="text-xs font-body text-inky">day(s) old with no response.</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-body text-inky">"Bump" defers a red report for</span>
+          <input type="number" min={1} value={config.bumpDays}
+            onChange={(e) => saveConfig({ ...config, bumpDays: Math.max(1, Number(e.target.value) || 1) })}
+            className={`${inputCls} w-16`} />
+          <span className="text-xs font-body text-inky">day(s), then it highlights again.</span>
         </div>
       </CardBody></Card>
 

@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useLocations } from '@/hooks/useLocations'
 import { DEFAULT_STATUS } from '@/modules/exceptions/exceptions'
+import { refreshNavBadges } from '@/hooks/useNavBadges'
 import type { TankMonitor } from '@/types'
 import {
   type TankEmailKind, type TankEmailTemplate, type TableCol, type TableRow,
@@ -235,6 +236,7 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
     setLogging(false)
     if (error) { toast.error(error.message); return }
     toast.success('Logged to Location Comms')
+    refreshNavBadges()
     onLogged?.()
     advance()
   }

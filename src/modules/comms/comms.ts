@@ -38,6 +38,11 @@ export interface CommsConfig {
   whoContacted: string[]
   commTypes: string[]
   actionTaken: string[]
+  // "Needs action" highlighting — a non-closed comm older than staleDays
+  // highlights red and counts toward the nav badge, unless bumped (deferred
+  // bumpDays via the Bump action).
+  staleDays: number
+  bumpDays: number
 }
 
 export const DEFAULT_COMMS_CONFIG: CommsConfig = {
@@ -45,6 +50,8 @@ export const DEFAULT_COMMS_CONFIG: CommsConfig = {
   whoContacted: ['Procurement', 'Area Manager', 'Shop Manager'],
   commTypes: ['Product Request', 'Exception Reporting'],
   actionTaken: ['Ad Hoc Order', 'Ordering on Next Order'],
+  staleDays: 3,
+  bumpDays: 3,
 }
 
 export const isEmailMethod = (m: string | null | undefined) => (m ?? '').toLowerCase().includes('email')

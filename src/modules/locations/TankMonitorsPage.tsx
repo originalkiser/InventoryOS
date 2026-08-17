@@ -11,7 +11,7 @@ import { ColumnManagerModal } from './ColumnManagerModal'
 import { TankEmailModal, type EmailTarget } from './TankEmailModal'
 import { TankEmailTemplates } from './TankEmailTemplates'
 import { TankProductMapping } from './TankProductMapping'
-import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate } from './tankEmail'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, DEFAULT_EMAIL_SKIP_DAYS } from './tankEmail'
 import type { TankMonitor, Location, VendorPart } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -74,6 +74,21 @@ export function TankMonitorsPage() {
   const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
   const [emailTargets, setEmailTargets] = useState<EmailTarget[]>([])
   const [prodMap, setProdMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
+  // Same skip settings as the email modal itself (shared app_settings keys)
+  // so "already emailed" monitors drop out of Offline here too, not just once
+  // you're inside the draft.
+  const [skipEnabled, setSkipEnabled] = useAppSetting<boolean>('tank_email_skip_enabled', true)
+  const [skipDays, setSkipDays] = useAppSetting<number>('tank_email_skip_days', DEFAULT_EMAIL_SKIP_DAYS)
+  const [offlineCommsRows, setOfflineCommsRows] = useState<{ location_id: string | null; comm_date: string | null; updated_at: string; products: unknown }[]>([])
+  const loadOfflineCommsLog = useCallback(async () => {
+    if (!companyId) return
+    const sb = supabase as any
+    const { data, error } = await sb.schema('inventory').from('location_comms')
+      .select('location_id, comm_date, updated_at, products').eq('company_id', companyId).eq('comm_type', 'Offline Tank Monitor')
+    if (error) return
+    setOfflineCommsRows((data ?? []) as typeof offlineCommsRows)
+  }, [companyId])
+  useEffect(() => { loadOfflineCommsLog() }, [loadOfflineCommsLog])
 
   // Location is hidden if the user excluded it (shared with the rest of the app).
   const isHidden = useCallback((id: string | null) => { const l = loc.byId(id); return !!l && isExcluded(l) }, [loc, isExcluded])
@@ -145,10 +160,24 @@ export function TankMonitorsPage() {
 
   // Offline = last reading > 1 day behind the freshest reading in the dataset.
   const latestReading = useMemo(() => Math.max(0, ...monitors.map((m) => readingTime(m) ?? 0)), [monitors])
+  const offlineCommsLog = useMemo(() => buildMonitorEmailLog(offlineCommsRows), [offlineCommsRows])
+  // Once a shop's been emailed about a monitor, it drops out of Offline (and
+  // the "Start email communication" count) for the skip window, so this tab
+  // only shows what still needs a follow-up.
+  const isRecentlyEmailed = useCallback((m: TankMonitor) => {
+    const serial = m.serial_rtu_id || m.system_tank_id || ''
+    if (!serial || !m.location_id) return false
+    const shopRows = offlineCommsRows.filter((r) => r.location_id === m.location_id)
+    const log = backfillTodayBlanket(offlineCommsLog.get(m.location_id) ?? new Map(), shopRows, [serial])
+    const last = log.get(serial)
+    return last != null && (Date.now() - new Date(last).getTime()) / 86400000 < skipDays
+  }, [offlineCommsRows, offlineCommsLog, skipDays])
   const offline = useMemo(() => filtered.filter((m) => {
     if (offlineVmiOnly && !m.keep_fill) return false
-    const t = readingTime(m); return t != null && latestReading - t > 86400000
-  }), [filtered, latestReading, offlineVmiOnly])
+    const t = readingTime(m); if (t == null || latestReading - t <= 86400000) return false
+    if (skipEnabled && isRecentlyEmailed(m)) return false
+    return true
+  }), [filtered, latestReading, offlineVmiOnly, skipEnabled, isRecentlyEmailed])
 
   // Count of low-VMI shops (mirrors LowVmiView) for the tab badge.
   const lowVmiCount = useMemo(() => {
@@ -227,6 +256,16 @@ export function TankMonitorsPage() {
         </TabsContent>
 
         <TabsContent value="offline">
+          <div className="flex items-center gap-3 mb-2 flex-wrap">
+            <label className="flex items-center gap-1.5 text-xs font-mono text-navy">
+              <input type="checkbox" checked={skipEnabled} onChange={(e) => setSkipEnabled(e.target.checked)} className="accent-sky" />
+              Skip tanks emailed in last
+              <input type="number" min={1} value={skipDays} disabled={!skipEnabled}
+                onChange={(e) => setSkipDays(Math.max(1, Number(e.target.value) || 1))}
+                className="w-12 bg-cream border border-navy/30 rounded px-1 py-0.5 text-center disabled:opacity-40" />
+              days
+            </label>
+          </div>
           <div className="flex items-center gap-3 mb-3 flex-wrap">
             <Toggle checked={offlineVmiOnly} onChange={setOfflineVmiOnly} label="VMI/keepfill only" color="cyan" />
             <span className="text-[11px] font-mono text-inky/50">Non-VMI tanks going quiet usually don't matter.</span>
@@ -263,6 +302,7 @@ export function TankMonitorsPage() {
           template={emailKind === 'offline' ? offlineTpl : lowvmiTpl}
           targets={emailTargets}
           internalOf={ctx.internalOf}
+          onLogged={loadOfflineCommsLog}
         />
       )}
     </div>

@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Pencil, Filter } from 'lucide-react'
+import { Pencil, Filter, Settings2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { Button, SbLoader } from '@/components/ui'
-import { EditDate, EditSelect, CappedTextarea } from '@/components/shared/InlineCells'
+import { EditDate, EditSelect, CappedTextarea, inputCls } from '@/components/shared/InlineCells'
 import { LocationCommsModal } from './LocationCommsModal'
 import { useCommsConfig } from './useCommsConfig'
 import type { LocationComm } from './comms'
 import { EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
+import { isStaleRecord, bumpedUntilISO } from '@/lib/staleness'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -32,7 +33,7 @@ export function LocationCommsPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
-  const { config } = useCommsConfig()
+  const { config, save: saveConfig } = useCommsConfig()
 
   const [rowsAll, setRowsAll] = useState<LocationComm[]>([])
   const [loading, setLoading] = useState(true)
@@ -40,6 +41,7 @@ export function LocationCommsPage() {
   const [statusFilter, setStatusFilter] = useState('All')
   const [filtersOn, setFiltersOn] = useState(false)
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [settingsOn, setSettingsOn] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Partial<LocationComm> | null>(null)
 
@@ -62,7 +64,7 @@ export function LocationCommsPage() {
     ;(supabase as any).schema('inventory').from('location_comms')
       .update({ ...patch, updated_by: profile?.id ?? null, last_change_source: 'manual', updated_at: new Date().toISOString() })
       .eq('id', id).then(({ error: e }: any) => { if (e) toast.error(e.message) })
-    if ('status' in patch) refreshNavBadges()
+    if ('status' in patch || 'metadata' in patch) refreshNavBadges()
   }
   const set = (r: LocationComm, patch: Partial<LocationComm>) => silentUpdate(r.id, patch)
 
@@ -127,11 +129,38 @@ export function LocationCommsPage() {
             </button>
           ))}
         </div>
-        <button onClick={() => setFiltersOn((o) => !o)}
-          className={['inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border transition-colors', filtersOn ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
-          <Filter className="w-3 h-3" /> {filtersOn ? 'Hide Filters' : 'Filter Columns'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setSettingsOn((o) => !o)}
+            className={['inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border transition-colors', settingsOn ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
+            <Settings2 className="w-3 h-3" /> Settings
+          </button>
+          <button onClick={() => setFiltersOn((o) => !o)}
+            className={['inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border transition-colors', filtersOn ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
+            <Filter className="w-3 h-3" /> {filtersOn ? 'Hide Filters' : 'Filter Columns'}
+          </button>
+        </div>
       </div>
+
+      {settingsOn && (
+        <div className="mb-3 rounded border border-navy/20 bg-navy/[0.03] px-4 py-3 flex flex-col gap-2 max-w-lg">
+          <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Needs Action Highlighting</h3>
+          <p className="text-[11px] font-mono text-inky/60">A non-closed communication older than this highlights red and counts toward the nav badge, regardless of status otherwise.</p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-body text-inky">Highlight red after</span>
+            <input type="number" min={1} value={config.staleDays}
+              onChange={(e) => saveConfig({ ...config, staleDays: Math.max(1, Number(e.target.value) || 1) })}
+              className={`${inputCls} w-16`} />
+            <span className="text-xs font-body text-inky">day(s) old.</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-body text-inky">"Bump" defers a red row for</span>
+            <input type="number" min={1} value={config.bumpDays}
+              onChange={(e) => saveConfig({ ...config, bumpDays: Math.max(1, Number(e.target.value) || 1) })}
+              className={`${inputCls} w-16`} />
+            <span className="text-xs font-body text-inky">day(s), then it highlights again.</span>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
@@ -161,16 +190,26 @@ export function LocationCommsPage() {
               {rows.length === 0 ? (
                 <tr><td colSpan={COLS.length} className="px-2 py-6 text-center text-inky/50">No rows match the filters.</td></tr>
               ) : rows.map((r, idx) => {
-                const band = idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
+                // Stale (needs-action, unbumped) rows override the band with a
+                // light red flag — this is what drives the nav badge count.
+                const stale = isStaleRecord(r.status, r.comm_date, r.metadata, config.staleDays)
+                const band = stale ? 'bg-[#C0392B]/10' : idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
                 return (
                   <tr key={r.id} className={band}>
-                    <td className={`${tdBase} sticky left-0 z-10 bg-cream w-[200px] min-w-[200px]`}>
+                    <td className={`${tdBase} sticky left-0 z-10 ${band} w-[200px] min-w-[200px]`}>
                       <div className="flex items-center gap-1">
                         <button onClick={() => { setEditing(r); setModalOpen(true) }} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
                         <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => set(r, { status: v })} className="min-w-[150px]" />
+                        {stale && (
+                          <button onClick={() => set(r, { metadata: { ...(r.metadata ?? {}), bumped_until: bumpedUntilISO(config.bumpDays) } })}
+                            title={`Defer ${config.bumpDays} more day(s)`}
+                            className="flex-shrink-0 text-[10px] font-mono text-[#C0392B] border border-[#C0392B]/40 rounded px-1 py-0.5 hover:bg-[#C0392B]/10">
+                            Bump
+                          </button>
+                        )}
                       </div>
                     </td>
-                    <td className={`${tdBase} sticky left-[200px] z-10 bg-cream text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
+                    <td className={`${tdBase} sticky left-[200px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
                     <td className={tdBase}><EditDate value={r.comm_date} onSave={(v) => set(r, { comm_date: v })} /></td>
                     <td className={tdBase}><EditSelect value={r.comm_type} options={config.commTypes} placeholder="—" allowCurrent onSave={(v) => set(r, { comm_type: v })} /></td>
                     <td className={tdBase}><EditSelect value={r.contact_method} options={config.contactMethods} placeholder="—" allowCurrent onSave={(v) => set(r, { contact_method: v })} /></td>

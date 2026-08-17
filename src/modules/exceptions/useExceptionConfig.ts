@@ -10,6 +10,8 @@ export function useExceptionConfig() {
     issues: raw.issues ?? DEFAULT_EXCEPTION_CONFIG.issues,
     responseDays: raw.responseDays ?? DEFAULT_EXCEPTION_CONFIG.responseDays,
     statuses: raw.statuses?.length ? raw.statuses : DEFAULT_EXCEPTION_CONFIG.statuses,
+    staleDays: raw.staleDays ?? DEFAULT_EXCEPTION_CONFIG.staleDays,
+    bumpDays: raw.bumpDays ?? DEFAULT_EXCEPTION_CONFIG.bumpDays,
   }
   return { config, save: (c: ExceptionConfig) => save(c), loaded }
 }

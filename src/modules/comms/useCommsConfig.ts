@@ -10,9 +10,11 @@ export function useCommsConfig() {
     whoContacted: raw.whoContacted?.length ? raw.whoContacted : DEFAULT_COMMS_CONFIG.whoContacted,
     commTypes: raw.commTypes?.length ? raw.commTypes : DEFAULT_COMMS_CONFIG.commTypes,
     actionTaken: raw.actionTaken?.length ? raw.actionTaken : DEFAULT_COMMS_CONFIG.actionTaken,
+    staleDays: raw.staleDays ?? DEFAULT_COMMS_CONFIG.staleDays,
+    bumpDays: raw.bumpDays ?? DEFAULT_COMMS_CONFIG.bumpDays,
   }
   // Append a value to a config list and persist.
-  const addOption = (field: keyof CommsConfig, value: string) => {
+  const addOption = (field: 'contactMethods' | 'whoContacted' | 'commTypes' | 'actionTaken', value: string) => {
     const cur = config[field]
     if (!value || cur.includes(value)) return
     save({ ...config, [field]: [...cur, value] })

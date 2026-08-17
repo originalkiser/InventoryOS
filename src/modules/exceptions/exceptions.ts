@@ -57,12 +57,19 @@ export interface ExceptionConfig {
   issues: Record<string, string[]>
   responseDays: number
   statuses: string[]
+  // "Needs action" highlighting — separate from responseDays (RD escalation).
+  // A non-closed row older than staleDays highlights red and counts toward
+  // the nav badge, unless bumped (deferred bumpDays via the Bump action).
+  staleDays: number
+  bumpDays: number
 }
 export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   types: [...REPORT_TYPES],
   issues: { ...DEFAULT_ISSUES },
   responseDays: 3,
   statuses: [...EXCEPTION_STATUSES],
+  staleDays: 3,
+  bumpDays: 3,
 }
 
 // Fixed response values (the table renders these as buttons).
