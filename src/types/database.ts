@@ -46,6 +46,13 @@ export interface Database {
   }
 }
 
+// Remembers a bulk "add all in Market X" (etc.) location pick alongside the
+// resolved location_ids, so the UI can show that provenance instead of just
+// N shop chips. `extra` is the paired field captured at selection time (e.g.
+// an Area Manager tag also remembers their most-common Market).
+export type LocationGroupField = 'market' | 'area_manager' | 'director'
+export interface LocationGroupTag { field: LocationGroupField; value: string; extra?: string }
+
 export interface MeetingNote {
   id: string
   company_id: string
@@ -57,6 +64,7 @@ export interface MeetingNote {
   notes: string | null
   shared: boolean
   location_ids?: string[]
+  location_groups?: LocationGroupTag[]
   created_by: string | null
   created_at: string
   updated_at: string
@@ -162,6 +170,7 @@ export interface Project {
   category: string | null
   helpful_links: string[]
   location_ids?: string[]
+  location_groups?: LocationGroupTag[]
   sort_order: number
   updated_by: string | null
   created_at: string

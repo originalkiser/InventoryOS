@@ -1,22 +1,46 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocations } from '@/hooks/useLocations'
 import { naturalCompare } from '@/lib/naturalSort'
+import type { LocationGroupField, LocationGroupTag } from '@/types'
+
+export interface LocationSelectionValue {
+  ids: string[]
+  groups: LocationGroupTag[]
+}
 
 interface Props {
-  selected: string[] // location ids
-  onChange: (ids: string[]) => void
+  value: LocationSelectionValue
+  onChange: (v: LocationSelectionValue) => void
   placeholder?: string
-  compact?: boolean // tighter chips/trigger for use inside a grid cell
+  compact?: boolean // tighter, height-capped footprint for use inside a grid cell
+}
+
+const GROUP_LABEL: Record<LocationGroupField, string> = { market: 'Market', area_manager: 'Area Manager', director: 'Regional Director' }
+
+function mostCommon(vals: (string | null | undefined)[]): string | undefined {
+  const counts = new Map<string, number>()
+  for (const v of vals) if (v) counts.set(v, (counts.get(v) ?? 0) + 1)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+}
+
+function groupTagLabel(g: LocationGroupTag): string {
+  const label = GROUP_LABEL[g.field]
+  if (g.extra && g.field === 'area_manager') return `${label}: ${g.value} (${g.extra} Market)`
+  if (g.extra && g.field === 'market') return `${label}: ${g.value} (AM: ${g.extra})`
+  return `${label}: ${g.value}`
 }
 
 // Multi-select for locations: removable chips + a dropdown with individual
 // checkboxes plus "select all in Market / Area Manager / Regional Director"
-// bulk-add shortcuts. Used by Projects and Meeting Notes.
-export function LocationMultiSelect({ selected, onChange, placeholder = '+ Add locations', compact = false }: Props) {
+// bulk-add shortcuts. Group picks are remembered as separate tags (shown
+// alongside the shop chips) so it's clear the selection came from a market
+// or AM/RD sweep, not a one-by-one pick. Used by Projects and Meeting Notes.
+export function LocationMultiSelect({ value, onChange, placeholder = '+ Add locations', compact = false }: Props) {
   const loc = useLocations()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  const { ids: selected, groups } = value
 
   useEffect(() => {
     if (!open) return
@@ -36,29 +60,44 @@ export function LocationMultiSelect({ selected, onChange, placeholder = '+ Add l
     return [...list].sort((a, b) => naturalCompare(a.shop_city || a.name, b.shop_city || b.name))
   }, [active, search])
 
-  const groupOptions = (field: 'market' | 'area_manager' | 'director') =>
+  const groupOptions = (field: LocationGroupField) =>
     [...new Set(active.map((l) => (l as any)[field]).filter(Boolean) as string[])].sort()
 
   function toggle(id: string) {
-    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id])
+    onChange({ ids: selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id], groups })
   }
   function remove(id: string) {
-    onChange(selected.filter((x) => x !== id))
+    onChange({ ids: selected.filter((x) => x !== id), groups })
   }
-  function addGroup(field: 'market' | 'area_manager' | 'director', value: string) {
-    if (!value) return
-    const ids = active.filter((l) => (l as any)[field] === value).map((l) => l.id)
-    const next = new Set(selected)
-    for (const id of ids) next.add(id)
-    onChange([...next])
+  function removeGroup(g: LocationGroupTag) {
+    onChange({ ids: selected, groups: groups.filter((x) => !(x.field === g.field && x.value === g.value)) })
+  }
+  function addGroup(field: LocationGroupField, groupValue: string) {
+    if (!groupValue) return
+    const matches = active.filter((l) => (l as any)[field] === groupValue)
+    const nextIds = new Set(selected)
+    for (const l of matches) nextIds.add(l.id)
+    let extra: string | undefined
+    if (field === 'area_manager') extra = mostCommon(matches.map((l) => l.market))
+    else if (field === 'market') extra = mostCommon(matches.map((l) => l.area_manager))
+    const tag: LocationGroupTag = { field, value: groupValue, extra }
+    const nextGroups = [...groups.filter((g) => !(g.field === field && g.value === groupValue)), tag]
+    onChange({ ids: [...nextIds], groups: nextGroups })
   }
 
   const chipCls = compact ? 'text-[10px] px-1.5 py-0.5' : 'text-xs px-2 py-1'
+  const hasChips = groups.length > 0 || selected.length > 0
 
   return (
     <div ref={ref} className="relative flex flex-col gap-1.5">
-      {selected.length > 0 && (
-        <div className="flex flex-wrap gap-1">
+      {hasChips && (
+        <div className={compact ? 'max-h-16 overflow-y-auto flex flex-wrap gap-1 pr-0.5' : 'flex flex-wrap gap-1'}>
+          {groups.map((g) => (
+            <span key={`${g.field}:${g.value}`} className={`inline-flex items-center gap-1 rounded border border-sky/50 bg-sky/15 font-mono text-navy font-semibold ${chipCls}`}>
+              {groupTagLabel(g)}
+              <button type="button" onClick={() => removeGroup(g)} title="Remove group selection" className="text-inky/50 hover:text-[#C0392B] leading-none">✕</button>
+            </span>
+          ))}
           {selected.map((id) => (
             <span key={id} className={`inline-flex items-center gap-1 rounded border border-navy/20 bg-navy/[0.04] font-mono text-navy ${chipCls}`}>
               {labelOf(id)}

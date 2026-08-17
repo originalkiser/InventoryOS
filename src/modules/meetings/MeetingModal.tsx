@@ -5,7 +5,7 @@ import { VisibilitySelector, type VisibilityValue, type SlimUser } from '@/compo
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { LocationMultiSelect } from '@/components/shared/LocationMultiSelect'
 import { Button, Input, Modal } from '@/components/ui'
-import type { MeetingNote, Project, Task } from '@/types'
+import type { LocationGroupTag, MeetingNote, Project, Task } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -21,6 +21,7 @@ const EMPTY_FORM = {
   visibility: 'private' as VisibilityValue,
   links: [] as MeetingLink[],
   location_ids: [] as string[],
+  location_groups: [] as LocationGroupTag[],
 }
 const EMPTY_TASK = { title: '', target_date: '', project_id: '' }
 
@@ -121,6 +122,7 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
         vendor: existing.vendor ?? '', category: existing.category ?? '', notes: existing.notes ?? '',
         visibility, links: ((existing as any).links ?? []) as MeetingLink[],
         location_ids: existing.location_ids ?? [],
+        location_groups: existing.location_groups ?? [],
       })
       loadMeetingTasks(existing.id)
     } else {
@@ -177,8 +179,10 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
       setEditCreatedBy(myId)
       toast.success('Meeting created')
     }
-    // Best-effort: links + location_ids columns may not exist in all environments yet.
-    if (savedId) sb.schema('inventory').from('meeting_notes').update({ links: form.links, location_ids: form.location_ids }).eq('id', savedId).then(() => {})
+    // Best-effort: links + location_ids/location_groups columns may not exist in all environments yet.
+    if (savedId) sb.schema('inventory').from('meeting_notes')
+      .update({ links: form.links, location_ids: form.location_ids, location_groups: form.location_groups })
+      .eq('id', savedId).then(() => {})
     // Draft is now persisted server-side — drop the local quick-capture cache.
     try { localStorage.removeItem(QUICK_DRAFT_KEY) } catch { /* ignore */ }
     setSaving(false)
@@ -259,7 +263,8 @@ export function MeetingForm({ open, onClose, existing, quick, onSaved }: Meeting
         </div>
 
         <SectionHeader>Locations Discussed</SectionHeader>
-        <LocationMultiSelect selected={form.location_ids} onChange={(ids) => setForm({ ...form, location_ids: ids })} />
+        <LocationMultiSelect value={{ ids: form.location_ids, groups: form.location_groups }}
+          onChange={(v) => setForm({ ...form, location_ids: v.ids, location_groups: v.groups })} />
 
         <SectionHeader>Meeting Notes</SectionHeader>
         <RichTextEditor value={form.notes} onChange={(html) => setForm({ ...form, notes: html })}

@@ -12,12 +12,13 @@ import { Button, Badge, Modal, SbLoader } from '@/components/ui'
 import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { LinksCell } from '@/components/shared/LinksCell'
 import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
-import { LocationMultiSelect } from '@/components/shared/LocationMultiSelect'
+import { LocationMultiSelect, type LocationSelectionValue } from '@/components/shared/LocationMultiSelect'
 import { useProjects } from '@/hooks/useProjects'
 import { useProjectColumns, type ColumnDef } from '@/hooks/useProjectColumns'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { supabase } from '@/lib/supabase'
-import type { Profile, Project, ProjectTask, Task } from '@/types'
+import type { LocationGroupTag, Profile, Project, ProjectTask, Task } from '@/types'
+import { Pencil } from 'lucide-react'
 
 type CellType = 'text' | 'date' | 'status' | 'datetime' | 'links' | 'attachments' | 'locations'
 
@@ -450,14 +451,18 @@ const VISIBILITY_OPTS = [
   { value: 'specific_users' as Visibility, label: 'Specific Users', icon: '👥', desc: 'I choose who can see this' },
 ]
 
-function NewProjectModal({
+function ProjectModal({
   open,
   onClose,
   onSave,
+  existing,
+  onRequestDelete,
 }: {
   open: boolean
   onClose: () => void
-  onSave: (data: Partial<Project>, locationIds: string[]) => Promise<void>
+  onSave: (data: Partial<Project>, locationIds: string[], locationGroups: LocationGroupTag[]) => Promise<void>
+  existing?: Project | null
+  onRequestDelete?: () => void
 }) {
   const [name, setName] = useState('')
   const [status, setStatus] = useState('Not Started')
@@ -466,16 +471,23 @@ function NewProjectModal({
   const [description, setDescription] = useState('')
   const [vendor, setVendor] = useState('')
   const [category, setCategory] = useState('')
-  const [locationIds, setLocationIds] = useState<string[]>([])
+  const [locations, setLocations] = useState<LocationSelectionValue>({ ids: [], groups: [] })
   const [visibility, setVisibility] = useState<Visibility>('private')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    if (existing) {
+      setName(existing.project_name ?? ''); setStatus(existing.status ?? 'Not Started')
+      setStartDate(existing.start_date ?? ''); setTargetEnd(existing.target_end_date ?? '')
+      setDescription(existing.description ?? ''); setVendor(existing.vendor ?? ''); setCategory(existing.category ?? '')
+      setLocations({ ids: existing.location_ids ?? [], groups: existing.location_groups ?? [] })
+      setVisibility((existing.visibility as Visibility) ?? 'private')
+    } else {
       setName(''); setStatus('Not Started'); setStartDate(''); setTargetEnd('')
-      setDescription(''); setVendor(''); setCategory(''); setLocationIds([]); setVisibility('private')
+      setDescription(''); setVendor(''); setCategory(''); setLocations({ ids: [], groups: [] }); setVisibility('private')
     }
-  }, [open])
+  }, [open, existing])
 
   async function handleSave() {
     if (!name.trim()) return
@@ -489,7 +501,7 @@ function NewProjectModal({
       vendor: vendor || null,
       category: category || null,
       visibility,
-    }, locationIds)
+    }, locations.ids, locations.groups)
     setSaving(false)
     onClose()
   }
@@ -511,7 +523,7 @@ function NewProjectModal({
   )
 
   return (
-    <Modal open={open} onClose={onClose} title="New Project">
+    <Modal open={open} onClose={onClose} title={existing ? 'Edit Project' : 'New Project'}>
       <div className="flex flex-col gap-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
@@ -533,7 +545,7 @@ function NewProjectModal({
             {field('Vendor', inp(vendor, setVendor, 'text', 'Vendor name…'))}
           </div>
           <div className="col-span-2">
-            {field('Locations', <LocationMultiSelect selected={locationIds} onChange={setLocationIds} />)}
+            {field('Locations', <LocationMultiSelect value={locations} onChange={setLocations} />)}
           </div>
           <div className="col-span-2">
             {field('Description', (
@@ -564,12 +576,17 @@ function NewProjectModal({
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-4 py-2 rounded border border-navy/20 text-xs font-mono text-inky hover:border-navy/40">Cancel</button>
-          <button onClick={handleSave} disabled={!name.trim() || saving}
-            className="px-4 py-2 rounded bg-navy text-cream text-xs font-heading uppercase tracking-wide hover:bg-inky disabled:opacity-40 transition-colors">
-            {saving ? 'Creating…' : 'Create Project'}
-          </button>
+        <div className="flex items-center justify-between gap-2 pt-2">
+          <div>{existing && onRequestDelete && (
+            <button onClick={onRequestDelete} className="px-3 py-2 rounded border border-red-400/40 text-xs font-mono text-red-400 hover:bg-red-400/10">Delete Project</button>
+          )}</div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded border border-navy/20 text-xs font-mono text-inky hover:border-navy/40">Cancel</button>
+            <button onClick={handleSave} disabled={!name.trim() || saving}
+              className="px-4 py-2 rounded bg-navy text-cream text-xs font-heading uppercase tracking-wide hover:bg-inky disabled:opacity-40 transition-colors">
+              {saving ? 'Saving…' : existing ? 'Save Changes' : 'Create Project'}
+            </button>
+          </div>
         </div>
       </div>
     </Modal>
@@ -626,6 +643,7 @@ export function ProjectsModule() {
   const [colMenuOpen, setColMenuOpen] = useState(false)
   const [autoEditId, setAutoEditId] = useState<string | null>(null)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<Project | null>(null)
   const [deletedProjects, setDeletedProjects] = useState<Project[]>([])
   const [showDeleted, setShowDeleted] = useState(false)
@@ -706,12 +724,24 @@ export function ProjectsModule() {
   function onNewProject() {
     setNewProjectOpen(true)
   }
+  function onEditProject(p: Project) {
+    setEditingProject(p)
+  }
+  function closeProjectModal() {
+    setNewProjectOpen(false)
+    setEditingProject(null)
+  }
 
-  async function handleCreateProject(data: Partial<Project>, locationIds: string[]) {
+  async function handleSaveProject(data: Partial<Project>, locationIds: string[], locationGroups: LocationGroupTag[]) {
+    if (editingProject) {
+      await updateProject(editingProject.id, data)
+      updateProjectLocations(editingProject.id, locationIds, locationGroups)
+      return
+    }
     const p = await addProject(data)
     if (p) {
       setExpanded((prev) => new Set([...prev, p.id]))
-      if (locationIds.length) updateProjectLocations(p.id, locationIds)
+      if (locationIds.length || locationGroups.length) updateProjectLocations(p.id, locationIds, locationGroups)
     }
   }
 
@@ -720,7 +750,10 @@ export function ProjectsModule() {
     if (type === 'status') return <StatusPill value={p.status} onChange={(v) => updateProject(p.id, { status: v })} options={statusOptions} colorOf={statusColor} onAddOption={addStatus} onSetColor={setStatusColor} />
     if (type === 'datetime') return <span className="px-2 text-xs font-mono text-inky">{p.last_update ? format(new Date(p.last_update), 'MMM d, h:mm a') : '—'}</span>
     if (type === 'links') return <LinksCell links={p.helpful_links ?? []} onSave={(links) => updateProject(p.id, { helpful_links: links })} />
-    if (type === 'locations') return <LocationMultiSelect compact selected={p.location_ids ?? []} onChange={(ids) => updateProjectLocations(p.id, ids)} />
+    if (type === 'locations') return (
+      <LocationMultiSelect compact value={{ ids: p.location_ids ?? [], groups: p.location_groups ?? [] }}
+        onChange={(v) => updateProjectLocations(p.id, v.ids, v.groups)} />
+    )
     if (type === 'attachments') return <AttachmentsCell entityType="project" entityId={p.id} companyId={companyId!} />
     if (type === 'text') return <ExpandableTextCell value={(p as any)[key] ?? null} placeholder={key === 'project_name' ? 'Project name…' : key === 'description' ? 'Description…' : '—'} autoEdit={key === 'project_name' && p.id === autoEditId} showPencil={key === 'project_name'} onSave={(v) => { if (key === 'project_name') setAutoEditId(null); updateProject(p.id, { [key]: v || null } as Partial<Project>) }} />
     return (
@@ -842,7 +875,7 @@ export function ProjectsModule() {
                   {g.items.map((p) => (
                     <ProjectRowFragment key={p.id} project={p} ordered={ordered} leftOffsets={leftOffsets} totalCols={totalCols}
                       expanded={expanded.has(p.id)} onToggle={() => toggleExpand(p.id)}
-                      renderCell={renderCell} onDelete={() => setDeleteConfirm(p)}
+                      renderCell={renderCell} onDelete={() => setDeleteConfirm(p)} onEdit={() => onEditProject(p)}
                       tasks={tasks.filter((t) => t.project_id === p.id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))}
                       linkedTasks={linkedTasks.filter((t) => t.project_id === p.id)}
                       onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTasks}
@@ -865,7 +898,8 @@ export function ProjectsModule() {
       )}
 
       {/* Project delete confirmation */}
-      <NewProjectModal open={newProjectOpen} onClose={() => setNewProjectOpen(false)} onSave={handleCreateProject} />
+      <ProjectModal open={newProjectOpen || !!editingProject} onClose={closeProjectModal} onSave={handleSaveProject}
+        existing={editingProject} onRequestDelete={editingProject ? () => { const p = editingProject; setEditingProject(null); setDeleteConfirm(p) } : undefined} />
 
       {deleteConfirm && (
         <Modal open onClose={() => setDeleteConfirm(null)} title="Delete Project?">
@@ -895,7 +929,7 @@ function GroupBlock({ label, count, totalCols, children }: { label: string | nul
   )
 }
 
-function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, tasks, linkedTasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, onToggleLinked, statusOptions, onAddStatus, colorOf, subColWidths, onSubColResize, profiles }: {
+function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded, onToggle, renderCell, onDelete, onEdit, tasks, linkedTasks, onAddTask, onUpdateTask, onDeleteTask, onReorderTask, onToggleLinked, statusOptions, onAddStatus, colorOf, subColWidths, onSubColResize, profiles }: {
   project: Project
   ordered: { key: string; width: number; pinned: boolean }[]
   leftOffsets: Record<string, number>
@@ -904,6 +938,7 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
   onToggle: () => void
   renderCell: (p: Project, key: string) => React.ReactNode
   onDelete: () => void
+  onEdit: () => void
   tasks: ProjectTask[]
   linkedTasks: Task[]
   onAddTask: (projectId: string) => void
@@ -924,9 +959,12 @@ function ProjectRowFragment({ project, ordered, leftOffsets, totalCols, expanded
     <>
       <tr className="border-t border-navy/30/50 hover:bg-navy/5">
         <td className="sticky left-0 z-10 border-r border-navy/30 bg-cream text-center" style={{ width: CTRL_W, minWidth: CTRL_W }}>
-          <button onClick={onToggle} className="px-2 py-1 text-inky hover:text-inky" title={expanded ? 'Collapse' : 'Expand'}>
-            <span className={['inline-block transition-transform', expanded ? 'rotate-90' : ''].join(' ')}>▶</span>
-          </button>
+          <div className="flex items-center justify-center gap-1">
+            <button onClick={onEdit} className="p-1 text-inky/70 hover:text-navy" title="Edit full project"><Pencil className="w-3.5 h-3.5" /></button>
+            <button onClick={onToggle} className="px-1 py-1 text-inky hover:text-inky" title={expanded ? 'Collapse' : 'Expand'}>
+              <span className={['inline-block transition-transform', expanded ? 'rotate-90' : ''].join(' ')}>▶</span>
+            </button>
+          </div>
         </td>
         {ordered.map((c) => (
           <td key={c.key} style={{ width: c.width, minWidth: c.width, maxWidth: c.width, ...(c.pinned ? { position: 'sticky', left: leftOffsets[c.key], zIndex: 10 } : {}) }}

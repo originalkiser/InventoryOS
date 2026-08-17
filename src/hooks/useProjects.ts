@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import type { Project, ProjectTask } from '@/types'
+import type { LocationGroupTag, Project, ProjectTask } from '@/types'
 import toast from 'react-hot-toast'
 
 const sb = supabase as any
@@ -66,12 +66,12 @@ export function useProjects() {
     if (error) { setProjects(snapshot); toast.error(error.message) }
   }
 
-  // Best-effort: location_ids is a newer column that may not exist in
-  // production yet, so this stays decoupled from updateProject (which would
-  // otherwise surface a hard error toast for every project field).
-  function updateProjectLocations(id: string, locationIds: string[]) {
-    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, location_ids: locationIds } : p)))
-    sb.schema('inventory').from('projects').update({ location_ids: locationIds }).eq('id', id)
+  // Best-effort: location_ids/location_groups are newer columns that may not
+  // exist in production yet, so this stays decoupled from updateProject
+  // (which would otherwise surface a hard error toast for every project field).
+  function updateProjectLocations(id: string, locationIds: string[], locationGroups: LocationGroupTag[]) {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, location_ids: locationIds, location_groups: locationGroups } : p)))
+    sb.schema('inventory').from('projects').update({ location_ids: locationIds, location_groups: locationGroups }).eq('id', id)
       .then(({ error }: any) => { if (error) console.warn('[projects] location_ids save failed (migration pending?):', error.message) })
   }
 
