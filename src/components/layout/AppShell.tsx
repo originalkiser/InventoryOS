@@ -38,7 +38,6 @@ export function AppShell() {
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const [navBarHeight, setNavBarHeight] = useState(0)
-  const navBarRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
   const lastInv = useRef<Exclude<PanelMode, 'hidden'>>(invMode === 'docked' ? 'docked' : 'floating')
   const lastTasks = useRef<Exclude<PanelMode, 'hidden'>>(tasksMode === 'docked' ? 'docked' : 'floating')
@@ -52,18 +51,6 @@ export function AppShell() {
     const ro = new ResizeObserver(() => setTopBarHeight(el.offsetHeight))
     ro.observe(el)
     setTopBarHeight(el.offsetHeight)
-    return () => ro.disconnect()
-  }, [])
-
-  // Measure the inventory quick-nav bar's height (0 when it isn't mounted) and
-  // expose it as a CSS var so routed pages can stick their own headers below
-  // it instead of overlapping it — see --inv-navbar-h below.
-  useLayoutEffect(() => {
-    const el = navBarRef.current
-    if (!el) return
-    const ro = new ResizeObserver(() => setNavBarHeight(el.offsetHeight))
-    ro.observe(el)
-    setNavBarHeight(el.offsetHeight)
     return () => ro.disconnect()
   }, [])
 
@@ -172,7 +159,7 @@ export function AppShell() {
           className="flex-1 overflow-auto app-scroll transition-[margin] duration-150"
           style={{ marginRight: pushWidth || undefined, ['--inv-navbar-h' as any]: `${navBarHeight}px` }}
         >
-          <div ref={navBarRef}>{isInventoryRoute && <InventoryNavBar />}</div>
+          {isInventoryRoute && <InventoryNavBar onHeightChange={setNavBarHeight} />}
           <main className="p-3 sm:p-6">
             <ErrorBoundary key={location.pathname}>
               <Outlet />

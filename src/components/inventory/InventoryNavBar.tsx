@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
@@ -15,11 +15,26 @@ const byKey = new Map(ITEMS.map((i) => [i.key, i]))
 // Persistent one-row nav for inventory pages: horizontally scrollable, with a
 // Customize mode to drag-reorder and hide buttons the user rarely uses. Order +
 // hidden set follow the user across devices (profile-backed).
-export function InventoryNavBar() {
+export function InventoryNavBar({ onHeightChange }: { onHeightChange?: (h: number) => void }) {
   const [customize, setCustomize] = useState(false)
   const [orderPref, setOrderPref] = useProfilePref<string[]>('inv-navbar:order', DEFAULT_ORDER)
   const [hidden, setHidden] = useProfilePref<string[]>('inv-navbar:hidden', [])
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // Report our own height (for other sticky page headers to offset below us).
+  // The ref goes directly on this sticky root — wrapping it in a measuring
+  // <div> elsewhere breaks position:sticky in some browsers, so the parent
+  // can't measure us from the outside.
+  useLayoutEffect(() => {
+    const el = rootRef.current
+    if (!el || !onHeightChange) return
+    const ro = new ResizeObserver(() => onHeightChange(el.offsetHeight))
+    ro.observe(el)
+    onHeightChange(el.offsetHeight)
+    return () => { ro.disconnect(); onHeightChange(0) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Reconcile stored order against the current item set (keep known, append new).
   const order = useMemo(() => { const k = orderPref.filter((x) => byKey.has(x)); return [...k, ...DEFAULT_ORDER.filter((x) => !k.includes(x))] }, [orderPref])
@@ -30,7 +45,7 @@ export function InventoryNavBar() {
   const visible = customize ? list : list.filter((i) => !hidden.includes(i.key))
 
   return (
-    <div className="sticky top-0 z-20 bg-cream/95 backdrop-blur border-b border-navy/15 flex items-center gap-2 px-3 sm:px-6 py-1.5">
+    <div ref={rootRef} className="sticky top-0 z-20 bg-cream/95 backdrop-blur border-b border-navy/15 flex items-center gap-2 px-3 sm:px-6 py-1.5">
       <div className="flex items-center gap-1.5 overflow-x-auto flex-1 hover-scroll-x">
         <DndContext sensors={sensors} collisionDetection={closestCenter}
           onDragEnd={(e: DragEndEvent) => { const { active, over } = e; if (over && active.id !== over.id) persistOrder(arrayMove(order, order.indexOf(String(active.id)), order.indexOf(String(over.id)))) }}>
