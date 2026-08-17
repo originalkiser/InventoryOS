@@ -78,6 +78,14 @@ export const useNavBadgesStore = create<State>((set, get) => ({
   reload: async (companyId) => { set({ loadedFor: null }); await get().load(companyId) },
 }))
 
+// Recompute the badge counts now — call after any mutation that changes a
+// tracked count (exception/comm/issue status, tank readings) so badges tick
+// down immediately instead of waiting for the next load.
+export function refreshNavBadges() {
+  const companyId = useAuthStore.getState().profile?.company_id
+  if (companyId) void useNavBadgesStore.getState().reload(companyId)
+}
+
 // Per-key badge count (triggers the load). inventory-alerts merges the alerts store.
 export function useNavBadge(key: string): number {
   const { profile } = useAuthStore()

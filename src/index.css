@@ -84,6 +84,12 @@
 .hover-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
 .hover-scroll:hover::-webkit-scrollbar-thumb { background: rgba(242,241,230,0.28); }
 
+/* Dark-mode native <select> dropdowns: force legible option colors. Without
+   this the highlighted/selected option renders as light text on the browser's
+   sky-ish accent (poor contrast). Light mode uses the browser defaults. */
+.dark select option { background-color: #0D2A44; color: #F2F1E6; }
+.dark select option:checked { background-color: #002745; color: #F2F1E6; }
+
 * {
   box-sizing: border-box;
 }

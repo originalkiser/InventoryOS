@@ -9,6 +9,7 @@ import { LocationCommsModal } from './LocationCommsModal'
 import { useCommsConfig } from './useCommsConfig'
 import type { LocationComm } from './comms'
 import { EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
+import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -61,13 +62,14 @@ export function LocationCommsPage() {
     ;(supabase as any).schema('inventory').from('location_comms')
       .update({ ...patch, updated_by: profile?.id ?? null, last_change_source: 'manual', updated_at: new Date().toISOString() })
       .eq('id', id).then(({ error: e }: any) => { if (e) toast.error(e.message) })
+    if ('status' in patch) refreshNavBadges()
   }
   const set = (r: LocationComm, patch: Partial<LocationComm>) => silentUpdate(r.id, patch)
 
   async function deleteComm(id: string) {
     const { error: e } = await (supabase as any).schema('inventory').from('location_comms').delete().eq('id', id)
     if (e) { toast.error('Failed to delete'); return }
-    toast.success('Deleted'); load()
+    toast.success('Deleted'); load(); refreshNavBadges()
   }
 
   const statusChips = useMemo(() => {
@@ -187,7 +189,7 @@ export function LocationCommsPage() {
       )}
 
       <LocationCommsModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
-        onSaved={load} onDelete={deleteComm} />
+        onSaved={() => { load(); refreshNavBadges() }} onDelete={deleteComm} />
     </div>
   )
 }

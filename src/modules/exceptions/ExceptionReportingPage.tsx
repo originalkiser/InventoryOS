@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode, type CSSProperties } from 'react'
-import { Pencil, Filter, GripVertical } from 'lucide-react'
+import { Pencil, Filter, GripVertical, ChevronUp, ChevronDown } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -15,11 +15,12 @@ import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
 import {
-  EXCEPTION_STATUSES, RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO,
+  RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO,
   parseContacted, isYesResponse, isRdAdded, rdCell,
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
+import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { ExceptionReportModal } from './ExceptionReportModal'
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -40,6 +41,7 @@ const UPLOAD_FIELDS = [
   { name: 'response', label: 'Response?' },
   { name: 'rd_if_no', label: 'RD if No' },
   { name: 'response_notes', label: 'Response Notes' },
+  { name: 'status', label: 'Status' },
 ]
 
 export function ExceptionReportingPage() {
@@ -66,6 +68,8 @@ export function ExceptionReportingPage() {
     ;(supabase as any).schema('inventory').from('exception_reports')
       .update({ ...patch, updated_by: profile?.id ?? null, last_change_source: 'manual', updated_at: new Date().toISOString() })
       .eq('id', id).then(({ error }: any) => { if (error) toast.error(error.message) })
+    // A status change may add/remove this report from the "pending" badge count.
+    if ('status' in patch) refreshNavBadges()
   }
   const set = (r: ExceptionReport, patch: Partial<ExceptionReport>) => silentUpdate(r.id, patch)
 
@@ -75,9 +79,10 @@ export function ExceptionReportingPage() {
   const statusChips = useMemo(() => {
     const counts = new Map<string, number>()
     for (const r of rowsAll) { const s = r.status || 'No Status'; counts.set(s, (counts.get(s) ?? 0) + 1) }
-    const present = [...counts.keys()].sort((a, b) => EXCEPTION_STATUSES.indexOf(a as any) - EXCEPTION_STATUSES.indexOf(b as any))
+    const idx = (s: string) => { const i = config.statuses.indexOf(s); return i === -1 ? 999 : i }
+    const present = [...counts.keys()].sort((a, b) => idx(a) - idx(b))
     return [{ key: 'All', count: rowsAll.length }, ...present.map((s) => ({ key: s, count: counts.get(s)! }))]
-  }, [rowsAll])
+  }, [rowsAll, config.statuses])
 
   const rows = useMemo(() => (statusFilter === 'All' ? rowsAll : rowsAll.filter((r) => (r.status || 'No Status') === statusFilter)), [rowsAll, statusFilter])
 
@@ -88,6 +93,7 @@ export function ExceptionReportingPage() {
       let date_of_finding: string | null = null, date_of_shop_action: string | null = null
       let report_type: string | null = null, issue: string | null = null, details: string | null = null
       let contactedRaw = '', response: string | null = null, rd_if_no: string | null = null, response_notes: string | null = null
+      let status: string | null = null
       for (const m of maps) {
         const v = mappedValue(row, m, maps)
         switch (m.fieldName) {
@@ -102,14 +108,18 @@ export function ExceptionReportingPage() {
           case 'response': response = v.trim() || null; break
           case 'rd_if_no': rd_if_no = v.trim() || null; break
           case 'response_notes': response_notes = v.trim() || null; break
+          case 'status': status = v.trim() || null; break
         }
       }
       const yr = date_of_finding ? Number(date_of_finding.slice(0, 4)) : new Date().getFullYear()
       const { contacted, contacted_date } = parseContacted(contactedRaw, yr)
-      return { location_id, area_manager, date_of_finding, date_of_shop_action, report_type, issue, details, contacted, contacted_date, response, rd_if_no, response_notes } as Partial<ExceptionReport>
+      // Default new rows to the first configured status when the file omits one.
+      if (!status) status = config.statuses[0] ?? null
+      return { location_id, area_manager, date_of_finding, date_of_shop_action, report_type, issue, details, contacted, contacted_date, response, rd_if_no, response_notes, status } as Partial<ExceptionReport>
     }).filter((r) => r.location_id)
     await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.location_id ?? ''}|${r.date_of_finding ?? ''}|${r.report_type ?? ''}|${r.issue ?? ''}|${r.details ?? ''}` })
     setImporting(false)
+    refreshNavBadges()
   }
 
   return (
@@ -158,8 +168,8 @@ export function ExceptionReportingPage() {
       </Tabs>
 
       <ExceptionReportModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
-        onSubmit={async (fields, id) => { if (id) silentUpdate(id, fields); else await insert(fields) }}
-        onDelete={(id) => remove(id)} />
+        onSubmit={async (fields, id) => { if (id) silentUpdate(id, fields); else await insert(fields); refreshNavBadges() }}
+        onDelete={(id) => { remove(id); refreshNavBadges() }} />
     </div>
   )
 }
@@ -320,7 +330,7 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
                     <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>
                       <div className="flex items-center gap-1">
                         <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                        <EditSelect bare value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                        <EditSelect bare value={r.status} options={config.statuses} placeholder="—" allowCurrent onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
                       </div>
                     </td>
                     <td className={`${tdBase} sticky left-[230px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
@@ -530,11 +540,16 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
 }) {
   const [newType, setNewType] = useState('')
   const [newIssue, setNewIssue] = useState<Record<string, string>>({})
+  const [newStatus, setNewStatus] = useState('')
 
   const addType = () => { const t = newType.trim(); if (!t || config.types.includes(t)) return; saveConfig({ ...config, types: [...config.types, t], issues: { ...config.issues, [t]: config.issues[t] ?? [] } }); setNewType('') }
   const removeType = (t: string) => saveConfig({ ...config, types: config.types.filter((x) => x !== t) })
   const addIssue = (t: string) => { const v = (newIssue[t] ?? '').trim(); if (!v) return; const cur = config.issues[t] ?? []; if (cur.includes(v)) return; saveConfig({ ...config, issues: { ...config.issues, [t]: [...cur, v] } }); setNewIssue((p) => ({ ...p, [t]: '' })) }
   const removeIssue = (t: string, v: string) => saveConfig({ ...config, issues: { ...config.issues, [t]: (config.issues[t] ?? []).filter((x) => x !== v) } })
+
+  const addStatus = () => { const s = newStatus.trim(); if (!s || config.statuses.includes(s)) return; saveConfig({ ...config, statuses: [...config.statuses, s] }); setNewStatus('') }
+  const removeStatus = (s: string) => { if (config.statuses.length <= 1) { toast.error('Keep at least one status'); return } saveConfig({ ...config, statuses: config.statuses.filter((x) => x !== s) }) }
+  const moveStatus = (i: number, dir: -1 | 1) => { const j = i + dir; if (j < 0 || j >= config.statuses.length) return; const next = [...config.statuses]; [next[i], next[j]] = [next[j], next[i]]; saveConfig({ ...config, statuses: next }) }
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl">
@@ -546,6 +561,30 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
             onChange={(e) => saveConfig({ ...config, responseDays: Math.max(1, Number(e.target.value) || 1) })}
             className={`${inputCls} w-16`} />
           <span className="text-xs font-body text-inky">business days (Mon–Fri) without a yes response.</span>
+        </div>
+      </CardBody></Card>
+
+      <Card><CardBody className="flex flex-col gap-3">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Statuses</h3>
+        <p className="text-[11px] font-mono text-inky/60">These drive the status dropdown and filter chips. Order is the workflow order (first = default for new/imported rows).</p>
+        <div className="flex items-center gap-2">
+          <Input value={newStatus} onChange={(e) => setNewStatus(e.target.value)} placeholder="New status" className="max-w-xs"
+            onKeyDown={(e) => { if (e.key === 'Enter') addStatus() }} />
+          <Button size="sm" onClick={addStatus}>Add Status</Button>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {config.statuses.map((s, i) => (
+            <div key={s} className="flex items-center gap-2 rounded border border-navy/15 px-2 py-1">
+              <span className="flex-1 text-xs font-mono text-navy">{s}</span>
+              <div className="flex items-center gap-0.5">
+                <button onClick={() => moveStatus(i, -1)} disabled={i === 0} title="Move up"
+                  className="text-inky/50 hover:text-navy disabled:opacity-25 disabled:hover:text-inky/50"><ChevronUp className="w-3.5 h-3.5" /></button>
+                <button onClick={() => moveStatus(i, 1)} disabled={i === config.statuses.length - 1} title="Move down"
+                  className="text-inky/50 hover:text-navy disabled:opacity-25 disabled:hover:text-inky/50"><ChevronDown className="w-3.5 h-3.5" /></button>
+                <button onClick={() => removeStatus(s)} title="Remove status" className="text-inky/50 hover:text-red-500 ml-1 text-sm leading-none">×</button>
+              </div>
+            </div>
+          ))}
         </div>
       </CardBody></Card>
 
@@ -579,7 +618,7 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
 
       <Card><CardBody className="flex flex-col gap-3">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Upload Exception Report File</h3>
-        <p className="text-[11px] font-mono text-inky/60">Columns: Shop, Date of Finding, Exception Report (type), Issue, Details, Contacted?, Response?, RD if No, Response Notes.</p>
+        <p className="text-[11px] font-mono text-inky/60">Columns: Shop, Date of Finding, Exception Report (type), Issue, Details, Contacted?, Response?, RD if No, Response Notes, Status (optional — defaults to "{config.statuses[0]}").</p>
         <ConfigUpload requiredFields={UPLOAD_FIELDS} onImport={onImport} importing={importing} />
       </CardBody></Card>
 

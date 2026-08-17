@@ -3,7 +3,7 @@ import { Modal, Button, Combobox, Select, Input, Toggle } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
 import { useExceptionConfig } from './useExceptionConfig'
-import { DEFAULT_STATUS, EXCEPTION_STATUSES, RESPONSE_OPTIONS, type ExceptionReport } from './exceptions'
+import { RESPONSE_OPTIONS, type ExceptionReport } from './exceptions'
 import toast from 'react-hot-toast'
 
 interface Props {
@@ -52,7 +52,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
     setResponse(existing?.response ?? '')
     setRdIfNo(existing?.rd_if_no ?? '')
     setResponseNotes(stripHtml(existing?.response_notes))
-    setStatus(existing?.status ?? (existing?.id ? '' : DEFAULT_STATUS))
+    setStatus(existing?.status ?? (existing?.id ? '' : (config.statuses[0] ?? '')))
     setDeleteConfirm(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing, open])
@@ -106,7 +106,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
   }
 
   const typeOptions = [{ value: '', label: 'Select type…' }, ...config.types.map((t) => ({ value: t, label: t }))]
-  const statusList = [...new Set([...EXCEPTION_STATUSES, ...(status ? [status] : [])])]
+  const statusList = [...new Set([...config.statuses, ...(status ? [status] : [])])]
 
   return (
     <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Exception Report' : 'New Exception Report'} size="lg">

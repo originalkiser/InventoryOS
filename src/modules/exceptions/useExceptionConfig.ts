@@ -9,6 +9,7 @@ export function useExceptionConfig() {
     types: raw.types?.length ? raw.types : DEFAULT_EXCEPTION_CONFIG.types,
     issues: raw.issues ?? DEFAULT_EXCEPTION_CONFIG.issues,
     responseDays: raw.responseDays ?? DEFAULT_EXCEPTION_CONFIG.responseDays,
+    statuses: raw.statuses?.length ? raw.statuses : DEFAULT_EXCEPTION_CONFIG.statuses,
   }
   return { config, save: (c: ExceptionConfig) => save(c), loaded }
 }

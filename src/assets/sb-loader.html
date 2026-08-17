@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strickland Brothers — Loading Icon</title>
+<style>
+  /* ============================================================
+     SB LOADING ICON — drop-in snippet
+     Files needed: sb-mono-navy.png, sb-mono-sky.png (same folder)
+     Outline color = CSS `color` (uses currentColor).
+     ============================================================ */
+  .sb-loader{
+    position:relative;
+    display:inline-block;
+    width:96px;                 /* set any size here */
+    aspect-ratio:100 / 124;
+    color:#002745;              /* navy outline */
+  }
+  .sb-loader--sky{ color:#B7E0DE; }   /* sky-blue outline */
+
+  .sb-loader svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .sb-loader__line{ animation:sb-loader-draw 2.6s ease-in-out infinite; }
+  .sb-loader__mark{
+    position:absolute; width:62%; left:50%; top:55%;
+    transform:translate(-50%,-50%); pointer-events:none;
+  }
+  @keyframes sb-loader-draw{
+    0%,6%   { stroke-dashoffset:1; }   /* empty (starts at the peak) */
+    46%,54% { stroke-dashoffset:0; }   /* full outline drawn */
+    94%,100%{ stroke-dashoffset:-1; }  /* erased back to the peak */
+  }
+  @media (prefers-reduced-motion: reduce){
+    .sb-loader__line{ animation:none; stroke-dashoffset:0; }
+  }
+
+  /* ---- demo page chrome (not part of the snippet) ---- */
+  body{ margin:0; font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+        background:#F2F1E6; color:#002745; }
+  .wrap{ max-width:880px; margin:0 auto; padding:56px 24px 80px; }
+  h1{ font-family:ui-sans-serif,system-ui,sans-serif; font-weight:800; letter-spacing:-0.01em;
+      text-transform:uppercase; font-size:30px; margin:0 0 4px; }
+  .sub{ color:#4F7489; font-size:13px; margin:0 0 40px; }
+  .row{ display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:44px; }
+  .swatch{ border-radius:16px; border:1px solid rgba(0,39,69,.14);
+           display:flex; flex-direction:column; align-items:center; justify-content:center;
+           gap:14px; padding:48px 16px; }
+  .swatch.cream{ background:#F2F1E6; }
+  .swatch.navy{ background:#002745; border-color:#002745; }
+  .cap{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; }
+  .swatch.cream .cap{ color:#4F7489; }
+  .swatch.navy .cap{ color:#B7E0DE; }
+  h2{ font-family:ui-sans-serif,system-ui,sans-serif; font-weight:800; text-transform:uppercase;
+      letter-spacing:-0.01em; font-size:15px; margin:0 0 10px; }
+  pre{ background:#002745; color:#F2F1E6; border-radius:12px; padding:18px 20px;
+       overflow:auto; font-size:12.5px; line-height:1.65; }
+  .note{ font-size:12.5px; color:#4F7489; line-height:1.7; margin:6px 0 28px; }
+  .rule{ width:34px; height:3px; background:#B7E0DE; border-radius:999px; margin:0 0 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="rule"></div>
+  <h1>SB Loading Icon</h1>
+  <p class="sub">// self-drawing drop outline · starts &amp; restarts at the peak</p>
+
+  <div class="row">
+    <div class="swatch cream">
+      <span class="sb-loader" role="status" aria-label="Loading">
+        <svg viewBox="0 0 100 124" fill="none" aria-hidden="true">
+          <path class="sb-loader__line" d="M50 3 L15.7 41.3 A46 46 0 1 0 84.3 41.3 L50 3 Z"
+            stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"
+            pathLength="1" stroke-dasharray="1 1"/>
+        </svg>
+        <img class="sb-loader__mark" src="sb-mono-navy.png" alt="">
+      </span>
+      <span class="cap">Navy — on light</span>
+    </div>
+    <div class="swatch navy">
+      <span class="sb-loader sb-loader--sky" role="status" aria-label="Loading">
+        <svg viewBox="0 0 100 124" fill="none" aria-hidden="true">
+          <path class="sb-loader__line" d="M50 3 L15.7 41.3 A46 46 0 1 0 84.3 41.3 L50 3 Z"
+            stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"
+            pathLength="1" stroke-dasharray="1 1"/>
+        </svg>
+        <img class="sb-loader__mark" src="sb-mono-sky.png" alt="">
+      </span>
+      <span class="cap">Sky — on navy</span>
+    </div>
+  </div>
+
+  <h2>Drop-in HTML</h2>
+  <p class="note">Copy the markup + CSS below. For the sky version add <code>sb-loader--sky</code>
+  and use <code>sb-mono-sky.png</code>. Resize by changing <code>.sb-loader { width }</code>.
+  Background stays transparent.</p>
+  <pre>&lt;span class="sb-loader" role="status" aria-label="Loading"&gt;
+  &lt;svg viewBox="0 0 100 124" fill="none" aria-hidden="true"&gt;
+    &lt;path class="sb-loader__line"
+      d="M50 3 L15.7 41.3 A46 46 0 1 0 84.3 41.3 L50 3 Z"
+      stroke="currentColor" stroke-width="6"
+      stroke-linecap="round" stroke-linejoin="round"
+      pathLength="1" stroke-dasharray="1 1"/&gt;
+  &lt;/svg&gt;
+  &lt;img class="sb-loader__mark" src="sb-mono-navy.png" alt=""&gt;
+&lt;/span&gt;</pre>
+
+  <h2>CSS</h2>
+  <pre>.sb-loader{ position:relative; display:inline-block;
+  width:96px; aspect-ratio:100 / 124; color:#002745; }
+.sb-loader--sky{ color:#B7E0DE; }
+.sb-loader svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+.sb-loader__line{ animation:sb-loader-draw 2.6s ease-in-out infinite; }
+.sb-loader__mark{ position:absolute; width:62%; left:50%; top:55%;
+  transform:translate(-50%,-50%); pointer-events:none; }
+@keyframes sb-loader-draw{
+  0%,6%   { stroke-dashoffset:1; }
+  46%,54% { stroke-dashoffset:0; }
+  94%,100%{ stroke-dashoffset:-1; }
+}</pre>
+</div>
+</body>
+</html>

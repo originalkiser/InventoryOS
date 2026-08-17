@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import { useIssueColumns } from '@/hooks/useIssueColumns'
+import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { Button, Badge, Modal, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { LinksCell } from '@/components/shared/LinksCell'
 import { AttachmentsCell } from '@/components/shared/AttachmentsCell'
@@ -556,6 +557,7 @@ export function IssuesPage() {
     setIssues(mapRow(liveRes.data ?? []))
     setDeletedIssues(mapRow(delRes.data ?? []))
     setLoading(false)
+    refreshNavBadges()
   }, [profile?.company_id, profile?.id, selectedDeptId])
 
   const loadDepartments = useCallback(async () => {
@@ -599,6 +601,7 @@ export function IssuesPage() {
     setIssues(prev => prev.map(i => (i.id === id ? { ...i, ...dbPatch, ...localPatch } : i)))
     const { error } = await (supabase as any).schema('platform').from('issues').update(dbPatch).eq('id', id)
     if (error) { toast.error(error.message); loadIssues() }
+    else if ('status_id' in dbPatch) refreshNavBadges()
   }, [loadIssues])
 
   function confirmResolve(saveNotes: boolean) {

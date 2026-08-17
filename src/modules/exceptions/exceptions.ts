@@ -56,11 +56,13 @@ export interface ExceptionConfig {
   types: string[]
   issues: Record<string, string[]>
   responseDays: number
+  statuses: string[]
 }
 export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   types: [...REPORT_TYPES],
   issues: { ...DEFAULT_ISSUES },
   responseDays: 3,
+  statuses: [...EXCEPTION_STATUSES],
 }
 
 // Fixed response values (the table renders these as buttons).
