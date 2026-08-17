@@ -26,3 +26,9 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code agent worktrees (embedded git repos — never track)
+.claude/worktrees/
+
+# Supabase CLI local state
+supabase/.temp/
