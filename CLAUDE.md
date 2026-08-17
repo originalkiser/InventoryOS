@@ -2,7 +2,7 @@
 
 ## Project overview
 
-InventoryOS is an internal Strickland Brothers operating platform. It consolidates and replaces numerous third-party SaaS tools. Modules cover inventory counting, ordering, location management, outlier reporting, meeting notes, forms, project task tracking, EOD review workflows, scheduling, month-end processing, and integrations (Monday.com, OneDrive, Azure/Microsoft sign-in).
+InventoryOS is an internal Strickland Brothers operating platform. It consolidates and replaces numerous third-party SaaS tools. Modules cover inventory counting, ordering, location management (lookup, tank monitors, AM/RD lookup, exception reporting, location comms), outlier reporting, meeting notes, forms, marketing campaign planning, project task tracking, EOD review workflows, scheduling, month-end processing, department-scoped access control, and integrations (Monday.com, OneDrive, Azure/Microsoft sign-in, Droptop).
 
 - **Repo:** https://github.com/originalkiser/InventoryOS
 - **Branch:** `main`
@@ -86,22 +86,28 @@ inventoryos/
     │   ├── shared/                # DataTable, FloatingPanel, CustomColumnBuilder, LinksCell, etc.
     │   ├── config/                # ClearTableButton, ConfigUpload, CustomFieldsEditor
     │   ├── integrations/          # LocationSyncPanel, MonthEndPullPanel, PlacedOrdersTable
-    │   ├── inventory/             # InventoryOverlay, InventoryView
+    │   ├── inventory/             # InventoryOverlay, InventoryView, InventoryNavBar, InventoryShortcuts
     │   └── upload/                # FileUploadZone, ColumnMapper, DataSourceLinker
     ├── hooks/                     # useAuth, useTable, useDarkMode, useSidebarPrefs, useFeatureAccess, etc.
     ├── lib/                       # supabase.ts, roles.ts, orderEngine.ts, recountEngine.ts, transforms.ts, etc.
     ├── modules/
-    │   ├── admin/                 # UsersPage, InviteUserModal
+    │   ├── admin/                 # UsersPage (users, departments, feature access), InviteUserModal
+    │   ├── comms/                 # LocationCommsPage, LocationCommsModal, useCommsConfig
     │   ├── config/
     │   │   ├── GlobalConfigPage.tsx
     │   │   ├── ConfigPage.tsx
     │   │   └── tabs/              # LocationsTab, VendorPartsTab, OrderConfigTab, ProductMappingTab,
     │   │                          #   GlobalProductsTab, PosLocationMapTab, CompanyHolidaysTab
     │   ├── dev-hub/               # DevHubPage
+    │   ├── exceptions/            # ExceptionReportingPage, ExceptionReportModal, useExceptionConfig
     │   ├── feature-requests/
     │   ├── forms/                 # FormBuilderPage, FormsListPage, FormAssignmentsPage, FormResultsPage
+    │   ├── inventory/             # InventoryAlertsPage
     │   ├── issues/                # IssuesPage, IssueFormModal
-    │   ├── locations/             # LocationsPage, LocationLookupOverlay, LocationDataSourceConfig
+    │   ├── locations/             # LocationsPage, LocationLookupPage/Overlay, AmRdLookupPage,
+    │   │                          #   TankMonitorsPage, TankEmailModal, TankProductMapping,
+    │   │                          #   LocationDataSourceConfig, MapRoutesTab
+    │   ├── marketing/             # MarketingPlannerPage, modals/, tabs/ (campaign planning)
     │   ├── meetings/              # MeetingNotesPage
     │   ├── monthend/              # MonthEndPage, CountsTab, RecountsTab, RecountLogicTab, etc.
     │   ├── operations/
@@ -112,13 +118,13 @@ inventoryos/
     │   ├── tasks/                 # TasksPage
     │   └── weekly/                # WeeklyPage
     ├── pages/                     # Dashboard, Login, OnHandPage, OrderConfig, OrderHistory, Setup, etc.
-    ├── services/
+    ├── services/                  # mondayService, droptopService, orderConfigService
     ├── stores/                    # authStore, monthEndStore, orderStore, weeklyStore (Zustand)
-    ├── types/                     # database.ts, forms.ts, index.ts, integrations.ts
+    ├── types/                     # database.ts, forms.ts, index.ts, integrations.ts, marketing.ts
     └── utils/                     # monthEndUtils.ts, orderNumberUtils.ts
 ```
 
-**Migration status:** Files under `supabase/migrations/Uploaded/` are applied to production. Files in `supabase/migrations/` root may be pending. Treat root-level migrations as possibly not yet live.
+**Migration status:** Files under `supabase/migrations/Uploaded/` are applied to production. Files in `supabase/migrations/` root may be pending — but root is not a reliable signal either: several root migrations (e.g. `20260817_forms_visibility_reapply.sql`) exist specifically because an earlier migration was written but never actually ran in production, and root files do get applied and then left in place. Do not infer applied/pending status from file location alone — if a feature depends on a specific column and it matters, verify empirically (query the column, or check whether recent commits reference save failures for it) rather than assuming. Default to the decoupled save pattern below for any new/recently-added column.
 
 ---
 
@@ -132,16 +138,35 @@ sb.schema('inventory').from('table_name')
 sb.schema('core').from('table_name')
 sb.schema('platform').from('table_name')
 sb.schema('outlier').from('table_name')
+sb.schema('forms').from('table_name')
+sb.schema('marketing').from('table_name')
 ```
 
 ### Schema map
 
 | Schema | Contains |
 |--------|----------|
-| `inventory` | counts, thresholds, orders, meeting_notes, projects, project_tasks, monthly_ending_balances, tank_monitors, location_order_config, global_products, product_id_mappings, uom_mappings, vendor_parts, vendors, product_usage |
-| `core` | **locations**, user_sidebar_prefs, shared config, pos_location_map, company_holidays |
-| `platform` | user_profiles (auth users, company, role, preferences) |
+| `inventory` | counts, thresholds, orders, order_profiles, order_sessions, meeting_notes, projects, project_tasks, monthly_ending_balances, recount_requests/recount_product_snapshots, tank_monitors, droptop_sync_log, location_order_config, location_comms, exception_reports, exception_issue_option, global_products, product_id_mappings, uom_mappings, vendor_parts, vendors, product_usage, issue_categories/issue_statuses/issue_tracker_columns/issue_custom_values (issue *config*, not the issues themselves — see `platform.issues` below), field_definitions, data_source_links |
+| `core` | **locations**, **tasks** (standalone user tasks — moved out of `inventory`), user_sidebar_prefs, user_feature_access, location_exclusions, location_supplemental, pos_location_map, company_holidays |
+| `platform` | user_profiles, **issues** (moved out of `inventory`, now department-scoped), departments, user_department_memberships, schedule_events, event_checklist_items, app_settings, custom_columns/custom_values, attachments |
 | `outlier` | report system: reports, report_entries, weeks, departments |
+| `forms` | form builder + submissions: forms, fields, field_conditions, condition_rules, submissions, responses, assignments, score_streaks, form_department_shares |
+| `marketing` | campaign planning: campaign_templates, campaign_template_tasks, monthly_plans, campaign_assignments, campaign_tasks |
+
+**Gotchas from recent schema moves — don't assume the old location:**
+- `tasks` (standalone tasks) is in **`core`**, not `inventory`. `project_tasks` (project-scoped) is still in `inventory`.
+- `issues` is in **`platform`**, not `inventory`. The issue *config* tables (`issue_statuses`, `issue_categories`, `issue_tracker_columns`, `issue_custom_values`) stayed in `inventory`.
+- `exception_reports`/`location_comms` are separate but linked tables in `inventory` — a Location Comms row with `comm_type = 'Exception Reporting'` writes an `exception_reports` row too and stores its id in `exception_report_id`.
+
+---
+
+## Roles & department access
+
+Roles (`src/lib/roles.ts`): `developer`, `administrator`, `area_manager`, `director`, `department_user` (legacy `admin`/`user` still handled for display).
+
+- `isAdminOrDeveloper(role)` — developer/administrator/admin only.
+- `department_user` role is scoped to specific departments via `platform.departments` + `platform.user_department_memberships`. `useDeptAccess()` (`src/hooks/useDeptAccess.ts`) returns the set of allowed sidebar section slugs (`inventory`, `operations`, `marketing`, `finance`, `accounting`, `project_management`) for the current user, or `null` if unrestricted. `App.tsx`'s `SmartRedirect`/`DEPT_FIRST_ROUTE` sends department users to their first allowed section.
+- Manage departments/memberships in `src/modules/admin/UsersPage.tsx`.
 
 ---
 
@@ -150,6 +175,7 @@ sb.schema('outlier').from('table_name')
 - **Email column is `email`**, not `work_email`
 - **Active users:** filter with `.is('deleted_at', null)` — **never** `.eq('is_active', true)` (column does not exist)
 - `user_profiles.id` IS the auth user ID — no separate join needed
+- `preferences` (jsonb, migration `20260815_user_preferences.sql`) backs cross-device UI prefs via `useProfilePrefs` — dark mode, nav order, dashboard shortcuts, FAB state, hidden sidebar sections, Location Lookup panel view. Falls back to localStorage-only if the column is missing.
 - New profile columns (`auto_push_tasks`, `skip_weekends_holidays`, `blocked_days`) may not exist in production until migration `20260628_eod_holidays.sql` is applied
 
 ```ts
@@ -236,6 +262,30 @@ Palette from `tailwind.config.ts` — CSS-variable-backed for dark mode:
 ### `inventory.location_data_source`
 `id, source_type, monday_board_id, monday_name_column, monday_code_column, monday_region_column, monday_market_column, monday_status_filter, azure_container_path, sync_schedule, last_synced_at, last_sync_count, updated_by, updated_at`
 
+### `inventory.exception_reports`
+`id, company_id, location_id, area_manager, date_of_finding, date_of_shop_action, report_type ('PO Match'|'Activity'|'Current On Hand'), issue, details, contacted (bool), contacted_date, response, rd_if_no, response_notes, status, metadata (jsonb), updated_by, last_change_source, created_at, updated_at`
+
+- Config (report types, per-type issue options, response-days default) lives in `platform.app_settings` key `exception_config` via `useExceptionConfig` — **not** in `inventory.exception_issue_option` (that table exists but is unused; defaults live in code).
+- Written from both the Exception Reporting page (`src/modules/exceptions/`) and the Location Lookup "Exceptions" box, and from Location Comms when `comm_type = 'Exception Reporting'`.
+
+### `inventory.location_comms`
+`id, company_id, location_id, comm_date, contact_method, email_subject, who_contacted, comm_type ('Product Request'|'Exception Reporting'|custom), products (jsonb array), action_taken, exception_report_id (nullable, set for Exception Reporting rows), status, notes, metadata, updated_by, last_change_source, created_at, updated_at`
+
+- Config (contact methods, who-contacted, comm types, action-taken options) lives in `platform.app_settings` key `comms_config` via `useCommsConfig`.
+- `LocationCommsPage.tsx` does its own direct query (not `useConfigTab`) because the modal multi-writes `exception_reports` + `location_comms` together.
+
+### `inventory.tank_monitors` (extended fields)
+Base tracked columns: `value, unit, product_id, keep_fill, on_hand, inventory_time, reading_date`. Extended (migration `20260815_tank_monitor_fields.sql`): `volume_alarm_status, key_note, battery_pct, serial_rtu_id, system_tank_id, level_inches, low_set_point_pct, height, source_location, available_capacity` and a generated `total_capacity` (`on_hand + available_capacity`, stored). `source_location` holds the raw uploaded shop string for monitors not yet matched to a `core.locations` row.
+
+### `platform.departments` / `platform.user_department_memberships`
+`departments`: `id, company_id, name, slug, sort_order, created_at, created_by` — seeded with `inventory`, `operations`, `marketing`, `finance`, `accounting`, `project_management` per company. `user_department_memberships`: `id, user_id, department_id, company_id, created_at, created_by`. Drive `department_user` role scoping — see Roles & department access above.
+
+### `platform.issues`
+Moved from `inventory.issues`; adds `department_id` (references `platform.departments`). `inventory.issue_statuses`, `inventory.issue_categories`, `inventory.issue_tracker_columns`, `inventory.issue_custom_values` remain in `inventory` and still join by issue id.
+
+### `marketing.*` (campaign planning)
+`campaign_templates` (company_id, name, category, description, is_active, sort_order) → `campaign_template_tasks` (per-template checklist) → `monthly_plans` (company_id, location_id, plan_month, plan_year, unique per location/month/year) → `campaign_assignments` (plan + template, snapshots name/category at assignment time) → `campaign_tasks` (assignment + template task, snapshots name/description, status: not_started/in_progress/complete/blocked/not_applicable). Assignments/tasks **snapshot** the template text at creation time so later template edits don't retroactively change existing plans.
+
 ---
 
 ## Defensive migration / decoupled save pattern
@@ -270,6 +320,10 @@ sb.schema('x').from('table')
 - `src/modules/operations/outlier/pages/ReportViewPage.tsx` — AM/RDO assignment columns
 - `src/modules/meetings/MeetingNotesPage.tsx` — `links` column on `inventory.meeting_notes`
 - `src/components/layout/Sidebar.tsx` — new profile columns (`auto_push_tasks`, etc.)
+- `src/hooks/useProfilePrefs.ts` — `platform.user_profiles.preferences` (falls back to localStorage-only)
+- `src/modules/tasks/TasksPage.tsx` — `core.tasks.target_date_end`
+- `src/modules/schedule/ScheduleEventModal.tsx` — `platform.schedule_events.color`/`checklist_lead_days`, `platform.event_checklist_items.start_offset_days`/`end_offset_days`
+- `src/modules/locations/LocationLookupPage.tsx` / config tabs — `core.location_supplemental` reads (best-effort/guarded)
 
 ---
 
@@ -291,14 +345,36 @@ AM Dashboard header shows: assigned item count + "N needs attention" (orange) fo
 ### Locations — `src/modules/locations/`
 
 - `LocationsPage.tsx` — quick access page with cascading filter dropdowns
-- `LocationLookupOverlay.tsx` — floating lookup panel with dnd-kit column management
-- `LocationDataSourceConfig.tsx` — Monday.com / Azure source config
+- `LocationLookupPage.tsx` / `LocationLookupOverlay.tsx` — per-shop detail view (route `/location-lookup`): picker + sidebar fields + tank monitors + order configs by vendor + issues/exceptions/comms boxes + supplemental data. Floating-panel version supports dnd-kit column management and is shareable as a block.
+- `AmRdLookupPage.tsx` — route `/am-rd-lookup`; AM/RD-focused rollup pulling `location_order_config`, `vendors`, `issues`, `issue_statuses`, `location_comms`, `tank_monitors`.
+- `TankMonitorsPage.tsx` — route `/tank-monitors`; all/offline/low-VMI views, serial-based overwrite (no daily history), self-healing dedupe by serial, Manage Columns, email workflow (`TankEmailModal.tsx`, `TankEmailTemplates.tsx`, `tankEmail.ts`) with a per-template "VMI/keepfill only" toggle.
+- `TankProductMapping.tsx` — maps tank monitor products to `core.vendor_parts`.
+- `LocationDataSourceConfig.tsx` — Monday.com / Azure source config.
+- `MapRoutesTab.tsx` / `ManualRouteModal.tsx` — route mapping (migration `20260702_location_routes.sql`).
 
-Filter hierarchy: `meta:owner` → `region` → `meta:market` → `meta:area_manager` → `meta:regional_director`. Apply filters **before** passing data to `useTable()`.
+Filter hierarchy: `meta:owner` → `region` → `meta:market` → `meta:area_manager` → `meta:regional_director` (falls back to `meta:director`). Apply filters **before** passing data to `useTable()`.
 
-`locFieldValue(loc, field)` reads base fields directly or `meta:X` from `loc.metadata[X]`. `meta:regional_director` falls back to `meta:director`.
+`locFieldValue(loc, field)` reads base fields directly or `meta:X` from `loc.metadata[X]`.
+
+Per-user location exclusions (`core.location_exclusions`, `src/hooks/useLocationExclusions.ts`) filter listings/dashboards for a given user — apply after the standard filter hierarchy, before `useTable()`.
 
 Config tab: `src/modules/config/tabs/LocationsTab.tsx` (uses `useConfigTab` hook).
+
+### Exception Reporting — `src/modules/exceptions/`
+
+Separate from `platform.issues` — tracks a specific inventory finding workflow (PO Match / Activity / Current On Hand) through shop contact → response → resolution. `exceptions.ts` holds types + `REPORT_TYPES`/`DEFAULT_ISSUES`/`EXCEPTION_STATUSES` + `parseContacted`. Page is Tabs [Reports/Summary/Settings]: Reports is a bespoke inline-editable table (not `useConfigTab`) with sticky Status+Shop columns, a pencil→modal for full edit, status filter chips, and a "More" popup for details/response notes. Settings tab holds the Excel upload + config editing (via `useExceptionConfig`, `platform.app_settings` key `exception_config`). The same table backs the Location Lookup "Exceptions" box — keep both write paths in sync when editing save logic.
+
+### Location Comms — `src/modules/comms/`
+
+Log of shop/AM contacts. Two branches in `LocationCommsModal.tsx`: **Product Request** (products pulled from `location_order_config` for configured items, `product_usage` for non-configured; on-hand/days-of-supply read directly from `product_usage.days_of_supply`, not computed) and **Exception Reporting** (upserts an `exception_reports` row, stores its id back on the comms row). Contact method / who / type / action-taken are add-to-list combos backed by `comms_config` (`useCommsConfig`). Sidebar item + route `/location-comms`, plus a "Comms" box on Location Lookup.
+
+### Marketing Planner — `src/modules/marketing/`
+
+Campaign planning module, own `marketing` schema (see Database schema reference). `MarketingPlannerPage.tsx` with tabs (`MonthlyPlansTab`, `ExecutionTab`, `CampaignTemplatesTab`, `ReportingTab`) and modals (`NewPlanModal`, `PlanDetailModal`, `ExecutionDetailModal`, `ImportPlansModal`). Route `/marketing-planner`; first-landing route for `department_user`s scoped to the `marketing` department. Assignments/tasks snapshot template text at creation — editing a template does not retroactively change plans already assigned from it.
+
+### Departments & role-based access — `src/modules/admin/UsersPage.tsx`
+
+Admins manage per-user `role`, department memberships (`platform.user_department_memberships`), and per-feature access (`core.user_feature_access`, checked via `useFeatureAccess`). See Roles & department access above for how `department_user` scoping works end-to-end.
 
 ### Config tabs — `src/modules/config/tabs/`
 
@@ -363,6 +439,11 @@ Uses `src/lib/orderEngine.ts`. Key tabs: `NewOrderTab`, `OrderHistoryTab`, `MinR
 - Do **not** overwrite user-edited app data without an explicit conflict rule
 - Store file/source metadata when practical
 - Prefer import logs for traceability (`location_sync_log` or equivalent)
+
+### Droptop integration — `src/services/droptopService.ts`
+- Maps locations via `core.locations.droptop_operation_id`
+- Reads/writes `inventory.count_snapshots`, `inventory.pull_log`
+- Logs sync results to `inventory.droptop_sync_log` (mirrors the Monday.com `location_sync_log` pattern)
 
 ---
 
@@ -441,7 +522,9 @@ Risks / assumptions:
 - Do not use `.schema('public').from()` — sends an unsupported header to PostgREST
 - Do not assume `platform.user_profiles.work_email` exists (column is `email`)
 - Do not assume `platform.user_profiles.is_active` exists (use `deleted_at IS NULL`)
-- Do not treat columns from pending (non-Uploaded) migration files as guaranteed in production
+- Do not assume `tasks` is in `inventory` — it's in `core` (standalone tasks). `project_tasks` is still in `inventory`.
+- Do not assume `issues` is in `inventory` — it's in `platform` (issue config tables `issue_statuses`/`issue_categories`/`issue_tracker_columns`/`issue_custom_values` stayed in `inventory`)
+- Do not treat columns from pending (non-Uploaded) migration files as guaranteed in production — and don't treat root-migration-file location alone as proof a column is *missing* either; verify or use the decoupled save pattern
 - Do not mix keep-fill products into standard order generation without special handling
 - Do not hard-code Monday.com API tokens, Azure tenant/client IDs, OneDrive paths, or Supabase service-role keys — always use environment variables
 - Do not introduce a new state management library (Zustand is already in use) without approval

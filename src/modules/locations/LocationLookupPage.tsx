@@ -59,12 +59,21 @@ function lastUpdated(rows: Array<Record<string, any>>, keys: string[]): string |
 }
 
 // Small "Updated MM-DD-YYYY" callout shown under a card header.
-function UpdatedCallout({ date }: { date: string | null }) {
-  if (!date) return null
+function UpdatedCallout({ date, onOpen, openTitle }: { date: string | null; onOpen?: () => void; openTitle?: string }) {
+  if (!date && !onOpen) return null
+  if (!onOpen) {
+    return (
+      <span className="self-start inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/30 text-navy">
+        Updated {date}
+      </span>
+    )
+  }
   return (
-    <span className="self-start inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/30 text-navy">
-      Updated {date}
-    </span>
+    <button onClick={onOpen} title={openTitle ?? 'Open config'}
+      className="group self-start inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/30 text-navy hover:bg-sky/50 transition-colors">
+      {date ? `Updated ${date}` : 'Open config'}
+      <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
+    </button>
   )
 }
 
@@ -531,11 +540,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                     </div>
                   ))}
                 </dl>
-                <button onClick={() => navigate('/global-config?tab=locations')} title="Open Locations config"
-                  className="mt-1 self-start text-[11px] font-mono text-inky hover:text-sky transition-colors text-left inline-flex items-center gap-1">
-                  Open Locations Config <span className="text-[10px]">↗</span>
-                </button>
-                <UpdatedCallout date={locUpdated} />
+                <UpdatedCallout date={locUpdated} onOpen={() => navigate('/global-config?tab=locations')} openTitle="Open Locations config" />
               </CardBody>
             </Card>
             <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
@@ -548,10 +553,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             <Card className="w-fit max-w-full">
               <CardBody className="flex flex-col gap-2">
                 <div className="flex items-center gap-3 self-start">
-                  <button onClick={() => navigate('/config?tab=tank-monitor')} title="Open Tank Monitor config"
-                    className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1">
-                    Tank Monitors ({tanks.length}) <span className="text-[10px] text-inky/50">↗</span>
-                  </button>
+                  <span className="text-xs font-mono text-navy uppercase tracking-wide">
+                    Tank Monitors ({tanks.length})
+                  </span>
                   {tanks.length > 0 && (
                     <button onClick={copyTanks} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
                   )}
@@ -565,7 +569,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                     <button onClick={() => setEmailKind('lowvmi')} title="Draft a low VMI coverage email" className="text-[10px] font-mono text-[#E67E22] border border-[#E67E22]/40 rounded px-1.5 py-0.5 hover:border-[#E67E22] inline-flex items-center gap-1">✉ Low VMI</button>
                   )}
                 </div>
-                {tanks.length > 0 && <UpdatedCallout date={tanksUpdated} />}
+                <UpdatedCallout date={tanks.length > 0 ? tanksUpdated : null} onOpen={() => navigate('/config?tab=tank-monitor')} openTitle="Open Tank Monitor config" />
                 {tanks.length === 0 ? (
                   <p className="text-xs font-mono text-inky/60">No tank monitor readings for this shop.</p>
                 ) : visibleTankCols.length === 0 ? (
@@ -805,11 +809,10 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
   return (
     <Card>
       <CardBody className="flex flex-col gap-2">
-        <button onClick={onOpenConfig} title="Open Order Config"
-          className="text-xs font-mono text-navy uppercase tracking-wide hover:text-sky transition-colors text-left inline-flex items-center gap-1 self-start">
-          {vendor} Order Config ({rows.length}) <span className="text-[10px] text-inky/50">↗</span>
-        </button>
-        <UpdatedCallout date={updated} />
+        <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
+          {vendor} Order Config ({rows.length})
+        </span>
+        <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
         {columns.length === 0 ? (
           <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
         ) : (
