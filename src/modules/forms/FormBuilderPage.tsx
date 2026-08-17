@@ -1306,14 +1306,19 @@ export function FormBuilderPage() {
     if (!profile?.id) return
     setSaving(true)
     try {
+      // `category` is written best-effort below — some environments don't yet
+      // have the forms.category column (or PostgREST's schema cache is stale),
+      // and it must not block saving the rest of the form.
+      const { category, ...core } = formData as any
       const payload: any = {
-        ...formData,
+        ...core,
         ...(publish != null ? { is_published: publish } : {}),
         updated_at: new Date().toISOString(),
       }
       let id = savedId
       if (id) {
-        await sb.schema('forms').from('forms').update(payload).eq('id', id)
+        const { error } = await sb.schema('forms').from('forms').update(payload).eq('id', id)
+        if (error) { toast.error(error.message); return }
       } else {
         const { data, error } = await sb.schema('forms').from('forms')
           .insert({ ...payload, created_by: profile.id, company_id: profile.company_id })
@@ -1322,6 +1327,11 @@ export function FormBuilderPage() {
         id = data.id
         setSavedId(id)
         navigate(`/forms/${id}/edit`, { replace: true })
+      }
+      // Best-effort: skip silently if the column isn't present in this environment.
+      if (category !== undefined) {
+        sb.schema('forms').from('forms').update({ category }).eq('id', id!)
+          .then(({ error }: any) => { if (error) console.warn('Form category not saved (column missing?):', error.message) })
       }
       await saveFormFields(id!, fields as FormField[], conditions)
       if (formData.visibility === 'departments') {
