@@ -16,6 +16,7 @@ export interface TankEmailTemplate {
 // Tokens the templates may reference. monitor_table + magnet_image are HTML
 // blocks; the rest are plain text resolved per shop.
 export const TANK_EMAIL_TOKENS: { token: string; label: string }[] = [
+  { token: 'greeting', label: 'Good morning / afternoon (based on your local time)' },
   { token: 'shop_number', label: 'Shop number' },
   { token: 'shop_name', label: 'Shop name / city' },
   { token: 'area_manager', label: 'Area manager name' },
@@ -26,10 +27,16 @@ export const TANK_EMAIL_TOKENS: { token: string; label: string }[] = [
   { token: 'magnet_image', label: 'Magnet photo (uploaded below)' },
 ]
 
+// "Good morning," before noon local time, "Good afternoon," otherwise — used to
+// fill the {{greeting}} token when a draft is copied.
+export function greetingFor(d: Date = new Date()): string {
+  return d.getHours() < 12 ? 'Good morning,' : 'Good afternoon,'
+}
+
 export const OFFLINE_DEFAULT: TankEmailTemplate = {
   subject: 'Shop {{shop_number}} - Offline Tank Monitor(s)',
   to: '{{shop_email}}, {{am_email}}',
-  body: `Good afternoon,
+  body: `{{greeting}}
 
 Your tank monitor(s) with the following product(s) and serial number(s) are showing as offline:
 
@@ -51,7 +58,7 @@ Thank you,`,
 export const LOWVMI_DEFAULT: TankEmailTemplate = {
   subject: 'Shop {{shop_number}} - Tank Monitor Coverage',
   to: '{{shop_email}}, {{am_email}}',
-  body: `Good afternoon,
+  body: `{{greeting}}
 
 Our records show shop {{shop_number}} currently has limited tank monitor (VMI) coverage. The following bulk products are on managed inventory today:
 
@@ -152,4 +159,33 @@ export function pluralizeParens(text: string, count: number): string {
 export function magnetImageHtml(dataUri: string | null | undefined): string {
   if (!dataUri) return ''
   return `<img src="${dataUri}" alt="Rub magnet on top of monitor" style="max-width:340px;height:auto;border:1px solid #4F7489;" />`
+}
+
+// Default "skip a monitor if we already emailed about it recently" window.
+export const DEFAULT_EMAIL_SKIP_DAYS = 5
+
+// Per-monitor last-emailed dates, derived from inventory.location_comms rows
+// logged by the tank email workflow (each row's `products` holds the serials
+// that email covered — see TankEmailModal.logAndNext). Returns location_id ->
+// (serial -> last comm_date/updated_at, ISO). Rows with no products (e.g. logs
+// from before this tracking existed) simply contribute nothing.
+export function buildMonitorEmailLog(
+  rows: { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown }[],
+): Map<string, Map<string, string>> {
+  const byLoc = new Map<string, Map<string, string>>()
+  for (const row of rows) {
+    if (!row.location_id) continue
+    const when = row.comm_date || row.updated_at
+    if (!when) continue
+    const list = Array.isArray(row.products) ? (row.products as { serial?: string | null }[]) : []
+    if (!list.length) continue
+    let forLoc = byLoc.get(row.location_id)
+    if (!forLoc) { forLoc = new Map(); byLoc.set(row.location_id, forLoc) }
+    for (const p of list) {
+      if (!p?.serial) continue
+      const prev = forLoc.get(p.serial)
+      if (!prev || when > prev) forLoc.set(p.serial, when)
+    }
+  }
+  return byLoc
 }

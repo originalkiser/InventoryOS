@@ -1,12 +1,15 @@
 // Types + editable config for Location Communications.
 
+// Also reused (serial + product_id only) by the tank-monitor email log — see
+// buildMonitorEmailLog in ../locations/tankEmail.ts.
 export interface CommProduct {
   product_id: string
-  configured: boolean
-  on_hand: number | null
-  days_of_supply: number | null
-  orderable: boolean
-  eta: string | null
+  configured?: boolean
+  on_hand?: number | null
+  days_of_supply?: number | null
+  orderable?: boolean
+  eta?: string | null
+  serial?: string | null
 }
 
 export interface LocationComm {

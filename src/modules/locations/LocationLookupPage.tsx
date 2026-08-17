@@ -11,7 +11,7 @@ import type { ExceptionReport } from '@/modules/exceptions/exceptions'
 import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
-import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate } from './tankEmail'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location, TankMonitor } from '@/types'
@@ -22,7 +22,7 @@ const LAST_SHOP_KEY = 'location-lookup:last-shop'
 const VIEW_KEY = 'location-lookup:view'
 
 interface TankRow {
-  id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null
+  id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null; system_tank_id?: string | null
   on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
   updated_at?: string | null
   internal?: string // resolved internal product id (manual map → vendor parts)
@@ -343,6 +343,32 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const nonVmiOffline = useMemo(() => offlineTanks.filter((t) => !t.keep_fill), [offlineTanks])
   const showOfflineBtn = vmiOffline.length > 0 || (!!prefs.nonVmiOfflineBtn && nonVmiOffline.length > 0)
 
+  // Per-serial last-emailed dates from the Offline Monitor email log for this
+  // shop — powers the "Last emailed …" hover on stale/offline readings below.
+  const offlineLog = useMemo(() => {
+    const rows = comms.filter((c) => c.comm_type === 'Offline Tank Monitor')
+      .map((c) => ({ location_id: c.location_id, comm_date: c.comm_date, updated_at: c.updated_at, products: c.products }))
+    return buildMonitorEmailLog(rows).get(shopId) ?? new Map<string, string>()
+  }, [comms, shopId])
+
+  // Stale/offline "Last Update" cell — same red/orange flag as the plain
+  // render below, but the tooltip explains whether (and when) we emailed
+  // about it, or why we didn't (e.g. not on VMI, so the offline email skips it).
+  function renderUpdatedCell(t: TankRow) {
+    const d = t.inventory_time ?? t.reading_date
+    const stale = !!d && Date.now() - new Date(d).getTime() > 2 * 86400000
+    const cls = stale ? (t.keep_fill ? 'text-[#C0392B] font-bold' : 'text-[#E67E22] font-bold') : ''
+    let title: string | undefined
+    if (stale) {
+      const serial = t.serial_rtu_id || t.system_tank_id || ''
+      const last = serial ? offlineLog.get(serial) : undefined
+      if (last) title = `Last emailed ${format(new Date(last), 'MMM d, yyyy')}`
+      else if (offlineTpl.vmiOnly !== false && !t.keep_fill) title = 'Not emailed — not on VMI/keepfill'
+      else title = 'Not yet emailed'
+    }
+    return <span className={cls} title={title}>{dateTime(d)}{stale ? ' ⚠' : ''}</span>
+  }
+
   // Unit shown on the On Hand header: use a shared row unit if present, else default to gallons.
   const tankUnit = useMemo(() => {
     const units = new Set(tanks.map((t) => normUnit(t.unit)).filter(Boolean) as string[])
@@ -480,7 +506,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         </div>
       )}
       {!embedded && (
-        <div className="sticky top-0 z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3">
+        <div className="sticky z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3" style={{ top: 'var(--inv-navbar-h, 0px)' }}>
           <div>
             <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Inventory Location Lookup</h1>
             {shopId
@@ -519,7 +545,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       ) : (
         <div className={`grid grid-cols-1 gap-4 items-start ${embedded ? '' : 'lg:grid-cols-[280px_1fr]'}`}>
           {/* Left info — frozen while the tables/issues scroll */}
-          <div className={`self-start flex flex-col gap-3 ${embedded ? '' : 'lg:sticky lg:top-[4.5rem]'}`}>
+          <div className={`self-start flex flex-col gap-3 ${embedded ? '' : 'lg:sticky'}`}
+            style={!embedded ? { top: 'calc(var(--inv-navbar-h, 0px) + 4.5rem)' } : undefined}>
             <Card>
               <CardBody className="flex flex-col gap-2">
                 {!embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />}
@@ -591,7 +618,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                       <tbody>
                         {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t) => (
                           <tr key={t.id} className="border-b border-navy/20">
-                            {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)}`}>{c.render(t)}</td>)}
+                            {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)}`}>{c.id === 'updated' ? renderUpdatedCell(t) : c.render(t)}</td>)}
                           </tr>
                         ))}
                       </tbody>
