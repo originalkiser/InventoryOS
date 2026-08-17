@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Copy, Mail, Columns3 } from 'lucide-react'
+import { Copy, Mail, Columns3, EyeOff } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -11,7 +11,8 @@ import { ColumnManagerModal } from './ColumnManagerModal'
 import { TankEmailModal, type EmailTarget } from './TankEmailModal'
 import { TankEmailTemplates } from './TankEmailTemplates'
 import { TankProductMapping } from './TankProductMapping'
-import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, DEFAULT_EMAIL_SKIP_DAYS } from './tankEmail'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from './tankEmail'
+import { refreshNavBadges } from '@/hooks/useNavBadges'
 import type { TankMonitor, Location, VendorPart } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -75,20 +76,25 @@ export function TankMonitorsPage() {
   const [emailTargets, setEmailTargets] = useState<EmailTarget[]>([])
   const [prodMap, setProdMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
   // Same skip settings as the email modal itself (shared app_settings keys)
-  // so "already emailed" monitors drop out of Offline here too, not just once
-  // you're inside the draft.
+  // so "already emailed" monitors drop out of Offline (and Low VMI) here
+  // too, not just once you're inside the draft.
   const [skipEnabled, setSkipEnabled] = useAppSetting<boolean>('tank_email_skip_enabled', true)
   const [skipDays, setSkipDays] = useAppSetting<number>('tank_email_skip_days', DEFAULT_EMAIL_SKIP_DAYS)
-  const [offlineCommsRows, setOfflineCommsRows] = useState<{ location_id: string | null; comm_date: string | null; updated_at: string; products: unknown }[]>([])
-  const loadOfflineCommsLog = useCallback(async () => {
+  const [monitorIgnore, setMonitorIgnore] = useAppSetting<string[]>('tank_monitor_ignore', [])
+  const [showIgnoredMonitors, setShowIgnoredMonitors] = useState(false)
+  const [commsRows, setCommsRows] = useState<{ location_id: string | null; comm_date: string | null; updated_at: string; products: unknown; comm_type: string | null }[]>([])
+  const loadCommsLog = useCallback(async () => {
     if (!companyId) return
     const sb = supabase as any
     const { data, error } = await sb.schema('inventory').from('location_comms')
-      .select('location_id, comm_date, updated_at, products').eq('company_id', companyId).eq('comm_type', 'Offline Tank Monitor')
+      .select('location_id, comm_date, updated_at, products, comm_type').eq('company_id', companyId)
+      .in('comm_type', ['Offline Tank Monitor', 'Low VMI Coverage'])
     if (error) return
-    setOfflineCommsRows((data ?? []) as typeof offlineCommsRows)
+    setCommsRows((data ?? []) as typeof commsRows)
   }, [companyId])
-  useEffect(() => { loadOfflineCommsLog() }, [loadOfflineCommsLog])
+  useEffect(() => { loadCommsLog() }, [loadCommsLog])
+  const offlineCommsRows = useMemo(() => commsRows.filter((r) => r.comm_type === 'Offline Tank Monitor'), [commsRows])
+  const lowVmiCommsRows = useMemo(() => commsRows.filter((r) => r.comm_type === 'Low VMI Coverage'), [commsRows])
 
   // Location is hidden if the user excluded it (shared with the rest of the app).
   const isHidden = useCallback((id: string | null) => { const l = loc.byId(id); return !!l && isExcluded(l) }, [loc, isExcluded])
@@ -175,9 +181,10 @@ export function TankMonitorsPage() {
   const offline = useMemo(() => filtered.filter((m) => {
     if (offlineVmiOnly && !m.keep_fill) return false
     const t = readingTime(m); if (t == null || latestReading - t <= 86400000) return false
+    if (monitorIgnore.includes(monitorIgnoreKey(m))) return false
     if (skipEnabled && isRecentlyEmailed(m)) return false
     return true
-  }), [filtered, latestReading, offlineVmiOnly, skipEnabled, isRecentlyEmailed])
+  }), [filtered, latestReading, offlineVmiOnly, skipEnabled, isRecentlyEmailed, monitorIgnore])
 
   // Count of low-VMI shops (mirrors LowVmiView) for the tab badge.
   const lowVmiCount = useMemo(() => {
@@ -275,13 +282,37 @@ export function TankMonitorsPage() {
               </Button>
             )}
           </div>
+          {monitorIgnore.length > 0 && (
+            <div className="text-[11px] font-mono mb-2">
+              <button onClick={() => setShowIgnoredMonitors((o) => !o)} className="text-inky/60 hover:text-navy hover:underline">
+                {monitorIgnore.length} monitor{monitorIgnore.length !== 1 ? 's' : ''} ignored {showIgnoredMonitors ? '▾' : '▸'}
+              </button>
+              {showIgnoredMonitors && (
+                <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                  {monitorIgnore.map((key) => {
+                    const m = monitors.find((mo) => monitorIgnoreKey(mo) === key)
+                    const label = m ? `${ctx.shopOf(m.location_id)} — ${ctx.internalOf(m.product_id)}` : key
+                    return (
+                      <span key={key} className="inline-flex items-center gap-1 rounded-full bg-navy/[0.06] border border-navy/15 px-2 py-0.5 text-navy">
+                        {label}
+                        <button onClick={() => { setMonitorIgnore(monitorIgnore.filter((x) => x !== key)); refreshNavBadges() }} title="Un-ignore this monitor" className="text-inky/50 hover:text-[#C0392B]">✕</button>
+                      </span>
+                    )
+                  })}
+                  <button onClick={() => { setMonitorIgnore([]); refreshNavBadges() }} className="text-inky/50 hover:text-navy hover:underline self-center">reset all</button>
+                </div>
+              )}
+            </div>
+          )}
           {loading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
             : offline.length === 0 ? <p className="text-xs font-mono text-inky/50 py-8">No offline monitors — all reported within 1 day of the latest upload.</p>
-            : <MonitorTable rows={offline} ctx={ctx} shopOf={ctx.shopOf} />}
+            : <MonitorTable rows={offline} ctx={ctx} shopOf={ctx.shopOf}
+                onIgnore={(m) => { setMonitorIgnore([...monitorIgnore, monitorIgnoreKey(m)]); refreshNavBadges() }} />}
         </TabsContent>
 
         <TabsContent value="lowvmi">
           <LowVmiView monitors={filtered} loc={loc} isExcluded={isExcluded} shopFilter={shopFilter} amFilter={amFilter} ignored={ignored} setIgnored={setIgnored} ctx={ctx}
+            skipEnabled={skipEnabled} setSkipEnabled={setSkipEnabled} skipDays={skipDays} setSkipDays={setSkipDays} lowVmiCommsRows={lowVmiCommsRows}
             onStartEmail={(targets) => { setEmailTargets(targets); setEmailKind('lowvmi') }} />
         </TabsContent>
 
@@ -302,7 +333,7 @@ export function TankMonitorsPage() {
           template={emailKind === 'offline' ? offlineTpl : lowvmiTpl}
           targets={emailTargets}
           internalOf={ctx.internalOf}
-          onLogged={loadOfflineCommsLog}
+          onLogged={loadCommsLog}
         />
       )}
     </div>
@@ -310,7 +341,7 @@ export function TankMonitorsPage() {
 }
 
 // ── Monitor table: click-header sort + shared Manage Columns modal ───────────
-function MonitorTable({ rows, ctx, shopOf }: { rows: TankMonitor[]; ctx: Ctx; shopOf: (id: string | null) => string }) {
+function MonitorTable({ rows, ctx, shopOf, onIgnore }: { rows: TankMonitor[]; ctx: Ctx; shopOf: (id: string | null) => string; onIgnore?: (m: TankMonitor) => void }) {
   // `shown` is the ordered list of visible column ids (managed by the shared
   // ColumnManagerModal). The Shop column is always shown + sticky, separately.
   const [shown, setShown] = useState<string[]>(() => {
@@ -384,7 +415,16 @@ function MonitorTable({ rows, ctx, shopOf }: { rows: TankMonitor[]; ctx: Ctx; sh
               const band = idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
               return (
                 <tr key={m.id} className={band}>
-                  <td className={`${tdBase} sticky left-0 z-10 ${band} ${stickyShop} font-semibold`} title={shopOf(m.location_id)}>{shopOf(m.location_id)}</td>
+                  <td className={`${tdBase} sticky left-0 z-10 ${band} ${stickyShop} font-semibold`}>
+                    <div className="flex items-center gap-1">
+                      {onIgnore && (
+                        <button onClick={() => onIgnore(m)} title="Ignore this monitor" className="flex-shrink-0 text-inky/40 hover:text-[#C0392B]">
+                          <EyeOff className="w-3 h-3" />
+                        </button>
+                      )}
+                      <span className="truncate" title={shopOf(m.location_id)}>{shopOf(m.location_id)}</span>
+                    </div>
+                  </td>
                   {shown.map((id) => <td key={id} className={tdBase}>{colOf(id).render(m, ctx)}</td>)}
                 </tr>
               )
@@ -454,8 +494,10 @@ function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLo
 }
 
 // ── Low VMI coverage ────────────────────────────────────────────────────────
-function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, setIgnored, ctx, onStartEmail }: {
+function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, setIgnored, ctx, skipEnabled, setSkipEnabled, skipDays, setSkipDays, lowVmiCommsRows, onStartEmail }: {
   monitors: TankMonitor[]; loc: ReturnType<typeof useLocations>; isExcluded: (l: Location) => boolean; shopFilter: string; amFilter: string; ignored: string[]; setIgnored: (v: string[]) => void; ctx: Ctx
+  skipEnabled: boolean; setSkipEnabled: (v: boolean) => void; skipDays: number; setSkipDays: (v: number) => void
+  lowVmiCommsRows: { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown }[]
   onStartEmail: (targets: EmailTarget[]) => void
 }) {
   const [showIgnoredList, setShowIgnoredList] = useState(false)
@@ -465,6 +507,18 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
     return m
   }, [monitors])
 
+  // Once a shop's been emailed about its low VMI coverage, it drops out for
+  // the skip window — matches the Offline tab's "skip tanks emailed" toggle.
+  const lowVmiLog = useMemo(() => buildMonitorEmailLog(lowVmiCommsRows), [lowVmiCommsRows])
+  const isRecentlyEmailed = useCallback((locationId: string) => {
+    const serials = (byShop.get(locationId) ?? []).filter((m) => m.keep_fill).map((m) => m.serial_rtu_id || m.system_tank_id || '')
+    const shopRows = lowVmiCommsRows.filter((r) => r.location_id === locationId)
+    const log = backfillTodayBlanket(lowVmiLog.get(locationId) ?? new Map(), shopRows, serials)
+    if (log.size === 0) return false
+    const mostRecent = [...log.values()].reduce((a, b) => (a > b ? a : b))
+    return (Date.now() - new Date(mostRecent).getTime()) / 86400000 < skipDays
+  }, [byShop, lowVmiLog, lowVmiCommsRows, skipDays])
+
   const shops = useMemo(() => loc.locations.filter((l) => {
     if (!l.active || isExcluded(l)) return false
     if (shopFilter && l.id !== shopFilter) return false
@@ -473,12 +527,20 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
     return keepfill < 4
   }).sort((a, b) => (a.shop_city || a.name).localeCompare(b.shop_city || b.name, undefined, { numeric: true })), [loc.locations, byShop, shopFilter, amFilter, isExcluded])
 
-  const visible = shops.filter((l) => !ignored.includes(l.id))
+  const visible = shops.filter((l) => !ignored.includes(l.id) && !(skipEnabled && isRecentlyEmailed(l.id)))
   const toggleIgnore = (id: string) => setIgnored(ignored.includes(id) ? ignored.filter((x) => x !== id) : [...ignored, id])
   const emailTargets = (): EmailTarget[] => visible.map((l) => ({ locationId: l.id, monitors: (byShop.get(l.id) ?? []).filter((m) => m.keep_fill) }))
 
   return (
     <div className="flex flex-col gap-3">
+      <label className="flex items-center gap-1.5 text-xs font-mono text-navy">
+        <input type="checkbox" checked={skipEnabled} onChange={(e) => setSkipEnabled(e.target.checked)} className="accent-sky" />
+        Skip tanks emailed in last
+        <input type="number" min={1} value={skipDays} disabled={!skipEnabled}
+          onChange={(e) => setSkipDays(Math.max(1, Number(e.target.value) || 1))}
+          className="w-12 bg-cream border border-navy/30 rounded px-1 py-0.5 text-center disabled:opacity-40" />
+        days
+      </label>
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs font-mono text-inky/60">Shops with fewer than 4 monitors on VMI/Keepfill. Ignore shops that will never need more.</p>
         {visible.length > 0 && (

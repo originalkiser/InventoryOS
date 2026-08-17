@@ -21,7 +21,7 @@ import {
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
-import { isStaleRecord, bumpedUntilISO } from '@/lib/staleness'
+import { isStaleRecord, bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -328,7 +328,7 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
                 // Stale (needs-action, unbumped) rows override the band with
                 // a light red flag — this is what drives the nav badge count.
                 const stale = isStaleRecord(r.status, r.date_of_finding, r.metadata, config.staleDays)
-                const band = stale ? 'bg-[#C0392B]/10' : idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
+                const band = stale ? STALE_ROW_BG : idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
                 return (
                   <tr key={r.id} className={band}>
                     <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>

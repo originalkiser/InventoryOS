@@ -7,6 +7,12 @@
 export const isClosedStatus = (status: string | null | undefined): boolean =>
   (status ?? '').toLowerCase().includes('closed')
 
+// Opaque light-red row tint for stale rows in sticky-column tables. Must be
+// a solid color, not a translucent bg-[#C0392B]/N — sticky columns rely on
+// an opaque background to hide horizontally-scrolled columns behind them; a
+// translucent tint lets that scrolled content bleed through visibly.
+export const STALE_ROW_BG = 'bg-[#F4DBD4] dark:bg-[#3A1F1C]'
+
 // ISO date-only string (YYYY-MM-DD) for "today + days" — used to store a
 // bump/snooze target in a row's metadata.
 export function bumpedUntilISO(days: number): string {

@@ -10,7 +10,7 @@ import { useCommsConfig } from './useCommsConfig'
 import type { LocationComm } from './comms'
 import { EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
-import { isStaleRecord, bumpedUntilISO } from '@/lib/staleness'
+import { isStaleRecord, bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -193,7 +193,7 @@ export function LocationCommsPage() {
                 // Stale (needs-action, unbumped) rows override the band with a
                 // light red flag — this is what drives the nav badge count.
                 const stale = isStaleRecord(r.status, r.comm_date, r.metadata, config.staleDays)
-                const band = stale ? 'bg-[#C0392B]/10' : idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
+                const band = stale ? STALE_ROW_BG : idx % 2 ? 'bg-navy/[0.04]' : 'bg-cream'
                 return (
                   <tr key={r.id} className={band}>
                     <td className={`${tdBase} sticky left-0 z-10 ${band} w-[200px] min-w-[200px]`}>

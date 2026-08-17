@@ -653,7 +653,7 @@ function UtilityNav({
               {ICONS[item.key] ?? ICONS.dashboard}
               <span className="truncate flex-1">{item.label}</span>
               {item.key === 'issues' && issuesBadge > 0 && (
-                <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center group-hover:opacity-0 transition-opacity">{issuesBadge}</span>
+                <span className={['flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center transition-opacity', expanded ? 'mr-4 group-hover:opacity-0' : ''].join(' ')}>{issuesBadge}</span>
               )}
             </NavLink>
             {expanded && (

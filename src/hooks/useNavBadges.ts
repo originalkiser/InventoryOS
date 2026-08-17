@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useInventoryAlertsStore } from './useInventoryAlerts'
 import { isStaleRecord } from '@/lib/staleness'
-import { buildMonitorEmailLog, backfillTodayBlanket, DEFAULT_EMAIL_SKIP_DAYS } from '@/modules/locations/tankEmail'
+import { buildMonitorEmailLog, backfillTodayBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from '@/modules/locations/tankEmail'
 import { DEFAULT_EXCEPTION_CONFIG } from '@/modules/exceptions/exceptions'
 import { DEFAULT_COMMS_CONFIG } from '@/modules/comms/comms'
 
@@ -29,13 +29,15 @@ async function fetchAppSetting(sb: any, companyId: string, key: string): Promise
 async function computeTankOfflineShops(companyId: string): Promise<number> {
   const sb = supabase as any
   const PAGE = 1000
-  const [{ count }, skipEnabledRaw, skipDaysRaw] = await Promise.all([
+  const [{ count }, skipEnabledRaw, skipDaysRaw, monitorIgnoreRaw] = await Promise.all([
     sb.schema('inventory').from('tank_monitors').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
     fetchAppSetting(sb, companyId, 'tank_email_skip_enabled'),
     fetchAppSetting(sb, companyId, 'tank_email_skip_days'),
+    fetchAppSetting(sb, companyId, 'tank_monitor_ignore'),
   ])
   const skipEnabled = skipEnabledRaw ?? true
   const skipDays = Number(skipDaysRaw ?? DEFAULT_EMAIL_SKIP_DAYS)
+  const monitorIgnore: string[] = Array.isArray(monitorIgnoreRaw) ? monitorIgnoreRaw : []
   const pages = Math.max(1, Math.ceil((count ?? 0) / PAGE))
   const [results, commsRes] = await Promise.all([
     Promise.all(Array.from({ length: pages }, (_, i) =>
@@ -65,6 +67,7 @@ async function computeTankOfflineShops(companyId: string): Promise<number> {
     if (!m.location_id || !m.keep_fill) continue // only VMI/keepfill monitors matter
     const t = rtime(m)
     if (!t || latestReading - t <= 86400000) continue // >1 day behind = offline
+    if (monitorIgnore.includes(monitorIgnoreKey(m))) continue // manually ignored
     if (!offlineByShop.has(m.location_id)) offlineByShop.set(m.location_id, [])
     offlineByShop.get(m.location_id)!.push(m)
   }

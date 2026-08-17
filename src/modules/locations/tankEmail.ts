@@ -5,6 +5,13 @@
 
 export type TankEmailKind = 'offline' | 'lowvmi'
 
+// Stable, location-qualified identity for a tank monitor — used to persist a
+// per-monitor "ignore" list (a bare serial could theoretically collide across
+// shops, so this always includes the location).
+export function monitorIgnoreKey(m: { location_id: string | null; serial_rtu_id: string | null; system_tank_id: string | null; product_id: string | null }): string {
+  return `${m.location_id ?? ''}|${m.serial_rtu_id || m.system_tank_id || m.product_id || ''}`
+}
+
 export interface TankEmailTemplate {
   subject: string
   to: string
