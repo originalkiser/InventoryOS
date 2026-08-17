@@ -5,10 +5,10 @@ import { SortableContext, rectSortingStrategy, arrayMove, useSortable } from '@d
 import { CSS } from '@dnd-kit/utilities'
 import { GripVertical } from 'lucide-react'
 import { SECTION_ITEMS, ICONS, type NavItem } from '@/components/layout/Sidebar'
-import { useInventoryAlertsStore } from '@/hooks/useInventoryAlerts'
+import { useNavBadge } from '@/hooks/useNavBadges'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 
-const ITEMS = SECTION_ITEMS.inventory.filter((i) => i.key !== 'dashboard' && i.to)
+const ITEMS: NavItem[] = [...SECTION_ITEMS.inventory.filter((i) => i.key !== 'dashboard' && i.to), { key: 'issues', label: 'Issues', to: '/issues' }]
 const DEFAULT_ORDER = ITEMS.map((i) => i.key)
 const byKey = new Map(ITEMS.map((i) => [i.key, i]))
 
@@ -22,7 +22,6 @@ export function InventoryShortcuts() {
   const persist = (next: string[]) => setOrderPref(next)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
   const shown = order.map((k) => byKey.get(k)).filter(Boolean) as NavItem[]
-  const alertCount = useInventoryAlertsStore((s) => s.derivedCount)
 
   return (
     <>
@@ -32,7 +31,6 @@ export function InventoryShortcuts() {
           <SortableContext items={order} strategy={rectSortingStrategy}>
             {shown.map((it) => (
               <Shortcut key={it.key} item={it} customize={customize}
-                badge={it.key === 'inventory-alerts' ? alertCount : 0}
                 onGo={() => it.to && navigate(it.to)} />
             ))}
           </SortableContext>
@@ -56,7 +54,8 @@ export function InventoryShortcuts() {
   )
 }
 
-function Shortcut({ item, customize, badge, onGo }: { item: NavItem; customize: boolean; badge: number; onGo: () => void }) {
+function Shortcut({ item, customize, onGo }: { item: NavItem; customize: boolean; onGo: () => void }) {
+  const badge = useNavBadge(item.key)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.key, disabled: !customize })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 }
   return (

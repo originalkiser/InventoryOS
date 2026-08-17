@@ -5,10 +5,10 @@ import { SortableContext, horizontalListSortingStrategy, arrayMove, useSortable 
 import { CSS } from '@dnd-kit/utilities'
 import { GripVertical, Eye, EyeOff, Settings2, Check } from 'lucide-react'
 import { SECTION_ITEMS, ICONS, type NavItem } from '@/components/layout/Sidebar'
-import { useInventoryAlertsStore } from '@/hooks/useInventoryAlerts'
+import { useNavBadge } from '@/hooks/useNavBadges'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 
-const ITEMS = SECTION_ITEMS.inventory.filter((i) => i.to)
+const ITEMS: NavItem[] = [...SECTION_ITEMS.inventory.filter((i) => i.to), { key: 'issues', label: 'Issues', to: '/issues' }]
 const DEFAULT_ORDER = ITEMS.map((i) => i.key)
 const byKey = new Map(ITEMS.map((i) => [i.key, i]))
 
@@ -19,7 +19,6 @@ export function InventoryNavBar() {
   const [customize, setCustomize] = useState(false)
   const [orderPref, setOrderPref] = useProfilePref<string[]>('inv-navbar:order', DEFAULT_ORDER)
   const [hidden, setHidden] = useProfilePref<string[]>('inv-navbar:hidden', [])
-  const alertCount = useInventoryAlertsStore((s) => s.derivedCount)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   // Reconcile stored order against the current item set (keep known, append new).
@@ -38,7 +37,7 @@ export function InventoryNavBar() {
           <SortableContext items={visible.map((i) => i.key)} strategy={horizontalListSortingStrategy}>
             {visible.map((it) => (
               <NavPill key={it.key} item={it} customize={customize} hidden={hidden.includes(it.key)}
-                onToggleHide={() => toggleHide(it.key)} badge={it.key === 'inventory-alerts' ? alertCount : 0} />
+                onToggleHide={() => toggleHide(it.key)} />
             ))}
           </SortableContext>
         </DndContext>
@@ -51,7 +50,8 @@ export function InventoryNavBar() {
   )
 }
 
-function NavPill({ item, customize, hidden, onToggleHide, badge }: { item: NavItem; customize: boolean; hidden: boolean; onToggleHide: () => void; badge: number }) {
+function NavPill({ item, customize, hidden, onToggleHide }: { item: NavItem; customize: boolean; hidden: boolean; onToggleHide: () => void }) {
+  const badge = useNavBadge(item.key)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.key, disabled: !customize })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 }
   const cls = 'flex-shrink-0 inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-heading transition-colors'

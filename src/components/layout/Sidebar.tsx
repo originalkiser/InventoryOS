@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom'
-import { useInventoryAlerts, useInventoryAlertsStore } from '@/hooks/useInventoryAlerts'
+import { useInventoryAlerts } from '@/hooks/useInventoryAlerts'
+import { useNavBadge } from '@/hooks/useNavBadges'
 import {
   normalizeBlockedDays,
   formatBlockedDayLabel,
@@ -190,8 +191,8 @@ function NavItemLink({
   dragStyle?: React.CSSProperties
 }) {
   const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
-  const alertCount = useInventoryAlertsStore((s) => s.derivedCount)
-  const showAlertBadge = item.key === 'inventory-alerts' && alertCount > 0 && showLabel
+  const badge = useNavBadge(item.key)
+  const showBadge = badge > 0 && showLabel
 
   if (!item.to) {
     return (
@@ -224,8 +225,8 @@ function NavItemLink({
         <span className="group-hover/row:hidden">{ICONS[item.key] ?? (item.key.startsWith('outlier-') ? ICONS.outlier : ICONS.dashboard)}</span>
         <span className="hidden group-hover/row:block">{ICONS[item.key] ?? (item.key.startsWith('outlier-') ? ICONS.outlier : ICONS.dashboard)}</span>
         {showLabel && <span className="truncate flex-1">{item.label}</span>}
-        {showAlertBadge && (
-          <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center">{alertCount}</span>
+        {showBadge && (
+          <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center">{badge}</span>
         )}
         {showLabel && onToggleFavorite && (
           <StarButton
@@ -612,6 +613,7 @@ function UtilityNav({
   const togglePin = (key: string) => setPinned((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]))
 
   const shown = expanded ? items : items.filter((i) => pinned.includes(i.key))
+  const issuesBadge = useNavBadge('issues')
 
   return (
     <div className="pt-1 pb-1 border-t border-[#F2F1E6]/8">
@@ -649,7 +651,10 @@ function UtilityNav({
               }
             >
               {ICONS[item.key] ?? ICONS.dashboard}
-              <span className="truncate flex-1 pr-4">{item.label}</span>
+              <span className="truncate flex-1">{item.label}</span>
+              {item.key === 'issues' && issuesBadge > 0 && (
+                <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center group-hover:opacity-0 transition-opacity">{issuesBadge}</span>
+              )}
             </NavLink>
             {expanded && (
               <button
