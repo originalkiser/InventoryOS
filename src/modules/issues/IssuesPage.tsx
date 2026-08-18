@@ -791,15 +791,25 @@ export function IssuesPage() {
   const allTable = useTable(issues, columns)
   const pendingTable = useTable(issues.filter(i => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('pending') || s.includes('open') }), columns)
   const resolvedTable = useTable(issues.filter(i => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('resolved') || s.includes('closed') }), columns)
+  // Everything the sidebar badge counts: any issue whose status doesn't read
+  // as closed/resolved. Deliberately not the same as "Pending" — a status
+  // like "In Progress" counts toward the badge but matches neither the
+  // pending nor the resolved filter, so it was previously in no tab.
+  const alertIssues = useMemo(
+    () => issues.filter(i => { const s = i.status_name?.toLowerCase() ?? ''; return !s.includes('resolved') && !s.includes('closed') }),
+    [issues],
+  )
+  const alertTable = useTable(alertIssues, columns)
 
   const pinnedIds = useMemo(() => customColumns.filter(c => c.pinned).map(c => `cf_${c.id}`), [customColumns])
   const { setColumnPinning: setAllPin } = allTable
   const { setColumnPinning: setPendPin } = pendingTable
   const { setColumnPinning: setResPin } = resolvedTable
+  const { setColumnPinning: setAlertPin } = alertTable
   useEffect(() => {
     const p = { left: ['select', 'title', ...builtinPinnedArr, ...pinnedIds], right: [] }
-    setAllPin(p); setPendPin(p); setResPin(p)
-  }, [builtinPinnedArr, pinnedIds, setAllPin, setPendPin, setResPin])
+    setAllPin(p); setPendPin(p); setResPin(p); setAlertPin(p)
+  }, [builtinPinnedArr, pinnedIds, setAllPin, setPendPin, setResPin, setAlertPin])
 
   useEffect(() => {
     if (!profile?.company_id) return
@@ -1024,10 +1034,14 @@ export function IssuesPage() {
 
       <Tabs defaultValue={defaultTab}>
         <TabsList>
+          <TabsTrigger value="alerts">Alerts ({alertIssues.length})</TabsTrigger>
           <TabsTrigger value="all">All Issues ({issues.length})</TabsTrigger>
           <TabsTrigger value="pending">Pending ({pendingTable.table.getCoreRowModel().rows.length})</TabsTrigger>
           <TabsTrigger value="resolved">Resolved ({resolvedTable.table.getCoreRowModel().rows.length})</TabsTrigger>
         </TabsList>
+        <TabsContent value="alerts">
+          <IssuesTable table={alertTable.table} filter={alertTable.globalFilter} onFilterChange={alertTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} clearSelectionToken={clearToken} />
+        </TabsContent>
         <TabsContent value="all">
           <IssuesTable table={allTable.table} filter={allTable.globalFilter} onFilterChange={allTable.setGlobalFilter} issues={issues} loading={loading} actions={actions} onSelectionChange={handleSelectionChange} clearSelectionToken={clearToken} />
         </TabsContent>

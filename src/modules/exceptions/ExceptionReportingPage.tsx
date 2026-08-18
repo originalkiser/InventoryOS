@@ -88,6 +88,13 @@ export function ExceptionReportingPage() {
 
   const rows = useMemo(() => (statusFilter === 'All' ? rowsAll : rowsAll.filter((r) => (r.status || 'No Status') === statusFilter)), [rowsAll, statusFilter])
 
+  // Same predicate the nav badge counts, so the Alerts tab and the sidebar
+  // number can never disagree.
+  const alertRows = useMemo(
+    () => rowsAll.filter((r) => isStaleRecord(r.status, r.date_of_finding, r.metadata, config.staleDays)),
+    [rowsAll, config.staleDays],
+  )
+
   async function handleImport(inRows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
     const payload = inRows.map((row) => {
@@ -132,11 +139,33 @@ export function ExceptionReportingPage() {
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Exception Reporting</h1>
           <p className="text-xs text-inky mt-0.5 mb-2">Inventory findings (PO match, activity, on-hand). Every cell is editable inline; the pencil opens full detail.</p>
           <div className="flex gap-1 border-b border-navy/30">
+            <TabsTrigger value="alerts">Alerts{alertRows.length > 0 ? ` (${alertRows.length})` : ''}</TabsTrigger>
             <TabsTrigger value="summary">Summary</TabsTrigger>
             <TabsTrigger value="reports">Reports</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </div>
         </div>
+
+        {/* Exactly the rows behind the sidebar badge: open, old enough to be
+            stale, and not currently bumped. */}
+        <TabsContent value="alerts">
+          {loading ? (
+            <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
+          ) : alertRows.length === 0 ? (
+            <p className="text-xs font-mono text-inky/60 py-8">
+              Nothing needs action — no open report is more than {config.staleDays} day{config.staleDays !== 1 ? 's' : ''} old.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs font-body text-inky mb-3">
+                Open reports at least {config.staleDays} day{config.staleDays !== 1 ? 's' : ''} old and not bumped — this is
+                what the sidebar count reflects. Close or bump a report to clear it from here.
+              </p>
+              <ExceptionTable rows={alertRows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
+                companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} />
+            </>
+          )}
+        </TabsContent>
 
         <TabsContent value="summary">
           <SummaryView data={rowsAll} config={config} />

@@ -178,6 +178,21 @@ export function TankMonitorsPage() {
     const last = log.get(serial)
     return last != null && (Date.now() - new Date(last).getTime()) / 86400000 < skipDays
   }, [offlineCommsRows, offlineCommsLog, skipDays])
+  // Exactly the badge's criteria — VMI/keepfill only (not the tab toggle),
+  // assigned to a shop, offline, not ignored, not recently emailed. The
+  // sidebar counts distinct shops across these.
+  const alertMonitors = useMemo(() => filtered.filter((m) => {
+    if (!m.location_id || !m.keep_fill) return false
+    const t = readingTime(m); if (t == null || latestReading - t <= 86400000) return false
+    if (monitorIgnore.includes(monitorIgnoreKey(m))) return false
+    if (skipEnabled && isRecentlyEmailed(m)) return false
+    return true
+  }), [filtered, latestReading, skipEnabled, isRecentlyEmailed, monitorIgnore])
+  const alertShopCount = useMemo(
+    () => new Set(alertMonitors.map((m) => m.location_id)).size,
+    [alertMonitors],
+  )
+
   const offline = useMemo(() => filtered.filter((m) => {
     if (offlineVmiOnly && !m.keep_fill) return false
     const t = readingTime(m); if (t == null || latestReading - t <= 86400000) return false
@@ -230,6 +245,7 @@ export function TankMonitorsPage() {
 
       <Tabs defaultValue="all">
         <TabsList>
+          <TabsTrigger value="alerts">Alerts{alertShopCount ? ` (${alertShopCount})` : ''}</TabsTrigger>
           <TabsTrigger value="all">All Monitors ({filtered.length})</TabsTrigger>
           <TabsTrigger value="offline">Offline ({offline.length})</TabsTrigger>
           <TabsTrigger value="lowvmi">Low VMI Coverage{lowVmiCount ? ` (${lowVmiCount})` : ''}</TabsTrigger>
@@ -259,6 +275,33 @@ export function TankMonitorsPage() {
               {unassigned.length > 0 && <UnassignedMatcher rows={unassigned} shopOptions={shopOptions} companyId={companyId} onMatched={load} onReloadLocations={loc.reload} matchIgnore={matchIgnore} setMatchIgnore={setMatchIgnore} />}
               <MonitorTable rows={filtered} ctx={ctx} shopOf={ctx.shopOf} />
             </div>
+          )}
+        </TabsContent>
+
+        {/* Alerts — the shops behind the sidebar count. Same rules as Offline
+            but always VMI-only and shop-assigned, since that's what the badge
+            counts; no toggles here so the two can't drift apart. */}
+        <TabsContent value="alerts">
+          {loading ? (
+            <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
+          ) : alertMonitors.length === 0 ? (
+            <p className="text-xs font-mono text-inky/50 py-8">
+              Nothing needs action — every VMI monitor is reporting, ignored, or already emailed within the last {skipDays} days.
+            </p>
+          ) : (
+            <>
+              <div className="flex items-center gap-3 mb-3 flex-wrap">
+                <span className="text-xs font-body text-inky">
+                  <strong className="text-navy">{alertShopCount}</strong> shop{alertShopCount !== 1 ? 's' : ''} need action —
+                  {' '}{alertMonitors.length} offline VMI monitor{alertMonitors.length !== 1 ? 's' : ''} not yet emailed about.
+                </span>
+                <Button size="sm" className="ml-auto" onClick={() => { setEmailTargets(groupTargets(alertMonitors)); setEmailKind('offline') }}>
+                  <Mail className="w-3.5 h-3.5 mr-1" /> Start email communication ({groupTargets(alertMonitors).length})
+                </Button>
+              </div>
+              <MonitorTable rows={alertMonitors} ctx={ctx} shopOf={ctx.shopOf}
+                onIgnore={(m) => { setMonitorIgnore([...monitorIgnore, monitorIgnoreKey(m)]); refreshNavBadges() }} />
+            </>
           )}
         </TabsContent>
 

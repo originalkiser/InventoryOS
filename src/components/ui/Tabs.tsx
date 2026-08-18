@@ -24,7 +24,12 @@ export function Tabs({ defaultValue, children, className = '' }: TabsProps) {
 
 export function TabsList({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={['flex gap-1 border-b border-navy/30 mb-4 overflow-x-auto', className].join(' ')}>
+    // overflow-y-hidden is required, not cosmetic: when one axis is set to a
+    // non-visible overflow, CSS computes the other from `visible` to `auto`,
+    // so `overflow-x-auto` alone puts a stray vertical scrollbar on a
+    // one-line tab strip. (`clip` is not an alternative here — it degrades to
+    // `hidden` whenever the other axis scrolls.)
+    <div className={['flex gap-1 border-b border-navy/30 mb-4 overflow-x-auto overflow-y-hidden', className].join(' ')}>
       {children}
     </div>
   )

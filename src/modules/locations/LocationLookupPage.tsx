@@ -167,11 +167,11 @@ function usePersistedSort(key: string) {
 
 const TANK_COLS: Col<TankRow>[] = [
   { id: 'product', label: 'Product', align: 'left', render: (t) => t.product_id ?? '—', sort: (t) => t.product_id },
-  { id: 'internal', label: 'Product ID (Internal)', align: 'left', render: (t) => t.internal || t.product_id || '—', sort: (t) => t.internal || t.product_id },
+  { id: 'internal', label: 'Product ID', align: 'left', render: (t) => t.internal || t.product_id || '—', sort: (t) => t.internal || t.product_id },
   { id: 'serial', label: 'Serial #', align: 'left', render: (t) => t.serial_rtu_id ?? '—', sort: (t) => t.serial_rtu_id },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand), sort: (t) => t.on_hand },
   { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity), sort: (t) => t.available_capacity },
-  { id: 'total_capacity', label: 'Total Capacity', align: 'right', render: (t) => num(tankCapacity(t)), sort: (t) => tankCapacity(t) },
+  { id: 'total_capacity', label: 'Capacity', align: 'right', render: (t) => num(tankCapacity(t)), sort: (t) => tankCapacity(t) },
   { id: 'height', label: 'Height', align: 'right', render: (t) => num(t.height), sort: (t) => t.height },
   { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>), sort: (t) => (t.keep_fill ? 1 : 0) },
   {
