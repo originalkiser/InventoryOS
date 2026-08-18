@@ -55,3 +55,15 @@ export const DEFAULT_COMMS_CONFIG: CommsConfig = {
 }
 
 export const isEmailMethod = (m: string | null | undefined) => (m ?? '').toLowerCase().includes('email')
+
+// Notes recorded once the issue is resolved. Stored in metadata rather than as
+// its own column so it needs no migration (same approach as bumped_until).
+export function resolutionNotes(r: { metadata?: Record<string, unknown> | null } | null | undefined): string {
+  const v = (r?.metadata as any)?.resolution_notes
+  return typeof v === 'string' ? v : ''
+}
+
+// Closed or Tentatively Closed — the states where a resolution is expected.
+export function isResolvedStatus(status: string | null | undefined): boolean {
+  return (status ?? '').toLowerCase().includes('closed')
+}

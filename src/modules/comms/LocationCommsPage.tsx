@@ -8,6 +8,7 @@ import { EditDate, EditSelect, CappedTextarea, inputCls } from '@/components/sha
 import { LocationCommsModal } from './LocationCommsModal'
 import { useCommsConfig } from './useCommsConfig'
 import type { LocationComm } from './comms'
+import { resolutionNotes } from './comms'
 import { EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { isStaleRecord, bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
@@ -27,6 +28,7 @@ const COLS: ColDef[] = [
   { id: 'products', label: 'Products', filter: true },
   { id: 'action', label: 'Action Taken', filter: true },
   { id: 'notes', label: 'Notes', filter: true },
+  { id: 'resolution', label: 'Resolution Notes', filter: true },
 ]
 
 export function LocationCommsPage() {
@@ -92,6 +94,7 @@ export function LocationCommsPage() {
       case 'products': return (r.products ?? []).map((p) => p.product_id).join(' ')
       case 'action': return r.action_taken ?? ''
       case 'notes': return r.notes ?? ''
+      case 'resolution': return resolutionNotes(r)
       default: return ''
     }
   }
@@ -219,6 +222,10 @@ export function LocationCommsPage() {
                     </td>
                     <td className={tdBase}><EditSelect value={r.action_taken} options={config.actionTaken} placeholder="—" allowCurrent onSave={(v) => set(r, { action_taken: v })} /></td>
                     <td className={`${tdBase} whitespace-normal`}><CappedTextarea value={r.notes ?? ''} onSave={(v) => set(r, { notes: v })} /></td>
+                    <td className={`${tdBase} whitespace-normal`}>
+                      <CappedTextarea value={resolutionNotes(r)}
+                        onSave={(v) => set(r, { metadata: { ...(r.metadata ?? {}), resolution_notes: v } })} />
+                    </td>
                   </tr>
                 )
               })}

@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useCommsConfig } from './useCommsConfig'
-import { isEmailMethod, type LocationComm, type CommProduct } from './comms'
+import { isEmailMethod, isResolvedStatus, resolutionNotes, type LocationComm, type CommProduct } from './comms'
 import { useExceptionConfig } from '@/modules/exceptions/useExceptionConfig'
 import { followUpDate } from '@/modules/exceptions/exceptions'
 import { DEFAULT_STATUS, EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
@@ -40,6 +40,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
   const [actionTaken, setActionTaken] = useState('')
   const [status, setStatus] = useState('')
   const [notes, setNotes] = useState('')
+  const [resolution, setResolution] = useState('')
   // Exception branch
   const [reportType, setReportType] = useState('')
   const [issue, setIssue] = useState('')
@@ -70,6 +71,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
     setActionTaken(existing?.action_taken ?? '')
     setStatus(existing?.status ?? (existing?.id ? '' : DEFAULT_STATUS))
     setNotes(existing?.notes ?? '')
+    setResolution(resolutionNotes(existing))
     setReportType(''); setIssue(''); setDetails(''); setResponse(''); setResponseDate(''); setResponseNotes('')
     setFollowUp(''); setExcMetadata({})
     setDeleteConfirm(false)
@@ -162,6 +164,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
       products: isProductRequest ? products : [],
       action_taken: isProductRequest ? (actionTaken || null) : null,
       exception_report_id: exceptionId, status: status || null, notes: notes.trim() || null,
+      metadata: { ...(existing?.metadata ?? {}), resolution_notes: resolution.trim() || null },
       last_change_source: 'manual', ...stamp,
     }
     const { error } = existing?.id
@@ -268,6 +271,17 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
         <div className="col-span-2">
           <Select label="Status" value={status} onChange={(e) => setStatus(e.target.value)} options={[{ value: '', label: 'Select status…' }, ...statusList.map((s) => ({ value: s, label: s }))]} />
         </div>
+
+        {/* Only asked for once the comm is being closed out — a resolution
+            doesn't exist yet while it's still pending. */}
+        {isResolvedStatus(status) && (
+          <div className="col-span-2">
+            <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Resolution Notes</label>
+            <textarea value={resolution} onChange={(e) => setResolution(e.target.value)} rows={2}
+              className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy focus:outline-none focus:ring-2 focus:ring-sky"
+              placeholder="How was this resolved?" />
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-2 mt-4">
