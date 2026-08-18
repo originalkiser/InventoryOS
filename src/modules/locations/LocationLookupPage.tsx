@@ -937,21 +937,20 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
         <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
           {vendor} Order Config ({rows.length})
         </span>
-        <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
+          {usageUpdated && (
+            <button onClick={() => navigate('/config?tab=product-usage')} title="Open Product Usage config"
+              className="group inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy hover:bg-[#2ECC71]/35 transition-colors">
+              Updated {usageUpdated}
+              <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
+            </button>
+          )}
+        </div>
         {columns.length === 0 ? (
           <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
         ) : (
-          <>
-            {usageUpdated && (
-              <div className="flex justify-end">
-                <button onClick={() => navigate('/config?tab=product-usage')} title="Open Product Usage config"
-                  className="group self-start inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy hover:bg-[#2ECC71]/35 transition-colors">
-                  Updated {usageUpdated}
-                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
-                </button>
-              </div>
-            )}
-            <div className="overflow-auto rounded border border-navy/30">
+          <div className="overflow-auto rounded border border-navy/30">
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
@@ -972,8 +971,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
                 ))}
               </tbody>
             </table>
-            </div>
-          </>
+          </div>
         )}
       </CardBody>
     </Card>
