@@ -272,10 +272,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     setLoading(true); setError(null)
     const sb = supabase as any
     try {
-      const [tankRes, cfgRes, usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes] = await Promise.all([
+      const [tankRes, cfgRes, usageRes, mapRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         sb.schema('inventory').from('product_usage').select('product_id, on_hands, daily_usage, updated_at').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
+        sb.schema('inventory').from('product_id_mappings').select('old_product_id, new_product_id').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
         sb.schema('platform').from('issues').select('*').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
@@ -299,8 +300,30 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       }
       setTankRows([...latestByTank.values()])
       setVendorParts((partsRes?.data ?? []) as any[])
-      const usageByProduct = new Map(((usageRes?.data ?? []) as any[]).filter((u) => u.product_id).map((u) => [u.product_id, u]))
-      setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({ ...r, usage: r.product_id ? usageByProduct.get(r.product_id) ?? null : null })))
+
+      // Product Usage is often still keyed by retired product ids while the
+      // order config already uses the new ones. Resolve each usage row through
+      // product_id_mappings (old -> new) and sum anything landing on the same
+      // product, so a config row shows what's actually on hand even when the
+      // usage file predates the rename.
+      const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+      const oldToNew = new Map<string, string>()
+      for (const m of ((mapRes?.data ?? []) as any[])) {
+        if (m.old_product_id && m.new_product_id) oldToNew.set(pkey(m.old_product_id), String(m.new_product_id))
+      }
+      const usageByProduct = new Map<string, { on_hands: number | null; daily_usage: number | null; updated_at: string | null }>()
+      for (const u of ((usageRes?.data ?? []) as any[])) {
+        if (!u.product_id) continue
+        const resolved = pkey(oldToNew.get(pkey(u.product_id)) ?? u.product_id)
+        const cur = usageByProduct.get(resolved)
+        const add = (a: number | null, b: unknown) => (b == null ? a : (a ?? 0) + Number(b))
+        usageByProduct.set(resolved, {
+          on_hands: add(cur?.on_hands ?? null, u.on_hands),
+          daily_usage: add(cur?.daily_usage ?? null, u.daily_usage),
+          updated_at: !cur?.updated_at || (u.updated_at && u.updated_at > cur.updated_at) ? (u.updated_at ?? cur?.updated_at ?? null) : cur.updated_at,
+        })
+      }
+      setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({ ...r, usage: r.product_id ? usageByProduct.get(pkey(r.product_id)) ?? null : null })))
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))

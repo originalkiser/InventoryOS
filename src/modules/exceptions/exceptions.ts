@@ -97,13 +97,13 @@ export function businessDaysSince(startISO: string | null | undefined): number {
 // Was the regional director escalated? Explicit "Yes (after RD added)"/"No", or an
 // overdue no-response (response window passed with no yes).
 export function isRdAdded(
-  r: { response: string | null; contacted: boolean; contacted_date: string | null; date_of_finding: string | null },
+  r: { response: string | null; contacted: boolean; contacted_date: string | null; date_of_finding: string | null; metadata?: Record<string, unknown> | null },
   responseDays: number,
 ): boolean {
   if (!r.contacted) return false
   if (r.response === RESPONSE_YES_RD || r.response === RESPONSE_NO) return true
   if (isYesResponse(r.response)) return false
-  return businessDaysSince(r.contacted_date || r.date_of_finding) > responseDays
+  return businessDaysSince(responseWindowStart(r)) > responseDays
 }
 
 // What the "Regional Director" cell should show:
@@ -112,31 +112,34 @@ export function isRdAdded(
 //  - 'rd'   : window passed (or escalated) — show the RD name
 export interface RdCell { mode: 'none' | 'left' | 'rd'; daysLeft?: number }
 export function rdCell(
-  r: { response: string | null; contacted: boolean; contacted_date: string | null; date_of_finding: string | null },
+  r: { response: string | null; contacted: boolean; contacted_date: string | null; date_of_finding: string | null; metadata?: Record<string, unknown> | null },
   responseDays: number,
 ): RdCell {
   if (!r.contacted) return { mode: 'none' }
   if (r.response === RESPONSE_YES) return { mode: 'none' }
   if (r.response === RESPONSE_YES_RD || r.response === RESPONSE_NO) return { mode: 'rd' }
-  const start = r.contacted_date || r.date_of_finding
+  // A sent follow-up resets the clock, so the window runs from it when set.
+  const start = responseWindowStart(r)
   if (!start) return { mode: 'none' }
   const left = responseDays - businessDaysSince(start)
   return left > 0 ? { mode: 'left', daysLeft: left } : { mode: 'rd' }
 }
 
-// When to check back on this finding. Stored in metadata alongside
-// impacted_products rather than as its own column, so it needs no migration.
+// The date a follow-up was SENT (a past action, not a reminder). When set it
+// restarts the response window — the shop gets a fresh `responseDays` from
+// the follow-up rather than from the original contact. Blank = ignored.
+// Stored in metadata alongside impacted_products, so it needs no migration.
 export function followUpDate(r: { metadata?: Record<string, unknown> | null } | null | undefined): string | null {
   const v = (r?.metadata as any)?.follow_up_date
   return typeof v === 'string' && v ? v : null
 }
 
-// A follow-up is overdue once its date has passed and the report isn't closed.
-export function isFollowUpOverdue(r: { metadata?: Record<string, unknown> | null; status: string | null }): boolean {
-  const d = followUpDate(r)
-  if (!d) return false
-  if ((r.status ?? '').toLowerCase().includes('closed')) return false
-  return new Date(d + 'T00:00:00').getTime() < new Date().setHours(0, 0, 0, 0)
+// Where the response window starts counting: the most recent contact we made
+// — the follow-up if there was one, else the original contact, else the find.
+export function responseWindowStart(
+  r: { metadata?: Record<string, unknown> | null; contacted_date: string | null; date_of_finding: string | null },
+): string | null {
+  return followUpDate(r) || r.contacted_date || r.date_of_finding
 }
 
 // Products the finding affects — stored in metadata (not a dedicated column)

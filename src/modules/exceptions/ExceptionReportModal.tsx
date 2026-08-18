@@ -147,8 +147,8 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
         <Input label="Contacted Date" type="date" value={contactedDate} onChange={(e) => setContactedDate(e.target.value)} disabled={!contacted} />
 
         <div className="col-span-2">
-          <Input label="Follow-Up Date" type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
-          <p className="text-[10px] font-mono text-inky/50 mt-0.5">When to check back. Turns red in the table once the date passes and the report is still open.</p>
+          <Input label="Follow-Up Sent" type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
+          <p className="text-[10px] font-mono text-inky/50 mt-0.5">Date a follow-up was sent. Restarts the response window from this date; leave blank if there was no follow-up.</p>
         </div>
 
         <Select label="Response from Shop/AM" value={response} onChange={(e) => setResponse(e.target.value)}

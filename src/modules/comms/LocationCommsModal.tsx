@@ -251,7 +251,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
             <div className="grid grid-cols-2 gap-3">
               <Input label="Response from Shop/AM" value={response} onChange={(e) => setResponse(e.target.value)} placeholder="e.g. Yes" />
               <Input label="Response Date" type="date" value={responseDate} onChange={(e) => setResponseDate(e.target.value)} />
-              <Input label="Follow-Up Date" type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
+              <Input label="Follow-Up Sent" type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
             </div>
             <div>
               <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Response Notes</label>
