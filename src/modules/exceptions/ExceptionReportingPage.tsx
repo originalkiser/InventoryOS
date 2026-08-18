@@ -16,10 +16,11 @@ import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
 import {
   RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO,
-  parseContacted, isYesResponse, isRdAdded, rdCell,
+  parseContacted, isYesResponse, isRdAdded, rdCell, impactedProducts,
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
+import { ImpactedProductsPicker } from './ImpactedProductsPicker'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { isStaleRecord, bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
@@ -159,7 +160,7 @@ export function ExceptionReportingPage() {
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : (
             <ExceptionTable rows={rows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
-              onSet={set} onEdit={openEdit} />
+              companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} />
           )}
         </TabsContent>
 
@@ -182,6 +183,7 @@ const COL_META: Record<string, { label: string; filter: boolean; wrap?: boolean 
   area_manager: { label: 'Area Manager', filter: true },
   type: { label: 'Type', filter: true },
   issue: { label: 'Issue', filter: true },
+  products: { label: 'Impacted Products', filter: false, wrap: true },
   details: { label: 'Details', filter: true, wrap: true },
   contacted: { label: 'Contacted', filter: false },
   response: { label: 'Response', filter: true },
@@ -208,11 +210,12 @@ function SortableHeaderCell({ id, thBase, children }: { id: string; thBase: stri
   )
 }
 
-function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEdit }: {
+function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, onSet, onEdit }: {
   rows: ExceptionReport[]
   config: ExceptionConfig
   shopLabel: (id: string | null) => string
   regionalDirector: (id: string | null) => string
+  companyId: string | null
   onSet: (r: ExceptionReport, patch: Partial<ExceptionReport>) => void
   onEdit: (r: ExceptionReport) => void
 }) {
@@ -272,6 +275,8 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
       case 'area_manager': return <EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} />
       case 'type': return <EditSelect bare value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} />
       case 'issue': return <EditSelect bare value={r.issue} options={config.issues[r.report_type ?? ''] ?? []} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} />
+      case 'products': return <ImpactedProductsPicker compact companyId={companyId} locationId={r.location_id} selected={impactedProducts(r)}
+        onChange={(ids) => onSet(r, { metadata: { ...(r.metadata ?? {}), impacted_products: ids } })} />
       case 'details': return <AutoTextarea value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} />
       case 'contacted': return (
         <div className="flex items-center gap-1">
@@ -332,13 +337,19 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, onSet, onEd
                 return (
                   <tr key={r.id} className={band}>
                     <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                        <EditSelect bare value={r.status} options={config.statuses} placeholder="—" allowCurrent onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                      {/* Bump stacks under the select (rather than beside it) so the
+                          combined width never exceeds this sticky column's own width —
+                          content that overflowed the column used to get covered by the
+                          next sticky column (Shop) once the row scrolled under it. */}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
+                          <EditSelect bare value={r.status} options={config.statuses} placeholder="—" allowCurrent onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                        </div>
                         {stale && (
                           <button onClick={() => onSet(r, { metadata: { ...(r.metadata ?? {}), bumped_until: bumpedUntilISO(config.bumpDays) } })}
                             title={`Defer ${config.bumpDays} more day(s)`}
-                            className="flex-shrink-0 text-[10px] font-mono text-[#C0392B] border border-[#C0392B]/40 rounded px-1 py-0.5 hover:bg-[#C0392B]/10">
+                            className="self-start flex-shrink-0 text-[10px] font-mono text-[#C0392B] border border-[#C0392B]/40 rounded px-1 py-0.5 hover:bg-[#C0392B]/10">
                             Bump
                           </button>
                         )}

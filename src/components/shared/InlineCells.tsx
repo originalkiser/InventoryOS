@@ -44,16 +44,25 @@ export function CappedTextarea({ value, onSave, rows = 2 }: { value: string; onS
   )
 }
 
-// Auto-grows to fit its content (row height expands); width is user-resizable.
+// Auto-grows to fit its content (row height expands); width and height are
+// also user-resizable via the corner handle. Typing only ever grows the box
+// (never shrinks a height the user dragged taller) so a manual vertical
+// resize survives further edits.
 export function AutoTextarea({ value, onSave }: { value: string; onSave: (v: string | null) => void }) {
   const [v, setV] = useState(value)
   const ref = useRef<HTMLTextAreaElement>(null)
   useEffect(() => { setV(value) }, [value])
-  useLayoutEffect(() => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` } }, [v])
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const prevPx = parseFloat(el.style.height || '0')
+    el.style.height = 'auto'
+    el.style.height = `${Math.max(el.scrollHeight, prevPx)}px`
+  }, [v])
   return (
     <textarea ref={ref} value={v} rows={1}
       onChange={(e) => setV(e.target.value)}
       onBlur={() => { if ((v.trim() || '') !== (value ?? '')) onSave(v.trim() || null) }}
-      className={`${inputCls} resize-x w-48 min-w-[8rem] overflow-hidden leading-snug align-top`} />
+      className={`${inputCls} resize w-48 min-w-[8rem] overflow-hidden leading-snug align-top`} />
   )
 }

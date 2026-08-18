@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Modal, Button, Combobox, Select, Input, Toggle } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
+import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useExceptionConfig } from './useExceptionConfig'
-import { RESPONSE_OPTIONS, type ExceptionReport } from './exceptions'
+import { RESPONSE_OPTIONS, impactedProducts, type ExceptionReport } from './exceptions'
+import { ImpactedProductsPicker } from './ImpactedProductsPicker'
 import toast from 'react-hot-toast'
 
 interface Props {
@@ -19,6 +21,7 @@ const today = () => new Date().toISOString().split('T')[0]
 const stripHtml = (s: string | null | undefined) => (s ? s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '')
 
 export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDelete }: Props) {
+  const { profile } = useAuthStore()
   const loc = useLocations()
   const { config, save: saveConfig } = useExceptionConfig()
 
@@ -35,6 +38,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
   const [rdIfNo, setRdIfNo] = useState('')
   const [responseNotes, setResponseNotes] = useState('')
   const [status, setStatus] = useState('')
+  const [products, setProducts] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
 
@@ -53,6 +57,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
     setRdIfNo(existing?.rd_if_no ?? '')
     setResponseNotes(stripHtml(existing?.response_notes))
     setStatus(existing?.status ?? (existing?.id ? '' : (config.statuses[0] ?? '')))
+    setProducts(impactedProducts(existing))
     setDeleteConfirm(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing, open])
@@ -96,6 +101,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
       rd_if_no: rdIfNo.trim() || null,
       response_notes: responseNotes.trim() || null,
       status: status || null,
+      metadata: { ...(existing?.metadata ?? {}), impacted_products: products },
     }
     try {
       await onSubmit(fields, existing?.id)
@@ -121,6 +127,10 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
         <Select label="Exception Report Type" value={reportType} onChange={(e) => setReportType(e.target.value)} options={typeOptions} />
         <Combobox label="ER Issue" options={issueOptions} value={issue} onChange={setIssue}
           placeholder={reportType ? 'Select or add…' : 'Pick a type first'} allowCreate onCreateOption={createIssueOption} />
+
+        <div className="col-span-2 rounded-lg border border-navy/20 p-3">
+          <ImpactedProductsPicker companyId={profile?.company_id ?? null} locationId={locationId} selected={products} onChange={setProducts} />
+        </div>
 
         <div className="col-span-2">
           <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Details</label>

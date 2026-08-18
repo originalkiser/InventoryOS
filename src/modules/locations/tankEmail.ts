@@ -207,28 +207,43 @@ export function buildMonitorEmailLog(
   return byLoc
 }
 
-// A same-day "Offline Tank Monitor" comm logged with no specific serials
-// attached (a legacy row, or one logged by hand outside the email flow) still
-// almost certainly covers today's offline monitors at that shop — we just
-// can't say which serials specifically. Backfill: if such a comm exists for
-// today, treat every given serial not already in the log as covered as of
-// today, so the "last emailed" indicator picks it up.
+// A recent "Offline Tank Monitor" comm logged with no specific serials
+// attached (a legacy row, one logged by hand outside the email flow, or a
+// batch send where every candidate was itself skip-filtered out) still
+// almost certainly covers that shop's offline monitors as of when it was
+// logged — we just can't say which serials specifically. Backfill: the most
+// recent such blank-products comm within `windowDays` (default: the skip
+// window, so a blank log stays effective for as long as a per-serial one
+// would) fills in every given serial not already in the log, using that
+// comm's date as its "last emailed" value.
+//
+// Originally this only matched a blank comm logged *today*, which meant the
+// backfill silently stopped applying the day after — a shop genuinely
+// emailed yesterday (with an empty products array) would look "never
+// emailed" again by the next morning even though nothing about the shop had
+// changed. Widening the match to a rolling window fixes that.
 export function backfillTodayBlanket(
   log: Map<string, string>,
   rows: { comm_date: string | null; updated_at: string; products: unknown }[],
   serials: (string | null | undefined)[],
+  windowDays: number = DEFAULT_EMAIL_SKIP_DAYS,
 ): Map<string, string> {
-  const todayStr = localDateStr()
-  const hasBlanket = rows.some((r) => {
+  const cutoff = Date.now() - windowDays * 86400000
+  let mostRecent: string | null = null
+  for (const r of rows) {
     const list = Array.isArray(r.products) ? r.products : []
-    if (list.length > 0) return false
-    const d = (r.comm_date || r.updated_at || '').slice(0, 10)
-    return d === todayStr
-  })
-  if (!hasBlanket) return log
+    if (list.length > 0) continue
+    const raw = r.comm_date || r.updated_at
+    if (!raw) continue
+    const iso = raw.length <= 10 ? `${raw}T00:00:00` : raw
+    const t = new Date(iso).getTime()
+    if (Number.isNaN(t) || t < cutoff) continue
+    if (!mostRecent || iso > mostRecent) mostRecent = iso
+  }
+  if (!mostRecent) return log
   const next = new Map(log)
   for (const serial of serials) {
-    if (serial && !next.has(serial)) next.set(serial, `${todayStr}T00:00:00`)
+    if (serial && !next.has(serial)) next.set(serial, mostRecent!)
   }
   return next
 }

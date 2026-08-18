@@ -124,6 +124,14 @@ export function rdCell(
   return left > 0 ? { mode: 'left', daysLeft: left } : { mode: 'rd' }
 }
 
+// Products the finding affects — stored in metadata (not a dedicated column)
+// since it's an optional, recently-added field. Selected from the shop's
+// configured products, mirroring Location Comms' product picker.
+export function impactedProducts(r: { metadata?: Record<string, unknown> | null } | null | undefined): string[] {
+  const v = (r?.metadata as any)?.impacted_products
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+}
+
 // Parse the sheet's "Contacted?" cell ("Yes 8/5", "Yes 8/4") into a flag + date.
 // Returns { contacted, contacted_date(YYYY-MM-DD | null) }.
 export function parseContacted(raw: string, fallbackYear: number): { contacted: boolean; contacted_date: string | null } {
