@@ -319,11 +319,13 @@ export function ProductUsageTab() {
     let from = 0
     const all: { vendor_id: string | null; part_number: string | null; our_part_number: string | null }[] = []
     for (;;) {
+      // vendor_parts lives in core (same schema VendorPartsTab reads/writes
+      // it from), not inventory.
       const { data: rows, error } = await sb
-        .schema('inventory').from('vendor_parts')
+        .schema('core').from('vendor_parts')
         .select('vendor_id, part_number, our_part_number').eq('company_id', profile.company_id)
         .order('id', { ascending: true }).range(from, from + PAGE - 1)
-      if (error) break
+      if (error) { toast.error('Unable to load Vendor Parts for the vendor-part-number import — ' + error.message); break }
       const batch = (rows ?? []) as any[]
       all.push(...batch)
       if (batch.length < PAGE) break
