@@ -64,8 +64,44 @@ interface ColumnMapperProps {
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-function loadSavedMap(key: string): ColumnMapping[] | undefined {
-  try { const v = JSON.parse(localStorage.getItem(`import.map.${key}`) || 'null'); if (Array.isArray(v)) return v } catch { /* ignore */ }
+
+// Identity for a file's column layout — sorted + normalized so header order
+// and trivial casing/whitespace differences don't matter. Used to recognize
+// "someone already mapped a file shaped exactly like this one."
+function headerSignature(headers: string[]): string {
+  return [...new Set(headers.map(norm).filter(Boolean))].sort().join('|')
+}
+
+// Org-shared mapping memory, keyed by header signature so multiple distinct
+// file layouts feeding the same upload screen each keep their own saved
+// mapping instead of overwriting each other. `bySignature[sig].mappings` is
+// an exact match (same file shape); when there's no exact match, the caller
+// falls back to the most recently saved entry as a fuzzy starting point.
+// Older data may still be a bare ColumnMapping[] (pre-signature) — kept as a
+// fuzzy-only fallback candidate and upgraded to this shape on next save.
+type StoredMappingEntry = { mappings: ColumnMapping[]; updatedAt: string }
+type StoredMappings = Record<string, StoredMappingEntry>
+
+function isStoredMappings(v: unknown): v is StoredMappings {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+function mostRecentEntry(store: StoredMappings): ColumnMapping[] | undefined {
+  const entries = Object.values(store)
+  entries.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+  return entries[0]?.mappings
+}
+
+function loadSavedMap(key: string, signature: string): { mappings: ColumnMapping[]; exact: boolean } | undefined {
+  try {
+    const exact = JSON.parse(localStorage.getItem(`import.map.${key}.${signature}`) || 'null')
+    if (Array.isArray(exact)) return { mappings: exact, exact: true }
+  } catch { /* ignore */ }
+  // Legacy flat cache from before per-signature keys — fuzzy fallback only.
+  try {
+    const legacy = JSON.parse(localStorage.getItem(`import.map.${key}`) || 'null')
+    if (Array.isArray(legacy)) return { mappings: legacy, exact: false }
+  } catch { /* ignore */ }
   return undefined
 }
 function buildMappings(requiredFields: RequiredField[], headers: string[], saved?: ColumnMapping[]): ColumnMapping[] {
@@ -161,10 +197,17 @@ function CompositeEditor({ value, headers, mappings, requiredFields, fieldName, 
 
 export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, initialMappings, onAddColumn, rememberKey, previewRows }: ColumnMapperProps) {
   const { profile } = useAuthStore()
-  const localSaved = rememberKey ? loadSavedMap(rememberKey) : undefined
-  const effectiveInitial = initialMappings ?? localSaved
+  const signature = headerSignature(headers)
+  const localSaved = rememberKey ? loadSavedMap(rememberKey, signature) : undefined
+  const effectiveInitial = initialMappings ?? localSaved?.mappings
   const [mappings, setMappings] = useState<ColumnMapping[]>(buildMappings(requiredFields, headers, effectiveInitial))
   const [newCol, setNewCol] = useState('')
+  // Lets the mapping form tell the user whether what's pre-filled is a sure
+  // thing (someone already mapped this exact file layout) or just a
+  // starting point from a differently-shaped file — worth double-checking.
+  const [matchQuality, setMatchQuality] = useState<'exact' | 'fuzzy' | null>(
+    initialMappings ? null : localSaved ? (localSaved.exact ? 'exact' : 'fuzzy') : null,
+  )
   const touched = useRef(false)
 
   useEffect(() => {
@@ -173,12 +216,21 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
     ;(supabase as any).schema('platform').from('app_settings').select('value').eq('company_id', profile.company_id).eq('key', `mapping.${rememberKey}`).maybeSingle()
       .then(({ data }: any) => {
         if (cancelled || touched.current) return
-        const org = data?.value
-        if (Array.isArray(org) && org.length) setMappings(buildMappings(requiredFields, headers, org as ColumnMapping[]))
+        const raw = data?.value
+        if (isStoredMappings(raw)) {
+          const exact = raw[signature]?.mappings
+          if (exact?.length) { setMappings(buildMappings(requiredFields, headers, exact)); setMatchQuality('exact'); return }
+          const fuzzy = mostRecentEntry(raw)
+          if (fuzzy?.length) { setMappings(buildMappings(requiredFields, headers, fuzzy)); setMatchQuality('fuzzy') }
+        } else if (Array.isArray(raw) && raw.length) {
+          // Legacy flat shape (pre-signature) — no exact-match info available.
+          setMappings(buildMappings(requiredFields, headers, raw as ColumnMapping[]))
+          setMatchQuality('fuzzy')
+        }
       })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rememberKey, profile?.company_id])
+  }, [rememberKey, profile?.company_id, signature])
 
   useEffect(() => {
     setMappings((prev) => {
@@ -207,12 +259,21 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
       return
     }
     if (rememberKey) {
-      try { localStorage.setItem(`import.map.${rememberKey}`, JSON.stringify(mappings)) } catch { /* ignore */ }
+      try { localStorage.setItem(`import.map.${rememberKey}.${signature}`, JSON.stringify(mappings)) } catch { /* ignore */ }
       if (profile?.company_id) {
-        void (supabase as any).schema('platform').from('app_settings').upsert(
-          { company_id: profile.company_id, key: `mapping.${rememberKey}`, value: mappings, updated_at: new Date().toISOString() },
-          { onConflict: 'company_id,key' },
-        )
+        const sb = supabase as any
+        const companyId = profile.company_id
+        // Read-merge-write so saving this file's shape doesn't clobber other
+        // shops'/vendors' mappings already saved under the same rememberKey.
+        void sb.schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', `mapping.${rememberKey}`).maybeSingle()
+          .then(({ data }: any) => {
+            const existing = isStoredMappings(data?.value) ? data.value : {}
+            const next: StoredMappings = { ...existing, [signature]: { mappings, updatedAt: new Date().toISOString() } }
+            return sb.schema('platform').from('app_settings').upsert(
+              { company_id: companyId, key: `mapping.${rememberKey}`, value: next, updated_at: new Date().toISOString() },
+              { onConflict: 'company_id,key' },
+            )
+          })
       }
     }
     onConfirm(mappings.filter((m) => m.sourceColumn))
@@ -232,6 +293,17 @@ export function ColumnMapper({ headers, requiredFields, onConfirm, onCancel, ini
         Use <span className="text-navy">transforms</span> to reshape values (e.g. strip currency symbols, multiply).
         <span className="text-navy"> Invert</span> flips the sign of numbers.
       </p>
+
+      {matchQuality === 'exact' && (
+        <p className="text-[11px] font-mono text-[#2ECC71] bg-[#2ECC71]/10 border border-[#2ECC71]/30 rounded px-2 py-1.5">
+          ✓ Someone on your team already mapped a file with these exact columns — pre-filled below. Double-check, then confirm.
+        </p>
+      )}
+      {matchQuality === 'fuzzy' && (
+        <p className="text-[11px] font-mono text-[#E67E22] bg-[#E67E22]/10 border border-[#E67E22]/30 rounded px-2 py-1.5">
+          ⚠ Pre-filled from a similar (not identical) file layout someone mapped before — review every field before confirming.
+        </p>
+      )}
 
       {previewRows && previewRows.length > 0 && (
         <div className="flex flex-col gap-1">
