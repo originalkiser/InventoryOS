@@ -309,7 +309,7 @@ export function ProductUsageTab() {
     if (!profile?.company_id) return
     const sb = supabase as any
     const [vRes] = await Promise.all([
-      sb.schema('core').from('vendors').select('id, name').eq('company_id', profile.company_id),
+      sb.schema('inventory').from('vendors').select('id, name').eq('company_id', profile.company_id),
     ])
     setVendors(((vRes.data ?? []) as any[]).map((v) => ({ id: v.id, name: v.name })))
     // Page through (server caps a single request at ~1000 rows) so a vendor
@@ -319,10 +319,8 @@ export function ProductUsageTab() {
     let from = 0
     const all: { vendor_id: string | null; part_number: string | null; our_part_number: string | null }[] = []
     for (;;) {
-      // vendor_parts lives in core (same schema VendorPartsTab reads/writes
-      // it from), not inventory.
       const { data: rows, error } = await sb
-        .schema('core').from('vendor_parts')
+        .schema('inventory').from('vendor_parts')
         .select('vendor_id, part_number, our_part_number').eq('company_id', profile.company_id)
         .order('id', { ascending: true }).range(from, from + PAGE - 1)
       if (error) { toast.error('Unable to load Vendor Parts for the vendor-part-number import — ' + error.message); break }

@@ -47,7 +47,7 @@ export function OrderConfigTab() {
 
   const loadVendors = useCallback(async () => {
     if (!companyId) return
-    const { data: v } = await (supabase as any).schema('core').from('vendors').select('*').eq('company_id', companyId).order('name')
+    const { data: v } = await (supabase as any).schema('inventory').from('vendors').select('*').eq('company_id', companyId).order('name')
     setVendors((v ?? []) as Vendor[])
   }, [companyId])
   useEffect(() => { loadVendors() }, [loadVendors])

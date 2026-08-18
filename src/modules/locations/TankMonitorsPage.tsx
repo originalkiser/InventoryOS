@@ -108,7 +108,7 @@ export function TankMonitorsPage() {
     // rows, which silently dropped shops (and broke the VMI counts).
     const [{ count }, partRes] = await Promise.all([
       sb.schema('inventory').from('tank_monitors').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-      sb.schema('core').from('vendor_parts').select('part_number, our_part_number, description').eq('company_id', companyId),
+      sb.schema('inventory').from('vendor_parts').select('part_number, our_part_number, description').eq('company_id', companyId),
     ])
     const pages = Math.max(1, Math.ceil((count ?? 0) / PAGE))
     const results = await Promise.all(Array.from({ length: pages }, (_, i) =>

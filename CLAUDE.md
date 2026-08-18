@@ -146,8 +146,8 @@ sb.schema('marketing').from('table_name')
 
 | Schema | Contains |
 |--------|----------|
-| `inventory` | counts, thresholds, orders, order_profiles, order_sessions, meeting_notes, projects, project_tasks, monthly_ending_balances, recount_requests/recount_product_snapshots, tank_monitors, droptop_sync_log, location_order_config, location_comms, exception_reports, exception_issue_option, global_products, product_id_mappings, uom_mappings, product_usage, issue_categories/issue_statuses/issue_tracker_columns/issue_custom_values (issue *config*, not the issues themselves — see `platform.issues` below), field_definitions, data_source_links |
-| `core` | **locations**, **tasks** (standalone user tasks — moved out of `inventory`), **vendors**, **vendor_parts**, user_sidebar_prefs, user_feature_access, location_exclusions, location_supplemental, pos_location_map, company_holidays |
+| `inventory` | counts, thresholds, orders, order_profiles, order_sessions, meeting_notes, projects, project_tasks, monthly_ending_balances, recount_requests/recount_product_snapshots, tank_monitors, droptop_sync_log, location_order_config, location_comms, exception_reports, exception_issue_option, global_products, product_id_mappings, uom_mappings, product_usage, **vendors**, **vendor_parts**, issue_categories/issue_statuses/issue_tracker_columns/issue_custom_values (issue *config*, not the issues themselves — see `platform.issues` below), field_definitions, data_source_links |
+| `core` | **locations**, **tasks** (standalone user tasks — moved out of `inventory`), user_sidebar_prefs, user_feature_access, location_exclusions, location_supplemental, pos_location_map, company_holidays |
 | `platform` | user_profiles, **issues** (moved out of `inventory`, now department-scoped), departments, user_department_memberships, schedule_events, event_checklist_items, app_settings, custom_columns/custom_values, attachments |
 | `outlier` | report system: reports, report_entries, weeks, departments |
 | `forms` | form builder + submissions: forms, fields, field_conditions, condition_rules, submissions, responses, assignments, score_streaks, form_department_shares |
@@ -157,7 +157,7 @@ sb.schema('marketing').from('table_name')
 - `tasks` (standalone tasks) is in **`core`**, not `inventory`. `project_tasks` (project-scoped) is still in `inventory`.
 - `issues` is in **`platform`**, not `inventory`. The issue *config* tables (`issue_statuses`, `issue_categories`, `issue_tracker_columns`, `issue_custom_values`) stayed in `inventory`.
 - `exception_reports`/`location_comms` are separate but linked tables in `inventory` — a Location Comms row with `comm_type = 'Exception Reporting'` writes an `exception_reports` row too and stores its id in `exception_report_id`.
-- `vendors` and `vendor_parts` are in **`core`**, not `inventory` — `.schema('inventory').from('vendor_parts')` returns zero rows with no error rather than failing loudly, which let this stay broken undetected in one feature until caught manually. `src/modules/orders/NewOrderTab.tsx` still queries `inventory.vendor_parts`; unverified whether that's actually working.
+- `vendors` and `vendor_parts` moved from `core` to **`inventory`** (migration `20260818d_move_vendors_to_inventory.sql`) to match everything else they relate to (`global_products`, `uom_mappings`, `location_order_config`, `product_usage`). Before this move, a `.schema('inventory').from('vendor_parts')` query returned zero rows with no error rather than failing loudly, which let a real feature (Product Usage's vendor-part-number import) stay silently broken until caught manually — if you ever see a cross-schema table query return an empty result where you expected data, verify the schema against the file that actually owns/CRUDs that table before trusting this doc.
 
 ---
 
@@ -228,15 +228,11 @@ Palette from `tailwind.config.ts` — CSS-variable-backed for dark mode:
 - `meta:regional_director` may fall back to `meta:director` in display code
 - `monday_item_id` is used for Monday.com sync; `raw_monday_data` stores the source payload
 
-### `core.vendors`
+### `inventory.vendors`
 `id, company_id, vendor_code, name, metadata, created_at, updated_at, updated_by, last_change_source`
 
-> Note: this table is in `core`, not `inventory` — `VendorPartsTab.tsx`, `LocationLookupPage.tsx`, `TankMonitorsPage.tsx` all read/write it via `core`. `src/modules/orders/NewOrderTab.tsx` queries `inventory.vendor_parts` instead — unverified whether that's live/working or a latent bug; don't copy that reference.
-
-### `core.vendor_parts`
+### `inventory.vendor_parts`
 `id, company_id, vendor_id, part_number, our_part_number, description, unit_of_measure, package_type, bulk_minimum, individual_minimum, metadata, created_at, updated_at, updated_by, last_change_source`
-
-> Note: this table is in `core`, not `inventory`, despite `Product/order quantity` below listing it alongside inventory-schema tables — same gotcha as `vendors` above. A `.schema('inventory').from('vendor_parts')` query returned zero rows with no error (rather than a schema/table-not-found error), so this went undetected until a feature built on it (Product Usage's "map by vendor's part number" import) silently resolved nothing — fixed by switching to `core`.
 
 ### `inventory.global_products`
 `id, company_id, product_id, unit_of_measure, order_uom, package_type, bulk_minimum, individual_minimum, created_at, updated_at, updated_by, last_change_source`
@@ -353,7 +349,7 @@ AM Dashboard header shows: assigned item count + "N needs attention" (orange) fo
 - `LocationLookupPage.tsx` / `LocationLookupOverlay.tsx` — per-shop detail view (route `/location-lookup`): picker + sidebar fields + tank monitors + order configs by vendor + issues/exceptions/comms boxes + supplemental data. Floating-panel version supports dnd-kit column management and is shareable as a block.
 - `AmRdLookupPage.tsx` — route `/am-rd-lookup`; AM/RD-focused rollup pulling `location_order_config`, `vendors`, `issues`, `issue_statuses`, `location_comms`, `tank_monitors`.
 - `TankMonitorsPage.tsx` — route `/tank-monitors`; all/offline/low-VMI views, serial-based overwrite (no daily history), self-healing dedupe by serial, Manage Columns, email workflow (`TankEmailModal.tsx`, `TankEmailTemplates.tsx`, `tankEmail.ts`) with a per-template "VMI/keepfill only" toggle.
-- `TankProductMapping.tsx` — maps tank monitor products to `core.vendor_parts`.
+- `TankProductMapping.tsx` — maps tank monitor products to `inventory.vendor_parts`.
 - `LocationDataSourceConfig.tsx` — Monday.com / Azure source config.
 - `MapRoutesTab.tsx` / `ManualRouteModal.tsx` — route mapping (migration `20260702_location_routes.sql`).
 

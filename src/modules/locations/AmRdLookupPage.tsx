@@ -63,7 +63,7 @@ export function AmRdLookupPage() {
     try {
       const [cfgRes, vendRes, issRes, statRes, commRes, tankRes] = await Promise.all([
         sb.schema('inventory').from('location_order_config').select('location_id, vendor_id').in('location_id', shopIds),
-        sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
+        sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
         sb.schema('platform').from('issues').select('location_id, status_id').in('location_id', shopIds).is('deleted_at', null),
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
         sb.schema('inventory').from('location_comms').select('location_id').in('location_id', shopIds),

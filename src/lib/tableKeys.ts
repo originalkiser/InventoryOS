@@ -6,7 +6,7 @@ export const TABLE_KEYS = {
   counts:        'inventory.monthly_counts',
   countProducts: 'inventory.count_products',
   locations:     'core.locations',
-  vendors:       'core.vendors',
+  vendors:       'inventory.vendors',
   orderSessions: 'inventory.order_sessions',
 } as const
 

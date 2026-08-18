@@ -21,7 +21,7 @@ async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; l
   const sb = supabase as any
   const [{ data: locs }, { data: vends }, cfgCountRes] = await Promise.all([
     sb.schema('core').from('locations').select('*').eq('company_id', companyId),
-    sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
+    sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
     sb.schema('inventory').from('location_order_config').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
   ])
   const allLocs = (locs ?? []) as Location[]
