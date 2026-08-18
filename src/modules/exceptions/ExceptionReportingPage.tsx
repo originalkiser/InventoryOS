@@ -16,13 +16,13 @@ import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
 import {
   RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO,
-  parseContacted, isYesResponse, isRdAdded, rdCell, impactedProducts, followUpDate,
+  parseContacted, isYesResponse, isRdAdded, rdCell, impactedProducts, followUpDate, isExceptionStale,
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
 import { ImpactedProductsPicker } from './ImpactedProductsPicker'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
-import { isStaleRecord, bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
+import { bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -91,8 +91,8 @@ export function ExceptionReportingPage() {
   // Same predicate the nav badge counts, so the Alerts tab and the sidebar
   // number can never disagree.
   const alertRows = useMemo(
-    () => rowsAll.filter((r) => isStaleRecord(r.status, r.date_of_finding, r.metadata, config.staleDays)),
-    [rowsAll, config.staleDays],
+    () => rowsAll.filter((r) => isExceptionStale(r, config.staleDays, config.responseDays)),
+    [rowsAll, config.staleDays, config.responseDays],
   )
 
   async function handleImport(inRows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
@@ -368,7 +368,7 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, 
                 // (a translucent band lets scrolled columns bleed through).
                 // Stale (needs-action, unbumped) rows override the band with
                 // a light red flag — this is what drives the nav badge count.
-                const stale = isStaleRecord(r.status, r.date_of_finding, r.metadata, config.staleDays)
+                const stale = isExceptionStale(r, config.staleDays, config.responseDays)
                 const band = stale ? STALE_ROW_BG : idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
                 return (
                   <tr key={r.id} className={band}>
@@ -629,7 +629,7 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
 
       <Card><CardBody className="flex flex-col gap-3">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Needs Action Highlighting</h3>
-        <p className="text-[11px] font-mono text-inky/60">Separate from the Response Window above. Drives the red row highlight and the nav badge count — closed reports never count, regardless of age.</p>
+        <p className="text-[11px] font-mono text-inky/60">Drives the red row highlight and the nav badge count. Closed reports never count, regardless of age. Recording a Follow-Up Sent clears the highlight and restarts the Response Window above — it returns once that window lapses.</p>
         <div className="flex items-center gap-2">
           <span className="text-xs font-body text-inky">Highlight red after</span>
           <input type="number" min={1} value={config.staleDays}

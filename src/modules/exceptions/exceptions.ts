@@ -1,6 +1,8 @@
 // Shared types + constants for Exception Reporting.
 // Defaults live here in code; "add to list" customs persist to inventory.exception_issue_option.
 
+import { daysSinceDate, isBumped, isClosedStatus } from '@/lib/staleness'
+
 export interface ExceptionReport {
   id: string
   company_id: string
@@ -140,6 +142,31 @@ export function responseWindowStart(
   r: { metadata?: Record<string, unknown> | null; contacted_date: string | null; date_of_finding: string | null },
 ): string | null {
   return followUpDate(r) || r.contacted_date || r.date_of_finding
+}
+
+/**
+ * Does this report still need action — i.e. does it get the red row and count
+ * toward the nav badge?
+ *
+ * Closed or bumped never counts. When a follow-up was sent the shop gets a
+ * fresh response window from that date, so the row clears and only turns red
+ * again once that window lapses. With no follow-up it's the plain staleDays
+ * age of the finding, as before.
+ *
+ * This is the single source of truth for the highlight, the Alerts tab and the
+ * sidebar count — they read it rather than re-deriving the rule.
+ */
+export function isExceptionStale(
+  r: { status: string | null; date_of_finding: string | null; metadata: Record<string, unknown> | null },
+  staleDays: number,
+  responseDays: number,
+): boolean {
+  if (isClosedStatus(r.status)) return false
+  if (isBumped(r.metadata)) return false
+  const followUp = followUpDate(r)
+  if (followUp) return businessDaysSince(followUp) > responseDays
+  if (!r.date_of_finding) return false
+  return daysSinceDate(r.date_of_finding) >= staleDays
 }
 
 // Products the finding affects — stored in metadata (not a dedicated column)

@@ -27,7 +27,7 @@ export function bumpedUntilISO(days: number): string {
   return localDateStr(d)
 }
 
-function daysSinceDate(dateStr: string): number {
+export function daysSinceDate(dateStr: string): number {
   const start = new Date(dateStr + 'T00:00:00').getTime()
   return Math.floor((Date.now() - start) / 86400000)
 }

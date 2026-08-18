@@ -5,7 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useInventoryAlertsStore } from './useInventoryAlerts'
 import { isStaleRecord } from '@/lib/staleness'
 import { buildMonitorEmailLog, backfillTodayBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from '@/modules/locations/tankEmail'
-import { DEFAULT_EXCEPTION_CONFIG } from '@/modules/exceptions/exceptions'
+import { DEFAULT_EXCEPTION_CONFIG, isExceptionStale } from '@/modules/exceptions/exceptions'
 import { DEFAULT_COMMS_CONFIG } from '@/modules/comms/comms'
 
 // Count badges shown on nav items (sidebar / dashboard / top bar). Loaded once
@@ -103,11 +103,12 @@ async function computeBadges(companyId: string): Promise<Record<string, number>>
   const statusName: Record<string, string> = {}
   for (const s of (issStatRes.data ?? []) as any[]) statusName[s.id] = s.name ?? ''
   const excStaleDays = Number(excCfgRaw?.staleDays ?? DEFAULT_EXCEPTION_CONFIG.staleDays)
+  const excResponseDays = Number(excCfgRaw?.responseDays ?? DEFAULT_EXCEPTION_CONFIG.responseDays)
   const commStaleDays = Number(commCfgRaw?.staleDays ?? DEFAULT_COMMS_CONFIG.staleDays)
   return {
     // Only rows that still need action: not closed, and stale (old enough,
     // not currently bumped) — matches the red-highlight rows on each page.
-    'exception-reporting': ((excRes.data ?? []) as any[]).filter((r) => isStaleRecord(r.status, r.date_of_finding, r.metadata, excStaleDays)).length,
+    'exception-reporting': ((excRes.data ?? []) as any[]).filter((r) => isExceptionStale(r, excStaleDays, excResponseDays)).length,
     'location-comms': ((commRes.data ?? []) as any[]).filter((r) => isStaleRecord(r.status, r.comm_date, r.metadata, commStaleDays)).length,
     issues: ((issRes.data ?? []) as any[]).filter((r) => !isClosed(statusName[r.status_id] ?? '')).length,
     'tank-monitors': tankOffline,
