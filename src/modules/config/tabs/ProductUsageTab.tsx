@@ -308,12 +308,28 @@ export function ProductUsageTab() {
   const loadVendorParts = useCallback(async () => {
     if (!profile?.company_id) return
     const sb = supabase as any
-    const [vRes, vpRes] = await Promise.all([
+    const [vRes] = await Promise.all([
       sb.schema('core').from('vendors').select('id, name').eq('company_id', profile.company_id),
-      sb.schema('inventory').from('vendor_parts').select('vendor_id, part_number, our_part_number').eq('company_id', profile.company_id),
     ])
     setVendors(((vRes.data ?? []) as any[]).map((v) => ({ id: v.id, name: v.name })))
-    setVendorParts((vpRes.data ?? []) as any[])
+    // Page through (server caps a single request at ~1000 rows) so a vendor
+    // with parts past that cutoff still resolves — this is what silently
+    // dropped every match for a vendor whose rows land later in the table.
+    const PAGE = 1000
+    let from = 0
+    const all: { vendor_id: string | null; part_number: string | null; our_part_number: string | null }[] = []
+    for (;;) {
+      const { data: rows, error } = await sb
+        .schema('inventory').from('vendor_parts')
+        .select('vendor_id, part_number, our_part_number').eq('company_id', profile.company_id)
+        .order('id', { ascending: true }).range(from, from + PAGE - 1)
+      if (error) break
+      const batch = (rows ?? []) as any[]
+      all.push(...batch)
+      if (batch.length < PAGE) break
+      from += PAGE
+    }
+    setVendorParts(all)
   }, [profile?.company_id])
 
   useEffect(() => { loadRpc(); loadDataSource(); loadCapacities(); loadVendorParts() }, [loadRpc, loadDataSource, loadCapacities, loadVendorParts])
