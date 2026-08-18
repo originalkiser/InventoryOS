@@ -7,6 +7,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useCommsConfig } from './useCommsConfig'
 import { isEmailMethod, type LocationComm, type CommProduct } from './comms'
 import { useExceptionConfig } from '@/modules/exceptions/useExceptionConfig'
+import { followUpDate } from '@/modules/exceptions/exceptions'
 import { DEFAULT_STATUS, EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
 import toast from 'react-hot-toast'
 
@@ -46,6 +47,10 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
   const [response, setResponse] = useState('')
   const [responseDate, setResponseDate] = useState('')
   const [responseNotes, setResponseNotes] = useState('')
+  const [followUp, setFollowUp] = useState('')
+  // Linked exception's metadata, kept so the update below merges into it
+  // instead of replacing it (it also holds impacted_products/bumped_until).
+  const [excMetadata, setExcMetadata] = useState<Record<string, unknown>>({})
 
   const [usage, setUsage] = useState<Record<string, { on_hand: number | null; days: number | null }>>({})
   const [configured, setConfigured] = useState<string[]>([])
@@ -66,6 +71,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
     setStatus(existing?.status ?? (existing?.id ? '' : DEFAULT_STATUS))
     setNotes(existing?.notes ?? '')
     setReportType(''); setIssue(''); setDetails(''); setResponse(''); setResponseDate(''); setResponseNotes('')
+    setFollowUp(''); setExcMetadata({})
     setDeleteConfirm(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing, open, lockedLocationId])
@@ -78,6 +84,8 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
         if (!data) return
         setReportType(data.report_type ?? ''); setIssue(data.issue ?? ''); setDetails(data.details ?? '')
         setResponse(data.response ?? ''); setResponseDate(data.date_of_shop_action ?? ''); setResponseNotes(data.response_notes ?? '')
+        setExcMetadata((data.metadata ?? {}) as Record<string, unknown>)
+        setFollowUp(followUpDate(data) ?? '')
       })
   }, [open, existing?.exception_report_id])
 
@@ -131,6 +139,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
         date_of_shop_action: responseDate || null,
         report_type: reportType || null, issue: issue || null, details: details.trim() || null,
         response: response.trim() || null, response_notes: responseNotes.trim() || null,
+        metadata: { ...excMetadata, follow_up_date: followUp || null },
         rd_if_no: loc.fieldValue(locationId, 'regional_director') || loc.fieldValue(locationId, 'director') || null,
         contacted: true, contacted_date: commDate || null,
         status: status || null, last_change_source: 'comms', ...stamp,
@@ -242,6 +251,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
             <div className="grid grid-cols-2 gap-3">
               <Input label="Response from Shop/AM" value={response} onChange={(e) => setResponse(e.target.value)} placeholder="e.g. Yes" />
               <Input label="Response Date" type="date" value={responseDate} onChange={(e) => setResponseDate(e.target.value)} />
+              <Input label="Follow-Up Date" type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
             </div>
             <div>
               <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Response Notes</label>
