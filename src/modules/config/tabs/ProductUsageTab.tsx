@@ -73,6 +73,18 @@ const REQUIRED_FIELDS = [
   { name: 'package_capacity', label: 'Package Capacity' },
   { name: 'cost_per_unit', label: 'Cost / Unit' },
 ]
+// Same shape, but for files that only carry the vendor's own part number (e.g.
+// a Valvoline usage export) — resolved to our_part_number via inventory.vendor_parts
+// for the vendor picked below, instead of being mapped directly.
+const REQUIRED_FIELDS_VENDOR_PART = [
+  { name: 'location', label: 'Location', required: true },
+  { name: 'vendor_part_number', label: "Vendor's Part Number", required: true },
+  { name: 'category', label: 'Category' },
+  { name: 'daily_usage', label: 'Daily Usage' },
+  { name: 'on_hands', label: 'On Hands' },
+  { name: 'package_capacity', label: 'Package Capacity' },
+  { name: 'cost_per_unit', label: 'Cost / Unit' },
+]
 
 const BATCH = 2000
 const CONCURRENCY = 4
@@ -173,6 +185,14 @@ export function ProductUsageTab() {
   const [form, setForm] = useState({ ...EMPTY })
   const [dataSource, setDataSource] = useState<ExistingDataSource | null>(null)
   const [colsOpen, setColsOpen] = useState(false)
+
+  // Vendor's-part-number import mode: resolve to our_part_number via
+  // inventory.vendor_parts for the picked vendor, for files (like a Valvoline
+  // usage export) that only carry the vendor's own part number.
+  const [importMode, setImportMode] = useState<'product_id' | 'vendor_part'>('product_id')
+  const [importVendorId, setImportVendorId] = useState('')
+  const [vendors, setVendors] = useState<{ id: string; name: string }[]>([])
+  const [vendorParts, setVendorParts] = useState<{ vendor_id: string | null; part_number: string | null; our_part_number: string | null }[]>([])
   // Package Capacity is sourced from the Global Config → Order Config table
   // (capacity per location + product), not from product_usage itself.
   const [capacityMap, setCapacityMap] = useState<Map<string, number>>(new Map())
@@ -284,7 +304,30 @@ export function ProductUsageTab() {
     setCapacityMap(m)
   }, [profile?.company_id])
 
-  useEffect(() => { loadRpc(); loadDataSource(); loadCapacities() }, [loadRpc, loadDataSource, loadCapacities])
+  // Vendors + vendor_parts for the vendor-part-number import mode below.
+  const loadVendorParts = useCallback(async () => {
+    if (!profile?.company_id) return
+    const sb = supabase as any
+    const [vRes, vpRes] = await Promise.all([
+      sb.schema('core').from('vendors').select('id, name').eq('company_id', profile.company_id),
+      sb.schema('inventory').from('vendor_parts').select('vendor_id, part_number, our_part_number').eq('company_id', profile.company_id),
+    ])
+    setVendors(((vRes.data ?? []) as any[]).map((v) => ({ id: v.id, name: v.name })))
+    setVendorParts((vpRes.data ?? []) as any[])
+  }, [profile?.company_id])
+
+  useEffect(() => { loadRpc(); loadDataSource(); loadCapacities(); loadVendorParts() }, [loadRpc, loadDataSource, loadCapacities, loadVendorParts])
+
+  // vendorId|normalized part number -> our_part_number
+  const vendorPartLookup = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const vp of vendorParts) {
+      if (!vp.vendor_id || !vp.part_number || !vp.our_part_number) continue
+      m.set(`${vp.vendor_id}|${vp.part_number.toLowerCase().trim()}`, vp.our_part_number)
+    }
+    return m
+  }, [vendorParts])
+  const vendorOptions = useMemo(() => vendors.map((v) => ({ value: v.id, label: v.name })).sort((a, b) => a.label.localeCompare(b.label)), [vendors])
 
   async function clearAll() {
     if (!profile?.company_id) return
@@ -448,12 +491,15 @@ export function ProductUsageTab() {
   // ---- Batch import ----
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     if (!profile?.company_id) return
+    const usesVendorPart = maps.some((m) => m.fieldName === 'vendor_part_number')
+    if (usesVendorPart && !importVendorId) { toast.error('Pick which vendor these part numbers belong to'); return }
     setImporting(true)
     const sb = supabase as any
     // Only send cost_per_unit when the file actually maps it, so imports without
     // a cost column still work if the cost migration isn't applied yet.
     const hasCost = maps.some((m) => m.fieldName === 'cost_per_unit')
 
+    let unresolved = 0
     const payload = rows.map((row) => {
       let location_id: string | null = null
       let product_id = '', category: string | null = null
@@ -462,6 +508,11 @@ export function ProductUsageTab() {
         const v = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
         else if (m.fieldName === 'product_id') product_id = v
+        else if (m.fieldName === 'vendor_part_number') {
+          const resolved = v.trim() ? vendorPartLookup.get(`${importVendorId}|${v.toLowerCase().trim()}`) : undefined
+          if (resolved) product_id = resolved
+          else if (v.trim()) unresolved++
+        }
         else if (m.fieldName === 'category') category = v.trim() || null
         else if (m.fieldName === 'daily_usage') daily_usage = parseNum(v)
         else if (m.fieldName === 'on_hands') on_hands = parseNum(v)
@@ -470,6 +521,8 @@ export function ProductUsageTab() {
       }
       return { location_id, product_id, category, daily_usage, on_hands, package_capacity, days_of_supply: daysOfSupply(on_hands, daily_usage), ...(hasCost ? { cost_per_unit } : {}) }
     }).filter((r) => r.product_id)
+
+    if (unresolved > 0) toast.error(`${unresolved.toLocaleString()} row(s) skipped — vendor part number not found in Vendor Parts for that vendor`)
 
     if (mode === 'replace') {
       const { error: delErr } = await sb.schema('inventory').from('product_usage').delete().eq('company_id', profile.company_id)
@@ -566,7 +619,27 @@ export function ProductUsageTab() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-mono text-inky uppercase tracking-wide">Upload File</h3>
-          <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-mono text-inky">File identifies products by</span>
+            <div className="flex rounded border border-navy/30 overflow-hidden">
+              <button onClick={() => setImportMode('product_id')}
+                className={`px-2.5 py-1 text-xs font-mono ${importMode === 'product_id' ? 'bg-sky/20 text-navy font-bold' : 'text-inky hover:text-navy'}`}>
+                Our Product ID
+              </button>
+              <button onClick={() => setImportMode('vendor_part')}
+                className={`px-2.5 py-1 text-xs font-mono ${importMode === 'vendor_part' ? 'bg-sky/20 text-navy font-bold' : 'text-inky hover:text-navy'}`}>
+                Vendor's Part Number
+              </button>
+            </div>
+          </div>
+          {importMode === 'vendor_part' && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-inky uppercase tracking-wide">Vendor</span>
+              <div className="w-56"><Combobox options={vendorOptions} value={importVendorId} onChange={setImportVendorId} placeholder="Select vendor…" /></div>
+              <span className="text-[10px] font-mono text-inky/50">resolved via Vendor Parts (part number → our_part_number)</span>
+            </div>
+          )}
+          <ConfigUpload requiredFields={importMode === 'vendor_part' ? REQUIRED_FIELDS_VENDOR_PART : REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
         </div>
         <DataSourceLinker
           configType="product_usage"
