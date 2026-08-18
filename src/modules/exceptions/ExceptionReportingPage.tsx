@@ -183,7 +183,7 @@ const COL_META: Record<string, { label: string; filter: boolean; wrap?: boolean 
   area_manager: { label: 'Area Manager', filter: true },
   type: { label: 'Type', filter: true },
   issue: { label: 'Issue', filter: true },
-  products: { label: 'Impacted Products', filter: false, wrap: true },
+  products: { label: 'Impacted Products', filter: false },
   details: { label: 'Details', filter: true, wrap: true },
   contacted: { label: 'Contacted', filter: false },
   response: { label: 'Response', filter: true },
@@ -357,7 +357,12 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, 
                     </td>
                     <td className={`${tdBase} sticky left-[230px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
                     {order.map((id) => (
-                      <td key={id} className={COL_META[id].wrap ? `${tdBase} whitespace-normal` : tdBase}>{renderCell(id, r)}</td>
+                      <td key={id} className={COL_META[id].wrap ? `${tdBase} whitespace-normal` : tdBase}>
+                        {/* Cap wrap-column content to roughly the Status column's own
+                            height (1 line + Bump) so a long note doesn't blow the whole
+                            row out — it scrolls internally instead. */}
+                        {COL_META[id].wrap ? <div className="max-h-11 overflow-y-auto">{renderCell(id, r)}</div> : renderCell(id, r)}
+                      </td>
                     ))}
                   </tr>
                 )

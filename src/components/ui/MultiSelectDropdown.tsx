@@ -10,9 +10,16 @@ interface Props {
   selected: string[]
   onChange: (selected: string[]) => void
   placeholder?: string
+  // Filter-style pickers use a top "All" checkbox where 0-selected == every
+  // option. Pure multi-select pickers (e.g. "which products") don't have
+  // that meaning for an empty selection, so they opt out.
+  showAllOption?: boolean
+  // Word used for the "N ___" summary label when 2+ are selected (e.g.
+  // "products" instead of the default "selected").
+  countNoun?: string
 }
 
-export function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All' }: Props) {
+export function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All', showAllOption = true, countNoun = 'selected' }: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -30,7 +37,7 @@ export function MultiSelectDropdown({ options, selected, onChange, placeholder =
       ? placeholder
       : selected.length === 1
         ? selected[0]
-        : `${selected.length} selected`
+        : `${selected.length} ${countNoun}`
 
   function toggle(value: string) {
     if (selected.includes(value)) onChange(selected.filter(v => v !== value))
@@ -60,15 +67,20 @@ export function MultiSelectDropdown({ options, selected, onChange, placeholder =
       {open && (
         <div className="absolute top-full left-0 mt-1 z-40 bg-cream dark:bg-[#0e2638] border border-navy/30 rounded shadow-xl overflow-hidden min-w-[160px] max-w-[240px]">
           <div className="max-h-56 overflow-y-auto p-1 flex flex-col gap-px">
-            <label className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer hover:bg-navy/5 select-none">
-              <input
-                type="checkbox"
-                checked={selected.length === 0}
-                onChange={() => onChange([])}
-                className="accent-navy w-3.5 h-3.5 shrink-0"
-              />
-              <span className="text-xs font-mono text-inky/60">All</span>
-            </label>
+            {showAllOption && (
+              <label className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer hover:bg-navy/5 select-none">
+                <input
+                  type="checkbox"
+                  checked={selected.length === 0}
+                  onChange={() => onChange([])}
+                  className="accent-navy w-3.5 h-3.5 shrink-0"
+                />
+                <span className="text-xs font-mono text-inky/60">All</span>
+              </label>
+            )}
+            {options.length === 0 && (
+              <span className="px-2 py-1 text-[11px] font-mono text-inky/40 italic">No options</span>
+            )}
             {options.map(opt => (
               <label
                 key={opt.value}

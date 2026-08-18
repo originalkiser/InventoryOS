@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Combobox } from '@/components/ui'
+import { Combobox, MultiSelectDropdown } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 
@@ -11,10 +11,12 @@ interface Props {
   compact?: boolean
 }
 
-// Which of the shop's products a finding affects — mirrors Location Comms'
-// "Products Requested" picker (chip-toggle over configured products, plus a
-// combobox to add a product not configured for this shop). Shared by the
-// inline table cell and the full-edit modal.
+// Which of the shop's products a finding affects. A checkbox multi-select
+// (not a wall of toggle chips — that made table rows balloon in height) over
+// the shop's configured products, plus a combobox to add one that isn't
+// configured. In the full-edit modal, selected products are also called out
+// as removable pills, matching the "N shops ignored" chip list on the Tank
+// Monitors Low VMI page.
 export function ImpactedProductsPicker({ companyId, locationId, selected, onChange, compact }: Props) {
   const [configured, setConfigured] = useState<string[]>([])
   const [usage, setUsage] = useState<string[]>([])
@@ -32,41 +34,47 @@ export function ImpactedProductsPicker({ companyId, locationId, selected, onChan
     })
   }, [companyId, locationId])
 
-  const selectedSet = new Set(selected)
-  const toggle = (pid: string) => onChange(selectedSet.has(pid) ? selected.filter((x) => x !== pid) : [...selected, pid])
-  const remove = (pid: string) => onChange(selected.filter((x) => x !== pid))
-  // Already-selected products that aren't in the configured list (added via the combobox).
-  const extras = selected.filter((pid) => !configured.includes(pid))
+  // Checkbox options: configured products plus anything already selected (so
+  // a product added via the combobox below still shows as a checked row).
+  const options = useMemo(() =>
+    [...new Set([...configured, ...selected])].sort().map((pid) => ({ value: pid })),
+  [configured, selected])
 
   const addOptions: ComboboxOption[] = useMemo(() =>
-    usage.filter((pid) => !configured.includes(pid) && !selectedSet.has(pid)).sort().map((pid) => ({ value: pid, label: pid })),
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  [usage, configured, selected])
+    usage.filter((pid) => !options.some((o) => o.value === pid)).sort().map((pid) => ({ value: pid, label: pid })),
+  [usage, options])
+
+  const remove = (pid: string) => onChange(selected.filter((x) => x !== pid))
+
+  const dropdown = (
+    <MultiSelectDropdown options={options} selected={selected} onChange={onChange} showAllOption={false} countNoun="products"
+      placeholder={locationId ? 'No products' : 'Pick a shop first'} />
+  )
+
+  if (compact) return dropdown
 
   return (
-    <div className={compact ? 'flex flex-col gap-1' : 'flex flex-col gap-2'}>
-      {!compact && <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Impacted Products</span>}
-      <div className="flex flex-wrap gap-1">
-        {configured.length === 0 && extras.length === 0 && (
-          <span className="text-[11px] font-mono text-inky/40 italic">{locationId ? 'No configured products for this shop' : 'Pick a shop first'}</span>
+    <div className="flex flex-col gap-2">
+      <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Impacted Products</span>
+      <div className="flex items-center gap-2">
+        {dropdown}
+        {locationId && (
+          <div className="w-56">
+            <Combobox options={addOptions} value={addPick}
+              onChange={(v) => { if (v && !selected.includes(v)) onChange([...selected, v]); setAddPick('') }}
+              placeholder="Add another product…" allowCreate onCreateOption={async (v) => ({ value: v, label: v })} />
+          </div>
         )}
-        {configured.map((pid) => (
-          <button key={pid} type="button" onClick={() => toggle(pid)}
-            className={['px-2 py-0.5 rounded text-[11px] font-mono border transition-colors', selectedSet.has(pid) ? 'bg-navy text-cream border-navy' : 'bg-cream text-navy border-navy/30 hover:border-navy'].join(' ')}>
-            {pid}
-          </button>
-        ))}
-        {extras.map((pid) => (
-          <span key={pid} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-navy text-cream border border-navy">
-            {pid}<button type="button" onClick={() => remove(pid)} className="hover:text-red-300">×</button>
-          </span>
-        ))}
       </div>
-      {locationId && (
-        <div className={compact ? 'w-40' : 'w-64'}>
-          <Combobox options={addOptions} value={addPick}
-            onChange={(v) => { if (v && !selectedSet.has(v)) onChange([...selected, v]); setAddPick('') }}
-            placeholder="Add another product…" allowCreate onCreateOption={async (v) => ({ value: v, label: v })} />
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {selected.map((pid) => (
+            <span key={pid} className="inline-flex items-center gap-1 rounded-full bg-navy/[0.06] border border-navy/15 px-2 py-0.5 text-[11px] font-mono text-navy">
+              {pid}
+              <button type="button" onClick={() => remove(pid)} title="Remove" className="text-inky/50 hover:text-[#C0392B]">✕</button>
+            </span>
+          ))}
+          <button type="button" onClick={() => onChange([])} className="text-inky/50 hover:text-navy hover:underline self-center text-[11px] font-mono">reset all</button>
         </div>
       )}
     </div>
