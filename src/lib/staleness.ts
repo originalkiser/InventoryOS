@@ -13,12 +13,18 @@ export const isClosedStatus = (status: string | null | undefined): boolean =>
 // translucent tint lets that scrolled content bleed through visibly.
 export const STALE_ROW_BG = 'bg-[#F4DBD4] dark:bg-[#3A1F1C]'
 
-// ISO date-only string (YYYY-MM-DD) for "today + days" — used to store a
-// bump/snooze target in a row's metadata.
+// Local (not UTC) YYYY-MM-DD date-only string for "today + days" — used to
+// store a bump/snooze target in a row's metadata. toISOString() would roll
+// over at UTC midnight (mid-afternoon/evening in US timezones), computing
+// the wrong local calendar date.
+function localDateStr(d: Date): string {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 export function bumpedUntilISO(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() + Math.max(1, days))
-  return d.toISOString().slice(0, 10)
+  return localDateStr(d)
 }
 
 function daysSinceDate(dateStr: string): number {

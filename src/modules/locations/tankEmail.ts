@@ -5,6 +5,16 @@
 
 export type TankEmailKind = 'offline' | 'lowvmi'
 
+// Local (not UTC) YYYY-MM-DD for "today" — comm_date represents the calendar
+// day someone was contacted, which is a local-time concept. Using
+// toISOString() here rolls over at UTC midnight, i.e. mid-afternoon/evening
+// in US timezones, so a comm logged this afternoon would stop matching
+// "today" by evening even though it's still the same local day.
+export function localDateStr(d: Date = new Date()): string {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 // Stable, location-qualified identity for a tank monitor — used to persist a
 // per-monitor "ignore" list (a bare serial could theoretically collide across
 // shops, so this always includes the location).
@@ -208,7 +218,7 @@ export function backfillTodayBlanket(
   rows: { comm_date: string | null; updated_at: string; products: unknown }[],
   serials: (string | null | undefined)[],
 ): Map<string, string> {
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = localDateStr()
   const hasBlanket = rows.some((r) => {
     const list = Array.isArray(r.products) ? r.products : []
     if (list.length > 0) return false

@@ -12,7 +12,7 @@ import type { TankMonitor } from '@/types'
 import {
   type TankEmailKind, type TankEmailTemplate, type TableCol, type TableRow,
   renderText, renderBodyHtml, renderBodyPlain, pluralizeParens,
-  tableHtml, tablePlain, magnetImageHtml, greetingFor, buildMonitorEmailLog, backfillTodayBlanket, DEFAULT_EMAIL_SKIP_DAYS,
+  tableHtml, tablePlain, magnetImageHtml, greetingFor, buildMonitorEmailLog, backfillTodayBlanket, localDateStr, DEFAULT_EMAIL_SKIP_DAYS,
 } from './tankEmail'
 import toast from 'react-hot-toast'
 
@@ -218,7 +218,7 @@ export function TankEmailModal({ open, onClose, kind, template, targets, interna
     const payload = {
       company_id: companyId,
       location_id: draft.id,
-      comm_date: new Date().toISOString().split('T')[0],
+      comm_date: localDateStr(),
       contact_method: 'Email',
       email_subject: draft.subject || null,
       who_contacted: 'Shop Manager',
