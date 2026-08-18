@@ -31,6 +31,9 @@ interface ConfigRow {
   id: string; vendor_id: string | null; product_id: string | null
   capacity: number | null; order_trigger: number | null; order_limit: number | null
   metadata: Record<string, unknown> | null; updated_at?: string | null
+  // Joined from inventory.product_usage by product_id — on hand / daily usage
+  // for the On Hand / Daily Usage / Days of Supply columns.
+  usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null } | null
 }
 interface IssueRow {
   id: string; title: string | null; status_id: string | null; issue_notes: string | null
@@ -124,7 +127,7 @@ function locVal(loc: Location | undefined, key: string): string {
   return meta == null ? '' : String(meta)
 }
 
-interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null }
+interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null; tint?: boolean }
 
 type SortState = { id: string; dir: 'asc' | 'desc' } | null
 function applySort<T>(rows: T[], cols: Col<T>[], sort: SortState): T[] {
@@ -188,6 +191,25 @@ const CONFIG_FIXED: Col<ConfigRow>[] = [
 // Metadata keys that are plumbing, not config attributes — never shown as columns.
 const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', 'vendor_name', 'location_label'])
 
+// On Hand / Daily Usage / Days of Supply — appended to the right of VMI,
+// tinted to set them apart since they come from inventory.product_usage
+// rather than the order config row itself. Days of Supply is always
+// computed here (on hand ÷ daily usage), not read from the table's own
+// days_of_supply column, so it stays consistent with what's displayed.
+const USAGE_COLS: Col<ConfigRow>[] = [
+  { id: 'on_hand', label: 'On Hand', align: 'right', tint: true, render: (r) => (r.usage?.on_hands != null ? num(r.usage.on_hands) : '—'), sort: (r) => r.usage?.on_hands ?? null },
+  { id: 'daily_usage', label: 'Daily Usage', align: 'right', tint: true, render: (r) => (r.usage?.daily_usage != null ? num(r.usage.daily_usage) : '—'), sort: (r) => r.usage?.daily_usage ?? null },
+  {
+    id: 'days_of_supply', label: 'Days of Supply', align: 'right', tint: true,
+    render: (r) => {
+      const oh = r.usage?.on_hands, du = r.usage?.daily_usage
+      return oh != null && du != null && du > 0 ? (oh / du).toFixed(1) : '—'
+    },
+    sort: (r) => { const oh = r.usage?.on_hands, du = r.usage?.daily_usage; return oh != null && du != null && du > 0 ? oh / du : null },
+  },
+]
+const USAGE_TINT = 'bg-[#2ECC71]/10'
+
 export function LocationDetailView({ embedded = false }: { embedded?: boolean }) {
   const { profile } = useAuthStore()
   const navigate = useNavigate()
@@ -243,9 +265,10 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     setLoading(true); setError(null)
     const sb = supabase as any
     try {
-      const [tankRes, cfgRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes] = await Promise.all([
+      const [tankRes, cfgRes, usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
+        sb.schema('inventory').from('product_usage').select('product_id, on_hands, daily_usage, updated_at').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('core').from('vendors').select('id, name').eq('company_id', companyId),
         sb.schema('platform').from('issues').select('*').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
@@ -269,7 +292,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       }
       setTankRows([...latestByTank.values()])
       setVendorParts((partsRes?.data ?? []) as any[])
-      setConfigs((cfgRes.data ?? []) as ConfigRow[])
+      const usageByProduct = new Map(((usageRes?.data ?? []) as any[]).filter((u) => u.product_id).map((u) => [u.product_id, u]))
+      setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({ ...r, usage: r.product_id ? usageByProduct.get(r.product_id) ?? null : null })))
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
@@ -549,7 +573,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           <CardBody className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <CheckGroup title="Left panel fields" items={sidebar.map((f) => ({ id: f.label, label: f.label }))} hidden={prefs.sidebar} onToggle={(id) => toggleHidden('sidebar', id)} />
             <CheckGroup title="Tank monitor columns" items={TANK_COLS.map((c) => ({ id: c.id, label: c.label }))} hidden={prefs.tank} onToggle={(id) => toggleHidden('tank', id)} />
-            <CheckGroup title="Order config columns" items={[...CONFIG_FIXED.map((c) => ({ id: c.id, label: c.label })), ...allConfigMetaKeys.map((k) => ({ id: `meta:${k}`, label: metaLabel(k) }))]} hidden={prefs.config} onToggle={(id) => toggleHidden('config', id)} />
+            <CheckGroup title="Order config columns" items={[...CONFIG_FIXED.map((c) => ({ id: c.id, label: c.label })), ...allConfigMetaKeys.map((k) => ({ id: `meta:${k}`, label: metaLabel(k) })), ...USAGE_COLS.map((c) => ({ id: c.id, label: c.label }))]} hidden={prefs.config} onToggle={(id) => toggleHidden('config', id)} />
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Options</span>
               <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer">
@@ -892,22 +916,36 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
     const metaKeys = new Set<string>()
     for (const r of rows) for (const k of Object.keys(r.metadata ?? {})) if (!CONFIG_META_EXCLUDE.has(k)) metaKeys.add(k)
     const metaCols: Col<ConfigRow>[] = [...metaKeys].sort().map((k) => ({ id: `meta:${k}`, label: metaLabel(k), align: 'left', render: (r) => String((r.metadata as any)?.[k] ?? '—'), sort: (r) => String((r.metadata as any)?.[k] ?? '') }))
-    // part, uom, capacity, max, [meta…], vmi — then drop hidden columns.
+    // part, uom, capacity, max, [meta…], vmi, [on hand, daily usage, days of
+    // supply] — then drop hidden columns.
     const vmi = CONFIG_FIXED.find((c) => c.id === 'vmi')!
-    const ordered = [...CONFIG_FIXED.filter((c) => c.id !== 'vmi'), ...metaCols, vmi]
+    const ordered = [...CONFIG_FIXED.filter((c) => c.id !== 'vmi'), ...metaCols, vmi, ...USAGE_COLS]
     return ordered.filter((c) => !hidden.includes(c.id))
   }, [rows, hidden])
 
   const sortedRows = useMemo(() => applySort(rows, columns, sort), [rows, columns, sort])
   const updated = useMemo(() => lastUpdated(rows as any[], ['updated_at']), [rows])
+  // Newest inventory.product_usage sync among this vendor's products — shown
+  // as its own callout since it's a different source/cadence than the order
+  // config rows themselves.
+  const usageUpdated = useMemo(() => lastUpdated(rows.map((r) => r.usage).filter(Boolean) as any[], ['updated_at']), [rows])
 
   return (
     <Card>
       <CardBody className="flex flex-col gap-2">
-        <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
-          {vendor} Order Config ({rows.length})
-        </span>
-        <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
+        <div className="flex items-start justify-between gap-2 flex-wrap">
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
+              {vendor} Order Config ({rows.length})
+            </span>
+            <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
+          </div>
+          {usageUpdated && (
+            <span className="self-start inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy" title="On Hand / Daily Usage / Days of Supply last synced from Product Usage">
+              Updated {usageUpdated}
+            </span>
+          )}
+        </div>
         {columns.length === 0 ? (
           <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
         ) : (
@@ -916,7 +954,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                   {columns.map((c) => (
-                    <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)}`}>
+                    <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>
                       <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
                         {c.label}{sortArrow(sort, c.id)}
                       </button>
@@ -927,7 +965,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
               <tbody>
                 {sortedRows.map((r) => (
                   <tr key={r.id} className="border-b border-navy/20">
-                    {columns.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)}`}>{c.render(r)}</td>)}
+                    {columns.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>{c.render(r)}</td>)}
                   </tr>
                 ))}
               </tbody>
