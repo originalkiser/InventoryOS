@@ -228,6 +228,22 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     else { invalidate(); await load() }
   }
 
+  // Delete a specific set of rows. Preferred over clearAll + re-upload when
+  // fixing duplicates/bad rows: untouched rows keep their ids, so anything
+  // referencing them (exception reports, comms, project assignments, order
+  // config…) stays linked instead of being silently orphaned.
+  async function removeMany(ids: string[]) {
+    if (!ids.length) return
+    const CHUNK = 200
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const { error } = await tbl().delete().in('id', ids.slice(i, i + CHUNK))
+      if (error) { toast.error(error.message); return }
+    }
+    toast.success(`Deleted ${ids.length.toLocaleString()} row${ids.length !== 1 ? 's' : ''}`)
+    invalidate()
+    await load()
+  }
+
   async function clearAll() {
     if (!profile?.company_id) return
     const { error } = await tbl().delete().eq('company_id', profile.company_id)
@@ -237,5 +253,5 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     await load()
   }
 
-  return { data, loading, load, insert, update, upsertBatch, importRows, remove, clearAll }
+  return { data, loading, load, insert, update, upsertBatch, importRows, remove, removeMany, clearAll }
 }

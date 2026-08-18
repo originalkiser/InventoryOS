@@ -35,7 +35,7 @@ interface CategorySimplification {
 const col = createColumnHelper<CategorySimplification>()
 
 export function CategorySimplificationTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } =
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } =
     useConfigTab<CategorySimplification>('category_simplification', 'inventory')
 
   const [addOpen, setAddOpen] = useState(false)
@@ -159,8 +159,9 @@ export function CategorySimplificationTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="category_simplification.csv" exportData={data} loading={loading}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
-          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" onClick={openAdd}>+ Add Category</Button>
         </>}
       />

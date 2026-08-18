@@ -42,7 +42,7 @@ const nowLocal = () => format(new Date(), "yyyy-MM-dd'T'HH:mm")
 const EMPTY = { locationId: '', product_id: '', keep_fill: false, inventory_time: nowLocal(), on_hand: '', available_capacity: '' }
 
 export function TankMonitorTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<TankMonitor>('tank_monitors', 'inventory')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<TankMonitor>('tank_monitors', 'inventory')
   const loc = useLocations()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -153,7 +153,9 @@ export function TankMonitorTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="tank_monitors.csv" exportData={data} loading={loading}
-        actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Reading</Button></>} />
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
+        actions={<><Button size="sm" onClick={openAdd}>+ Add Reading</Button></>} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">

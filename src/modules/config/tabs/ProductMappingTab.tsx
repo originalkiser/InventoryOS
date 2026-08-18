@@ -21,7 +21,7 @@ const col = createColumnHelper<ProductIdMapping>()
 const EMPTY = { old_product_id: '', new_product_id: '', notes: '' }
 
 export function ProductMappingTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<ProductIdMapping>('product_id_mappings', 'inventory')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<ProductIdMapping>('product_id_mappings', 'inventory')
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -72,7 +72,9 @@ export function ProductMappingTab() {
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="product_mappings.csv" exportData={data} loading={loading}
-        actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
+        actions={<><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>}
       />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">

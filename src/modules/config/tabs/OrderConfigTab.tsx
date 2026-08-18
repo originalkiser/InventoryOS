@@ -34,7 +34,7 @@ const col = createColumnHelper<LocationOrderConfig>()
 export function OrderConfigTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<LocationOrderConfig>('location_order_config', 'inventory')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<LocationOrderConfig>('location_order_config', 'inventory')
   const { active: customFields, addField } = useCustomFields('order_config')
   const loc = useLocations()
 
@@ -183,8 +183,9 @@ export function OrderConfigTab() {
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="order_config.csv" exportData={data} loading={loading}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
-          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
           <Button size="sm" onClick={openAdd}>+ Add Config</Button>
         </>}

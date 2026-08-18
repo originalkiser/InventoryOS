@@ -354,6 +354,21 @@ export function ProductUsageTab() {
     await loadRpc()
   }
 
+  // Delete only the checked rows — this tab loads its own data, so it can't use
+  // useConfigTab's removeMany.
+  async function removeMany(ids: string[]) {
+    if (!ids.length) return
+    const sb = supabase as any
+    const CHUNK = 200
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const { error } = await sb.schema('inventory').from('product_usage').delete().in('id', ids.slice(i, i + CHUNK))
+      if (error) { toast.error(error.message); return }
+    }
+    toast.success(`Deleted ${ids.length.toLocaleString()} row${ids.length !== 1 ? 's' : ''}`)
+    invalidateInventoryCache()
+    await loadRpc()
+  }
+
   // ---- Columns ----
   const columns = useMemo(() => [
     { id: 'location', header: 'Location', accessorFn: (r: ProductUsage) => loc.codeOf(r.location_id), cell: (i: any) => i.getValue() || '—' },
@@ -612,8 +627,9 @@ export function ProductUsageTab() {
         exportData={displayData}
         loading={loading}
         hideColumnControl
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
-          <ClearTableButton clearAll={clearAll} />
           <label className="flex items-center gap-2 text-xs font-mono text-inky">
             <Toggle checked={exclude} onChange={setExclude} size="sm" color="amber" />
             Exclude products not in order config

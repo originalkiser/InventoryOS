@@ -50,7 +50,7 @@ const col = createColumnHelper<VendorPart>()
 export function VendorPartsTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<VendorPart>('vendor_parts', 'inventory')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<VendorPart>('vendor_parts', 'inventory')
   const { active: customFields, addField } = useCustomFields('vendor_parts')
 
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -201,8 +201,9 @@ export function VendorPartsTab() {
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="vendor_parts.csv" exportData={data} loading={loading}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
-          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
           <Button size="sm" onClick={openAdd}>+ Add Part</Button>
         </>}

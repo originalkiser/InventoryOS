@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { flexRender, type Row, type Table as TTable } from '@tanstack/react-table'
-import { Button, Input, SbLoader } from '@/components/ui'
+import { Button, Input, Modal, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -28,6 +28,16 @@ interface DataTableProps<T> {
   onSelectionChange?: (ids: Set<string>) => void
   /** Increment to imperatively clear the current selection */
   clearSelectionToken?: number
+  /**
+   * Enables "Delete selected" for the checked rows. Preferred over clearing the
+   * whole table: it removes only what you picked, so every other row keeps its
+   * id and nothing referencing them gets orphaned.
+   */
+  onBulkDelete?: (ids: string[]) => Promise<void> | void
+  /** Singular noun used in the bulk-delete confirmation ("row", "location", …) */
+  bulkDeleteNoun?: string
+  /** Rendered in a separate strip *below* the table — for destructive actions */
+  dangerZone?: React.ReactNode
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -117,6 +127,9 @@ export function DataTable<T>({
   mobileCards,
   onSelectionChange,
   clearSelectionToken,
+  onBulkDelete,
+  bulkDeleteNoun = 'row',
+  dangerZone,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -170,6 +183,27 @@ export function DataTable<T>({
   const exportRows =
     selectedCount > 0 ? filteredRows.filter((r) => selectedIds.has(rowKey(r))) : filteredRows
   const exportName = exportFilename ? makeExportName(exportFilename) : ''
+
+  // ── Bulk delete ──────────────────────────────────────────────────────────────
+  // Deletes only the checked rows, so untouched rows keep their ids and nothing
+  // referencing them is orphaned (unlike a clear-and-re-upload).
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const selectedRowIds = filteredRows.filter((r) => selectedIds.has(rowKey(r))).map(rowKey)
+
+  async function confirmBulkDelete() {
+    if (!onBulkDelete) return
+    setBulkBusy(true)
+    try {
+      await onBulkDelete(selectedRowIds)
+      setSelectedIds(new Set())
+      setBulkOpen(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   // ── Export dropdown ──────────────────────────────────────────────────────────
   const [exportOpen, setExportOpen] = useState(false)
@@ -343,6 +377,13 @@ export function DataTable<T>({
               ✕
             </button>
           </span>
+        )}
+
+        {/* Delete just the checked rows — the safe alternative to Remove All */}
+        {onBulkDelete && selectedCount > 0 && (
+          <Button variant="danger" size="sm" onClick={() => setBulkOpen(true)}>
+            Delete {selectedCount} selected
+          </Button>
         )}
 
         {actions}
@@ -581,6 +622,41 @@ export function DataTable<T>({
           </button>
         </div>
       </div>
+
+      {/* Danger zone — kept below the table (and away from the everyday toolbar)
+          so a destructive action can't be hit while reaching for Columns/Export. */}
+      {dangerZone && (
+        <div className="mt-2 rounded border border-[#C0392B]/30 bg-[#C0392B]/[0.04] px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex flex-col">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-[#C0392B]">Danger Zone</span>
+            <span className="text-[11px] font-body text-inky">
+              Removing everything re-creates rows with new ids and orphans anything referencing them.
+              Prefer selecting rows above and using <strong>Delete selected</strong>.
+            </span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">{dangerZone}</div>
+        </div>
+      )}
+
+      {/* Bulk-delete confirmation */}
+      <Modal open={bulkOpen} onClose={() => setBulkOpen(false)} title="Delete Selected" size="sm">
+        <div className="flex flex-col gap-4">
+          <p className="text-sm font-body text-navy">
+            Permanently delete <strong>{selectedCount} {bulkDeleteNoun}{selectedCount !== 1 ? 's' : ''}</strong>?
+            This cannot be undone.
+          </p>
+          <p className="text-xs font-body text-inky">
+            Only the selected {selectedCount !== 1 ? 'rows are' : 'row is'} removed — everything else keeps its
+            existing id, so other records referencing them stay linked.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <Button variant="danger" size="sm" onClick={confirmBulkDelete} disabled={bulkBusy}>
+              {bulkBusy ? 'Deleting…' : `Delete ${selectedCount}`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

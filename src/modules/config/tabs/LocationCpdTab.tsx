@@ -38,7 +38,7 @@ function monthKey(v: string): string | null {
 const col = createColumnHelper<LocationCpd>()
 
 export function LocationCpdTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } =
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } =
     useConfigTab<LocationCpd>('location_cpd', 'inventory')
   const loc = useLocations()
 
@@ -138,8 +138,9 @@ export function LocationCpdTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="location_cpd.csv" exportData={data} loading={loading}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
-          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" onClick={openAdd}>+ Add CPD</Button>
         </>}
       />

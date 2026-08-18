@@ -21,7 +21,7 @@ const col = createColumnHelper<PosLocationMap>()
 const EMPTY = { pos_string: '', locationId: '' }
 
 export function PosLocationMapTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<PosLocationMap>('pos_location_map', 'core')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<PosLocationMap>('pos_location_map', 'core')
   const loc = useLocations()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -83,7 +83,9 @@ export function PosLocationMapTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="pos_location_map.csv" exportData={data} loading={loading}
-        actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>} />
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
+        actions={<><Button size="sm" onClick={openAdd}>+ Add Mapping</Button></>} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">

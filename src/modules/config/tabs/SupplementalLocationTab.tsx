@@ -23,7 +23,7 @@ const slug = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').r
 const titleCase = (k: string) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
 export function SupplementalLocationTab() {
-  const { data, loading, importRows, remove, clearAll } = useConfigTab<Supplemental>('location_supplemental', 'core')
+  const { data, loading, importRows, remove, removeMany, clearAll } = useConfigTab<Supplemental>('location_supplemental', 'core')
   const loc = useLocations()
 
   const [parsed, setParsed] = useState<ParseResult | null>(null)
@@ -83,7 +83,7 @@ export function SupplementalLocationTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="supplemental_location_data.csv" exportData={data} loading={loading}
-        actions={<ClearTableButton clearAll={clearAll} />}
+        onBulkDelete={removeMany} dangerZone={<ClearTableButton clearAll={clearAll} />}
       />
 
       <div className="flex flex-col gap-3 max-w-2xl">

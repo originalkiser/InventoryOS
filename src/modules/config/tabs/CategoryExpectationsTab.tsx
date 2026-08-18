@@ -45,7 +45,7 @@ const EMPTY_FORM = {
 }
 
 export function CategoryExpectationsTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } =
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } =
     useConfigTab<CategoryExpectation>('category_expectations', 'inventory')
 
   const [tankVariance, saveTankVariance] = useAppSetting<number>(TANK_VARIANCE_KEY, DEFAULT_TANK_VARIANCE)
@@ -194,8 +194,9 @@ export function CategoryExpectationsTab() {
 
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="category_expectations.csv" exportData={data} loading={loading}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
-          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" onClick={openAdd}>+ Add Category</Button>
         </>}
       />

@@ -83,7 +83,7 @@ const col = createColumnHelper<MonthlyEndingBalance>()
 
 export function EndingBalancesTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances', 'inventory')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<MonthlyEndingBalance>('monthly_ending_balances', 'inventory')
   const { active: categories, addField } = useCustomFields('ending_balance')
   const loc = useLocations()
 
@@ -337,8 +337,9 @@ export function EndingBalancesTab() {
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="month_end_ending_balance.csv" exportData={data} loading={loading}
         onSelectionChange={setSelectedIds}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
-          <ClearTableButton clearAll={clearAll} />
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Categories</Button>
           <Button size="sm" onClick={openAdd}>+ Add Balance</Button>
         </>}

@@ -27,7 +27,7 @@ const NUM = ['bulk_minimum', 'individual_minimum']
 const col = createColumnHelper<GlobalProduct>()
 
 export function GlobalProductsTab() {
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<GlobalProduct>('global_products', 'inventory')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<GlobalProduct>('global_products', 'inventory')
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -88,7 +88,9 @@ export function GlobalProductsTab() {
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="global_products.csv" exportData={data} loading={loading}
-        actions={<><ClearTableButton clearAll={clearAll} /><Button size="sm" onClick={openAdd}>+ Add Product</Button></>}
+        onBulkDelete={removeMany}
+        dangerZone={<ClearTableButton clearAll={clearAll} />}
+        actions={<><Button size="sm" onClick={openAdd}>+ Add Product</Button></>}
       />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">

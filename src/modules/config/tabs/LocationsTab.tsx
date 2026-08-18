@@ -422,7 +422,7 @@ const col = createColumnHelper<Location>()
 
 export function LocationsTab() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, update, remove, importRows, clearAll } = useConfigTab<Location>('locations', 'core')
+  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<Location>('locations', 'core')
   const { active: customFields, addField } = useCustomFields('locations')
 
   const [addOpen, setAddOpen] = useState(false)
@@ -860,9 +860,23 @@ export function LocationsTab() {
           exportFilename="locations.csv"
           loading={loading}
           hideColumnControl
+          onBulkDelete={removeMany}
+          bulkDeleteNoun="location"
+          dangerZone={
+            <ClearTableButton
+              clearAll={clearAll}
+              impact={
+                <>
+                  Locations are referenced by id across the app. Removing them all detaches every existing{' '}
+                  <strong>exception report, location comm, project/meeting assignment, order config, tank monitor,
+                  POS mapping and supplemental record</strong> from its shop — the records survive, but they no
+                  longer resolve to a location and can only be relinked from a database backup.
+                </>
+              }
+            />
+          }
           actions={
             <>
-              <ClearTableButton clearAll={clearAll} />
               <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
               <Button size="sm" onClick={openAdd}>+ Add Location</Button>
             </>
