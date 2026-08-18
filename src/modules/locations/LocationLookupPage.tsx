@@ -911,6 +911,7 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
 }
 
 function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: string; rows: ConfigRow[]; hidden: string[]; onOpenConfig: () => void }) {
+  const navigate = useNavigate()
   const [sort, setSort] = usePersistedSort(`location-lookup:config-sort:${vendor}`)
   const columns = useMemo(() => {
     const metaKeys = new Set<string>()
@@ -933,23 +934,24 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
   return (
     <Card>
       <CardBody className="flex flex-col gap-2">
-        <div className="flex items-start justify-between gap-2 flex-wrap">
-          <div className="flex flex-col gap-2">
-            <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
-              {vendor} Order Config ({rows.length})
-            </span>
-            <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
-          </div>
-          {usageUpdated && (
-            <span className="self-start inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy" title="On Hand / Daily Usage / Days of Supply last synced from Product Usage">
-              Updated {usageUpdated}
-            </span>
-          )}
-        </div>
+        <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
+          {vendor} Order Config ({rows.length})
+        </span>
+        <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
         {columns.length === 0 ? (
           <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
         ) : (
-          <div className="overflow-auto rounded border border-navy/30">
+          <>
+            {usageUpdated && (
+              <div className="flex justify-end">
+                <button onClick={() => navigate('/config?tab=product-usage')} title="Open Product Usage config"
+                  className="group self-start inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy hover:bg-[#2ECC71]/35 transition-colors">
+                  Updated {usageUpdated}
+                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
+                </button>
+              </div>
+            )}
+            <div className="overflow-auto rounded border border-navy/30">
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
@@ -970,7 +972,8 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
       </CardBody>
     </Card>
