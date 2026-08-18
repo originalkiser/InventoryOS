@@ -21,6 +21,7 @@ import {
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
 import { ImpactedProductsPicker } from './ImpactedProductsPicker'
+import { QuickResponseModal, type QuickResponseSeed } from './QuickResponseModal'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
@@ -74,6 +75,22 @@ export function ExceptionReportingPage() {
     if ('status' in patch) refreshNavBadges()
   }
   const set = (r: ExceptionReport, patch: Partial<ExceptionReport>) => silentUpdate(r.id, patch)
+
+  // Quick wrap-up prompt — opens when a response date is entered or the status
+  // moves to a closed state, so the closing details get captured in one step.
+  const [quick, setQuick] = useState<QuickResponseSeed | null>(null)
+  const closedStatus = useMemo(() => {
+    const exact = config.statuses.find((x) => x.trim().toLowerCase() === 'closed')
+    return exact ?? config.statuses.find((x) => x.toLowerCase().includes('closed')) ?? ''
+  }, [config.statuses])
+  function openQuick(r: ExceptionReport, opts: { responseDate?: string | null; status?: string | null }) {
+    setQuick({
+      row: r,
+      status: opts.status ?? closedStatus ?? (r.status ?? ''),
+      responseDate: opts.responseDate ?? r.date_of_shop_action ?? '',
+      notes: stripHtml(r.response_notes),
+    })
+  }
 
   function openAdd() { setEditing(null); setModalOpen(true) }
   function openEdit(r: ExceptionReport) { setEditing(r); setModalOpen(true) }
@@ -162,7 +179,7 @@ export function ExceptionReportingPage() {
                 what the sidebar count reflects. Close or bump a report to clear it from here.
               </p>
               <ExceptionTable rows={alertRows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
-                companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} />
+                companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} onQuick={openQuick} />
             </>
           )}
         </TabsContent>
@@ -189,7 +206,7 @@ export function ExceptionReportingPage() {
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : (
             <ExceptionTable rows={rows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
-              companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} />
+              companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} onQuick={openQuick} />
           )}
         </TabsContent>
 
@@ -197,6 +214,9 @@ export function ExceptionReportingPage() {
           <SettingsView config={config} saveConfig={saveConfig} onImport={handleImport} importing={importing} clearAll={clearAll} />
         </TabsContent>
       </Tabs>
+
+      <QuickResponseModal seed={quick} statuses={config.statuses} onClose={() => setQuick(null)}
+        onSave={(patch) => { if (quick) silentUpdate(quick.row.id, patch) }} />
 
       <ExceptionReportModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
         onSubmit={async (fields, id) => { if (id) silentUpdate(id, fields); else await insert(fields); refreshNavBadges() }}
@@ -240,7 +260,7 @@ function SortableHeaderCell({ id, thBase, children }: { id: string; thBase: stri
   )
 }
 
-function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, onSet, onEdit }: {
+function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, onSet, onEdit, onQuick }: {
   rows: ExceptionReport[]
   config: ExceptionConfig
   shopLabel: (id: string | null) => string
@@ -248,6 +268,9 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, 
   companyId: string | null
   onSet: (r: ExceptionReport, patch: Partial<ExceptionReport>) => void
   onEdit: (r: ExceptionReport) => void
+  // Fired when an edit suggests the report is wrapping up (response date
+  // entered, or status moved to closed) so the parent can prompt for the rest.
+  onQuick: (r: ExceptionReport, opts: { responseDate?: string | null; status?: string | null }) => void
 }) {
   const [filtersOn, setFiltersOn] = useState(false)
   const [filters, setFilters] = useState<Record<string, string>>({})
@@ -322,7 +345,8 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, 
         onSave={(v) => onSet(r, { metadata: { ...(r.metadata ?? {}), follow_up_date: v } })} />
       case 'response': return <ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} />
       case 'response_date': return isYesResponse(r.response)
-        ? <EditDate bare value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} />
+        ? <EditDate bare value={r.date_of_shop_action}
+            onSave={(v) => { onSet(r, { date_of_shop_action: v }); if (v) onQuick(r, { responseDate: v }) }} />
         : <span className="text-inky/30">—</span>
       case 'rd': return info!.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info!.daysLeft}d left</span>
         : info!.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
@@ -380,7 +404,8 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, 
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1">
                           <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                          <EditSelect bare value={r.status} options={config.statuses} placeholder="—" allowCurrent onSave={(v) => onSet(r, { status: v })} className="min-w-[180px]" />
+                          <EditSelect bare value={r.status} options={config.statuses} placeholder="—" allowCurrent className="min-w-[180px]"
+                            onSave={(v) => { onSet(r, { status: v }); if ((v ?? '').toLowerCase().includes('closed')) onQuick(r, { status: v }) }} />
                         </div>
                         {stale && (
                           <button onClick={() => onSet(r, { metadata: { ...(r.metadata ?? {}), bumped_until: bumpedUntilISO(config.bumpDays) } })}
