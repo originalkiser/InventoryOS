@@ -7,6 +7,7 @@ import { SUPABASE_MISSING } from '@/lib/supabase'
 import { AppShell } from '@/components/layout/AppShell'
 import { SbLoader } from '@/components/ui'
 import { UpdateBanner } from '@/components/shared/UpdateBanner'
+import { ImportPreviewHost } from '@/components/config/ImportPreviewHost'
 import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { SetupPage } from '@/pages/Setup'
@@ -122,6 +123,7 @@ export default function App() {
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       <AuthProvider />
       <UpdateBanner />
+      <ImportPreviewHost />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />

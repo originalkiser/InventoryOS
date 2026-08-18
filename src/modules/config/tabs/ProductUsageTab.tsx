@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
+import { requestImportConfirm } from '@/components/config/ImportPreviewHost'
 import { DataSourceLinker, type ExistingDataSource } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
@@ -554,6 +555,24 @@ export function ProductUsageTab() {
     }).filter((r) => r.product_id)
 
     if (unresolved > 0) toast.error(`${unresolved.toLocaleString()} row(s) skipped — vendor part number not found in Vendor Parts for that vendor`)
+
+    // Pre-write review — same summary the useConfigTab-backed tabs show, built
+    // here because this tab owns its own load/write path.
+    const keyOfRow = (r: { location_id: string | null; product_id: string }) =>
+      `${r.location_id ?? ''}|${String(r.product_id).toLowerCase()}`
+    const labelOfRow = (r: { location_id: string | null; product_id: string }) =>
+      `${loc.codeOf(r.location_id) || '(no location)'} — ${r.product_id}`
+    const existingKeys = new Set(data.map((d) => `${d.location_id ?? ''}|${String(d.product_id).toLowerCase()}`))
+    const newOnes = mode === 'replace' ? payload : payload.filter((r) => !existingKeys.has(keyOfRow(r)))
+    const okToWrite = await requestImportConfirm({
+      mode,
+      total: payload.length,
+      updates: mode === 'replace' ? 0 : payload.length - newOnes.length,
+      creates: newOnes.length,
+      deletes: mode === 'replace' ? data.length : 0,
+      newRows: newOnes.map(labelOfRow),
+    })
+    if (!okToWrite) { setImporting(false); return }
 
     if (mode === 'replace') {
       const { error: delErr } = await sb.schema('inventory').from('product_usage').delete().eq('company_id', profile.company_id)

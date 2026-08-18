@@ -761,7 +761,7 @@ export function LocationsTab() {
       out.metadata = meta
       return out as Partial<Location>
     }).filter((r: any) => r.name)
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.name ?? '').toLowerCase() })
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.name ?? '').toLowerCase(), labelOf: (r: any) => `${r.name ?? ''}${r.shop_city ? ` — ${r.shop_city}` : ''}` })
     setImporting(false)
   }
 

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { invalidateInventoryCache } from '@/hooks/useInventory'
+import { requestImportConfirm, type ImportSummary } from '@/components/config/ImportPreviewHost'
 import toast from 'react-hot-toast'
 
 // Config tables whose writes must also drop the shared inventory cache
@@ -18,6 +19,11 @@ export interface ImportOptions<T> {
   // When true, existing rows that share a natural key (true duplicates) are
   // collapsed to one on merge — the extras are deleted after the upsert.
   dedupeExisting?: boolean
+  // Pre-write review (defaults to the shared ImportPreviewHost modal). Pass
+  // `false` for non-interactive callers; pass your own to customise.
+  confirm?: ((summary: ImportSummary) => Promise<boolean>) | false
+  // Label shown per new row in the review list. Defaults to keyOf.
+  labelOf?: (row: Partial<T>) => string
 }
 
 // ---------------------------------------------------------------------------
@@ -164,8 +170,20 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
   async function importRows(rows: Partial<T>[], opts: ImportOptions<T>) {
     if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
     const source = opts.source ?? 'upload'
+    // Review step — shows what will be updated vs newly created before any
+    // write happens, so a mis-mapped key column doesn't quietly insert a
+    // duplicate set of rows.
+    const askConfirm = opts.confirm === false ? null : (opts.confirm ?? requestImportConfirm)
+    const labelFor = (r: Partial<T>) => (opts.labelOf ?? opts.keyOf)?.(r) ?? ''
 
     if (opts.mode === 'replace') {
+      if (askConfirm) {
+        const ok = await askConfirm({
+          mode: 'replace', total: rows.length, updates: 0, creates: rows.length,
+          deletes: data.length, newRows: rows.map(labelFor),
+        })
+        if (!ok) return
+      }
       const { error: delErr } = await tbl().delete().eq('company_id', profile.company_id)
       if (delErr) { toast.error(delErr.message); return }
       const error = await writeInBatches(rows.map((r) => stamp(r as Record<string, unknown>, source)), 'insert')
@@ -190,6 +208,7 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       }
     }
     let matched = 0
+    const newLabels: string[] = []
     const payload = rows.map((r) => {
       const base = stamp(r as Record<string, unknown>, source)
       const existingId = keyOf ? existingByKey.get(keyOf(r)) : undefined
@@ -197,9 +216,18 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       // New rows get a fresh UUID; existing rows get their stored id so Postgres
       // resolves the conflict and updates in place rather than inserting.
       if (existingId) matched++
+      else newLabels.push(labelFor(r))
       const id = existingId ?? crypto.randomUUID()
       return { ...base, id }
     })
+
+    if (askConfirm) {
+      const ok = await askConfirm({
+        mode: 'merge', total: rows.length, updates: matched,
+        creates: rows.length - matched, deletes: 0, newRows: newLabels,
+      })
+      if (!ok) return
+    }
     // Collapse duplicate ids (two incoming rows mapping to the same existing row)
     // — otherwise Postgres errors "ON CONFLICT DO UPDATE cannot affect row a
     // second time". Last write wins.

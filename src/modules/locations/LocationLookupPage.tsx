@@ -24,9 +24,14 @@ const VIEW_KEY = 'location-lookup:view'
 interface TankRow {
   id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null; system_tank_id?: string | null
   on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
+  height: number | null; total_capacity: number | null
   updated_at?: string | null
   internal?: string // resolved internal product id (manual map → vendor parts)
 }
+
+// total_capacity is a stored generated column (on_hand + available_capacity);
+// fall back to computing it for rows written before that column existed.
+const tankCapacity = (t: TankRow) => t.total_capacity ?? ((t.on_hand ?? 0) + (t.available_capacity ?? 0))
 interface ConfigRow {
   id: string; vendor_id: string | null; product_id: string | null
   capacity: number | null; order_trigger: number | null; order_limit: number | null
@@ -166,6 +171,8 @@ const TANK_COLS: Col<TankRow>[] = [
   { id: 'serial', label: 'Serial #', align: 'left', render: (t) => t.serial_rtu_id ?? '—', sort: (t) => t.serial_rtu_id },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand), sort: (t) => t.on_hand },
   { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity), sort: (t) => t.available_capacity },
+  { id: 'total_capacity', label: 'Total Capacity', align: 'right', render: (t) => num(tankCapacity(t)), sort: (t) => tankCapacity(t) },
+  { id: 'height', label: 'Height', align: 'right', render: (t) => num(t.height), sort: (t) => t.height },
   { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>), sort: (t) => (t.keep_fill ? 1 : 0) },
   {
     id: 'updated', label: 'Last Update', align: 'left',
@@ -505,13 +512,20 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   async function copyTanks() {
     const cols = visibleTankCols
     const rows = tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks
-    const label = (c: Col<TankRow>) => ((c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label)
+    const unitCols = new Set(['on_hand', 'available', 'total_capacity'])
+    const label = (c: Col<TankRow>) => (unitCols.has(c.id) && tankUnit ? `${c.label} (${tankUnit})` : c.label)
+    // Every id in TANK_COLS needs a case here — anything unhandled falls to
+    // `default` and silently copies as an empty cell (which is how the
+    // "Product ID (Internal)" column ended up blank in pasted tables).
     const text = (c: Col<TankRow>, t: TankRow): string => {
       switch (c.id) {
         case 'product': return t.product_id ?? ''
+        case 'internal': return t.internal || t.product_id || ''
         case 'serial': return t.serial_rtu_id ?? ''
         case 'on_hand': return t.on_hand == null ? '' : String(t.on_hand)
         case 'available': return t.available_capacity == null ? '' : String(t.available_capacity)
+        case 'total_capacity': return String(tankCapacity(t))
+        case 'height': return t.height == null ? '' : String(t.height)
         case 'keepfill': return t.keep_fill ? 'yes' : ''
         case 'updated': return dateTime(t.inventory_time ?? t.reading_date)
         default: return ''

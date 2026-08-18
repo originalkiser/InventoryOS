@@ -67,7 +67,7 @@ export function SupplementalLocationTab() {
       const existing = location_id ? existingByLoc.get(location_id) : undefined
       return { location_id, data: { ...(existing?.data ?? {}), ...incoming } } as Partial<Supplemental>
     }).filter((r) => r.location_id)
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => r.location_id ?? '' })
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => r.location_id ?? '', labelOf: (r: any) => loc.labelOf(r.location_id ?? null) })
     setParsed(null); setLocCol(''); setImporting(false)
   }
 

@@ -143,7 +143,7 @@ export function VendorPartsTab() {
     }).filter((r: any) => r.part_number)
     // Per-vendor stacking: match on vendor + part number, so re-uploading a
     // vendor's file updates its parts and leaves other vendors untouched.
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.vendor_id ?? ''}|${r.part_number}` })
+    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.vendor_id ?? ''}|${r.part_number}`, labelOf: (r: any) => String(r.part_number ?? '') })
     setImporting(false)
   }
 
