@@ -152,6 +152,10 @@ sb.schema('marketing').from('table_name')
 | `outlier` | report system: reports, report_entries, weeks, departments |
 | `forms` | form builder + submissions: forms, fields, field_conditions, condition_rules, submissions, responses, assignments, score_streaks, form_department_shares |
 | `marketing` | campaign planning: campaign_templates, campaign_template_tasks, monthly_plans, campaign_assignments, campaign_tasks |
+| `archive` | `deleted_rows` — every deleted row (as jsonb) from tables whose ids other records reference. Written only by an `AFTER DELETE` trigger; see below. |
+
+**Deleted-row archive (`archive.deleted_rows`, migration `20260819_archive_deleted_rows.sql`):**
+Cross-table references in this app are plain `uuid` columns with **no foreign keys**, so deleting a row (or clearing + re-uploading a table, which is a delete plus brand-new ids) silently orphans everything pointing at it — no error, it just stops matching. An `AFTER DELETE` trigger copies the full pre-delete row into `archive.deleted_rows` for the tables that carry that risk (`core.locations`, `core.pos_location_map`, `inventory.vendors`/`vendor_parts`/`issue_statuses`/`issue_categories`, `platform.departments`). Restore recipes are in the migration file's trailing comment — including the important case where rows were re-created under new ids, where the archive is used as an old-id → business-key map to repoint orphans rather than to re-insert. **When adding a table that other records will reference by id, add it to that trigger list.**
 
 **Gotchas from recent schema moves — don't assume the old location:**
 - `tasks` (standalone tasks) is in **`core`**, not `inventory`. `project_tasks` (project-scoped) is still in `inventory`.
