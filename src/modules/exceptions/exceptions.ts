@@ -124,6 +124,21 @@ export function rdCell(
   return left > 0 ? { mode: 'left', daysLeft: left } : { mode: 'rd' }
 }
 
+// When to check back on this finding. Stored in metadata alongside
+// impacted_products rather than as its own column, so it needs no migration.
+export function followUpDate(r: { metadata?: Record<string, unknown> | null } | null | undefined): string | null {
+  const v = (r?.metadata as any)?.follow_up_date
+  return typeof v === 'string' && v ? v : null
+}
+
+// A follow-up is overdue once its date has passed and the report isn't closed.
+export function isFollowUpOverdue(r: { metadata?: Record<string, unknown> | null; status: string | null }): boolean {
+  const d = followUpDate(r)
+  if (!d) return false
+  if ((r.status ?? '').toLowerCase().includes('closed')) return false
+  return new Date(d + 'T00:00:00').getTime() < new Date().setHours(0, 0, 0, 0)
+}
+
 // Products the finding affects — stored in metadata (not a dedicated column)
 // since it's an optional, recently-added field. Selected from the shop's
 // configured products, mirroring Location Comms' product picker.

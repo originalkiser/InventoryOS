@@ -16,7 +16,7 @@ import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
 import {
   RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO,
-  parseContacted, isYesResponse, isRdAdded, rdCell, impactedProducts,
+  parseContacted, isYesResponse, isRdAdded, rdCell, impactedProducts, followUpDate, isFollowUpOverdue,
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
@@ -215,6 +215,7 @@ const COL_META: Record<string, { label: string; filter: boolean; wrap?: boolean 
   products: { label: 'Impacted Products', filter: false },
   details: { label: 'Details', filter: true, wrap: true },
   contacted: { label: 'Contacted', filter: false },
+  follow_up: { label: 'Follow Up', filter: false },
   response: { label: 'Response', filter: true },
   response_date: { label: 'Response Date', filter: false },
   rd: { label: 'Regional Director', filter: false },
@@ -313,6 +314,13 @@ function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, 
           {r.contacted && <EditDate bare value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
         </div>
       )
+      case 'follow_up': {
+        const overdue = isFollowUpOverdue(r)
+        return <EditDate bare value={followUpDate(r)}
+          className={overdue ? 'text-[#C0392B] font-bold' : ''}
+          title={overdue ? 'Follow-up date has passed' : 'When to check back on this finding'}
+          onSave={(v) => onSet(r, { metadata: { ...(r.metadata ?? {}), follow_up_date: v } })} />
+      }
       case 'response': return <ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} />
       case 'response_date': return isYesResponse(r.response)
         ? <EditDate bare value={r.date_of_shop_action} onSave={(v) => onSet(r, { date_of_shop_action: v })} />

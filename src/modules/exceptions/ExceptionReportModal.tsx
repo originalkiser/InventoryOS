@@ -4,7 +4,7 @@ import type { ComboboxOption } from '@/components/ui'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useExceptionConfig } from './useExceptionConfig'
-import { RESPONSE_OPTIONS, impactedProducts, type ExceptionReport } from './exceptions'
+import { RESPONSE_OPTIONS, impactedProducts, followUpDate, type ExceptionReport } from './exceptions'
 import { ImpactedProductsPicker } from './ImpactedProductsPicker'
 import toast from 'react-hot-toast'
 
@@ -34,6 +34,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
   const [details, setDetails] = useState('')
   const [contacted, setContacted] = useState(false)
   const [contactedDate, setContactedDate] = useState('')
+  const [followUp, setFollowUp] = useState('')
   const [response, setResponse] = useState('')
   const [rdIfNo, setRdIfNo] = useState('')
   const [responseNotes, setResponseNotes] = useState('')
@@ -53,6 +54,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
     setDetails(stripHtml(existing?.details))
     setContacted(!!existing?.contacted)
     setContactedDate(existing?.contacted_date ?? '')
+    setFollowUp(followUpDate(existing) ?? '')
     setResponse(existing?.response ?? '')
     setRdIfNo(existing?.rd_if_no ?? '')
     setResponseNotes(stripHtml(existing?.response_notes))
@@ -101,7 +103,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
       rd_if_no: rdIfNo.trim() || null,
       response_notes: responseNotes.trim() || null,
       status: status || null,
-      metadata: { ...(existing?.metadata ?? {}), impacted_products: products },
+      metadata: { ...(existing?.metadata ?? {}), impacted_products: products, follow_up_date: followUp || null },
     }
     try {
       await onSubmit(fields, existing?.id)
@@ -143,6 +145,11 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
           <Toggle checked={contacted} onChange={setContacted} label="Contacted shop/AM?" color="green" />
         </div>
         <Input label="Contacted Date" type="date" value={contactedDate} onChange={(e) => setContactedDate(e.target.value)} disabled={!contacted} />
+
+        <div className="col-span-2">
+          <Input label="Follow-Up Date" type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
+          <p className="text-[10px] font-mono text-inky/50 mt-0.5">When to check back. Turns red in the table once the date passes and the report is still open.</p>
+        </div>
 
         <Select label="Response from Shop/AM" value={response} onChange={(e) => setResponse(e.target.value)}
           options={[{ value: '', label: 'No response yet' }, ...RESPONSE_OPTIONS.map((r) => ({ value: r, label: r }))]} />

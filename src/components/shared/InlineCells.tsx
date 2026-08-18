@@ -17,8 +17,8 @@ export function EditText({ value, onSave, placeholder, className = '' }: { value
   )
 }
 
-export function EditDate({ value, onSave, bare }: { value: string | null; onSave: (v: string | null) => void; bare?: boolean }) {
-  return <input type="date" value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={bare ? bareCls : inputCls} />
+export function EditDate({ value, onSave, bare, className = '', title }: { value: string | null; onSave: (v: string | null) => void; bare?: boolean; className?: string; title?: string }) {
+  return <input type="date" value={value ?? ''} title={title} onChange={(e) => onSave(e.target.value || null)} className={`${bare ? bareCls : inputCls} ${className}`} />
 }
 
 export function EditSelect({ value, options, onSave, placeholder, allowCurrent, className = '', bare }: {
