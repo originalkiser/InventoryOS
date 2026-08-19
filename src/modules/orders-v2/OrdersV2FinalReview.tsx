@@ -74,6 +74,18 @@ export function OrdersV2FinalReview() {
       || Number(b.max_capacity_gallons ?? 0) - Number(a.max_capacity_gallons ?? 0))
   }, [lines, filter, shopLabel])
 
+  // Alternates per shop (not per row) — see OrdersV2Review.tsx for why.
+  const bandOf = useMemo(() => {
+    const m = new Map<string, boolean>()
+    let prevShop: string | null = null
+    let band = false
+    for (const l of visible) {
+      if (l.location_id !== prevShop) { band = !band; prevShop = l.location_id }
+      m.set(l.id, band)
+    }
+    return m
+  }, [visible])
+
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
   if (!draft) return <p className="text-xs font-mono text-inky/60 py-8">Draft not found.</p>
 
@@ -175,7 +187,7 @@ export function OrdersV2FinalReview() {
           </tr></thead>
           <tbody>
             {visible.map((l) => (
-              <tr key={l.id} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'}`}>
+              <tr key={l.id} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
                 <td className="px-2 py-1">
                   <button onClick={() => setOpenShop({ locationId: l.location_id ?? '', orderType: l.order_type })}
                     className="text-navy hover:underline">{shopLabel(l.location_id)}</button>

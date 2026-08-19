@@ -9,7 +9,7 @@ const rule = (over: Partial<ProductRule> = {}): ProductRule => ({
   location_id: 'L1', product_id: 'P1', uom: 'case', units_per_uom_gallons: 5, unit_cost: 100,
   max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false,
   ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2,
-  include_in_total_shop_order: true, ...over,
+  include_in_total_shop_order: true, order_type_override: null, ...over,
 })
 
 const input = (over: Omit<Partial<GenerationInput>, 'rule'> & { rule?: Partial<ProductRule> } = {}): GenerationInput => {

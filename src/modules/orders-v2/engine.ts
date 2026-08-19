@@ -48,6 +48,14 @@ export const gallonsPerUnit = (rule: ProductRule): number => {
 }
 
 /**
+ * Package vs. bulk for this line. orderTypeOf only recognizes a uom that
+ * literally says "bulk", which misses real bulk products configured under
+ * a differently-worded uom — order_type_override (set on the UOM
+ * Conversions row in useOrdersV2.ts) takes precedence when present.
+ */
+export const resolvedOrderType = (rule: ProductRule): OrderType => rule.order_type_override ?? orderTypeOf(rule.uom)
+
+/**
  * Round a unit quantity for its UOM. Discrete UOMs must be whole; bulk may
  * carry decimals per settings. `dir` biases the rounding — we round down
  * when a cap is binding so a limit is never breached by rounding.
@@ -260,7 +268,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
   return {
     location_id: input.location_id,
     product_id: input.product_id,
-    order_type: orderTypeOf(rule.uom),
+    order_type: resolvedOrderType(rule),
     uom: rule.uom,
     system_qty: units,
     qty: units,
@@ -425,7 +433,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
 
   for (const input of inputs) {
     const { rule } = input
-    const groupKey = `${input.location_id}|${orderTypeOf(rule.uom)}`
+    const groupKey = `${input.location_id}|${resolvedOrderType(rule)}`
 
     if (ctx.eligibleLocationIds && !ctx.eligibleLocationIds.has(input.location_id)) {
       skipped.push({ ...idOf(input), reason: 'not_order_day' }); continue
@@ -556,7 +564,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
         // never dragged onto an order purely to reach a dollar minimum. It
         // never stops a product that is genuinely due from being ordered.
         const spares = (eligibleSpare.get(key) ?? [])
-          .filter((sp) => orderTypeOf(sp.rule.uom) === order_type)
+          .filter((sp) => resolvedOrderType(sp.rule) === order_type)
           .filter((sp) => {
             const d = daysOfSupply(sp.on_hand, sp.daily_usage)
             return d == null || d <= ctx.settings.skip_order_if_dos_over
@@ -599,16 +607,37 @@ function idOf(i: GenerationInput) { return { location_id: i.location_id, product
 // ── Composite template rendering (export / PO numbers) ──────────────────
 
 /**
- * Render `{field}` and `{date:FORMAT}` placeholders. Used for PO numbers,
- * file names, sheet names and email subjects so they all share one syntax.
- *   {shop_number}-{date:MMDDYYYY}{order_type_code}  ->  1-08192026B
+ * Render `{field}`, `{date:FORMAT}`, `{today:FORMAT}` and zero-padded
+ * `{field:00000}` placeholders. Used for PO numbers, file names, sheet
+ * names, export columns and email subjects so they all share one syntax.
+ *   {shop_number}-{date:MMDDYYYY}{order_type_code}     -> 1-08192026B
+ *   {today:MMDDYYYY}                                   -> today's date, not the order date
+ *   {date+4:MMDDYYYY}                                  -> order date, 4 calendar days later
+ *   S{shop_number:00000}                                -> S00013
  */
 export function renderTemplate(tpl: string, values: Record<string, string | number | null | undefined>, date?: string): string {
-  return (tpl ?? '').replace(/\{([a-z_]+)(?::([^}]+))?\}/gi, (_m, key: string, fmt?: string) => {
-    if (key.toLowerCase() === 'date') return formatDateToken(date ?? values.date as string, fmt ?? 'MMDDYYYY')
+  return (tpl ?? '').replace(/\{([a-z_]+)([+-]\d+)?(?::([^}]+))?\}/gi, (_m, key: string, offset: string | undefined, fmt: string | undefined) => {
+    const k = key.toLowerCase()
+    if (k === 'today') return formatDateToken(addCalendarDays(toIso(new Date()), offset ? Number(offset) : 0), fmt ?? 'MMDDYYYY')
+    if (k === 'date') {
+      const base = date ?? (values.date as string)
+      return formatDateToken(offset ? addCalendarDays(base, Number(offset)) : base, fmt ?? 'MMDDYYYY')
+    }
     const v = values[key]
-    return v == null ? '' : String(v)
+    if (v == null) return ''
+    // Zero-pad, e.g. {shop_number:00000} -> "00013" — any other fmt on a
+    // non-date field is left as a no-op rather than an error.
+    if (fmt && /^0+$/.test(fmt)) return String(v).padStart(fmt.length, '0')
+    return String(v)
   })
+}
+
+function addCalendarDays(date: string | undefined, days: number): string | undefined {
+  if (!date) return date
+  const d = new Date(String(date) + 'T00:00:00')
+  if (Number.isNaN(d.getTime())) return date
+  d.setDate(d.getDate() + days)
+  return toIso(d)
 }
 
 function formatDateToken(date: string | undefined, fmt: string): string {

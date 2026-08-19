@@ -94,6 +94,10 @@ export interface ProductRule {
   ignore_minimum_if_ordered_alone: boolean
   default_order_amount_if_alone: number
   include_in_total_shop_order: boolean
+  // Package-vs-bulk override for this uom (from the UOM Conversions table).
+  // Default classification only recognizes a uom that literally says
+  // "bulk" — this lets a differently-worded bulk UOM be marked correctly.
+  order_type_override: OrderType | null
 }
 
 // One candidate line the engine reasons about.

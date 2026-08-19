@@ -16,8 +16,8 @@ import type { OrderType } from './types'
 
 // Fields a source/composite column can reference.
 export const EXPORT_FIELDS = [
-  'po_number', 'shop_number', 'shop_name', 'product_id', 'uom', 'qty', 'unit_cost',
-  'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor',
+  'po_number', 'shop_number', 'shop_name', 'product_id', 'vendor_part_number', 'vendor_description',
+  'uom', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor',
 ] as const
 export type ExportField = (typeof EXPORT_FIELDS)[number]
 
@@ -78,6 +78,8 @@ export function OrdersV2Export() {
   const [tpl, setTpl] = useState<ExportTemplate>(DEFAULT_TEMPLATE)
   const [savedTpl, setSavedTpl] = useState<ExportTemplate | null>(null)
   const [finalizing, setFinalizing] = useState(false)
+  const [vendorParts, setVendorParts] = useState<{ our_part_number: string | null; part_number: string | null; description: string | null }[]>([])
+  const [productMappings, setProductMappings] = useState<{ old_product_id: string | null; new_product_id: string | null }[]>([])
 
   const shopNumber = useCallback((id: string | null) => {
     const label = loc.fieldValue(id, 'name') || loc.codeOf(id) || ''
@@ -108,6 +110,32 @@ export function OrdersV2Export() {
     return () => { cancelled = true }
   }, [profile?.company_id, draft?.vendor_id])
 
+  // Vendor's own part number/description — matched vendor + our_part_number,
+  // resolved through product_id_mappings the same way Orders v2 generation
+  // resolves usage and package size (a line's product_id may be a canonical
+  // id vendor_parts hasn't caught up to yet).
+  useEffect(() => {
+    if (!profile?.company_id || !draft?.vendor_id) return
+    let cancelled = false
+    Promise.all([
+      sb().schema('inventory').from('vendor_parts').select('our_part_number, part_number, description')
+        .eq('company_id', profile.company_id).eq('vendor_id', draft.vendor_id),
+      sb().schema('inventory').from('product_id_mappings').select('old_product_id, new_product_id').eq('company_id', profile.company_id),
+    ]).then(([vp, pm]: any[]) => {
+      if (cancelled) return
+      setVendorParts((vp.data ?? []) as any[])
+      setProductMappings((pm.data ?? []) as any[])
+    })
+    return () => { cancelled = true }
+  }, [profile?.company_id, draft?.vendor_id])
+
+  const vendorPartFor = useMemo(() => {
+    const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+    const oldToNew = new Map(productMappings.filter((m) => m.old_product_id && m.new_product_id).map((m) => [pkey(m.old_product_id), String(m.new_product_id)]))
+    const byPart = new Map(vendorParts.filter((p) => p.our_part_number).map((p) => [pkey(p.our_part_number), p]))
+    return (productId: string) => byPart.get(pkey(oldToNew.get(pkey(productId)) ?? productId))
+  }, [vendorParts, productMappings])
+
   const included = useMemo(() => lines.filter((l) => l.included && Number(l.qty) > 0), [lines])
   const vendorName = vendors.byId(draft?.vendor_id ?? null)?.name ?? ''
   const dirty = savedTpl ? JSON.stringify(savedTpl) !== JSON.stringify(tpl) : true
@@ -115,11 +143,14 @@ export function OrdersV2Export() {
   /** Values available to a source/composite column for one line. */
   const valuesFor = useCallback((l: DraftLineRow): Record<string, string | number> => {
     const orderType = l.order_type as OrderType
+    const vp = vendorPartFor(l.product_id)
     return {
       po_number: poNumber(shopNumber(l.location_id), draft?.order_date ?? '', orderType),
       shop_number: shopNumber(l.location_id),
       shop_name: shopName(l.location_id),
       product_id: l.product_id,
+      vendor_part_number: vp?.part_number ?? '',
+      vendor_description: vp?.description ?? '',
       uom: l.uom ?? '',
       qty: Number(l.qty),
       unit_cost: Number(l.unit_cost ?? 0),
@@ -129,7 +160,7 @@ export function OrdersV2Export() {
       order_type_code: orderType === 'bulk' ? 'B' : 'P',
       vendor: vendorName,
     }
-  }, [draft?.order_date, shopNumber, shopName, vendorName])
+  }, [draft?.order_date, shopNumber, shopName, vendorName, vendorPartFor])
 
   const rows = useMemo(() => included.map((l) => {
     const v = valuesFor(l)
@@ -269,9 +300,14 @@ export function OrdersV2Export() {
             </div>
           ))}
         </div>
-        <p className="text-[10px] font-mono text-inky/50">
-          Composite fields: {EXPORT_FIELDS.join(', ')} — plus <code>{'{date:MMDDYYYY}'}</code>.
-        </p>
+        <div className="text-[10px] font-mono text-inky/50 flex flex-col gap-0.5">
+          <p>Composite fields: {EXPORT_FIELDS.join(', ')}</p>
+          <p>
+            <code>{'{date:MMDDYYYY}'}</code> order date · <code>{'{today:MMDDYYYY}'}</code> today's date ·{' '}
+            <code>{'{date+4:MMDDYYYY}'}</code> order date +4 days (use <code>-</code> for earlier) ·{' '}
+            <code>{'{shop_number:00000}'}</code> zero-padded to 5 digits (works on any field, e.g. <code>{'S{shop_number:00000}'}</code> → S00013)
+          </p>
+        </div>
       </CardBody></Card>
 
       {/* Naming + email */}

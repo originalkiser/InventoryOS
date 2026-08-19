@@ -7,7 +7,7 @@ import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
-import { Button, Input, Modal, Combobox, Card, CardBody } from '@/components/ui'
+import { Button, Input, Modal, Combobox, Card, CardBody, Select } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
@@ -18,6 +18,7 @@ const REQUIRED_FIELDS = [
   { name: 'from_unit', label: 'From Unit (on-hand)', required: true },
   { name: 'to_unit', label: 'To Unit (order)', required: true },
   { name: 'factor', label: 'Factor', required: true },
+  { name: 'order_type', label: 'Order Type (Package/Bulk, Orders v2)' },
 ]
 
 // Orders v2 reads quarts-per-package from rows whose to_unit normalizes to
@@ -27,7 +28,8 @@ const QUART_NAMES = new Set(['quart', 'quarts', 'qt', 'qts'])
 const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
 
 const col = createColumnHelper<UomMapping>()
-const EMPTY = { vendorId: '', from_unit: '', to_unit: '', factor: '' }
+const EMPTY = { vendorId: '', from_unit: '', to_unit: '', factor: '', orderType: '' }
+const ORDER_TYPE_LABEL: Record<string, string> = { package: 'Package', bulk: 'Bulk' }
 
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
 
@@ -93,6 +95,7 @@ export function UomMappingsTab() {
     col.accessor('from_unit', { header: 'From (on-hand)' }),
     col.accessor('to_unit', { header: 'To (order)' }),
     col.accessor('factor', { header: 'Factor', cell: (i) => i.getValue() ?? '—' }),
+    { id: 'order_type', header: 'Order Type', accessorFn: (r: UomMapping) => r.order_type ?? '', cell: (i: any) => ORDER_TYPE_LABEL[i.getValue()] ?? '—' },
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as UomMapping)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
@@ -101,12 +104,12 @@ export function UomMappingsTab() {
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: UomMapping) {
     setEditId(r.id)
-    setForm({ vendorId: r.vendor_id ?? '', from_unit: r.from_unit ?? '', to_unit: r.to_unit ?? '', factor: r.factor?.toString() ?? '' })
+    setForm({ vendorId: r.vendor_id ?? '', from_unit: r.from_unit ?? '', to_unit: r.to_unit ?? '', factor: r.factor?.toString() ?? '', orderType: r.order_type ?? '' })
     setAddOpen(true)
   }
   function openUnmapped(u: UnmappedRow) {
     setEditId(null)
-    setForm({ vendorId: u.vendorId ?? '', from_unit: u.uom, to_unit: 'Quarts', factor: '' })
+    setForm({ vendorId: u.vendorId ?? '', from_unit: u.uom, to_unit: 'Quarts', factor: '', orderType: '' })
     setAddOpen(true)
   }
 
@@ -116,7 +119,9 @@ export function UomMappingsTab() {
       const out: Record<string, unknown> = {}
       for (const m of maps) {
         const v = mappedValue(row, m, maps)
-        out[m.fieldName] = m.fieldName === 'factor' ? num(v) : (v || null)
+        if (m.fieldName === 'factor') out[m.fieldName] = num(v)
+        else if (m.fieldName === 'order_type') out[m.fieldName] = ORDER_TYPE_LABEL[pkey(v)] ? pkey(v) : null
+        else out[m.fieldName] = v || null
       }
       return out as Partial<UomMapping>
     }).filter((r: any) => r.from_unit && r.to_unit)
@@ -127,7 +132,10 @@ export function UomMappingsTab() {
   async function onSubmit() {
     const factor = num(form.factor)
     if (!form.from_unit.trim() || !form.to_unit.trim() || factor == null) return
-    const payload = { vendor_id: form.vendorId || null, from_unit: form.from_unit.trim(), to_unit: form.to_unit.trim(), factor } as Partial<UomMapping>
+    const payload = {
+      vendor_id: form.vendorId || null, from_unit: form.from_unit.trim(), to_unit: form.to_unit.trim(), factor,
+      order_type: (form.orderType || null) as UomMapping['order_type'],
+    } as Partial<UomMapping>
     if (editId) await update(editId, payload)
     else await insert(payload)
     setForm({ ...EMPTY }); setAddOpen(false); setEditId(null)
@@ -186,6 +194,11 @@ export function UomMappingsTab() {
             <Input label="To Unit *" value={form.to_unit} onChange={(e) => setForm({ ...form, to_unit: e.target.value })} placeholder="Quarts" />
             <Input label="Factor *" value={form.factor} onChange={(e) => setForm({ ...form, factor: e.target.value })} placeholder="55" />
           </div>
+          <Select label="Order Type (Orders v2)" value={form.orderType} onChange={(e) => setForm({ ...form, orderType: e.target.value })}
+            options={[{ value: '', label: "Default (uom must say \"bulk\")" }, { value: 'package', label: 'Package' }, { value: 'bulk', label: 'Bulk' }]} />
+          <p className="text-[10px] font-mono text-inky/50 -mt-2">
+            Overrides how Orders v2 classifies this UOM for grouping and the PO number&apos;s B/P code — use it when a bulk product&apos;s UOM text doesn&apos;t literally say "bulk".
+          </p>
           <div className="flex justify-between gap-2 pt-2">
             <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>
             <div className="flex gap-2">

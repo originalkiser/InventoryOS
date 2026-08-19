@@ -105,7 +105,7 @@ const rule = (over: Partial<ProductRule> = {}): ProductRule => ({
   location_id: 'L1', product_id: 'P1', uom: 'case', units_per_uom_gallons: 5, unit_cost: 100,
   max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false,
   ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2,
-  include_in_total_shop_order: true, ...over,
+  include_in_total_shop_order: true, order_type_override: null, ...over,
 })
 const input = (): GenerationInput => ({
   location_id: 'L1', product_id: 'P1', rule: rule(), on_hand: 10, daily_usage: 5,
@@ -253,8 +253,8 @@ describe('on-hand resolution', () => {
 const vp = (over: Partial<{ vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> }> = {}) => ({
   vendor_id: 'V1', our_part_number: '5W20', unit_of_measure: null, metadata: {}, ...over,
 })
-const uomRow = (over: Partial<{ vendor_id: string | null; from_unit: string; to_unit: string; factor: number }> = {}) => ({
-  vendor_id: null, from_unit: '', to_unit: 'Quarts', factor: 1, ...over,
+const uomRow = (over: Partial<{ vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: 'package' | 'bulk' | null }> = {}) => ({
+  vendor_id: null, from_unit: '', to_unit: 'Quarts', factor: 1, order_type: null, ...over,
 })
 
 describe('package size / cost resolution', () => {
@@ -300,7 +300,7 @@ describe('package size / cost resolution', () => {
   })
 
   it('an explicit ov2_product_rules value wins over anything derived', () => {
-    const rule = { location_id: 'L1', product_id: '5W20', uom: 'drum', units_per_uom_gallons: 40, unit_cost: 200, max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2, include_in_total_shop_order: true }
+    const rule = { location_id: 'L1', product_id: '5W20', uom: 'drum', units_per_uom_gallons: 40, unit_cost: 200, max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2, include_in_total_shop_order: true, order_type_override: null }
     const [i] = buildGenerationInputs(
       [cfg('5W20')], [rule], [], [], [vp({ metadata: { package_qty_gallons: 55, price_per_gallon: 3 } })], [])
     expect(i.rule.units_per_uom_gallons).toBe(40)
@@ -316,5 +316,60 @@ describe('package size / cost resolution', () => {
     const [i] = buildGenerationInputs([cfg('NOPART')], [], [], [], [vp()], [])
     expect(i.rule.units_per_uom_gallons).toBeNull()
     expect(i.rule.unit_cost).toBeNull()
+  })
+})
+
+// ── order type override (package vs. bulk) ───────────────────────────────
+
+describe('order type override', () => {
+  it('marks a line bulk when the matched UOM row says so, despite the uom text', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ unit_of_measure: 'Tank' })], [uomRow({ vendor_id: 'V1', from_unit: 'Tank', order_type: 'bulk' })])
+    expect(i.rule.order_type_override).toBe('bulk')
+  })
+
+  it('does not apply a different vendor\'s order-type override', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ vendor_id: 'V1', unit_of_measure: 'Tank' })],
+      [uomRow({ vendor_id: 'V2', from_unit: 'Tank', order_type: 'bulk' })])
+    expect(i.rule.order_type_override).toBeNull()
+  })
+
+  it('leaves order type unset when no vendor part matches', () => {
+    const [i] = buildGenerationInputs([cfg('NOPART')], [], [], [], [vp()], [uomRow({ from_unit: 'Tank', order_type: 'bulk' })])
+    expect(i.rule.order_type_override).toBeNull()
+  })
+})
+
+// ── on-hand/usage unit conversion (global_products) ──────────────────────
+
+const gp = (product_id: string, unit_of_measure: string | null) => ({ product_id, unit_of_measure })
+
+describe('on-hand unit conversion', () => {
+  it('converts ounces to quarts for a product tracked that way', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('HM0806')], [], [use('HM0806', 320, 32)], [], [], [], [gp('HM0806', 'oz')])
+    expect(i.on_hand).toBeCloseTo(10, 6)     // 320 oz / 32
+    expect(i.daily_usage).toBeCloseTo(1, 6)  // 32 oz / 32
+  })
+
+  it('leaves quarts-tracked products unchanged', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [use('5W20', 100, 5)], [], [], [], [gp('5W20', 'Quarts')])
+    expect(i.on_hand).toBe(100)
+    expect(i.daily_usage).toBe(5)
+  })
+
+  it('leaves a product with no global_products row unchanged', () => {
+    const [i] = buildGenerationInputs([cfg('5W20')], [], [use('5W20', 100, 5)], [], [], [], [])
+    expect(i.on_hand).toBe(100)
+    expect(i.daily_usage).toBe(5)
+  })
+
+  it('resolves the source unit through product_id_mappings same as usage', () => {
+    const maps = [{ old_product_id: 'OLDID', new_product_id: 'HM0806' }]
+    const [i] = buildGenerationInputs(
+      [cfg('HM0806')], [], [use('HM0806', 320, 32)], maps, [], [], [gp('OLDID', 'oz')])
+    expect(i.on_hand).toBeCloseTo(10, 6)
   })
 })

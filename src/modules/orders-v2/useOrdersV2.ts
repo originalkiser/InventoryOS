@@ -264,9 +264,14 @@ export function useDraft(draftId: string | null) {
 
   /** Autosave a single line edit; marks it as a user override for the UI. */
   async function patchLine(id: string, patch: Partial<DraftLineRow>, markOverride = true) {
-    setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch, ...(markOverride ? { is_override: true } : {}) } : l)))
-    const body: Record<string, unknown> = { ...patch, updated_at: new Date().toISOString() }
-    if (markOverride) body.is_override = true
+    // Reverting qty back to what the engine originally proposed clears the
+    // override flag too — it marks "I changed this," not a permanent tag
+    // once the change is undone.
+    const current = lines.find((l) => l.id === id)
+    const reverted = markOverride && patch.qty != null && current != null && Number(patch.qty) === Number(current.system_qty)
+    const overridePatch = markOverride ? { is_override: !reverted } : {}
+    setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch, ...overridePatch } : l)))
+    const body: Record<string, unknown> = { ...patch, updated_at: new Date().toISOString(), ...overridePatch }
     const { error } = await sb().schema('inventory').from('ov2_order_draft_lines').update(body).eq('id', id)
     if (error) toast.error(error.message)
     void touch()
@@ -307,7 +312,8 @@ export function useDraft(draftId: string | null) {
 export interface OrderConfigRow { location_id: string; product_id: string; vendor_id: string | null; capacity: number | null; metadata: Record<string, unknown> | null }
 export interface UsageRow { location_id: string; product_id: string; on_hands: number | null; daily_usage: number | null }
 export interface VendorPartRow { vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null }
-export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number }
+export interface GlobalProductRow { product_id: string; unit_of_measure: string | null }
+export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }
 // Derived from core.locations.reladyne_delivery_day rather than a table of
 // its own — the location list is already the source of truth for it.
 export interface VendorDayRow { location_id: string; order_dow: number | null; delivery_dow: number | null }
@@ -322,11 +328,11 @@ export function useGenerationData() {
   const companyId = profile?.company_id ?? null
 
   const fetchInputs = useCallback(async (vendorId: string | null, lookbackDays: number) => {
-    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
+    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const [configs, rules, usage, productMappings, vendorParts, uomMappings, locRows, schedRows, calRows, history] = await Promise.all([
+    const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, locRows, schedRows, calRows, history] = await Promise.all([
       fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
@@ -336,7 +342,12 @@ export function useGenerationData() {
       // table has no editing UI and is empty in practice) — see
       // resolveVendorPart below.
       fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata', companyId),
-      fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor', companyId),
+      fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor, order_type', companyId),
+      // Most products report on-hand/usage in quarts already; a product
+      // whose global_products.unit_of_measure says otherwise (e.g. HM0806
+      // in ounces) gets converted before it reaches the engine — see
+      // quartsFromSourceUnit below.
+      fetchAll<GlobalProductRow>('inventory', 'global_products', 'product_id, unit_of_measure', companyId),
       fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
       fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
@@ -382,7 +393,7 @@ export function useGenerationData() {
       (calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']),
     )
 
-    return { configs, rules, usage, productMappings, vendorParts, uomMappings, days, schedules, calendar, history: historyFacts }
+    return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
   return { fetchInputs }
@@ -393,6 +404,7 @@ export function buildGenerationInputs(
   configs: OrderConfigRow[], rules: (ProductRule & { id?: string })[], usage: UsageRow[],
   productMappings: { old_product_id: string | null; new_product_id: string | null }[] = [],
   vendorParts: VendorPartRow[] = [], uomMappings: UomMappingRow[] = [],
+  globalProducts: GlobalProductRow[] = [],
 ) {
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
@@ -445,9 +457,49 @@ export function buildGenerationInputs(
     if (!u) return undefined
     return uomQuartsMap.get(`${vendorId ?? ''}|${u}`) ?? uomQuartsMap.get(`|${u}`)
   }
+  // Package-vs-bulk override, keyed the same way but independent of the
+  // to_unit filter above — order_type can be set on a row regardless of
+  // whether it also carries a quarts conversion.
+  const uomOrderTypeMap = new Map<string, OrderType>()
+  for (const m of uomMappings) {
+    if (m.order_type) uomOrderTypeMap.set(`${m.vendor_id ?? ''}|${pkey(m.from_unit)}`, m.order_type)
+  }
+  const orderTypeForUom = (vendorId: string | null, uomName: string | null | undefined): OrderType | null => {
+    const u = pkey(uomName)
+    if (!u) return null
+    return uomOrderTypeMap.get(`${vendorId ?? ''}|${u}`) ?? uomOrderTypeMap.get(`|${u}`) ?? null
+  }
   const resolveVendorPart = (vendorId: string | null, productId: string) => {
     const resolved = oldToNew.get(pkey(productId)) ?? productId
     return vendorPartMap.get(`${vendorId ?? ''}|${pkey(resolved)}`)
+  }
+
+  // Almost every product's on-hand/usage is already recorded in quarts —
+  // but a product tracked in a different unit (e.g. HM0806 in ounces) would
+  // silently overstate its order need by that same factor, since the
+  // deficit math downstream assumes quarts throughout. global_products'
+  // "on-hand UOM" declares the real source unit per product; anything not
+  // listed here, or already quarts, passes through unchanged.
+  const QUARTS_PER_SOURCE_UNIT: Record<string, number> = {
+    quart: 1, quarts: 1, qt: 1, qts: 1,
+    ounce: 1 / 32, ounces: 1 / 32, oz: 1 / 32,
+    pint: 0.5, pints: 0.5, pt: 0.5,
+    gallon: 4, gallons: 4, gal: 4,
+  }
+  // Resolved the same direction as usage above: global_products may still
+  // carry a retired id, so each row is forward-mapped to its canonical id
+  // before indexing — the config's own product_id is already canonical, so
+  // no resolution is needed at lookup time.
+  const sourceUnitMap = new Map<string, string>()
+  for (const g of globalProducts) {
+    if (!g.unit_of_measure) continue
+    const resolved = oldToNew.get(pkey(g.product_id)) ?? g.product_id
+    sourceUnitMap.set(pkey(resolved), g.unit_of_measure)
+  }
+  const quartsFromSourceUnit = (productId: string): number => {
+    const unit = sourceUnitMap.get(pkey(productId))
+    if (!unit) return 1
+    return QUARTS_PER_SOURCE_UNIT[pkey(unit)] ?? 1
   }
 
   return configs.map((c) => {
@@ -465,6 +517,7 @@ export function buildGenerationInputs(
       vmi_keepfill_enabled: String(meta.vmi ?? '').trim().toLowerCase() === 'yes',
       can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true,
       default_order_amount_if_alone: 2, include_in_total_shop_order: true,
+      order_type_override: null,
     }
 
     // Fill in whatever an explicit ov2_product_rules override (if any)
@@ -485,10 +538,15 @@ export function buildGenerationInputs(
     if (rule.max_capacity_gallons == null && c.capacity != null) {
       rule.max_capacity_gallons = Number(c.capacity) * 4
     }
+    if (rule.order_type_override == null && vp) {
+      rule.order_type_override = orderTypeForUom(vp.vendor_id ?? c.vendor_id, vp.unit_of_measure)
+    }
 
+    const srcFactor = quartsFromSourceUnit(c.product_id)
     return {
       location_id: c.location_id, product_id: c.product_id, rule,
-      on_hand: u?.on_hands ?? null, daily_usage: u?.daily_usage ?? null,
+      on_hand: u?.on_hands != null ? u.on_hands * srcFactor : null,
+      daily_usage: u?.daily_usage != null ? u.daily_usage * srcFactor : null,
     }
   })
 }

@@ -9,7 +9,7 @@ const rule = (over: Partial<ProductRule> = {}): ProductRule => ({
   location_id: 'L1', product_id: 'P1', uom: 'case', units_per_uom_gallons: 5, unit_cost: 100,
   max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false,
   ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2,
-  include_in_total_shop_order: true, ...over,
+  include_in_total_shop_order: true, order_type_override: null, ...over,
 })
 
 const input = (over: Omit<Partial<GenerationInput>, 'rule'> & { rule?: Partial<ProductRule> } = {}): GenerationInput => {
@@ -221,5 +221,28 @@ describe('templates', () => {
 
   it('renders unknown fields as empty rather than leaving the placeholder', () => {
     expect(renderTemplate('{nope}-x', {}, '2026-08-19')).toBe('-x')
+  })
+
+  it('renders a future date relative to the order date, not today', () => {
+    expect(renderTemplate('{date+4:MMDDYYYY}', {}, '2026-08-19')).toBe('08232026')
+  })
+
+  it('renders today\'s actual date, independent of the order date passed in', () => {
+    const now = new Date()
+    const expected = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${now.getFullYear()}`
+    expect(renderTemplate('{today:MMDDYYYY}', {}, '2020-01-01')).toBe(expected)
+  })
+
+  it('renders a past date with a negative offset', () => {
+    expect(renderTemplate('{date-2:MMDDYYYY}', {}, '2026-08-19')).toBe('08172026')
+  })
+
+  it('zero-pads any field to the requested width', () => {
+    expect(renderTemplate('S{shop_number:00000}', { shop_number: 13 })).toBe('S00013')
+    expect(renderTemplate('#{shop_number:0000}', { shop_number: 13 })).toBe('#0013')
+  })
+
+  it('leaves a non-zero-pad format on a plain field as a no-op', () => {
+    expect(renderTemplate('{vendor:anything}', { vendor: 'RelaDyne' })).toBe('RelaDyne')
   })
 })

@@ -55,8 +55,8 @@ export function OrdersV2Review() {
     const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
     try {
-      const { configs, rules, usage, productMappings, vendorParts, uomMappings, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
-      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings)
+      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
+      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts)
       const result = generateOrder(inputs, {
         settings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
@@ -151,6 +151,20 @@ export function OrdersV2Review() {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
     else { setSortKey(k); setSortDir(k === 'capacity' ? 'desc' : 'asc') }
   }
+
+  // Alternates per shop (not per row), so multiple lines for the same shop
+  // band together — makes it obvious at a glance whether adjacent rows are
+  // one shop's multi-product order or a boundary between two shops.
+  const bandOf = useMemo(() => {
+    const m = new Map<string, boolean>()
+    let prevShop: string | null = null
+    let band = false
+    for (const l of visible) {
+      if (l.location_id !== prevShop) { band = !band; prevShop = l.location_id }
+      m.set(l.id, band)
+    }
+    return m
+  }, [visible])
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
   if (!draft) return <p className="text-xs font-mono text-inky/60 py-8">Draft not found. It may have been deleted.</p>
@@ -256,7 +270,7 @@ export function OrdersV2Review() {
               {visible.map((l) => {
                 const dollars = Number(l.qty) * Number(l.unit_cost ?? 0)
                 return (
-                  <tr key={l.id} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'}`}>
+                  <tr key={l.id} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
                     <Td>{shopLabel(l.location_id)}</Td>
                     <Td>
                       {l.product_id}

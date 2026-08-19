@@ -242,6 +242,7 @@ export interface UomMapping {
   from_unit: string
   to_unit: string
   factor: number
+  order_type: 'package' | 'bulk' | null
   updated_by: string | null
   last_change_source: string | null
   created_at: string
