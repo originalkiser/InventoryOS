@@ -532,7 +532,7 @@ export function ProductUsageTab() {
     const hasCost = maps.some((m) => m.fieldName === 'cost_per_unit')
 
     let unresolved = 0
-    const payload = rows.map((row) => {
+    let payload = rows.map((row) => {
       let location_id: string | null = null
       let product_id = '', category: string | null = null
       let daily_usage: number | null = null, on_hands: number | null = null, package_capacity: number | null = null, cost_per_unit: number | null = null
@@ -562,6 +562,22 @@ export function ProductUsageTab() {
       `${r.location_id ?? ''}|${String(r.product_id).toLowerCase()}`
     const labelOfRow = (r: { location_id: string | null; product_id: string }) =>
       `${loc.codeOf(r.location_id) || '(no location)'} — ${r.product_id}`
+
+    // Collapse rows that land on the same location+product before writing —
+    // the vendor-part-number path especially can map two different vendor
+    // part numbers onto the same internal product, and two upload rows that
+    // both resolve to the same EXISTING product_usage row would carry that
+    // row's id into the same upsert batch. Postgres refuses to apply
+    // ON CONFLICT DO UPDATE to the same row twice in one statement, which is
+    // exactly the "cannot affect row a second time" error this fixes. Last
+    // row for a given key wins.
+    const dedupedPayload = [...new Map(payload.map((r) => [keyOfRow(r), r])).values()]
+    const dupesDropped = payload.length - dedupedPayload.length
+    if (dupesDropped > 0) {
+      toast(`${dupesDropped.toLocaleString()} duplicate location+product row${dupesDropped !== 1 ? 's' : ''} in the file collapsed to the last value`, { icon: 'ℹ️' })
+    }
+    payload = dedupedPayload
+
     const existingKeys = new Set(data.map((d) => `${d.location_id ?? ''}|${String(d.product_id).toLowerCase()}`))
     const newOnes = mode === 'replace' ? payload : payload.filter((r) => !existingKeys.has(keyOfRow(r)))
     const okToWrite = await requestImportConfirm({
