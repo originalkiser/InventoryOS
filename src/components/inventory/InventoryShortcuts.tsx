@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical } from 'lucide-react'
+import { GripVertical, Settings } from 'lucide-react'
 import { SECTION_ITEMS, ICONS, type NavItem } from '@/components/layout/Sidebar'
 import { useNavBadge } from '@/hooks/useNavBadges'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
@@ -37,19 +37,21 @@ export function InventoryShortcuts() {
         </DndContext>
       </div>
 
-      {/* Floating customize control — bottom-right, like Location Lookup.
-          right-20 keeps it clear of the quick-access FAB rail (16-56px from
-          the right edge), which right-6 sat directly on top of. */}
-      <div className="fixed bottom-6 right-20 z-30 flex items-center gap-2">
+      {/* Pinned to the page's top-right corner rather than sitting in the
+          flow, so it never pushes the dashboard header around. Positions
+          against Dashboard's root, which is the nearest relative ancestor. */}
+      <div className="absolute top-0 right-0 z-20 flex items-center gap-2">
         {customize && (
           <button onClick={() => persist(DEFAULT_ORDER)}
-            className="rounded-full bg-cream border border-navy/30 text-navy px-3 py-2.5 text-xs font-mono shadow-lg hover:border-navy transition-colors">
+            className="rounded-full bg-cream/80 border border-navy/30 text-navy px-3 py-1.5 text-xs font-mono shadow-lg hover:bg-cream hover:border-navy transition-colors">
             Reset
           </button>
         )}
         <button onClick={() => setCustomize((o) => !o)}
-          className="rounded-full bg-navy text-cream px-5 py-2.5 text-xs font-mono uppercase tracking-wide shadow-lg hover:bg-navy/90 transition-colors">
-          {customize ? 'Done' : 'Customize'}
+          title={customize ? 'Done customizing' : 'Customize shortcuts'}
+          aria-label={customize ? 'Done customizing' : 'Customize shortcuts'}
+          className={`flex items-center justify-center rounded-full p-2 shadow-lg transition-colors ${customize ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
+          <Settings className="w-4 h-4" />
         </button>
       </div>
     </>

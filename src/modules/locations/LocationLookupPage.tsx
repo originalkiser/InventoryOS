@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { MapPin } from 'lucide-react'
+import { MapPin, Settings } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -605,6 +605,16 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           {!shopId && (
             <div className="w-80"><Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
           )}
+          {/* Absolute, so it rides along in the header's corner without taking
+              part in the flex row — nothing here shifts when it appears. */}
+          {shopId && (
+            <button onClick={() => setCustomizeOpen((o) => !o)}
+              title={customizeOpen ? 'Done customizing' : 'Customize columns'}
+              aria-label={customizeOpen ? 'Done customizing' : 'Customize columns'}
+              className={`absolute top-1 right-0 flex items-center justify-center rounded-full p-2 shadow-lg transition-colors ${customizeOpen ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
+              <Settings className="w-4 h-4" />
+            </button>
+          )}
         </div>
       )}
 
@@ -732,14 +742,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         </div>
       )}
 
-      {shopId && (
+      {shopId && embedded && (
         <button onClick={() => setCustomizeOpen((o) => !o)}
-          className={embedded
-            ? 'self-end rounded-full bg-navy text-cream px-3 py-1.5 text-[11px] font-mono uppercase tracking-wide hover:bg-navy/90 transition-colors'
-            // right-20 clears the quick-access FAB rail, which sits 16-56px
-            // from the right edge; right-6 put this straight on top of it.
-            : 'fixed bottom-6 right-20 z-30 rounded-full bg-navy text-cream px-5 py-2.5 text-xs font-mono uppercase tracking-wide shadow-lg hover:bg-navy/90 transition-colors'}>
-          {customizeOpen ? 'Done' : 'Customize'}
+          title={customizeOpen ? 'Done customizing' : 'Customize columns'}
+          aria-label={customizeOpen ? 'Done customizing' : 'Customize columns'}
+          className={`self-end flex items-center justify-center rounded-full p-2 transition-colors ${customizeOpen ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
+          <Settings className="w-4 h-4" />
         </button>
       )}
 

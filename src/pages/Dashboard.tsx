@@ -268,7 +268,8 @@ export function DashboardPage() {
   const axisTickProps = { fill: '#4F7489', fontSize: 11, fontFamily: '"DM Mono", monospace' }
 
   return (
-    <div className="flex flex-col gap-6">
+    // relative anchors InventoryShortcuts' customize cog to the page's corner
+    <div className="relative flex flex-col gap-6">
       <div>
         <h1 className="text-lg font-heading font-bold text-navy tracking-wide uppercase">Dashboard</h1>
         <p className="text-xs text-inky font-body mt-0.5">
