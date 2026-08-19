@@ -71,11 +71,13 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing, open])
 
-  // Auto-fill area manager + regional director from the location's metadata (only if empty).
+  // Changing the shop always re-fills area manager + regional director from
+  // its data — picking the wrong shop first and correcting it should update
+  // these, not leave the first shop's values stuck after the fix.
   function onLocationChange(id: string) {
     setLocationId(id)
-    if (!areaManager) { const am = loc.fieldValue(id, 'area_manager'); if (am) setAreaManager(am) }
-    if (!rdIfNo) { const rd = loc.fieldValue(id, 'regional_director') || loc.fieldValue(id, 'director'); if (rd) setRdIfNo(rd) }
+    setAreaManager(loc.fieldValue(id, 'area_manager'))
+    setRdIfNo(loc.fieldValue(id, 'regional_director') || loc.fieldValue(id, 'director'))
   }
 
   const issueOptions: ComboboxOption[] = useMemo(() => {
