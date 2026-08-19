@@ -200,7 +200,7 @@ describe('draft order weekday', () => {
 // ── on-hand resolution through product ID mappings ──────────────────────
 
 const cfg = (product_id: string) => ({
-  location_id: 'L1', product_id, vendor_id: 'V1', capacity: null, metadata: {},
+  location_id: 'L1', product_id, vendor_id: 'V1', capacity: null, order_limit: null, metadata: {},
 })
 const use = (product_id: string, on_hands: number | null, daily_usage: number | null) => ({
   location_id: 'L1', product_id, on_hands, daily_usage,
@@ -316,6 +316,31 @@ describe('package size / cost resolution', () => {
     const [i] = buildGenerationInputs([cfg('NOPART')], [], [], [], [vp()], [])
     expect(i.rule.units_per_uom_gallons).toBeNull()
     expect(i.rule.unit_cost).toBeNull()
+  })
+})
+
+// ── order_limit = 0 ("inactive" per the config screen's own convention) ──
+
+describe('order limit exclusion', () => {
+  it('excludes a product whose order_limit is exactly 0', () => {
+    const out = buildGenerationInputs([{ ...cfg('5W20'), order_limit: 0 }], [], [use('5W20', 5, 5)])
+    expect(out).toHaveLength(0)
+  })
+
+  it('does not exclude a product with no order_limit set', () => {
+    const out = buildGenerationInputs([{ ...cfg('5W20'), order_limit: null }], [], [use('5W20', 5, 5)])
+    expect(out).toHaveLength(1)
+  })
+
+  it('does not exclude a product with a positive order_limit', () => {
+    const out = buildGenerationInputs([{ ...cfg('5W20'), order_limit: 50 }], [], [use('5W20', 5, 5)])
+    expect(out).toHaveLength(1)
+  })
+
+  it('only excludes the zeroed-out product, not the rest of the shop', () => {
+    const out = buildGenerationInputs(
+      [{ ...cfg('5W20'), order_limit: 0 }, cfg('SYN-0W16BB')], [], [use('5W20', 5, 5), use('SYN-0W16BB', 5, 5)])
+    expect(out.map((o) => o.product_id)).toEqual(['SYN-0W16BB'])
   })
 })
 

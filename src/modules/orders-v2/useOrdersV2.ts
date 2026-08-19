@@ -309,7 +309,7 @@ export function useDraft(draftId: string | null) {
 
 // ── Generation inputs ───────────────────────────────────────────────────
 
-export interface OrderConfigRow { location_id: string; product_id: string; vendor_id: string | null; capacity: number | null; metadata: Record<string, unknown> | null }
+export interface OrderConfigRow { location_id: string; product_id: string; vendor_id: string | null; capacity: number | null; order_limit: number | null; metadata: Record<string, unknown> | null }
 export interface UsageRow { location_id: string; product_id: string; on_hands: number | null; daily_usage: number | null }
 export interface VendorPartRow { vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null }
 export interface GlobalProductRow { product_id: string; unit_of_measure: string | null }
@@ -333,7 +333,7 @@ export function useGenerationData() {
     const sinceStr = since.toISOString().slice(0, 10)
 
     const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, locRows, schedRows, calRows, history] = await Promise.all([
-      fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, metadata', companyId,
+      fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
       fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId),
@@ -510,7 +510,13 @@ export function buildGenerationInputs(
     return unit ? quartsPerSourceUnit(unit) : 1
   }
 
-  return configs.map((c) => {
+  // "Order Limit" of exactly 0 is the config screen's own documented
+  // convention for "inactive — don't order this product at this shop"
+  // (OrderConfigTab.tsx: "set Order Limit to 0 to make a product
+  // inactive"). Orders v2 never selected the column before now, so this
+  // was silently ignored; excluded here so an inactive product never
+  // becomes a candidate at all, not just capped.
+  return configs.filter((c) => c.order_limit !== 0).map((c) => {
     const k = ruleKey(c.location_id, c.product_id)
     const r = ruleMap.get(k)
     const u = usageMap.get(k)
