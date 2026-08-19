@@ -2,6 +2,15 @@
 -- Orders v2 — automatic UOM/cost resolution from vendor parts, plus a
 -- vendor-scoped UOM→quarts conversion table and vendor part price history.
 --
+--  0. inventory.uom_mappings turns out not to exist — it's still
+--     core.uom_mappings. Same story as the vendors/vendor_parts move in
+--     20260818d (whose own comment claims uom_mappings was already in
+--     inventory — it wasn't; nobody had verified it since nothing had ever
+--     populated the table to notice the schema mismatch). Every
+--     `.schema('inventory').from('uom_mappings')` call in the app — this
+--     config tab and the legacy Orders module's UOM conversion — has been
+--     silently getting zero rows. Moved here first so the rest of this
+--     migration has something to alter.
 --  1. inventory.ov2_product_rules (units_per_uom_gallons, unit_cost) has no
 --     editing UI and is empty in every company — every generation run has
 --     been falling back to "1 gallon-equivalent per package unit" and a
@@ -23,6 +32,17 @@
 --
 -- Safe to re-run.
 -- ============================================================
+
+-- ── 0. Move uom_mappings to where the rest of the schema already assumes
+-- it lives. Metadata-only, instant, RLS/indexes move automatically.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'core' AND table_name = 'uom_mappings')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'inventory' AND table_name = 'uom_mappings') THEN
+    ALTER TABLE core.uom_mappings SET SCHEMA inventory;
+  END IF;
+END
+$$;
 
 -- ── 1. Vendor-scoped UOM conversions ────────────────────────────────────
 ALTER TABLE inventory.uom_mappings
