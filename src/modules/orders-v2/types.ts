@@ -45,12 +45,13 @@ export interface OrderSettings {
   // Smoothing guard only: a product above this DOS is never pulled onto an
   // order purely to reach a minimum. It does not block a genuinely-due product.
   skip_order_if_dos_over: number
-  flag_if_ordered_over_dos: number
-  flag_if_ordered_within_days: number
-  // Second flag pair: ordered within N days AND the days of supply ordered
-  // at the time exceeded M.
-  flag_recent_order_days: number
-  flag_recent_order_dos_over: number
+  // Repeat-ordering check. Sums the days of supply ordered across EVERY
+  // order in the window: if we've sent 45+ days of supply in the last 30
+  // days and the product still reads as low, either the shop isn't updating
+  // on-hand or deliveries aren't arriving. Cumulative on purpose — a single
+  // large order is not what we're looking for.
+  flag_cumulative_days: number
+  flag_cumulative_dos_over: number
   bulk_rounding_decimals: number
 }
 
@@ -66,10 +67,8 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   bulk_minimum_type: 'dollars',
   bulk_minimum_qty: null,
   skip_order_if_dos_over: 45,
-  flag_if_ordered_over_dos: 30,
-  flag_if_ordered_within_days: 30,
-  flag_recent_order_days: 30,
-  flag_recent_order_dos_over: 30,
+  flag_cumulative_days: 30,
+  flag_cumulative_dos_over: 45,
   bulk_rounding_decimals: 0,
 }
 
@@ -98,6 +97,35 @@ export interface GenerationInput {
   daily_usage: number | null    // gallons/day
 }
 
+// How a shop's delivery date is worked out for a vendor.
+//   weekly             — a fixed weekday every week
+//   week_ab            — alternating weekdays, driven by an uploaded A/B calendar
+//   plus_business_days — a flat turnaround, no weekday involved
+export type ScheduleType = 'weekly' | 'week_ab' | 'plus_business_days'
+export const SCHEDULE_LABELS: Record<ScheduleType, string> = {
+  weekly: 'Same weekday every week',
+  week_ab: 'Week A / Week B weekdays',
+  plus_business_days: '+N business days after ordering',
+}
+
+export interface DeliverySchedule {
+  type: ScheduleType
+  delivery_dow: number | null
+  week_a_dow: number | null
+  week_b_dow: number | null
+  // weekly/week_ab: minimum business days of lead — an order placed closer
+  // than this rolls to the next occurrence.
+  // plus_business_days: the turnaround itself.
+  lead_business_days: number
+}
+
+export const DEFAULT_SCHEDULE: DeliverySchedule = {
+  type: 'weekly', delivery_dow: null, week_a_dow: null, week_b_dow: null, lead_business_days: 4,
+}
+
+/** week_start (Sunday, YYYY-MM-DD) -> 'A' | 'B'. */
+export type WeekCalendar = Map<string, 'A' | 'B'>
+
 export interface VendorRules {
   vendor_id: string | null
   minimums: Partial<Record<OrderType, OrderMinimum>>
@@ -113,8 +141,7 @@ export type LineFlag =
   | 'below_minimum'          // shop still under minimum after smoothing
   | 'capacity_capped'        // max_capacity_gallons was the binding constraint
   | 'case_minimum_topup'     // raised to meet the vendor case-type minimum
-  | 'recent_high_dos_order'  // ordered recently while DOS was already high
-  | 'recent_large_dos_order' // ordered recently with a large days-of-supply quantity
+  | 'repeat_ordering'        // lots of supply already sent in the window and still reading low
   | 'over_dos_max'           // pushed past the soft DOS ceiling to reach a minimum
   | 'stocked_out'            // on hand is zero/effectively zero
   | 'alone_default_qty'      // sole line, used default_order_amount_if_alone

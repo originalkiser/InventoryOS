@@ -8,8 +8,9 @@ import { orderDayFromDelivery, parseWeekday } from '@/lib/orderDay'
 import toast from 'react-hot-toast'
 import {
   DEFAULT_ORDER_SETTINGS, orderTypeOf,
-  type DraftStatus, type GeneratedLine, type MinimumType, type OrderMinimum,
-  type OrderSettings, type OrderType, type ProductRule, type VendorRules,
+  type DeliverySchedule, type DraftStatus, type GeneratedLine, type MinimumType,
+  type OrderMinimum, type OrderSettings, type OrderType, type ProductRule,
+  type VendorRules, type WeekCalendar,
 } from './types'
 
 const sb = () => supabase as any
@@ -307,16 +308,18 @@ export function useGenerationData() {
   const companyId = profile?.company_id ?? null
 
   const fetchInputs = useCallback(async (vendorId: string | null, lookbackDays: number) => {
-    if (!companyId) return { configs: [], rules: [], usage: [], days: [], history: [] as any[] }
+    if (!companyId) return { configs: [], rules: [], usage: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const [configs, rules, usage, locRows, history] = await Promise.all([
+    const [configs, rules, usage, locRows, schedRows, calRows, history] = await Promise.all([
       fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
       fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId),
       fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
+      fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
+      fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, order_id', companyId),
     ])
 
@@ -345,7 +348,21 @@ export function useGenerationData() {
       }
     }).filter((d: VendorDayRow) => d.order_dow != null)
 
-    return { configs, rules, usage, days, history: historyFacts }
+    // Per-shop delivery schedules (Valvoline and anything else that isn't a
+    // single company-wide weekday), plus the uploaded A/B week calendar.
+    const schedules = new Map<string, DeliverySchedule>()
+    for (const r of (schedRows ?? [])) {
+      schedules.set(r.location_id, {
+        type: r.schedule_type, delivery_dow: r.delivery_dow,
+        week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+        lead_business_days: Number(r.lead_business_days ?? 4),
+      })
+    }
+    const calendar: WeekCalendar = new Map(
+      (calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']),
+    )
+
+    return { configs, rules, usage, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
   return { fetchInputs }

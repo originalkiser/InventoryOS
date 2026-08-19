@@ -1,0 +1,146 @@
+import { describe, it, expect } from 'vitest'
+import { resolveDeliveryDate, addBusinessDays, businessDaysBetween, weekStartOf, generateOrder } from './engine'
+import { DEFAULT_ORDER_SETTINGS, type DeliverySchedule, type GenerationContext, type GenerationInput, type ProductRule, type WeekCalendar } from './types'
+
+// 2026-08-19 is a Wednesday. Weekday numbers: Sun 0 … Sat 6.
+const WED = '2026-08-19'
+
+const sched = (over: Partial<DeliverySchedule> = {}): DeliverySchedule => ({
+  type: 'weekly', delivery_dow: null, week_a_dow: null, week_b_dow: null, lead_business_days: 0, ...over,
+})
+
+describe('business-day helpers', () => {
+  it('adds business days, skipping weekends', () => {
+    // Wed + 5 business days -> next Wednesday
+    expect(addBusinessDays(WED, 5)).toBe('2026-08-26')
+    // Wed + 2 -> Friday
+    expect(addBusinessDays(WED, 2)).toBe('2026-08-21')
+    // Wed + 3 -> Monday (skips the weekend)
+    expect(addBusinessDays(WED, 3)).toBe('2026-08-24')
+  })
+
+  it('counts business days between dates, excluding the start', () => {
+    expect(businessDaysBetween(WED, '2026-08-21')).toBe(2)
+    expect(businessDaysBetween(WED, '2026-08-24')).toBe(3)
+    expect(businessDaysBetween(WED, WED)).toBe(0)
+  })
+
+  it('keys a week by its Sunday', () => {
+    expect(weekStartOf(WED)).toBe('2026-08-16')
+    expect(weekStartOf('2026-08-16')).toBe('2026-08-16')
+  })
+})
+
+describe('weekly schedule', () => {
+  it('takes the next occurrence of the weekday when there is no lead requirement', () => {
+    expect(resolveDeliveryDate(WED, sched({ delivery_dow: 4 }))).toBe('2026-08-20') // Thu
+  })
+
+  it('rolls to the following week when the next occurrence is inside the lead time', () => {
+    // Thursday is 1 business day out; a 4-business-day lead pushes it a week.
+    expect(resolveDeliveryDate(WED, sched({ delivery_dow: 4, lead_business_days: 4 }))).toBe('2026-08-27')
+  })
+
+  it('keeps the nearest occurrence once the lead is satisfied', () => {
+    // Next Wednesday is 5 business days out, which clears a 4-day lead.
+    expect(resolveDeliveryDate(WED, sched({ delivery_dow: 3, lead_business_days: 4 }))).toBe('2026-08-26')
+  })
+
+  it('never returns the order date itself', () => {
+    expect(resolveDeliveryDate(WED, sched({ delivery_dow: 3 }))).toBe('2026-08-26')
+  })
+
+  it('returns null when no weekday is configured', () => {
+    expect(resolveDeliveryDate(WED, sched({ delivery_dow: null }))).toBeNull()
+  })
+})
+
+describe('+N business days schedule', () => {
+  it('uses the configured turnaround', () => {
+    expect(resolveDeliveryDate(WED, sched({ type: 'plus_business_days', lead_business_days: 5 }))).toBe('2026-08-26')
+  })
+
+  it('defaults to 5 business days when none is set', () => {
+    expect(resolveDeliveryDate(WED, sched({ type: 'plus_business_days', lead_business_days: 0 }))).toBe('2026-08-26')
+  })
+})
+
+describe('week A / week B schedule', () => {
+  // Week of Aug 16 = A, week of Aug 23 = B, week of Aug 30 = A.
+  const cal: WeekCalendar = new Map<string, 'A' | 'B'>([
+    ['2026-08-16', 'A'], ['2026-08-23', 'B'], ['2026-08-30', 'A'],
+  ])
+  const ab = sched({ type: 'week_ab', week_a_dow: 4, week_b_dow: 1 })  // A=Thu, B=Mon
+
+  it('uses week A\'s weekday inside an A week', () => {
+    expect(resolveDeliveryDate(WED, ab, cal)).toBe('2026-08-20')       // Thu of the A week
+  })
+
+  it('uses week B\'s weekday once the A week has passed', () => {
+    // Ordering Friday of the A week: Thursday is gone, so the next hit is
+    // Monday of the following (B) week.
+    expect(resolveDeliveryDate('2026-08-21', ab, cal)).toBe('2026-08-24')
+  })
+
+  it('respects the lead requirement across the A/B boundary', () => {
+    // Wed of the A week with a 4-business-day lead: Thu (1 day) is too soon,
+    // Mon of the B week (3 days) is too soon, so it lands on Thu of the next A week.
+    expect(resolveDeliveryDate(WED, { ...ab, lead_business_days: 4 }, cal)).toBe('2026-09-03')
+  })
+
+  it('skips weeks the calendar does not label rather than guessing', () => {
+    const sparse: WeekCalendar = new Map<string, 'A' | 'B'>([['2026-08-30', 'A']])
+    expect(resolveDeliveryDate(WED, ab, sparse)).toBe('2026-09-03')
+  })
+
+  it('returns null with no calendar at all', () => {
+    expect(resolveDeliveryDate(WED, ab, new Map())).toBeNull()
+  })
+})
+
+// ── the repeat-ordering flag ────────────────────────────────────────────
+
+const rule = (over: Partial<ProductRule> = {}): ProductRule => ({
+  location_id: 'L1', product_id: 'P1', uom: 'case', units_per_uom_gallons: 5, unit_cost: 100,
+  max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false,
+  ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2,
+  include_in_total_shop_order: true, ...over,
+})
+const input = (): GenerationInput => ({
+  location_id: 'L1', product_id: 'P1', rule: rule(), on_hand: 10, daily_usage: 5,
+})
+const ctx = (history: GenerationContext['history']): GenerationContext => ({
+  settings: DEFAULT_ORDER_SETTINGS,
+  vendor: { vendor_id: 'V1', minimums: { package: { type: 'dollars', dollars: 0, qty: null } }, caseTypeMinimums: {}, usesOrderDays: false },
+  orderDate: WED, eligibleLocationIds: null, history, includeVmi: false,
+})
+const past = (date: string, dosOrdered: number) => ({
+  location_id: 'L1', product_id: 'P1', order_date: date, dos_before: null, dos_ordered: dosOrdered, qty: 1,
+})
+
+describe('repeat-ordering flag', () => {
+  it('sums across every order in the window, not just the largest', () => {
+    // Three modest orders totalling 60 days of supply — none individually large.
+    const c = ctx([past('2026-08-05', 20), past('2026-08-10', 20), past('2026-08-15', 20)])
+    expect(generateOrder([input()], c).lines[0].flags).toContain('repeat_ordering')
+  })
+
+  it('stays quiet when the cumulative total is within the threshold', () => {
+    const c = ctx([past('2026-08-10', 20), past('2026-08-15', 20)])   // 40 <= 45
+    expect(generateOrder([input()], c).lines[0].flags).not.toContain('repeat_ordering')
+  })
+
+  it('ignores orders outside the lookback window', () => {
+    const c = ctx([past('2026-01-01', 90), past('2026-08-15', 10)])
+    expect(generateOrder([input()], c).lines[0].flags).not.toContain('repeat_ordering')
+  })
+
+  it('flags a single very large order too, since it is the same symptom', () => {
+    const c = ctx([past('2026-08-15', 60)])
+    expect(generateOrder([input()], c).lines[0].flags).toContain('repeat_ordering')
+  })
+
+  it('does not flag a product with no order history', () => {
+    expect(generateOrder([input()], ctx([])).lines[0].flags).not.toContain('repeat_ordering')
+  })
+})

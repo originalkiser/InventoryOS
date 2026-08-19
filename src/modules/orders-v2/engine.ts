@@ -17,8 +17,8 @@
 import {
   isBulkUom, orderTypeOf,
   type GeneratedLine, type GenerationContext, type GenerationInput,
-  type GenerationResult, type HistoryFact, type LineFlag, type OrderMinimum, type OrderType,
-  type ProductRule, type ShopGroupResult,
+  type DeliverySchedule, type GenerationResult, type LineFlag, type OrderMinimum,
+  type OrderType, type ProductRule, type ShopGroupResult, type WeekCalendar,
 } from './types'
 
 // ── Small numeric helpers ────────────────────────────────────────────────
@@ -52,10 +52,98 @@ export function roundQty(qty: number, uom: string | null, bulkDecimals: number, 
   return dir === 'down' ? Math.floor(qty) : Math.round(qty)
 }
 
+/** Add n business days (Mon–Fri) to a YYYY-MM-DD date. */
+export function addBusinessDays(date: string, n: number): string {
+  const d = new Date(date + 'T00:00:00')
+  if (Number.isNaN(d.getTime())) return date
+  let left = Math.max(0, n)
+  while (left > 0) {
+    d.setDate(d.getDate() + 1)
+    const wd = d.getDay()
+    if (wd !== 0 && wd !== 6) left--
+  }
+  return toIso(d)
+}
+
+/** Business days between two dates, not counting the start date itself. */
+export function businessDaysBetween(from: string, to: string): number {
+  const a = new Date(from + 'T00:00:00'), b = new Date(to + 'T00:00:00')
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime()) || b <= a) return 0
+  let count = 0
+  const d = new Date(a)
+  while (d < b) {
+    d.setDate(d.getDate() + 1)
+    const wd = d.getDay()
+    if (wd !== 0 && wd !== 6) count++
+  }
+  return count
+}
+
+const toIso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+/** The Sunday that starts the week containing `date` — the calendar's key. */
+export function weekStartOf(date: string): string {
+  const d = new Date(date + 'T00:00:00')
+  if (Number.isNaN(d.getTime())) return date
+  d.setDate(d.getDate() - d.getDay())
+  return toIso(d)
+}
+
+/**
+ * Work out the delivery date for one shop's schedule.
+ *
+ *   weekly              next occurrence of the weekday with at least
+ *                       `lead_business_days` of lead; too close rolls a week.
+ *   week_ab             same, but the weekday depends on whether the
+ *                       candidate week is labelled A or B in the uploaded
+ *                       calendar. A week with no label is skipped rather
+ *                       than guessed at.
+ *   plus_business_days  simply order date + N business days.
+ *
+ * Returns null when the schedule can't produce a date (no weekday set, or no
+ * calendar coverage) — callers show that as unknown rather than inventing one.
+ */
+export function resolveDeliveryDate(
+  orderDate: string, schedule: DeliverySchedule | null | undefined, calendar?: WeekCalendar,
+): string | null {
+  if (!schedule) return null
+  const lead = Math.max(0, n(schedule.lead_business_days))
+
+  if (schedule.type === 'plus_business_days') {
+    return addBusinessDays(orderDate, lead > 0 ? lead : 5)
+  }
+
+  const start = new Date(orderDate + 'T00:00:00')
+  if (Number.isNaN(start.getTime())) return null
+
+  // Walk forward day by day; take the first matching weekday that clears the
+  // lead requirement. Capped at 8 weeks so a mis-set schedule can't spin.
+  for (let i = 1; i <= 56; i++) {
+    const d = new Date(start)
+    d.setDate(d.getDate() + i)
+    const iso = toIso(d)
+    const dow = d.getDay()
+
+    let wanted: number | null
+    if (schedule.type === 'weekly') {
+      wanted = schedule.delivery_dow
+    } else {
+      const label = calendar?.get(weekStartOf(iso))
+      if (!label) continue                       // unlabelled week — skip, don't guess
+      wanted = label === 'A' ? schedule.week_a_dow : schedule.week_b_dow
+    }
+    if (wanted == null || dow !== wanted) continue
+    if (businessDaysBetween(orderDate, iso) < lead) continue
+    return iso
+  }
+  return null
+}
+
 /**
  * Delivery date = the next occurrence of `deliveryDow` strictly after the
  * order date. An order placed ON the delivery weekday rolls to next week —
- * you can't order and receive the same day.
+ * you can't order and receive the same day. (RelaDyne path.)
  */
 export function nextDeliveryDate(orderDate: string, deliveryDow: number | null | undefined): string | null {
   if (deliveryDow == null || deliveryDow < 0 || deliveryDow > 6) return null
@@ -128,24 +216,20 @@ export function capsFor(input: GenerationInput, ctx: GenerationContext, opts?: {
 function historyFlags(input: GenerationInput, ctx: GenerationContext): LineFlag[] {
   const flags: LineFlag[] = []
   const { settings, orderDate, history } = ctx
-  const prior = history
-    .filter((h) => h.location_id === input.location_id && h.product_id === input.product_id)
-    .sort((a, b) => b.order_date.localeCompare(a.order_date))
 
-  // Ordered recently while DOS was already high.
-  const recent = prior.filter((h) => daysBetween(h.order_date, orderDate) <= settings.flag_if_ordered_within_days)
-  if (recent.some((h) => h.dos_before != null && h.dos_before > settings.flag_if_ordered_over_dos)) {
-    flags.push('recent_high_dos_order')
-  }
+  // Repeat-ordering check. Sum the days of supply sent across EVERY order in
+  // the window — not the largest single order. If we've already pushed well
+  // over a window's worth of supply and the product still reads low, the
+  // on-hand figure probably isn't reflecting what was delivered.
+  const inWindow = history.filter((h) =>
+    h.location_id === input.location_id
+    && h.product_id === input.product_id
+    && daysBetween(h.order_date, orderDate) >= 0
+    && daysBetween(h.order_date, orderDate) <= settings.flag_cumulative_days)
 
-  // Ordered recently AND the quantity ordered represented a lot of days of
-  // supply — i.e. we already pushed a big amount onto this shop lately.
-  const recentLarge = history.filter((h) =>
-    h.location_id === input.location_id && h.product_id === input.product_id
-    && daysBetween(h.order_date, orderDate) <= settings.flag_recent_order_days)
-  if (recentLarge.some((h) => h.dos_ordered != null && h.dos_ordered > settings.flag_recent_order_dos_over)) {
-    flags.push('recent_large_dos_order')
-  }
+  const totalDosOrdered = inWindow.reduce((sum, h) => sum + n(h.dos_ordered), 0)
+  if (totalDosOrdered > settings.flag_cumulative_dos_over) flags.push('repeat_ordering')
+
   return flags
 }
 

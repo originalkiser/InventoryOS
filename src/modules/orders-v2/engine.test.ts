@@ -200,38 +200,6 @@ describe('pass 2 — smoothing to the order minimum', () => {
 })
 
 describe('flags', () => {
-  it('flags a product ordered recently while DOS was already high', () => {
-    const c = ctx({
-      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
-      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-10', dos_before: 40, dos_ordered: null, qty: 5 }],
-    })
-    expect(generateOrder([input({ on_hand: 10, daily_usage: 5 })], c).lines[0].flags).toContain('recent_high_dos_order')
-  })
-
-  it('does not flag when the high-DOS order falls outside the lookback window', () => {
-    const c = ctx({
-      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
-      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-01-01', dos_before: 40, dos_ordered: null, qty: 5 }],
-    })
-    expect(generateOrder([input()], c).lines[0].flags).not.toContain('recent_high_dos_order')
-  })
-
-  it('flags a recent order whose quantity was a large days-of-supply amount', () => {
-    const c = ctx({
-      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
-      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-12', dos_before: 5, dos_ordered: 60, qty: 12 }],
-    })
-    expect(generateOrder([input()], c).lines[0].flags).toContain('recent_large_dos_order')
-  })
-
-  it('does not raise the large-DOS flag when the ordered amount was modest', () => {
-    const c = ctx({
-      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
-      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-12', dos_before: 5, dos_ordered: 5, qty: 1 }],
-    })
-    expect(generateOrder([input()], c).lines[0].flags).not.toContain('recent_large_dos_order')
-  })
-
   it('flags a stocked-out product', () => {
     const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } })
     expect(generateOrder([input({ on_hand: 0, daily_usage: 5 })], c).lines[0].flags).toContain('stocked_out')

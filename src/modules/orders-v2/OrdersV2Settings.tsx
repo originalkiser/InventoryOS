@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Button, Card, CardBody, Input, SbLoader, Select } from '@/components/ui'
 import { useOrderSettings } from './useOrdersV2'
 import { VendorRulesCard } from './VendorRulesCard'
+import { DeliverySchedulesCard } from './DeliverySchedulesCard'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
 
 
@@ -66,15 +67,17 @@ export function OrdersV2Settings() {
       </CardBody></Card>
 
       <Card><CardBody className="flex flex-col gap-3">
-        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Flags</h3>
-        <p className="text-[11px] font-mono text-inky/60">Informational only — flagged lines still order normally.</p>
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Repeat Ordering Check</h3>
+        <p className="text-[11px] font-mono text-inky/60">
+          Catches a product being ordered again and again while its on-hand never rises — usually the shop not
+          updating inventory after a delivery, or deliveries not arriving. It sums the days of supply ordered across
+          <strong> every</strong> order in the window, so a run of ordinary orders is caught, not just one big one.
+          Informational: flagged lines still order normally.
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {numField('flag_if_ordered_within_days', 'Ordered within (days)', 'lookback window')}
-          {numField('flag_if_ordered_over_dos', '…and DOS at the time was over', 'the shop was already well stocked')}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {numField('flag_recent_order_days', 'Ordered within (days)', 'lookback window')}
-          {numField('flag_recent_order_dos_over', '…and days of supply ordered was over', 'the quantity sent was large')}
+          {numField('flag_cumulative_days', 'Look back (days)', 'how far back to add orders up')}
+          {numField('flag_cumulative_dos_over', 'Flag if total days of supply ordered exceeds',
+            'across all orders in that window')}
         </div>
       </CardBody></Card>
 
@@ -90,6 +93,7 @@ export function OrdersV2Settings() {
 
       <VendorRulesCard />
       <OrderDaysCard />
+      <DeliverySchedulesCard />
     </div>
   )
 }

@@ -11,7 +11,7 @@ import {
   buildGenerationInputs, eligibleLocations, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
-import { generateOrder, nextDeliveryDate, dosAfterDelivery, gallonsPerUnit } from './engine'
+import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num } from './shared'
 import type { LineFlag } from './types'
 
@@ -50,7 +50,7 @@ export function OrdersV2Review() {
     if (!draft || !profile?.company_id) return
     setGenerating(true)
     try {
-      const { configs, rules, usage, days, history } = await fetchInputs(draft.vendor_id, settings.flag_if_ordered_within_days)
+      const { configs, rules, usage, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
       const inputs = buildGenerationInputs(configs, rules, usage)
       const result = generateOrder(inputs, {
         settings,
@@ -66,7 +66,12 @@ export function OrdersV2Review() {
       const ruleByKey = new Map(inputs.map((i) => [`${i.location_id}|${i.product_id}`, i.rule]))
       const withDelivery = result.lines.map((l) => {
         const rule = ruleByKey.get(`${l.location_id}|${l.product_id}`)
-        const deliver = nextDeliveryDate(draft.order_date, deliveryDow.get(l.location_id) ?? null)
+        // A configured per-shop schedule wins; otherwise fall back to the
+        // RelaDyne weekday from the location list.
+        const sched = schedules.get(l.location_id ?? '')
+        const deliver = sched
+          ? resolveDeliveryDate(draft.order_date, sched, calendar)
+          : nextDeliveryDate(draft.order_date, deliveryDow.get(l.location_id) ?? null)
         const gallons = rule ? l.qty * gallonsPerUnit(rule) : 0
         return { ...l, dos_after_delivery: dosAfterDelivery(l.on_hand, l.daily_usage, gallons, draft.order_date, deliver) }
       })
