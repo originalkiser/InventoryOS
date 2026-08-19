@@ -31,9 +31,40 @@ ALTER TABLE inventory.uom_mappings
 COMMENT ON COLUMN inventory.uom_mappings.vendor_id IS
   'Optional — a UOM name can mean a different size per vendor. NULL applies to any vendor using that UOM name.';
 
-ALTER TABLE inventory.uom_mappings DROP CONSTRAINT IF EXISTS uom_mappings_company_id_from_unit_to_unit_key;
-ALTER TABLE inventory.uom_mappings
-  ADD CONSTRAINT uom_mappings_company_vendor_from_to_key UNIQUE (company_id, vendor_id, from_unit, to_unit);
+-- Looked up by shape rather than by a guessed name — the original migration
+-- (Uploaded/phase8_uom_conversion.sql) named it via Postgres's default
+-- convention, but that's exactly the kind of thing that drifts, and a wrong
+-- guess here is a silent no-op that leaves the OLD constraint blocking the
+-- very thing this migration adds: a global mapping and a vendor-specific
+-- mapping coexisting for the same UOM name.
+DO $$
+DECLARE old_con text;
+BEGIN
+  SELECT c.conname INTO old_con
+  FROM pg_constraint c
+  JOIN pg_class t ON t.oid = c.conrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace
+  WHERE n.nspname = 'inventory' AND t.relname = 'uom_mappings' AND c.contype = 'u'
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_attribute a
+      WHERE a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) AND a.attname = 'vendor_id'
+    )
+  LIMIT 1;
+  IF old_con IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE inventory.uom_mappings DROP CONSTRAINT %I', old_con);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = 'inventory' AND t.relname = 'uom_mappings' AND c.conname = 'uom_mappings_company_vendor_from_to_key'
+  ) THEN
+    ALTER TABLE inventory.uom_mappings
+      ADD CONSTRAINT uom_mappings_company_vendor_from_to_key UNIQUE (company_id, vendor_id, from_unit, to_unit);
+  END IF;
+END
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_uom_mappings_vendor
   ON inventory.uom_mappings (company_id, vendor_id);
