@@ -45,8 +45,15 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
 
   useEffect(() => {
     if (!open) return
-    setLocationId(existing?.location_id ?? '')
-    setAreaManager(existing?.area_manager ?? '')
+    const startLocationId = existing?.location_id ?? ''
+    setLocationId(startLocationId)
+    // Auto-fill area manager + regional director from the location's
+    // metadata when the report doesn't already have them — covers a
+    // location picked via the Combobox below (onLocationChange) AND one
+    // the caller pre-fills directly, e.g. Location Lookup's "Exceptions"
+    // box opens straight to the current shop without ever touching the
+    // Combobox, so its onChange auto-fill never used to run.
+    setAreaManager(existing?.area_manager || (startLocationId ? loc.fieldValue(startLocationId, 'area_manager') || '' : ''))
     setDateFinding(existing?.date_of_finding ?? (existing?.id ? '' : today()))
     setDateAction(existing?.date_of_shop_action ?? '')
     setReportType(existing?.report_type ?? '')
@@ -56,7 +63,7 @@ export function ExceptionReportModal({ open, onClose, existing, onSubmit, onDele
     setContactedDate(existing?.contacted_date ?? '')
     setFollowUp(followUpDate(existing) ?? '')
     setResponse(existing?.response ?? '')
-    setRdIfNo(existing?.rd_if_no ?? '')
+    setRdIfNo(existing?.rd_if_no || (startLocationId ? (loc.fieldValue(startLocationId, 'regional_director') || loc.fieldValue(startLocationId, 'director')) || '' : ''))
     setResponseNotes(stripHtml(existing?.response_notes))
     setStatus(existing?.status ?? (existing?.id ? '' : (config.statuses[0] ?? '')))
     setProducts(impactedProducts(existing))
