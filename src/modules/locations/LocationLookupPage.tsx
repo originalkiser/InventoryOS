@@ -606,12 +606,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             <div className="w-80"><Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
           )}
           {/* Absolute, so it rides along in the header's corner without taking
-              part in the flex row — nothing here shifts when it appears. */}
+              part in the flex row — nothing here shifts when it appears.
+              -right-1: see InventoryShortcuts.tsx for why plain right-0
+              lands 4px left of the quick-access FAB nub below it. */}
           {shopId && (
             <button onClick={() => setCustomizeOpen((o) => !o)}
               title={customizeOpen ? 'Done customizing' : 'Customize columns'}
               aria-label={customizeOpen ? 'Done customizing' : 'Customize columns'}
-              className={`absolute top-1 right-0 flex items-center justify-center rounded-full p-2 shadow-lg transition-colors ${customizeOpen ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
+              className={`absolute top-1 -right-1 flex items-center justify-center rounded-full p-2 shadow-lg transition-colors ${customizeOpen ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
               <Settings className="w-4 h-4" />
             </button>
           )}

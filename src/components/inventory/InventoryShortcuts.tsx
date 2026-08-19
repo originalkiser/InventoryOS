@@ -40,7 +40,10 @@ export function InventoryShortcuts() {
       {/* Pinned to the page's top-right corner rather than sitting in the
           flow, so it never pushes the dashboard header around. Positions
           against Dashboard's root, which is the nearest relative ancestor. */}
-      <div className="absolute top-0 right-0 z-20 flex items-center gap-2">
+      {/* -right-1: the FAB rail below sits 8px closer to the viewport edge
+          (16px base vs main's 24px padding) and its nub is 8px wider than
+          this button, so a plain right-0 lands 4px left of dead-center. */}
+      <div className="absolute top-0 -right-1 z-20 flex items-center gap-2">
         {customize && (
           <button onClick={() => persist(DEFAULT_ORDER)}
             className="rounded-full bg-cream/80 border border-navy/30 text-navy px-3 py-1.5 text-xs font-mono shadow-lg hover:bg-cream hover:border-navy transition-colors">
