@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveDeliveryDate, addBusinessDays, businessDaysBetween, weekStartOf, generateOrder } from './engine'
+import { eligibleLocations, shopsPerOrderDay, draftOrderDow } from './useOrdersV2'
 import { DEFAULT_ORDER_SETTINGS, type DeliverySchedule, type GenerationContext, type GenerationInput, type ProductRule, type WeekCalendar } from './types'
 
 // 2026-08-19 is a Wednesday. Weekday numbers: Sun 0 … Sat 6.
@@ -142,5 +143,56 @@ describe('repeat-ordering flag', () => {
 
   it('does not flag a product with no order history', () => {
     expect(generateOrder([input()], ctx([])).lines[0].flags).not.toContain('repeat_ordering')
+  })
+})
+
+// ── order-day eligibility (weekday, not date) ───────────────────────────
+
+const day = (location_id: string, order_dow: number | null) => ({ location_id, order_dow, delivery_dow: null })
+
+describe('order-day eligibility', () => {
+  // WED = 2026-08-19, a Wednesday (dow 3).
+  const days = [day('mon1', 1), day('mon2', 1), day('wed1', 3), day('wed2', 3), day('wed3', 3), day('fri1', 5)]
+
+  it('matches on the order date\'s weekday by default', () => {
+    const set = eligibleLocations(days, true, WED)
+    expect([...set!].sort()).toEqual(['wed1', 'wed2', 'wed3'])
+  })
+
+  it('can be pointed at a different weekday without moving the order date', () => {
+    const set = eligibleLocations(days, true, WED, 1)
+    expect([...set!].sort()).toEqual(['mon1', 'mon2'])
+  })
+
+  it('returns an empty set — not everything — for a weekday nobody orders on', () => {
+    expect(eligibleLocations(days, true, WED, 6)!.size).toBe(0)
+  })
+
+  it('applies no restriction for a vendor that does not use order days', () => {
+    expect(eligibleLocations(days, false, WED)).toBeNull()
+    expect(eligibleLocations(days, false, WED, 1)).toBeNull()
+  })
+
+  it('applies no restriction when no shop has an order day configured', () => {
+    expect(eligibleLocations([day('a', null), day('b', null)], true, WED)).toBeNull()
+  })
+
+  it('counts shops per weekday for the picker', () => {
+    expect(shopsPerOrderDay(days)).toEqual([0, 2, 0, 3, 0, 1, 0])
+  })
+})
+
+describe('draft order weekday', () => {
+  it('uses the explicitly chosen weekday when one was stored', () => {
+    expect(draftOrderDow({ order_date: WED, settings_snapshot: { __order_dow: 1 } })).toBe(1)
+  })
+
+  it('falls back to the order date\'s weekday', () => {
+    expect(draftOrderDow({ order_date: WED, settings_snapshot: {} })).toBe(3)
+    expect(draftOrderDow({ order_date: WED, settings_snapshot: null })).toBe(3)
+  })
+
+  it('ignores an out-of-range stored value', () => {
+    expect(draftOrderDow({ order_date: WED, settings_snapshot: { __order_dow: 9 } })).toBe(3)
   })
 })

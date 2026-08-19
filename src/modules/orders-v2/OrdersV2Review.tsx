@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import {
   useDraft, useGenerationData, useOrderSettings, useVendorRules,
-  buildGenerationInputs, eligibleLocations, type DraftLineRow,
+  buildGenerationInputs, eligibleLocations, draftOrderDow, shopsPerOrderDay, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit } from './engine'
@@ -16,6 +16,8 @@ import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num } from './shared'
 import type { LineFlag } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
+
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 /**
  * Step 2 — the working order. Generates on demand, then every edit autosaves
@@ -39,6 +41,8 @@ export function OrdersV2Review() {
   const [filter, setFilter] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [skipped, setSkipped] = useState<{ location_id: string; product_id: string; reason: string }[]>([])
+  const [dayCounts, setDayCounts] = useState<number[]>([0, 0, 0, 0, 0, 0, 0])
+  const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
 
   const shopLabel = useCallback(
     (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
@@ -46,8 +50,9 @@ export function OrdersV2Review() {
   )
 
   /** Run the engine and replace the draft's lines with the result. */
-  const runGeneration = useCallback(async (includeVmi: boolean) => {
+  const runGeneration = useCallback(async (includeVmi: boolean, dow?: number) => {
     if (!draft || !profile?.company_id) return
+    const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
     try {
       const { configs, rules, usage, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
@@ -56,7 +61,7 @@ export function OrdersV2Review() {
         settings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
         orderDate: draft.order_date,
-        eligibleLocationIds: eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date),
+        eligibleLocationIds: eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow),
         history,
         includeVmi,
       })
@@ -81,8 +86,9 @@ export function OrdersV2Review() {
       const shops = new Set(withDelivery.map((l) => l.location_id)).size
       // Cache the shop count on the header so the landing page can show it
       // without loading every line.
+      setDayCounts(shopsPerOrderDay(days))
       await (supabase as any).schema('inventory').from('ov2_order_drafts')
-        .update({ settings_snapshot: { ...settings, __shop_count: shops }, status: 'review' })
+        .update({ settings_snapshot: { ...settings, __shop_count: shops, __order_dow: useDow }, status: 'review' })
         .eq('id', draft.id)
       await reload()
       toast.success(`Generated ${withDelivery.length} line${withDelivery.length !== 1 ? 's' : ''} across ${shops} shop${shops !== 1 ? 's' : ''}`)
@@ -150,6 +156,7 @@ export function OrdersV2Review() {
   if (!draft) return <p className="text-xs font-mono text-inky/60 py-8">Draft not found. It may have been deleted.</p>
 
   const vendorName = vendors.byId(draft.vendor_id)?.name ?? 'All vendors'
+  const usesOrderDays = rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays
 
   return (
     <div className="flex flex-col gap-4">
@@ -157,7 +164,9 @@ export function OrdersV2Review() {
         <div>
           <button onClick={() => navigate('/orders-v2')} className="text-[11px] font-mono text-inky/60 hover:text-navy hover:underline">← Orders v2</button>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
-          <p className="text-xs text-inky mt-0.5">{vendorName} · {draft.order_date} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}</p>
+          <p className="text-xs text-inky mt-0.5">
+            {vendorName} · {draft.order_date}{usesOrderDays ? ` · ${DOW[orderDow]} shops` : ''} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration(showVmi)}>
@@ -175,6 +184,17 @@ export function OrdersV2Review() {
           <Toggle checked={showVmi} onChange={(v) => { setShowVmi(v); void runGeneration(v) }} size="sm" color="cyan" />
           Show VMI / keepfill
         </label>
+        {usesOrderDays && (
+          <label className="flex items-center gap-2 text-xs font-mono text-inky">
+            Order day
+            <select value={String(orderDow)} onChange={(e) => void runGeneration(showVmi, Number(e.target.value))}
+              className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky">
+              {DOW.map((d, i) => (
+                <option key={d} value={i}>{d}{dayCounts[i] ? ` (${dayCounts[i]})` : ''}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <span className="text-xs font-mono text-inky">
           {lines.length} line{lines.length !== 1 ? 's' : ''}
           {overrideCount > 0 && (
@@ -191,10 +211,25 @@ export function OrdersV2Review() {
       {generating && <div className="py-8 flex justify-center"><SbLoader size={32} /></div>}
 
       {!generating && lines.length === 0 && (
-        <p className="text-xs font-mono text-inky/60 py-8">
-          Nothing to order for this vendor and date — no shop is both on its order day and below the minimum
-          days-of-supply trigger. Try Regenerate after changing the order date, or check Order Settings.
-        </p>
+        <div className="py-8 flex flex-col gap-2">
+          <p className="text-xs font-mono text-inky/60">Nothing to order for this run.</p>
+          {usesOrderDays && dayCounts[orderDow] === 0 ? (
+            <p className="text-xs font-mono text-[#C0392B]">
+              No shops have {DOW[orderDow]} as their order day
+              {dayCounts.some((c) => c > 0)
+                ? ` — shops per day: ${DOW.map((d, i) => (dayCounts[i] ? `${d.slice(0, 3)} ${dayCounts[i]}` : null)).filter(Boolean).join(', ')}.`
+                : '. No shop has a Reladyne Delivery Day set on the location list.'}
+              {' '}Switch the order day above to run a different day&apos;s shops.
+            </p>
+          ) : (
+            <p className="text-xs font-mono text-inky/60">
+              {usesOrderDays && `${dayCounts[orderDow]} shop${dayCounts[orderDow] !== 1 ? 's' : ''} order on ${DOW[orderDow]}, but none `}
+              {!usesOrderDays && 'No product is '}
+              below the minimum days-of-supply trigger. Check Order Settings, or that Product Usage has current
+              on-hand and daily usage for these shops.
+            </p>
+          )}
+        </div>
       )}
 
       {lines.length > 0 && (

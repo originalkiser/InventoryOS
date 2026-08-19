@@ -187,11 +187,16 @@ export function useDrafts() {
    * A draft becomes a real row the moment the user starts one, so it appears
    * on the landing page for everyone and survives a closed browser.
    */
-  async function createDraft(vendorId: string | null, orderDate: string, settings: OrderSettings): Promise<string | null> {
+  async function createDraft(
+    vendorId: string | null, orderDate: string, settings: OrderSettings, orderDow?: number | null,
+  ): Promise<string | null> {
     if (!companyId) return null
     const { data, error } = await sb().schema('inventory').from('ov2_order_drafts').insert({
       company_id: companyId, vendor_id: vendorId, order_date: orderDate, status: 'generating',
-      settings_snapshot: settings, created_by: profile?.id ?? null, last_edited_by: profile?.id ?? null,
+      // __order_dow rides along with the settings snapshot so the draft
+      // remembers which weekday's shops it was built for.
+      settings_snapshot: { ...settings, __order_dow: orderDow ?? null },
+      created_by: profile?.id ?? null, last_edited_by: profile?.id ?? null,
     }).select('id').single()
     if (error) { toast.error(error.message); return null }
     await load()
@@ -403,12 +408,69 @@ export function buildGenerationInputs(
  * Shops whose order day falls on this date. Only RelaDyne restricts by day —
  * for any other vendor this returns null, meaning "no restriction".
  */
-export function eligibleLocations(days: VendorDayRow[], usesOrderDays: boolean, orderDate: string): Set<string> | null {
+export function eligibleLocations(
+  days: VendorDayRow[], usesOrderDays: boolean, orderDate: string, overrideDow?: number | null,
+): Set<string> | null {
   if (!usesOrderDays) return null
   const withDays = days.filter((d) => d.order_dow != null)
   if (!withDays.length) return null
-  const dow = new Date(orderDate + 'T00:00:00').getDay()
+  // Order days are a weekday, not a date. The order date supplies the default
+  // weekday, but a run can be pointed at a different one (ordering Thursday's
+  // shops on a Wednesday, say) without moving the order date itself.
+  const dow = overrideDow ?? new Date(orderDate + 'T00:00:00').getDay()
   return new Set(withDays.filter((d) => d.order_dow === dow).map((d) => d.location_id))
+}
+
+/** How many shops sit on each order weekday — powers the picker and the empty state. */
+export function shopsPerOrderDay(days: VendorDayRow[]): number[] {
+  const counts = [0, 0, 0, 0, 0, 0, 0]
+  for (const d of days) if (d.order_dow != null) counts[d.order_dow]++
+  return counts
+}
+
+/** The weekday a draft is ordering for: an explicit choice, else the date's own. */
+export function draftOrderDow(draft: { order_date: string; settings_snapshot?: Record<string, unknown> | null }): number {
+  const stored = (draft.settings_snapshot as any)?.__order_dow
+  if (typeof stored === 'number' && stored >= 0 && stored <= 6) return stored
+  return new Date(draft.order_date + 'T00:00:00').getDay()
+}
+
+/**
+ * Order-day coverage for a vendor: how many shops sit on each weekday, so the
+ * "start order" dialog can say up front that Wednesday has 12 shops and
+ * Saturday has none — rather than generating an empty order and leaving the
+ * user to work out why.
+ */
+export function useOrderDayCoverage(vendorName: string | null | undefined) {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const [counts, setCounts] = useState<number[]>([0, 0, 0, 0, 0, 0, 0])
+  const [applies, setApplies] = useState(false)
+
+  useEffect(() => {
+    if (!companyId) return
+    const uses = isReladyne(vendorName)
+    setApplies(uses)
+    if (!uses) { setCounts([0, 0, 0, 0, 0, 0, 0]); return }
+    let cancelled = false
+    void (async () => {
+      const rows = await fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day, active', companyId)
+      if (cancelled) return
+      const days: VendorDayRow[] = rows
+        .filter((l) => l.active !== false)
+        .map((l) => {
+          const deliv = parseWeekday(l.reladyne_delivery_day)
+          return {
+            location_id: l.id, delivery_dow: deliv,
+            order_dow: deliv == null ? null : parseWeekday(orderDayFromDelivery(l.reladyne_delivery_day)),
+          }
+        })
+      setCounts(shopsPerOrderDay(days))
+    })()
+    return () => { cancelled = true }
+  }, [companyId, vendorName])
+
+  return { counts, applies, total: counts.reduce((a, b) => a + b, 0) }
 }
 
 export const groupKeyOf = (l: { location_id: string; order_type: OrderType }) => `${l.location_id}|${l.order_type}`

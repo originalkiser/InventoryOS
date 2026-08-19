@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
-import { Button, Card, CardBody, Combobox, Input, Modal, SbLoader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Button, Card, CardBody, Combobox, Input, Modal, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
-import { useDrafts, useOrderSettings, type DraftRow } from './useOrdersV2'
+import { useDrafts, useOrderSettings, useOrderDayCoverage, type DraftRow } from './useOrdersV2'
 import { useOrderHistory } from './useOrderHistory'
 import { useVendors, useUserNames } from './useLookups'
 import { STATUS_LABEL, statusRoute, money, dShort, dTime } from './shared'
+
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 /**
  * Module landing page. Not a wizard entry point — it's the home for both
@@ -27,7 +29,11 @@ export function OrdersV2Landing() {
   const [startOpen, setStartOpen] = useState(false)
   const [vendorId, setVendorId] = useState('')
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10))
+  // Which weekday's shops to pull in. Defaults to the order date's own
+  // weekday, but can be pointed elsewhere without moving the order date.
+  const [orderDow, setOrderDow] = useState<number>(() => new Date().getDay())
   const [starting, setStarting] = useState(false)
+  const coverage = useOrderDayCoverage(vendors.byId(vendorId || null)?.name)
 
   // Shared filters across both lists.
   const [fVendor, setFVendor] = useState('')
@@ -51,9 +57,14 @@ export function OrdersV2Landing() {
 
   const vendorName = (id: string | null) => vendors.byId(id)?.name ?? '—'
 
+  function pickDate(v: string) {
+    setOrderDate(v)
+    if (v) setOrderDow(new Date(v + 'T00:00:00').getDay())
+  }
+
   async function start() {
     setStarting(true)
-    const id = await createDraft(vendorId || null, orderDate, settings)
+    const id = await createDraft(vendorId || null, orderDate, settings, orderDow)
     setStarting(false)
     if (id) { setStartOpen(false); navigate(`/orders-v2/draft/${id}`) }
   }
@@ -168,10 +179,33 @@ export function OrdersV2Landing() {
       <Modal open={startOpen} onClose={() => setStartOpen(false)} title="Start New Order" size="sm">
         <div className="flex flex-col gap-3">
           <Combobox label="Vendor" options={vendors.options} value={vendorId} onChange={setVendorId} placeholder="Select vendor…" />
-          <Input label="Order Date" type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
+          <Input label="Order Date" type="date" value={orderDate} onChange={(e) => pickDate(e.target.value)} />
+
+          {coverage.applies ? (
+            <>
+              <Select label="Order day (which shops to include)" value={String(orderDow)}
+                onChange={(e) => setOrderDow(Number(e.target.value))}
+                options={DOW.map((d, i) => ({ value: String(i), label: `${d} — ${coverage.counts[i]} shop${coverage.counts[i] !== 1 ? 's' : ''}` }))} />
+              {coverage.counts[orderDow] === 0 ? (
+                <p className="text-[11px] font-mono text-[#C0392B]">
+                  No shops order on {DOW[orderDow]}. Pick a day with shops on it, or check the Reladyne Delivery Day
+                  column on the location list — the order day is derived from it (delivery minus three business days).
+                </p>
+              ) : (
+                <p className="text-[11px] font-mono text-inky/60">
+                  {coverage.counts[orderDow]} shop{coverage.counts[orderDow] !== 1 ? 's' : ''} order on {DOW[orderDow]}.
+                  Defaults to the order date&apos;s weekday — change it to run a different day&apos;s shops.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-[11px] font-mono text-inky/60">
+              This vendor has no order-day restriction, so every shop with configured products is considered.
+            </p>
+          )}
+
           <p className="text-[11px] font-mono text-inky/60">
-            Only shops whose configured order day for this vendor falls on this date will be included. The draft is
-            saved immediately, so you can leave and resume it from this page.
+            The draft is saved immediately, so you can leave and resume it from this page.
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => setStartOpen(false)}>Cancel</Button>
