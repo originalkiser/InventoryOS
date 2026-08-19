@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveDeliveryDate, addBusinessDays, businessDaysBetween, weekStartOf, generateOrder } from './engine'
-import { eligibleLocations, shopsPerOrderDay, draftOrderDow } from './useOrdersV2'
+import { buildGenerationInputs, eligibleLocations, shopsPerOrderDay, draftOrderDow } from './useOrdersV2'
 import { DEFAULT_ORDER_SETTINGS, type DeliverySchedule, type GenerationContext, type GenerationInput, type ProductRule, type WeekCalendar } from './types'
 
 // 2026-08-19 is a Wednesday. Weekday numbers: Sun 0 … Sat 6.
@@ -194,5 +194,56 @@ describe('draft order weekday', () => {
 
   it('ignores an out-of-range stored value', () => {
     expect(draftOrderDow({ order_date: WED, settings_snapshot: { __order_dow: 9 } })).toBe(3)
+  })
+})
+
+// ── on-hand resolution through product ID mappings ──────────────────────
+
+const cfg = (product_id: string) => ({
+  location_id: 'L1', product_id, vendor_id: 'V1', capacity: null, metadata: {},
+})
+const use = (product_id: string, on_hands: number | null, daily_usage: number | null) => ({
+  location_id: 'L1', product_id, on_hands, daily_usage,
+})
+
+describe('on-hand resolution', () => {
+  const maps = [{ old_product_id: 'R540BB', new_product_id: 'ROT-T6-5W40BB' }]
+
+  it('joins usage straight through when the ids already match', () => {
+    const [i] = buildGenerationInputs([cfg('5W20')], [], [use('5W20', 120, 4)])
+    expect(i.on_hand).toBe(120)
+    expect(i.daily_usage).toBe(4)
+  })
+
+  it('finds usage recorded under a retired product id', () => {
+    // Regression: the order config uses the new id, product_usage still has
+    // the old one, so a direct join found no on-hand at all.
+    const [i] = buildGenerationInputs([cfg('ROT-T6-5W40BB')], [], [use('R540BB', 96, 0.66)], maps)
+    expect(i.on_hand).toBe(96)
+    expect(i.daily_usage).toBe(0.66)
+  })
+
+  it('sums old and new rows for the same product', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('ROT-T6-5W40BB')], [], [use('R540BB', 50, 0.5), use('ROT-T6-5W40BB', 30, 0.25)], maps)
+    expect(i.on_hand).toBe(80)
+    expect(i.daily_usage).toBeCloseTo(0.75, 6)
+  })
+
+  it('matches case-insensitively', () => {
+    const [i] = buildGenerationInputs([cfg('ROT-T6-5W40BB')], [], [use('r540bb', 12, 1)], maps)
+    expect(i.on_hand).toBe(12)
+  })
+
+  it('leaves on-hand null when the shop has no usage row at all', () => {
+    const [i] = buildGenerationInputs([cfg('NOPE')], [], [use('5W20', 10, 1)], maps)
+    expect(i.on_hand).toBeNull()
+  })
+
+  it('only returns products in the shop order config', () => {
+    // Usage for a product the shop isn't configured for must not create a line.
+    const out = buildGenerationInputs([cfg('5W20')], [], [use('5W20', 1, 1), use('OTHER', 99, 9)], maps)
+    expect(out).toHaveLength(1)
+    expect(out[0].product_id).toBe('5W20')
   })
 })

@@ -44,7 +44,10 @@ export const gallonsPerUnit = (rule: ProductRule): number => {
  * when a cap is binding so a limit is never breached by rounding.
  */
 export function roundQty(qty: number, uom: string | null, bulkDecimals: number, dir: 'nearest' | 'down' = 'nearest'): number {
-  if (qty <= 0) return 0
+  // Caps are Infinity when nothing limits a product, and a missing figure can
+  // produce NaN. Either would serialise to null over the wire and blow up a
+  // NOT NULL column, so they're pinned to 0 here rather than at each caller.
+  if (!Number.isFinite(qty) || qty <= 0) return 0
   if (isBulkUom(uom)) {
     const f = Math.pow(10, Math.max(0, bulkDecimals))
     return dir === 'down' ? Math.floor(qty * f) / f : Math.round(qty * f) / f
@@ -235,9 +238,11 @@ function historyFlags(input: GenerationInput, ctx: GenerationContext): LineFlag[
 
 // ── Pass 1 ──────────────────────────────────────────────────────────────
 
-function buildLine(input: GenerationInput, ctx: GenerationContext, units: number, caps: Caps): GeneratedLine {
+function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: number, caps: Caps): GeneratedLine {
   const { rule } = input
   const per = gallonsPerUnit(rule)
+  // Guard once, here, so no downstream field can carry Infinity/NaN.
+  const units = Number.isFinite(rawUnits) ? Math.max(0, rawUnits) : 0
   const gallons = units * per
   const flags: LineFlag[] = [...historyFlags(input, ctx)]
   if (n(input.on_hand) <= 0) flags.push('stocked_out')
@@ -551,7 +556,10 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
           const caps = capsFor(sp, ctx, { respectDosMax: false })
           if (caps.maxUnits <= 0) continue
           const unitCost = n(sp.rule.unit_cost)
-          const need = unitCost > 0 ? (minimum - dollars) / unitCost : caps.maxUnits
+          // No unit cost means the line contributes $0, so it can never close
+          // a dollar gap — adding it would just inflate the order for nothing.
+          if (unitCost <= 0) continue
+          const need = (minimum - dollars) / unitCost
           const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_decimals)
           if (units <= 0) continue
           const line = buildLine(sp, ctx, units, caps)

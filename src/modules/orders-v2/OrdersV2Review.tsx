@@ -55,8 +55,8 @@ export function OrdersV2Review() {
     const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
     try {
-      const { configs, rules, usage, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
-      const inputs = buildGenerationInputs(configs, rules, usage)
+      const { configs, rules, usage, productMappings, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
+      const inputs = buildGenerationInputs(configs, rules, usage, productMappings)
       const result = generateOrder(inputs, {
         settings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),

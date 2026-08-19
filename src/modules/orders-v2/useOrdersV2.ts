@@ -238,13 +238,20 @@ export function useDraft(draftId: string | null) {
   async function replaceLines(generated: (GeneratedLine & { dos_after_delivery?: number | null })[]) {
     if (!companyId || !draftId) return
     await sb().schema('inventory').from('ov2_order_draft_lines').delete().eq('draft_id', draftId)
+    // JSON has no Infinity/NaN — both serialise to null, which then trips the
+    // NOT NULL columns. Numbers are pinned here so a bad figure surfaces as a
+    // zero to fix in review rather than a failed insert.
+    const numOr = (v: unknown, fallback: number | null) =>
+      (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
+
     const payload = generated.map((l) => ({
       company_id: companyId, draft_id: draftId,
       location_id: l.location_id, product_id: l.product_id, order_type: l.order_type, uom: l.uom,
-      system_qty: l.system_qty, qty: l.qty, is_override: false, included: l.included,
-      unit_cost: l.unit_cost, on_hand: l.on_hand, daily_usage: l.daily_usage,
-      dos_before: l.dos_before, dos_after: l.dos_after, dos_after_delivery: l.dos_after_delivery ?? null,
-      max_capacity_gallons: l.max_capacity_gallons, flags: l.flags,
+      system_qty: numOr(l.system_qty, 0), qty: numOr(l.qty, 0), is_override: false, included: l.included,
+      unit_cost: numOr(l.unit_cost, null), on_hand: numOr(l.on_hand, null), daily_usage: numOr(l.daily_usage, null),
+      dos_before: numOr(l.dos_before, null), dos_after: numOr(l.dos_after, null),
+      dos_after_delivery: numOr(l.dos_after_delivery, null),
+      max_capacity_gallons: numOr(l.max_capacity_gallons, null), flags: l.flags,
       added_by_smoothing: l.added_by_smoothing, triggered_smoothing: l.triggered_smoothing,
     }))
     const CHUNK = 500
@@ -313,15 +320,16 @@ export function useGenerationData() {
   const companyId = profile?.company_id ?? null
 
   const fetchInputs = useCallback(async (vendorId: string | null, lookbackDays: number) => {
-    if (!companyId) return { configs: [], rules: [], usage: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
+    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const [configs, rules, usage, locRows, schedRows, calRows, history] = await Promise.all([
+    const [configs, rules, usage, productMappings, locRows, schedRows, calRows, history] = await Promise.all([
       fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
       fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId),
+      fetchAll<any>('inventory', 'product_id_mappings', 'old_product_id, new_product_id', companyId),
       fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
       fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
@@ -367,7 +375,7 @@ export function useGenerationData() {
       (calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']),
     )
 
-    return { configs, rules, usage, days, schedules, calendar, history: historyFacts }
+    return { configs, rules, usage, productMappings, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
   return { fetchInputs }
@@ -376,10 +384,34 @@ export function useGenerationData() {
 /** Merge config + rules + usage into engine inputs (config is the gate). */
 export function buildGenerationInputs(
   configs: OrderConfigRow[], rules: (ProductRule & { id?: string })[], usage: UsageRow[],
+  productMappings: { old_product_id: string | null; new_product_id: string | null }[] = [],
 ) {
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
-  const usageMap = new Map(usage.map((u) => [ruleKey(u.location_id, u.product_id), u]))
+
+  // Product Usage is often still keyed by retired product ids while the order
+  // config already uses the new ones, so a straight join finds no on-hand at
+  // all. Resolve each usage row through product_id_mappings first and sum
+  // anything landing on the same product — same treatment Location Lookup's
+  // order-config table gets.
+  const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+  const oldToNew = new Map<string, string>()
+  for (const m of productMappings) {
+    if (m.old_product_id && m.new_product_id) oldToNew.set(pkey(m.old_product_id), String(m.new_product_id))
+  }
+  const usageMap = new Map<string, UsageRow>()
+  for (const u of usage) {
+    const resolved = oldToNew.get(pkey(u.product_id)) ?? u.product_id
+    const k = ruleKey(u.location_id, resolved)
+    const cur = usageMap.get(k)
+    const add = (a: number | null | undefined, b: number | null | undefined) =>
+      (b == null ? (a ?? null) : (a ?? 0) + Number(b))
+    usageMap.set(k, {
+      location_id: u.location_id, product_id: resolved,
+      on_hands: add(cur?.on_hands, u.on_hands),
+      daily_usage: add(cur?.daily_usage, u.daily_usage),
+    })
+  }
 
   return configs.map((c) => {
     const k = ruleKey(c.location_id, c.product_id)

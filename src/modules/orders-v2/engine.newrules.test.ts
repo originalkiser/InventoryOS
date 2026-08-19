@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generateOrder } from './engine'
+import { generateOrder, roundQty } from './engine'
 import { DEFAULT_ORDER_SETTINGS, type GenerationContext, type GenerationInput, type ProductRule } from './types'
 
 // Coverage for the rules revised after the first review: soft DOS ceilings,
@@ -154,5 +154,46 @@ describe('vendor case-type minimums', () => {
     // Individual lines are free to be any quantity — only the sum must clear 6.
     expect(res.lines.some((l) => l.qty % 6 !== 0)).toBe(true)
     expect(res.lines.reduce((s, l) => s + l.qty, 0)).toBeGreaterThanOrEqual(6)
+  })
+})
+
+describe('never emits a non-finite quantity', () => {
+  // Regression: an uncapped product (no usage data, no capacity limit) has an
+  // Infinity cap. With no unit cost the smoothing branch used that cap as the
+  // quantity, and JSON.stringify(Infinity) is null — which violated the NOT
+  // NULL constraint on ov2_order_draft_lines.system_qty.
+  it('does not order Infinity of a costless, uncapped product to reach a minimum', () => {
+    const due = input({ product_id: 'P1', on_hand: 45, daily_usage: 5, rule: { unit_cost: 10, max_capacity_gallons: 50 } })
+    const costless = input({ product_id: 'P2', on_hand: 5, daily_usage: 0, rule: { unit_cost: null, max_capacity_gallons: null } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(9999) }, caseTypeMinimums: {}, usesOrderDays: false } })
+    const res = generateOrder([due, costless], c)
+    for (const l of res.lines) {
+      expect(Number.isFinite(l.qty)).toBe(true)
+      expect(Number.isFinite(l.system_qty)).toBe(true)
+    }
+    // A $0 line can't close a dollar gap, so it shouldn't be pulled in at all.
+    expect(res.lines.find((l) => l.product_id === 'P2')).toBeUndefined()
+  })
+
+  it('keeps every numeric field finite across a whole run', () => {
+    const rows = [
+      input({ product_id: 'A', on_hand: 0, daily_usage: 0, rule: { unit_cost: null } }),
+      input({ product_id: 'B', on_hand: 10, daily_usage: 5, rule: { unit_cost: 20 } }),
+      input({ product_id: 'C', on_hand: 5, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 1, unit_cost: 0 } }),
+    ]
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(5000), bulk: dollars(5000) }, caseTypeMinimums: {}, usesOrderDays: false } })
+    const res = generateOrder(rows, c)
+    for (const l of res.lines) {
+      for (const v of [l.qty, l.system_qty]) expect(Number.isFinite(v)).toBe(true)
+      for (const v of [l.dos_before, l.dos_after, l.unit_cost, l.on_hand, l.daily_usage]) {
+        if (v != null) expect(Number.isFinite(v)).toBe(true)
+      }
+    }
+  })
+
+  it('rounds a non-finite quantity down to zero', () => {
+    expect(roundQty(Number.POSITIVE_INFINITY, 'case', 0)).toBe(0)
+    expect(roundQty(Number.NaN, 'case', 0)).toBe(0)
+    expect(roundQty(Number.POSITIVE_INFINITY, 'bulk', 1)).toBe(0)
   })
 })
