@@ -736,7 +736,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         <button onClick={() => setCustomizeOpen((o) => !o)}
           className={embedded
             ? 'self-end rounded-full bg-navy text-cream px-3 py-1.5 text-[11px] font-mono uppercase tracking-wide hover:bg-navy/90 transition-colors'
-            : 'fixed bottom-6 right-6 z-30 rounded-full bg-navy text-cream px-5 py-2.5 text-xs font-mono uppercase tracking-wide shadow-lg hover:bg-navy/90 transition-colors'}>
+            // right-20 clears the quick-access FAB rail, which sits 16-56px
+            // from the right edge; right-6 put this straight on top of it.
+            : 'fixed bottom-6 right-20 z-30 rounded-full bg-navy text-cream px-5 py-2.5 text-xs font-mono uppercase tracking-wide shadow-lg hover:bg-navy/90 transition-colors'}>
           {customizeOpen ? 'Done' : 'Customize'}
         </button>
       )}

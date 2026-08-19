@@ -37,8 +37,10 @@ export function InventoryShortcuts() {
         </DndContext>
       </div>
 
-      {/* Floating customize control — bottom-right, like Location Lookup */}
-      <div className="fixed bottom-6 right-6 z-30 flex items-center gap-2">
+      {/* Floating customize control — bottom-right, like Location Lookup.
+          right-20 keeps it clear of the quick-access FAB rail (16-56px from
+          the right edge), which right-6 sat directly on top of. */}
+      <div className="fixed bottom-6 right-20 z-30 flex items-center gap-2">
         {customize && (
           <button onClick={() => persist(DEFAULT_ORDER)}
             className="rounded-full bg-cream border border-navy/30 text-navy px-3 py-2.5 text-xs font-mono shadow-lg hover:border-navy transition-colors">
