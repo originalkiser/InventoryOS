@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useMonthEndStore } from '@/stores/monthEndStore'
 import { Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { MonthEndPullPanel } from '@/components/integrations/MonthEndPullPanel'
@@ -28,9 +29,15 @@ const YEAR_OPTIONS = Array.from({ length: 6 }, (_, i) => {
 export function MonthEndPage() {
   const { profile } = useAuthStore()
   const { month, year, setPeriod } = useMonthEndStore()
+  const [savedPeriod, setSavedPeriod, prefsLoaded] = useProfilePref<{ month: number; year: number } | null>('monthend:period', null)
 
-  // Default the period to the most recent month that has count data.
+  // Restore whatever period the user last picked, once profile prefs have
+  // loaded (cross-device). Only when nothing has ever been picked does this
+  // fall back to the most recent month with count data — after that first
+  // default, an explicit choice sticks until changed again.
   useEffect(() => {
+    if (!prefsLoaded) return
+    if (savedPeriod) { setPeriod(savedPeriod.month, savedPeriod.year); return }
     if (!profile?.company_id) return
     let cancelled = false
     ;(async () => {
@@ -49,7 +56,12 @@ export function MonthEndPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [profile?.company_id])
+  }, [prefsLoaded, savedPeriod, profile?.company_id])
+
+  function changePeriod(m: number, y: number) {
+    setPeriod(m, y)
+    setSavedPeriod({ month: m, year: y })
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -64,7 +76,7 @@ export function MonthEndPage() {
               label="Period — Month"
               options={MONTH_OPTIONS}
               value={String(month)}
-              onChange={(e) => setPeriod(Number(e.target.value), year)}
+              onChange={(e) => changePeriod(Number(e.target.value), year)}
             />
           </div>
           <div className="w-28">
@@ -72,7 +84,7 @@ export function MonthEndPage() {
               label="Year"
               options={YEAR_OPTIONS}
               value={String(year)}
-              onChange={(e) => setPeriod(month, Number(e.target.value))}
+              onChange={(e) => changePeriod(month, Number(e.target.value))}
             />
           </div>
         </div>

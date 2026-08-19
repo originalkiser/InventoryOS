@@ -142,6 +142,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   const [overrides, setOverrides] = useState<Record<string, 'include' | 'exclude'>>({})
   const [rulePopover, setRulePopover] = useState<string | null>(null)
   const [thresholdDraft, setThresholdDraft] = useState<Record<string, string>>({})
+  const [showExcludedList, setShowExcludedList] = useState(false)
 
   function getRule(t: string): TypeRule {
     return typeRules[t] ?? { mode: 'include', threshold: null }
@@ -170,7 +171,8 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   }
 
   const filteredSummary = useMemo(() => summaryRows.filter(included), [summaryRows, typeRules, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
-  const excludedCount = summaryRows.length - filteredSummary.length
+  const excludedRows = useMemo(() => summaryRows.filter((r) => !included(r)), [summaryRows, typeRules, overrides]) // eslint-disable-line react-hooks/exhaustive-deps
+  const excludedCount = excludedRows.length
 
   // ---- Product: zero on-hand filter + per-category exceptions ----
   const [excludeZeroOH, setExcludeZeroOH] = useAppSetting<boolean>('monthend.excludeZeroOnHand', true)
@@ -192,7 +194,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
 
   // ---- Columns ----
   const summaryColumns = useMemo(() => [
-    { id: 'incl', header: '', enableSorting: false, enableColumnFilter: false, cell: (i: any) => { const r = i.row.original as SummaryResultRow; const inc = included(r); return <button onClick={() => toggleOverride(r)} title={inc ? 'Exclude this row' : 'Include this row'} className={inc ? 'text-green-700' : 'text-inky/70'}>{inc ? '✓' : '✕'}</button> } },
+    { id: 'incl', header: '', enableSorting: false, enableColumnFilter: false, cell: (i: any) => { const r = i.row.original as SummaryResultRow; const inc = included(r); return <button onClick={() => toggleOverride(r)} title={inc ? 'Exclude this row' : 'Include this row'} className={`text-[11px] font-mono px-2 py-0.5 rounded border transition-colors ${inc ? 'border-navy/20 text-inky hover:border-[#C0392B] hover:text-[#C0392B]' : 'border-green-600/40 bg-green-50 text-green-700 hover:border-green-600'}`}>{inc ? 'Exclude' : 'Include'}</button> } },
     sc.accessor('location_label', { header: 'Location' }),
     sc.accessor('count_type', { header: 'Type', cell: (i) => i.getValue() ?? '—' }),
     sc.accessor('count_date', {
@@ -371,7 +373,30 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
               </div>
             )
           })}
-          {excludedCount > 0 && <span className="text-xs font-mono text-orange-600">{excludedCount} row{excludedCount !== 1 ? 's' : ''} excluded</span>}
+          {excludedCount > 0 && (
+            <button onClick={() => setShowExcludedList((v) => !v)}
+              className="text-xs font-mono text-orange-600 hover:underline">
+              {excludedCount} row{excludedCount !== 1 ? 's' : ''} excluded {showExcludedList ? '▲' : '▼'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {view === 'summary' && showExcludedList && excludedCount > 0 && (
+        <div className="rounded border border-orange-300 bg-orange-50/50 px-3 py-2 flex flex-col gap-1">
+          <span className="text-[10px] font-mono uppercase tracking-wide text-orange-700">Excluded rows</span>
+          <div className="flex flex-col divide-y divide-orange-200/70">
+            {excludedRows.map((r) => (
+              <div key={rowKey(r)} className="flex items-center justify-between gap-3 py-1 text-xs font-mono">
+                <span className="text-navy">{r.location_label}</span>
+                <span className="text-inky/60">{r.count_type ?? '—'}</span>
+                <button onClick={() => toggleOverride(r)}
+                  className="text-[11px] font-mono px-2 py-0.5 rounded border border-green-600/40 bg-green-50 text-green-700 hover:border-green-600 transition-colors">
+                  Include
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -33,6 +33,7 @@ export function ProductDetailUpload({
   const [parsed, setParsed] = useState<ParsedUpload | null>(null)
   const [fileName, setFileName] = useState('')
   const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
 
   async function importBatch(mappings: ColumnMapping[]) {
     if (!parsed) return
@@ -74,10 +75,34 @@ export function ProductDetailUpload({
         }
       })
 
-      const { error: rowsErr } = await (supabase as any)
-        .schema('inventory').from('count_products')
-        .insert(insertRows)
-      if (rowsErr) throw rowsErr
+      // A single insert of a very large batch (this screen has seen 250k+
+      // row files) risks a request-size/timeout failure and gives no
+      // feedback while it's in flight. Chunked + a couple concurrent
+      // requests at a time keeps each request small and lets the UI show
+      // progress instead of just "Importing batch…" for however long the
+      // whole thing takes.
+      const CHUNK = 2000
+      const CONCURRENCY = 3
+      const chunks: (typeof insertRows)[] = []
+      for (let i = 0; i < insertRows.length; i += CHUNK) chunks.push(insertRows.slice(i, i + CHUNK))
+      setImportProgress({ done: 0, total: insertRows.length })
+
+      for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+        const group = chunks.slice(i, i + CONCURRENCY)
+        const results = await Promise.all(
+          group.map((slice) => (supabase as any).schema('inventory').from('count_products').insert(slice)),
+        )
+        const failed = results.find((r) => r.error)
+        if (failed?.error) {
+          // Roll back whatever landed so a mid-import failure doesn't leave a
+          // batch row claiming more rows than actually made it in — same
+          // all-or-nothing guarantee the single insert this replaced had.
+          await (supabase as any).schema('inventory').from('count_products').delete().eq('upload_batch_id', batch.id)
+          await (supabase as any).schema('inventory').from('count_batches').delete().eq('id', batch.id)
+          throw new Error(`${failed.error.message} — import rolled back, nothing was saved`)
+        }
+        setImportProgress((p) => p && { done: Math.min(p.total, p.done + group.reduce((s, g) => s + g.length, 0)), total: p.total })
+      }
 
       toast.success(`Added batch: ${insertRows.length} product rows${unresolved ? ` · ${unresolved} unresolved` : ''}`)
       setParsed(null)
@@ -87,6 +112,7 @@ export function ProductDetailUpload({
       toast.error(e instanceof Error ? e.message : 'Failed to import batch')
     } finally {
       setImporting(false)
+      setImportProgress(null)
     }
   }
 
@@ -149,7 +175,13 @@ export function ProductDetailUpload({
                 onConfirm={importBatch}
                 onCancel={() => setParsed(null)}
               />
-              {importing && <p className="text-xs text-inky font-mono">Importing batch…</p>}
+              {importing && (
+                <p className="text-xs text-inky font-mono">
+                  {importProgress
+                    ? `Importing batch… ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()} rows`
+                    : 'Importing batch…'}
+                </p>
+              )}
             </>
           )
         )}

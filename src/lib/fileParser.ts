@@ -1,5 +1,3 @@
-import Papa from 'papaparse'
-import * as XLSX from 'xlsx'
 import { detectHeaderRow } from './columnDetect'
 
 export interface ParseResult {
@@ -11,10 +9,6 @@ export interface ParseResult {
   headerRowIndex: number   // detected (or forced) header row, 0-based
 }
 
-function normalizeHeader(h: unknown): string {
-  return String(h ?? '').trim()
-}
-
 async function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -24,14 +18,34 @@ async function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   })
 }
 
+// The actual CPU-heavy parsing (XLSX.read/sheet_to_json, Papa.parse, and the
+// row-normalizing loop) runs in fileParser.worker.ts — a large spreadsheet
+// spends seconds to tens of seconds there, which froze the tab when it ran
+// on the main thread. One worker per call; it's terminated once it replies.
+let reqId = 0
+function runInWorker<T>(kind: 'csv' | 'xlsx' | 'xlsx-all', buffer: ArrayBuffer): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./fileParser.worker.ts', import.meta.url), { type: 'module' })
+    const id = String(++reqId)
+    worker.onmessage = (e: MessageEvent<{ id: string; ok: boolean; result?: T; error?: string }>) => {
+      if (e.data.id !== id) return
+      worker.terminate()
+      if (e.data.ok) resolve(e.data.result as T)
+      else reject(new Error(e.data.error ?? 'Parse failed'))
+    }
+    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'Parse failed')) }
+    // The buffer is transferred (zero-copy), not cloned — safe since nothing
+    // on this side reads it afterward.
+    worker.postMessage({ id, kind, buffer }, [buffer])
+  })
+}
+
 export async function parseFile(file: File): Promise<ParseResult> {
   const ext = file.name.split('.').pop()?.toLowerCase()
+  const buffer = await readFileAsArrayBuffer(file)
 
-  if (ext === 'csv') {
-    return parseCsv(file)
-  } else if (ext === 'xlsx' || ext === 'xls') {
-    return parseExcel(file)
-  }
+  if (ext === 'csv') return runInWorker<ParseResult>('csv', buffer)
+  if (ext === 'xlsx' || ext === 'xls') return runInWorker<ParseResult>('xlsx', buffer)
   throw new Error(`Unsupported file type: .${ext}`)
 }
 
@@ -41,47 +55,15 @@ export interface SheetParseResult { name: string; result: ParseResult }
 // that map each sheet to a different target (e.g. Parts / Oil / Additives / Total).
 export async function parseAllSheets(file: File): Promise<SheetParseResult[]> {
   const ext = file.name.split('.').pop()?.toLowerCase()
-  if (ext === 'csv') {
-    return [{ name: 'Sheet1', result: await parseCsv(file) }]
-  } else if (ext === 'xlsx' || ext === 'xls') {
-    const buffer = await readFileAsArrayBuffer(file)
-    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
-    return workbook.SheetNames.map((name) => {
-      const sheet = workbook.Sheets[name]
-      const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true })
-      return { name, result: processRawRows(raw) }
-    })
-  }
+  const buffer = await readFileAsArrayBuffer(file)
+
+  if (ext === 'csv') return [{ name: 'Sheet1', result: await runInWorker<ParseResult>('csv', buffer) }]
+  if (ext === 'xlsx' || ext === 'xls') return runInWorker<SheetParseResult[]>('xlsx-all', buffer)
   throw new Error(`Unsupported file type: .${ext}`)
 }
 
-function parseCsv(file: File): Promise<ParseResult> {
-  return new Promise((resolve, reject) => {
-    Papa.parse(file, {
-      header: false,
-      skipEmptyLines: false,
-      complete: (results) => {
-        try {
-          const raw = results.data as unknown[][]
-          resolve(processRawRows(raw))
-        } catch (e) {
-          reject(e)
-        }
-      },
-      error: reject,
-    })
-  })
-}
-
-async function parseExcel(file: File): Promise<ParseResult> {
-  const buffer = await readFileAsArrayBuffer(file)
-  // cellDates: real JS Dates for date/time cells instead of Excel serial numbers
-  // (a serial like 46186 was being parsed as the year 46186 downstream).
-  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
-  const sheetName = workbook.SheetNames[0]
-  const sheet = workbook.Sheets[sheetName]
-  const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true })
-  return processRawRows(raw)
+function normalizeHeader(h: unknown): string {
+  return String(h ?? '').trim()
 }
 
 // Returns true when every non-empty cell in the row exactly matches its header
@@ -123,7 +105,9 @@ function processRawRows(raw: unknown[][], forcedHeaderIndex?: number): ParseResu
 }
 
 // Re-derive a ParseResult from already-parsed raw rows using a chosen header
-// row — powers the "override the detected header row" control.
+// row — powers the "override the detected header row" control. Runs on the
+// main thread: it operates on data already held in memory (interactive,
+// not the initial heavy parse) and every caller passes a bounded grid.
 export function reprocessRows(allRows: string[][], headerRowIndex: number): ParseResult {
   return processRawRows(allRows, headerRowIndex)
 }
