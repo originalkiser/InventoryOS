@@ -1,11 +1,12 @@
-﻿import { useState } from 'react'
+﻿import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
-import { Button, Input, Modal } from '@/components/ui'
+import { Button, Input, Modal, Select, Combobox } from '@/components/ui'
+import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { GlobalProduct, ColumnMapping } from '@/types'
@@ -13,6 +14,18 @@ import { format } from 'date-fns'
 
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
 const EMPTY = { product_id: '', unit_of_measure: '', order_uom: '', package_type: '', bulk_minimum: '', individual_minimum: '' }
+
+// Fixed set — must match the spellings Orders v2's on-hand conversion
+// actually recognizes (useOrdersV2.ts's quartsPerSourceUnit), so a typo
+// here can no longer silently break that conversion the way "Ounces" vs.
+// an unrecognized variant could with a free-text field.
+const ON_HAND_UNIT_OPTIONS = [
+  { value: '', label: 'Not specified' },
+  { value: 'Quarts', label: 'Quarts' },
+  { value: 'Ounces', label: 'Ounces' },
+  { value: 'Pints', label: 'Pints' },
+  { value: 'Gallons', label: 'Gallons' },
+]
 
 const REQUIRED_FIELDS = [
   { name: 'product_id', label: 'Product ID', required: true },
@@ -32,6 +45,21 @@ export function GlobalProductsTab() {
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [form, setForm] = useState({ ...EMPTY })
+
+  // Order Unit and Package Type vary too much per vendor/product for a fixed
+  // list, but still benefit from suggesting what's already on file instead
+  // of leaving both wide open to a fresh typo every time.
+  const orderUnitOptions: ComboboxOption[] = useMemo(
+    () => [...new Set(data.map((r) => r.order_uom).filter((v): v is string => !!v))]
+      .sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v })),
+    [data],
+  )
+  const packageTypeOptions: ComboboxOption[] = useMemo(
+    () => [...new Set(data.map((r) => r.package_type).filter((v): v is string => !!v))]
+      .sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v })),
+    [data],
+  )
+  const createFreeText = (v: string): ComboboxOption => ({ value: v, label: v })
 
   const COLUMNS = [
     col.accessor('product_id', { header: 'Product ID' }),
@@ -103,9 +131,11 @@ export function GlobalProductsTab() {
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
             <Input label="Product ID *" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} />
-            <Input label="On-Hand Unit" value={form.unit_of_measure} onChange={(e) => setForm({ ...form, unit_of_measure: e.target.value })} />
-            <Input label="Order Unit" value={form.order_uom} onChange={(e) => setForm({ ...form, order_uom: e.target.value })} />
-            <Input label="Package Type" value={form.package_type} onChange={(e) => setForm({ ...form, package_type: e.target.value })} />
+            <Select label="On-Hand Unit" options={ON_HAND_UNIT_OPTIONS} value={form.unit_of_measure} onChange={(e) => setForm({ ...form, unit_of_measure: e.target.value })} />
+            <Combobox label="Order Unit" options={orderUnitOptions} value={form.order_uom} onChange={(v) => setForm({ ...form, order_uom: v })}
+              placeholder="Select or type…" allowCreate onCreateOption={createFreeText} />
+            <Combobox label="Package Type" options={packageTypeOptions} value={form.package_type} onChange={(v) => setForm({ ...form, package_type: v })}
+              placeholder="Select or type…" allowCreate onCreateOption={createFreeText} />
             <Input label="Bulk Minimum" value={form.bulk_minimum} onChange={(e) => setForm({ ...form, bulk_minimum: e.target.value })} />
             <Input label="Individual Minimum" value={form.individual_minimum} onChange={(e) => setForm({ ...form, individual_minimum: e.target.value })} />
           </div>
