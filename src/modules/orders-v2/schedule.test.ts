@@ -372,4 +372,10 @@ describe('on-hand unit conversion', () => {
       [cfg('HM0806')], [], [use('HM0806', 320, 32)], maps, [], [], [gp('OLDID', 'oz')])
     expect(i.on_hand).toBeCloseTo(10, 6)
   })
+
+  it.each(['OZ', 'Oz.', 'ounce', 'Ounces', 'fl oz', 'fluid ounces'])(
+    'recognizes %j as ounces, not just an exact "oz" match', (unit) => {
+      const [i] = buildGenerationInputs([cfg('HM0806')], [], [use('HM0806', 320, 32)], [], [], [], [gp('HM0806', unit)])
+      expect(i.on_hand).toBeCloseTo(10, 6)
+    })
 })

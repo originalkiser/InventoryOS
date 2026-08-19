@@ -480,11 +480,20 @@ export function buildGenerationInputs(
   // deficit math downstream assumes quarts throughout. global_products'
   // "on-hand UOM" declares the real source unit per product; anything not
   // listed here, or already quarts, passes through unchanged.
-  const QUARTS_PER_SOURCE_UNIT: Record<string, number> = {
-    quart: 1, quarts: 1, qt: 1, qts: 1,
-    ounce: 1 / 32, ounces: 1 / 32, oz: 1 / 32,
-    pint: 0.5, pints: 0.5, pt: 0.5,
-    gallon: 4, gallons: 4, gal: 4,
+  //
+  // Ounces get a substring match (any spelling containing "oz" or "ounce" —
+  // "oz", "Oz.", "fl oz", "fluid ounces", ...) rather than requiring one
+  // exact string, since how it got typed into Global Products varies and a
+  // near-miss here means the conversion silently never applies. Quart/pint/
+  // gallon stay exact-match: those abbreviations are short enough that a
+  // substring match risks false positives.
+  const quartsPerSourceUnit = (raw: string): number => {
+    const u = pkey(raw).replace(/\./g, '')
+    if (['quart', 'quarts', 'qt', 'qts'].includes(u)) return 1
+    if (['pint', 'pints', 'pt'].includes(u)) return 0.5
+    if (['gallon', 'gallons', 'gal'].includes(u)) return 4
+    if (u.includes('oz') || u.includes('ounce')) return 1 / 32
+    return 1
   }
   // Resolved the same direction as usage above: global_products may still
   // carry a retired id, so each row is forward-mapped to its canonical id
@@ -498,8 +507,7 @@ export function buildGenerationInputs(
   }
   const quartsFromSourceUnit = (productId: string): number => {
     const unit = sourceUnitMap.get(pkey(productId))
-    if (!unit) return 1
-    return QUARTS_PER_SOURCE_UNIT[pkey(unit)] ?? 1
+    return unit ? quartsPerSourceUnit(unit) : 1
   }
 
   return configs.map((c) => {
