@@ -35,7 +35,7 @@ export function PosLocationMapTab() {
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:pos-location-map' })
 
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: PosLocationMap) { setEditId(r.id); setForm({ pos_string: r.pos_string ?? '', locationId: r.location_id ?? '' }); setAddOpen(true) }

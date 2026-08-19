@@ -73,7 +73,7 @@ export function TankMonitorTab() {
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as TankMonitor)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:tank-monitor' })
 
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: TankMonitor) {

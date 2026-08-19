@@ -79,7 +79,7 @@ export function CategoryExpectationsTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:category-expectations' })
 
   const uploadFields = [
     { name: 'category', label: 'Category', required: true },

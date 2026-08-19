@@ -147,7 +147,7 @@ export function EndingBalancesTab() {
     return cols
   }, [categories, loc])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:ending-balances' })
 
   const uploadFields = [
     { name: 'location', label: 'Location', required: true },

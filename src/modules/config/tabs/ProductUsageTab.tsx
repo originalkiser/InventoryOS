@@ -387,7 +387,7 @@ export function ProductUsageTab() {
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductUsage)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(displayData, columns)
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(displayData, columns, { persistKey: 'config:product-usage' })
   useColumnPrefs('inventory.product_usage', table, columnVisibility, columnOrder, setColumnOrder)
 
   const colLabel = (c: ReturnType<typeof table.getAllLeafColumns>[number]) =>

@@ -15,12 +15,25 @@ import { ProductMappingTab } from './tabs/ProductMappingTab'
 import { GlobalProductsTab } from './tabs/GlobalProductsTab'
 
 const CONFIG_TABS = ['uom-mappings', 'vendor-parts', 'order-config', 'product-mapping', 'global-products', 'product-usage', 'tank-monitor', 'ending-balances', 'category-simplification', 'category-expectations', 'location-cpd']
+const LAST_TAB_KEY = 'config:lastTab'
 
 export function ConfigPage() {
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const [searchParams] = useSearchParams()
-  const initialTab = CONFIG_TABS.includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'uom-mappings'
+  // An explicit ?tab= wins (deep links elsewhere in the app navigate this
+  // way); otherwise fall back to whichever sheet was open last time, so
+  // leaving Config and coming back — e.g. via the sidebar — doesn't always
+  // land back on UoM Conversions.
+  const urlTab = searchParams.get('tab')
+  const lastTab = (() => { try { return localStorage.getItem(LAST_TAB_KEY) } catch { return null } })()
+  const initialTab = CONFIG_TABS.includes(urlTab ?? '') ? urlTab!
+    : CONFIG_TABS.includes(lastTab ?? '') ? lastTab!
+    : 'uom-mappings'
+
+  function rememberTab(v: string) {
+    try { localStorage.setItem(LAST_TAB_KEY, v) } catch { /* ignore */ }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -41,7 +54,7 @@ export function ConfigPage() {
         </div>
       )}
 
-      <Tabs defaultValue={initialTab}>
+      <Tabs defaultValue={initialTab} onValueChange={rememberTab}>
         <TabsList>
           <TabsTrigger value="uom-mappings">UoM Conversions</TabsTrigger>
           <TabsTrigger value="vendor-parts">Vendor Parts</TabsTrigger>

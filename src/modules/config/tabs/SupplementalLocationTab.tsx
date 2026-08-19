@@ -51,7 +51,7 @@ export function SupplementalLocationTab() {
     },
   ], [dataKeys, loc, remove])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:supplemental-location' })
 
   async function doImport(mode: ImportMode) {
     if (!parsed || !locCol) return

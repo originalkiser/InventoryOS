@@ -689,6 +689,7 @@ export function LocationsTab() {
 
   const { table, globalFilter, setGlobalFilter } = useTable(filteredData, columns, {
     initialSorting: [{ id: 'name', desc: false }],
+    persistKey: 'config:locations',
   })
 
   // ── Save helpers ────────────────────────────────────────────────────────────

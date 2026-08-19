@@ -95,7 +95,7 @@ export function CategorySimplificationTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [update])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:category-simplification' })
 
   const uploadFields = [
     { name: 'category', label: 'Category', required: true },

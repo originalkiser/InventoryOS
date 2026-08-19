@@ -73,7 +73,7 @@ export function LocationCpdTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [loc])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:location-cpd' })
 
   const uploadFields = [
     { name: 'location', label: 'Location', required: true },

@@ -117,7 +117,7 @@ export function VendorPartsTab() {
     return cols
   }, [customFields, vendorMap])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:vendor-parts' })
 
   const uploadFields = [
     { name: 'part_number', label: 'Vendor Part #', required: true },

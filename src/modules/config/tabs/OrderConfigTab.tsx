@@ -89,7 +89,7 @@ export function OrderConfigTab() {
     return cols
   }, [customFields, loc, vendors])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:order-config' })
 
   // All uploaded products are treated as active; set Order Limit to 0 to make a
   // product inactive. UoM is captured (used by UoM conversions).

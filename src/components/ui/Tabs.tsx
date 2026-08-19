@@ -9,12 +9,14 @@ const TabsContext = createContext<TabsContextValue>({ active: '', setActive: () 
 
 interface TabsProps {
   defaultValue: string
+  onValueChange?: (v: string) => void
   children: React.ReactNode
   className?: string
 }
 
-export function Tabs({ defaultValue, children, className = '' }: TabsProps) {
-  const [active, setActive] = useState(defaultValue)
+export function Tabs({ defaultValue, onValueChange, children, className = '' }: TabsProps) {
+  const [active, setActiveState] = useState(defaultValue)
+  const setActive = (v: string) => { setActiveState(v); onValueChange?.(v) }
   return (
     <TabsContext.Provider value={{ active, setActive }}>
       <div className={className}>{children}</div>
