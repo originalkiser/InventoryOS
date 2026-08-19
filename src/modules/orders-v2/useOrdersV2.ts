@@ -251,7 +251,7 @@ export function useDraft(draftId: string | null) {
       unit_cost: numOr(l.unit_cost, null), on_hand: numOr(l.on_hand, null), daily_usage: numOr(l.daily_usage, null),
       dos_before: numOr(l.dos_before, null), dos_after: numOr(l.dos_after, null),
       dos_after_delivery: numOr(l.dos_after_delivery, null),
-      max_capacity_gallons: numOr(l.max_capacity_gallons, null), flags: l.flags,
+      max_capacity_gallons: numOr(l.max_capacity_gallons, null), quarts_per_unit: numOr(l.quarts_per_unit, null), flags: l.flags,
       added_by_smoothing: l.added_by_smoothing, triggered_smoothing: l.triggered_smoothing,
     }))
     const CHUNK = 500
@@ -306,6 +306,8 @@ export function useDraft(draftId: string | null) {
 
 export interface OrderConfigRow { location_id: string; product_id: string; vendor_id: string | null; capacity: number | null; metadata: Record<string, unknown> | null }
 export interface UsageRow { location_id: string; product_id: string; on_hands: number | null; daily_usage: number | null }
+export interface VendorPartRow { vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null }
+export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number }
 // Derived from core.locations.reladyne_delivery_day rather than a table of
 // its own — the location list is already the source of truth for it.
 export interface VendorDayRow { location_id: string; order_dow: number | null; delivery_dow: number | null }
@@ -320,16 +322,21 @@ export function useGenerationData() {
   const companyId = profile?.company_id ?? null
 
   const fetchInputs = useCallback(async (vendorId: string | null, lookbackDays: number) => {
-    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
+    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const [configs, rules, usage, productMappings, locRows, schedRows, calRows, history] = await Promise.all([
+    const [configs, rules, usage, productMappings, vendorParts, uomMappings, locRows, schedRows, calRows, history] = await Promise.all([
       fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
       fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId),
       fetchAll<any>('inventory', 'product_id_mappings', 'old_product_id, new_product_id', companyId),
+      // Cost + package size come from here, not from ov2_product_rules (that
+      // table has no editing UI and is empty in practice) — see
+      // resolveVendorPart below.
+      fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata', companyId),
+      fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor', companyId),
       fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
       fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
@@ -375,7 +382,7 @@ export function useGenerationData() {
       (calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']),
     )
 
-    return { configs, rules, usage, productMappings, days, schedules, calendar, history: historyFacts }
+    return { configs, rules, usage, productMappings, vendorParts, uomMappings, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
   return { fetchInputs }
@@ -385,6 +392,7 @@ export function useGenerationData() {
 export function buildGenerationInputs(
   configs: OrderConfigRow[], rules: (ProductRule & { id?: string })[], usage: UsageRow[],
   productMappings: { old_product_id: string | null; new_product_id: string | null }[] = [],
+  vendorParts: VendorPartRow[] = [], uomMappings: UomMappingRow[] = [],
 ) {
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
@@ -413,6 +421,35 @@ export function buildGenerationInputs(
     })
   }
 
+  // Package size + cost come from vendor_parts (matched vendor + our part
+  // number, resolved through the same product_id_mappings as usage above —
+  // both can lag behind the config's canonical id), not from
+  // ov2_product_rules: that table has no editing UI and is empty in
+  // practice. "Quarts per package" prefers the vendor-scoped UOM
+  // Conversions table; when a UOM has no mapping yet, package_qty_gallons
+  // × 4 is used as a fallback so a product isn't left fully unresolved
+  // just because nobody's filled in the UOM table for it yet.
+  const vendorPartMap = new Map<string, VendorPartRow>()
+  for (const vp of vendorParts) {
+    if (!vp.our_part_number) continue
+    vendorPartMap.set(`${vp.vendor_id ?? ''}|${pkey(vp.our_part_number)}`, vp)
+  }
+  const QUART_NAMES = new Set(['quart', 'quarts', 'qt', 'qts'])
+  const uomQuartsMap = new Map<string, number>()
+  for (const m of uomMappings) {
+    if (!QUART_NAMES.has(pkey(m.to_unit)) || !(Number(m.factor) > 0)) continue
+    uomQuartsMap.set(`${m.vendor_id ?? ''}|${pkey(m.from_unit)}`, Number(m.factor))
+  }
+  const quartsForUom = (vendorId: string | null, uomName: string | null | undefined) => {
+    const u = pkey(uomName)
+    if (!u) return undefined
+    return uomQuartsMap.get(`${vendorId ?? ''}|${u}`) ?? uomQuartsMap.get(`|${u}`)
+  }
+  const resolveVendorPart = (vendorId: string | null, productId: string) => {
+    const resolved = oldToNew.get(pkey(productId)) ?? productId
+    return vendorPartMap.get(`${vendorId ?? ''}|${pkey(resolved)}`)
+  }
+
   return configs.map((c) => {
     const k = ruleKey(c.location_id, c.product_id)
     const r = ruleMap.get(k)
@@ -424,11 +461,31 @@ export function buildGenerationInputs(
       // has been set up yet, so a shop is usable before it's fully configured.
       uom: String(meta.uom ?? '').toLowerCase().replace(/\s+/g, '_') || null,
       units_per_uom_gallons: null, unit_cost: null,
-      max_capacity_gallons: c.capacity ?? null,
+      max_capacity_gallons: null,
       vmi_keepfill_enabled: String(meta.vmi ?? '').trim().toLowerCase() === 'yes',
       can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true,
       default_order_amount_if_alone: 2, include_in_total_shop_order: true,
     }
+
+    // Fill in whatever an explicit ov2_product_rules override (if any)
+    // left unset — vendor_parts for package size/cost, the config's own
+    // capacity (converted gallons -> quarts, the one place that
+    // conversion happens) for the cap.
+    const vp = resolveVendorPart(c.vendor_id, c.product_id)
+    if (rule.units_per_uom_gallons == null && vp) {
+      const uomFactor = quartsForUom(vp.vendor_id ?? c.vendor_id, vp.unit_of_measure)
+      const galQty = Number((vp.metadata as any)?.package_qty_gallons)
+      rule.units_per_uom_gallons = uomFactor ?? (galQty > 0 ? galQty * 4 : null)
+    }
+    if (rule.unit_cost == null && vp) {
+      const galQty = Number((vp.metadata as any)?.package_qty_gallons)
+      const perGal = Number((vp.metadata as any)?.price_per_gallon)
+      rule.unit_cost = galQty > 0 && perGal > 0 ? galQty * perGal : null
+    }
+    if (rule.max_capacity_gallons == null && c.capacity != null) {
+      rule.max_capacity_gallons = Number(c.capacity) * 4
+    }
+
     return {
       location_id: c.location_id, product_id: c.product_id, rule,
       on_hand: u?.on_hands ?? null, daily_usage: u?.daily_usage ?? null,

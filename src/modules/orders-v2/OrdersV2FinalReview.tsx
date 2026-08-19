@@ -182,7 +182,10 @@ export function OrdersV2FinalReview() {
                 </td>
                 <td className="px-2 py-1 text-navy">{l.product_id}</td>
                 <td className="px-2 py-1 text-navy">{l.uom ?? '—'}</td>
-                <td className={`px-2 py-1 text-right text-navy ${l.is_override ? OVERRIDE_CELL : ''}`}>{num(l.qty)}</td>
+                <td className={`px-2 py-1 text-right text-navy ${l.is_override ? OVERRIDE_CELL : ''}`}>
+                  {num(l.qty)}
+                  {l.quarts_per_unit != null && <span className="text-inky/50"> ({num(Number(l.qty) * l.quarts_per_unit, 1)} qt)</span>}
+                </td>
                 <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>
                 <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after_delivery)}</td>
                 <td className="px-2 py-1 text-right text-navy">{money(Number(l.qty) * Number(l.unit_cost ?? 0))}</td>
@@ -212,6 +215,9 @@ export function OrdersV2FinalReview() {
                         <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
                           onChange={(e) => patchLine(l.id, { qty: Number(e.target.value) || 0 })}
                           className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+                        {l.quarts_per_unit != null && (
+                          <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
+                        )}
                       </td>
                       <td className="px-2 py-1 text-right text-navy">{money(Number(l.qty) * Number(l.unit_cost ?? 0))}</td>
                       <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>

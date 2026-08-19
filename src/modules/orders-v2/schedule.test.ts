@@ -247,3 +247,74 @@ describe('on-hand resolution', () => {
     expect(out[0].product_id).toBe('5W20')
   })
 })
+
+// ── package size / cost resolution through vendor parts ─────────────────
+
+const vp = (over: Partial<{ vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> }> = {}) => ({
+  vendor_id: 'V1', our_part_number: '5W20', unit_of_measure: null, metadata: {}, ...over,
+})
+const uomRow = (over: Partial<{ vendor_id: string | null; from_unit: string; to_unit: string; factor: number }> = {}) => ({
+  vendor_id: null, from_unit: '', to_unit: 'Quarts', factor: 1, ...over,
+})
+
+describe('package size / cost resolution', () => {
+  it('resolves quarts-per-package from the vendor-scoped UOM table', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ unit_of_measure: 'Drum' })], [uomRow({ vendor_id: 'V1', from_unit: 'Drum', factor: 55 })])
+    expect(i.rule.units_per_uom_gallons).toBe(55)
+  })
+
+  it('a global (no vendor) UOM mapping applies to any vendor', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ unit_of_measure: 'Bay Box' })], [uomRow({ vendor_id: null, from_unit: 'Bay Box', factor: 12 })])
+    expect(i.rule.units_per_uom_gallons).toBe(12)
+  })
+
+  it('a vendor part is only matched against its own vendor', () => {
+    // cfg() configures shop L1 for vendor V1; the part is filed under V2, so
+    // the vendor_parts join itself finds nothing for this shop.
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ vendor_id: 'V2', unit_of_measure: 'Drum' })],
+      [uomRow({ vendor_id: 'V1', from_unit: 'Drum', factor: 55 })])
+    expect(i.rule.units_per_uom_gallons).toBeNull()
+  })
+
+  it('a vendor-specific UOM mapping does not apply to a different vendor', () => {
+    // The part matches (both V1), but the only Drum mapping on file is V2's.
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ vendor_id: 'V1', unit_of_measure: 'Drum' })],
+      [uomRow({ vendor_id: 'V2', from_unit: 'Drum', factor: 55 })])
+    expect(i.rule.units_per_uom_gallons).toBeNull()
+  })
+
+  it('falls back to package_qty_gallons x 4 when the UOM has no mapping yet', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ unit_of_measure: 'Drum', metadata: { package_qty_gallons: 55 } })], [])
+    expect(i.rule.units_per_uom_gallons).toBe(220)
+  })
+
+  it('derives unit cost as package_qty_gallons x price_per_gallon', () => {
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [], [], [], [vp({ metadata: { package_qty_gallons: 55, price_per_gallon: 3 } })], [])
+    expect(i.rule.unit_cost).toBe(165)
+  })
+
+  it('an explicit ov2_product_rules value wins over anything derived', () => {
+    const rule = { location_id: 'L1', product_id: '5W20', uom: 'drum', units_per_uom_gallons: 40, unit_cost: 200, max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2, include_in_total_shop_order: true }
+    const [i] = buildGenerationInputs(
+      [cfg('5W20')], [rule], [], [], [vp({ metadata: { package_qty_gallons: 55, price_per_gallon: 3 } })], [])
+    expect(i.rule.units_per_uom_gallons).toBe(40)
+    expect(i.rule.unit_cost).toBe(200)
+  })
+
+  it('converts the config capacity from gallons to quarts', () => {
+    const [i] = buildGenerationInputs([{ ...cfg('5W20'), capacity: 40 }], [], [], [], [], [])
+    expect(i.rule.max_capacity_gallons).toBe(160)
+  })
+
+  it('leaves package size/cost null when no vendor part matches at all', () => {
+    const [i] = buildGenerationInputs([cfg('NOPART')], [], [], [], [vp()], [])
+    expect(i.rule.units_per_uom_gallons).toBeNull()
+    expect(i.rule.unit_cost).toBeNull()
+  })
+})

@@ -55,8 +55,8 @@ export function OrdersV2Review() {
     const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
     try {
-      const { configs, rules, usage, productMappings, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
-      const inputs = buildGenerationInputs(configs, rules, usage, productMappings)
+      const { configs, rules, usage, productMappings, vendorParts, uomMappings, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
+      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings)
       const result = generateOrder(inputs, {
         settings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
@@ -271,6 +271,9 @@ export function OrdersV2Review() {
                       <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
                         onChange={(e) => patchLine(l.id, { qty: Number(e.target.value) || 0 })}
                         className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+                      {l.quarts_per_unit != null && (
+                        <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
+                      )}
                     </td>
                     <Td align="right">{dos(l.dos_after)}</Td>
                     <Td align="right">{dos(l.dos_after_delivery)}</Td>

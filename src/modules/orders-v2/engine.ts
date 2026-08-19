@@ -5,6 +5,15 @@
 // the whole thing is directly testable and a draft can be regenerated
 // identically from its stored snapshot.
 //
+// Unit convention: every volume figure in here (on_hand, daily_usage,
+// units_per_uom_gallons, max_capacity_gallons) must arrive already
+// expressed in the SAME unit — QUARTS, matching inventory.product_usage.
+// The "gallons" in these names is historical; the engine itself never
+// hardcodes a real-world gallon/quart conversion, it only requires
+// internal consistency. See buildGenerationInputs in useOrdersV2.ts for
+// where real gallon figures (vendor capacity, package sizes) get
+// converted to quarts before reaching here.
+//
 // Shape of a run:
 //   Pass 1  fill each eligible product toward the DOS target, bounded by
 //           dos_max (soft) and max_capacity_gallons (hard).
@@ -32,7 +41,7 @@ export function daysOfSupply(onHand: number | null, dailyUsage: number | null): 
   return n(onHand) / u
 }
 
-/** Gallons in one orderable unit; defaults to 1 so a missing size can't zero out an order. */
+/** Quarts in one orderable unit; defaults to 1 so a missing size can't zero out an order. */
 export const gallonsPerUnit = (rule: ProductRule): number => {
   const g = n(rule.units_per_uom_gallons)
   return g > 0 ? g : 1
@@ -256,6 +265,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
     system_qty: units,
     qty: units,
     unit_cost: rule.unit_cost,
+    quarts_per_unit: per,
     on_hand: input.on_hand,
     daily_usage: input.daily_usage,
     dos_before: daysOfSupply(input.on_hand, input.daily_usage),

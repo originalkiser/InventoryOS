@@ -238,6 +238,7 @@ export interface IssueCustomValue {
 export interface UomMapping {
   id: string
   company_id: string
+  vendor_id: string | null
   from_unit: string
   to_unit: string
   factor: number
@@ -449,6 +450,17 @@ export interface VendorPart {
   metadata: Json | null
   created_at: string
   updated_at: string
+}
+
+export interface VendorPartPriceHistory {
+  id: string
+  company_id: string
+  vendor_part_id: string
+  price_per_gallon: number | null
+  price_per_package: number | null
+  source: 'manual' | 'upload'
+  changed_by: string | null
+  changed_at: string
 }
 
 export interface ProductIdMapping {

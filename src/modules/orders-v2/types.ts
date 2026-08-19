@@ -72,8 +72,16 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   bulk_rounding_decimals: 0,
 }
 
-// Per shop x product ordering rules (inventory.ov2_product_rules), joined
-// with the shop's order config + current usage before generation.
+// Per shop x product ordering rules. Named fields say "gallons" for
+// historical reasons, but the volume unit the engine actually works in is
+// QUARTS (matching on_hand/daily_usage from inventory.product_usage) —
+// units_per_uom_gallons is really "quarts per package" and
+// max_capacity_gallons is really "capacity in quarts". See buildGenerationInputs
+// in useOrdersV2.ts, the one place that converts real gallon figures
+// (vendor_parts.package_qty_gallons, location_order_config.capacity) into
+// quarts before they reach here — inventory.ov2_product_rules is a manual
+// per-shop override layer on top of that and, if ever populated through a
+// future UI, should be entered in quarts too so this stays consistent.
 export interface ProductRule {
   location_id: string
   product_id: string
@@ -93,8 +101,8 @@ export interface GenerationInput {
   location_id: string
   product_id: string
   rule: ProductRule
-  on_hand: number | null        // in gallons
-  daily_usage: number | null    // gallons/day
+  on_hand: number | null        // in quarts
+  daily_usage: number | null    // quarts/day
 }
 
 // How a shop's delivery date is worked out for a vendor.
@@ -159,6 +167,12 @@ export interface GeneratedLine {
   dos_before: number | null
   dos_after: number | null
   max_capacity_gallons: number | null
+  // The conversion factor actually used to turn this qty into a volume
+  // (see gallonsPerUnit in engine.ts — despite the name, the volume unit
+  // is quarts; see the top-of-file note there). Snapshotted so review,
+  // export, and history can show "qty ordered, in quarts" without
+  // re-deriving it from a rule that may since have changed.
+  quarts_per_unit: number | null
   included: boolean
   flags: LineFlag[]
   added_by_smoothing: boolean

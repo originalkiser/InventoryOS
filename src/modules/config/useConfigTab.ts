@@ -144,17 +144,19 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     return { ...row, company_id: profile!.company_id, updated_by: profile!.id ?? null, last_change_source: source }
   }
 
-  async function insert(row: Partial<T> & { company_id?: string }) {
-    if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
+  async function insert(row: Partial<T> & { company_id?: string }): Promise<boolean> {
+    if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return false }
     const { error } = await tbl().insert(stamp(row as Record<string, unknown>, 'manual'))
-    if (error) toast.error(error.message)
-    else { toast.success('Saved'); invalidate(); await load() }
+    if (error) { toast.error(error.message); return false }
+    toast.success('Saved'); invalidate(); await load()
+    return true
   }
 
-  async function update(id: string, patch: Partial<T>) {
+  async function update(id: string, patch: Partial<T>): Promise<boolean> {
     const { error } = await tbl().update(stamp(patch as Record<string, unknown>, 'manual')).eq('id', id)
-    if (error) toast.error(error.message)
-    else { toast.success('Updated'); invalidate(); await load() }
+    if (error) { toast.error(error.message); return false }
+    toast.success('Updated'); invalidate(); await load()
+    return true
   }
 
   // Back-compat: append upsert (no key matching). Prefer importRows.
@@ -167,8 +169,11 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
   }
 
   // Merge (match existing by natural key, update or insert) or replace-all.
-  async function importRows(rows: Partial<T>[], opts: ImportOptions<T>) {
-    if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return }
+  // Returns whether the write actually happened, so a caller with a
+  // side-effect that must stay in sync (e.g. price history) can gate on it
+  // instead of firing regardless of a cancelled confirm or a failed write.
+  async function importRows(rows: Partial<T>[], opts: ImportOptions<T>): Promise<boolean> {
+    if (!profile?.company_id) { toast.error('No workspace linked yet — try refreshing the page'); return false }
     const source = opts.source ?? 'upload'
     // Review step — shows what will be updated vs newly created before any
     // write happens, so a mis-mapped key column doesn't quietly insert a
@@ -182,15 +187,15 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
           mode: 'replace', total: rows.length, updates: 0, creates: rows.length,
           deletes: data.length, newRows: rows.map(labelFor),
         })
-        if (!ok) return
+        if (!ok) return false
       }
       const { error: delErr } = await tbl().delete().eq('company_id', profile.company_id)
-      if (delErr) { toast.error(delErr.message); return }
+      if (delErr) { toast.error(delErr.message); return false }
       const error = await writeInBatches(rows.map((r) => stamp(r as Record<string, unknown>, source)), 'insert')
-      if (error) { toast.error(error.message); return }
+      if (error) { toast.error(error.message); return false }
       toast.success(`Replaced with ${rows.length.toLocaleString()} rows`)
       invalidate(); load().catch(() => {})
-      return
+      return true
     }
 
     // merge — attach existing id to matching rows so upsert updates them in place
@@ -226,7 +231,7 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
         mode: 'merge', total: rows.length, updates: matched,
         creates: rows.length - matched, deletes: 0, newRows: newLabels,
       })
-      if (!ok) return
+      if (!ok) return false
     }
     // Collapse duplicate ids (two incoming rows mapping to the same existing row)
     // — otherwise Postgres errors "ON CONFLICT DO UPDATE cannot affect row a
@@ -235,7 +240,7 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     for (const p of payload) byIdMerge.set(String((p as any).id), p)
     const dedupedPayload = [...byIdMerge.values()]
     const error = await writeInBatches(dedupedPayload, 'upsert')
-    if (error) { toast.error(error.message); return }
+    if (error) { toast.error(error.message); return false }
     // Remove now-redundant duplicate rows that shared a natural key (opt-in).
     if (opts.dedupeExisting && dupeIds.length) {
       const CHUNK = 200
@@ -248,6 +253,7 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     const extra = dupeIds.length ? `, ${dupeIds.length.toLocaleString()} duplicates removed` : ''
     toast.success(`Imported ${rows.length.toLocaleString()} rows (${matched.toLocaleString()} updated, ${created.toLocaleString()} new${extra})`)
     invalidate(); load().catch(() => {})
+    return true
   }
 
   async function remove(id: string) {

@@ -13,7 +13,7 @@ import { Button, Input, Modal, Combobox } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
-import type { VendorPart, Vendor, ColumnMapping } from '@/types'
+import type { VendorPart, Vendor, VendorPartPriceHistory, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -59,6 +59,7 @@ export function VendorPartsTab() {
   const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [historyFor, setHistoryFor] = useState<VendorPart | null>(null)
 
   const [form, setForm] = useState({ vendorId: '', part_number: '', our_part_number: '', description: '', item_category: '', unit_of_measure: '', package_type: '', package_qty_gallons: '', price_per_gallon: '', base_item: '', bulk_minimum: '', individual_minimum: '' })
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
@@ -85,6 +86,14 @@ export function VendorPartsTab() {
     return { value: v.id, label: v.name }
   }
 
+  async function recordPriceHistory(
+    entries: { vendor_part_id: string; price_per_gallon: number | null; price_per_package: number | null; source: 'manual' | 'upload' }[],
+  ) {
+    if (!entries.length || !companyId) return
+    const rows = entries.map((e) => ({ ...e, company_id: companyId, changed_by: profile?.id ?? null }))
+    await (supabase as any).schema('inventory').from('vendor_part_price_history').insert(rows)
+  }
+
   const columns = useMemo(() => {
     const cols: any[] = [
       { id: 'vendor', header: 'Vendor', accessorFn: (r: VendorPart) => vendorName(r.vendor_id), cell: (i: any) => vendorName((i.row.original as VendorPart).vendor_id) },
@@ -103,6 +112,7 @@ export function VendorPartsTab() {
     ]
     for (const f of customFields) cols.push({ id: `cf_${f.field_key}`, header: f.label, accessorFn: (r: VendorPart) => (r.metadata as any)?.[f.field_key] ?? '', cell: (i: any) => i.getValue() || '—' })
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
+    cols.push({ id: 'history', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => setHistoryFor(i.row.original as VendorPart)} className="text-xs font-mono text-inky hover:underline">History</button> })
     cols.push({ id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as VendorPart)} className="text-xs font-mono text-inky hover:underline">Edit</button> })
     return cols
   }, [customFields, vendorMap])
@@ -143,7 +153,29 @@ export function VendorPartsTab() {
     }).filter((r: any) => r.part_number)
     // Per-vendor stacking: match on vendor + part number, so re-uploading a
     // vendor's file updates its parts and leaves other vendors untouched.
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.vendor_id ?? ''}|${r.part_number}`, labelOf: (r: any) => String(r.part_number ?? '') })
+    const keyOf = (r: any) => `${r.vendor_id ?? ''}|${r.part_number}`
+
+    // Snapshot which rows are about to get a new price, matched the same way
+    // importRows resolves existing rows — before the write, `data` still
+    // holds the old prices. Skipped for a full replace: old rows (and their
+    // ids) are gone, so there's nothing to attach history to.
+    const existingByKey = new Map<string, VendorPart>()
+    for (const d of data) existingByKey.set(keyOf(d), d)
+    const priceChanges = mode === 'replace' ? [] : payload.flatMap((p: any) => {
+      const existing = existingByKey.get(keyOf(p))
+      if (!existing) return []
+      const pg = Number(p.metadata?.price_per_gallon)
+      const oldPg = Number((existing.metadata as any)?.price_per_gallon)
+      if (!Number.isFinite(pg) || pg === oldPg) return []
+      const g = Number(p.metadata?.package_qty_gallons ?? (existing.metadata as any)?.package_qty_gallons)
+      return [{
+        vendor_part_id: existing.id, price_per_gallon: pg,
+        price_per_package: g > 0 ? g * pg : null, source: 'upload' as const,
+      }]
+    })
+
+    const ok = await importRows(payload, { mode, source: 'upload', keyOf, labelOf: (r: any) => String(r.part_number ?? '') })
+    if (ok) await recordPriceHistory(priceChanges)
     setImporting(false)
   }
 
@@ -186,8 +218,20 @@ export function VendorPartsTab() {
       individual_minimum: num(form.individual_minimum),
       metadata: meta,
     } as Partial<VendorPart>
-    if (editId) await update(editId, payload)
-    else await insert(payload)
+    if (editId) {
+      const before = data.find((r) => r.id === editId)
+      const oldPg = Number((before?.metadata as any)?.price_per_gallon)
+      const ok = await update(editId, payload)
+      if (ok && meta.price_per_gallon != null && Number(meta.price_per_gallon) !== oldPg) {
+        const g = Number(meta.package_qty_gallons)
+        await recordPriceHistory([{
+          vendor_part_id: editId, price_per_gallon: Number(meta.price_per_gallon),
+          price_per_package: g > 0 ? g * Number(meta.price_per_gallon) : null, source: 'manual',
+        }])
+      }
+    } else {
+      await insert(payload)
+    }
     resetForm(); setAddOpen(false); setEditId(null)
   }
 
@@ -254,6 +298,70 @@ export function VendorPartsTab() {
       <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Vendor Part Columns" size="lg">
         <CustomFieldsEditor section="vendor_parts" />
       </Modal>
+
+      <PriceHistoryModal part={historyFor} onClose={() => setHistoryFor(null)} />
     </div>
+  )
+}
+
+function PriceHistoryModal({ part, onClose }: { part: VendorPart | null; onClose: () => void }) {
+  const [rows, setRows] = useState<VendorPartPriceHistory[]>([])
+  const [names, setNames] = useState<Map<string, string>>(new Map())
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!part) return
+    let cancelled = false
+    setLoading(true)
+    ;(supabase as any).schema('inventory').from('vendor_part_price_history')
+      .select('*').eq('vendor_part_id', part.id).order('changed_at', { ascending: false })
+      .then(async ({ data: hist }: any) => {
+        if (cancelled) return
+        const list = (hist ?? []) as VendorPartPriceHistory[]
+        setRows(list)
+        const ids = [...new Set(list.map((r) => r.changed_by).filter(Boolean))] as string[]
+        if (ids.length) {
+          const { data: users } = await (supabase as any).schema('platform').from('user_profiles')
+            .select('id, full_name').in('id', ids)
+          if (!cancelled) setNames(new Map((users ?? []).map((u: any) => [u.id, u.full_name ?? '—'])))
+        }
+        setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [part])
+
+  return (
+    <Modal open={!!part} onClose={onClose} title={part ? `Price History — ${part.part_number}` : ''}>
+      <div className="flex flex-col gap-2">
+        {loading ? (
+          <p className="text-xs font-mono text-inky/60 py-4">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-xs font-mono text-inky/60 py-4">No price changes recorded yet — history starts from the next edit or upload that changes Price / Gal.</p>
+        ) : (
+          <div className="overflow-auto max-h-96 rounded border border-navy/20">
+            <table className="w-full text-xs font-mono">
+              <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
+                <th className="text-left px-2 py-1">Date</th>
+                <th className="text-right px-2 py-1">Price / Gal</th>
+                <th className="text-right px-2 py-1">Price / Package</th>
+                <th className="text-left px-2 py-1">Source</th>
+                <th className="text-left px-2 py-1">By</th>
+              </tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-b border-navy/10">
+                    <td className="px-2 py-1 text-navy">{format(new Date(r.changed_at), 'MMM d, yyyy h:mm a')}</td>
+                    <td className="px-2 py-1 text-right text-navy">{fmtMoney(r.price_per_gallon)}</td>
+                    <td className="px-2 py-1 text-right text-navy">{fmtMoney(r.price_per_package)}</td>
+                    <td className="px-2 py-1 text-navy capitalize">{r.source}</td>
+                    <td className="px-2 py-1 text-navy">{r.changed_by ? (names.get(r.changed_by) ?? '—') : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </Modal>
   )
 }

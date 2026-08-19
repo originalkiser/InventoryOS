@@ -145,6 +145,7 @@ export function OrdersV2History() {
                       }}
                       className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
                   ) : num(l.qty)}
+                  {l.quarts_per_unit != null && <span className="text-inky/50"> ({num(Number(l.qty) * l.quarts_per_unit, 1)} qt)</span>}
                 </td>
                 <td className="px-2 py-1 text-right text-navy">{money(l.unit_cost)}</td>
                 <td className="px-2 py-1 text-right text-navy">{money(l.line_total)}</td>
