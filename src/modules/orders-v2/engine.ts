@@ -1,0 +1,415 @@
+// Orders v2 — order generation engine.
+//
+// Pure functions only: no React, no Supabase, no clock reads beyond what's
+// passed in. Everything the engine needs arrives in GenerationContext, so
+// the whole thing is directly testable and a draft can be regenerated
+// identically from its stored snapshot.
+//
+// Shape of a run:
+//   Pass 1  fill each eligible product toward the DOS target, bounded by
+//           dos_max, max_capacity_gallons and any vendor case-type limit.
+//   Pass 2  if a shop/order-type group is under its dollar minimum, top up
+//           existing lines first (cheapest excess first), then pull in
+//           further eligible products only if that can't close the gap.
+//   Flags   informational only; they never block or alter quantities.
+
+import {
+  isBulkUom, orderTypeOf,
+  type GeneratedLine, type GenerationContext, type GenerationInput,
+  type GenerationResult, type HistoryFact, type LineFlag, type OrderType,
+  type ProductRule, type ShopGroupResult,
+} from './types'
+
+// ── Small numeric helpers ────────────────────────────────────────────────
+
+const n = (v: number | null | undefined): number => (v == null || Number.isNaN(v) ? 0 : Number(v))
+
+/** Days of supply. Null when usage is unknown/zero — "infinite", not zero. */
+export function daysOfSupply(onHand: number | null, dailyUsage: number | null): number | null {
+  const u = n(dailyUsage)
+  if (u <= 0) return null
+  return n(onHand) / u
+}
+
+/** Gallons in one orderable unit; defaults to 1 so a missing size can't zero out an order. */
+export const gallonsPerUnit = (rule: ProductRule): number => {
+  const g = n(rule.units_per_uom_gallons)
+  return g > 0 ? g : 1
+}
+
+/**
+ * Round a unit quantity for its UOM. Discrete UOMs must be whole; bulk may
+ * carry decimals per settings. `dir` biases the rounding — we round down
+ * when a cap is binding so a limit is never breached by rounding.
+ */
+export function roundQty(qty: number, uom: string | null, bulkDecimals: number, dir: 'nearest' | 'down' = 'nearest'): number {
+  if (qty <= 0) return 0
+  if (isBulkUom(uom)) {
+    const f = Math.pow(10, Math.max(0, bulkDecimals))
+    return dir === 'down' ? Math.floor(qty * f) / f : Math.round(qty * f) / f
+  }
+  return dir === 'down' ? Math.floor(qty) : Math.round(qty)
+}
+
+/**
+ * Delivery date = the next occurrence of `deliveryDow` strictly after the
+ * order date. An order placed ON the delivery weekday rolls to next week —
+ * you can't order and receive the same day.
+ */
+export function nextDeliveryDate(orderDate: string, deliveryDow: number | null | undefined): string | null {
+  if (deliveryDow == null || deliveryDow < 0 || deliveryDow > 6) return null
+  const d = new Date(orderDate + 'T00:00:00')
+  if (Number.isNaN(d.getTime())) return null
+  let delta = (deliveryDow - d.getDay() + 7) % 7
+  if (delta === 0) delta = 7            // strictly after
+  d.setDate(d.getDate() + delta)
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** Whole days between two YYYY-MM-DD dates (b - a). */
+export function daysBetween(a: string, b: string): number {
+  const t1 = new Date(a + 'T00:00:00').getTime(), t2 = new Date(b + 'T00:00:00').getTime()
+  if (Number.isNaN(t1) || Number.isNaN(t2)) return 0
+  return Math.round((t2 - t1) / 86400000)
+}
+
+/** DOS at delivery: today's on-hand plus the order, less usage until delivery. */
+export function dosAfterDelivery(
+  onHand: number | null, dailyUsage: number | null, orderedGallons: number,
+  orderDate: string, deliveryDate: string | null,
+): number | null {
+  const u = n(dailyUsage)
+  if (u <= 0) return null
+  const lead = deliveryDate ? Math.max(0, daysBetween(orderDate, deliveryDate)) : 0
+  const atDelivery = n(onHand) - u * lead + orderedGallons
+  return atDelivery / u
+}
+
+// ── Caps ────────────────────────────────────────────────────────────────
+
+interface Caps { maxUnits: number; capacityBound: boolean; caseLimitBound: boolean }
+
+/**
+ * Largest unit quantity allowed for a line, considering dos_max, the shop's
+ * max capacity for the product, and any vendor case-type limit. Returns
+ * which constraint bound so the UI can explain a short order.
+ */
+export function capsFor(input: GenerationInput, ctx: GenerationContext): Caps {
+  const { rule, on_hand, daily_usage } = input
+  const per = gallonsPerUnit(rule)
+  const u = n(daily_usage)
+
+  // dos_max ceiling, expressed in units
+  let maxUnits = Number.POSITIVE_INFINITY
+  if (u > 0) {
+    const maxGallons = ctx.settings.days_of_supply_max * u
+    maxUnits = Math.max(0, (maxGallons - n(on_hand)) / per)
+  }
+
+  // per-product physical capacity
+  let capacityBound = false
+  if (rule.max_capacity_gallons != null && rule.max_capacity_gallons > 0) {
+    const byCapacity = Math.max(0, (rule.max_capacity_gallons - n(on_hand)) / per)
+    if (byCapacity < maxUnits) { maxUnits = byCapacity; capacityBound = true }
+  }
+
+  // vendor case-type limit (e.g. Valvoline bay boxes)
+  let caseLimitBound = false
+  const limit = rule.uom ? ctx.vendor.caseTypeLimits[rule.uom] : undefined
+  if (limit != null && limit < maxUnits) { maxUnits = limit; caseLimitBound = true }
+
+  return { maxUnits: Math.max(0, maxUnits), capacityBound, caseLimitBound }
+}
+
+// ── Flags ───────────────────────────────────────────────────────────────
+
+function historyFlags(input: GenerationInput, ctx: GenerationContext): LineFlag[] {
+  const flags: LineFlag[] = []
+  const { settings, orderDate, history } = ctx
+  const prior = history
+    .filter((h) => h.location_id === input.location_id && h.product_id === input.product_id)
+    .sort((a, b) => b.order_date.localeCompare(a.order_date))
+
+  // Ordered recently while DOS was already high.
+  const recent = prior.filter((h) => daysBetween(h.order_date, orderDate) <= settings.flag_if_ordered_within_days)
+  if (recent.some((h) => h.dos_before != null && h.dos_before > settings.flag_if_ordered_over_dos)) {
+    flags.push('recent_high_dos_order')
+  }
+
+  // Since the last order, did actual usage cover fewer than X days?
+  const last: HistoryFact | undefined = prior[0]
+  if (last) {
+    const elapsed = daysBetween(last.order_date, orderDate)
+    const u = n(input.daily_usage)
+    if (elapsed > 0 && u > 0) {
+      const consumedDays = (n(last.qty) * gallonsPerUnit(input.rule)) / u
+      if (consumedDays < settings.flag_if_last_order_usage_under) flags.push('last_order_short_usage')
+    }
+  }
+  return flags
+}
+
+// ── Pass 1 ──────────────────────────────────────────────────────────────
+
+function buildLine(input: GenerationInput, ctx: GenerationContext, units: number, caps: Caps): GeneratedLine {
+  const { rule } = input
+  const per = gallonsPerUnit(rule)
+  const gallons = units * per
+  const flags: LineFlag[] = [...historyFlags(input, ctx)]
+  if (n(input.on_hand) <= 0) flags.push('stocked_out')
+  if (units > 0 && caps.capacityBound) flags.push('capacity_capped')
+  if (units > 0 && caps.caseLimitBound) flags.push('case_limit_capped')
+
+  return {
+    location_id: input.location_id,
+    product_id: input.product_id,
+    order_type: orderTypeOf(rule.uom),
+    uom: rule.uom,
+    system_qty: units,
+    qty: units,
+    unit_cost: rule.unit_cost,
+    on_hand: input.on_hand,
+    daily_usage: input.daily_usage,
+    dos_before: daysOfSupply(input.on_hand, input.daily_usage),
+    dos_after: daysOfSupply(n(input.on_hand) + gallons, input.daily_usage),
+    max_capacity_gallons: rule.max_capacity_gallons,
+    included: units > 0,
+    flags,
+    added_by_smoothing: false,
+    triggered_smoothing: false,
+  }
+}
+
+/** Units needed to reach the DOS target, before caps. */
+function unitsToTarget(input: GenerationInput, ctx: GenerationContext): number {
+  const u = n(input.daily_usage)
+  if (u <= 0) return 0
+  const targetGallons = ctx.settings.days_of_supply_target * u
+  const deficit = targetGallons - n(input.on_hand)
+  if (deficit <= 0) return 0
+  return deficit / gallonsPerUnit(input.rule)
+}
+
+// ── Pass 2 (smoothing) ──────────────────────────────────────────────────
+
+const lineDollars = (l: GeneratedLine) => n(l.qty) * n(l.unit_cost)
+
+/** Dollars counting toward a shop's minimum (respects include_in_total_shop_order). */
+function groupDollars(lines: GeneratedLine[], ruleOf: (l: GeneratedLine) => ProductRule | undefined): number {
+  return lines.reduce((sum, l) => {
+    const rule = ruleOf(l)
+    if (rule && !rule.include_in_total_shop_order) return sum
+    return sum + lineDollars(l)
+  }, 0)
+}
+
+/**
+ * "Most efficient" top-up: of the lines that can still take more, prefer the
+ * one whose next unit adds the most dollars per unit of excess DOS — i.e.
+ * closes the gap with the least overstock, rather than dumping everything
+ * into whichever product happens to be first.
+ */
+function bestTopUpIndex(
+  lines: GeneratedLine[], headroom: number[], inputs: Map<string, GenerationInput>,
+): number {
+  let best = -1, bestScore = -Infinity
+  for (let i = 0; i < lines.length; i++) {
+    if (headroom[i] <= 0) continue
+    const l = lines[i]
+    const inp = inputs.get(`${l.location_id}|${l.product_id}`)
+    if (!inp) continue
+    const per = gallonsPerUnit(inp.rule)
+    const u = n(l.daily_usage)
+    const dollarsPerUnit = n(l.unit_cost)
+    if (dollarsPerUnit <= 0) continue
+    // Excess DOS added per unit; guard against zero-usage lines.
+    const dosPerUnit = u > 0 ? per / u : 0.0001
+    const score = dollarsPerUnit / Math.max(dosPerUnit, 0.0001)
+    if (score > bestScore) { bestScore = score; best = i }
+  }
+  return best
+}
+
+// ── Entry point ─────────────────────────────────────────────────────────
+
+export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext): GenerationResult {
+  const skipped: GenerationResult['skipped'] = []
+  const inputByKey = new Map<string, GenerationInput>()
+  for (const i of inputs) inputByKey.set(`${i.location_id}|${i.product_id}`, i)
+
+  // ---- eligibility + Pass 1 ------------------------------------------------
+  const pass1: GeneratedLine[] = []
+  const eligibleSpare = new Map<string, GenerationInput[]>()   // group key -> products not ordered in pass 1
+
+  for (const input of inputs) {
+    const { rule } = input
+    const groupKey = `${input.location_id}|${orderTypeOf(rule.uom)}`
+
+    if (ctx.eligibleLocationIds && !ctx.eligibleLocationIds.has(input.location_id)) {
+      skipped.push({ ...idOf(input), reason: 'not_order_day' }); continue
+    }
+    if (rule.vmi_keepfill_enabled && !ctx.includeVmi) {
+      skipped.push({ ...idOf(input), reason: 'vmi_keepfill' }); continue
+    }
+
+    const dos = daysOfSupply(input.on_hand, input.daily_usage)
+    if (dos != null && dos > ctx.settings.skip_order_if_dos_over) {
+      skipped.push({ ...idOf(input), reason: 'dos_over_skip_threshold' }); continue
+    }
+
+    const caps = capsFor(input, ctx)
+    const belowTrigger = dos != null && dos < ctx.settings.days_of_supply_min_trigger
+
+    if (!belowTrigger) {
+      // Not due yet, but still a candidate for smoothing to reach a minimum.
+      if (!eligibleSpare.has(groupKey)) eligibleSpare.set(groupKey, [])
+      eligibleSpare.get(groupKey)!.push(input)
+      skipped.push({ ...idOf(input), reason: dos == null ? 'no_usage_data' : 'above_min_trigger' })
+      continue
+    }
+
+    const want = unitsToTarget(input, ctx)
+    const units = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_decimals,
+      // Round down when a hard cap binds so the cap is never exceeded.
+      want > caps.maxUnits ? 'down' : 'nearest')
+
+    if (units <= 0) {
+      if (!eligibleSpare.has(groupKey)) eligibleSpare.set(groupKey, [])
+      eligibleSpare.get(groupKey)!.push(input)
+      skipped.push({ ...idOf(input), reason: 'no_room_or_zero_qty' })
+      continue
+    }
+    pass1.push(buildLine(input, ctx, units, caps))
+  }
+
+  // ---- group + Pass 2 ------------------------------------------------------
+  const byGroup = new Map<string, GeneratedLine[]>()
+  for (const l of pass1) {
+    const k = `${l.location_id}|${l.order_type}`
+    if (!byGroup.has(k)) byGroup.set(k, [])
+    byGroup.get(k)!.push(l)
+  }
+
+  const ruleOf = (l: GeneratedLine) => inputByKey.get(`${l.location_id}|${l.product_id}`)?.rule
+  const groups: ShopGroupResult[] = []
+
+  for (const [key, lines] of byGroup) {
+    const [location_id, order_type] = key.split('|') as [string, OrderType]
+    const minimum = ctx.vendor.minimums[order_type]
+      ?? (order_type === 'bulk' ? ctx.settings.order_minimum_dollars_bulk : ctx.settings.order_minimum_dollars_package)
+
+    let dollars = groupDollars(lines, ruleOf)
+    let smoothingApplied = false
+
+    // A single line flagged to ignore the minimum when ordered alone uses its
+    // configured alone-quantity instead of being inflated to hit the minimum.
+    const soleLine = lines.length === 1 ? lines[0] : null
+    const soleRule = soleLine ? ruleOf(soleLine) : undefined
+    if (soleLine && soleRule?.can_ignore_minimum && soleRule.ignore_minimum_if_ordered_alone && dollars < minimum) {
+      const inp = inputByKey.get(`${soleLine.location_id}|${soleLine.product_id}`)!
+      const caps = capsFor(inp, ctx)
+      const alone = roundQty(
+        Math.min(n(soleRule.default_order_amount_if_alone), caps.maxUnits),
+        soleRule.uom, ctx.settings.bulk_rounding_decimals, 'down',
+      )
+      if (alone > 0) {
+        soleLine.system_qty = alone
+        soleLine.qty = alone
+        soleLine.dos_after = daysOfSupply(n(soleLine.on_hand) + alone * gallonsPerUnit(soleRule), soleLine.daily_usage)
+        if (!soleLine.flags.includes('alone_default_qty')) soleLine.flags.push('alone_default_qty')
+      }
+      groups.push({
+        location_id, order_type, lines, dollars: groupDollars(lines, ruleOf),
+        minimum, meetsMinimum: true, smoothingApplied: false,
+      })
+      continue
+    }
+
+    if (dollars < minimum) {
+      smoothingApplied = true
+      // Everything already on the order caused the shortfall — mark them so
+      // the review UI can show which products pulled the order under.
+      for (const l of lines) l.triggered_smoothing = true
+
+      // (a) top up existing lines, most efficient first
+      const headroom = lines.map((l) => {
+        const inp = inputByKey.get(`${l.location_id}|${l.product_id}`)
+        if (!inp) return 0
+        return Math.max(0, capsFor(inp, ctx).maxUnits - l.qty)
+      })
+      let guard = 0
+      while (dollars < minimum && guard++ < 10000) {
+        const i = bestTopUpIndex(lines, headroom, inputByKey)
+        if (i < 0) break
+        const inp = inputByKey.get(`${lines[i].location_id}|${lines[i].product_id}`)!
+        const step = isBulkUom(lines[i].uom) ? Math.pow(10, -Math.max(0, ctx.settings.bulk_rounding_decimals)) : 1
+        const take = Math.min(step, headroom[i])
+        if (take <= 0) { headroom[i] = 0; continue }
+        lines[i].qty = roundQty(lines[i].qty + take, lines[i].uom, ctx.settings.bulk_rounding_decimals)
+        lines[i].system_qty = lines[i].qty
+        headroom[i] -= take
+        lines[i].dos_after = daysOfSupply(n(lines[i].on_hand) + lines[i].qty * gallonsPerUnit(inp.rule), lines[i].daily_usage)
+        dollars = groupDollars(lines, ruleOf)
+      }
+
+      // (b) still short — pull in other eligible products from the shop's config
+      if (dollars < minimum) {
+        const spares = (eligibleSpare.get(key) ?? []).filter((sp) => orderTypeOf(sp.rule.uom) === order_type)
+        for (const sp of spares) {
+          if (dollars >= minimum) break
+          const caps = capsFor(sp, ctx)
+          if (caps.maxUnits <= 0) continue
+          const unitCost = n(sp.rule.unit_cost)
+          const need = unitCost > 0 ? (minimum - dollars) / unitCost : caps.maxUnits
+          const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_decimals)
+          if (units <= 0) continue
+          const line = buildLine(sp, ctx, units, caps)
+          line.added_by_smoothing = true
+          lines.push(line)
+          dollars = groupDollars(lines, ruleOf)
+        }
+      }
+    }
+
+    const meetsMinimum = dollars >= minimum
+    if (!meetsMinimum) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
+
+    groups.push({ location_id, order_type, lines, dollars, minimum, meetsMinimum, smoothingApplied })
+  }
+
+  return { lines: groups.flatMap((g) => g.lines), groups, skipped }
+}
+
+function idOf(i: GenerationInput) { return { location_id: i.location_id, product_id: i.product_id } }
+
+// ── Composite template rendering (export / PO numbers) ──────────────────
+
+/**
+ * Render `{field}` and `{date:FORMAT}` placeholders. Used for PO numbers,
+ * file names, sheet names and email subjects so they all share one syntax.
+ *   {shop_number}-{date:MMDDYYYY}{order_type_code}  ->  1-08192026B
+ */
+export function renderTemplate(tpl: string, values: Record<string, string | number | null | undefined>, date?: string): string {
+  return (tpl ?? '').replace(/\{([a-z_]+)(?::([^}]+))?\}/gi, (_m, key: string, fmt?: string) => {
+    if (key.toLowerCase() === 'date') return formatDateToken(date ?? values.date as string, fmt ?? 'MMDDYYYY')
+    const v = values[key]
+    return v == null ? '' : String(v)
+  })
+}
+
+function formatDateToken(date: string | undefined, fmt: string): string {
+  if (!date) return ''
+  const d = new Date(String(date) + 'T00:00:00')
+  if (Number.isNaN(d.getTime())) return ''
+  const MM = String(d.getMonth() + 1).padStart(2, '0')
+  const DD = String(d.getDate()).padStart(2, '0')
+  const YYYY = String(d.getFullYear())
+  const YY = YYYY.slice(-2)
+  return fmt.replace(/YYYY/g, YYYY).replace(/YY/g, YY).replace(/MM/g, MM).replace(/DD/g, DD)
+}
+
+/** PO number: {shop}-{MMDDYYYY}{B|P}, one per shop per order type per run. */
+export function poNumber(shopNumber: string, orderDate: string, orderType: OrderType): string {
+  return `${shopNumber}-${formatDateToken(orderDate, 'MMDDYYYY')}${orderType === 'bulk' ? 'B' : 'P'}`
+}

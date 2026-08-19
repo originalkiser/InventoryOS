@@ -45,6 +45,12 @@ import { FormAssignmentsPage } from '@/modules/forms/FormAssignmentsPage'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { OnHandPage } from '@/pages/OnHandPage'
 import { MarketingPlannerPage } from '@/modules/marketing/MarketingPlannerPage'
+import { OrdersV2Landing } from '@/modules/orders-v2/OrdersV2Landing'
+import { OrdersV2Review } from '@/modules/orders-v2/OrdersV2Review'
+import { OrdersV2FinalReview } from '@/modules/orders-v2/OrdersV2FinalReview'
+import { OrdersV2Export } from '@/modules/orders-v2/OrdersV2Export'
+import { OrdersV2Settings } from '@/modules/orders-v2/OrdersV2Settings'
+import { OrdersV2History } from '@/modules/orders-v2/OrdersV2History'
 
 const DEPT_FIRST_ROUTE: Record<string, string> = {
   marketing: '/marketing-planner',
@@ -153,6 +159,12 @@ export default function App() {
           <Route path="month-end" element={<Navigate to="/monthend" replace />} />
           <Route path="weekly" element={<WeeklyPage />} />
           <Route path="orders" element={<OrdersPage />} />
+          <Route path="orders-v2" element={<OrdersV2Landing />} />
+          <Route path="orders-v2/settings" element={<OrdersV2Settings />} />
+          <Route path="orders-v2/draft/:draftId" element={<OrdersV2Review />} />
+          <Route path="orders-v2/draft/:draftId/final" element={<OrdersV2FinalReview />} />
+          <Route path="orders-v2/draft/:draftId/export" element={<OrdersV2Export />} />
+          <Route path="orders-v2/history/:orderId" element={<OrdersV2History />} />
           <Route path="on-hand" element={<OnHandPage />} />
           <Route path="issues" element={<IssuesPage />} />
           <Route path="projects" element={<ProjectsModule />} />
