@@ -11,9 +11,9 @@ import {
   buildGenerationInputs, eligibleLocations, draftOrderDow, shopsPerOrderDay, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
-import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit } from './engine'
+import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num } from './shared'
-import type { LineFlag } from './types'
+import type { LineFlag, GenerationInput, OrderType } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
@@ -32,7 +32,7 @@ export function OrdersV2Review() {
   const { settings } = useOrderSettings()
   const { rulesFor } = useVendorRules()
   const { fetchInputs } = useGenerationData()
-  const { draft, lines, loading, reload, replaceLines, patchLine, removeLine, setStatus } = useDraft(draftId || null)
+  const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
 
   const [generating, setGenerating] = useState(false)
   const [showVmi, setShowVmi] = useState(false)
@@ -42,6 +42,11 @@ export function OrdersV2Review() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [skipped, setSkipped] = useState<{ location_id: string; product_id: string; reason: string }[]>([])
   const [dayCounts, setDayCounts] = useState<number[]>([0, 0, 0, 0, 0, 0, 0])
+  // Every candidate the engine considered for this run, not just the ones
+  // that made it onto the draft — the smoothing panel needs the shop's
+  // full config (including products it decided NOT to order) to show what
+  // else could be pulled in, not just what already is.
+  const [allInputs, setAllInputs] = useState<GenerationInput[]>([])
   const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
 
   const shopLabel = useCallback(
@@ -57,6 +62,7 @@ export function OrdersV2Review() {
     try {
       const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
       const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts)
+      setAllInputs(inputs)
       const result = generateOrder(inputs, {
         settings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
@@ -132,18 +138,22 @@ export function OrdersV2Review() {
     let out = [...lines]
     if (q) out = out.filter((l) => `${shopLabel(l.location_id)} ${l.product_id} ${l.uom ?? ''}`.toLowerCase().includes(q))
     const dir = sortDir === 'asc' ? 1 : -1
-    return [...out].sort((a, b) => {
+    const secondary = (a: DraftLineRow, b: DraftLineRow) => {
       switch (sortKey) {
         case 'capacity': return dir * (Number(b.max_capacity_gallons ?? 0) - Number(a.max_capacity_gallons ?? 0))
         case 'product': return dir * a.product_id.localeCompare(b.product_id)
         case 'qty': return dir * (Number(a.qty) - Number(b.qty))
         case 'dollars': return dir * ((Number(a.qty) * Number(a.unit_cost ?? 0)) - (Number(b.qty) * Number(b.unit_cost ?? 0)))
         case 'dos_after': return dir * (Number(a.dos_after ?? 0) - Number(b.dos_after ?? 0))
-        default: {
-          const s = shopLabel(a.location_id).localeCompare(shopLabel(b.location_id), undefined, { numeric: true })
-          return s !== 0 ? dir * s : Number(b.max_capacity_gallons ?? 0) - Number(a.max_capacity_gallons ?? 0)
-        }
+        default: return Number(b.max_capacity_gallons ?? 0) - Number(a.max_capacity_gallons ?? 0)
       }
+    }
+    return [...out].sort((a, b) => {
+      // Shops always group together, in numeric order, regardless of the
+      // chosen sort — that only orders products within a shop, so a
+      // multi-product shop never gets scattered across the table.
+      const s = shopLabel(a.location_id).localeCompare(shopLabel(b.location_id), undefined, { numeric: true })
+      return s !== 0 ? s : secondary(a, b)
     })
   }, [lines, filter, sortKey, sortDir, shopLabel])
 
@@ -165,6 +175,29 @@ export function OrdersV2Review() {
     }
     return m
   }, [visible])
+
+  // Every candidate the engine saw for a shop/order-type, whether or not it
+  // ended up on the draft — what the smoothing panel below shows per shop.
+  const inputsByGroup = useMemo(() => {
+    const m = new Map<string, GenerationInput[]>()
+    for (const i of allInputs) {
+      const k = `${i.location_id}|${resolvedOrderType(i.rule)}`
+      if (!m.has(k)) m.set(k, [])
+      m.get(k)!.push(i)
+    }
+    return m
+  }, [allInputs])
+
+  async function addSmoothingProduct(input: GenerationInput, orderType: OrderType, qty: number) {
+    if (qty <= 0) return
+    await addLine({
+      location_id: input.location_id, product_id: input.product_id, order_type: orderType,
+      uom: input.rule.uom, qty, system_qty: 0,
+      unit_cost: input.rule.unit_cost, on_hand: input.on_hand, daily_usage: input.daily_usage,
+      dos_before: daysOfSupply(input.on_hand, input.daily_usage),
+      max_capacity_gallons: input.rule.max_capacity_gallons, quarts_per_unit: gallonsPerUnit(input.rule),
+    })
+  }
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
   if (!draft) return <p className="text-xs font-mono text-inky/60 py-8">Draft not found. It may have been deleted.</p>
@@ -321,9 +354,30 @@ export function OrdersV2Review() {
           </p>
           {[...groups.entries()]
             .filter(([, ls]) => ls.some((l) => l.triggered_smoothing || l.added_by_smoothing))
+            .sort(([a], [b]) => shopLabel(a.split('|')[0]).localeCompare(shopLabel(b.split('|')[0]), undefined, { numeric: true }))
             .map(([key, ls]) => {
               const [locId, type] = key.split('|')
               const open = expanded.has(key)
+
+              // The shop's full config for this order type — including
+              // products the engine decided NOT to order — not just what
+              // landed on the draft, so "what else could close the gap" is
+              // visible alongside what already did.
+              const candidates = inputsByGroup.get(key) ?? []
+              const lineByProduct = new Map(ls.map((l) => [l.product_id, l]))
+              const candidateIds = new Set(candidates.map((c) => c.product_id))
+              const rows: { input?: GenerationInput; line?: DraftLineRow }[] =
+                candidates.map((c) => ({ input: c, line: lineByProduct.get(c.product_id) }))
+              for (const l of ls) if (!candidateIds.has(l.product_id)) rows.push({ line: l })
+              // Actionable rows first (what caused the shortfall, what was
+              // pulled in to close it), then everything else alphabetically.
+              rows.sort((ra, rb) => {
+                const rank = (r: typeof ra) => (r.line?.triggered_smoothing ? 0 : r.line?.added_by_smoothing ? 1 : 2)
+                const d = rank(ra) - rank(rb)
+                if (d !== 0) return d
+                return (ra.line?.product_id ?? ra.input?.product_id ?? '').localeCompare(rb.line?.product_id ?? rb.input?.product_id ?? '')
+              })
+
               return (
                 <div key={key} className="rounded border border-navy/20">
                   <button onClick={() => setExpanded((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n })}
@@ -337,15 +391,10 @@ export function OrdersV2Review() {
                       <table className="w-full text-[11px] font-mono">
                         <thead><tr className="text-inky/60 uppercase"><td className="py-1">Product</td><td className="text-right">Qty</td><td className="text-right">$</td><td>Why</td></tr></thead>
                         <tbody>
-                          {ls.map((l) => (
-                            <tr key={l.id} className="border-t border-navy/10">
-                              <td className="py-1 text-navy">{l.product_id}</td>
-                              <td className="text-right text-navy">{num(l.qty)}</td>
-                              <td className="text-right text-navy">{money(Number(l.qty) * Number(l.unit_cost ?? 0))}</td>
-                              <td className="text-inky/70">
-                                {l.triggered_smoothing ? 'triggered smoothing' : l.added_by_smoothing ? 'added to reach minimum' : ''}
-                              </td>
-                            </tr>
+                          {rows.map((r) => (
+                            <SmoothingRow key={r.line?.id ?? r.input?.product_id}
+                              input={r.input} line={r.line} orderType={type as OrderType}
+                              onPatch={(id, qty) => patchLine(id, { qty })} onAdd={addSmoothingProduct} />
                           ))}
                         </tbody>
                       </table>
@@ -386,6 +435,44 @@ function Th({ children, onClick, active, dir, align }: {
 }
 function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }) {
   return <td className={`px-2 py-1 text-navy whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</td>
+}
+
+/** One row in a shop's smoothing panel — an existing line (editable in
+ * place) or a configured-but-not-ordered candidate (typing a qty adds it). */
+function SmoothingRow({ input, line, orderType, onPatch, onAdd }: {
+  input?: GenerationInput; line?: DraftLineRow; orderType: OrderType
+  onPatch: (id: string, qty: number) => void
+  onAdd: (input: GenerationInput, orderType: OrderType, qty: number) => void
+}) {
+  const productId = line?.product_id ?? input?.product_id ?? ''
+  const unitCost = Number(line?.unit_cost ?? input?.rule.unit_cost ?? 0)
+  const uom = line?.uom ?? input?.rule.uom ?? null
+  const why = line?.triggered_smoothing ? 'triggered smoothing'
+    : line?.added_by_smoothing ? 'added to reach minimum'
+    : 'not on order'
+  const whyClass = line?.triggered_smoothing ? 'text-[#C0392B]'
+    : line?.added_by_smoothing ? 'text-sky'
+    : 'text-inky/40'
+
+  return (
+    <tr className="border-t border-navy/10">
+      <td className="py-1 text-navy">{productId}</td>
+      <td className="text-right">
+        {line ? (
+          <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
+            onChange={(e) => onPatch(line.id, Number(e.target.value) || 0)}
+            className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+        ) : input ? (
+          <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
+            onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(input, orderType, v) }}
+            title="Add this product to the order"
+            className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
+        ) : null}
+      </td>
+      <td className="text-right text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>
+      <td className={whyClass}>{why}</td>
+    </tr>
+  )
 }
 
 export function Flags({ flags }: { flags: LineFlag[] }) {

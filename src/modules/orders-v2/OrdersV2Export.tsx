@@ -136,7 +136,12 @@ export function OrdersV2Export() {
     return (productId: string) => byPart.get(pkey(oldToNew.get(pkey(productId)) ?? productId))
   }, [vendorParts, productMappings])
 
-  const included = useMemo(() => lines.filter((l) => l.included && Number(l.qty) > 0), [lines])
+  // Shop-grouped, numeric order — matches Review/Final Review/History, so
+  // the exported file reads the same way the shop reviewed it as.
+  const included = useMemo(() => [...lines].filter((l) => l.included && Number(l.qty) > 0)
+    .sort((a, b) => shopNumber(a.location_id).localeCompare(shopNumber(b.location_id), undefined, { numeric: true })
+      || a.product_id.localeCompare(b.product_id)),
+  [lines, shopNumber])
   const vendorName = vendors.byId(draft?.vendor_id ?? null)?.name ?? ''
   const dirty = savedTpl ? JSON.stringify(savedTpl) !== JSON.stringify(tpl) : true
 
