@@ -7,16 +7,17 @@
 //
 // Shape of a run:
 //   Pass 1  fill each eligible product toward the DOS target, bounded by
-//           dos_max, max_capacity_gallons and any vendor case-type limit.
-//   Pass 2  if a shop/order-type group is under its dollar minimum, top up
-//           existing lines first (cheapest excess first), then pull in
-//           further eligible products only if that can't close the gap.
+//           dos_max (soft) and max_capacity_gallons (hard).
+//   Pass 2  if a shop/order-type group is under its minimum, top up existing
+//           lines first (most efficient first), then pull in further eligible
+//           products. A per-product minimum is a floor on each line instead.
+//   Pass 3  vendor case-type minimums ("at least 6 bay boxes on the order").
 //   Flags   informational only; they never block or alter quantities.
 
 import {
   isBulkUom, orderTypeOf,
   type GeneratedLine, type GenerationContext, type GenerationInput,
-  type GenerationResult, type HistoryFact, type LineFlag, type OrderType,
+  type GenerationResult, type HistoryFact, type LineFlag, type OrderMinimum, type OrderType,
   type ProductRule, type ShopGroupResult,
 } from './types'
 
@@ -88,38 +89,38 @@ export function dosAfterDelivery(
 
 // ── Caps ────────────────────────────────────────────────────────────────
 
-interface Caps { maxUnits: number; capacityBound: boolean; caseLimitBound: boolean }
+interface Caps { maxUnits: number; capacityBound: boolean; dosBound: boolean }
 
 /**
- * Largest unit quantity allowed for a line, considering dos_max, the shop's
- * max capacity for the product, and any vendor case-type limit. Returns
- * which constraint bound so the UI can explain a short order.
+ * Largest unit quantity for a line.
+ *
+ * Two different kinds of ceiling, deliberately kept apart:
+ *   - max_capacity_gallons is PHYSICAL — the shop can't hold more, so it is
+ *     hard and is never exceeded, even to reach an order minimum.
+ *   - days_of_supply_max is a SOFT target — pass 1 stops there, but smoothing
+ *     may go past it when a minimum can't otherwise be met (`soft: false`).
  */
-export function capsFor(input: GenerationInput, ctx: GenerationContext): Caps {
+export function capsFor(input: GenerationInput, ctx: GenerationContext, opts?: { respectDosMax?: boolean }): Caps {
   const { rule, on_hand, daily_usage } = input
   const per = gallonsPerUnit(rule)
   const u = n(daily_usage)
+  const respectDosMax = opts?.respectDosMax !== false
 
-  // dos_max ceiling, expressed in units
   let maxUnits = Number.POSITIVE_INFINITY
-  if (u > 0) {
+  let dosBound = false
+  if (respectDosMax && u > 0) {
     const maxGallons = ctx.settings.days_of_supply_max * u
     maxUnits = Math.max(0, (maxGallons - n(on_hand)) / per)
+    dosBound = true
   }
 
-  // per-product physical capacity
   let capacityBound = false
   if (rule.max_capacity_gallons != null && rule.max_capacity_gallons > 0) {
     const byCapacity = Math.max(0, (rule.max_capacity_gallons - n(on_hand)) / per)
-    if (byCapacity < maxUnits) { maxUnits = byCapacity; capacityBound = true }
+    if (byCapacity < maxUnits) { maxUnits = byCapacity; capacityBound = true; dosBound = false }
   }
 
-  // vendor case-type limit (e.g. Valvoline bay boxes)
-  let caseLimitBound = false
-  const limit = rule.uom ? ctx.vendor.caseTypeLimits[rule.uom] : undefined
-  if (limit != null && limit < maxUnits) { maxUnits = limit; caseLimitBound = true }
-
-  return { maxUnits: Math.max(0, maxUnits), capacityBound, caseLimitBound }
+  return { maxUnits: Math.max(0, maxUnits), capacityBound, dosBound }
 }
 
 // ── Flags ───────────────────────────────────────────────────────────────
@@ -137,15 +138,13 @@ function historyFlags(input: GenerationInput, ctx: GenerationContext): LineFlag[
     flags.push('recent_high_dos_order')
   }
 
-  // Since the last order, did actual usage cover fewer than X days?
-  const last: HistoryFact | undefined = prior[0]
-  if (last) {
-    const elapsed = daysBetween(last.order_date, orderDate)
-    const u = n(input.daily_usage)
-    if (elapsed > 0 && u > 0) {
-      const consumedDays = (n(last.qty) * gallonsPerUnit(input.rule)) / u
-      if (consumedDays < settings.flag_if_last_order_usage_under) flags.push('last_order_short_usage')
-    }
+  // Ordered recently AND the quantity ordered represented a lot of days of
+  // supply — i.e. we already pushed a big amount onto this shop lately.
+  const recentLarge = history.filter((h) =>
+    h.location_id === input.location_id && h.product_id === input.product_id
+    && daysBetween(h.order_date, orderDate) <= settings.flag_recent_order_days)
+  if (recentLarge.some((h) => h.dos_ordered != null && h.dos_ordered > settings.flag_recent_order_dos_over)) {
+    flags.push('recent_large_dos_order')
   }
   return flags
 }
@@ -159,7 +158,6 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, units: number
   const flags: LineFlag[] = [...historyFlags(input, ctx)]
   if (n(input.on_hand) <= 0) flags.push('stocked_out')
   if (units > 0 && caps.capacityBound) flags.push('capacity_capped')
-  if (units > 0 && caps.caseLimitBound) flags.push('case_limit_capped')
 
   return {
     location_id: input.location_id,
@@ -202,6 +200,90 @@ function groupDollars(lines: GeneratedLine[], ruleOf: (l: GeneratedLine) => Prod
     if (rule && !rule.include_in_total_shop_order) return sum
     return sum + lineDollars(l)
   }, 0)
+}
+
+/**
+ * A per-product minimum ("bulk must be >= 250 gallons of each product") is a
+ * floor on every line, not on the order total — so it's satisfied line by
+ * line, and a group either has every line at the floor or it doesn't.
+ */
+function applyPerProductMinimum(
+  lines: GeneratedLine[], min: OrderMinimum, ctx: GenerationContext,
+  inputs: Map<string, GenerationInput>,
+): boolean {
+  const floor = n(min.qty)
+  if (floor <= 0) return true
+  let allMet = true
+  for (const l of lines) {
+    const inp = inputs.get(`${l.location_id}|${l.product_id}`)
+    if (!inp) continue
+    const per = gallonsPerUnit(inp.rule)
+    // 'gallons_per_product' is expressed in gallons; convert to units.
+    const floorUnits = min.type === 'gallons_per_product' ? floor / per : floor
+    if (l.qty >= floorUnits) continue
+    // Physical capacity still wins — never order more than the shop can hold.
+    const hard = capsFor(inp, ctx, { respectDosMax: false })
+    const target = Math.min(floorUnits, hard.maxUnits)
+    const rounded = roundQty(target, l.uom, ctx.settings.bulk_rounding_decimals, 'down')
+    if (rounded > l.qty) {
+      l.qty = rounded
+      l.system_qty = rounded
+      l.dos_after = daysOfSupply(n(l.on_hand) + rounded * per, l.daily_usage)
+      markOverDosMax(l, ctx)
+    }
+    if (l.qty + 1e-9 < floorUnits) allMet = false
+  }
+  return allMet
+}
+
+/**
+ * Vendor case-type minimum: "if the order includes bay boxes at all, it must
+ * include at least 6 of them" — a floor on the order's TOTAL for that case
+ * type, spread across whichever products are already on it. Deliberately not
+ * applied when the order contains none of that case type.
+ */
+function applyCaseTypeMinimums(
+  lines: GeneratedLine[], ctx: GenerationContext, inputs: Map<string, GenerationInput>,
+): void {
+  const mins = ctx.vendor.caseTypeMinimums ?? {}
+  for (const [caseType, minQtyRaw] of Object.entries(mins)) {
+    const minQty = n(minQtyRaw)
+    if (minQty <= 0) continue
+    const ofType = lines.filter((l) => (l.uom ?? '') === caseType && l.qty > 0)
+    if (!ofType.length) continue                      // none ordered — rule doesn't apply
+    let total = ofType.reduce((s, l) => s + n(l.qty), 0)
+    if (total >= minQty) continue
+
+    // Spread the shortfall over the lines with the most physical headroom, so
+    // one product isn't loaded up while others sit at their configured target.
+    let guard = 0
+    while (total + 1e-9 < minQty && guard++ < 10000) {
+      let best: GeneratedLine | null = null
+      let bestHeadroom = 0
+      for (const l of ofType) {
+        const inp = inputs.get(`${l.location_id}|${l.product_id}`)
+        if (!inp) continue
+        const headroom = capsFor(inp, ctx, { respectDosMax: false }).maxUnits - l.qty
+        if (headroom > bestHeadroom) { bestHeadroom = headroom; best = l }
+      }
+      if (!best || bestHeadroom < 1) break            // capacity blocks the rest
+      const inp = inputs.get(`${best.location_id}|${best.product_id}`)!
+      best.qty += 1
+      best.system_qty = best.qty
+      best.dos_after = daysOfSupply(n(best.on_hand) + best.qty * gallonsPerUnit(inp.rule), best.daily_usage)
+      if (!best.flags.includes('case_minimum_topup')) best.flags.push('case_minimum_topup')
+      markOverDosMax(best, ctx)
+      total += 1
+    }
+  }
+}
+
+/** Note when a line has been pushed past the soft DOS ceiling. */
+function markOverDosMax(l: GeneratedLine, ctx: GenerationContext): void {
+  if (l.dos_after != null && l.dos_after > ctx.settings.days_of_supply_max
+      && !l.flags.includes('over_dos_max')) {
+    l.flags.push('over_dos_max')
+  }
 }
 
 /**
@@ -254,10 +336,6 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     }
 
     const dos = daysOfSupply(input.on_hand, input.daily_usage)
-    if (dos != null && dos > ctx.settings.skip_order_if_dos_over) {
-      skipped.push({ ...idOf(input), reason: 'dos_over_skip_threshold' }); continue
-    }
-
     const caps = capsFor(input, ctx)
     const belowTrigger = dos != null && dos < ctx.settings.days_of_supply_min_trigger
 
@@ -296,9 +374,26 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
 
   for (const [key, lines] of byGroup) {
     const [location_id, order_type] = key.split('|') as [string, OrderType]
-    const minimum = ctx.vendor.minimums[order_type]
-      ?? (order_type === 'bulk' ? ctx.settings.order_minimum_dollars_bulk : ctx.settings.order_minimum_dollars_package)
+    const min: OrderMinimum = ctx.vendor.minimums[order_type] ?? {
+      type: order_type === 'bulk' ? ctx.settings.bulk_minimum_type : ctx.settings.package_minimum_type,
+      dollars: order_type === 'bulk' ? ctx.settings.order_minimum_dollars_bulk : ctx.settings.order_minimum_dollars_package,
+      qty: order_type === 'bulk' ? ctx.settings.bulk_minimum_qty : ctx.settings.package_minimum_qty,
+    }
 
+    // A per-product minimum is a floor on each line, so it's handled up front
+    // and doesn't involve the dollar-smoothing path at all.
+    if (min.type !== 'dollars') {
+      const met = applyPerProductMinimum(lines, min, ctx, inputByKey)
+      applyCaseTypeMinimums(lines, ctx, inputByKey)
+      if (!met) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
+      groups.push({
+        location_id, order_type, lines, dollars: groupDollars(lines, ruleOf),
+        minimum: n(min.qty), meetsMinimum: met, smoothingApplied: false,
+      })
+      continue
+    }
+
+    const minimum = n(min.dollars)
     let dollars = groupDollars(lines, ruleOf)
     let smoothingApplied = false
 
@@ -308,7 +403,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     const soleRule = soleLine ? ruleOf(soleLine) : undefined
     if (soleLine && soleRule?.can_ignore_minimum && soleRule.ignore_minimum_if_ordered_alone && dollars < minimum) {
       const inp = inputByKey.get(`${soleLine.location_id}|${soleLine.product_id}`)!
-      const caps = capsFor(inp, ctx)
+      const caps = capsFor(inp, ctx, { respectDosMax: false })
       const alone = roundQty(
         Math.min(n(soleRule.default_order_amount_if_alone), caps.maxUnits),
         soleRule.uom, ctx.settings.bulk_rounding_decimals, 'down',
@@ -333,10 +428,12 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       for (const l of lines) l.triggered_smoothing = true
 
       // (a) top up existing lines, most efficient first
+      // dos_max is a soft target: smoothing may exceed it (flagged), but
+      // physical capacity is still hard.
       const headroom = lines.map((l) => {
         const inp = inputByKey.get(`${l.location_id}|${l.product_id}`)
         if (!inp) return 0
-        return Math.max(0, capsFor(inp, ctx).maxUnits - l.qty)
+        return Math.max(0, capsFor(inp, ctx, { respectDosMax: false }).maxUnits - l.qty)
       })
       let guard = 0
       while (dollars < minimum && guard++ < 10000) {
@@ -350,15 +447,24 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
         lines[i].system_qty = lines[i].qty
         headroom[i] -= take
         lines[i].dos_after = daysOfSupply(n(lines[i].on_hand) + lines[i].qty * gallonsPerUnit(inp.rule), lines[i].daily_usage)
+        markOverDosMax(lines[i], ctx)
         dollars = groupDollars(lines, ruleOf)
       }
 
       // (b) still short — pull in other eligible products from the shop's config
       if (dollars < minimum) {
-        const spares = (eligibleSpare.get(key) ?? []).filter((sp) => orderTypeOf(sp.rule.uom) === order_type)
+        // skip_order_if_dos_over applies HERE only: a well-stocked product is
+        // never dragged onto an order purely to reach a dollar minimum. It
+        // never stops a product that is genuinely due from being ordered.
+        const spares = (eligibleSpare.get(key) ?? [])
+          .filter((sp) => orderTypeOf(sp.rule.uom) === order_type)
+          .filter((sp) => {
+            const d = daysOfSupply(sp.on_hand, sp.daily_usage)
+            return d == null || d <= ctx.settings.skip_order_if_dos_over
+          })
         for (const sp of spares) {
           if (dollars >= minimum) break
-          const caps = capsFor(sp, ctx)
+          const caps = capsFor(sp, ctx, { respectDosMax: false })
           if (caps.maxUnits <= 0) continue
           const unitCost = n(sp.rule.unit_cost)
           const need = unitCost > 0 ? (minimum - dollars) / unitCost : caps.maxUnits
@@ -366,11 +472,16 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
           if (units <= 0) continue
           const line = buildLine(sp, ctx, units, caps)
           line.added_by_smoothing = true
+          markOverDosMax(line, ctx)
           lines.push(line)
           dollars = groupDollars(lines, ruleOf)
         }
       }
     }
+
+    // Case-type minimums apply to whatever the order ended up containing.
+    applyCaseTypeMinimums(lines, ctx, inputByKey)
+    dollars = groupDollars(lines, ruleOf)
 
     const meetsMinimum = dollars >= minimum
     if (!meetsMinimum) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')

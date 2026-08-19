@@ -20,9 +20,12 @@ const input = (over: Omit<Partial<GenerationInput>, 'rule'> & { rule?: Partial<P
   }
 }
 
+/** Dollar minimum shorthand for the vendor rules in these tests. */
+const dollars = (v: number) => ({ type: 'dollars' as const, dollars: v, qty: null })
+
 const ctx = (over: Partial<GenerationContext> = {}): GenerationContext => ({
   settings: { ...DEFAULT_ORDER_SETTINGS, ...(over.settings ?? {}) },
-  vendor: over.vendor ?? { vendor_id: 'V1', minimums: {}, caseTypeLimits: {} },
+  vendor: over.vendor ?? { vendor_id: 'V1', minimums: {}, caseTypeMinimums: {}, usesOrderDays: false },
   orderDate: over.orderDate ?? '2026-08-19',
   eligibleLocationIds: over.eligibleLocationIds ?? null,
   history: over.history ?? [],
@@ -69,21 +72,16 @@ describe('pass 1 — fill to target', () => {
 
   it('orders up toward the target when below the trigger', () => {
     // DOS 2, target 21 => need 105 gallons - 10 on hand = 95 => 19 cases of 5
-    const res = generateOrder([input({ on_hand: 10, daily_usage: 5 })], ctx({ vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} } }))
+    const res = generateOrder([input({ on_hand: 10, daily_usage: 5 })], ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } }))
     expect(res.lines).toHaveLength(1)
     expect(res.lines[0].qty).toBe(19)
     expect(res.lines[0].dos_after).toBeCloseTo(21, 5)
   })
 
-  it('skips a whole shop when DOS already exceeds the skip threshold', () => {
-    const res = generateOrder([input({ on_hand: 1000, daily_usage: 5 })], ctx())
-    expect(res.skipped[0].reason).toBe('dos_over_skip_threshold')
-  })
-
   it('excludes VMI/keepfill unless explicitly included', () => {
     const vmi = input({ rule: { vmi_keepfill_enabled: true } })
     expect(generateOrder([vmi], ctx()).skipped[0].reason).toBe('vmi_keepfill')
-    expect(generateOrder([vmi], ctx({ includeVmi: true, vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} } })).lines).toHaveLength(1)
+    expect(generateOrder([vmi], ctx({ includeVmi: true, vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } })).lines).toHaveLength(1)
   })
 
   it('honours the order-day restriction', () => {
@@ -98,22 +96,22 @@ describe('caps', () => {
     const caps = capsFor(i, ctx())
     expect(caps.maxUnits).toBe(6)             // (40-10)/5
     expect(caps.capacityBound).toBe(true)
-    const res = generateOrder([i], ctx({ vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} } }))
+    const res = generateOrder([i], ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } }))
     expect(res.lines[0].qty).toBe(6)
     expect(res.lines[0].flags).toContain('capacity_capped')
   })
 
-  it('applies a vendor case-type limit and flags it', () => {
-    const i = input({ on_hand: 10, daily_usage: 5, rule: { uom: 'bay_box' } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: { bay_box: 4 } } })
+  it('treats max capacity as hard but the DOS ceiling as soft', () => {
+    const i = input({ on_hand: 45, daily_usage: 5, rule: { unit_cost: 10, max_capacity_gallons: 55 } })
+    // A minimum far beyond reach: smoothing may pass dos_max but never capacity.
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(100000) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([i], c)
-    expect(res.lines[0].qty).toBe(4)
-    expect(res.lines[0].flags).toContain('case_limit_capped')
+    expect(res.lines[0].qty * 5 + 45).toBeLessThanOrEqual(55)
   })
 
   it('caps at dos_max even with no capacity limit', () => {
     // target 21 but dos_max 35 -> plenty of room; tighten dos_max to bind
-    const c = ctx({ settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_max: 15 }, vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} } })
+    const c = ctx({ settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_max: 15 }, vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([input({ on_hand: 10, daily_usage: 5 })], c)
     expect(res.lines[0].dos_after! <= 15).toBe(true)
   })
@@ -124,7 +122,7 @@ describe('pass 2 — smoothing to the order minimum', () => {
     // DOS 9 -> pass 1 fills to target = 12 cases. At $30 that's $360, under
     // the $500 minimum, and headroom to dos_max allows topping up.
     const i = input({ on_hand: 45, daily_usage: 5, rule: { unit_cost: 30 } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 500 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(500) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([i], c)
     const g = res.groups[0]
     expect(g.smoothingApplied).toBe(true)
@@ -137,7 +135,7 @@ describe('pass 2 — smoothing to the order minimum', () => {
     const short = input({ product_id: 'P1', on_hand: 45, daily_usage: 5, rule: { unit_cost: 100, max_capacity_gallons: 55 } })
     // P2 isn't due (DOS 20) but is available to help reach the minimum
     const spare = input({ product_id: 'P2', on_hand: 100, daily_usage: 5, rule: { unit_cost: 100 } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 500 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(500) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([short, spare], c)
     const added = res.lines.find((l) => l.product_id === 'P2')
     expect(added).toBeDefined()
@@ -147,7 +145,7 @@ describe('pass 2 — smoothing to the order minimum', () => {
 
   it('reports a group that still cannot reach the minimum instead of forcing it', () => {
     const i = input({ on_hand: 45, daily_usage: 5, rule: { unit_cost: 10, max_capacity_gallons: 55 } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 5000 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(5000) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([i], c)
     expect(res.groups[0].meetsMinimum).toBe(false)
     expect(res.lines[0].flags).toContain('below_minimum')
@@ -159,7 +157,7 @@ describe('pass 2 — smoothing to the order minimum', () => {
     // Minimum is unreachable ($1,200 of demand vs a $5,000 floor), so rather
     // than inflating the order the waiver applies and the alone-qty is used.
     const i = input({ on_hand: 45, daily_usage: 5, rule: { unit_cost: 100, can_ignore_minimum: true, ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2 } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 5000 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(5000) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([i], c)
     expect(res.lines[0].qty).toBe(2)
     expect(res.lines[0].flags).toContain('alone_default_qty')
@@ -169,7 +167,7 @@ describe('pass 2 — smoothing to the order minimum', () => {
   it('leaves a sole line at real demand when it already clears the minimum', () => {
     // The waiver exists to avoid inflating an order, not to cap a healthy one.
     const i = input({ on_hand: 45, daily_usage: 5, rule: { unit_cost: 100, can_ignore_minimum: true, ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2 } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 500 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(500) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([i], c)
     expect(res.lines[0].qty).toBe(12)
     expect(res.lines[0].flags).not.toContain('alone_default_qty')
@@ -178,7 +176,7 @@ describe('pass 2 — smoothing to the order minimum', () => {
   it('excludes products marked out of the shop total from the minimum maths', () => {
     const counted = input({ product_id: 'P1', on_hand: 45, daily_usage: 5, rule: { unit_cost: 100 } })
     const uncounted = input({ product_id: 'P2', on_hand: 45, daily_usage: 5, rule: { unit_cost: 100, include_in_total_shop_order: false } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 300 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(300) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([counted, uncounted], c)
     const p2 = res.lines.find((l) => l.product_id === 'P2')!
     // P2's dollars don't count, so the group total must come from P1 alone
@@ -190,7 +188,7 @@ describe('pass 2 — smoothing to the order minimum', () => {
   it('keeps package and bulk as separate groups with their own minimums', () => {
     const pkg = input({ product_id: 'P1', on_hand: 45, daily_usage: 5, rule: { uom: 'case', unit_cost: 100 } })
     const blk = input({ product_id: 'B1', on_hand: 45, daily_usage: 5, rule: { uom: 'bulk', unit_cost: 4, units_per_uom_gallons: 1 } })
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 200, bulk: 100 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(200), bulk: dollars(100) }, caseTypeMinimums: {}, usesOrderDays: false } })
     const res = generateOrder([pkg, blk], c)
     expect(res.groups).toHaveLength(2)
     const p = res.groups.find((g) => g.order_type === 'package')!
@@ -204,31 +202,38 @@ describe('pass 2 — smoothing to the order minimum', () => {
 describe('flags', () => {
   it('flags a product ordered recently while DOS was already high', () => {
     const c = ctx({
-      vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} },
-      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-10', dos_before: 40, qty: 5 }],
+      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
+      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-10', dos_before: 40, dos_ordered: null, qty: 5 }],
     })
     expect(generateOrder([input({ on_hand: 10, daily_usage: 5 })], c).lines[0].flags).toContain('recent_high_dos_order')
   })
 
   it('does not flag when the high-DOS order falls outside the lookback window', () => {
     const c = ctx({
-      vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} },
-      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-01-01', dos_before: 40, qty: 5 }],
+      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
+      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-01-01', dos_before: 40, dos_ordered: null, qty: 5 }],
     })
     expect(generateOrder([input()], c).lines[0].flags).not.toContain('recent_high_dos_order')
   })
 
-  it('flags when the last order covered fewer days than configured', () => {
-    // 1 case = 5 gal at 5/day = 1 day of cover, under the 7-day threshold
+  it('flags a recent order whose quantity was a large days-of-supply amount', () => {
     const c = ctx({
-      vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} },
-      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-12', dos_before: 5, qty: 1 }],
+      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
+      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-12', dos_before: 5, dos_ordered: 60, qty: 12 }],
     })
-    expect(generateOrder([input()], c).lines[0].flags).toContain('last_order_short_usage')
+    expect(generateOrder([input()], c).lines[0].flags).toContain('recent_large_dos_order')
+  })
+
+  it('does not raise the large-DOS flag when the ordered amount was modest', () => {
+    const c = ctx({
+      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
+      history: [{ location_id: 'L1', product_id: 'P1', order_date: '2026-08-12', dos_before: 5, dos_ordered: 5, qty: 1 }],
+    })
+    expect(generateOrder([input()], c).lines[0].flags).not.toContain('recent_large_dos_order')
   })
 
   it('flags a stocked-out product', () => {
-    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: 0 }, caseTypeLimits: {} } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } })
     expect(generateOrder([input({ on_hand: 0, daily_usage: 5 })], c).lines[0].flags).toContain('stocked_out')
   })
 })

@@ -30,7 +30,8 @@ export function OrdersV2FinalReview() {
     [loc],
   )
 
-  const vendorRules = useMemo(() => rulesFor(draft?.vendor_id ?? null, settings), [rulesFor, draft?.vendor_id, settings])
+  const vendorRules = useMemo(() => rulesFor(draft?.vendor_id ?? null, settings, vendors.byId(draft?.vendor_id ?? null)?.name),
+    [rulesFor, draft?.vendor_id, settings, vendors])
 
   /** Per shop x order type: dollars, minimum, and whether it clears. */
   const groups = useMemo(() => {
@@ -41,7 +42,7 @@ export function OrdersV2FinalReview() {
       if (!m.has(key)) {
         m.set(key, {
           locationId: l.location_id ?? '', orderType: l.order_type, lines: [], dollars: 0,
-          minimum: vendorRules.minimums[l.order_type]
+          minimum: vendorRules.minimums[l.order_type]?.dollars
             ?? (l.order_type === 'bulk' ? settings.order_minimum_dollars_bulk : settings.order_minimum_dollars_package),
         })
       }

@@ -4,11 +4,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { orderDayFromDelivery, parseWeekday } from '@/lib/orderDay'
 import toast from 'react-hot-toast'
 import {
   DEFAULT_ORDER_SETTINGS, orderTypeOf,
-  type DraftStatus, type GeneratedLine, type OrderSettings, type OrderType,
-  type ProductRule, type VendorRules,
+  type DraftStatus, type GeneratedLine, type MinimumType, type OrderMinimum,
+  type OrderSettings, type OrderType, type ProductRule, type VendorRules,
 } from './types'
 
 const sb = () => supabase as any
@@ -64,8 +65,14 @@ export function useOrderSettings() {
 
 // ── Vendor rules ────────────────────────────────────────────────────────
 
-export interface VendorRuleRow { id: string; vendor_id: string; order_type: OrderType; minimum_dollars: number }
-export interface CaseLimitRow { id: string; vendor_id: string; case_type: string; limit_qty: number }
+export interface VendorRuleRow {
+  id: string; vendor_id: string; order_type: OrderType
+  minimum_dollars: number; minimum_type: MinimumType; minimum_qty: number | null
+}
+export interface CaseLimitRow { id: string; vendor_id: string; case_type: string; minimum_qty: number }
+
+/** Order-day restrictions are RelaDyne-specific today. */
+export const isReladyne = (vendorName: string | null | undefined) => /reladyne/i.test(vendorName ?? '')
 
 export function useVendorRules() {
   const { profile } = useAuthStore()
@@ -78,31 +85,42 @@ export function useVendorRules() {
     if (!companyId) { setLoading(false); return }
     setLoading(true)
     const [m, c] = await Promise.all([
-      fetchAll<VendorRuleRow>('inventory', 'ov2_vendor_order_minimums', 'id, vendor_id, order_type, minimum_dollars', companyId),
-      fetchAll<CaseLimitRow>('inventory', 'ov2_vendor_case_type_limits', 'id, vendor_id, case_type, limit_qty', companyId),
+      fetchAll<VendorRuleRow>('inventory', 'ov2_vendor_order_minimums', 'id, vendor_id, order_type, minimum_dollars, minimum_type, minimum_qty', companyId),
+      fetchAll<CaseLimitRow>('inventory', 'ov2_vendor_case_type_minimums', 'id, vendor_id, case_type, minimum_qty', companyId),
     ])
     setMinimums(m); setCaseLimits(c); setLoading(false)
   }, [companyId])
   useEffect(() => { load() }, [load])
 
   /** Engine-shaped rules for one vendor, falling back to module defaults. */
-  const rulesFor = useCallback((vendorId: string | null, settings: OrderSettings): VendorRules => ({
-    vendor_id: vendorId,
-    minimums: {
-      package: minimums.find((x) => x.vendor_id === vendorId && x.order_type === 'package')?.minimum_dollars
-        ?? settings.order_minimum_dollars_package,
-      bulk: minimums.find((x) => x.vendor_id === vendorId && x.order_type === 'bulk')?.minimum_dollars
-        ?? settings.order_minimum_dollars_bulk,
-    },
-    caseTypeLimits: Object.fromEntries(
-      caseLimits.filter((x) => x.vendor_id === vendorId).map((x) => [x.case_type, Number(x.limit_qty)]),
-    ),
-  }), [minimums, caseLimits])
+  const rulesFor = useCallback((vendorId: string | null, settings: OrderSettings, vendorName?: string | null): VendorRules => {
+    const pick = (type: OrderType): OrderMinimum => {
+      const row = minimums.find((x) => x.vendor_id === vendorId && x.order_type === type)
+      if (row) return { type: row.minimum_type ?? 'dollars', dollars: Number(row.minimum_dollars ?? 0), qty: row.minimum_qty ?? null }
+      return type === 'bulk'
+        ? { type: settings.bulk_minimum_type, dollars: settings.order_minimum_dollars_bulk, qty: settings.bulk_minimum_qty }
+        : { type: settings.package_minimum_type, dollars: settings.order_minimum_dollars_package, qty: settings.package_minimum_qty }
+    }
+    return {
+      vendor_id: vendorId,
+      minimums: { package: pick('package'), bulk: pick('bulk') },
+      caseTypeMinimums: Object.fromEntries(
+        caseLimits.filter((x) => x.vendor_id === vendorId).map((x) => [x.case_type, Number(x.minimum_qty)]),
+      ),
+      // Order/delivery weekdays are a RelaDyne arrangement; other vendors can
+      // be ordered any day, so the restriction simply doesn't apply to them.
+      usesOrderDays: isReladyne(vendorName),
+    }
+  }, [minimums, caseLimits])
 
-  async function saveMinimum(vendorId: string, orderType: OrderType, dollars: number) {
+  async function saveMinimum(
+    vendorId: string, orderType: OrderType, dollars: number,
+    minimumType: MinimumType = 'dollars', qty: number | null = null,
+  ) {
     if (!companyId) return
     const { error } = await sb().schema('inventory').from('ov2_vendor_order_minimums')
       .upsert({ company_id: companyId, vendor_id: vendorId, order_type: orderType, minimum_dollars: dollars,
+        minimum_type: minimumType, minimum_qty: qty,
         updated_by: profile?.id ?? null, updated_at: new Date().toISOString() }, { onConflict: 'company_id,vendor_id,order_type' })
     if (error) { toast.error(error.message); return }
     toast.success('Minimum saved'); load()
@@ -110,15 +128,15 @@ export function useVendorRules() {
 
   async function saveCaseLimit(vendorId: string, caseType: string, qty: number) {
     if (!companyId) return
-    const { error } = await sb().schema('inventory').from('ov2_vendor_case_type_limits')
-      .upsert({ company_id: companyId, vendor_id: vendorId, case_type: caseType, limit_qty: qty,
+    const { error } = await sb().schema('inventory').from('ov2_vendor_case_type_minimums')
+      .upsert({ company_id: companyId, vendor_id: vendorId, case_type: caseType, minimum_qty: qty,
         updated_by: profile?.id ?? null, updated_at: new Date().toISOString() }, { onConflict: 'company_id,vendor_id,case_type' })
     if (error) { toast.error(error.message); return }
     toast.success('Case limit saved'); load()
   }
 
   async function removeCaseLimit(id: string) {
-    const { error } = await sb().schema('inventory').from('ov2_vendor_case_type_limits').delete().eq('id', id)
+    const { error } = await sb().schema('inventory').from('ov2_vendor_case_type_minimums').delete().eq('id', id)
     if (error) { toast.error(error.message); return }
     load()
   }
@@ -275,7 +293,9 @@ export function useDraft(draftId: string | null) {
 
 export interface OrderConfigRow { location_id: string; product_id: string; vendor_id: string | null; capacity: number | null; metadata: Record<string, unknown> | null }
 export interface UsageRow { location_id: string; product_id: string; on_hands: number | null; daily_usage: number | null }
-export interface VendorDayRow { location_id: string; vendor_id: string; order_dow: number | null; delivery_dow: number | null }
+// Derived from core.locations.reladyne_delivery_day rather than a table of
+// its own — the location list is already the source of truth for it.
+export interface VendorDayRow { location_id: string; order_dow: number | null; delivery_dow: number | null }
 
 /**
  * Everything the engine needs, pulled once per generation run: the shop's
@@ -291,13 +311,13 @@ export function useGenerationData() {
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const [configs, rules, usage, days, history] = await Promise.all([
+    const [configs, rules, usage, locRows, history] = await Promise.all([
       fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
       fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId),
-      fetchAll<VendorDayRow>('inventory', 'ov2_location_vendor_days', 'location_id, vendor_id, order_dow, delivery_dow', companyId),
-      fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, order_id', companyId),
+      fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
+      fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, order_id', companyId),
     ])
 
     // History lines carry no date of their own; join the header dates in.
@@ -306,7 +326,24 @@ export function useGenerationData() {
     const dateById = new Map<string, string>(((heads ?? []) as any[]).map((h) => [h.id, h.order_date]))
     const historyFacts = history
       .filter((h) => dateById.has(h.order_id))
-      .map((h) => ({ location_id: h.location_id, product_id: h.product_id, order_date: dateById.get(h.order_id)!, dos_before: h.dos_before, qty: Number(h.qty) }))
+      .map((h) => ({
+        location_id: h.location_id, product_id: h.product_id,
+        order_date: dateById.get(h.order_id)!,
+        dos_before: h.dos_before,
+        // How many days of supply that order added — dos_after minus dos_before.
+        dos_ordered: h.dos_after != null && h.dos_before != null ? Number(h.dos_after) - Number(h.dos_before) : null,
+        qty: Number(h.qty),
+      }))
+
+    // Order day = RelaDyne delivery day − 3 business days (lib/orderDay).
+    const days: VendorDayRow[] = (locRows ?? []).map((l: any) => {
+      const deliv = parseWeekday(l.reladyne_delivery_day)
+      return {
+        location_id: l.id,
+        delivery_dow: deliv,
+        order_dow: deliv == null ? null : parseWeekday(orderDayFromDelivery(l.reladyne_delivery_day)),
+      }
+    }).filter((d: VendorDayRow) => d.order_dow != null)
 
     return { configs, rules, usage, days, history: historyFacts }
   }, [companyId])
@@ -345,12 +382,16 @@ export function buildGenerationInputs(
   })
 }
 
-/** Shops whose configured order day for this vendor matches the order date. */
-export function eligibleLocations(days: VendorDayRow[], vendorId: string | null, orderDate: string): Set<string> | null {
-  const forVendor = days.filter((d) => d.vendor_id === vendorId && d.order_dow != null)
-  if (!forVendor.length) return null           // no restriction configured
+/**
+ * Shops whose order day falls on this date. Only RelaDyne restricts by day —
+ * for any other vendor this returns null, meaning "no restriction".
+ */
+export function eligibleLocations(days: VendorDayRow[], usesOrderDays: boolean, orderDate: string): Set<string> | null {
+  if (!usesOrderDays) return null
+  const withDays = days.filter((d) => d.order_dow != null)
+  if (!withDays.length) return null
   const dow = new Date(orderDate + 'T00:00:00').getDay()
-  return new Set(forVendor.filter((d) => d.order_dow === dow).map((d) => d.location_id))
+  return new Set(withDays.filter((d) => d.order_dow === dow).map((d) => d.location_id))
 }
 
 export const groupKeyOf = (l: { location_id: string; order_type: OrderType }) => `${l.location_id}|${l.order_type}`

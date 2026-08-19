@@ -54,15 +54,15 @@ export function OrdersV2Review() {
       const inputs = buildGenerationInputs(configs, rules, usage)
       const result = generateOrder(inputs, {
         settings,
-        vendor: rulesFor(draft.vendor_id, settings),
+        vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
         orderDate: draft.order_date,
-        eligibleLocationIds: eligibleLocations(days, draft.vendor_id, draft.order_date),
+        eligibleLocationIds: eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date),
         history,
         includeVmi,
       })
 
       // Days of supply at delivery uses the shop's configured delivery day.
-      const deliveryDow = new Map(days.filter((d) => d.vendor_id === draft.vendor_id).map((d) => [d.location_id, d.delivery_dow]))
+      const deliveryDow = new Map(days.map((d) => [d.location_id, d.delivery_dow]))
       const ruleByKey = new Map(inputs.map((i) => [`${i.location_id}|${i.product_id}`, i.rule]))
       const withDelivery = result.lines.map((l) => {
         const rule = ruleByKey.get(`${l.location_id}|${l.product_id}`)
@@ -86,7 +86,7 @@ export function OrdersV2Review() {
     } finally {
       setGenerating(false)
     }
-  }, [draft, profile?.company_id, fetchInputs, settings, rulesFor, replaceLines, reload])
+  }, [draft, profile?.company_id, fetchInputs, settings, rulesFor, replaceLines, reload, vendors])
 
   // Generate automatically the first time a fresh draft is opened.
   useEffect(() => {

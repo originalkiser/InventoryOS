@@ -42,9 +42,10 @@ export const dTime = (d: string | null | undefined) => {
 export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange' | 'sky'; title: string }> = {
   below_minimum: { label: 'Under min', tone: 'red', title: 'Shop is still under its order minimum after smoothing' },
   capacity_capped: { label: 'At capacity', tone: 'orange', title: 'Quantity limited by the shop\'s max capacity for this product' },
-  case_limit_capped: { label: 'Case cap', tone: 'orange', title: 'Quantity limited by the vendor case-type limit' },
+  case_minimum_topup: { label: 'Case min', tone: 'sky', title: 'Raised to meet the vendor case-type order minimum' },
   recent_high_dos_order: { label: 'Recent order', tone: 'orange', title: 'Ordered recently while days of supply was already high' },
-  last_order_short_usage: { label: 'Short usage', tone: 'orange', title: 'Last order covered fewer days than expected' },
+  recent_large_dos_order: { label: 'Large recent', tone: 'orange', title: 'Ordered recently, and that order was a large days-of-supply quantity' },
+  over_dos_max: { label: 'Over DOS max', tone: 'orange', title: 'Pushed past the soft days-of-supply ceiling to reach an order minimum' },
   stocked_out: { label: 'Out of stock', tone: 'red', title: 'No on-hand recorded for this product' },
   alone_default_qty: { label: 'Alone qty', tone: 'sky', title: 'Only line on the order — used its configured alone quantity' },
 }

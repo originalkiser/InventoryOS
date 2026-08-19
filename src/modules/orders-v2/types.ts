@@ -15,16 +15,42 @@ export const UOM_LABELS: Record<string, string> = {
 export const isBulkUom = (uom: string | null | undefined) => (uom ?? '').toLowerCase() === 'bulk'
 export const orderTypeOf = (uom: string | null | undefined): OrderType => (isBulkUom(uom) ? 'bulk' : 'package')
 
+// How an order minimum is expressed. 'dollars' is a floor on the whole
+// shop/order-type total; the per-product variants are floors on each line
+// (e.g. bulk must be at least N gallons of each product ordered).
+export type MinimumType = 'dollars' | 'units_per_product' | 'gallons_per_product'
+export const MINIMUM_TYPE_LABELS: Record<MinimumType, string> = {
+  dollars: '$ total for the order',
+  units_per_product: 'units per product',
+  gallons_per_product: 'gallons per product',
+}
+
+export interface OrderMinimum {
+  type: MinimumType
+  dollars: number
+  qty: number | null
+}
+
 export interface OrderSettings {
   days_of_supply_target: number
   days_of_supply_min_trigger: number
+  // Soft ceiling — pass 1 respects it, smoothing may exceed it to reach a minimum.
   days_of_supply_max: number
   order_minimum_dollars_package: number
   order_minimum_dollars_bulk: number
+  package_minimum_type: MinimumType
+  package_minimum_qty: number | null
+  bulk_minimum_type: MinimumType
+  bulk_minimum_qty: number | null
+  // Smoothing guard only: a product above this DOS is never pulled onto an
+  // order purely to reach a minimum. It does not block a genuinely-due product.
   skip_order_if_dos_over: number
   flag_if_ordered_over_dos: number
   flag_if_ordered_within_days: number
-  flag_if_last_order_usage_under: number
+  // Second flag pair: ordered within N days AND the days of supply ordered
+  // at the time exceeded M.
+  flag_recent_order_days: number
+  flag_recent_order_dos_over: number
   bulk_rounding_decimals: number
 }
 
@@ -35,10 +61,15 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   order_minimum_dollars_package: 375,
   // ASSUMPTION: same as package until a real bulk figure is supplied.
   order_minimum_dollars_bulk: 375,
+  package_minimum_type: 'dollars',
+  package_minimum_qty: null,
+  bulk_minimum_type: 'dollars',
+  bulk_minimum_qty: null,
   skip_order_if_dos_over: 45,
   flag_if_ordered_over_dos: 30,
   flag_if_ordered_within_days: 30,
-  flag_if_last_order_usage_under: 7,
+  flag_recent_order_days: 30,
+  flag_recent_order_dos_over: 30,
   bulk_rounding_decimals: 0,
 }
 
@@ -69,16 +100,22 @@ export interface GenerationInput {
 
 export interface VendorRules {
   vendor_id: string | null
-  minimums: Partial<Record<OrderType, number>>
-  caseTypeLimits: Record<string, number>   // case_type -> max qty per order
+  minimums: Partial<Record<OrderType, OrderMinimum>>
+  // case_type -> the order must total at least this many of it, whenever the
+  // order includes any. Not a per-product multiple.
+  caseTypeMinimums: Record<string, number>
+  // Order/delivery weekday restriction applies to this vendor (RelaDyne only
+  // today — other vendors can be ordered any day).
+  usesOrderDays: boolean
 }
 
 export type LineFlag =
   | 'below_minimum'          // shop still under minimum after smoothing
   | 'capacity_capped'        // max_capacity_gallons was the binding constraint
-  | 'case_limit_capped'      // vendor case-type limit was binding
+  | 'case_minimum_topup'     // raised to meet the vendor case-type minimum
   | 'recent_high_dos_order'  // ordered recently while DOS was already high
-  | 'last_order_short_usage' // last order's usage covered < X days
+  | 'recent_large_dos_order' // ordered recently with a large days-of-supply quantity
+  | 'over_dos_max'           // pushed past the soft DOS ceiling to reach a minimum
   | 'stocked_out'            // on hand is zero/effectively zero
   | 'alone_default_qty'      // sole line, used default_order_amount_if_alone
 
@@ -107,6 +144,9 @@ export interface HistoryFact {
   product_id: string
   order_date: string       // YYYY-MM-DD
   dos_before: number | null
+  // Days of supply the ordered quantity represented at the time — captured
+  // then rather than recomputed, since usage moves.
+  dos_ordered: number | null
   qty: number
 }
 
