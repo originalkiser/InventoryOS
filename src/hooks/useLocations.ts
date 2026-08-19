@@ -70,12 +70,21 @@ export function useLocations() {
 
   // Resolve a (possibly linked) field value for a location: base columns first,
   // then custom metadata by key. Used by cross-section linked columns.
+  //
+  // area_manager/owner/market/am_phone/am_email/director/rd_email were
+  // promoted from metadata to real columns on core.locations a while back
+  // (see the Location type) — this used to only ever check metadata, which
+  // is now stale/empty for any location touched since that promotion, so
+  // every one of those fields silently read blank. Matches locVal() in
+  // LocationLookupPage.tsx, which already got this right.
   function fieldValue(id: string | null, key: string): string {
     const l = byId(id)
     if (!l) return ''
     if (key === 'name') return l.name
     if (key === 'shop_city') return l.shop_city ?? ''
     if (key === 'region') return l.region ?? ''
+    const base = (l as any)[key]
+    if (base != null && base !== '') return String(base)
     const v = (l.metadata as any)?.[key]
     return v == null ? '' : String(v)
   }
