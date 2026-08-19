@@ -86,6 +86,95 @@ export function evaluateCounts(
   })
 }
 
+export interface TankVarianceCandidate {
+  location_id: string
+  product_id: string   // resolved internal id
+  tank_qts: number
+  on_hand: number
+  diff: number          // tank_qts - on_hand, signed
+}
+
+/**
+ * VMI tank readings vs. this period's counted on-hand, per (shop, product).
+ * Returns every pair with both a tank reading and a count row — the caller
+ * decides what counts as "too far off" against a (possibly draft) threshold,
+ * same live-preview split as the other rules.
+ *
+ * Resolves each tank's raw product text the same way the Tank Monitors page
+ * does (manual tank_product_map first, then Vendor Parts description/part
+ * number) — the SQL exceptions RPC does a raw string match with no such
+ * resolution, which this intentionally does not replicate; a tank reading
+ * that only resolves through Vendor Parts would otherwise never match here.
+ */
+export async function fetchTankVarianceCandidates(
+  companyId: string, countMonth: string, tankProductMap: Record<string, string>,
+): Promise<TankVarianceCandidate[]> {
+  const sb = supabase as any
+  const [tmRes, vpRes, cpRes] = await Promise.all([
+    sb.schema('inventory').from('tank_monitors')
+      .select('location_id, product_id, value, unit, inventory_time, reading_date, system_tank_id, serial_rtu_id')
+      .eq('company_id', companyId).eq('keep_fill', true).not('location_id', 'is', null).not('product_id', 'is', null),
+    sb.schema('inventory').from('vendor_parts').select('part_number, our_part_number, description').eq('company_id', companyId),
+    sb.schema('inventory').from('count_products').select('location_id, product_id, on_hand, created_at')
+      .eq('company_id', companyId).eq('count_month', countMonth),
+  ])
+
+  const parts = (vpRes.data ?? []) as { part_number: string | null; our_part_number: string | null; description: string | null }[]
+  const internalMap = new Map<string, string>()
+  for (const p of parts) {
+    if (!p.our_part_number) continue
+    const desc = p.description ? String(p.description).toLowerCase().trim() : ''
+    if (desc) internalMap.set(desc, p.our_part_number)
+    const pn = p.part_number ? String(p.part_number).toLowerCase().trim() : ''
+    if (pn && !internalMap.has(pn)) internalMap.set(pn, p.our_part_number)
+  }
+  const resolve = (raw: string) => {
+    const k = raw.toLowerCase().trim()
+    return tankProductMap[k] || internalMap.get(k) || raw
+  }
+  const readingTime = (v: { inventory_time?: string | null; reading_date?: string | null }) => {
+    const d = v.inventory_time ?? v.reading_date
+    return d ? new Date(d).getTime() : 0
+  }
+
+  // Latest reading per physical tank (system_tank_id/serial_rtu_id), then
+  // per (location, resolved product) keep whichever tank read most recently
+  // — mirrors the dedup Tank Monitors and the exceptions RPC both use.
+  const latestByTank = new Map<string, (typeof tmRes.data)[number]>()
+  for (const t of (tmRes.data ?? []) as any[]) {
+    const key = `${t.location_id}|${t.system_tank_id ?? t.serial_rtu_id ?? t.product_id}`
+    const ex = latestByTank.get(key)
+    if (!ex || readingTime(t) > readingTime(ex)) latestByTank.set(key, t)
+  }
+  const tankByKey = new Map<string, { qts: number; time: number }>()
+  for (const t of latestByTank.values()) {
+    const resolved = resolve(String(t.product_id))
+    const qts = String(t.unit ?? 'gal').toLowerCase().startsWith('gal') ? Number(t.value ?? 0) * 4 : Number(t.value ?? 0)
+    const key = `${t.location_id}|${resolved.toLowerCase()}`
+    const time = readingTime(t)
+    const ex = tankByKey.get(key)
+    if (!ex || time >= ex.time) tankByKey.set(key, { qts, time })
+  }
+
+  // Latest on-hand per (location, product) for the month — snapshot, not sum.
+  const onHandByKey = new Map<string, { on_hand: number; created_at: string }>()
+  for (const c of (cpRes.data ?? []) as any[]) {
+    if (!c.location_id) continue
+    const key = `${c.location_id}|${String(c.product_id).toLowerCase()}`
+    const ex = onHandByKey.get(key)
+    if (!ex || new Date(c.created_at) > new Date(ex.created_at)) onHandByKey.set(key, { on_hand: Number(c.on_hand ?? 0), created_at: c.created_at })
+  }
+
+  const out: TankVarianceCandidate[] = []
+  for (const [key, tank] of tankByKey) {
+    const oh = onHandByKey.get(key)
+    if (!oh) continue
+    const [location_id, product_id] = key.split('|')
+    out.push({ location_id, product_id, tank_qts: tank.qts, on_hand: oh.on_hand, diff: tank.qts - oh.on_hand })
+  }
+  return out
+}
+
 // Threshold-only shape used to drive evaluation from unsaved form state.
 export type DraftThresholds = Pick<
   RecountConfig,

@@ -5,7 +5,8 @@ import { useMonthEndStore } from '@/stores/monthEndStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Badge, Card, CardBody } from '@/components/ui'
-import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
+import { CategorySimplificationTab } from '@/modules/config/tabs/CategorySimplificationTab'
+import { CategoryExpectationsTab, TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -34,6 +35,7 @@ export function ProductExceptionsTab() {
   const [unlistedLimit] = useAppSetting<number | null>(UNLISTED_LIMIT_KEY, null)
 
   const [rows, setRows] = useState<ExceptionRow[] | null>(null)
+  const [editingExpectations, setEditingExpectations] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -69,12 +71,26 @@ export function ProductExceptionsTab() {
             </span>
             <span className="text-[11px] font-mono text-inky/70">
               Tank variance ±{tankVariance ?? DEFAULT_TANK_VARIANCE} qts · Unlisted limit {unlistedLimit == null ? 'unlimited' : unlistedLimit.toLocaleString()}
-              {' · '}adjust in Config → Expected On Hand
             </span>
           </div>
-          <Button loading={running} onClick={run}>Run Analysis</Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setEditingExpectations((v) => !v)}>
+              {editingExpectations ? 'Done Editing' : 'Edit Expectations'}
+            </Button>
+            <Button loading={running} onClick={run}>Run Analysis</Button>
+          </div>
         </CardBody>
       </Card>
+
+      {editingExpectations && (
+        <Card><CardBody className="flex flex-col gap-6">
+          <p className="text-[11px] font-mono text-inky/60">
+            Same tables Config → Category Simplification / Expected On Hand edit — changes here apply everywhere immediately.
+          </p>
+          <CategorySimplificationTab />
+          <div className="border-t border-navy/10 pt-6"><CategoryExpectationsTab /></div>
+        </CardBody></Card>
+      )}
 
       {error && (
         <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">

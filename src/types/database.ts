@@ -599,6 +599,7 @@ export interface RecountConfig {
   completion_max_adjustment: number | null
   var_med_threshold_type?: 'percentage' | 'dollar'
   var_last_threshold_type?: 'percentage' | 'dollar'
+  tank_variance_qts_threshold?: number | null
   created_at: string
   updated_at: string
 }

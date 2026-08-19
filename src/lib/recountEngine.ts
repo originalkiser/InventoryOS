@@ -142,4 +142,5 @@ export const RECOUNT_FLAG_LABELS: Record<string, string> = {
   high_ending_balance: 'High ending balance',
   variance_vs_median: 'Variance vs median',
   variance_vs_last_month: 'Variance vs last month',
+  tank_monitor_variance: 'Tank monitor variance',
 }

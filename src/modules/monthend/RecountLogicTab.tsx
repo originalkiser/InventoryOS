@@ -2,13 +2,15 @@
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Input, Toggle, Badge, Card, CardHeader, CardBody } from '@/components/ui'
 import { RECOUNT_FLAG_LABELS } from '@/lib/recountEngine'
 import {
-  fetchPeriodEvalData, evaluateCounts, draftToConfig,
-  type PeriodEvalData, type DraftThresholds,
+  fetchPeriodEvalData, evaluateCounts, draftToConfig, fetchTankVarianceCandidates,
+  type PeriodEvalData, type DraftThresholds, type TankVarianceCandidate,
 } from './recountData'
 import { locationLabel } from './countsShared'
+import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import type { RecountConfig } from '@/types'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -24,6 +26,7 @@ function flagsToReason(flags: string[]): string {
   if (flags.includes('high_oil_adjustments')) return 'Too many oil adjustments'
   if (flags.includes('variance_vs_median')) return 'Unexpected ending balance'
   if (flags.includes('variance_vs_last_month')) return 'Unexpected ending balance'
+  if (flags.includes('tank_monitor_variance')) return 'Tank monitor variance'
   return flags.join(', ')
 }
 
@@ -48,6 +51,7 @@ export function RecountLogicTab() {
   const [balEnabled, setBalEnabled] = useState(false)
   const [varMedEnabled, setVarMedEnabled] = useState(false)
   const [varLastEnabled, setVarLastEnabled] = useState(false)
+  const [tankVarEnabled, setTankVarEnabled] = useState(false)
 
   // Threshold inputs (strings)
   const [lowAdj, setLowAdj] = useState('')
@@ -58,6 +62,7 @@ export function RecountLogicTab() {
   const [highBal, setHighBal] = useState('')
   const [varMed, setVarMed] = useState('')
   const [varLast, setVarLast] = useState('')
+  const [tankVarQts, setTankVarQts] = useState('')
   const [lookback, setLookback] = useState(String(DEFAULT_LOOKBACK))
 
   // Per-rule threshold types
@@ -69,6 +74,10 @@ export function RecountLogicTab() {
   const [completionMaxAdj] = useState('')
 
   const [evalData, setEvalData] = useState<PeriodEvalData | null>(null)
+  const [tankCandidates, setTankCandidates] = useState<TankVarianceCandidate[]>([])
+  const [tankProductMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
+  const [tankVariance] = useAppSetting<number>(TANK_VARIANCE_KEY, DEFAULT_TANK_VARIANCE)
+  const [unlistedLimit] = useAppSetting<number | null>(UNLISTED_LIMIT_KEY, null)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'pending' | 'saved'>('idle')
@@ -89,6 +98,8 @@ export function RecountLogicTab() {
       setBalEnabled(c.low_balance_threshold != null || c.high_balance_threshold != null)
       setVarMedEnabled(c.variance_to_median_pct != null)
       setVarLastEnabled(c.variance_to_last_month_pct != null)
+      setTankVarEnabled(c.tank_variance_qts_threshold != null)
+      setTankVarQts(c.tank_variance_qts_threshold?.toString() ?? '')
       setLowAdj(c.low_adj_threshold?.toString() ?? '')
       setHighAdj(c.high_adj_threshold?.toString() ?? '')
       setLowOilAdj(c.oil_low_adj_threshold?.toString() ?? '')
@@ -121,8 +132,8 @@ export function RecountLogicTab() {
     }, 1500)
     return () => clearTimeout(autoSaveTimerRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled,
-      lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast,
+  }, [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled, tankVarEnabled,
+      lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, tankVarQts,
       lookback, varMedThresholdType, varLastThresholdType])
 
   // Load period data for the live preview (once per period)
@@ -133,7 +144,31 @@ export function RecountLogicTab() {
     return () => { cancelled = true }
   }, [companyId, countMonth])
 
+  // VMI tank readings vs. this period's counted on-hand — fetched once per
+  // period; which pairs actually exceed the (possibly draft) threshold is
+  // computed below so the preview still updates live as it's edited.
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    fetchTankVarianceCandidates(companyId, countMonth, tankProductMap).then((d) => { if (!cancelled) setTankCandidates(d) })
+    return () => { cancelled = true }
+  }, [companyId, countMonth, tankProductMap])
+
   const lookbackN = numOrNull(lookback) ?? DEFAULT_LOOKBACK
+  const tankVarThreshold = tankVarEnabled ? numOrNull(tankVarQts) : null
+
+  // Shops with at least one VMI product whose tank reading is off from its
+  // counted on-hand by more than the threshold.
+  const tankVarByShop = useMemo(() => {
+    const m = new Map<string, TankVarianceCandidate[]>()
+    if (tankVarThreshold == null) return m
+    for (const c of tankCandidates) {
+      if (Math.abs(c.diff) <= tankVarThreshold) continue
+      if (!m.has(c.location_id)) m.set(c.location_id, [])
+      m.get(c.location_id)!.push(c)
+    }
+    return m
+  }, [tankCandidates, tankVarThreshold])
 
   // Draft thresholds derived from current (unsaved) form state
   const draft: DraftThresholds = useMemo(() => ({
@@ -150,11 +185,19 @@ export function RecountLogicTab() {
     var_last_threshold_type: varLastThresholdType,
   }), [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled, lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, lookbackN, varMedThresholdType, varLastThresholdType])
 
-  // Live evaluation against the draft rules
+  // Live evaluation against the draft rules, plus tank-variance shops that
+  // the dollar/count rules above have no way to see (evaluateRecountFlags
+  // only ever looks at MonthlyCount fields — tank data is merged in here
+  // instead of threading it through that pure function).
   const evaluated = useMemo(() => {
     if (!evalData) return []
-    return evaluateCounts(evalData.counts, evalData.histByLoc, draftToConfig(draft), lookbackN)
-  }, [evalData, draft, lookbackN])
+    const base = evaluateCounts(evalData.counts, evalData.histByLoc, draftToConfig(draft), lookbackN)
+    if (tankVarByShop.size === 0) return base
+    return base.map((e) => {
+      if (!e.locationId || !tankVarByShop.has(e.locationId)) return e
+      return { ...e, flags: [...e.flags, 'tank_monitor_variance'] }
+    })
+  }, [evalData, draft, lookbackN, tankVarByShop])
 
   const flagged = evaluated.filter((e) => e.flags.length > 0)
   const totalShops = evaluated.length
@@ -185,14 +228,14 @@ export function RecountLogicTab() {
       savedId = data.id
       setConfigId(data.id)
     }
-    // best-effort: oil adjustment threshold columns (may not exist in prod yet)
+    // best-effort: columns from migrations that may not have run in prod yet
     if (savedId) {
       sb.schema('inventory').from('recount_config')
-        .update({ oil_low_adj_threshold, oil_high_adj_threshold })
+        .update({ oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold })
         .eq('id', savedId)
         .then(() => {})
     }
-    setRecountConfig({ id: savedId!, ...payload, oil_low_adj_threshold, oil_high_adj_threshold } as unknown as RecountConfig)
+    setRecountConfig({ id: savedId!, ...payload, oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold } as unknown as RecountConfig)
     return savedId
   }
 
@@ -218,33 +261,60 @@ export function RecountLogicTab() {
 
       // Skip locations that already have an auto recount for this period
       const sb = supabase as any
-      const { data: existing } = await sb
-        .schema('inventory').from('recount_requests')
-        .select('location_id, recount_fields')
-        .eq('company_id', companyId)
-        .filter('recount_fields->>count_month', 'eq', countMonth)
-        .filter('recount_fields->>source', 'eq', 'auto')
+      const [{ data: existing }, { data: exceptions, error: rpcError }] = await Promise.all([
+        sb.schema('inventory').from('recount_requests')
+          .select('location_id, recount_fields')
+          .eq('company_id', companyId)
+          .filter('recount_fields->>count_month', 'eq', countMonth)
+          .filter('recount_fields->>source', 'eq', 'auto'),
+        // Category-simplification / expected-on-hand exceptions for the whole
+        // period, so a flagged shop's recount can point at the specific
+        // products actually driving its ending balance rather than leaving
+        // requested_products empty.
+        sb.rpc('get_product_expectation_exceptions', {
+          p_company_id: companyId, p_count_month: countMonth,
+          p_tank_variance: tankVariance ?? DEFAULT_TANK_VARIANCE, p_unlisted_limit: unlistedLimit ?? null,
+        }),
+      ])
+      if (rpcError) toast.error(`Could not load product exceptions — recounts will still generate without them (${rpcError.message})`)
       const already = new Set((existing ?? []).map((r: any) => r.location_id))
+
+      const exceptionsByShop = new Map<string, { product_id: string; category: string | null; basis: string; on_hand: number; expected_limit: number }[]>()
+      for (const r of (exceptions ?? []) as any[]) {
+        if (!r.location_id) continue
+        if (!exceptionsByShop.has(r.location_id)) exceptionsByShop.set(r.location_id, [])
+        exceptionsByShop.get(r.location_id)!.push({ product_id: r.product_id, category: r.category, basis: r.basis, on_hand: r.on_hand, expected_limit: r.expected_limit })
+      }
 
       const today = format(new Date(), 'yyyy-MM-dd')
       const rows = flaggedWithLoc
         .filter((e) => !already.has(e.locationId))
-        .map((e) => ({
-          company_id: companyId,
-          location_id: e.locationId,
-          recount_type: 'Oil Recount',
-          requested_products: [],
-          request_date: today,
-          recount_fields: {
-            count_month: countMonth,
-            source: 'auto',
-            flags: e.flags,
-            recount_reason: flagsToReason(e.flags),
-          },
-          completed_flags: [false],
-          completed_dates: [null],
-          recount_status: 'open',
-        }))
+        .map((e) => {
+          const catFlags = exceptionsByShop.get(e.locationId!) ?? []
+          const tankFlags = tankVarByShop.get(e.locationId!) ?? []
+          const productFlags = [
+            ...catFlags.map((x) => ({ source: 'category_limit' as const, product_id: x.product_id, category: x.category, basis: x.basis, reason: `${x.on_hand} on hand > ${x.expected_limit} ${x.basis} limit` })),
+            ...tankFlags.map((x) => ({ source: 'tank_variance' as const, product_id: x.product_id, category: null, basis: 'tank_variance', reason: `tank ${x.tank_qts.toFixed(1)} qt vs ${x.on_hand.toFixed(1)} on hand (${x.diff > 0 ? '+' : ''}${x.diff.toFixed(1)} qt)` })),
+          ]
+          const requestedProducts = productFlags.map((p) => `${p.product_id} (${p.reason})`)
+          return {
+            company_id: companyId,
+            location_id: e.locationId,
+            recount_type: requestedProducts.length > 0 ? 'Partial Recount Products' : 'Oil Recount',
+            requested_products: requestedProducts,
+            request_date: today,
+            recount_fields: {
+              count_month: countMonth,
+              source: 'auto',
+              flags: e.flags,
+              recount_reason: flagsToReason(e.flags),
+              product_flags: productFlags,
+            },
+            completed_flags: [false],
+            completed_dates: [null],
+            recount_status: 'open',
+          }
+        })
 
       if (rows.length === 0) {
         toast('All flagged shops already have recounts for this period', { icon: 'ℹ️' })
@@ -356,6 +426,17 @@ export function RecountLogicTab() {
               placeholder="e.g. 20"
             />
           </div>
+        </RuleCard>
+
+        <RuleCard
+          title="Tank Monitor Variance"
+          enabled={tankVarEnabled}
+          onToggle={setTankVarEnabled}
+          preview={tankVarEnabled && tankVarQts.trim()
+            ? `Flag shops where a VMI tank's reading differs from its counted on-hand by more than ${tankVarQts} quarts.`
+            : 'Disabled — set a threshold to enable. VMI tanks only (keep_fill), compared to this period\'s counted on-hand.'}
+        >
+          <Input label="Variance (quarts)" value={tankVarQts} onChange={(e) => setTankVarQts(e.target.value)} placeholder="e.g. 50" />
         </RuleCard>
       </div>
 
