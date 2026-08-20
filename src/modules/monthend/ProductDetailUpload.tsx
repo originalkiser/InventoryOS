@@ -14,6 +14,25 @@ import toast from 'react-hot-toast'
 
 type Mode = 'file' | 'live' | 'manual'
 
+// A transient network blip (the browser's fetch itself failing, not
+// Postgres rejecting the data) shouldn't cost 30k+ rows of progress and a
+// full rollback — retried a couple times with a short backoff before
+// giving up. A real data/constraint error from Postgres fails the same
+// way every time, so retrying it would just waste time; only the
+// generic "the request never completed" shape gets retried.
+async function insertChunkWithRetry(rows: Record<string, unknown>[], attempts = 3) {
+  let last: { error: { message: string } | null } = { error: null }
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = await (supabase as any).schema('inventory').from('count_products').insert(rows)
+    if (!result.error) return result
+    last = result
+    const isNetworkError = /failed to fetch|network/i.test(String(result.error.message ?? ''))
+    if (!isNetworkError || attempt === attempts) break
+    await new Promise((r) => setTimeout(r, 600 * attempt))
+  }
+  return last
+}
+
 interface Props {
   locations: Location[]
   companyId: string
@@ -89,9 +108,7 @@ export function ProductDetailUpload({
 
       for (let i = 0; i < chunks.length; i += CONCURRENCY) {
         const group = chunks.slice(i, i + CONCURRENCY)
-        const results = await Promise.all(
-          group.map((slice) => (supabase as any).schema('inventory').from('count_products').insert(slice)),
-        )
+        const results = await Promise.all(group.map((slice) => insertChunkWithRetry(slice)))
         const failed = results.find((r) => r.error)
         if (failed?.error) {
           // Roll back whatever landed so a mid-import failure doesn't leave a
@@ -99,6 +116,7 @@ export function ProductDetailUpload({
           // all-or-nothing guarantee the single insert this replaced had.
           await (supabase as any).schema('inventory').from('count_products').delete().eq('upload_batch_id', batch.id)
           await (supabase as any).schema('inventory').from('count_batches').delete().eq('id', batch.id)
+          onChanged() // the rollback above needs to be reflected in the batch list, not just the database
           throw new Error(`${failed.error.message} — import rolled back, nothing was saved`)
         }
         setImportProgress((p) => p && { done: Math.min(p.total, p.done + group.reduce((s, g) => s + g.length, 0)), total: p.total })
