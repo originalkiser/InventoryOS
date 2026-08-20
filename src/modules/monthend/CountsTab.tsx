@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
@@ -79,20 +79,32 @@ export function CountsTab() {
 
   useEffect(() => { loadAll() }, [loadAll])
 
-  // Realtime — reload + toast on any change to the three count tables
+  // Realtime — reload on any change to the three count tables. Debounced:
+  // Postgres emits roughly one change event per row, and count_products
+  // sees bulk imports of 250k+ rows — reacting to every single one fired
+  // this page's full reload (6 queries, including an aggregation RPC) up
+  // to 250k times over, concurrently with the import itself hammering the
+  // same connection. A quiet-period collapse turns that into one reload
+  // shortly after the burst settles, regardless of how many rows changed.
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const debouncedReload = useCallback(() => {
+    clearTimeout(reloadTimerRef.current)
+    reloadTimerRef.current = setTimeout(() => { loadAll() }, 1500)
+  }, [loadAll])
+
   useEffect(() => {
     if (!companyId) return
     const channel = supabase
       .channel('monthend-counts-rt')
       .on('postgres_changes', { event: '*', schema: 'inventory', table: 'counts', filter: `company_id=eq.${companyId}` },
-        () => { toast('Counts updated', { icon: '📊' }); loadAll() })
+        () => { toast('Counts updated', { icon: '📊' }); debouncedReload() })
       .on('postgres_changes', { event: '*', schema: 'inventory', table: 'count_products', filter: `company_id=eq.${companyId}` },
-        () => { loadAll() })
+        () => { debouncedReload() })
       .on('postgres_changes', { event: '*', schema: 'inventory', table: 'count_batches', filter: `company_id=eq.${companyId}` },
-        () => { toast('Batches updated', { icon: '📦' }); loadAll() })
+        () => { toast('Batches updated', { icon: '📦' }); debouncedReload() })
       .subscribe()
-    return () => { void supabase.removeChannel(channel) }
-  }, [companyId, loadAll])
+    return () => { clearTimeout(reloadTimerRef.current); void supabase.removeChannel(channel) }
+  }, [companyId, debouncedReload])
 
   // ---- Derive summary rows (one per location) with live recount evaluation ----
   const summaryRows: SummaryResultRow[] = (() => {
