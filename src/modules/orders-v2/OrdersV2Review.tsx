@@ -389,7 +389,13 @@ export function OrdersV2Review() {
                   {open && (
                     <div className="px-3 pb-2">
                       <table className="w-full text-[11px] font-mono">
-                        <thead><tr className="text-inky/60 uppercase"><td className="py-1">Product</td><td className="text-right">Qty</td><td className="text-right">$</td><td>Why</td></tr></thead>
+                        <thead><tr className="text-inky/60 uppercase">
+                          <td className="py-1">Product</td><td>UOM</td>
+                          <td className="text-right">Capacity</td><td className="text-right">On Hand</td>
+                          <td className="text-right">Usage/Day</td><td className="text-right">DOS Now</td>
+                          <td className="text-right">Qty</td><td className="text-right">DOS After</td>
+                          <td className="text-right">$</td><td>Why</td>
+                        </tr></thead>
                         <tbody>
                           {rows.map((r) => (
                             <SmoothingRow key={r.line?.id ?? r.input?.product_id}
@@ -447,6 +453,13 @@ function SmoothingRow({ input, line, orderType, onPatch, onAdd }: {
   const productId = line?.product_id ?? input?.product_id ?? ''
   const unitCost = Number(line?.unit_cost ?? input?.rule.unit_cost ?? 0)
   const uom = line?.uom ?? input?.rule.uom ?? null
+  const capacity = line?.max_capacity_gallons ?? input?.rule.max_capacity_gallons ?? null
+  const onHand = line?.on_hand ?? input?.on_hand ?? null
+  const dailyUsage = line?.daily_usage ?? input?.daily_usage ?? null
+  // A candidate with no line yet hasn't had anything ordered, so "after"
+  // is just "now" until a qty is actually added.
+  const dosNow = line?.dos_before ?? daysOfSupply(onHand, dailyUsage)
+  const dosAfter = line?.dos_after ?? dosNow
   const why = line?.triggered_smoothing ? 'triggered smoothing'
     : line?.added_by_smoothing ? 'added to reach minimum'
     : 'not on order'
@@ -457,6 +470,11 @@ function SmoothingRow({ input, line, orderType, onPatch, onAdd }: {
   return (
     <tr className="border-t border-navy/10">
       <td className="py-1 text-navy">{productId}</td>
+      <td className="text-inky/70">{uom ?? '—'}</td>
+      <td className="text-right text-inky/70">{num(capacity, 0)}</td>
+      <td className="text-right text-inky/70">{num(onHand)}</td>
+      <td className="text-right text-inky/70">{num(dailyUsage)}</td>
+      <td className="text-right text-inky/70">{dos(dosNow)}</td>
       <td className="text-right">
         {line ? (
           <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
@@ -469,6 +487,7 @@ function SmoothingRow({ input, line, orderType, onPatch, onAdd }: {
             className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
         ) : null}
       </td>
+      <td className="text-right text-inky/70">{dos(dosAfter)}</td>
       <td className="text-right text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>
       <td className={whyClass}>{why}</td>
     </tr>
