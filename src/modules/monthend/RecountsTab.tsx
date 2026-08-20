@@ -39,6 +39,31 @@ interface RecountRow extends RecountRequest {
 
 const col = createColumnHelper<RecountRow>()
 
+// Wraps instead of truncating to one invisible line, but caps at a single
+// row's height by default — a long product_flags list (each entry carries
+// its "on hand > limit" reason) would otherwise blow the row out to several
+// lines for every recount, not just the ones being looked at. Expand is
+// opt-in per row, never automatic.
+function ProductsCell({ items }: { items: string[] }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!items.length) return <span className="text-inky/50">—</span>
+  const text = items.join(', ')
+  const needsToggle = items.length > 1 || text.length > 30
+  return (
+    <div className="max-w-[260px]">
+      <p className={['text-xs whitespace-normal break-words', expanded ? '' : 'line-clamp-1'].join(' ')}>{text}</p>
+      {needsToggle && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+          className="text-[10px] font-mono text-inky/60 hover:text-inky hover:underline mt-0.5"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function RecountsTab() {
   const { profile } = useAuthStore()
   const { getCountMonth } = useMonthEndStore()
@@ -123,12 +148,7 @@ export function RecountsTab() {
     col.accessor('requested_products', {
       header: 'Products',
       enableSorting: false,
-      cell: (i) => {
-        const p = (i.getValue() ?? []) as string[]
-        return p.length
-          ? <span className="text-xs truncate max-w-[200px] block">{p.join(', ')}</span>
-          : <span className="text-inky/50">—</span>
-      },
+      cell: (i) => <ProductsCell items={(i.getValue() ?? []) as string[]} />,
     }),
     col.accessor('request_date', {
       header: 'Requested',

@@ -96,17 +96,17 @@ export function MonthEndPage() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="counts">Counts</TabsTrigger>
+          <TabsTrigger value="product_exceptions">Product Exceptions</TabsTrigger>
           <TabsTrigger value="recount_logic">Recount Logic</TabsTrigger>
           <TabsTrigger value="recounts">Recounts</TabsTrigger>
-          <TabsTrigger value="product_exceptions">Product Exceptions</TabsTrigger>
           <TabsTrigger value="review">Review</TabsTrigger>
           <TabsTrigger value="not_submitted">Not Submitted</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewTab /></TabsContent>
         <TabsContent value="counts"><CountsTab /></TabsContent>
+        <TabsContent value="product_exceptions"><ProductExceptionsTab /></TabsContent>
         <TabsContent value="recount_logic"><RecountLogicTab /></TabsContent>
         <TabsContent value="recounts"><RecountsTab /></TabsContent>
-        <TabsContent value="product_exceptions"><ProductExceptionsTab /></TabsContent>
         <TabsContent value="review"><ReviewTab /></TabsContent>
         <TabsContent value="not_submitted"><NotSubmittedTab /></TabsContent>
       </Tabs>
