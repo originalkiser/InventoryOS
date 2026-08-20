@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
@@ -28,26 +28,71 @@ export function useLocations() {
 
   useEffect(() => { reload() }, [reload])
 
+  // Precomputed once per data load rather than per resolveId call — each
+  // call used to be up to four full linear scans (locations twice,
+  // posMaps twice), which is fine for a handful of calls but becomes a
+  // multi-second, tab-freezing blocking loop at the row counts a large
+  // file import calls this in (a 250k-row product detail file was the
+  // one that surfaced it, but every large-file importer calling
+  // resolveId per row shares the same hook). First match in `locations`'
+  // array order (sorted by name) wins on a key collision, matching what
+  // .find() returned before.
+  const byExactKey = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const l of locations) {
+      const idKey = l.id.toLowerCase(); if (!m.has(idKey)) m.set(idKey, l.id)
+      if (l.name) { const k = l.name.toLowerCase(); if (!m.has(k)) m.set(k, l.id) }
+      if (l.shop_city) { const k = l.shop_city.toLowerCase(); if (!m.has(k)) m.set(k, l.id) }
+    }
+    return m
+  }, [locations])
+  const posByExactKey = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of posMaps) {
+      if (!p.pos_string || !p.location_id) continue
+      const k = String(p.pos_string).trim().toLowerCase()
+      if (!m.has(k)) m.set(k, p.location_id)
+    }
+    return m
+  }, [posMaps])
+  const byCodeNumber = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const l of locations) {
+      const cd = String(l.name ?? '').match(/\d+/)?.[0]
+      if (cd == null) continue
+      const n = Number(cd); if (!m.has(n)) m.set(n, l.id)
+    }
+    return m
+  }, [locations])
+  const posByNumber = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const p of posMaps) {
+      if (!p.location_id) continue
+      const pd = String(p.pos_string ?? '').match(/\d+/)?.[0]
+      if (pd == null) continue
+      const n = Number(pd); if (!m.has(n)) m.set(n, p.location_id)
+    }
+    return m
+  }, [posMaps])
+
   function resolveId(value: string | null | undefined): string | null {
     const v = String(value ?? '').trim().toLowerCase()
     if (!v) return null
-    const m = locations.find(
-      (l) => l.id.toLowerCase() === v || l.name.toLowerCase() === v || (l.shop_city ?? '').toLowerCase() === v
-    )
-    if (m) return m.id
+    const exact = byExactKey.get(v)
+    if (exact) return exact
     // Exact POS-string match.
-    const pos = posMaps.find((p) => String(p.pos_string ?? '').trim().toLowerCase() === v)
-    if (pos?.location_id) return pos.location_id
+    const pos = posByExactKey.get(v)
+    if (pos) return pos
     // Numeric fallback: match the value's number against location-code numbers
     // (handles "SB 1521 - Port Arthur" → code 1521, and "001" ↔ "1") or a POS
     // string's number.
     const digits = String(value ?? '').match(/\d+/)?.[0]
     if (digits) {
       const n = Number(digits)
-      const byCode = locations.find((l) => { const cd = String(l.name ?? '').match(/\d+/)?.[0]; return cd != null && Number(cd) === n })
-      if (byCode) return byCode.id
-      const posByNum = posMaps.find((p) => { const pd = String(p.pos_string ?? '').match(/\d+/)?.[0]; return pd != null && Number(pd) === n && p.location_id })
-      if (posByNum?.location_id) return posByNum.location_id
+      const byCode = byCodeNumber.get(n)
+      if (byCode) return byCode
+      const posByNum = posByNumber.get(n)
+      if (posByNum) return posByNum
     }
     return null
   }
