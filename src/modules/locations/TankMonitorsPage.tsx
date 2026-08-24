@@ -11,7 +11,7 @@ import { ColumnManagerModal } from './ColumnManagerModal'
 import { TankEmailModal, type EmailTarget } from './TankEmailModal'
 import { TankEmailTemplates } from './TankEmailTemplates'
 import { TankProductMapping } from './TankProductMapping'
-import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from './tankEmail'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from './tankEmail'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import type { TankMonitor, Location, VendorPart } from '@/types'
 import { format } from 'date-fns'
@@ -187,8 +187,10 @@ export function TankMonitorsPage() {
   const hasPendingComm = useCallback((m: TankMonitor) => {
     const serial = m.serial_rtu_id || m.system_tank_id || ''
     if (!serial || !m.location_id) return false
-    return offlinePendingSet.get(m.location_id)?.has(serial) ?? false
-  }, [offlinePendingSet])
+    const shopRows = offlineCommsRows.filter((r) => r.location_id === m.location_id)
+    const pending = backfillPendingBlanket(offlinePendingSet.get(m.location_id) ?? new Set(), shopRows, [serial])
+    return pending.has(serial)
+  }, [offlineCommsRows, offlinePendingSet])
   // Exactly the badge's criteria — VMI/keepfill only (not the tab toggle),
   // assigned to a shop, offline, not ignored, not recently emailed, not
   // still pending a response. The sidebar counts distinct shops across these.

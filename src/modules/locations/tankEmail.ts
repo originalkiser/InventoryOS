@@ -209,6 +209,30 @@ export function buildPendingCommSet(
   return byLoc
 }
 
+// A still-open comm logged with no specific serials (a legacy row, or one
+// entered by hand outside the email flow — Location Comms lets someone add a
+// row for a shop without picking individual monitors) can't say which
+// serials it covers, but it almost certainly covers whatever's currently
+// offline at that shop. Mirrors backfillTodayBlanket's blank-comm handling,
+// but deliberately has NO time cutoff — the whole point of "pending" here is
+// to keep suppressing a monitor past the skip-days window, so time-limiting
+// this defeats that.
+export function backfillPendingBlanket(
+  pending: Set<string>,
+  rows: { products: unknown; status: string | null }[],
+  serials: (string | null | undefined)[],
+): Set<string> {
+  const hasOpenBlankComm = rows.some((r) => {
+    if (!r.status || !OPEN_COMM_STATUSES.has(r.status)) return false
+    const list = Array.isArray(r.products) ? r.products : []
+    return list.length === 0
+  })
+  if (!hasOpenBlankComm) return pending
+  const next = new Set(pending)
+  for (const s of serials) { if (s) next.add(s) }
+  return next
+}
+
 // Per-monitor last-emailed dates, derived from inventory.location_comms rows
 // logged by the tank email workflow (each row's `products` holds the serials
 // that email covered — see TankEmailModal.logAndNext). Returns location_id ->
