@@ -8,13 +8,15 @@ import { TankMonitorTab } from './tabs/TankMonitorTab'
 import { EndingBalancesTab } from './tabs/EndingBalancesTab'
 import { CategorySimplificationTab } from './tabs/CategorySimplificationTab'
 import { CategoryExpectationsTab } from './tabs/CategoryExpectationsTab'
+import { ProductOverridesTab } from './tabs/ProductOverridesTab'
 import { LocationCpdTab } from './tabs/LocationCpdTab'
+import { LocationCommsConfigTab } from './tabs/LocationCommsConfigTab'
 import { VendorPartsTab } from './tabs/VendorPartsTab'
 import { OrderConfigTab } from './tabs/OrderConfigTab'
 import { ProductMappingTab } from './tabs/ProductMappingTab'
 import { GlobalProductsTab } from './tabs/GlobalProductsTab'
 
-const CONFIG_TABS = ['uom-mappings', 'vendor-parts', 'order-config', 'product-mapping', 'global-products', 'product-usage', 'tank-monitor', 'ending-balances', 'category-simplification', 'category-expectations', 'location-cpd']
+const CONFIG_TABS = ['uom-mappings', 'vendor-parts', 'order-config', 'product-mapping', 'global-products', 'product-usage', 'tank-monitor', 'ending-balances', 'category-simplification', 'category-expectations', 'product-overrides', 'location-cpd', 'location-comms']
 const LAST_TAB_KEY = 'config:lastTab'
 
 export function ConfigPage() {
@@ -66,7 +68,9 @@ export function ConfigPage() {
           <TabsTrigger value="ending-balances">Month End Ending Balance</TabsTrigger>
           <TabsTrigger value="category-simplification">Category Simplification</TabsTrigger>
           <TabsTrigger value="category-expectations">Expected On Hand</TabsTrigger>
+          <TabsTrigger value="product-overrides">Product Overrides</TabsTrigger>
           <TabsTrigger value="location-cpd">Location CPD</TabsTrigger>
+          <TabsTrigger value="location-comms">Location Comms</TabsTrigger>
         </TabsList>
 
         <TabsContent value="uom-mappings"><UomMappingsTab /></TabsContent>
@@ -79,7 +83,9 @@ export function ConfigPage() {
         <TabsContent value="ending-balances"><EndingBalancesTab /></TabsContent>
         <TabsContent value="category-simplification"><CategorySimplificationTab /></TabsContent>
         <TabsContent value="category-expectations"><CategoryExpectationsTab /></TabsContent>
+        <TabsContent value="product-overrides"><ProductOverridesTab /></TabsContent>
         <TabsContent value="location-cpd"><LocationCpdTab /></TabsContent>
+        <TabsContent value="location-comms"><LocationCommsConfigTab /></TabsContent>
       </Tabs>
     </div>
   )

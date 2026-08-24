@@ -48,11 +48,18 @@ export interface CommsConfig {
 export const DEFAULT_COMMS_CONFIG: CommsConfig = {
   contactMethods: ['Phone', 'Email', 'Text', 'In Person', 'Teams'],
   whoContacted: ['Procurement', 'Area Manager', 'Shop Manager'],
-  commTypes: ['Product Request', 'Exception Reporting'],
+  commTypes: ['Product Request', 'Exception Reporting', 'Offline Tank Monitor', 'Low VMI Coverage'],
   actionTaken: ['Ad Hoc Order', 'Ordering on Next Order'],
   staleDays: 3,
   bumpDays: 3,
 }
+
+// Logged automatically by the Tank Monitors email workflow (TankEmailModal's
+// COMM_TYPE map) — always present in the Type dropdown regardless of a
+// company's customized commTypes list, so a row using one of these can still
+// be corrected by hand instead of only ever showing as a value nothing in
+// the dropdown matches.
+export const SYSTEM_COMM_TYPES = ['Offline Tank Monitor', 'Low VMI Coverage']
 
 export const isEmailMethod = (m: string | null | undefined) => (m ?? '').toLowerCase().includes('email')
 

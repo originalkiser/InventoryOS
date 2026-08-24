@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Pencil, Filter, Settings2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { Button, SbLoader } from '@/components/ui'
-import { EditDate, EditSelect, CappedTextarea, inputCls } from '@/components/shared/InlineCells'
+import { EditDate, EditSelect, CappedTextarea } from '@/components/shared/InlineCells'
 import { LocationCommsModal } from './LocationCommsModal'
 import { useCommsConfig } from './useCommsConfig'
 import type { LocationComm } from './comms'
@@ -35,7 +36,8 @@ export function LocationCommsPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
-  const { config, save: saveConfig } = useCommsConfig()
+  const navigate = useNavigate()
+  const { config } = useCommsConfig()
 
   const [rowsAll, setRowsAll] = useState<LocationComm[]>([])
   const [loading, setLoading] = useState(true)
@@ -43,7 +45,6 @@ export function LocationCommsPage() {
   const [statusFilter, setStatusFilter] = useState('All')
   const [filtersOn, setFiltersOn] = useState(false)
   const [filters, setFilters] = useState<Record<string, string>>({})
-  const [settingsOn, setSettingsOn] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Partial<LocationComm> | null>(null)
 
@@ -133,9 +134,9 @@ export function LocationCommsPage() {
           ))}
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setSettingsOn((o) => !o)}
-            className={['inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border transition-colors', settingsOn ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
-            <Settings2 className="w-3 h-3" /> Settings
+          <button onClick={() => navigate('/config?tab=location-comms')}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border border-navy/30 bg-cream text-inky hover:border-navy transition-colors">
+            <Settings2 className="w-3 h-3" /> Settings ↗
           </button>
           <button onClick={() => setFiltersOn((o) => !o)}
             className={['inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border transition-colors', filtersOn ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
@@ -143,27 +144,6 @@ export function LocationCommsPage() {
           </button>
         </div>
       </div>
-
-      {settingsOn && (
-        <div className="mb-3 rounded border border-navy/20 bg-navy/[0.03] px-4 py-3 flex flex-col gap-2 max-w-lg">
-          <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Needs Action Highlighting</h3>
-          <p className="text-[11px] font-mono text-inky/60">A non-closed communication older than this highlights red and counts toward the nav badge, regardless of status otherwise.</p>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-body text-inky">Highlight red after</span>
-            <input type="number" min={1} value={config.staleDays}
-              onChange={(e) => saveConfig({ ...config, staleDays: Math.max(1, Number(e.target.value) || 1) })}
-              className={`${inputCls} w-16`} />
-            <span className="text-xs font-body text-inky">day(s) old.</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-body text-inky">"Bump" defers a red row for</span>
-            <input type="number" min={1} value={config.bumpDays}
-              onChange={(e) => saveConfig({ ...config, bumpDays: Math.max(1, Number(e.target.value) || 1) })}
-              className={`${inputCls} w-16`} />
-            <span className="text-xs font-body text-inky">day(s), then it highlights again.</span>
-          </div>
-        </div>
-      )}
 
       {loading ? (
         <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
