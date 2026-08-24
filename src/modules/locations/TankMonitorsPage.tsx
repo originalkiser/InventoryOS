@@ -101,6 +101,7 @@ export function TankMonitorsPage() {
   const offlineCommsRows = useMemo(() => commsRows.filter((r) => r.comm_type === 'Offline Tank Monitor'), [commsRows])
   const lowVmiCommsRows = useMemo(() => commsRows.filter((r) => r.comm_type === 'Low VMI Coverage'), [commsRows])
   const offlinePendingSet = useMemo(() => buildPendingCommSet(offlineCommsRows), [offlineCommsRows])
+  const lowVmiPendingSet = useMemo(() => buildPendingCommSet(lowVmiCommsRows), [lowVmiCommsRows])
 
   // Location is hidden if the user excluded it (shared with the rest of the app).
   const isHidden = useCallback((id: string | null) => { const l = loc.byId(id); return !!l && isExcluded(l) }, [loc, isExcluded])
@@ -375,6 +376,7 @@ export function TankMonitorsPage() {
         <TabsContent value="lowvmi">
           <LowVmiView monitors={filtered} loc={loc} isExcluded={isExcluded} shopFilter={shopFilter} amFilter={amFilter} ignored={ignored} setIgnored={setIgnored} ctx={ctx}
             skipEnabled={skipEnabled} setSkipEnabled={setSkipEnabled} skipDays={skipDays} setSkipDays={setSkipDays} lowVmiCommsRows={lowVmiCommsRows}
+            excludePending={excludePending} setExcludePending={setExcludePending} lowVmiPendingSet={lowVmiPendingSet}
             onStartEmail={(targets) => { setEmailTargets(targets); setEmailKind('lowvmi') }} />
         </TabsContent>
 
@@ -556,10 +558,11 @@ function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLo
 }
 
 // ── Low VMI coverage ────────────────────────────────────────────────────────
-function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, setIgnored, ctx, skipEnabled, setSkipEnabled, skipDays, setSkipDays, lowVmiCommsRows, onStartEmail }: {
+function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, setIgnored, ctx, skipEnabled, setSkipEnabled, skipDays, setSkipDays, lowVmiCommsRows, excludePending, setExcludePending, lowVmiPendingSet, onStartEmail }: {
   monitors: TankMonitor[]; loc: ReturnType<typeof useLocations>; isExcluded: (l: Location) => boolean; shopFilter: string; amFilter: string; ignored: string[]; setIgnored: (v: string[]) => void; ctx: Ctx
   skipEnabled: boolean; setSkipEnabled: (v: boolean) => void; skipDays: number; setSkipDays: (v: number) => void
-  lowVmiCommsRows: { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown }[]
+  lowVmiCommsRows: { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown; status: string | null }[]
+  excludePending: boolean; setExcludePending: (v: boolean) => void; lowVmiPendingSet: Map<string, Set<string>>
   onStartEmail: (targets: EmailTarget[]) => void
 }) {
   const [showIgnoredList, setShowIgnoredList] = useState(false)
@@ -581,6 +584,16 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
     return (Date.now() - new Date(mostRecent).getTime()) / 86400000 < skipDays
   }, [byShop, lowVmiLog, lowVmiCommsRows, skipDays])
 
+  // Same "still-open comm keeps suppressing regardless of age" logic as the
+  // Offline tab — a shop's Low VMI Coverage comm that was never resolved
+  // shouldn't get re-emailed just because it aged past the skip window.
+  const hasPendingComm = useCallback((locationId: string) => {
+    const serials = (byShop.get(locationId) ?? []).filter((m) => m.keep_fill).map((m) => m.serial_rtu_id || m.system_tank_id || '')
+    const shopRows = lowVmiCommsRows.filter((r) => r.location_id === locationId)
+    const pending = backfillPendingBlanket(lowVmiPendingSet.get(locationId) ?? new Set(), shopRows, serials)
+    return serials.some((s) => s && pending.has(s))
+  }, [byShop, lowVmiCommsRows, lowVmiPendingSet])
+
   const shops = useMemo(() => loc.locations.filter((l) => {
     if (!l.active || isExcluded(l)) return false
     if (shopFilter && l.id !== shopFilter) return false
@@ -589,7 +602,7 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
     return keepfill < 4
   }).sort((a, b) => (a.shop_city || a.name).localeCompare(b.shop_city || b.name, undefined, { numeric: true })), [loc.locations, byShop, shopFilter, amFilter, isExcluded])
 
-  const visible = shops.filter((l) => !ignored.includes(l.id) && !(skipEnabled && isRecentlyEmailed(l.id)))
+  const visible = shops.filter((l) => !ignored.includes(l.id) && !(skipEnabled && isRecentlyEmailed(l.id)) && !(excludePending && hasPendingComm(l.id)))
   const toggleIgnore = (id: string) => setIgnored(ignored.includes(id) ? ignored.filter((x) => x !== id) : [...ignored, id])
   const emailTargets = (): EmailTarget[] => visible.map((l) => ({ locationId: l.id, monitors: (byShop.get(l.id) ?? []).filter((m) => m.keep_fill) }))
 
@@ -602,6 +615,10 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
           onChange={(e) => setSkipDays(Math.max(1, Number(e.target.value) || 1))}
           className="w-12 bg-cream border border-navy/30 rounded px-1 py-0.5 text-center disabled:opacity-40" />
         days
+      </label>
+      <label className="flex items-center gap-1.5 text-xs font-mono text-navy" title="Won't re-list a shop whose last Low VMI Coverage comm is still unresolved, even once it's older than the skip window above.">
+        <input type="checkbox" checked={excludePending} onChange={(e) => setExcludePending(e.target.checked)} className="accent-sky" />
+        Exclude tanks with a pending communication
       </label>
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs font-mono text-inky/60">Shops with fewer than 4 monitors on VMI/Keepfill. Ignore shops that will never need more.</p>
