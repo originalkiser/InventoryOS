@@ -181,6 +181,34 @@ export function magnetImageHtml(dataUri: string | null | undefined): string {
 // Default "skip a monitor if we already emailed about it recently" window.
 export const DEFAULT_EMAIL_SKIP_DAYS = 5
 
+// location_comms statuses (from exceptions.ts's EXCEPTION_STATUSES, shared
+// across every comm type) that mean the shop/AM still owes a response — as
+// opposed to 'Tentatively Closed' / 'Closed', which mean the comm is done.
+export const OPEN_COMM_STATUSES = new Set([
+  'Pending Shop/AM Response',
+  'Pending RelaDyne Response',
+  'Pending Procurement Action',
+])
+
+// Per-shop, per-serial: every monitor already covered by a STILL-OPEN comm,
+// independent of how long ago it was sent. The skip-days window only holds a
+// monitor out of the list for a few days; a comm nobody ever resolved should
+// keep suppressing it indefinitely, not reappear (and get double-emailed)
+// once it ages past that window.
+export function buildPendingCommSet(
+  rows: { location_id: string | null; products: unknown; status: string | null }[],
+): Map<string, Set<string>> {
+  const byLoc = new Map<string, Set<string>>()
+  for (const row of rows) {
+    if (!row.location_id || !row.status || !OPEN_COMM_STATUSES.has(row.status)) continue
+    const list = Array.isArray(row.products) ? (row.products as { serial?: string | null }[]) : []
+    let set = byLoc.get(row.location_id)
+    if (!set) { set = new Set(); byLoc.set(row.location_id, set) }
+    for (const p of list) { if (p?.serial) set.add(p.serial) }
+  }
+  return byLoc
+}
+
 // Per-monitor last-emailed dates, derived from inventory.location_comms rows
 // logged by the tank email workflow (each row's `products` holds the serials
 // that email covered — see TankEmailModal.logAndNext). Returns location_id ->

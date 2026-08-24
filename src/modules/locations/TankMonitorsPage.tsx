@@ -11,7 +11,7 @@ import { ColumnManagerModal } from './ColumnManagerModal'
 import { TankEmailModal, type EmailTarget } from './TankEmailModal'
 import { TankEmailTemplates } from './TankEmailTemplates'
 import { TankProductMapping } from './TankProductMapping'
-import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from './tankEmail'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from './tankEmail'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import type { TankMonitor, Location, VendorPart } from '@/types'
 import { format } from 'date-fns'
@@ -80,14 +80,19 @@ export function TankMonitorsPage() {
   // too, not just once you're inside the draft.
   const [skipEnabled, setSkipEnabled] = useAppSetting<boolean>('tank_email_skip_enabled', true)
   const [skipDays, setSkipDays] = useAppSetting<number>('tank_email_skip_days', DEFAULT_EMAIL_SKIP_DAYS)
+  // Independent of the skip-days window above: hides a monitor whose last
+  // comm is still open (shop/AM never responded), no matter how old it is —
+  // otherwise a comm that ages past the skip window quietly reappears and
+  // gets emailed again even though nothing was resolved.
+  const [excludePending, setExcludePending] = useAppSetting<boolean>('tank_email_exclude_pending', true)
   const [monitorIgnore, setMonitorIgnore] = useAppSetting<string[]>('tank_monitor_ignore', [])
   const [showIgnoredMonitors, setShowIgnoredMonitors] = useState(false)
-  const [commsRows, setCommsRows] = useState<{ location_id: string | null; comm_date: string | null; updated_at: string; products: unknown; comm_type: string | null }[]>([])
+  const [commsRows, setCommsRows] = useState<{ location_id: string | null; comm_date: string | null; updated_at: string; products: unknown; comm_type: string | null; status: string | null }[]>([])
   const loadCommsLog = useCallback(async () => {
     if (!companyId) return
     const sb = supabase as any
     const { data, error } = await sb.schema('inventory').from('location_comms')
-      .select('location_id, comm_date, updated_at, products, comm_type').eq('company_id', companyId)
+      .select('location_id, comm_date, updated_at, products, comm_type, status').eq('company_id', companyId)
       .in('comm_type', ['Offline Tank Monitor', 'Low VMI Coverage'])
     if (error) return
     setCommsRows((data ?? []) as typeof commsRows)
@@ -95,6 +100,7 @@ export function TankMonitorsPage() {
   useEffect(() => { loadCommsLog() }, [loadCommsLog])
   const offlineCommsRows = useMemo(() => commsRows.filter((r) => r.comm_type === 'Offline Tank Monitor'), [commsRows])
   const lowVmiCommsRows = useMemo(() => commsRows.filter((r) => r.comm_type === 'Low VMI Coverage'), [commsRows])
+  const offlinePendingSet = useMemo(() => buildPendingCommSet(offlineCommsRows), [offlineCommsRows])
 
   // Location is hidden if the user excluded it (shared with the rest of the app).
   const isHidden = useCallback((id: string | null) => { const l = loc.byId(id); return !!l && isExcluded(l) }, [loc, isExcluded])
@@ -178,16 +184,22 @@ export function TankMonitorsPage() {
     const last = log.get(serial)
     return last != null && (Date.now() - new Date(last).getTime()) / 86400000 < skipDays
   }, [offlineCommsRows, offlineCommsLog, skipDays])
+  const hasPendingComm = useCallback((m: TankMonitor) => {
+    const serial = m.serial_rtu_id || m.system_tank_id || ''
+    if (!serial || !m.location_id) return false
+    return offlinePendingSet.get(m.location_id)?.has(serial) ?? false
+  }, [offlinePendingSet])
   // Exactly the badge's criteria — VMI/keepfill only (not the tab toggle),
-  // assigned to a shop, offline, not ignored, not recently emailed. The
-  // sidebar counts distinct shops across these.
+  // assigned to a shop, offline, not ignored, not recently emailed, not
+  // still pending a response. The sidebar counts distinct shops across these.
   const alertMonitors = useMemo(() => filtered.filter((m) => {
     if (!m.location_id || !m.keep_fill) return false
     const t = readingTime(m); if (t == null || latestReading - t <= 86400000) return false
     if (monitorIgnore.includes(monitorIgnoreKey(m))) return false
     if (skipEnabled && isRecentlyEmailed(m)) return false
+    if (excludePending && hasPendingComm(m)) return false
     return true
-  }), [filtered, latestReading, skipEnabled, isRecentlyEmailed, monitorIgnore])
+  }), [filtered, latestReading, skipEnabled, isRecentlyEmailed, excludePending, hasPendingComm, monitorIgnore])
   const alertShopCount = useMemo(
     () => new Set(alertMonitors.map((m) => m.location_id)).size,
     [alertMonitors],
@@ -198,8 +210,9 @@ export function TankMonitorsPage() {
     const t = readingTime(m); if (t == null || latestReading - t <= 86400000) return false
     if (monitorIgnore.includes(monitorIgnoreKey(m))) return false
     if (skipEnabled && isRecentlyEmailed(m)) return false
+    if (excludePending && hasPendingComm(m)) return false
     return true
-  }), [filtered, latestReading, offlineVmiOnly, skipEnabled, isRecentlyEmailed, monitorIgnore])
+  }), [filtered, latestReading, offlineVmiOnly, skipEnabled, isRecentlyEmailed, excludePending, hasPendingComm, monitorIgnore])
 
   // Count of low-VMI shops (mirrors LowVmiView) for the tab badge.
   const lowVmiCount = useMemo(() => {
@@ -286,7 +299,7 @@ export function TankMonitorsPage() {
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : alertMonitors.length === 0 ? (
             <p className="text-xs font-mono text-inky/50 py-8">
-              Nothing needs action — every VMI monitor is reporting, ignored, or already emailed within the last {skipDays} days.
+              Nothing needs action — every VMI monitor is reporting, ignored, already emailed within the last {skipDays} days, or already has a pending communication.
             </p>
           ) : (
             <>
@@ -314,6 +327,10 @@ export function TankMonitorsPage() {
                 onChange={(e) => setSkipDays(Math.max(1, Number(e.target.value) || 1))}
                 className="w-12 bg-cream border border-navy/30 rounded px-1 py-0.5 text-center disabled:opacity-40" />
               days
+            </label>
+            <label className="flex items-center gap-1.5 text-xs font-mono text-navy" title="Won't re-list a tank whose last email is still unresolved, even once it's older than the skip window above.">
+              <input type="checkbox" checked={excludePending} onChange={(e) => setExcludePending(e.target.checked)} className="accent-sky" />
+              Exclude tanks with a pending communication
             </label>
           </div>
           <div className="flex items-center gap-3 mb-3 flex-wrap">
