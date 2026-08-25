@@ -11,7 +11,7 @@ import type { ExceptionReport } from '@/modules/exceptions/exceptions'
 import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
-import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket } from './tankEmail'
+import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location, MeetingNote, Project, TankMonitor } from '@/types'
@@ -406,18 +406,34 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const nonVmiOffline = useMemo(() => offlineTanks.filter((t) => !t.keep_fill), [offlineTanks])
   const showOfflineBtn = vmiOffline.length > 0 || (!!prefs.nonVmiOfflineBtn && nonVmiOffline.length > 0)
 
+  const offlineCommRows = useMemo(
+    () => comms.filter((c) => c.comm_type === 'Offline Tank Monitor')
+      .map((c) => ({ location_id: c.location_id, comm_date: c.comm_date, updated_at: c.updated_at, products: c.products, status: c.status })),
+    [comms],
+  )
+
   // Per-serial last-emailed dates from the Offline Monitor email log for this
   // shop — powers the "Last emailed …" callout on stale/offline readings below.
   // A same-day comm logged without specific serials (legacy rows, or logged
   // by hand outside the email flow) is backfilled to cover today's offline
   // monitors, so the callout doesn't wrongly say "not yet emailed".
   const offlineLog = useMemo(() => {
-    const rows = comms.filter((c) => c.comm_type === 'Offline Tank Monitor')
-      .map((c) => ({ location_id: c.location_id, comm_date: c.comm_date, updated_at: c.updated_at, products: c.products }))
-    const bySerial = buildMonitorEmailLog(rows).get(shopId) ?? new Map<string, string>()
+    const bySerial = buildMonitorEmailLog(offlineCommRows).get(shopId) ?? new Map<string, string>()
     const serials = offlineTanks.map((t) => t.serial_rtu_id || t.system_tank_id || '')
-    return backfillTodayBlanket(bySerial, rows, serials)
-  }, [comms, shopId, offlineTanks])
+    return backfillTodayBlanket(bySerial, offlineCommRows, serials)
+  }, [offlineCommRows, shopId, offlineTanks])
+
+  // Still-open comm covering a monitor (any age — no skip-days window), same
+  // check Tank Monitors' Alerts tab uses to exclude a monitor from the list.
+  // Without this the tooltip can say "Not yet emailed" for a monitor that's
+  // missing from Alerts for exactly this reason — technically true (no dated
+  // log entry exists) but misleading, since the real reason is a pending
+  // comm nobody's resolved yet, not that no one's reached out.
+  const offlinePendingSerials = useMemo(() => {
+    const base = buildPendingCommSet(offlineCommRows).get(shopId) ?? new Set<string>()
+    const serials = offlineTanks.map((t) => t.serial_rtu_id || t.system_tank_id || '')
+    return backfillPendingBlanket(base, offlineCommRows, serials)
+  }, [offlineCommRows, shopId, offlineTanks])
 
   // Stale/offline "Last Update" cell — same red/orange flag as the plain
   // render below. Hovering shows a fast, custom callout (not the native
@@ -432,6 +448,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       const serial = t.serial_rtu_id || t.system_tank_id || ''
       const last = serial ? offlineLog.get(serial) : undefined
       if (last) title = `Last emailed ${format(new Date(last), 'MMM d, yyyy')}`
+      else if (serial && offlinePendingSerials.has(serial)) title = 'Pending — shop/AM hasn\'t responded yet (see Location Comms)'
       else if (offlineTpl.vmiOnly !== false && !t.keep_fill) title = 'Not emailed — not on VMI/keepfill'
       else title = 'Not yet emailed'
     }
