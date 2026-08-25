@@ -226,8 +226,9 @@ export function LocationCommsPage() {
       <LocationCommsModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
         onSaved={() => { load(); refreshNavBadges() }} onDelete={deleteComm} />
 
-      <WrapUpCommModal seed={wrapUp} statuses={EXCEPTION_STATUSES as unknown as string[]} onClose={() => setWrapUp(null)}
-        onSave={(patch) => { if (wrapUp) silentUpdate(wrapUp.row.id, patch) }} />
+      <WrapUpCommModal seed={wrapUp} statuses={EXCEPTION_STATUSES as unknown as string[]}
+        onCancel={() => { if (wrapUp) silentUpdate(wrapUp.row.id, { status: wrapUp.row.status ?? null }); setWrapUp(null) }}
+        onSave={(patch) => { if (wrapUp) silentUpdate(wrapUp.row.id, patch); setWrapUp(null) }} />
     </div>
   )
 }

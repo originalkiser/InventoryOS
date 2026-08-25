@@ -215,8 +215,9 @@ export function ExceptionReportingPage() {
         </TabsContent>
       </Tabs>
 
-      <QuickResponseModal seed={quick} statuses={config.statuses} onClose={() => setQuick(null)}
-        onSave={(patch) => { if (quick) silentUpdate(quick.row.id, patch) }} />
+      <QuickResponseModal seed={quick} statuses={config.statuses}
+        onCancel={() => { if (quick) silentUpdate(quick.row.id, { status: quick.row.status ?? null }); setQuick(null) }}
+        onSave={(patch) => { if (quick) silentUpdate(quick.row.id, patch); setQuick(null) }} />
 
       <ExceptionReportModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
         onSubmit={async (fields, id) => { if (id) silentUpdate(id, fields); else await insert(fields); refreshNavBadges() }}

@@ -12,7 +12,10 @@ export interface WrapUpCommSeed {
 interface Props {
   seed: WrapUpCommSeed | null
   statuses: string[]
-  onClose: () => void
+  // Cancel, X, outside-click, Escape — all revert the status to what it was
+  // before the inline edit that opened this modal (seed.row.status), since
+  // that edit committed eagerly. Save is the only path that keeps it.
+  onCancel: () => void
   onSave: (patch: Partial<LocationComm>) => void
 }
 
@@ -28,9 +31,9 @@ function responseDateOf(r: LocationComm): string {
  * Tentatively Closed or Closed — mirrors QuickResponseModal in Exception
  * Reporting. Pre-selects the closing status but says so plainly and lets it
  * be changed, so nothing is closed silently. The inline status edit already
- * committed by the time this opens — Cancel just skips the extra details.
+ * committed by the time this opens; Cancel reverts it back to what it was.
  */
-export function WrapUpCommModal({ seed, statuses, onClose, onSave }: Props) {
+export function WrapUpCommModal({ seed, statuses, onCancel, onSave }: Props) {
   const [status, setStatus] = useState('')
   const [responseDate, setResponseDate] = useState('')
   const [notes, setNotes] = useState('')
@@ -57,11 +60,10 @@ export function WrapUpCommModal({ seed, statuses, onClose, onSave }: Props) {
         resolution_notes: notes.trim() || null,
       },
     })
-    onClose()
   }
 
   return (
-    <Modal open={!!seed} onClose={onClose} title="Wrap Up Communication" size="sm">
+    <Modal open={!!seed} onClose={onCancel} title="Wrap Up Communication" size="sm">
       <div className="flex flex-col gap-3">
         {statusChanging && (
           <div className="rounded border border-sky/50 bg-sky/15 px-3 py-2">
@@ -87,10 +89,10 @@ export function WrapUpCommModal({ seed, statuses, onClose, onSave }: Props) {
 
         <div className="flex items-center justify-between gap-2 pt-1">
           <span className="text-[10px] font-mono text-inky/50">
-            Cancel keeps the edit you just made and changes nothing else.
+            Cancel reverts the status back to {current ? <strong>{current}</strong> : 'what it was'}.
           </span>
           <div className="flex gap-2">
-            <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+            <Button variant="secondary" size="sm" onClick={onCancel}>Cancel</Button>
             <Button size="sm" onClick={save}>Save</Button>
           </div>
         </div>
