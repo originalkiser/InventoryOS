@@ -7,7 +7,7 @@ import { Button, Input, Toggle, Badge, Card, CardHeader, CardBody } from '@/comp
 import { RECOUNT_FLAG_LABELS } from '@/lib/recountEngine'
 import {
   fetchPeriodEvalData, evaluateCounts, draftToConfig, fetchTankVarianceCandidates,
-  type PeriodEvalData, type DraftThresholds, type TankVarianceCandidate,
+  type PeriodEvalData, type DraftThresholds, type TankVarianceCandidate, type EvaluatedCount,
 } from './recountData'
 import { locationLabel } from './countsShared'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
@@ -35,6 +35,15 @@ function numOrNull(s: string): number | null {
   if (t === '') return null
   const n = Number(t)
   return isNaN(n) ? null : n
+}
+
+interface ProductExceptionRow {
+  location_id: string
+  product_id: string
+  category: string | null
+  basis: string
+  on_hand: number
+  expected_limit: number
 }
 
 export function RecountLogicTab() {
@@ -75,6 +84,7 @@ export function RecountLogicTab() {
 
   const [evalData, setEvalData] = useState<PeriodEvalData | null>(null)
   const [tankCandidates, setTankCandidates] = useState<TankVarianceCandidate[]>([])
+  const [productExceptions, setProductExceptions] = useState<ProductExceptionRow[]>([])
   const [tankProductMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
   const [tankVariance] = useAppSetting<number>(TANK_VARIANCE_KEY, DEFAULT_TANK_VARIANCE)
   const [unlistedLimit] = useAppSetting<number | null>(UNLISTED_LIMIT_KEY, null)
@@ -154,21 +164,60 @@ export function RecountLogicTab() {
     return () => { cancelled = true }
   }, [companyId, countMonth, tankProductMap])
 
+  // Category-simplification / expected-on-hand exceptions — fetched once per
+  // period (not just at generate time) so the live preview can show exactly
+  // which flagged shops have a specific product driving the issue vs. which
+  // need manual review, and Apply & Generate uses this same data rather than
+  // a separate re-fetch that could disagree with what the preview showed.
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    ;(supabase as any).rpc('get_product_expectation_exceptions', {
+      p_company_id: companyId, p_count_month: countMonth,
+      p_tank_variance: tankVariance ?? DEFAULT_TANK_VARIANCE, p_unlisted_limit: unlistedLimit ?? null,
+    }).then(({ data, error }: any) => {
+      if (cancelled) return
+      if (error) { toast.error(`Could not load product exceptions — manual review split will be incomplete (${error.message})`); return }
+      setProductExceptions((data ?? []) as ProductExceptionRow[])
+    })
+    return () => { cancelled = true }
+  }, [companyId, countMonth, tankVariance, unlistedLimit])
+
   const lookbackN = numOrNull(lookback) ?? DEFAULT_LOOKBACK
   const tankVarThreshold = tankVarEnabled ? numOrNull(tankVarQts) : null
 
   // Shops with at least one VMI product whose tank reading is off from its
-  // counted on-hand by more than the threshold.
+  // counted on-hand by more than the threshold. Gated to eligible shops —
+  // count_products can exist (a Product Detail upload) for a shop that never
+  // submitted a Monthly count or got marked accepted, and that shop should
+  // stay off the recount list entirely, not get flagged from data with no
+  // count behind it.
   const tankVarByShop = useMemo(() => {
     const m = new Map<string, TankVarianceCandidate[]>()
-    if (tankVarThreshold == null) return m
+    if (tankVarThreshold == null || !evalData) return m
     for (const c of tankCandidates) {
+      if (!evalData.eligibleLocationIds.has(c.location_id)) continue
       if (Math.abs(c.diff) <= tankVarThreshold) continue
       if (!m.has(c.location_id)) m.set(c.location_id, [])
       m.get(c.location_id)!.push(c)
     }
     return m
-  }, [tankCandidates, tankVarThreshold])
+  }, [tankCandidates, tankVarThreshold, evalData])
+
+  // Product-level expected-on-hand exceptions, same eligibility gate as tank
+  // variance above. Enrichment only (per design) — never flags a shop on its
+  // own, only supplies the "specific product" detail for shops the rules
+  // above already flagged, and determines the manual-review split below.
+  const exceptionsByShop = useMemo(() => {
+    const m = new Map<string, ProductExceptionRow[]>()
+    if (!evalData) return m
+    for (const r of productExceptions) {
+      if (!evalData.eligibleLocationIds.has(r.location_id)) continue
+      if (!m.has(r.location_id)) m.set(r.location_id, [])
+      m.get(r.location_id)!.push(r)
+    }
+    return m
+  }, [productExceptions, evalData])
 
   // Draft thresholds derived from current (unsaved) form state
   const draft: DraftThresholds = useMemo(() => ({
@@ -185,21 +234,54 @@ export function RecountLogicTab() {
     var_last_threshold_type: varLastThresholdType,
   }), [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled, lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, lookbackN, varMedThresholdType, varLastThresholdType])
 
-  // Live evaluation against the draft rules, plus tank-variance shops that
-  // the dollar/count rules above have no way to see (evaluateRecountFlags
-  // only ever looks at MonthlyCount fields — tank data is merged in here
-  // instead of threading it through that pure function).
+  // Three-stage pipeline over eligible shops only:
+  //   1. Initial checks (adjustment count, ending balance, variance vs
+  //      median/last month) — evaluateCounts, over this period's Monthly
+  //      counts.
+  //   2. Tank monitor variance — merged onto a shop's stage-1 entry if it has
+  //      one; for an eligible shop with no Monthly count row (accepted via
+  //      Mark Counted, or a count_type mismatch) but a tank/count_products
+  //      mismatch, this is the only stage that can flag it, so it gets a
+  //      synthetic entry rather than being silently dropped.
+  //   3. Product-range exceptions (exceptionsByShop, above) — enrichment
+  //      only, applied below when splitting flagged shops for generation;
+  //      never adds a new flag by itself.
   const evaluated = useMemo(() => {
     if (!evalData) return []
     const base = evaluateCounts(evalData.counts, evalData.histByLoc, draftToConfig(draft), lookbackN)
-    if (tankVarByShop.size === 0) return base
-    return base.map((e) => {
+    const withTankFlag = base.map((e) => {
       if (!e.locationId || !tankVarByShop.has(e.locationId)) return e
       return { ...e, flags: [...e.flags, 'tank_monitor_variance'] }
     })
+    const coveredLocIds = new Set(base.map((e) => e.locationId).filter((id): id is string => !!id))
+    const tankOnly: EvaluatedCount[] = []
+    for (const locId of tankVarByShop.keys()) {
+      if (coveredLocIds.has(locId) || !evalData.eligibleLocationIds.has(locId)) continue
+      tankOnly.push({ count: null, locationId: locId, prev: null, median: 0, varVsLastMonth: 0, varVsMedian: 0, flags: ['tank_monitor_variance'] })
+    }
+    return [...withTankFlag, ...tankOnly]
   }, [evalData, draft, lookbackN, tankVarByShop])
 
   const flagged = evaluated.filter((e) => e.flags.length > 0)
+
+  // Split for generation: a flagged shop with no specific product driving it
+  // (no tank-variance product, no product-range exception) can't say what to
+  // recount, so it's routed to manual review instead of auto-generating an
+  // untargeted "Oil Recount". A tank_monitor_variance flag always implies
+  // product detail by construction, so this split only ever pulls in shops
+  // flagged purely by the dollar/count rules.
+  const { flaggedWithProducts, manualReview } = useMemo(() => {
+    const withP: EvaluatedCount[] = []
+    const manual: EvaluatedCount[] = []
+    for (const e of flagged) {
+      const hasProduct = !!e.locationId && (
+        (tankVarByShop.get(e.locationId)?.length ?? 0) > 0 ||
+        (exceptionsByShop.get(e.locationId)?.length ?? 0) > 0
+      )
+      ;(hasProduct ? withP : manual).push(e)
+    }
+    return { flaggedWithProducts: withP, manualReview: manual }
+  }, [flagged, tankVarByShop, exceptionsByShop])
   const totalShops = evaluated.length
 
   async function saveLogic(): Promise<string | null> {
@@ -253,38 +335,25 @@ export function RecountLogicTab() {
       const id = await saveLogic()
       if (!id) return
 
-      const flaggedWithLoc = flagged.filter((e) => e.locationId)
+      // Only shops with a specific product driving the flag generate a
+      // recount here — the rest (flagged, but nothing product-specific to
+      // point at) show in the Manual Review section below instead.
+      const flaggedWithLoc = flaggedWithProducts.filter((e) => e.locationId)
       if (flaggedWithLoc.length === 0) {
-        toast('No shops flagged for this period', { icon: 'ℹ️' })
+        toast(manualReview.length > 0
+          ? `No shops ready to auto-generate — ${manualReview.length} need manual review below`
+          : 'No shops flagged for this period', { icon: 'ℹ️' })
         return
       }
 
       // Skip locations that already have an auto recount for this period
       const sb = supabase as any
-      const [{ data: existing }, { data: exceptions, error: rpcError }] = await Promise.all([
-        sb.schema('inventory').from('recount_requests')
-          .select('location_id, recount_fields')
-          .eq('company_id', companyId)
-          .filter('recount_fields->>count_month', 'eq', countMonth)
-          .filter('recount_fields->>source', 'eq', 'auto'),
-        // Category-simplification / expected-on-hand exceptions for the whole
-        // period, so a flagged shop's recount can point at the specific
-        // products actually driving its ending balance rather than leaving
-        // requested_products empty.
-        sb.rpc('get_product_expectation_exceptions', {
-          p_company_id: companyId, p_count_month: countMonth,
-          p_tank_variance: tankVariance ?? DEFAULT_TANK_VARIANCE, p_unlisted_limit: unlistedLimit ?? null,
-        }),
-      ])
-      if (rpcError) toast.error(`Could not load product exceptions — recounts will still generate without them (${rpcError.message})`)
+      const { data: existing } = await sb.schema('inventory').from('recount_requests')
+        .select('location_id, recount_fields')
+        .eq('company_id', companyId)
+        .filter('recount_fields->>count_month', 'eq', countMonth)
+        .filter('recount_fields->>source', 'eq', 'auto')
       const already = new Set((existing ?? []).map((r: any) => r.location_id))
-
-      const exceptionsByShop = new Map<string, { product_id: string; category: string | null; basis: string; on_hand: number; expected_limit: number }[]>()
-      for (const r of (exceptions ?? []) as any[]) {
-        if (!r.location_id) continue
-        if (!exceptionsByShop.has(r.location_id)) exceptionsByShop.set(r.location_id, [])
-        exceptionsByShop.get(r.location_id)!.push({ product_id: r.product_id, category: r.category, basis: r.basis, on_hand: r.on_hand, expected_limit: r.expected_limit })
-      }
 
       const today = format(new Date(), 'yyyy-MM-dd')
       const rows = flaggedWithLoc
@@ -462,22 +531,83 @@ export function RecountLogicTab() {
         </CardBody>
       </Card>
 
-      {/* Live preview */}
+      {/* Live preview — shops that would actually generate a recount */}
       <Card>
         <CardHeader className="flex items-center justify-between">
           <span className="text-xs font-mono text-inky uppercase tracking-wide">Live Preview — {format(parseISO(countMonth), 'MMMM yyyy')}</span>
           <span className="text-xs font-mono">
-            <span className="text-orange-600">{flagged.length}</span>
-            <span className="text-inky"> of {totalShops} shops would flag</span>
+            <span className="text-orange-600">{flaggedWithProducts.length}</span>
+            <span className="text-inky"> of {totalShops} eligible shops would generate a recount</span>
           </span>
         </CardHeader>
         <CardBody>
           {!evalData ? (
             <p className="text-xs font-mono text-inky">Loading period data…</p>
-          ) : flagged.length === 0 ? (
-            <p className="text-xs font-mono text-inky/70">No shops flag under the current rules.</p>
+          ) : flaggedWithProducts.length === 0 ? (
+            <p className="text-xs font-mono text-inky/70">No shops flag with a specific product under the current rules.</p>
           ) : (
             <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
+              <table className="w-full text-xs font-mono">
+                <thead className="sticky top-0">
+                  <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+                    <th className="px-3 py-2 text-left">Location</th>
+                    <th className="px-3 py-2 text-right">Adj Count</th>
+                    <th className="px-3 py-2 text-right">Ending</th>
+                    <th className="px-3 py-2 text-right">Prev</th>
+                    <th className="px-3 py-2 text-right">Median</th>
+                    <th className="px-3 py-2 text-left">Flags</th>
+                    <th className="px-3 py-2 text-left">Products</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {flaggedWithProducts.map((e) => (
+                    <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
+                      <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, evalData.locations)}</td>
+                      <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
+                      <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
+                      <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
+                      <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {e.flags.map((f) => (
+                            <Badge key={f} color={f.startsWith('variance') || f.startsWith('high') ? 'red' : 'amber'}>
+                              {RECOUNT_FLAG_LABELS[f] ?? f}
+                            </Badge>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-inky">{productsPreview(e, tankVarByShop, exceptionsByShop)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Flagged, but no specific product to point at — not auto-generated;
+          left here for a human to look at the shop directly. */}
+      <Card className="border-[#E67E22]/40">
+        <CardHeader className="flex items-center justify-between">
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Needs Manual Review — No Specific Product Identified</span>
+          <span className="text-xs font-mono">
+            <span className="text-[#E67E22]">{manualReview.length}</span>
+            <span className="text-inky"> shop{manualReview.length === 1 ? '' : 's'}</span>
+          </span>
+        </CardHeader>
+        <CardBody>
+          <p className="text-[11px] font-mono text-inky/60 mb-3">
+            These shops flagged on ending balance/adjustment/variance rules, but neither a tank monitor mismatch nor a
+            product-range exception points at a specific product — Apply &amp; Generate skips them. Add a recount by
+            hand from the Recounts tab if one's warranted.
+          </p>
+          {!evalData ? (
+            <p className="text-xs font-mono text-inky">Loading period data…</p>
+          ) : manualReview.length === 0 ? (
+            <p className="text-xs font-mono text-inky/70">Nothing needs manual review right now.</p>
+          ) : (
+            <div className="overflow-auto max-h-[calc(100vh-400px)] rounded border border-navy/30">
               <table className="w-full text-xs font-mono">
                 <thead className="sticky top-0">
                   <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
@@ -490,11 +620,11 @@ export function RecountLogicTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {flagged.map((e) => (
-                    <tr key={e.count.id} className="border-b border-navy/30/50">
+                  {manualReview.map((e) => (
+                    <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
                       <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, evalData.locations)}</td>
-                      <td className="px-3 py-2 text-right text-inky">{e.count.total_adjustments ?? '—'}</td>
-                      <td className="px-3 py-2 text-right text-navy">{fmt(e.count.ending_inventory_cost)}</td>
+                      <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
+                      <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
                       <td className="px-3 py-2">
@@ -520,6 +650,22 @@ export function RecountLogicTab() {
 
 function fmt(v: number | null | undefined) {
   return v === null || v === undefined ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+}
+
+// Comma-separated product codes that would land in requested_products for
+// this shop — same sources handleApplyGenerate reads, so the preview matches
+// what Apply & Generate actually writes.
+function productsPreview(
+  e: EvaluatedCount,
+  tankVarByShop: Map<string, TankVarianceCandidate[]>,
+  exceptionsByShop: Map<string, ProductExceptionRow[]>,
+): string {
+  if (!e.locationId) return '—'
+  const products = [
+    ...(exceptionsByShop.get(e.locationId) ?? []).map((x) => x.product_id),
+    ...(tankVarByShop.get(e.locationId) ?? []).map((x) => x.product_id),
+  ]
+  return products.length ? products.join(', ') : '—'
 }
 
 function adjPreview(low: string, high: string): string {

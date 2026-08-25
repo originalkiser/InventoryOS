@@ -12,8 +12,17 @@ const HISTORY_WINDOW_MONTHS = 24
 
 export interface PeriodEvalData {
   locations: Location[]
-  counts: MonthlyCount[]
+  counts: MonthlyCount[] // count_type = 'Monthly' only — see eligibleLocationIds
   histByLoc: Map<string, number[]> // location_id -> ending balances, most recent first
+  // Shops eligible for recount checks this period: submitted a Monthly count,
+  // or were manually marked counted (Not Submitted panel's "Mark Counted",
+  // which writes inventory.manual_count_entries rather than a real count
+  // row). A shop on neither list is still outstanding on Not Submitted and
+  // has nothing to evaluate — every recount check (initial rules, tank
+  // variance, product-range) is gated to this set so an unsubmitted shop
+  // can't get flagged from data that happens to exist without a count
+  // behind it (e.g. a Product Detail upload with no matching Count Summary).
+  eligibleLocationIds: Set<string>
 }
 
 export async function fetchPeriodEvalData(
@@ -23,11 +32,12 @@ export async function fetchPeriodEvalData(
   const sb = supabase as any
   const lowerBound = format(subMonths(new Date(countMonth), HISTORY_WINDOW_MONTHS), 'yyyy-MM-dd')
 
-  const [locRes, countRes, balRes] = await Promise.all([
+  const [locRes, countRes, balRes, manualRes] = await Promise.all([
     sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
     sb.schema('inventory').from('counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
     sb.schema('inventory').from('monthly_ending_balances').select('*').eq('company_id', companyId)
       .gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
+    sb.schema('inventory').from('manual_count_entries').select('location_id').eq('company_id', companyId).eq('count_period', countMonth),
   ])
 
   const histByLoc = new Map<string, number[]>()
@@ -38,15 +48,27 @@ export async function fetchPeriodEvalData(
     histByLoc.set(b.location_id, arr)
   }
 
+  const allCounts = (countRes.data ?? []) as MonthlyCount[]
+  const monthlyCounts = allCounts.filter((c) => (c.count_type ?? '').trim().toLowerCase() === 'monthly')
+
+  const eligibleLocationIds = new Set<string>()
+  for (const c of monthlyCounts) if (c.location_id) eligibleLocationIds.add(c.location_id)
+  for (const r of (manualRes.data ?? []) as { location_id: string | null }[]) if (r.location_id) eligibleLocationIds.add(r.location_id)
+
   return {
     locations: (locRes.data ?? []) as Location[],
-    counts: (countRes.data ?? []) as MonthlyCount[],
+    counts: monthlyCounts,
     histByLoc,
+    eligibleLocationIds,
   }
 }
 
 export interface EvaluatedCount {
-  count: MonthlyCount
+  // null for a synthetic entry — an eligible shop flagged only by tank
+  // monitor variance, with no Monthly count row of its own to evaluate the
+  // dollar-based rules against (RecountLogicTab adds these on top of this
+  // function's output so tank variance can flag independently).
+  count: MonthlyCount | null
   locationId: string | null
   prev: number | null
   median: number
