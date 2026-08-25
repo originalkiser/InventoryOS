@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
 import { getMissingShops } from '@/lib/recountEngine'
+import { isRealShopLocation } from '@/hooks/useLocations'
 import { NotSubmittedPanel } from '@/components/shared/NotSubmittedPanel'
 import { AmSubmissionRollup } from './AmSubmissionRollup'
 import type { Location } from '@/types'
@@ -36,7 +37,9 @@ export function NotSubmittedTab() {
       sb.schema('inventory').from('manual_count_entries').select('location_id').eq('company_id', companyId).eq('count_period', countMonth),
     ])
 
-    const locs = (locRes.data ?? []) as Location[]
+    // Header/divider rows (e.g. "Open Car Wash Stores") sometimes land in
+    // core.locations as active rows — see isRealShopLocation.
+    const locs = ((locRes.data ?? []) as Location[]).filter(isRealShopLocation)
     const counts = (countRes.data ?? []) as { location_id: string | null; count_type: string | null }[]
     setLocations(locs)
     setMissing(getMissingShops(locs, counts))

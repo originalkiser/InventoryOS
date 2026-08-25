@@ -5,6 +5,16 @@ import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { byNaturalLabel } from '@/lib/naturalSort'
 import type { Location, PosLocationMap } from '@/types'
 
+// Section-header/divider rows (e.g. a Monday.com group header like "Open Car
+// Wash Stores") sometimes land in core.locations as ordinary active rows — a
+// real shop's `name` is always its numeric code, so anything with no digit
+// in it isn't an actual shop. Exported so call sites that query
+// core.locations directly (not through useLocations) can apply the same
+// rule without duplicating the regex.
+export function isRealShopLocation(l: Pick<Location, 'name'>): boolean {
+  return /\d/.test(l.name ?? '')
+}
+
 // Loads the company's locations and provides id <-> code/name resolution,
 // plus access to each location's custom metadata for cross-section linking.
 // Also consults the POS location map so uploads whose location value is a POS
@@ -22,7 +32,10 @@ export function useLocations() {
       (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
       (supabase as any).schema('core').from('pos_location_map').select('*').eq('company_id', companyId),
     ])
-    setLocations((loc.data ?? []) as Location[])
+    // Filtered here (not at the query) so Config -> Locations, which reads
+    // core.locations directly and not through this hook, still shows header
+    // rows so they can be cleaned up or deleted at the source.
+    setLocations(((loc.data ?? []) as Location[]).filter(isRealShopLocation))
     setPosMaps((pos.data ?? []) as PosLocationMap[])
   }, [companyId])
 
