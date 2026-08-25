@@ -7,7 +7,7 @@
 // Requires Supabase secrets: DROPTOP_PUBLIC_KEY, DROPTOP_PRIVATE_KEY
 // (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are injected.)
 //
-// POST body: { mode?, daysBack?, locationId?, locationIds?, categories? }
+// POST body: { mode?, daysBack?, locationId?, locationIds?, categories?, writeToCountProducts?, countMonth? }
 //   mode        — 'both' (default) | 'inventory' (on-hands only, 1 call/location)
 //                 | 'usage' (sales changes only) | 'alerts' (adjustment scan)
 //                 Partial modes preserve the other side's existing values and
@@ -22,6 +22,11 @@
 //                 e.g. ["engine oil", "additive"]); empty/absent = all products.
 //                 Droptop has no server-side category filter, so this is applied
 //                 after fetch, before writing to product_usage.
+//   writeToCountProducts / countMonth — opt-in: also feed this pull's on-hands
+//                 into inventory.count_products for the given Month End period
+//                 (YYYY-MM-01), so a same-day Droptop pull shows up in Month
+//                 End's Product Detail without also needing a manual upload.
+//                 Set only by Month End's Daily Pull panel — see step 5b below.
 //
 // Per-location work (one or two Droptop API calls, more if a location's
 // change-event window paginates) runs with bounded concurrency rather than
@@ -246,6 +251,13 @@ Deno.serve(async (req) => {
     const categories: string[] = Array.isArray(body.categories)
       ? body.categories.map((c: unknown) => String(c).trim().toLowerCase()).filter(Boolean)
       : []
+    // Opt-in: also feed this pull's on-hands into inventory.count_products for
+    // Month End, under a dedicated batch this sync owns (source_type 'api',
+    // file_name 'Droptop Daily Pull'). Only Month End's Daily Pull sets this —
+    // Product Usage's own sync stays scoped to product_usage as before, so an
+    // unrelated manual refresh there can't quietly create month-end count data.
+    const writeToCountProducts = body.writeToCountProducts === true
+    const countProductsMonth: string | null = writeToCountProducts && typeof body.countMonth === 'string' ? body.countMonth : null
     const matchesCategory = (productType: string | null | undefined): boolean => {
       if (!categories.length) return true
       const pt = (productType ?? '').toLowerCase()
@@ -372,6 +384,10 @@ Deno.serve(async (req) => {
     const allUpsertRows: Record<string, unknown>[] = []
     let operationsSynced = 0
     const opErrors: string[] = []
+    // Only locations that actually succeeded this pull — a location that
+    // errored keeps whatever count_products it already had rather than
+    // having them wiped by a scoped delete for data we don't actually have.
+    const succeededLocIds: string[] = []
 
     await mapWithConcurrency(locations, 2, async (loc: any) => {
       try {
@@ -445,6 +461,7 @@ Deno.serve(async (req) => {
         }
 
         operationsSynced++
+        succeededLocIds.push(loc.id)
       } catch (opErr: unknown) {
         const msg = opErr instanceof Error ? opErr.message : String(opErr)
         opErrors.push(`${loc.droptop_operation_id}: ${msg}`)
@@ -463,6 +480,74 @@ Deno.serve(async (req) => {
       productsUpserted += batch.length
     }
 
+    // 5b. Feed on-hands into Month End's count_products, under one dedicated
+    // batch this sync owns per (company, period) — reused across calls
+    // rather than one new batch per pull, so re-running "Pull Now" for the
+    // same day/period replaces its own contribution instead of stacking a
+    // fresh copy on top. On-hand is a snapshot, not a flow value like
+    // sold/adjusted (which genuinely accumulate across distinct upload
+    // batches) — summing two same-day pulls of the same snapshot would
+    // double it, so this is scoped-delete-then-insert, not additive.
+    let countProductsWarning: string | null = null
+    if (countProductsMonth && succeededLocIds.length) {
+      try {
+        let batchId: string | null = null
+        const { data: existingBatch } = await (admin as any)
+          .schema('inventory').from('count_batches')
+          .select('id')
+          .eq('company_id', me.company_id)
+          .eq('module', 'monthly')
+          .eq('count_month', countProductsMonth)
+          .eq('source_type', 'api')
+          .eq('file_name', 'Droptop Daily Pull')
+          .maybeSingle()
+        if (existingBatch) {
+          batchId = existingBatch.id
+        } else {
+          const { data: newBatch, error: batchErr } = await (admin as any)
+            .schema('inventory').from('count_batches')
+            .insert({ company_id: me.company_id, module: 'monthly', count_month: countProductsMonth, file_name: 'Droptop Daily Pull', source_type: 'api', row_count: 0 })
+            .select('id').single()
+          if (batchErr) throw new Error(`Batch create failed: ${batchErr.message}`)
+          batchId = newBatch.id
+        }
+
+        await (admin as any).schema('inventory').from('count_products')
+          .delete()
+          .eq('company_id', me.company_id)
+          .eq('upload_batch_id', batchId)
+          .in('location_id', succeededLocIds)
+
+        const countProductRows = allUpsertRows
+          .filter((r: any) => r.on_hands != null && succeededLocIds.includes(r.location_id))
+          .map((r: any) => ({
+            company_id: me.company_id,
+            upload_batch_id: batchId,
+            location_id: r.location_id,
+            product_id: r.product_id,
+            category: r.category,
+            on_hand: r.on_hands,
+            count_month: countProductsMonth,
+          }))
+
+        const CP_BATCH = 1000
+        for (let i = 0; i < countProductRows.length; i += CP_BATCH) {
+          const slice = countProductRows.slice(i, i + CP_BATCH)
+          const { error: cpErr } = await (admin as any).schema('inventory').from('count_products').insert(slice)
+          if (cpErr) throw new Error(`count_products insert failed: ${cpErr.message}`)
+        }
+        ;(admin as any).schema('inventory').from('count_batches')
+          .update({ row_count: countProductRows.length })
+          .eq('id', batchId)
+          .then(() => {})
+      } catch (cpErr: unknown) {
+        // Best-effort — product_usage already succeeded, so the sync itself
+        // still reports success; this just didn't also reach Month End.
+        countProductsWarning = cpErr instanceof Error ? cpErr.message : String(cpErr)
+        console.error('count_products feed failed:', countProductsWarning)
+      }
+    }
+
     // 6. Log the sync (best-effort — table may not exist if migration pending)
     ;(admin as any)
       .schema('inventory').from('droptop_sync_log').insert({
@@ -479,12 +564,13 @@ Deno.serve(async (req) => {
       return ok({ error: opErrors.join(' | ') })
     }
 
+    const warnings = [...opErrors, ...(countProductsWarning ? [`Month End feed: ${countProductsWarning}`] : [])]
     return ok({
       success: true,
       mode,
       operations_synced: operationsSynced,
       products_upserted: productsUpserted,
-      ...(opErrors.length > 0 ? { warnings: opErrors } : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
     })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Unexpected error'

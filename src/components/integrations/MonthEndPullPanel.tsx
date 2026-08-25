@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Button } from '@/components/ui'
 import { useAuthStore } from '@/stores/authStore'
+import { useMonthEndStore } from '@/stores/monthEndStore'
 import { runDroptopSync, getLastDroptopSyncLog, getDroptopSyncHistory } from '@/services/droptopService'
 import { isMonthEndPeriod, daysUntilMonthEndPeriod } from '@/utils/monthEndUtils'
 import type { DroptopSyncLog } from '@/types/integrations'
@@ -12,6 +13,7 @@ function fmtDate(iso: string) {
 
 export function MonthEndPullPanel() {
   const { profile } = useAuthStore()
+  const { getCountMonth } = useMonthEndStore()
   const companyId = profile?.company_id ?? null
   const [pulling, setPulling] = useState(false)
   const [progress, setProgress] = useState<{ batch: number; totalBatches: number } | null>(null)
@@ -33,10 +35,13 @@ export function MonthEndPullPanel() {
     try {
       // Daily pull: current on-hands (always a live snapshot) + the last
       // day's usage — a lighter, incremental version of Product Usage's
-      // manual Full Sync (which defaults to a 30-day usage window).
+      // manual Full Sync (which defaults to a 30-day usage window). Also
+      // feeds this period's on-hands into Month End's count_products
+      // (countMonth) so a pull that already ran today shows up in Counts →
+      // Product Detail without a separate manual upload for the same data.
       const result = await runDroptopSync(
         companyId,
-        { mode: 'both', daysBack: 1 },
+        { mode: 'both', daysBack: 1, countMonth: getCountMonth() },
         (p) => setProgress(p),
       )
       toast.success(`Pull complete — ${result.products_upserted.toLocaleString()} products updated across ${result.operations_synced} location${result.operations_synced === 1 ? '' : 's'}`)
@@ -113,6 +118,9 @@ export function MonthEndPullPanel() {
       {!lastLog && (
         <p className="text-xs font-mono text-inky/40">No pull history yet. Pulls also run automatically during month-end period.</p>
       )}
+      <p className="text-[10px] font-mono text-inky/40">
+        Also feeds on-hands into Counts → Product Detail for this period — no separate upload needed for what's already pulled today.
+      </p>
 
       {showHistory && (
         <div className="mt-2">

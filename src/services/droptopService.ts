@@ -28,6 +28,11 @@ export interface DroptopSyncOptions {
   daysBack: number
   categories?: string[]
   locationId?: string // sync a single location — skips chunking entirely
+  // Opt-in: also feed this pull's on-hands into inventory.count_products for
+  // the given Month End period (YYYY-MM-01) — see droptop-sync-usage's own
+  // doc comment for why this is scoped-delete-then-insert, not additive.
+  // Only Month End's Daily Pull panel should set this.
+  countMonth?: string
 }
 
 export interface DroptopSyncProgress {
@@ -76,10 +81,11 @@ export async function runDroptopSync(
   opts: DroptopSyncOptions,
   onProgress?: (p: DroptopSyncProgress) => void,
 ): Promise<DroptopSyncResult> {
-  const { mode, daysBack, categories = [], locationId } = opts
+  const { mode, daysBack, categories = [], locationId, countMonth } = opts
+  const writeToCountProducts = !!countMonth
 
   if (locationId) {
-    return invokeSync({ mode, daysBack, categories, locationId })
+    return invokeSync({ mode, daysBack, categories, locationId, writeToCountProducts, countMonth })
   }
 
   const ids = await fetchDroptopLocationIds(companyId)
@@ -95,7 +101,7 @@ export async function runDroptopSync(
   for (let i = 0; i < batches.length; i++) {
     onProgress?.({ batch: i + 1, totalBatches: batches.length })
     try {
-      const result = await invokeSync({ mode, daysBack, categories, locationIds: batches[i] })
+      const result = await invokeSync({ mode, daysBack, categories, locationIds: batches[i], writeToCountProducts, countMonth })
       operationsSynced += result.operations_synced
       productsUpserted += result.products_upserted
       if (result.warnings?.length) warnings.push(...result.warnings)
