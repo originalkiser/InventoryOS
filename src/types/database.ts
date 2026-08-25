@@ -600,6 +600,16 @@ export interface RecountConfig {
   var_med_threshold_type?: 'percentage' | 'dollar'
   var_last_threshold_type?: 'percentage' | 'dollar'
   tank_variance_qts_threshold?: number | null
+  // When true, the dollar/count-based rules (Adjustment Count, Oil
+  // Adjustment Count, Ending Balance, Variance vs Median, Variance vs Last
+  // Month) are skipped entirely, regardless of each rule's own enabled
+  // state/thresholds (which are kept, not cleared) — only the
+  // product-evidenced checks (tank variance, product-range, unconfigured
+  // oil) can flag a shop.
+  ignore_ending_balance?: boolean
+  // Engine-oil products with on-hand this period but no location_order_config
+  // row for that shop — see get_unconfigured_oil_on_hand.
+  oil_check_enabled?: boolean
   created_at: string
   updated_at: string
 }

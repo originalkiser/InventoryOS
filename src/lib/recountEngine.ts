@@ -143,4 +143,5 @@ export const RECOUNT_FLAG_LABELS: Record<string, string> = {
   variance_vs_median: 'Variance vs median',
   variance_vs_last_month: 'Variance vs last month',
   tank_monitor_variance: 'Tank monitor variance',
+  unconfigured_oil: 'Oil on hand, not configured to order',
 }

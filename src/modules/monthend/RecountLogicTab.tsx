@@ -10,6 +10,7 @@ import {
   type PeriodEvalData, type DraftThresholds, type TankVarianceCandidate, type EvaluatedCount,
 } from './recountData'
 import { locationLabel } from './countsShared'
+import { OilOnHandExceptionsPanel } from './OilOnHandExceptionsPanel'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import type { RecountConfig } from '@/types'
 import { format, parseISO } from 'date-fns'
@@ -27,6 +28,7 @@ function flagsToReason(flags: string[]): string {
   if (flags.includes('variance_vs_median')) return 'Unexpected ending balance'
   if (flags.includes('variance_vs_last_month')) return 'Unexpected ending balance'
   if (flags.includes('tank_monitor_variance')) return 'Tank monitor variance'
+  if (flags.includes('unconfigured_oil')) return 'Oil on hand, not configured to order'
   return flags.join(', ')
 }
 
@@ -46,6 +48,13 @@ interface ProductExceptionRow {
   expected_limit: number
 }
 
+interface OilOnHandRow {
+  location_id: string
+  product_id: string
+  category: string | null
+  on_hand: number
+}
+
 export function RecountLogicTab() {
   const { profile } = useAuthStore()
   const { getCountMonth, setRecountConfig } = useMonthEndStore()
@@ -61,6 +70,12 @@ export function RecountLogicTab() {
   const [varMedEnabled, setVarMedEnabled] = useState(false)
   const [varLastEnabled, setVarLastEnabled] = useState(false)
   const [tankVarEnabled, setTankVarEnabled] = useState(false)
+  const [oilCheckEnabled, setOilCheckEnabled] = useState(false)
+  // Master switch: skip Adjustment Count / Oil Adjustment Count / Ending
+  // Balance / Variance vs Median / Variance vs Last Month entirely,
+  // regardless of each rule's own toggle/thresholds above (kept, not
+  // cleared, so turning this back off restores them as they were).
+  const [ignoreEndingBalance, setIgnoreEndingBalance] = useState(false)
 
   // Threshold inputs (strings)
   const [lowAdj, setLowAdj] = useState('')
@@ -85,6 +100,7 @@ export function RecountLogicTab() {
   const [evalData, setEvalData] = useState<PeriodEvalData | null>(null)
   const [tankCandidates, setTankCandidates] = useState<TankVarianceCandidate[]>([])
   const [productExceptions, setProductExceptions] = useState<ProductExceptionRow[]>([])
+  const [oilOnHandRows, setOilOnHandRows] = useState<OilOnHandRow[]>([])
   const [tankProductMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
   const [tankVariance] = useAppSetting<number>(TANK_VARIANCE_KEY, DEFAULT_TANK_VARIANCE)
   const [unlistedLimit] = useAppSetting<number | null>(UNLISTED_LIMIT_KEY, null)
@@ -110,6 +126,8 @@ export function RecountLogicTab() {
       setVarLastEnabled(c.variance_to_last_month_pct != null)
       setTankVarEnabled(c.tank_variance_qts_threshold != null)
       setTankVarQts(c.tank_variance_qts_threshold?.toString() ?? '')
+      setOilCheckEnabled(c.oil_check_enabled ?? false)
+      setIgnoreEndingBalance(c.ignore_ending_balance ?? false)
       setLowAdj(c.low_adj_threshold?.toString() ?? '')
       setHighAdj(c.high_adj_threshold?.toString() ?? '')
       setLowOilAdj(c.oil_low_adj_threshold?.toString() ?? '')
@@ -143,6 +161,7 @@ export function RecountLogicTab() {
     return () => clearTimeout(autoSaveTimerRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled, tankVarEnabled,
+      oilCheckEnabled, ignoreEndingBalance,
       lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, tankVarQts,
       lookback, varMedThresholdType, varLastThresholdType])
 
@@ -183,6 +202,23 @@ export function RecountLogicTab() {
     return () => { cancelled = true }
   }, [companyId, countMonth, tankVariance, unlistedLimit])
 
+  // Engine-oil on-hand with no location_order_config row for that shop —
+  // fetched whenever the toggle is on, same "once per period" shape as the
+  // fetches above. get_unconfigured_oil_on_hand already excludes anything
+  // listed in oil_on_hand_exceptions server-side.
+  useEffect(() => {
+    if (!companyId || !oilCheckEnabled) { setOilOnHandRows([]); return }
+    let cancelled = false
+    ;(supabase as any).rpc('get_unconfigured_oil_on_hand', {
+      p_company_id: companyId, p_count_month: countMonth,
+    }).then(({ data, error }: any) => {
+      if (cancelled) return
+      if (error) { toast.error(`Could not load unconfigured oil on-hand (${error.message})`); return }
+      setOilOnHandRows((data ?? []) as OilOnHandRow[])
+    })
+    return () => { cancelled = true }
+  }, [companyId, countMonth, oilCheckEnabled])
+
   const lookbackN = numOrNull(lookback) ?? DEFAULT_LOOKBACK
   const tankVarThreshold = tankVarEnabled ? numOrNull(tankVarQts) : null
 
@@ -219,6 +255,22 @@ export function RecountLogicTab() {
     return m
   }, [productExceptions, evalData])
 
+  // Engine-oil on-hand not configured to order, same eligibility gate as the
+  // others. Independent flag — same as tank variance, not enrichment-only —
+  // since "on hand at this shop with no order config" is itself a specific,
+  // actionable product-level finding, not just a detail to attach to a flag
+  // some other rule already raised.
+  const oilFlagsByShop = useMemo(() => {
+    const m = new Map<string, OilOnHandRow[]>()
+    if (!evalData || !oilCheckEnabled) return m
+    for (const r of oilOnHandRows) {
+      if (!evalData.eligibleLocationIds.has(r.location_id)) continue
+      if (!m.has(r.location_id)) m.set(r.location_id, [])
+      m.get(r.location_id)!.push(r)
+    }
+    return m
+  }, [oilOnHandRows, evalData, oilCheckEnabled])
+
   // Draft thresholds derived from current (unsaved) form state
   const draft: DraftThresholds = useMemo(() => ({
     low_adj_threshold: adjEnabled ? numOrNull(lowAdj) : null,
@@ -234,54 +286,70 @@ export function RecountLogicTab() {
     var_last_threshold_type: varLastThresholdType,
   }), [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled, lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, lookbackN, varMedThresholdType, varLastThresholdType])
 
-  // Three-stage pipeline over eligible shops only:
+  // Pipeline over eligible shops only:
   //   1. Initial checks (adjustment count, ending balance, variance vs
   //      median/last month) — evaluateCounts, over this period's Monthly
-  //      counts.
-  //   2. Tank monitor variance — merged onto a shop's stage-1 entry if it has
-  //      one; for an eligible shop with no Monthly count row (accepted via
-  //      Mark Counted, or a count_type mismatch) but a tank/count_products
-  //      mismatch, this is the only stage that can flag it, so it gets a
-  //      synthetic entry rather than being silently dropped.
-  //   3. Product-range exceptions (exceptionsByShop, above) — enrichment
+  //      counts. Skipped entirely (flags cleared, but rows kept so tank/oil
+  //      flags below still have somewhere to attach) when ignoreEndingBalance
+  //      is on.
+  //   2. Tank monitor variance and 3. unconfigured oil — each merged onto a
+  //      shop's stage-1 entry if it has one; for an eligible shop with no
+  //      Monthly count row (accepted via Mark Counted, or a count_type
+  //      mismatch) but a real tank/oil finding, these are the only stages
+  //      that can flag it, so it gets one shared synthetic entry rather than
+  //      being silently dropped (or duplicated across two separate ones).
+  //   4. Product-range exceptions (exceptionsByShop, above) — enrichment
   //      only, applied below when splitting flagged shops for generation;
   //      never adds a new flag by itself.
   const evaluated = useMemo(() => {
     if (!evalData) return []
-    const base = evaluateCounts(evalData.counts, evalData.histByLoc, draftToConfig(draft), lookbackN)
-    const withTankFlag = base.map((e) => {
-      if (!e.locationId || !tankVarByShop.has(e.locationId)) return e
-      return { ...e, flags: [...e.flags, 'tank_monitor_variance'] }
+    const rawBase = evaluateCounts(evalData.counts, evalData.histByLoc, draftToConfig(draft), lookbackN)
+    const base = ignoreEndingBalance ? rawBase.map((e) => ({ ...e, flags: [] as string[] })) : rawBase
+
+    const withFlags = base.map((e) => {
+      if (!e.locationId) return e
+      const extra: string[] = []
+      if (tankVarByShop.has(e.locationId)) extra.push('tank_monitor_variance')
+      if (oilFlagsByShop.has(e.locationId)) extra.push('unconfigured_oil')
+      return extra.length ? { ...e, flags: [...e.flags, ...extra] } : e
     })
-    const coveredLocIds = new Set(base.map((e) => e.locationId).filter((id): id is string => !!id))
-    const tankOnly: EvaluatedCount[] = []
-    for (const locId of tankVarByShop.keys()) {
-      if (coveredLocIds.has(locId) || !evalData.eligibleLocationIds.has(locId)) continue
-      tankOnly.push({ count: null, locationId: locId, prev: null, median: 0, varVsLastMonth: 0, varVsMedian: 0, flags: ['tank_monitor_variance'] })
-    }
-    return [...withTankFlag, ...tankOnly]
-  }, [evalData, draft, lookbackN, tankVarByShop])
+
+    const coveredLocIds = new Set(withFlags.map((e) => e.locationId).filter((id): id is string => !!id))
+    const onlyLocIds = new Set(
+      [...tankVarByShop.keys(), ...oilFlagsByShop.keys()]
+        .filter((id) => !coveredLocIds.has(id) && evalData.eligibleLocationIds.has(id))
+    )
+    const synthetic: EvaluatedCount[] = [...onlyLocIds].map((locId) => {
+      const flags: string[] = []
+      if (tankVarByShop.has(locId)) flags.push('tank_monitor_variance')
+      if (oilFlagsByShop.has(locId)) flags.push('unconfigured_oil')
+      return { count: null, locationId: locId, prev: null, median: 0, varVsLastMonth: 0, varVsMedian: 0, flags }
+    })
+    return [...withFlags, ...synthetic]
+  }, [evalData, draft, lookbackN, tankVarByShop, oilFlagsByShop, ignoreEndingBalance])
 
   const flagged = evaluated.filter((e) => e.flags.length > 0)
 
   // Split for generation: a flagged shop with no specific product driving it
-  // (no tank-variance product, no product-range exception) can't say what to
-  // recount, so it's routed to manual review instead of auto-generating an
-  // untargeted "Oil Recount". A tank_monitor_variance flag always implies
-  // product detail by construction, so this split only ever pulls in shops
-  // flagged purely by the dollar/count rules.
+  // (no tank-variance product, no unconfigured-oil product, no product-range
+  // exception) can't say what to recount, so it's routed to manual review
+  // instead of auto-generating an untargeted "Oil Recount". A
+  // tank_monitor_variance or unconfigured_oil flag always implies product
+  // detail by construction, so this split only ever pulls in shops flagged
+  // purely by the dollar/count rules.
   const { flaggedWithProducts, manualReview } = useMemo(() => {
     const withP: EvaluatedCount[] = []
     const manual: EvaluatedCount[] = []
     for (const e of flagged) {
       const hasProduct = !!e.locationId && (
         (tankVarByShop.get(e.locationId)?.length ?? 0) > 0 ||
-        (exceptionsByShop.get(e.locationId)?.length ?? 0) > 0
+        (exceptionsByShop.get(e.locationId)?.length ?? 0) > 0 ||
+        (oilFlagsByShop.get(e.locationId)?.length ?? 0) > 0
       )
       ;(hasProduct ? withP : manual).push(e)
     }
     return { flaggedWithProducts: withP, manualReview: manual }
-  }, [flagged, tankVarByShop, exceptionsByShop])
+  }, [flagged, tankVarByShop, exceptionsByShop, oilFlagsByShop])
   const totalShops = evaluated.length
 
   async function saveLogic(): Promise<string | null> {
@@ -313,11 +381,17 @@ export function RecountLogicTab() {
     // best-effort: columns from migrations that may not have run in prod yet
     if (savedId) {
       sb.schema('inventory').from('recount_config')
-        .update({ oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold })
+        .update({
+          oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold,
+          ignore_ending_balance: ignoreEndingBalance, oil_check_enabled: oilCheckEnabled,
+        })
         .eq('id', savedId)
         .then(() => {})
     }
-    setRecountConfig({ id: savedId!, ...payload, oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold } as unknown as RecountConfig)
+    setRecountConfig({
+      id: savedId!, ...payload, oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold,
+      ignore_ending_balance: ignoreEndingBalance, oil_check_enabled: oilCheckEnabled,
+    } as unknown as RecountConfig)
     return savedId
   }
 
@@ -361,9 +435,11 @@ export function RecountLogicTab() {
         .map((e) => {
           const catFlags = exceptionsByShop.get(e.locationId!) ?? []
           const tankFlags = tankVarByShop.get(e.locationId!) ?? []
+          const oilFlags = oilFlagsByShop.get(e.locationId!) ?? []
           const productFlags = [
             ...catFlags.map((x) => ({ source: 'category_limit' as const, product_id: x.product_id, category: x.category, basis: x.basis, reason: `${x.on_hand} on hand > ${x.expected_limit} ${x.basis} limit` })),
             ...tankFlags.map((x) => ({ source: 'tank_variance' as const, product_id: x.product_id, category: null, basis: 'tank_variance', reason: `tank ${x.tank_qts.toFixed(1)} qt vs ${x.on_hand.toFixed(1)} on hand (${x.diff > 0 ? '+' : ''}${x.diff.toFixed(1)} qt)` })),
+            ...oilFlags.map((x) => ({ source: 'unconfigured_oil' as const, product_id: x.product_id, category: x.category, basis: 'unconfigured_oil', reason: `${x.on_hand} qt on hand, not configured to order at this shop` })),
           ]
           const requestedProducts = productFlags.map((p) => `${p.product_id} (${p.reason})`)
           return {
@@ -402,6 +478,20 @@ export function RecountLogicTab() {
 
   return (
     <div className="flex flex-col gap-6">
+      <Card className={ignoreEndingBalance ? 'border-[#E67E22]/50' : ''}>
+        <CardBody className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <span className="text-xs font-mono text-navy uppercase tracking-wide">Ignore Ending Balance Rules</span>
+            <p className="text-[11px] font-mono text-inky/60 mt-0.5 max-w-xl">
+              When on, Adjustment Count, Oil Adjustment Count, Ending Balance, Variance vs Median, and Variance vs
+              Last Month stop flagging shops entirely — only Tank Monitor Variance, Oil On Hand (below), and product
+              range exceptions can flag a recount. Each rule's own toggle/thresholds are kept, not cleared.
+            </p>
+          </div>
+          <Toggle checked={ignoreEndingBalance} onChange={setIgnoreEndingBalance} color="amber" size="sm" label={ignoreEndingBalance ? 'On' : 'Off'} />
+        </CardBody>
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <RuleCard
           title="Adjustment Count"
@@ -507,7 +597,20 @@ export function RecountLogicTab() {
         >
           <Input label="Variance (quarts)" value={tankVarQts} onChange={(e) => setTankVarQts(e.target.value)} placeholder="e.g. 50" />
         </RuleCard>
+
+        <RuleCard
+          title="Oil On Hand — Not Configured to Order"
+          enabled={oilCheckEnabled}
+          onToggle={setOilCheckEnabled}
+          preview={oilCheckEnabled
+            ? 'Flag shops with engine oil on hand this period that has no location_order_config row — i.e. oil they\'re counting but not configured to order. Exceptions below are excluded.'
+            : 'Disabled.'}
+        >
+          <p className="text-xs font-mono text-inky/60">Engine oil only. No threshold — any unconfigured oil with on-hand &gt; 0 flags the shop and product.</p>
+        </RuleCard>
       </div>
+
+      <OilOnHandExceptionsPanel />
 
       <Card>
         <CardBody className="flex items-end justify-between flex-wrap gap-4">
@@ -576,7 +679,7 @@ export function RecountLogicTab() {
                           ))}
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-inky">{productsPreview(e, tankVarByShop, exceptionsByShop)}</td>
+                      <td className="px-3 py-2 text-inky">{productsPreview(e, tankVarByShop, exceptionsByShop, oilFlagsByShop)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -659,11 +762,13 @@ function productsPreview(
   e: EvaluatedCount,
   tankVarByShop: Map<string, TankVarianceCandidate[]>,
   exceptionsByShop: Map<string, ProductExceptionRow[]>,
+  oilFlagsByShop: Map<string, OilOnHandRow[]>,
 ): string {
   if (!e.locationId) return '—'
   const products = [
     ...(exceptionsByShop.get(e.locationId) ?? []).map((x) => x.product_id),
     ...(tankVarByShop.get(e.locationId) ?? []).map((x) => x.product_id),
+    ...(oilFlagsByShop.get(e.locationId) ?? []).map((x) => x.product_id),
   ]
   return products.length ? products.join(', ') : '—'
 }
