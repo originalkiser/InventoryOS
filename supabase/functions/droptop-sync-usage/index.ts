@@ -369,15 +369,31 @@ Deno.serve(async (req) => {
     // ── Sync modes: inventory / usage / both ────────────────────────────────
 
     // 3. Load existing product_usage rows — used both to dedup (id match) and,
-    // for partial modes, to carry over the side we aren't pulling.
-    const { data: existingRows } = await (admin as any)
-      .schema('inventory').from('product_usage')
-      .select('id, location_id, product_id, category, daily_usage, on_hands')
-      .eq('company_id', me.company_id)
-
+    // for partial modes, to carry over the side we aren't pulling. Paginated:
+    // a single un-ranged select is capped at PostgREST's db-max-rows (~1000),
+    // which silently truncated this for any company with more rows than that
+    // (244 locations × their product counts clears it easily) — the missing
+    // rows then looked "new", got a fresh id, and collided with the real
+    // pre-existing row on the (company, location, product) unique index.
     const existingMap = new Map<string, any>()
-    for (const r of (existingRows ?? [])) {
-      existingMap.set(`${r.location_id ?? ''}|${String(r.product_id).toLowerCase()}`, r)
+    {
+      const PAGE = 1000
+      let from = 0
+      for (;;) {
+        const { data: rows, error } = await (admin as any)
+          .schema('inventory').from('product_usage')
+          .select('id, location_id, product_id, category, daily_usage, on_hands')
+          .eq('company_id', me.company_id)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1)
+        if (error) throw new Error(`Failed to load existing product_usage: ${error.message}`)
+        const batch = (rows ?? []) as any[]
+        for (const r of batch) {
+          existingMap.set(`${r.location_id ?? ''}|${String(r.product_id).toLowerCase()}`, r)
+        }
+        if (batch.length < PAGE) break
+        from += PAGE
+      }
     }
 
     // 4. Sync each location
