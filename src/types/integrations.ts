@@ -63,45 +63,28 @@ export interface LocationSyncLog {
   error_message: string | null
 }
 
-// Integration 3 — Droptop month-end
-export interface DroptopInventoryItem {
-  shopId: string
-  productName: string
-  sku?: string
-  onHandQty: number
-  endingBalance?: number
-  uom?: string
-  // TODO: [DROPTOP] verify field names against actual Droptop API response
+// Integration 3 — Droptop usage/on-hands sync. Runs server-side via the
+// droptop-sync-usage Edge Function, authenticated with Supabase secrets
+// (DROPTOP_PUBLIC_KEY / DROPTOP_PRIVATE_KEY) — not a client-side API key.
+export type DroptopSyncMode = 'both' | 'inventory' | 'usage' | 'alerts'
+
+export interface DroptopSyncResult {
+  operations_synced: number
+  products_upserted: number
+  warnings?: string[]
 }
 
-export interface MonthEndPullResult {
-  date: string
-  recordsWritten: number
-  status: 'success' | 'error'
-  error?: string
-}
-
-export interface MonthEndPullLog {
+// Mirrors inventory.droptop_sync_log, written by the Edge Function after
+// every invocation (one row per invocation — a chunked full-company sync
+// writes one row per chunk, not one combined row).
+export interface DroptopSyncLog {
   id: string
-  pull_date: string
-  pulled_at: string
-  locations_pulled: number
-  records_written: number
-  status: 'success' | 'error'
+  company_id: string
+  synced_at: string
+  operations_count: number | null
+  products_upserted: number | null
+  status: 'success' | 'partial' | 'error'
   error_message: string | null
-}
-
-export interface MonthEndSnapshot {
-  id: string
-  snapshot_date: string
-  location_id: string
-  product_name: string
-  sku: string | null
-  on_hand_qty: number
-  ending_balance: number | null
-  uom: string | null
-  pulled_at: string
-  source: string
 }
 
 // Integration 4 — Placed Orders

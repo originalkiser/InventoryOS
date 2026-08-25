@@ -7,17 +7,42 @@
 // Requires Supabase secrets: DROPTOP_PUBLIC_KEY, DROPTOP_PRIVATE_KEY
 // (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are injected.)
 //
-// POST body: { mode?, daysBack?, locationId?, categories? }
-//   mode       — 'both' (default) | 'inventory' (on-hands only, 1 call/location)
-//                | 'usage' (sales changes only) | 'alerts' (adjustment scan)
-//                Partial modes preserve the other side's existing values and
-//                recompute days_of_supply from the merged pair.
-//   daysBack   — usage/alerts window in days; default 30 (alerts: 1), max 365
-//   locationId — sync a single location
-//   categories — product_type filter terms (case-insensitive substring match,
-//                e.g. ["engine oil", "additive"]); empty/absent = all products.
-//                Droptop has no server-side category filter, so this is applied
-//                after fetch, before writing to product_usage.
+// POST body: { mode?, daysBack?, locationId?, locationIds?, categories? }
+//   mode        — 'both' (default) | 'inventory' (on-hands only, 1 call/location)
+//                 | 'usage' (sales changes only) | 'alerts' (adjustment scan)
+//                 Partial modes preserve the other side's existing values and
+//                 recompute days_of_supply from the merged pair.
+//   daysBack    — usage/alerts window in days; default 30 (alerts: 1), max 365
+//   locationId  — sync a single location
+//   locationIds — sync a specific batch of locations (client-side chunking for
+//                 a full-company sync — see runDroptopSync in droptopService.ts).
+//                 Ignored if locationId is also set. Neither set = every
+//                 location with a droptop_operation_id.
+//   categories  — product_type filter terms (case-insensitive substring match,
+//                 e.g. ["engine oil", "additive"]); empty/absent = all products.
+//                 Droptop has no server-side category filter, so this is applied
+//                 after fetch, before writing to product_usage.
+//
+// Per-location work (one or two Droptop API calls, more if a location's
+// change-event window paginates) runs with bounded concurrency rather than
+// one location at a time — a full-company "all shops" sync used to run every
+// location sequentially, which for 200+ locations could easily exceed the
+// Edge Function's execution time limit. The platform kills the invocation at
+// that point and returns a non-2xx status with no useful body, which is what
+// surfaces client-side as "Edge Function returned a non-2xx status code" —
+// the function's own code always tries to respond 200, even on internal
+// errors, so that generic message only ever comes from the platform, not
+// from a `return ok({ error: ... })` path below.
+async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const item = items[next++]
+      await fn(item)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+}
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -185,6 +210,9 @@ Deno.serve(async (req) => {
     const defaultDays = mode === 'alerts' ? 1 : 30
     const daysBack = Math.min(Math.max(Number(body.daysBack ?? defaultDays), 1), 365)
     const locationId: string | null = body.locationId ?? null
+    const locationIds: string[] = !locationId && Array.isArray(body.locationIds)
+      ? body.locationIds.filter((v: unknown) => typeof v === 'string')
+      : []
     const categories: string[] = Array.isArray(body.categories)
       ? body.categories.map((c: unknown) => String(c).trim().toLowerCase()).filter(Boolean)
       : []
@@ -209,6 +237,7 @@ Deno.serve(async (req) => {
         .eq('company_id', me.company_id)
         .not('droptop_operation_id', 'is', null)
       if (locationId) q = q.eq('id', locationId)
+      else if (locationIds.length) q = q.in('id', locationIds)
       const { data, error } = await q
       if (error) return ok({ error: `Locations query failed: ${error.message}` })
       locations = (data ?? []).filter((l: any) => l.droptop_operation_id)
@@ -243,7 +272,7 @@ Deno.serve(async (req) => {
       let operationsScanned = 0
       const opErrors: string[] = []
 
-      for (const loc of locations) {
+      await mapWithConcurrency(locations, 5, async (loc: any) => {
         try {
           const changes = await fetchChanges(loc.droptop_operation_id, startUnix, endUnix, publicKey, privateKey)
           for (const c of changes) {
@@ -271,7 +300,7 @@ Deno.serve(async (req) => {
         } catch (opErr: unknown) {
           opErrors.push(`${loc.droptop_operation_id}: ${opErr instanceof Error ? opErr.message : String(opErr)}`)
         }
-      }
+      })
 
       let alertsCreated = 0
       if (alertRows.length) {
@@ -314,7 +343,7 @@ Deno.serve(async (req) => {
     let operationsSynced = 0
     const opErrors: string[] = []
 
-    for (const loc of locations) {
+    await mapWithConcurrency(locations, 5, async (loc: any) => {
       try {
         const opId: string = loc.droptop_operation_id
 
@@ -385,7 +414,7 @@ Deno.serve(async (req) => {
         opErrors.push(`${loc.droptop_operation_id}: ${msg}`)
         console.error(`Droptop sync error for operation ${loc.droptop_operation_id}:`, msg)
       }
-    }
+    })
 
     // 5. Batch upsert into inventory.product_usage
     let productsUpserted = 0

@@ -6,6 +6,7 @@ import { invalidateInventoryCache } from '@/hooks/useInventory'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
+import { runDroptopSync } from '@/services/droptopService'
 import { DataTable } from '@/components/shared/DataTable'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
@@ -26,6 +27,10 @@ import toast from 'react-hot-toast'
 export const EXCLUDE_NOT_IN_ORDER_KEY = 'product_usage.excludeNotInOrderConfig'
 
 type DroptopMode = 'both' | 'inventory' | 'usage'
+
+function syncingLabel(progress: { batch: number; totalBatches: number } | null): string {
+  return progress && progress.totalBatches > 1 ? `Syncing… (${progress.batch}/${progress.totalBatches})` : 'Syncing…'
+}
 
 interface AlertThreshold {
   id: string
@@ -200,6 +205,7 @@ export function ProductUsageTab() {
 
   // Droptop sync
   const [droptopSyncing, setDroptopSyncing] = useState<DroptopMode | null>(null)
+  const [droptopProgress, setDroptopProgress] = useState<{ batch: number; totalBatches: number } | null>(null)
   const [droptopDaysBack, setDroptopDaysBack] = useState(30)
   const [droptopCategories, setDroptopCategories] = useState('Engine Oil, Additive')
   const [droptopLocationId, setDroptopLocationId] = useState<string>('')
@@ -485,39 +491,41 @@ export function ProductUsageTab() {
   }
 
   // ---- Droptop sync ----
+  // Full-company syncs ("all locations", no droptopLocationId) run as several
+  // smaller Edge Function invocations rather than one — see runDroptopSync in
+  // droptopService.ts for why a single all-locations call can time out.
   async function syncFromDroptop(mode: DroptopMode) {
+    if (!profile?.company_id) return
     setDroptopSyncing(mode)
+    setDroptopProgress(null)
     setDroptopError(null)
     setDroptopResult(null)
-    const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
-      body: {
-        mode,
-        daysBack: droptopDaysBack,
-        ...(droptopLocationId ? { locationId: droptopLocationId } : {}),
-        categories: droptopCategories.split(',').map((c) => c.trim()).filter(Boolean),
-      },
-    })
-    setDroptopSyncing(null)
-    if (error) {
-      setDroptopError(error.message)
+    try {
+      const result = await runDroptopSync(
+        profile.company_id,
+        {
+          mode,
+          daysBack: droptopDaysBack,
+          categories: droptopCategories.split(',').map((c) => c.trim()).filter(Boolean),
+          ...(droptopLocationId ? { locationId: droptopLocationId } : {}),
+        },
+        (p) => setDroptopProgress(p),
+      )
+      setDroptopResult({ operations_synced: result.operations_synced, products_upserted: result.products_upserted })
+      toast.success(`Synced ${result.products_upserted.toLocaleString()} products from Droptop`)
+      if (result.warnings?.length) {
+        setDroptopError(result.warnings.join(' | '))
+        toast(`${result.warnings.length} location${result.warnings.length === 1 ? '' : 's'} had issues — see details below`, { icon: '⚠️' })
+      }
+      invalidateInventoryCache()
+      loadRpc()
+    } catch (err) {
+      setDroptopError(err instanceof Error ? err.message : 'Droptop sync failed')
       toast.error('Droptop sync failed')
-      return
+    } finally {
+      setDroptopSyncing(null)
+      setDroptopProgress(null)
     }
-    if (data?.error) {
-      const msg = data.error === 'credentials_not_configured'
-        ? 'Droptop API keys not configured — add DROPTOP_PUBLIC_KEY and DROPTOP_PRIVATE_KEY to Supabase secrets.'
-        : data.error
-      setDroptopError(msg)
-      toast.error('Droptop sync failed')
-      return
-    }
-    setDroptopResult({
-      operations_synced: data.operations_synced ?? 0,
-      products_upserted: data.products_upserted ?? 0,
-    })
-    toast.success(`Synced ${(data.products_upserted ?? 0).toLocaleString()} products from Droptop`)
-    invalidateInventoryCache()
-    loadRpc()
   }
 
   // ---- Batch import ----
@@ -764,17 +772,18 @@ export function ProductUsageTab() {
               />
             </label>
             <Button size="sm" onClick={() => syncFromDroptop('both')} disabled={droptopSyncing != null}>
-              {droptopSyncing === 'both' ? 'Syncing…' : 'Full Sync'}
+              {droptopSyncing === 'both' ? syncingLabel(droptopProgress) : 'Full Sync'}
             </Button>
             <Button size="sm" variant="secondary" onClick={() => syncFromDroptop('inventory')} disabled={droptopSyncing != null}>
-              {droptopSyncing === 'inventory' ? 'Syncing…' : 'On-Hands Only'}
+              {droptopSyncing === 'inventory' ? syncingLabel(droptopProgress) : 'On-Hands Only'}
             </Button>
             <Button size="sm" variant="secondary" onClick={() => syncFromDroptop('usage')} disabled={droptopSyncing != null}>
-              {droptopSyncing === 'usage' ? 'Syncing…' : 'Usage Only'}
+              {droptopSyncing === 'usage' ? syncingLabel(droptopProgress) : 'Usage Only'}
             </Button>
           </div>
           <p className="text-[10px] font-mono text-inky/50">
             On-Hands Only = 1 API call per location (cheap, schedule daily). Usage Only pages through change events for the window (heavier — run less often). Partial syncs keep the other side's existing values.
+            {!droptopLocationId && ' Syncing all locations runs in batches to avoid timing out — this can take a while for a large company.'}
           </p>
           {droptopResult && (
             <p className="text-xs font-mono text-inky">
