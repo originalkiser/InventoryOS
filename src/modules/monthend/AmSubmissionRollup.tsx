@@ -122,8 +122,14 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
   async function copyTable() {
     const cellStyle = (bg: string | undefined, fg: string | undefined, extra = '') =>
       `border:1px solid #4F7489;padding:4px 10px;${bg ? `background:${bg};` : ''}${fg ? `color:${fg};` : ''}${extra}`
+    // Text is nested in a legacy <font color> tag, not just inline CSS —
+    // Outlook's Word-based rendering engine has a long-standing bug where it
+    // drops/overrides inline `color` on table cells (especially once pasted
+    // through Excel first), silently turning cream-on-navy into illegible
+    // black-on-navy. <font color> is the one thing that reliably survives
+    // that pipeline; the inline color stays too for clients that respect it.
     const headCell = (t: string) =>
-      `<td style="border:1px solid #002745;background:#002745;color:#ffffff;padding:5px 10px;text-align:left;font-weight:bold;">${escapeHtml(t)}</td>`
+      `<td style="border:1px solid #002745;background:#002745;color:#F2F1E6;padding:5px 10px;text-align:left;font-weight:bold;"><font color="#F2F1E6">${escapeHtml(t)}</font></td>`
 
     const summaryHtml =
       `<table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;font-size:12px;"><tbody>` +

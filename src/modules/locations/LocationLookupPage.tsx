@@ -558,11 +558,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     const align = (c: Col<TankRow>) => (c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left')
 
     const title = `${shopLabel(shopId)} — Tank Monitors`
-    // Bold <td> rather than <th>, and pure white rather than cream: Outlook and
-    // Word drop the colour off <th> and fall back to black, which is unreadable
-    // on the navy fill. Same fix/reasoning as tableHtml() in tankEmail.ts.
-    const thStyle = (c: Col<TankRow>) => `border:1px solid #002745;background:#002745;color:#ffffff;padding:4px 8px;text-align:${align(c)};font-weight:bold;`
-    const head = `<tr>${cols.map((c) => `<td style="${thStyle(c)}">${esc(label(c))}</td>`).join('')}</tr>`
+    // Bold <td> rather than <th>: Outlook/Word drop the colour off <th> and
+    // fall back to black, which is unreadable on the navy fill. Inline color
+    // alone isn't reliable either — Outlook's Word rendering engine can still
+    // drop/override it on table cells (especially once pasted through Excel
+    // first) — so the text is also wrapped in a legacy <font color> tag,
+    // which survives that pipeline. Same fix as tableHtml() in tankEmail.ts.
+    const thStyle = (c: Col<TankRow>) => `border:1px solid #002745;background:#002745;color:#F2F1E6;padding:4px 8px;text-align:${align(c)};font-weight:bold;`
+    const head = `<tr>${cols.map((c) => `<td style="${thStyle(c)}"><font color="#F2F1E6">${esc(label(c))}</font></td>`).join('')}</tr>`
     const body = rows.map((t, i) => {
       const bg = i % 2 ? '#F2F1E6' : '#FFFFFF'
       return `<tr>${cols.map((c) => `<td style="border:1px solid #4F7489;padding:3px 8px;text-align:${align(c)};background:${bg};">${esc(text(c, t))}</td>`).join('')}</tr>`
