@@ -402,37 +402,50 @@ Deno.serve(async (req) => {
             : Promise.resolve([]),
         ])
 
-        // Aggregate sales by product_id
-        const salesByProduct = new Map<string, number>()
+        // Aggregate sales by product_id — keyed case-insensitively. The POS
+        // API and existing product_usage rows don't always agree on casing
+        // for the same product, and treating "Product-A" / "PRODUCT-A" as
+        // two different products is what produced duplicate on-hand rows
+        // for the same (location, product) before the unique index existed.
+        const salesByProduct = new Map<string, number>() // key: lowercased product_id
+        const displayId = new Map<string, string>() // lowercased -> first-seen raw casing
         for (const change of changes) {
           if (change.change_type !== 'sale') continue
           if (!matchesCategory(change.product_type)) continue
           const pid: string = change.product_id
+          const key = pid.toLowerCase()
           const qty = Math.abs(parseFloat(change.quantity_change || '0'))
-          salesByProduct.set(pid, (salesByProduct.get(pid) ?? 0) + qty)
+          salesByProduct.set(key, (salesByProduct.get(key) ?? 0) + qty)
+          if (!displayId.has(key)) displayId.set(key, pid)
         }
 
-        // Index inventory by product_id
+        // Index inventory by product_id (same case-insensitive keying)
         const invByProduct = new Map<string, { on_hands: number; product_type: string }>()
         for (const item of inventory) {
           if (!matchesCategory(item.product_type)) continue
-          invByProduct.set(item.product_id, {
+          const key = item.product_id.toLowerCase()
+          invByProduct.set(key, {
             on_hands: parseFloat(item.quantity_on_hand || '0'),
             product_type: item.product_type || '',
           })
+          if (!displayId.has(key)) displayId.set(key, item.product_id)
         }
 
         // Products touched by the side(s) we pulled
-        const productIds = new Set([...salesByProduct.keys(), ...invByProduct.keys()])
+        const productKeys = new Set([...salesByProduct.keys(), ...invByProduct.keys()])
 
-        for (const productId of productIds) {
-          const dedupeKey = `${loc.id ?? ''}|${productId.toLowerCase()}`
+        for (const key of productKeys) {
+          const dedupeKey = `${loc.id ?? ''}|${key}`
           const existing = existingMap.get(dedupeKey)
-          const invData = invByProduct.get(productId)
+          const invData = invByProduct.get(key)
+          // Prefer the casing already on record for this row, so an existing
+          // product_id (possibly referenced elsewhere) never gets rewritten
+          // just because the POS API happened to send different casing.
+          const productId = existing?.product_id ?? displayId.get(key) ?? key
 
           // Pulled side wins; other side carries over from the existing row.
           const dailyUsage = mode !== 'inventory'
-            ? (salesByProduct.has(productId) ? (salesByProduct.get(productId)! / daysBack) : null)
+            ? (salesByProduct.has(key) ? (salesByProduct.get(key)! / daysBack) : null)
             : (existing?.daily_usage ?? null)
           const onHands = mode !== 'usage'
             ? (invData ? invData.on_hands : null)
