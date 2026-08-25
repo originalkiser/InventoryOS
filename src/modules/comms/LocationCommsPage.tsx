@@ -7,9 +7,10 @@ import { useLocations } from '@/hooks/useLocations'
 import { Button, SbLoader } from '@/components/ui'
 import { EditDate, EditSelect, CappedTextarea } from '@/components/shared/InlineCells'
 import { LocationCommsModal } from './LocationCommsModal'
+import { WrapUpCommModal, seedFor, type WrapUpCommSeed } from './WrapUpCommModal'
 import { useCommsConfig } from './useCommsConfig'
 import type { LocationComm } from './comms'
-import { resolutionNotes } from './comms'
+import { resolutionNotes, isResolvedStatus } from './comms'
 import { EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { isStaleRecord, bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
@@ -47,6 +48,13 @@ export function LocationCommsPage() {
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Partial<LocationComm> | null>(null)
+  // Quick wrap-up prompt — opens when the inline status edit moves to
+  // Tentatively Closed or Closed, so the closing details get captured in
+  // one step without a full edit.
+  const [wrapUp, setWrapUp] = useState<WrapUpCommSeed | null>(null)
+  function openWrapUp(r: LocationComm, statusOverride: string | null) {
+    setWrapUp(seedFor(r, statusOverride))
+  }
 
   const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
 
@@ -182,7 +190,8 @@ export function LocationCommsPage() {
                     <td className={`${tdBase} sticky left-0 z-10 ${band} w-[200px] min-w-[200px]`}>
                       <div className="flex items-center gap-1">
                         <button onClick={() => { setEditing(r); setModalOpen(true) }} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                        <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—" onSave={(v) => set(r, { status: v })} className="min-w-[150px]" />
+                        <EditSelect value={r.status} options={EXCEPTION_STATUSES as unknown as string[]} placeholder="—"
+                          onSave={(v) => { set(r, { status: v }); if (isResolvedStatus(v)) openWrapUp(r, v) }} className="min-w-[150px]" />
                         {stale && (
                           <button onClick={() => set(r, { metadata: { ...(r.metadata ?? {}), bumped_until: bumpedUntilISO(config.bumpDays) } })}
                             title={`Defer ${config.bumpDays} more day(s)`}
@@ -216,6 +225,9 @@ export function LocationCommsPage() {
 
       <LocationCommsModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
         onSaved={() => { load(); refreshNavBadges() }} onDelete={deleteComm} />
+
+      <WrapUpCommModal seed={wrapUp} statuses={EXCEPTION_STATUSES as unknown as string[]} onClose={() => setWrapUp(null)}
+        onSave={(patch) => { if (wrapUp) silentUpdate(wrapUp.row.id, patch) }} />
     </div>
   )
 }
