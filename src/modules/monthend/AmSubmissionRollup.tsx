@@ -1,5 +1,7 @@
 import { useMemo } from 'react'
+import { EyeOff } from 'lucide-react'
 import { useLocations } from '@/hooks/useLocations'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Card, CardBody } from '@/components/ui'
 import { escapeHtml } from '@/modules/locations/tankEmail'
 import type { Location } from '@/types'
@@ -45,8 +47,9 @@ interface Props {
 
 export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel }: Props) {
   const loc = useLocations()
+  const [hiddenAms, setHiddenAms] = useAppSetting<string[]>('monthend.hiddenAreaManagers', [])
 
-  const rows: AmRollupRow[] = useMemo(() => {
+  const allRows: AmRollupRow[] = useMemo(() => {
     const byAm = new Map<string, { submitted: number; notSubmitted: number; shops: string[] }>()
     for (const l of locations) {
       const am = loc.fieldValue(l.id, 'area_manager').trim() || 'Unassigned'
@@ -69,21 +72,35 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
       })
   }, [locations, monthlySubmittedIds, loc])
 
+  const rows = useMemo(() => allRows.filter((r) => !hiddenAms.includes(r.am)), [allRows, hiddenAms])
+
+  function hideAm(am: string) {
+    if (!hiddenAms.includes(am)) setHiddenAms([...hiddenAms, am])
+  }
+  function unhideAm(am: string) {
+    setHiddenAms(hiddenAms.filter((a) => a !== am))
+  }
+
   const totalSubmitted = rows.reduce((s, r) => s + r.submitted, 0)
   const totalNotSubmitted = rows.reduce((s, r) => s + r.notSubmitted, 0)
   const totalPct = totalSubmitted + totalNotSubmitted > 0 ? totalSubmitted / (totalSubmitted + totalNotSubmitted) : 0
 
   // Outstanding-only — AMs/RDs for shops still missing a Monthly count, since
-  // that's who a reminder email would actually go to.
+  // that's who a reminder email would actually go to. Hidden AMs are left out
+  // of the AM list entirely (their email shouldn't go out with this batch);
+  // RD emails aren't scoped to hidden AMs since an RD oversees more than just
+  // that one AM's shops.
   const outstandingAmEmails = useMemo(() => {
     const set = new Set<string>()
     for (const l of locations) {
       if (monthlySubmittedIds.has(l.id)) continue
+      const am = loc.fieldValue(l.id, 'area_manager').trim() || 'Unassigned'
+      if (hiddenAms.includes(am)) continue
       const e = loc.fieldValue(l.id, 'am_email').trim()
       if (e) set.add(e)
     }
     return [...set].sort()
-  }, [locations, monthlySubmittedIds, loc])
+  }, [locations, monthlySubmittedIds, hiddenAms, loc])
 
   const outstandingRdEmails = useMemo(() => {
     const set = new Set<string>()
@@ -164,7 +181,18 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
               {totalSubmitted} of {totalSubmitted + totalNotSubmitted} shops submitted for {periodLabel} ({pctStr(totalPct)}). Monthly count type only.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {hiddenAms.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap text-[11px] font-mono text-inky/70 border border-navy/20 rounded px-2 py-1 bg-navy/[0.03] max-w-xs">
+                <span className="uppercase tracking-wide text-inky/50 flex-shrink-0">Hidden:</span>
+                {hiddenAms.map((am) => (
+                  <span key={am} className="inline-flex items-center gap-1 text-navy">
+                    {am}
+                    <button onClick={() => unhideAm(am)} title="Unhide" className="text-inky/40 hover:text-[#C0392B]">×</button>
+                  </span>
+                ))}
+              </div>
+            )}
             <Button size="sm" variant="secondary" onClick={() => copyEmails(outstandingAmEmails, 'AM')}>
               Copy AM Emails ({outstandingAmEmails.length})
             </Button>
@@ -193,7 +221,14 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
                 const t = tierFor(r.notSubmitted, r.pct)
                 return (
                   <tr key={r.am} style={t ? { background: t.bg, color: t.fg } : undefined} className={!t ? 'border-b border-navy/15 text-navy' : undefined}>
-                    <td className="px-3 py-1.5 font-semibold">{r.am}</td>
+                    <td className="px-3 py-1.5 font-semibold">
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => hideAm(r.am)} title="Hide this Area Manager" className="flex-shrink-0 opacity-50 hover:opacity-100">
+                          <EyeOff className="w-3 h-3" />
+                        </button>
+                        {r.am}
+                      </div>
+                    </td>
                     <td className="px-3 py-1.5 text-right">{r.submitted}</td>
                     <td className="px-3 py-1.5 text-right">{r.notSubmitted}</td>
                     <td className="px-3 py-1.5 text-right">{pctStr(r.pct)}</td>

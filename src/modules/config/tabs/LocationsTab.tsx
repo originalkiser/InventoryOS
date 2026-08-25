@@ -5,6 +5,7 @@ import { createColumnHelper, type SortingFn, type VisibilityState } from '@tanst
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useAuthStore } from '@/stores/authStore'
+import { isRealShopLocation } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
@@ -16,6 +17,7 @@ import { mappedValue } from '@/lib/columnTransform'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Location, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
+import toast from 'react-hot-toast'
 
 // ── Sorting ───────────────────────────────────────────────────────────────────
 
@@ -762,7 +764,23 @@ export function LocationsTab() {
       out.metadata = meta
       return out as Partial<Location>
     }).filter((r: any) => r.name)
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => String(r.name ?? '').toLowerCase(), labelOf: (r: any) => `${r.name ?? ''}${r.shop_city ? ` — ${r.shop_city}` : ''}` })
+
+    // Spreadsheet section headers/dividers (e.g. "Open Car Wash Stores") are
+    // sometimes mixed into a location upload alongside real shop rows — a
+    // real shop's Name (Code) is always numeric, so anything without a digit
+    // isn't a shop and would otherwise import as one with no area manager,
+    // no counts, etc. Skipped rather than imported, with a warning naming
+    // them so a genuinely mistyped code isn't silently dropped unnoticed.
+    const headerLike = payload.filter((r: any) => !isRealShopLocation(r))
+    const realShops = payload.filter((r: any) => isRealShopLocation(r))
+    if (headerLike.length) {
+      toast(
+        `Skipped ${headerLike.length} row${headerLike.length === 1 ? '' : 's'} with no numeric code (likely section headers, not shops): ${headerLike.map((r: any) => r.name).join(', ')}`,
+        { icon: '⚠️', duration: 8000 },
+      )
+    }
+
+    await importRows(realShops, { mode, source: 'upload', keyOf: (r: any) => String(r.name ?? '').toLowerCase(), labelOf: (r: any) => `${r.name ?? ''}${r.shop_city ? ` — ${r.shop_city}` : ''}` })
     setImporting(false)
   }
 
