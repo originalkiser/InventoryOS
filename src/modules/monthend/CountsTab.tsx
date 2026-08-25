@@ -15,6 +15,25 @@ import toast from 'react-hot-toast'
 
 const DEFAULT_LOOKBACK = 6
 
+// Module-level cache, keyed by company+period — survives unmount/remount, so
+// switching Month End tabs (TabsContent unmounts inactive panels) and coming
+// back to Counts doesn't re-run all 7 queries (including a 250k+ row
+// aggregation RPC) from scratch. Stale-while-revalidate: a cached period
+// renders instantly, then silently refreshes in the background once past
+// the TTL — same pattern as useConfigTab's tabCache.
+interface CountsCacheEntry {
+  locations: Location[]
+  recountConfig: RecountConfig | null
+  counts: MonthlyCount[]
+  productRows: ProductResultRow[]
+  batches: CountUploadBatch[]
+  balances: MonthlyEndingBalance[]
+  userNames: Record<string, string>
+  ts: number
+}
+const countsCache = new Map<string, CountsCacheEntry>()
+const CACHE_TTL_MS = 5 * 60 * 1000
+
 export function CountsTab() {
   const { profile } = useAuthStore()
   const { getCountMonth, recountConfig, setRecountConfig } = useMonthEndStore()
@@ -31,9 +50,32 @@ export function CountsTab() {
 
   const lookbackN = recountConfig?.median_months_lookback ?? DEFAULT_LOOKBACK
 
-  const loadAll = useCallback(async () => {
+  const applyEntry = useCallback((entry: CountsCacheEntry) => {
+    setLocations(entry.locations)
+    setRecountConfig(entry.recountConfig)
+    setCounts(entry.counts)
+    setProductRows(entry.productRows)
+    setBatches(entry.batches)
+    setBalances(entry.balances)
+    setUserNames(entry.userNames)
+  }, [setRecountConfig])
+
+  // `force: true` (writes, and the realtime-triggered reload below) always
+  // hits the network — we have positive evidence the data changed, so
+  // serving a within-TTL cache entry would show stale results. A plain
+  // mount/remount (tab switch back to Counts) uses the cache when fresh.
+  const loadAll = useCallback(async (opts?: { force?: boolean }) => {
     if (!companyId) return
-    setLoading(true)
+    const key = `${companyId}|${countMonth}`
+    const cached = countsCache.get(key)
+    if (cached) {
+      applyEntry(cached)
+      setLoading(false)
+      if (!opts?.force && Date.now() - cached.ts < CACHE_TTL_MS) return
+    } else {
+      setLoading(true)
+    }
+
     const sb = supabase as any
     const lowerBound = format(subMonths(new Date(countMonth), lookbackN + 1), 'yyyy-MM-dd')
 
@@ -49,14 +91,18 @@ export function CountsTab() {
     ])
 
     const locs = (locRes.data ?? []) as Location[]
-    setLocations(locs)
-    setRecountConfig((cfgRes.data ?? null) as RecountConfig | null)
-    setCounts((countRes.data ?? []) as MonthlyCount[])
     if (aggProdRes.error) {
       toast.error(`Product load failed: ${aggProdRes.error.message}`)
     }
-    setProductRows(
-      ((aggProdRes.data ?? []) as any[]).map((p) => ({
+    const names: Record<string, string> = {}
+    for (const p of (profRes.data ?? []) as { id: string; full_name: string | null }[]) {
+      names[p.id] = p.full_name ?? 'Unknown'
+    }
+    const entry: CountsCacheEntry = {
+      locations: locs,
+      recountConfig: (cfgRes.data ?? null) as RecountConfig | null,
+      counts: (countRes.data ?? []) as MonthlyCount[],
+      productRows: ((aggProdRes.data ?? []) as any[]).map((p) => ({
         location_label: locationLabel(p.location_id, locs),
         product_id: String(p.product_id ?? ''),
         category: String(p.category ?? ''),
@@ -65,17 +111,16 @@ export function CountsTab() {
         adjusted: Number(p.adjusted ?? 0),
         ending_value: Number(p.ending_value ?? 0),
         batch_count: Number(p.batch_count ?? 1),
-      }))
-    )
-    setBatches((batchRes.data ?? []) as CountUploadBatch[])
-    setBalances((balRes.data ?? []) as MonthlyEndingBalance[])
-    const names: Record<string, string> = {}
-    for (const p of (profRes.data ?? []) as { id: string; full_name: string | null }[]) {
-      names[p.id] = p.full_name ?? 'Unknown'
+      })),
+      batches: (batchRes.data ?? []) as CountUploadBatch[],
+      balances: (balRes.data ?? []) as MonthlyEndingBalance[],
+      userNames: names,
+      ts: Date.now(),
     }
-    setUserNames(names)
+    countsCache.set(key, entry)
+    applyEntry(entry)
     setLoading(false)
-  }, [companyId, countMonth, lookbackN, setRecountConfig])
+  }, [companyId, countMonth, lookbackN, applyEntry])
 
   useEffect(() => { loadAll() }, [loadAll])
 
@@ -89,7 +134,7 @@ export function CountsTab() {
   const reloadTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const debouncedReload = useCallback(() => {
     clearTimeout(reloadTimerRef.current)
-    reloadTimerRef.current = setTimeout(() => { loadAll() }, 1500)
+    reloadTimerRef.current = setTimeout(() => { loadAll({ force: true }) }, 1500)
   }, [loadAll])
 
   useEffect(() => {
@@ -162,7 +207,7 @@ export function CountsTab() {
       .eq('company_id', companyId)
       .eq('count_month', countMonth)
     if (error) toast.error(error.message)
-    else { toast.success('Count summaries cleared'); loadAll() }
+    else { toast.success('Count summaries cleared'); loadAll({ force: true }) }
   }
 
   async function clearProductCounts() {
@@ -181,7 +226,7 @@ export function CountsTab() {
       .eq('module', 'monthly')
       .eq('count_month', countMonth)
     if (e1 || e2) toast.error('Failed to clear product counts')
-    else { toast.success('Product batches cleared'); loadAll() }
+    else { toast.success('Product batches cleared'); loadAll({ force: true }) }
   }
 
   return (
@@ -198,7 +243,7 @@ export function CountsTab() {
           companyId={companyId}
           target={monthlySummaryTarget(countMonth)}
           uploadedBy={profile?.id ?? null}
-          onImported={loadAll}
+          onImported={() => loadAll({ force: true })}
           onClear={clearSummaryCounts}
         />
         <ProductDetailUpload
@@ -208,7 +253,7 @@ export function CountsTab() {
           uploadedBy={profile?.id ?? null}
           batches={batches}
           userNames={userNames}
-          onChanged={loadAll}
+          onChanged={() => loadAll({ force: true })}
           onClear={clearProductCounts}
         />
       </div>

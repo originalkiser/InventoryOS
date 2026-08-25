@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useInventoryAlertsStore } from './useInventoryAlerts'
 import { isStaleRecord } from '@/lib/staleness'
-import { buildMonitorEmailLog, backfillTodayBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from '@/modules/locations/tankEmail'
+import { buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from '@/modules/locations/tankEmail'
 import { DEFAULT_EXCEPTION_CONFIG, isExceptionStale } from '@/modules/exceptions/exceptions'
 import { DEFAULT_COMMS_CONFIG } from '@/modules/comms/comms'
 
@@ -29,14 +29,16 @@ async function fetchAppSetting(sb: any, companyId: string, key: string): Promise
 async function computeTankOfflineShops(companyId: string): Promise<number> {
   const sb = supabase as any
   const PAGE = 1000
-  const [{ count }, skipEnabledRaw, skipDaysRaw, monitorIgnoreRaw] = await Promise.all([
+  const [{ count }, skipEnabledRaw, skipDaysRaw, excludePendingRaw, monitorIgnoreRaw] = await Promise.all([
     sb.schema('inventory').from('tank_monitors').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
     fetchAppSetting(sb, companyId, 'tank_email_skip_enabled'),
     fetchAppSetting(sb, companyId, 'tank_email_skip_days'),
+    fetchAppSetting(sb, companyId, 'tank_email_exclude_pending'),
     fetchAppSetting(sb, companyId, 'tank_monitor_ignore'),
   ])
   const skipEnabled = skipEnabledRaw ?? true
   const skipDays = Number(skipDaysRaw ?? DEFAULT_EMAIL_SKIP_DAYS)
+  const excludePending = excludePendingRaw ?? true
   const monitorIgnore: string[] = Array.isArray(monitorIgnoreRaw) ? monitorIgnoreRaw : []
   const pages = Math.max(1, Math.ceil((count ?? 0) / PAGE))
   const [results, commsRes] = await Promise.all([
@@ -44,7 +46,7 @@ async function computeTankOfflineShops(companyId: string): Promise<number> {
       sb.schema('inventory').from('tank_monitors')
         .select('location_id, source_location, system_tank_id, serial_rtu_id, product_id, keep_fill, inventory_time, reading_date')
         .eq('company_id', companyId).order('id', { ascending: true }).range(i * PAGE, i * PAGE + PAGE - 1))),
-    sb.schema('inventory').from('location_comms').select('location_id, comm_date, updated_at, products').eq('company_id', companyId).eq('comm_type', 'Offline Tank Monitor'),
+    sb.schema('inventory').from('location_comms').select('location_id, comm_date, updated_at, products, status').eq('company_id', companyId).eq('comm_type', 'Offline Tank Monitor'),
   ])
   const all = results.flatMap((r: any) => (r.data ?? []) as any[])
   const rtime = (m: any) => { const v = m.inventory_time ?? m.reading_date; return v ? new Date(v).getTime() : 0 }
@@ -58,8 +60,9 @@ async function computeTankOfflineShops(companyId: string): Promise<number> {
   const mons = [...latest.values()]
   const latestReading = Math.max(0, ...mons.map(rtime))
 
-  const commsRows = (commsRes.data ?? []) as { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown }[]
+  const commsRows = (commsRes.data ?? []) as { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown; status: string | null }[]
   const emailLog = buildMonitorEmailLog(commsRows)
+  const pendingSet = buildPendingCommSet(commsRows)
 
   // Offline VMI monitors, grouped by shop.
   const offlineByShop = new Map<string, any[]>()
@@ -72,15 +75,23 @@ async function computeTankOfflineShops(companyId: string): Promise<number> {
     offlineByShop.get(m.location_id)!.push(m)
   }
 
+  // Same two independent exclusions as the Offline tab's per-monitor filter
+  // (both default on) — without this, a monitor the Alerts tab has already
+  // filtered out (recently emailed, or still pending a response) kept
+  // counting toward this badge, so it could show e.g. 11 while the tab
+  // itself read empty.
   const shops = new Set<string>()
   for (const [locId, list] of offlineByShop) {
-    if (!skipEnabled) { shops.add(locId); continue }
     const shopRows = commsRows.filter((r) => r.location_id === locId)
     const serials = list.map((m) => m.serial_rtu_id || m.system_tank_id || '')
-    const log = backfillTodayBlanket(emailLog.get(locId) ?? new Map(), shopRows, serials)
+    const log = skipEnabled ? backfillTodayBlanket(emailLog.get(locId) ?? new Map(), shopRows, serials) : null
+    const pending = excludePending ? backfillPendingBlanket(pendingSet.get(locId) ?? new Set(), shopRows, serials) : null
+
     const stillNeedsAction = list.some((m) => {
       const serial = m.serial_rtu_id || m.system_tank_id || ''
-      const last = serial ? log.get(serial) : undefined
+      if (pending?.has(serial)) return false
+      if (!skipEnabled) return true
+      const last = serial ? log!.get(serial) : undefined
       if (!last) return true
       return (Date.now() - new Date(last).getTime()) / 86400000 >= skipDays
     })
