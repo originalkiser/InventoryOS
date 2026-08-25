@@ -33,6 +33,15 @@
 // the function's own code always tries to respond 200, even on internal
 // errors, so that generic message only ever comes from the platform, not
 // from a `return ok({ error: ... })` path below.
+//
+// Kept deliberately low (2) — Droptop's own rate limit is tight enough that
+// higher concurrency (5 was tried) produced a wall of 429s once a sync got a
+// few batches in. callDroptop retries 429s with backoff, so occasional ones
+// are fine; the low concurrency just keeps them occasional instead of the
+// default state. Batching locations across several invocations (see
+// runDroptopSync in droptopService.ts) is what actually keeps each
+// invocation's wall-clock time bounded — concurrency here is a modest speed
+// bonus on top of that, not the timeout fix.
 async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0
   async function worker() {
@@ -111,22 +120,43 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
   return [sig, keyFormat, message]
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Retries on 429 (Droptop's own rate limit, not a transient network blip) —
+// a full-company sync easily makes hundreds of Droptop calls across the run,
+// which trips Droptop's rate limiter regardless of how conservative the
+// concurrency setting is. Honors Retry-After when Droptop sends one, else
+// backs off exponentially (2s, 4s, 8s, 16s, 32s). The signature is
+// timestamp-based, so each retry rebuilds it rather than reusing the first
+// attempt's — Droptop would otherwise see a stale/replayed signature.
 async function callDroptop(
   endpoint: string,
   params: Record<string, string>,
   publicKey: string,
   privateKey: string,
+  maxRetries = 5,
 ): Promise<any> {
-  const [sig] = await buildSig(publicKey, 'GET', privateKey)
-  const qs = new URLSearchParams({ sig, ...params })
-  const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
-  const res = await fetch(url, {
-    headers: { 'x-api-key': publicKey.trim() },
-    redirect: 'follow',
-  })
-  const text = await res.text()
-  if (!res.ok) throw new Error(`Droptop ${res.status}: ${text}`)
-  return JSON.parse(text)
+  for (let attempt = 0; ; attempt++) {
+    const [sig] = await buildSig(publicKey, 'GET', privateKey)
+    const qs = new URLSearchParams({ sig, ...params })
+    const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
+    const res = await fetch(url, {
+      headers: { 'x-api-key': publicKey.trim() },
+      redirect: 'follow',
+    })
+    if (res.status === 429 && attempt < maxRetries) {
+      const retryAfterHeader = Number(res.headers.get('retry-after'))
+      const waitMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
+        ? retryAfterHeader * 1000
+        : 2000 * 2 ** attempt
+      await res.text().catch(() => {}) // drain the body before retrying
+      await sleep(waitMs)
+      continue
+    }
+    const text = await res.text()
+    if (!res.ok) throw new Error(`Droptop ${res.status}: ${text}`)
+    return JSON.parse(text)
+  }
 }
 
 // ── Droptop data fetchers ────────────────────────────────────────────────────
@@ -272,7 +302,7 @@ Deno.serve(async (req) => {
       let operationsScanned = 0
       const opErrors: string[] = []
 
-      await mapWithConcurrency(locations, 5, async (loc: any) => {
+      await mapWithConcurrency(locations, 2, async (loc: any) => {
         try {
           const changes = await fetchChanges(loc.droptop_operation_id, startUnix, endUnix, publicKey, privateKey)
           for (const c of changes) {
@@ -343,7 +373,7 @@ Deno.serve(async (req) => {
     let operationsSynced = 0
     const opErrors: string[] = []
 
-    await mapWithConcurrency(locations, 5, async (loc: any) => {
+    await mapWithConcurrency(locations, 2, async (loc: any) => {
       try {
         const opId: string = loc.droptop_operation_id
 
@@ -394,8 +424,14 @@ Deno.serve(async (req) => {
           const daysOfSupply =
             dailyUsage && dailyUsage > 0 && onHands != null ? onHands / dailyUsage : null
 
+          // Always supply an id, never rely on the column default — a batch
+          // upsert mixes existing rows (which carry their real id) and new
+          // rows in one INSERT ... ON CONFLICT statement, and PostgREST
+          // sends an explicit NULL (not "use the default") for any column a
+          // given row's object doesn't include, once ANY row in the batch
+          // supplies that column. Same fix as useConfigTab.ts's importRows.
           allUpsertRows.push({
-            ...(existing ? { id: existing.id } : {}),
+            id: existing?.id ?? crypto.randomUUID(),
             company_id: me.company_id,
             location_id: loc.id,
             product_id: productId,
