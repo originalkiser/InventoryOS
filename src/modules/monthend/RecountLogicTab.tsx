@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Input, Toggle, Badge, Card, CardHeader, CardBody } from '@/components/ui'
-import { RECOUNT_FLAG_LABELS } from '@/lib/recountEngine'
+import { RECOUNT_FLAG_LABELS, RECOUNT_FLAG_DESCRIPTIONS } from '@/lib/recountEngine'
 import {
   fetchPeriodEvalData, evaluateCounts, draftToConfig, fetchTankVarianceCandidates,
   type PeriodEvalData, type DraftThresholds, type TankVarianceCandidate, type EvaluatedCount,
@@ -80,6 +80,23 @@ function splitBorderStyle(types: Set<FlagType>): React.CSSProperties {
   const step = 100 / active.length
   const stops = active.map((t, i) => `${FLAG_COLORS[t]} ${i * step}% ${(i + 1) * step}%`).join(', ')
   return { borderWidth: 2, borderStyle: 'solid', borderImage: `linear-gradient(to right, ${stops}) 1` }
+}
+
+// Same three flag colors as the product-chip borders above, so a shop's
+// Flags badges visually match the product(s) driving each one. Hover a
+// badge for the full explanation — the label itself stays short.
+const FLAG_BADGE_COLOR: Record<string, 'red' | 'green' | 'orange' | 'amber'> = {
+  tank_monitor_variance: 'green',
+  unconfigured_oil: 'orange',
+  product_range_exception: 'red',
+}
+function FlagBadge({ flag }: { flag: string }) {
+  const color = FLAG_BADGE_COLOR[flag] ?? (flag.startsWith('variance') || flag.startsWith('high') ? 'red' : 'amber')
+  return (
+    <span title={RECOUNT_FLAG_DESCRIPTIONS[flag]}>
+      <Badge color={color}>{RECOUNT_FLAG_LABELS[flag] ?? flag}</Badge>
+    </span>
+  )
 }
 
 interface ProductExceptionRow {
@@ -402,15 +419,16 @@ export function RecountLogicTab() {
   //      counts. Skipped entirely (flags cleared, but rows kept so tank/oil
   //      flags below still have somewhere to attach) when ignoreEndingBalance
   //      is on.
-  //   2. Tank monitor variance and 3. unconfigured oil — each merged onto a
-  //      shop's stage-1 entry if it has one; for an eligible shop with no
-  //      Monthly count row (accepted via Mark Counted, or a count_type
-  //      mismatch) but a real tank/oil finding, these are the only stages
-  //      that can flag it, so it gets one shared synthetic entry rather than
-  //      being silently dropped (or duplicated across two separate ones).
-  //   4. Product-range exceptions (exceptionsByShop, above) — enrichment
-  //      only, applied below when splitting flagged shops for generation;
-  //      never adds a new flag by itself.
+  //   2. Tank monitor variance, 3. unconfigured oil, and 4. product-range
+  //      exceptions — each merged onto a shop's stage-1 entry if it has one,
+  //      each contributing its own flag (tank_monitor_variance /
+  //      unconfigured_oil / product_range_exception) so a shop hit by more
+  //      than one still shows every applicable flag, not just one. For an
+  //      eligible shop with no Monthly count row (accepted via Mark Counted,
+  //      or a count_type mismatch) but a real tank/oil/exception finding,
+  //      these are the only stages that can flag it, so it gets one shared
+  //      synthetic entry rather than being silently dropped (or duplicated
+  //      across separate ones).
   const evaluated = useMemo(() => {
     if (!evalData) return []
     const rawBase = evaluateCounts(evalData.counts, evalData.histByLoc, draftToConfig(draft), lookbackN)
@@ -421,22 +439,24 @@ export function RecountLogicTab() {
       const extra: string[] = []
       if (effTankVarByShop.has(e.locationId)) extra.push('tank_monitor_variance')
       if (effOilFlagsByShop.has(e.locationId)) extra.push('unconfigured_oil')
+      if (effExceptionsByShop.has(e.locationId)) extra.push('product_range_exception')
       return extra.length ? { ...e, flags: [...e.flags, ...extra] } : e
     })
 
     const coveredLocIds = new Set(withFlags.map((e) => e.locationId).filter((id): id is string => !!id))
     const onlyLocIds = new Set(
-      [...effTankVarByShop.keys(), ...effOilFlagsByShop.keys()]
+      [...effTankVarByShop.keys(), ...effOilFlagsByShop.keys(), ...effExceptionsByShop.keys()]
         .filter((id) => !coveredLocIds.has(id) && evalData.eligibleLocationIds.has(id))
     )
     const synthetic: EvaluatedCount[] = [...onlyLocIds].map((locId) => {
       const flags: string[] = []
       if (effTankVarByShop.has(locId)) flags.push('tank_monitor_variance')
       if (effOilFlagsByShop.has(locId)) flags.push('unconfigured_oil')
+      if (effExceptionsByShop.has(locId)) flags.push('product_range_exception')
       return { count: null, locationId: locId, prev: null, median: 0, varVsLastMonth: 0, varVsMedian: 0, flags }
     })
     return [...withFlags, ...synthetic]
-  }, [evalData, draft, lookbackN, effTankVarByShop, effOilFlagsByShop, ignoreEndingBalance])
+  }, [evalData, draft, lookbackN, effTankVarByShop, effOilFlagsByShop, effExceptionsByShop, ignoreEndingBalance])
 
   const flagged = evaluated.filter((e) => e.flags.length > 0)
 
@@ -894,11 +914,7 @@ export function RecountLogicTab() {
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
-                          {e.flags.map((f) => (
-                            <Badge key={f} color={f.startsWith('variance') || f.startsWith('high') ? 'red' : 'amber'}>
-                              {RECOUNT_FLAG_LABELS[f] ?? f}
-                            </Badge>
-                          ))}
+                          {e.flags.map((f) => <FlagBadge key={f} flag={f} />)}
                         </div>
                       </td>
                     </tr>
@@ -978,11 +994,7 @@ function RecountPreviewTable({
               <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-1">
-                  {e.flags.map((f) => (
-                    <Badge key={f} color={f.startsWith('variance') || f.startsWith('high') ? 'red' : 'amber'}>
-                      {RECOUNT_FLAG_LABELS[f] ?? f}
-                    </Badge>
-                  ))}
+                  {e.flags.map((f) => <FlagBadge key={f} flag={f} />)}
                 </div>
               </td>
               <td className="px-3 py-2 text-inky">
