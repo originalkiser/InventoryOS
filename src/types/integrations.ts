@@ -87,6 +87,23 @@ export interface DroptopSyncLog {
   error_message: string | null
 }
 
+// Mirrors inventory.data_connection_sync_log — connection-agnostic sync
+// history (Droptop, SkyBitz tanks, ...) shown on the Inventory Alerts page's
+// "Data Connection Updates" section. Additive alongside DroptopSyncLog
+// above, which other panels keep reading directly.
+export interface DataConnectionSyncLog {
+  id: string
+  company_id: string
+  connection: string
+  started_at: string
+  finished_at: string
+  duration_ms: number | null
+  items_updated: number | null
+  items_unchanged: number | null
+  status: 'success' | 'partial' | 'error'
+  error_message: string | null
+}
+
 // Integration 4 — Placed Orders
 export interface OrderSnapshot {
   location_id?: string

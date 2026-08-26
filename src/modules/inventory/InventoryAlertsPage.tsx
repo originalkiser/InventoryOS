@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { Card, CardBody, SbLoader, Button, Badge } from '@/components/ui'
 import { useInventoryAlerts, type AlertGroup } from '@/hooks/useInventoryAlerts'
+import { DataConnectionUpdatesSection } from './DataConnectionUpdatesSection'
 
 export function InventoryAlertsPage() {
   const { groups, ignoredGroups, count, ignoredCount, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
@@ -55,6 +56,8 @@ export function InventoryAlertsPage() {
               ))}
             </div>
           )}
+
+          <DataConnectionUpdatesSection />
         </div>
       )}
     </div>

@@ -109,6 +109,7 @@ interface ExistingTank {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const startedAt = Date.now()
 
   try {
     const syncSecret = Deno.env.get('SKYBITZ_SYNC_SECRET')
@@ -191,7 +192,7 @@ Deno.serve(async (req) => {
     // field here to mean "leave alone" would instead null it out. Same
     // rule documented in droptop-sync-usage/index.ts.
     const updates: Record<string, unknown>[] = []
-    let skippedUnmatched = 0, skippedNoRtuid = 0
+    let skippedUnmatched = 0, skippedNoRtuid = 0, unchangedCount = 0
     for (let li = 1; li < lines.length; li++) {
       const cols = parseCsvLine(lines[li])
       const rtuid = (cols[iRtuid] ?? '').trim()
@@ -207,18 +208,27 @@ Deno.serve(async (req) => {
       const systemTankId = iTankId !== -1 ? ((cols[iTankId] ?? '').trim() || null) : null
       const isoTime = iTime !== -1 ? parseSkybitzTime(cols[iTime] ?? '') : null
 
+      const resolvedOnHand = onHand ?? existing.on_hand
+      const resolvedLevel = level ?? existing.level_inches
+      const resolvedBattery = battery ?? existing.battery_pct
+      const resolvedTime = isoTime ?? existing.inventory_time
+      if (resolvedOnHand === existing.on_hand && resolvedLevel === existing.level_inches
+        && resolvedBattery === existing.battery_pct && resolvedTime === existing.inventory_time) {
+        unchangedCount++
+      }
+
       updates.push({
         id: existing.id,
         company_id: existing.company_id,
         location_id: existing.location_id,
         product_id: existing.product_id,
         keep_fill: existing.keep_fill,
-        on_hand: onHand ?? existing.on_hand,
+        on_hand: resolvedOnHand,
         available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : existing.available_capacity,
-        level_inches: level ?? existing.level_inches,
-        battery_pct: battery ?? existing.battery_pct,
+        level_inches: resolvedLevel,
+        battery_pct: resolvedBattery,
         system_tank_id: systemTankId ?? existing.system_tank_id,
-        inventory_time: isoTime ?? existing.inventory_time,
+        inventory_time: resolvedTime,
         reading_date: isoTime ? isoTime.slice(0, 10) : existing.reading_date,
         updated_at: new Date().toISOString(),
         last_change_source: 'skybitz',
@@ -226,18 +236,38 @@ Deno.serve(async (req) => {
     }
 
     let updated = 0
+    let upsertError: string | null = null
     const BATCH = 500
     for (let i = 0; i < updates.length; i += BATCH) {
       const slice = updates.slice(i, i + BATCH)
       const { error } = await (admin as any).schema('inventory').from('tank_monitors').upsert(slice)
-      if (error) return ok({ error: `Upsert failed: ${error.message}`, updated_so_far: updated })
+      if (error) { upsertError = error.message; break }
       updated += slice.length
     }
+
+    // Log the run to the connection-agnostic history table the Inventory
+    // Alerts "Data Connection Updates" section reads from (best-effort —
+    // table may not exist if migration pending).
+    ;(admin as any)
+      .schema('inventory').from('data_connection_sync_log').insert({
+        company_id: companyId,
+        connection: 'skybitz_tanks',
+        started_at: new Date(startedAt).toISOString(),
+        duration_ms: Date.now() - startedAt,
+        items_updated: updated - unchangedCount,
+        items_unchanged: unchangedCount,
+        status: upsertError ? 'error' : 'success',
+        error_message: upsertError,
+      })
+      .then(() => {})
+
+    if (upsertError) return ok({ error: `Upsert failed: ${upsertError}`, updated_so_far: updated })
 
     return ok({
       success: true,
       rows_in_file: lines.length - 1,
       updated,
+      unchanged: unchangedCount,
       skipped_unmatched_rtuid: skippedUnmatched,
       skipped_no_rtuid: skippedNoRtuid,
     })

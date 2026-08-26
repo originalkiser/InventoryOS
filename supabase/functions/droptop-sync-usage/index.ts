@@ -214,6 +214,7 @@ async function fetchInventory(operationId: string, pub: string, priv: string): P
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const startedAt = Date.now()
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -406,6 +407,10 @@ Deno.serve(async (req) => {
     // 4. Sync each location
     const allUpsertRows: Record<string, unknown>[] = []
     let operationsSynced = 0
+    // Rows touched but whose daily_usage/on_hands came out identical to what
+    // was already there — reported separately from real changes in the
+    // data-connection sync log, not excluded from allUpsertRows itself.
+    let unchangedCount = 0
     const opErrors: string[] = []
     // Only locations that actually succeeded this pull — a location that
     // errored keeps whatever count_products it already had rather than
@@ -475,6 +480,10 @@ Deno.serve(async (req) => {
             : (existing?.on_hands ?? null)
           const daysOfSupply =
             dailyUsage && dailyUsage > 0 && onHands != null ? onHands / dailyUsage : null
+
+          if (existing && existing.daily_usage === dailyUsage && existing.on_hands === onHands) {
+            unchangedCount++
+          }
 
           // Always supply an id, never rely on the column default — a batch
           // upsert mixes existing rows (which carry their real id) and new
@@ -590,6 +599,22 @@ Deno.serve(async (req) => {
         company_id: me.company_id,
         operations_count: operationsSynced,
         products_upserted: productsUpserted,
+        status: opErrors.length > 0 ? 'partial' : 'success',
+        error_message: opErrors.length > 0 ? opErrors.join(' | ') : null,
+      })
+      .then(() => {})
+
+    // 6b. Same run, logged to the connection-agnostic history table the
+    // Inventory Alerts "Data Connection Updates" section reads from
+    // (best-effort — table may not exist if migration pending).
+    ;(admin as any)
+      .schema('inventory').from('data_connection_sync_log').insert({
+        company_id: me.company_id,
+        connection: 'droptop',
+        started_at: new Date(startedAt).toISOString(),
+        duration_ms: Date.now() - startedAt,
+        items_updated: productsUpserted - unchangedCount,
+        items_unchanged: unchangedCount,
         status: opErrors.length > 0 ? 'partial' : 'success',
         error_message: opErrors.length > 0 ? opErrors.join(' | ') : null,
       })
