@@ -94,6 +94,10 @@ function numOrNull(s: string | undefined): number | null {
 
 interface ExistingTank {
   id: string
+  company_id: string
+  location_id: string | null
+  product_id: string | null
+  keep_fill: boolean | null
   on_hand: number | null
   available_capacity: number | null
   level_inches: number | null
@@ -160,7 +164,7 @@ Deno.serve(async (req) => {
       for (;;) {
         const { data: rows, error } = await (admin as any)
           .schema('inventory').from('tank_monitors')
-          .select('id, serial_rtu_id, on_hand, available_capacity, level_inches, battery_pct, system_tank_id, inventory_time, reading_date')
+          .select('id, company_id, location_id, product_id, keep_fill, serial_rtu_id, on_hand, available_capacity, level_inches, battery_pct, system_tank_id, inventory_time, reading_date')
           .eq('company_id', companyId)
           .not('serial_rtu_id', 'is', null)
           .order('id', { ascending: true })
@@ -169,7 +173,8 @@ Deno.serve(async (req) => {
         const batch = (rows ?? []) as any[]
         for (const r of batch) {
           existingBySerial.set(String(r.serial_rtu_id).trim().toLowerCase(), {
-            id: r.id, on_hand: r.on_hand, available_capacity: r.available_capacity,
+            id: r.id, company_id: r.company_id, location_id: r.location_id, product_id: r.product_id, keep_fill: r.keep_fill,
+            on_hand: r.on_hand, available_capacity: r.available_capacity,
             level_inches: r.level_inches, battery_pct: r.battery_pct,
             system_tank_id: r.system_tank_id, inventory_time: r.inventory_time, reading_date: r.reading_date,
           })
@@ -204,6 +209,10 @@ Deno.serve(async (req) => {
 
       updates.push({
         id: existing.id,
+        company_id: existing.company_id,
+        location_id: existing.location_id,
+        product_id: existing.product_id,
+        keep_fill: existing.keep_fill,
         on_hand: onHand ?? existing.on_hand,
         available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : existing.available_capacity,
         level_inches: level ?? existing.level_inches,
