@@ -47,20 +47,19 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
     const sftpUrl = Deno.env.get('SKYBITZ_SFTP_URL')
     const sftpUser = Deno.env.get('SKYBITZ_SFTP_USERNAME')
     const sftpPass = Deno.env.get('SKYBITZ_SFTP_PASSWORD')
 
     if (!sftpUrl || !sftpUser || !sftpPass) return ok({ error: 'credentials_not_configured' })
 
-    // Verify caller — same pattern as droptop-sync-usage.
-    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2')
-    const authHeader = req.headers.get('Authorization') ?? ''
-    const caller = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } })
-    const { data: who, error: whoErr } = await caller.auth.getUser()
-    if (whoErr || !who.user) return ok({ error: 'Not authenticated' })
+    // No caller-identity check here (unlike droptop-sync-usage) — this is a
+    // throwaway, read-only connectivity probe with no company-scoped data to
+    // protect, and skipping it lets the Supabase dashboard's plain "Test
+    // Function" button work without hand-crafting a user Authorization
+    // header. The real sync function this leads to will be cron-triggered
+    // (service role, not a logged-in user) and will get its own access
+    // story then — this check isn't a template for that.
 
     const body = await req.json().catch(() => ({}))
     const target = parseTarget(sftpUrl)
