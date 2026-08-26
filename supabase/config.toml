@@ -8,6 +8,10 @@
 [functions.invite-user]
 verify_jwt = false
 
+# Same reason as invite-user above — authenticates the caller itself.
+[functions.admin-reset-password]
+verify_jwt = false
+
 # Cron-triggered (pg_cron -> net.http_post), no interactive user session to
 # carry a Supabase JWT — auth is the X-Sync-Token shared-secret header
 # checked in the function itself instead.
