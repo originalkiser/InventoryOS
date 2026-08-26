@@ -100,6 +100,7 @@ export interface DataConnectionSyncLog {
   duration_ms: number | null
   items_updated: number | null
   items_unchanged: number | null
+  items_inserted: number | null
   status: 'success' | 'partial' | 'error'
   error_message: string | null
 }

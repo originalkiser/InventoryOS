@@ -1,21 +1,32 @@
-// Daily SkyBitz tank telemetry sync. Downloads the single combined CSV over
-// SFTP and updates on-hand/level/battery/inventory-time for EXISTING
-// inventory.tank_monitors rows matched by RTUID (serial_rtu_id) — never
-// creates a new row, and never touches location_id, product_id, or
-// keep_fill. Those stay under Strickland's own manual upload process; this
-// only refreshes numeric readings for tanks already onboarded that way.
+// SkyBitz tank telemetry sync. Downloads the single combined CSV over SFTP
+// and updates on-hand/level/battery/inventory-time for tank_monitors rows
+// matched by RTUID (serial_rtu_id). Never touches location_id, product_id,
+// or keep_fill on a row that already exists — those stay under Strickland's
+// own manual upload process; this only refreshes numeric readings for tanks
+// already onboarded that way. An RTUID in the file with no matching existing
+// row gets a brand-new tank_monitors row instead (location_id/product_id
+// left null, source_location/product carried over raw from the file) so a
+// newly-installed monitor shows up for someone to match by hand later —
+// same "keep unmatched rows, match later" convention as the manual CSV
+// import in TankMonitorTab.tsx.
 //
 // The file's Location/Customer/Tank text columns are SkyBitz's own internal
 // labels ("STB Reladyne Jacksonville - Receiving", "LOST MONITOR - STORE
-// 122") and don't reliably map to real shop names, which is why matching is
-// RTUID-only rather than trying to resolve a location from the file.
+// 122") and don't reliably map to real shop names, which is why an existing
+// row is matched RTUID-only rather than by resolving a location from the file.
 //
-// Meant to be triggered daily (6am) via pg_cron -> net.http_post — not by an
-// interactive user, so auth is a shared secret rather than a Supabase JWT.
+// Callable two ways:
+//  - Interactively, from the Tank Monitor config page's "Pull from SkyBitz"
+//    button — supabase.functions.invoke() attaches the logged-in user's
+//    session automatically, verified the same way droptop-sync-usage does.
+//  - Unattended, via pg_cron -> net.http_post (no user session available) —
+//    authorized instead by an X-Sync-Token header matching the
+//    SKYBITZ_SYNC_SECRET secret.
+// Either is accepted; requests with neither are rejected.
+//
 // Requires Supabase secrets: SKYBITZ_SFTP_URL, SKYBITZ_SFTP_USERNAME,
-// SKYBITZ_SFTP_PASSWORD (already set) and SKYBITZ_SYNC_SECRET (new — set
-// this to any random value, then send it back as the X-Sync-Token header on
-// every call, including the pg_cron job once that's set up).
+// SKYBITZ_SFTP_PASSWORD, SKYBITZ_SYNC_SECRET (any random value — send it
+// back as X-Sync-Token from the pg_cron job).
 //
 // POST body: { path? } — path overrides the file to fetch; defaults to
 // /StricklandBrothers.CSV, the file found by skybitz-sftp-test.
@@ -112,13 +123,25 @@ Deno.serve(async (req) => {
   const startedAt = Date.now()
 
   try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+
+    // Accept either the pg_cron shared secret, or a real logged-in user
+    // (for the Tank Monitor config page's "Pull from SkyBitz" button).
     const syncSecret = Deno.env.get('SKYBITZ_SYNC_SECRET')
     const suppliedSecret = req.headers.get('x-sync-token') ?? ''
-    if (!syncSecret) return ok({ error: 'sync_secret_not_configured' })
-    if (suppliedSecret !== syncSecret) return ok({ error: 'Not authorized' })
+    let authorized = !!syncSecret && suppliedSecret === syncSecret
+    if (!authorized) {
+      const authHeader = req.headers.get('Authorization') ?? ''
+      if (authHeader) {
+        const caller = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } })
+        const { data: who, error: whoErr } = await caller.auth.getUser()
+        authorized = !whoErr && !!who.user
+      }
+    }
+    if (!authorized) return ok({ error: 'Not authorized' })
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const sftpUrl = Deno.env.get('SKYBITZ_SFTP_URL')
     const sftpUser = Deno.env.get('SKYBITZ_SFTP_USERNAME')
     const sftpPass = Deno.env.get('SKYBITZ_SFTP_PASSWORD')
@@ -152,7 +175,8 @@ Deno.serve(async (req) => {
     const idx = (name: string) => headers.indexOf(name)
     const iRtuid = idx('RTUID'), iTankId = idx('TankID'), iInventory = idx('Inventory'),
       iLevel = idx('Level'), iLevelUom = idx('Level UOM'), iCapacity = idx('Tank Capacity'),
-      iBattery = idx('Battery Level'), iTime = idx('Inventory Time (UTC)')
+      iBattery = idx('Battery Level'), iTime = idx('Inventory Time (UTC)'),
+      iLocation = idx('Location'), iProduct = idx('Product')
     if (iRtuid === -1) return ok({ error: 'RTUID column not found in file' })
 
     // Existing tank_monitors, keyed by serial — paginated (the Droptop sync
@@ -192,13 +216,15 @@ Deno.serve(async (req) => {
     // field here to mean "leave alone" would instead null it out. Same
     // rule documented in droptop-sync-usage/index.ts.
     const updates: Record<string, unknown>[] = []
-    let skippedUnmatched = 0, skippedNoRtuid = 0, unchangedCount = 0
+    const inserts: Record<string, unknown>[] = []
+    const seenNewRtuids = new Set<string>() // dedupe brand-new rows within this one file
+    let skippedNoRtuid = 0, unchangedCount = 0
     for (let li = 1; li < lines.length; li++) {
       const cols = parseCsvLine(lines[li])
       const rtuid = (cols[iRtuid] ?? '').trim()
       if (!rtuid) { skippedNoRtuid++; continue }
-      const existing = existingBySerial.get(rtuid.toLowerCase())
-      if (!existing) { skippedUnmatched++; continue }
+      const rtuidKey = rtuid.toLowerCase()
+      const existing = existingBySerial.get(rtuidKey)
 
       const onHand = numOrNull(cols[iInventory])
       const capacity = numOrNull(cols[iCapacity])
@@ -207,6 +233,35 @@ Deno.serve(async (req) => {
       const battery = numOrNull(cols[iBattery])
       const systemTankId = iTankId !== -1 ? ((cols[iTankId] ?? '').trim() || null) : null
       const isoTime = iTime !== -1 ? parseSkybitzTime(cols[iTime] ?? '') : null
+
+      if (!existing) {
+        // New RTUID — no tank_monitors row references it yet. Insert one
+        // with location_id/keep_fill left unset so it shows up for a human
+        // to match, same as an unmatched row from the manual CSV import.
+        if (seenNewRtuids.has(rtuidKey)) continue
+        seenNewRtuids.add(rtuidKey)
+        const rawLocation = iLocation !== -1 ? ((cols[iLocation] ?? '').trim() || null) : null
+        const rawProduct = iProduct !== -1 ? ((cols[iProduct] ?? '').trim() || null) : null
+        inserts.push({
+          id: crypto.randomUUID(),
+          company_id: companyId,
+          location_id: null,
+          product_id: rawProduct,
+          keep_fill: false,
+          source_location: rawLocation,
+          serial_rtu_id: rtuid,
+          system_tank_id: systemTankId,
+          on_hand: onHand,
+          available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : null,
+          level_inches: level,
+          battery_pct: battery,
+          inventory_time: isoTime,
+          reading_date: isoTime ? isoTime.slice(0, 10) : null,
+          last_change_source: 'skybitz',
+          updated_at: new Date().toISOString(),
+        })
+        continue
+      }
 
       const resolvedOnHand = onHand ?? existing.on_hand
       const resolvedLevel = level ?? existing.level_inches
@@ -236,6 +291,7 @@ Deno.serve(async (req) => {
     }
 
     let updated = 0
+    let inserted = 0
     let upsertError: string | null = null
     const BATCH = 500
     for (let i = 0; i < updates.length; i += BATCH) {
@@ -243,6 +299,14 @@ Deno.serve(async (req) => {
       const { error } = await (admin as any).schema('inventory').from('tank_monitors').upsert(slice)
       if (error) { upsertError = error.message; break }
       updated += slice.length
+    }
+    if (!upsertError) {
+      for (let i = 0; i < inserts.length; i += BATCH) {
+        const slice = inserts.slice(i, i + BATCH)
+        const { error } = await (admin as any).schema('inventory').from('tank_monitors').insert(slice)
+        if (error) { upsertError = error.message; break }
+        inserted += slice.length
+      }
     }
 
     // Log the run to the connection-agnostic history table the Inventory
@@ -256,19 +320,20 @@ Deno.serve(async (req) => {
         duration_ms: Date.now() - startedAt,
         items_updated: updated - unchangedCount,
         items_unchanged: unchangedCount,
+        items_inserted: inserted,
         status: upsertError ? 'error' : 'success',
         error_message: upsertError,
       })
       .then(() => {})
 
-    if (upsertError) return ok({ error: `Upsert failed: ${upsertError}`, updated_so_far: updated })
+    if (upsertError) return ok({ error: `Upsert failed: ${upsertError}`, updated_so_far: updated, inserted_so_far: inserted })
 
     return ok({
       success: true,
       rows_in_file: lines.length - 1,
       updated,
       unchanged: unchangedCount,
-      skipped_unmatched_rtuid: skippedUnmatched,
+      inserted,
       skipped_no_rtuid: skippedNoRtuid,
     })
   } catch (err) {

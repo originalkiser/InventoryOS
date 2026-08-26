@@ -6,7 +6,7 @@ import { useInventoryAlerts, type AlertGroup } from '@/hooks/useInventoryAlerts'
 import { DataConnectionUpdatesSection } from './DataConnectionUpdatesSection'
 
 export function InventoryAlertsPage() {
-  const { groups, ignoredGroups, count, ignoredCount, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
+  const { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
   const navigate = useNavigate()
   const [showIgnored, setShowIgnored] = useState(false)
 
@@ -17,7 +17,13 @@ export function InventoryAlertsPage() {
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 text-[#C0392B]" /> Inventory Alerts
           </h1>
-          <p className="text-xs text-inky mt-0.5">Configuration gaps across shops. {count > 0 ? `${count} alert${count !== 1 ? 's' : ''} to review.` : 'All clear.'}</p>
+          <p className="text-xs text-inky mt-0.5">
+            Configuration gaps across shops
+            {connectionIssueCount > 0 ? ' and data connection failures' : ''}.{' '}
+            {count + connectionIssueCount > 0
+              ? `${count + connectionIssueCount} alert${count + connectionIssueCount !== 1 ? 's' : ''} to review.`
+              : 'All clear.'}
+          </p>
         </div>
         <Button size="sm" variant="secondary" onClick={reload} disabled={loading}>
           <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh

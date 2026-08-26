@@ -10,8 +10,10 @@ import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
+import { runSkybitzTankSync, type SkybitzSyncResult } from '@/services/skybitzService'
 import type { TankMonitor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
+import toast from 'react-hot-toast'
 
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
 const truthy = (v: string) => ['true', '1', 'yes', 'y', 'keep', 'keepfill', 'keep fill', 'keep-fill', 'enabled', 'vmi', 'kf', 'managed', 'vendor managed', 'x'].includes(v.trim().toLowerCase())
@@ -42,12 +44,33 @@ const nowLocal = () => format(new Date(), "yyyy-MM-dd'T'HH:mm")
 const EMPTY = { locationId: '', product_id: '', keep_fill: false, inventory_time: nowLocal(), on_hand: '', available_capacity: '' }
 
 export function TankMonitorTab() {
-  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<TankMonitor>('tank_monitors', 'inventory')
+  const { data, loading, load, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<TankMonitor>('tank_monitors', 'inventory')
   const loc = useLocations()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [form, setForm] = useState({ ...EMPTY })
+  const [skybitzSyncing, setSkybitzSyncing] = useState(false)
+  const [skybitzResult, setSkybitzResult] = useState<SkybitzSyncResult | null>(null)
+  const [skybitzError, setSkybitzError] = useState<string | null>(null)
+
+  async function syncFromSkybitz() {
+    setSkybitzSyncing(true)
+    setSkybitzError(null)
+    setSkybitzResult(null)
+    try {
+      const result = await runSkybitzTankSync()
+      setSkybitzResult(result)
+      toast.success(`SkyBitz sync complete — ${result.updated.toLocaleString()} updated, ${result.inserted.toLocaleString()} new`)
+      await load()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'SkyBitz sync failed'
+      setSkybitzError(msg)
+      toast.error('SkyBitz sync failed')
+    } finally {
+      setSkybitzSyncing(false)
+    }
+  }
 
   const columns = useMemo(() => [
     // Resolve the label in the cell (live each render) — react-table caches the
@@ -163,6 +186,35 @@ export function TankMonitorTab() {
           <ConfigUpload requiredFields={REQUIRED_FIELDS} onImport={handleImport} importing={importing} />
         </div>
         <DataSourceLinker configType="tank_monitor" />
+      </div>
+
+      {/* ── SkyBitz Sync ──────────────────────────────────────────────────── */}
+      <div className="border-t border-navy/10 pt-4">
+        <div className="flex flex-col gap-3">
+          <div>
+            <h3 className="text-xs font-mono text-inky uppercase tracking-wide">SkyBitz Sync</h3>
+            <p className="text-xs text-inky/60 mt-0.5">
+              Pull the latest on-hand, level, and battery readings from SkyBitz over SFTP. Matches by Serial # (RTU ID) —
+              updates existing tanks in place and adds a new row (unmatched to a shop) for any RTUID not already here.
+              Never touches Location, Product, or Keep-fill on an existing tank — set those here or by re-upload.
+            </p>
+          </div>
+          <div>
+            <Button size="sm" onClick={syncFromSkybitz} disabled={skybitzSyncing}>
+              {skybitzSyncing ? 'Syncing…' : 'Pull from SkyBitz'}
+            </Button>
+          </div>
+          {skybitzResult && (
+            <p className="text-xs font-mono text-inky">
+              {skybitzResult.rows_in_file.toLocaleString()} rows in file · {skybitzResult.updated.toLocaleString()} updated ·{' '}
+              {skybitzResult.unchanged.toLocaleString()} unchanged · {skybitzResult.inserted.toLocaleString()} new
+              {skybitzResult.skipped_no_rtuid > 0 && ` · ${skybitzResult.skipped_no_rtuid.toLocaleString()} skipped (no RTUID)`}
+            </p>
+          )}
+          {skybitzError && (
+            <p className="text-xs font-mono text-[#C0392B]">{skybitzError}</p>
+          )}
+        </div>
       </div>
 
       <Modal open={addOpen} onClose={() => { setAddOpen(false); setEditId(null) }} title={editId ? 'Edit Reading' : 'Add Reading'}>

@@ -17,12 +17,31 @@ const RELADYNE_MIN = 10
 const VALVOLINE_MIN = 3
 const IGNORE_KEY = 'inventory_alert_ignores'
 
-async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; locById: Record<string, Location> }> {
+// Most recent run per data connection (Droptop, SkyBitz Tanks, ...) that
+// didn't finish 'success' — feeds both the nav badge count and the "Data
+// Connection Updates" section's default collapsed view.
+async function fetchConnectionIssueCount(companyId: string): Promise<number> {
+  const { data, error } = await (supabase as any)
+    .schema('inventory').from('data_connection_sync_log')
+    .select('connection, status, finished_at')
+    .eq('company_id', companyId)
+    .order('finished_at', { ascending: false })
+    .limit(200)
+  if (error || !data) return 0
+  const latestByConnection = new Map<string, { status: string }>()
+  for (const r of data as { connection: string; status: string }[]) {
+    if (!latestByConnection.has(r.connection)) latestByConnection.set(r.connection, r)
+  }
+  return [...latestByConnection.values()].filter((r) => r.status !== 'success').length
+}
+
+async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; locById: Record<string, Location>; connectionIssueCount: number }> {
   const sb = supabase as any
-  const [{ data: locs }, { data: vends }, cfgCountRes] = await Promise.all([
+  const [{ data: locs }, { data: vends }, cfgCountRes, connectionIssueCount] = await Promise.all([
     sb.schema('core').from('locations').select('*').eq('company_id', companyId),
     sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
     sb.schema('inventory').from('location_order_config').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    fetchConnectionIssueCount(companyId),
   ])
   const allLocs = (locs ?? []) as Location[]
   const locById: Record<string, Location> = {}
@@ -64,7 +83,7 @@ async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; l
     { key: 'valvoline-low', title: `Shops with fewer than ${VALVOLINE_MIN} Valvoline products configured`, hint: 'Add Valvoline products to their order config.', shops: valLow },
     { key: 'missing-valvoline-acct', title: 'Shops missing a Valvoline Account #', hint: 'Set the Valvoline # in Global Config → Locations.', shops: missingAcct },
   ]
-  return { rawGroups, locById }
+  return { rawGroups, locById, connectionIssueCount }
 }
 
 async function fetchIgnores(companyId: string): Promise<string[]> {
@@ -81,7 +100,8 @@ interface AlertsState {
   rawGroups: AlertGroup[]
   locById: Record<string, Location>
   ignores: string[]
-  derivedCount: number // exclusion + ignore filtered; written by the hook for the nav badge
+  connectionIssueCount: number // latest run per data connection that isn't 'success'
+  derivedCount: number // exclusion + ignore filtered shops + connectionIssueCount; written by the hook for the nav badge
   loaded: boolean; loading: boolean; loadedCompany: string | null
   load: (companyId: string) => Promise<void>
   reload: (companyId: string) => Promise<void>
@@ -89,15 +109,15 @@ interface AlertsState {
 }
 
 export const useInventoryAlertsStore = create<AlertsState>((set, get) => ({
-  rawGroups: [], locById: {}, ignores: [], derivedCount: 0, loaded: false, loading: false, loadedCompany: null,
+  rawGroups: [], locById: {}, ignores: [], connectionIssueCount: 0, derivedCount: 0, loaded: false, loading: false, loadedCompany: null,
   load: async (companyId) => {
     const s = get()
     if (s.loading) return
     if (s.loaded && s.loadedCompany === companyId) return
     set({ loading: true })
     try {
-      const [{ rawGroups, locById }, ignores] = await Promise.all([fetchRaw(companyId), fetchIgnores(companyId)])
-      set({ rawGroups, locById, ignores, loaded: true, loadedCompany: companyId, loading: false })
+      const [{ rawGroups, locById, connectionIssueCount }, ignores] = await Promise.all([fetchRaw(companyId), fetchIgnores(companyId)])
+      set({ rawGroups, locById, ignores, connectionIssueCount, loaded: true, loadedCompany: companyId, loading: false })
     } catch { set({ loading: false }) }
   },
   reload: async (companyId) => { set({ loaded: false, loadedCompany: null }); await get().load(companyId) },
@@ -116,6 +136,7 @@ export function useInventoryAlerts() {
   const rawGroups = useInventoryAlertsStore((s) => s.rawGroups)
   const locById = useInventoryAlertsStore((s) => s.locById)
   const ignores = useInventoryAlertsStore((s) => s.ignores)
+  const connectionIssueCount = useInventoryAlertsStore((s) => s.connectionIssueCount)
   const loaded = useInventoryAlertsStore((s) => s.loaded)
   const loading = useInventoryAlertsStore((s) => s.loading)
   const load = useInventoryAlertsStore((s) => s.load)
@@ -135,12 +156,13 @@ export function useInventoryAlerts() {
     return { groups, ignoredGroups, count, ignoredCount }
   }, [rawGroups, locById, ignores, isExcluded])
 
-  // Publish the filtered count so the sidebar badge reads it without re-deriving.
-  useEffect(() => { useInventoryAlertsStore.setState({ derivedCount: count }) }, [count])
+  // Publish the filtered count (+ non-success connection runs) so the
+  // sidebar badge reads it without re-deriving.
+  useEffect(() => { useInventoryAlertsStore.setState({ derivedCount: count + connectionIssueCount }) }, [count, connectionIssueCount])
 
   const reload = useCallback(() => { if (companyId) reloadFn(companyId) }, [companyId, reloadFn])
   const ignore = useCallback((groupKey: string, shopId: string) => { if (companyId) setIgnore(companyId, `${groupKey}|${shopId}`, true) }, [companyId, setIgnore])
   const unignore = useCallback((groupKey: string, shopId: string) => { if (companyId) setIgnore(companyId, `${groupKey}|${shopId}`, false) }, [companyId, setIgnore])
 
-  return { groups, ignoredGroups, count, ignoredCount, loaded, loading, reload, ignore, unignore }
+  return { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, loaded, loading, reload, ignore, unignore }
 }
