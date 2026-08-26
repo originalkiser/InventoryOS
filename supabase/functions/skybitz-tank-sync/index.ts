@@ -1,0 +1,239 @@
+// Daily SkyBitz tank telemetry sync. Downloads the single combined CSV over
+// SFTP and updates on-hand/level/battery/inventory-time for EXISTING
+// inventory.tank_monitors rows matched by RTUID (serial_rtu_id) — never
+// creates a new row, and never touches location_id, product_id, or
+// keep_fill. Those stay under Strickland's own manual upload process; this
+// only refreshes numeric readings for tanks already onboarded that way.
+//
+// The file's Location/Customer/Tank text columns are SkyBitz's own internal
+// labels ("STB Reladyne Jacksonville - Receiving", "LOST MONITOR - STORE
+// 122") and don't reliably map to real shop names, which is why matching is
+// RTUID-only rather than trying to resolve a location from the file.
+//
+// Meant to be triggered daily (6am) via pg_cron -> net.http_post — not by an
+// interactive user, so auth is a shared secret rather than a Supabase JWT.
+// Requires Supabase secrets: SKYBITZ_SFTP_URL, SKYBITZ_SFTP_USERNAME,
+// SKYBITZ_SFTP_PASSWORD (already set) and SKYBITZ_SYNC_SECRET (new — set
+// this to any random value, then send it back as the X-Sync-Token header on
+// every call, including the pg_cron job once that's set up).
+//
+// POST body: { path? } — path overrides the file to fetch; defaults to
+// /StricklandBrothers.CSV, the file found by skybitz-sftp-test.
+
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import SftpClient from 'npm:ssh2-sftp-client@12'
+
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-sync-token',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
+function ok(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { ...CORS, 'Content-Type': 'application/json' },
+  })
+}
+
+interface ParsedTarget { host: string; port: number; path: string }
+
+function parseTarget(raw: string): ParsedTarget {
+  let s = raw.trim()
+  s = s.replace(/^sftp:\/\//i, '')
+  const slash = s.indexOf('/')
+  const hostPort = slash === -1 ? s : s.slice(0, slash)
+  const path = slash === -1 ? '/' : s.slice(slash) || '/'
+  const [host, portStr] = hostPort.split(':')
+  const port = portStr ? parseInt(portStr, 10) : 22
+  return { host, port: isNaN(port) ? 22 : port, path }
+}
+
+// Minimal CSV line splitter with quoted-field support (the sample file has
+// no quoted commas, but Address/Customer are free text and could gain one).
+function parseCsvLine(line: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++ } else inQuotes = false
+      } else cur += ch
+    } else {
+      if (ch === '"') inQuotes = true
+      else if (ch === ',') { out.push(cur); cur = '' }
+      else cur += ch
+    }
+  }
+  out.push(cur)
+  return out
+}
+
+// "MM/DD/YYYY hh:mm:ss AM/PM" -> ISO string. Returns null for unparseable
+// text and for SkyBitz's "never reported" placeholder (01/01/1900).
+function parseSkybitzTime(s: string): string | null {
+  const m = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)$/i)
+  if (!m) return null
+  const [, moS, dS, yS, hS, minS, secS, ap] = m
+  let h = parseInt(hS, 10) % 12
+  if (ap.toUpperCase() === 'PM') h += 12
+  const year = parseInt(yS, 10)
+  if (year < 2000) return null
+  const d = new Date(Date.UTC(year, parseInt(moS, 10) - 1, parseInt(dS, 10), h, parseInt(minS, 10), parseInt(secS, 10)))
+  return isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+function numOrNull(s: string | undefined): number | null {
+  const t = (s ?? '').trim()
+  if (t === '') return null
+  const n = Number(t)
+  return isNaN(n) ? null : n
+}
+
+interface ExistingTank {
+  id: string
+  on_hand: number | null
+  available_capacity: number | null
+  level_inches: number | null
+  battery_pct: number | null
+  system_tank_id: string | null
+  inventory_time: string | null
+  reading_date: string | null
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+
+  try {
+    const syncSecret = Deno.env.get('SKYBITZ_SYNC_SECRET')
+    const suppliedSecret = req.headers.get('x-sync-token') ?? ''
+    if (!syncSecret) return ok({ error: 'sync_secret_not_configured' })
+    if (suppliedSecret !== syncSecret) return ok({ error: 'Not authorized' })
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const sftpUrl = Deno.env.get('SKYBITZ_SFTP_URL')
+    const sftpUser = Deno.env.get('SKYBITZ_SFTP_USERNAME')
+    const sftpPass = Deno.env.get('SKYBITZ_SFTP_PASSWORD')
+    if (!sftpUrl || !sftpUser || !sftpPass) return ok({ error: 'credentials_not_configured' })
+
+    const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+
+    // Single-tenant deployment — every location belongs to the same company.
+    const { data: anyLoc, error: locErr } = await (admin as any)
+      .schema('core').from('locations').select('company_id').limit(1).maybeSingle()
+    if (locErr || !anyLoc?.company_id) return ok({ error: 'Unable to resolve company_id' })
+    const companyId = anyLoc.company_id as string
+
+    const target = parseTarget(sftpUrl)
+    const body = await req.json().catch(() => ({}))
+    const remotePath: string = typeof body.path === 'string' ? body.path : '/StricklandBrothers.CSV'
+
+    let csvText: string
+    const sftp = new SftpClient()
+    try {
+      await sftp.connect({ host: target.host, port: target.port, username: sftpUser, password: sftpPass, readyTimeout: 20000 })
+      const buf = await sftp.get(remotePath)
+      csvText = (buf as Buffer).toString('utf-8')
+    } finally {
+      await sftp.end().catch(() => {})
+    }
+
+    const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0)
+    if (lines.length < 2) return ok({ error: 'File had no data rows' })
+    const headers = parseCsvLine(lines[0]).map((h) => h.trim())
+    const idx = (name: string) => headers.indexOf(name)
+    const iRtuid = idx('RTUID'), iTankId = idx('TankID'), iInventory = idx('Inventory'),
+      iLevel = idx('Level'), iLevelUom = idx('Level UOM'), iCapacity = idx('Tank Capacity'),
+      iBattery = idx('Battery Level'), iTime = idx('Inventory Time (UTC)')
+    if (iRtuid === -1) return ok({ error: 'RTUID column not found in file' })
+
+    // Existing tank_monitors, keyed by serial — paginated (the Droptop sync
+    // in this same codebase learned the hard way that an un-ranged select
+    // silently truncates at PostgREST's row cap).
+    const existingBySerial = new Map<string, ExistingTank>()
+    {
+      const PAGE = 1000
+      let from = 0
+      for (;;) {
+        const { data: rows, error } = await (admin as any)
+          .schema('inventory').from('tank_monitors')
+          .select('id, serial_rtu_id, on_hand, available_capacity, level_inches, battery_pct, system_tank_id, inventory_time, reading_date')
+          .eq('company_id', companyId)
+          .not('serial_rtu_id', 'is', null)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1)
+        if (error) return ok({ error: `Failed to load existing tank_monitors: ${error.message}` })
+        const batch = (rows ?? []) as any[]
+        for (const r of batch) {
+          existingBySerial.set(String(r.serial_rtu_id).trim().toLowerCase(), {
+            id: r.id, on_hand: r.on_hand, available_capacity: r.available_capacity,
+            level_inches: r.level_inches, battery_pct: r.battery_pct,
+            system_tank_id: r.system_tank_id, inventory_time: r.inventory_time, reading_date: r.reading_date,
+          })
+        }
+        if (batch.length < PAGE) break
+        from += PAGE
+      }
+    }
+
+    // Build updates — every row carries the FULL field set (falling back to
+    // the tank's existing value when this pull has nothing new), because a
+    // batch upsert sends an explicit NULL for any column a row's object
+    // omits once ANY row in the batch supplies that column. Omitting a
+    // field here to mean "leave alone" would instead null it out. Same
+    // rule documented in droptop-sync-usage/index.ts.
+    const updates: Record<string, unknown>[] = []
+    let skippedUnmatched = 0, skippedNoRtuid = 0
+    for (let li = 1; li < lines.length; li++) {
+      const cols = parseCsvLine(lines[li])
+      const rtuid = (cols[iRtuid] ?? '').trim()
+      if (!rtuid) { skippedNoRtuid++; continue }
+      const existing = existingBySerial.get(rtuid.toLowerCase())
+      if (!existing) { skippedUnmatched++; continue }
+
+      const onHand = numOrNull(cols[iInventory])
+      const capacity = numOrNull(cols[iCapacity])
+      const levelUom = (cols[iLevelUom] ?? '').trim().toLowerCase()
+      const level = iLevel !== -1 && (levelUom === 'in' || levelUom === 'inches') ? numOrNull(cols[iLevel]) : null
+      const battery = numOrNull(cols[iBattery])
+      const systemTankId = iTankId !== -1 ? ((cols[iTankId] ?? '').trim() || null) : null
+      const isoTime = iTime !== -1 ? parseSkybitzTime(cols[iTime] ?? '') : null
+
+      updates.push({
+        id: existing.id,
+        on_hand: onHand ?? existing.on_hand,
+        available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : existing.available_capacity,
+        level_inches: level ?? existing.level_inches,
+        battery_pct: battery ?? existing.battery_pct,
+        system_tank_id: systemTankId ?? existing.system_tank_id,
+        inventory_time: isoTime ?? existing.inventory_time,
+        reading_date: isoTime ? isoTime.slice(0, 10) : existing.reading_date,
+        updated_at: new Date().toISOString(),
+        last_change_source: 'skybitz',
+      })
+    }
+
+    let updated = 0
+    const BATCH = 500
+    for (let i = 0; i < updates.length; i += BATCH) {
+      const slice = updates.slice(i, i + BATCH)
+      const { error } = await (admin as any).schema('inventory').from('tank_monitors').upsert(slice)
+      if (error) return ok({ error: `Upsert failed: ${error.message}`, updated_so_far: updated })
+      updated += slice.length
+    }
+
+    return ok({
+      success: true,
+      rows_in_file: lines.length - 1,
+      updated,
+      skipped_unmatched_rtuid: skippedUnmatched,
+      skipped_no_rtuid: skippedNoRtuid,
+    })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return ok({ error: msg })
+  }
+})
