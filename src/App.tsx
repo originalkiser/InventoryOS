@@ -81,7 +81,7 @@ function SmartRedirect() {
 }
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { session, initialized } = useAuthStore()
+  const { session, profile, initialized } = useAuthStore()
   const isPlaceholder = import.meta.env.VITE_SUPABASE_URL?.includes('placeholder')
   if (!isPlaceholder && !initialized) {
     return (
@@ -91,6 +91,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     )
   }
   if (!isPlaceholder && session === null) return <Navigate to="/login" replace />
+  // An admin reset this user's password — force Set New Password before
+  // letting them into the rest of the app.
+  if (!isPlaceholder && profile?.must_reset_password) return <Navigate to="/reset-password" replace />
   return <>{children}</>
 }
 

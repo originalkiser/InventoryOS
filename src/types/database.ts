@@ -293,6 +293,8 @@ export interface Profile {
   auto_push_tasks: boolean | null
   skip_weekends_holidays: boolean | null
   blocked_days: Array<{ date: string; note?: string }> | null
+  // Set by admin-reset-password — forces Set New Password on next login.
+  must_reset_password?: boolean | null
 }
 
 export interface CompanyHoliday {

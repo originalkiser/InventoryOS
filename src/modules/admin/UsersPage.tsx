@@ -74,6 +74,9 @@ function ManageUserModal({
   const [saving, setSaving] = useState(false)
   const [resettingPw, setResettingPw] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const [confirmAdminReset, setConfirmAdminReset] = useState(false)
+  const [adminResetting, setAdminResetting] = useState(false)
+  const [adminResetResult, setAdminResetResult] = useState<{ tempPassword: string; warning?: string } | null>(null)
 
   useEffect(() => {
     const sb = supabase as any
@@ -177,6 +180,32 @@ function ManageUserModal({
     setResettingPw(false)
   }
 
+  async function adminResetPassword() {
+    setAdminResetting(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-reset-password', {
+        body: { userId: user.id },
+      })
+      if (error) {
+        let msg = error.message
+        try {
+          const ctx = (error as { context?: Response }).context
+          if (ctx && typeof ctx.json === 'function') { const b = await ctx.json(); if (b?.error) msg = b.error }
+        } catch { /* keep generic message */ }
+        throw new Error(msg)
+      }
+      if (data?.error) throw new Error(data.error)
+      setAdminResetResult({ tempPassword: data.tempPassword, warning: data.warning })
+      if (data.warning) toast(data.warning, { icon: '⚠️' })
+      else toast.success('Password reset')
+    } catch (e) {
+      const msg = (e as { message?: string })?.message || 'Failed to reset password'
+      toast.error(msg)
+    } finally {
+      setAdminResetting(false)
+    }
+  }
+
   async function doRemove() {
     const sb = supabase as any
     const now = new Date().toISOString()
@@ -259,7 +288,7 @@ function ManageUserModal({
 
         {/* Actions row */}
         <div className="flex items-center justify-between border-t border-navy/10 dark:border-[#F2F1E6]/10 pt-4">
-          <div className="flex gap-2">
+          <div className="flex gap-3">
             {user.email && (
               <button
                 onClick={sendReset}
@@ -267,6 +296,14 @@ function ManageUserModal({
                 className="text-xs font-mono text-inky/70 dark:text-[#F2F1E6]/50 hover:text-navy dark:hover:text-[#F2F1E6] transition-colors disabled:opacity-40"
               >
                 {resettingPw ? 'Sending…' : 'Send Password Reset'}
+              </button>
+            )}
+            {!isSelf && (
+              <button
+                onClick={() => setConfirmAdminReset(true)}
+                className="text-xs font-mono text-inky/70 dark:text-[#F2F1E6]/50 hover:text-navy dark:hover:text-[#F2F1E6] transition-colors"
+              >
+                Reset Password
               </button>
             )}
           </div>
@@ -299,6 +336,58 @@ function ManageUserModal({
             <Button variant="danger" size="sm" onClick={doRemove}>Yes, Remove</Button>
           </div>
         </div>
+      </Modal>
+
+      {/* Admin reset password — confirm, then reveal the temp password */}
+      <Modal
+        open={confirmAdminReset}
+        onClose={() => { setConfirmAdminReset(false); setAdminResetResult(null) }}
+        title={adminResetResult ? 'Password Reset' : 'Reset Password?'}
+      >
+        {adminResetResult ? (
+          <div className="flex flex-col gap-4">
+            <p className="text-xs text-inky font-mono">
+              Share this temporary password with <span className="text-navy">{user.email}</span> — they'll be required to set a new one when they log in.
+            </p>
+            <div className="bg-cream border border-navy/30 rounded p-4 flex flex-col gap-2 font-mono text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-inky">Temp Password</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-orange-600 tracking-wider">{adminResetResult.tempPassword}</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(adminResetResult.tempPassword); toast.success('Copied') }}
+                    className="text-inky hover:text-navy transition-colors"
+                    title="Copy password"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            {adminResetResult.warning && (
+              <p className="text-xs font-mono text-[#C0392B]">{adminResetResult.warning}</p>
+            )}
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => { setConfirmAdminReset(false); setAdminResetResult(null) }}>Done</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm font-body text-navy dark:text-[#F2F1E6]">
+              Reset the password for <span className="font-bold">{user.full_name ?? user.email}</span>?
+            </p>
+            <p className="text-xs font-mono text-inky/70 dark:text-[#F2F1E6]/50">
+              Their current password stops working immediately. You'll get a temporary password to share with them — they'll be required to set a new one the next time they log in.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setConfirmAdminReset(false)}>Cancel</Button>
+              <Button variant="danger" size="sm" loading={adminResetting} onClick={adminResetPassword}>Yes, Reset Password</Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </Modal>
   )
