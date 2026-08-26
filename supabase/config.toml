@@ -9,7 +9,7 @@
 verify_jwt = false
 
 # Same reason as invite-user above — authenticates the caller itself.
-[functions.admin-reset-password]
+[functions.admin-password-reset]
 verify_jwt = false
 
 # Cron-triggered (pg_cron -> net.http_post), no interactive user session to

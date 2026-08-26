@@ -6,7 +6,7 @@
 //
 // Mirrors invite-user's own admin-verification pattern.
 //
-// Deploy:  supabase functions deploy admin-reset-password
+// Deploy:  supabase functions deploy admin-password-reset
 // SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are injected
 // automatically into deployed functions — no manual secrets needed.
 

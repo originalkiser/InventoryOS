@@ -183,7 +183,7 @@ function ManageUserModal({
   async function adminResetPassword() {
     setAdminResetting(true)
     try {
-      const { data, error } = await supabase.functions.invoke('admin-reset-password', {
+      const { data, error } = await supabase.functions.invoke('admin-password-reset', {
         body: { userId: user.id },
       })
       if (error) {
