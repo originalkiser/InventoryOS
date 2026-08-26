@@ -17,11 +17,18 @@ interface Props {
   // Word used for the "N ___" summary label when 2+ are selected (e.g.
   // "products" instead of the default "selected").
   countNoun?: string
+  // Adds a text filter above the checklist — for option lists too long to
+  // scan (e.g. every product ID in the catalog).
+  searchable?: boolean
 }
 
-export function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All', showAllOption = true, countNoun = 'selected' }: Props) {
+export function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All', showAllOption = true, countNoun = 'selected', searchable = false }: Props) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  const visibleOptions = searchable && query.trim()
+    ? options.filter((o) => o.value.toLowerCase().includes(query.trim().toLowerCase()))
+    : options
 
   useEffect(() => {
     if (!open) return
@@ -66,6 +73,17 @@ export function MultiSelectDropdown({ options, selected, onChange, placeholder =
 
       {open && (
         <div className="absolute top-full left-0 mt-1 z-40 bg-cream dark:bg-[#0e2638] border border-navy/30 rounded shadow-xl overflow-hidden min-w-[160px] max-w-[240px]">
+          {searchable && (
+            <div className="p-1 border-b border-navy/10">
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search…"
+                className="w-full rounded border border-navy/20 bg-cream dark:bg-[#0e2638] px-2 py-1 text-xs font-mono text-navy dark:text-[#F2F1E6] focus:outline-none focus:border-sky"
+              />
+            </div>
+          )}
           <div className="max-h-56 overflow-y-auto p-1 flex flex-col gap-px">
             {showAllOption && (
               <label className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer hover:bg-navy/5 select-none">
@@ -78,10 +96,10 @@ export function MultiSelectDropdown({ options, selected, onChange, placeholder =
                 <span className="text-xs font-mono text-inky/60">All</span>
               </label>
             )}
-            {options.length === 0 && (
-              <span className="px-2 py-1 text-[11px] font-mono text-inky/40 italic">No options</span>
+            {visibleOptions.length === 0 && (
+              <span className="px-2 py-1 text-[11px] font-mono text-inky/40 italic">{options.length === 0 ? 'No options' : 'No matches'}</span>
             )}
-            {options.map(opt => (
+            {visibleOptions.map(opt => (
               <label
                 key={opt.value}
                 className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer hover:bg-navy/5 select-none"

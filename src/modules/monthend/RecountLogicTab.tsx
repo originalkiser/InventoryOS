@@ -10,7 +10,7 @@ import {
   type PeriodEvalData, type DraftThresholds, type TankVarianceCandidate, type EvaluatedCount,
 } from './recountData'
 import { locationLabel } from './countsShared'
-import { OilOnHandExceptionsPanel } from './OilOnHandExceptionsPanel'
+import { ProductOnHandExceptionsPanel } from './ProductOnHandExceptionsPanel'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import type { RecountConfig, Location } from '@/types'
 import { format, parseISO } from 'date-fns'
@@ -56,6 +56,30 @@ function omitHiddenProducts<T extends { product_id: string }>(
     if (remaining.length > 0) out.set(locId, remaining)
   }
   return out
+}
+
+// Which flag source hit a product in the preview table's Products cell, and
+// the color used to border that chip — restricted to the CLAUDE.md-approved
+// off-palette colors (red/green/orange) since none of the brand tokens are
+// distinct enough from each other for this purpose.
+type FlagType = 'exception' | 'tank' | 'oil'
+const FLAG_COLORS: Record<FlagType, string> = {
+  exception: '#C0392B', // sb-red — product/category range exception
+  tank: '#2ECC71',      // sb-green — tank monitor variance
+  oil: '#E67E22',       // sb-orange — oil on hand, not configured to order
+}
+const FLAG_ORDER: FlagType[] = ['exception', 'tank', 'oil']
+
+// A product hit by more than one flag type gets its border split into equal
+// color segments (one per flag) via a hard-stop border-image gradient,
+// instead of picking just one color to show.
+function splitBorderStyle(types: Set<FlagType>): React.CSSProperties {
+  const active = FLAG_ORDER.filter((t) => types.has(t))
+  if (active.length === 0) return { borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(0,39,69,0.2)' }
+  if (active.length === 1) return { borderWidth: 2, borderStyle: 'solid', borderColor: FLAG_COLORS[active[0]] }
+  const step = 100 / active.length
+  const stops = active.map((t, i) => `${FLAG_COLORS[t]} ${i * step}% ${(i + 1) * step}%`).join(', ')
+  return { borderWidth: 2, borderStyle: 'solid', borderImage: `linear-gradient(to right, ${stops}) 1` }
 }
 
 interface ProductExceptionRow {
@@ -233,7 +257,7 @@ export function RecountLogicTab() {
   // Engine-oil on-hand with no location_order_config row for that shop —
   // fetched whenever the toggle is on, same "once per period" shape as the
   // fetches above. get_unconfigured_oil_on_hand already excludes anything
-  // listed in oil_on_hand_exceptions server-side.
+  // listed in product_on_hand_exceptions server-side.
   useEffect(() => {
     if (!companyId || !oilCheckEnabled) { setOilOnHandRows([]); return }
     let cancelled = false
@@ -588,20 +612,6 @@ export function RecountLogicTab() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Card className={ignoreEndingBalance ? 'border-[#E67E22]/50' : ''}>
-        <CardBody className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <span className="text-xs font-mono text-navy uppercase tracking-wide">Ignore Ending Balance Rules</span>
-            <p className="text-[11px] font-mono text-inky/60 mt-0.5 max-w-xl">
-              When on, Adjustment Count, Oil Adjustment Count, Ending Balance, Variance vs Median, and Variance vs
-              Last Month stop flagging shops entirely — only Tank Monitor Variance, Oil On Hand (below), and product
-              range exceptions can flag a recount. Each rule's own toggle/thresholds are kept, not cleared.
-            </p>
-          </div>
-          <Toggle checked={ignoreEndingBalance} onChange={setIgnoreEndingBalance} color="amber" size="sm" label={ignoreEndingBalance ? 'On' : 'Off'} />
-        </CardBody>
-      </Card>
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <RuleCard
           title="Adjustment Count"
@@ -718,20 +728,32 @@ export function RecountLogicTab() {
         >
           <p className="text-xs font-mono text-inky/60">Engine oil only. No threshold — any unconfigured oil with on-hand &gt; 0 flags the shop and product.</p>
         </RuleCard>
+
+        <CollapsibleCard
+          title="Median Lookback & Ending-Balance Rules"
+          borderClassName={ignoreEndingBalance ? 'border-[#E67E22]/50' : ''}
+          headerRight={<Toggle checked={ignoreEndingBalance} onChange={setIgnoreEndingBalance} color="amber" size="sm" label={ignoreEndingBalance ? 'Ignoring' : 'Normal'} />}
+        >
+          <Input
+            label="Median Lookback (months)"
+            value={lookback}
+            onChange={(e) => setLookback(e.target.value)}
+            hint={`Median over trailing ${lookbackN} months`}
+          />
+          <p className="text-xs font-mono text-inky leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
+            When "Ignoring" is on, Adjustment Count, Oil Adjustment Count, Ending Balance, Variance vs Median, and
+            Variance vs Last Month stop flagging shops entirely — only Tank Monitor Variance, Oil On Hand, and product
+            range exceptions can still flag a recount. Each rule's own toggle/thresholds are kept, not cleared.
+          </p>
+        </CollapsibleCard>
       </div>
 
-      <OilOnHandExceptionsPanel />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ProductOnHandExceptionsPanel />
+      </div>
 
       <Card>
-        <CardBody className="flex items-end justify-between flex-wrap gap-4">
-          <div className="w-40">
-            <Input
-              label="Median Lookback (months)"
-              value={lookback}
-              onChange={(e) => setLookback(e.target.value)}
-              hint={`Median over trailing ${lookbackN} months`}
-            />
-          </div>
+        <CardBody className="flex items-center justify-end flex-wrap gap-4">
           <div className="flex items-center gap-3">
             {autoSaveStatus === 'pending' && (
               <span className="text-[10px] font-mono text-inky/50 animate-pulse">Auto-saving…</span>
@@ -781,28 +803,6 @@ export function RecountLogicTab() {
               )}
             </>
           )}
-        </CardBody>
-      </Card>
-
-      <Card>
-        <CardBody className="flex items-end justify-between flex-wrap gap-4">
-          <div className="w-40">
-            <Input
-              label="Median Lookback (months)"
-              value={lookback}
-              onChange={(e) => setLookback(e.target.value)}
-              hint={`Median over trailing ${lookbackN} months`}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            {autoSaveStatus === 'pending' && (
-              <span className="text-[10px] font-mono text-inky/50 animate-pulse">Auto-saving…</span>
-            )}
-            {autoSaveStatus === 'saved' && (
-              <span className="text-[10px] font-mono text-green-600">✓ Saved</span>
-            )}
-            <Button loading={generating} onClick={handleApplyGenerate}>Apply &amp; Generate Recounts</Button>
-          </div>
         </CardBody>
       </Card>
 
@@ -955,11 +955,16 @@ function RecountPreviewTable({
         {rows.map((e) => {
           const varVsPrev = e.count?.ending_inventory_cost != null && e.prev != null ? e.count.ending_inventory_cost - e.prev : null
           const isRed = varVsPrev != null && Math.abs(varVsPrev) > varianceRedThreshold
-          const products = [
-            ...(exceptionsByShop.get(e.locationId ?? '') ?? []).map((x) => ({ id: x.product_id, qty: x.on_hand })),
-            ...(tankVarByShop.get(e.locationId ?? '') ?? []).map((x) => ({ id: x.product_id, qty: x.on_hand })),
-            ...(oilFlagsByShop.get(e.locationId ?? '') ?? []).map((x) => ({ id: x.product_id, qty: x.on_hand })),
-          ]
+          const productMap = new Map<string, { qty: number; types: Set<FlagType> }>()
+          const addProduct = (id: string, qty: number, type: FlagType) => {
+            const cur = productMap.get(id)
+            if (cur) cur.types.add(type)
+            else productMap.set(id, { qty, types: new Set([type]) })
+          }
+          ;(exceptionsByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'exception'))
+          ;(tankVarByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'tank'))
+          ;(oilFlagsByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'oil'))
+          const products = [...productMap.entries()].map(([id, v]) => ({ id, qty: v.qty, types: v.types }))
           const hiddenSet = (e.locationId && hiddenProducts.get(e.locationId)) || new Set<string>()
           return (
             <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
@@ -983,16 +988,17 @@ function RecountPreviewTable({
               <td className="px-3 py-2 text-inky">
                 {products.length === 0 ? '—' : (
                   <div className="flex flex-wrap gap-1">
-                    {products.map((p, i) => {
+                    {products.map((p) => {
                       const hidden = hiddenSet.has(p.id)
                       return (
                         <button
-                          key={`${p.id}-${i}`}
+                          key={p.id}
                           onClick={() => e.locationId && onToggleHide(e.locationId, p.id)}
-                          title={hidden ? 'Click to include in the recount again' : 'Click to hide from the recount'}
+                          title={hidden ? 'Click to include in the recount again' : `Click to hide from the recount — flagged by: ${[...p.types].join(', ')}`}
+                          style={hidden ? undefined : splitBorderStyle(p.types)}
                           className={[
-                            'rounded border px-1.5 py-0.5 transition-colors',
-                            hidden ? 'border-navy/10 text-inky/30 line-through hover:text-inky/60' : 'border-navy/20 text-inky hover:border-[#C0392B]/50 hover:text-[#C0392B]',
+                            'rounded px-1.5 py-0.5 transition-colors',
+                            hidden ? 'border border-navy/10 text-inky/30 line-through hover:text-inky/60' : 'text-inky hover:text-[#C0392B]',
                           ].join(' ')}
                         >
                           {p.id} <span className="opacity-70">({fmt(p.qty)})</span>
@@ -1041,6 +1047,36 @@ function balPreview(low: string, high: string): string {
   return `Flag shops with ending balance ${parts.join(' or ')}.`
 }
 
+// Shared collapsible-card shell — all the configurable check tiles at the
+// top of Recount Logic use this so they can be collapsed to save vertical
+// space; each defaults closed since there are many of them on one screen.
+function CollapsibleCard({
+  title, headerRight, children, defaultCollapsed = true, borderClassName = '',
+}: {
+  title: string
+  headerRight?: React.ReactNode
+  children: React.ReactNode
+  defaultCollapsed?: boolean
+  borderClassName?: string
+}) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  return (
+    <Card className={borderClassName}>
+      <CardHeader className="flex items-center justify-between">
+        <button
+          onClick={() => setCollapsed((v) => !v)}
+          className="flex items-center gap-1.5 text-xs font-mono text-navy uppercase tracking-wide hover:text-navy/70 transition-colors"
+        >
+          <span className={`inline-block text-[10px] transition-transform ${collapsed ? '' : 'rotate-90'}`}>▸</span>
+          {title}
+        </button>
+        {headerRight}
+      </CardHeader>
+      {!collapsed && <CardBody className="flex flex-col gap-3">{children}</CardBody>}
+    </Card>
+  )
+}
+
 function RuleCard({
   title, enabled, onToggle, preview, children,
 }: {
@@ -1051,17 +1087,14 @@ function RuleCard({
   children: React.ReactNode
 }) {
   return (
-    <Card>
-      <CardHeader className="flex items-center justify-between">
-        <span className="text-xs font-mono text-navy uppercase tracking-wide">{title}</span>
-        <Toggle checked={enabled} onChange={onToggle} color="green" size="sm" label={enabled ? 'On' : 'Off'} />
-      </CardHeader>
-      <CardBody className="flex flex-col gap-3">
-        <div className={enabled ? '' : 'opacity-40 pointer-events-none'}>{children}</div>
-        <p className="text-xs font-mono text-inky leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
-          {preview}
-        </p>
-      </CardBody>
-    </Card>
+    <CollapsibleCard
+      title={title}
+      headerRight={<Toggle checked={enabled} onChange={onToggle} color="green" size="sm" label={enabled ? 'On' : 'Off'} />}
+    >
+      <div className={enabled ? '' : 'opacity-40 pointer-events-none'}>{children}</div>
+      <p className="text-xs font-mono text-inky leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
+        {preview}
+      </p>
+    </CollapsibleCard>
   )
 }

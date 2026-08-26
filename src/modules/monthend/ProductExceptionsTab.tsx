@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
@@ -7,6 +7,7 @@ import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Badge, Card, CardBody } from '@/components/ui'
 import { CategorySimplificationTab } from '@/modules/config/tabs/CategorySimplificationTab'
 import { CategoryExpectationsTab, TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
+import { ProductOverridesTab } from '@/modules/config/tabs/ProductOverridesTab'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -22,7 +23,7 @@ interface ExceptionRow {
 }
 
 const show = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 }))
-const basisColor = (b: string) => (b === 'bulk' || b === 'drum' || b === 'package' ? 'red' : b === 'unlisted' ? 'gray' : 'amber')
+const basisColor = (b: string) => (b === 'product_override' ? 'sky' : b === 'bulk' || b === 'drum' || b === 'package' ? 'red' : b === 'unlisted' ? 'gray' : 'amber')
 
 export function ProductExceptionsTab() {
   const { profile } = useAuthStore()
@@ -38,6 +39,20 @@ export function ProductExceptionsTab() {
   const [editingExpectations, setEditingExpectations] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [categoryCount, setCategoryCount] = useState<number | null>(null)
+  const [productOverrides, setProductOverrides] = useState<{ product_id: string; expected_limit: number | null }[] | null>(null)
+
+  useEffect(() => {
+    if (!companyId) return
+    const sb = supabase as any
+    sb.schema('inventory').from('category_expectations').select('id').eq('company_id', companyId)
+      .then(({ data }: { data: { id: string }[] | null }) => setCategoryCount((data ?? []).length))
+    // best-effort: inventory.product_expectations is a recently-added table
+    sb.schema('inventory').from('product_expectations').select('product_id, expected_limit').eq('company_id', companyId)
+      .then(({ data, error }: { data: { product_id: string; expected_limit: number | null }[] | null; error: unknown }) => {
+        if (!error) setProductOverrides(data ?? [])
+      })
+  }, [companyId])
 
   async function run() {
     if (!companyId) return
@@ -82,6 +97,24 @@ export function ProductExceptionsTab() {
         </CardBody>
       </Card>
 
+      {(categoryCount != null || productOverrides != null) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {categoryCount != null && (
+            <span className="text-[11px] font-mono text-inky/70 rounded border border-navy/20 px-2 py-1">
+              <span className="text-navy font-bold">{categoryCount}</span> categor{categoryCount === 1 ? 'y' : 'ies'} checked for balance limits
+            </span>
+          )}
+          {productOverrides != null && (
+            <span className="text-[11px] font-mono text-inky/70 rounded border border-sky/40 px-2 py-1">
+              <span className="text-navy font-bold">{productOverrides.length}</span> product{productOverrides.length === 1 ? '' : 's'} with {productOverrides.length === 1 ? 'its' : 'their'} own limit
+              {productOverrides.length > 0 && productOverrides.length <= 3 && (
+                <span className="text-inky/50"> — {productOverrides.map((p) => `${p.product_id}: ${show(p.expected_limit)}`).join(', ')}</span>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+
       {editingExpectations && (
         <Card><CardBody className="flex flex-col gap-6">
           <p className="text-[11px] font-mono text-inky/60">
@@ -89,6 +122,7 @@ export function ProductExceptionsTab() {
           </p>
           <CategorySimplificationTab />
           <div className="border-t border-navy/10 pt-6"><CategoryExpectationsTab /></div>
+          <div className="border-t border-navy/10 pt-6"><ProductOverridesTab /></div>
         </CardBody></Card>
       )}
 
