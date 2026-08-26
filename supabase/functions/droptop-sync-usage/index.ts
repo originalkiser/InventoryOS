@@ -241,8 +241,8 @@ Deno.serve(async (req) => {
     if (!me?.company_id) return ok({ error: 'Profile not found' })
 
     const body = await req.json().catch(() => ({}))
-    const mode: 'both' | 'inventory' | 'usage' | 'alerts' =
-      ['inventory', 'usage', 'alerts'].includes(body.mode) ? body.mode : 'both'
+    const mode: 'both' | 'inventory' | 'usage' | 'alerts' | 'inspect' =
+      ['inventory', 'usage', 'alerts', 'inspect'].includes(body.mode) ? body.mode : 'both'
     const defaultDays = mode === 'alerts' ? 1 : 30
     const daysBack = Math.min(Math.max(Number(body.daysBack ?? defaultDays), 1), 365)
     const locationId: string | null = body.locationId ?? null
@@ -288,6 +288,24 @@ Deno.serve(async (req) => {
 
     if (!locations.length) {
       return ok({ error: 'No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.' })
+    }
+
+    // ── Inspect mode: read-only peek at Droptop's raw response shape ───────
+    // Never writes anything — returns a couple of un-mapped items exactly as
+    // Droptop sends them, so we can see fields the sync doesn't currently
+    // read (e.g. a per-item cost/value) before deciding how to use them.
+    if (mode === 'inspect') {
+      const opId = locations[0].droptop_operation_id
+      const [inventory, changes] = await Promise.all([
+        fetchInventory(opId, publicKey, privateKey),
+        fetchChanges(opId, startUnix, endUnix, publicKey, privateKey),
+      ])
+      return ok({
+        success: true,
+        operation_id: opId,
+        inventory_sample: inventory.slice(0, 3),
+        changes_sample: changes.slice(0, 5),
+      })
     }
 
     // ── Alerts mode: scan adjustment activity against thresholds ────────────
