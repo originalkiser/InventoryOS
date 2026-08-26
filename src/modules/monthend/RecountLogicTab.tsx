@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
@@ -12,7 +12,7 @@ import {
 import { locationLabel } from './countsShared'
 import { OilOnHandExceptionsPanel } from './OilOnHandExceptionsPanel'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
-import type { RecountConfig } from '@/types'
+import type { RecountConfig, Location } from '@/types'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -37,6 +37,25 @@ function numOrNull(s: string): number | null {
   if (t === '') return null
   const n = Number(t)
   return isNaN(n) ? null : n
+}
+
+// Drops any (location, product) pair marked hidden from a shop-keyed map —
+// used to make hidden products stop driving flags/recount generation while
+// leaving the raw map (still used for display) untouched.
+function omitHiddenProducts<T extends { product_id: string }>(
+  map: Map<string, T[]>,
+  hidden: Map<string, Set<string>>,
+): Map<string, T[]> {
+  if (hidden.size === 0) return map
+  const out = new Map<string, T[]>()
+  for (const [locId, rows] of map) {
+    const hiddenSet = hidden.get(locId)
+    const remaining = hiddenSet ? rows.filter((r) => !hiddenSet.has(r.product_id)) : rows
+    // Omit the key entirely once nothing's left, so .has(locId) correctly
+    // reads as "no longer flagged" instead of "flagged with zero products."
+    if (remaining.length > 0) out.set(locId, remaining)
+  }
+  return out
 }
 
 interface ProductExceptionRow {
@@ -107,6 +126,15 @@ export function RecountLogicTab() {
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'pending' | 'saved'>('idle')
+
+  // Per-period workflow state: hide one product from a shop's recount
+  // consideration, dismiss a whole shop for this period, or set it aside to
+  // revisit later — all persisted so the whole team sees the same state.
+  const [hiddenProducts, setHiddenProducts] = useState<Map<string, Set<string>>>(new Map())
+  const [excludedShops, setExcludedShops] = useState<Set<string>>(new Set())
+  const [flaggedLaterShops, setFlaggedLaterShops] = useState<Set<string>>(new Set())
+  const [varianceRedThreshold, setVarianceRedThreshold] = useState('7500')
+  const [flaggedLaterExpanded, setFlaggedLaterExpanded] = useState(false)
   const hasLoadedRef = useRef(false)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
@@ -219,6 +247,55 @@ export function RecountLogicTab() {
     return () => { cancelled = true }
   }, [companyId, countMonth, oilCheckEnabled])
 
+  // Per-period preview workflow state (hidden products, excluded shops,
+  // flagged-for-later shops) — persisted so the whole team sees the same
+  // state, not just whoever last touched the page.
+  const loadPreviewActions = useCallback(async () => {
+    if (!companyId) return
+    const { data, error } = await (supabase as any)
+      .schema('inventory').from('recount_preview_actions')
+      .select('location_id, product_id, action')
+      .eq('company_id', companyId)
+      .eq('count_month', countMonth)
+    if (error) { toast.error(`Could not load recount workflow state (${error.message})`); return }
+    const hidden = new Map<string, Set<string>>()
+    const excluded = new Set<string>()
+    const later = new Set<string>()
+    for (const r of (data ?? []) as { location_id: string; product_id: string | null; action: string }[]) {
+      if (r.action === 'hidden_product' && r.product_id) {
+        if (!hidden.has(r.location_id)) hidden.set(r.location_id, new Set())
+        hidden.get(r.location_id)!.add(r.product_id)
+      } else if (r.action === 'excluded_shop') excluded.add(r.location_id)
+      else if (r.action === 'flagged_later') later.add(r.location_id)
+    }
+    setHiddenProducts(hidden)
+    setExcludedShops(excluded)
+    setFlaggedLaterShops(later)
+  }, [companyId, countMonth])
+  useEffect(() => { loadPreviewActions() }, [loadPreviewActions])
+
+  async function addPreviewAction(locationId: string, action: 'hidden_product' | 'excluded_shop' | 'flagged_later', productId: string | null = null) {
+    if (!companyId) return
+    const { error } = await (supabase as any).schema('inventory').from('recount_preview_actions')
+      .upsert({ company_id: companyId, count_month: countMonth, location_id: locationId, product_id: productId, action, created_by: profile?.id ?? null },
+        { onConflict: 'company_id,count_month,location_id,product_id,action' })
+    if (error) { toast.error(error.message); return }
+    await loadPreviewActions()
+  }
+  async function removePreviewAction(locationId: string, action: 'hidden_product' | 'excluded_shop' | 'flagged_later', productId: string | null = null) {
+    if (!companyId) return
+    const sb = (supabase as any).schema('inventory').from('recount_preview_actions')
+      .delete().eq('company_id', companyId).eq('count_month', countMonth).eq('location_id', locationId).eq('action', action)
+    const { error } = productId ? await sb.eq('product_id', productId) : await sb.is('product_id', null)
+    if (error) { toast.error(error.message); return }
+    await loadPreviewActions()
+  }
+  function toggleHideProduct(locationId: string, productId: string) {
+    const isHidden = hiddenProducts.get(locationId)?.has(productId) ?? false
+    if (isHidden) removePreviewAction(locationId, 'hidden_product', productId)
+    else addPreviewAction(locationId, 'hidden_product', productId)
+  }
+
   const lookbackN = numOrNull(lookback) ?? DEFAULT_LOOKBACK
   const tankVarThreshold = tankVarEnabled ? numOrNull(tankVarQts) : null
 
@@ -271,6 +348,15 @@ export function RecountLogicTab() {
     return m
   }, [oilOnHandRows, evalData, oilCheckEnabled])
 
+  // "Effective" versions of the three maps above with hidden products
+  // removed — used for flag/manual-review logic and recount generation, so
+  // a hidden product stops driving anything. The raw maps above stay
+  // untouched so the Products cell can still show a hidden product (dimmed,
+  // click to restore) rather than making it disappear silently.
+  const effTankVarByShop = useMemo(() => omitHiddenProducts(tankVarByShop, hiddenProducts), [tankVarByShop, hiddenProducts])
+  const effExceptionsByShop = useMemo(() => omitHiddenProducts(exceptionsByShop, hiddenProducts), [exceptionsByShop, hiddenProducts])
+  const effOilFlagsByShop = useMemo(() => omitHiddenProducts(oilFlagsByShop, hiddenProducts), [oilFlagsByShop, hiddenProducts])
+
   // Draft thresholds derived from current (unsaved) form state
   const draft: DraftThresholds = useMemo(() => ({
     low_adj_threshold: adjEnabled ? numOrNull(lowAdj) : null,
@@ -309,24 +395,24 @@ export function RecountLogicTab() {
     const withFlags = base.map((e) => {
       if (!e.locationId) return e
       const extra: string[] = []
-      if (tankVarByShop.has(e.locationId)) extra.push('tank_monitor_variance')
-      if (oilFlagsByShop.has(e.locationId)) extra.push('unconfigured_oil')
+      if (effTankVarByShop.has(e.locationId)) extra.push('tank_monitor_variance')
+      if (effOilFlagsByShop.has(e.locationId)) extra.push('unconfigured_oil')
       return extra.length ? { ...e, flags: [...e.flags, ...extra] } : e
     })
 
     const coveredLocIds = new Set(withFlags.map((e) => e.locationId).filter((id): id is string => !!id))
     const onlyLocIds = new Set(
-      [...tankVarByShop.keys(), ...oilFlagsByShop.keys()]
+      [...effTankVarByShop.keys(), ...effOilFlagsByShop.keys()]
         .filter((id) => !coveredLocIds.has(id) && evalData.eligibleLocationIds.has(id))
     )
     const synthetic: EvaluatedCount[] = [...onlyLocIds].map((locId) => {
       const flags: string[] = []
-      if (tankVarByShop.has(locId)) flags.push('tank_monitor_variance')
-      if (oilFlagsByShop.has(locId)) flags.push('unconfigured_oil')
+      if (effTankVarByShop.has(locId)) flags.push('tank_monitor_variance')
+      if (effOilFlagsByShop.has(locId)) flags.push('unconfigured_oil')
       return { count: null, locationId: locId, prev: null, median: 0, varVsLastMonth: 0, varVsMedian: 0, flags }
     })
     return [...withFlags, ...synthetic]
-  }, [evalData, draft, lookbackN, tankVarByShop, oilFlagsByShop, ignoreEndingBalance])
+  }, [evalData, draft, lookbackN, effTankVarByShop, effOilFlagsByShop, ignoreEndingBalance])
 
   const flagged = evaluated.filter((e) => e.flags.length > 0)
 
@@ -337,19 +423,26 @@ export function RecountLogicTab() {
   // tank_monitor_variance or unconfigured_oil flag always implies product
   // detail by construction, so this split only ever pulls in shops flagged
   // purely by the dollar/count rules.
-  const { flaggedWithProducts, manualReview } = useMemo(() => {
+  // Excluded shops drop out of consideration entirely for this period.
+  // Flagged-for-later shops move to their own section instead of either list
+  // below, so they aren't forgotten but also aren't cluttering the active
+  // preview or getting swept into Apply & Generate.
+  const { flaggedWithProducts, manualReview, flaggedLater } = useMemo(() => {
     const withP: EvaluatedCount[] = []
     const manual: EvaluatedCount[] = []
+    const later: EvaluatedCount[] = []
     for (const e of flagged) {
+      if (e.locationId && excludedShops.has(e.locationId)) continue
+      if (e.locationId && flaggedLaterShops.has(e.locationId)) { later.push(e); continue }
       const hasProduct = !!e.locationId && (
-        (tankVarByShop.get(e.locationId)?.length ?? 0) > 0 ||
-        (exceptionsByShop.get(e.locationId)?.length ?? 0) > 0 ||
-        (oilFlagsByShop.get(e.locationId)?.length ?? 0) > 0
+        (effTankVarByShop.get(e.locationId)?.length ?? 0) > 0 ||
+        (effExceptionsByShop.get(e.locationId)?.length ?? 0) > 0 ||
+        (effOilFlagsByShop.get(e.locationId)?.length ?? 0) > 0
       )
       ;(hasProduct ? withP : manual).push(e)
     }
-    return { flaggedWithProducts: withP, manualReview: manual }
-  }, [flagged, tankVarByShop, exceptionsByShop, oilFlagsByShop])
+    return { flaggedWithProducts: withP, manualReview: manual, flaggedLater: later }
+  }, [flagged, effTankVarByShop, effExceptionsByShop, effOilFlagsByShop, excludedShops, flaggedLaterShops])
   const totalShops = evaluated.length
 
   async function saveLogic(): Promise<string | null> {
@@ -402,6 +495,58 @@ export function RecountLogicTab() {
     if (id) toast.success('Recount logic saved')
   }
 
+  function buildRecountRow(e: EvaluatedCount, today: string) {
+    const catFlags = effExceptionsByShop.get(e.locationId!) ?? []
+    const tankFlags = effTankVarByShop.get(e.locationId!) ?? []
+    const oilFlags = effOilFlagsByShop.get(e.locationId!) ?? []
+    const productFlags = [
+      ...catFlags.map((x) => ({ source: 'category_limit' as const, product_id: x.product_id, category: x.category, basis: x.basis, reason: `${x.on_hand} on hand > ${x.expected_limit} ${x.basis} limit` })),
+      ...tankFlags.map((x) => ({ source: 'tank_variance' as const, product_id: x.product_id, category: null, basis: 'tank_variance', reason: `tank ${x.tank_qts.toFixed(1)} qt vs ${x.on_hand.toFixed(1)} on hand (${x.diff > 0 ? '+' : ''}${x.diff.toFixed(1)} qt)` })),
+      ...oilFlags.map((x) => ({ source: 'unconfigured_oil' as const, product_id: x.product_id, category: x.category, basis: 'unconfigured_oil', reason: `${x.on_hand} qt on hand, not configured to order at this shop` })),
+    ]
+    const requestedProducts = productFlags.map((p) => `${p.product_id} (${p.reason})`)
+    return {
+      company_id: companyId,
+      location_id: e.locationId,
+      recount_type: requestedProducts.length > 0 ? 'Partial Recount Products' : 'Oil Recount',
+      requested_products: requestedProducts,
+      request_date: today,
+      recount_fields: {
+        count_month: countMonth,
+        source: 'auto',
+        flags: e.flags,
+        recount_reason: flagsToReason(e.flags),
+        product_flags: productFlags,
+      },
+      completed_flags: [false],
+      completed_dates: [null],
+      recount_status: 'open',
+    }
+  }
+
+  // Shared by the bulk "Apply & Generate" button and a single row's "Push to
+  // Recounts" — same skip-if-already-exists behavior either way.
+  async function generateForShops(shops: EvaluatedCount[]): Promise<{ created: number; alreadyHad: number }> {
+    const withLoc = shops.filter((e) => e.locationId)
+    if (withLoc.length === 0) return { created: 0, alreadyHad: 0 }
+
+    const sb = supabase as any
+    const { data: existing } = await sb.schema('inventory').from('recount_requests')
+      .select('location_id, recount_fields')
+      .eq('company_id', companyId)
+      .filter('recount_fields->>count_month', 'eq', countMonth)
+      .filter('recount_fields->>source', 'eq', 'auto')
+    const already = new Set((existing ?? []).map((r: any) => r.location_id))
+
+    const today = format(new Date(), 'yyyy-MM-dd')
+    const rows = withLoc.filter((e) => !already.has(e.locationId)).map((e) => buildRecountRow(e, today))
+    if (rows.length === 0) return { created: 0, alreadyHad: withLoc.length }
+
+    const { error } = await sb.schema('inventory').from('recount_requests').insert(rows)
+    if (error) throw new Error(error.message)
+    return { created: rows.length, alreadyHad: withLoc.length - rows.length }
+  }
+
   async function handleApplyGenerate() {
     if (!companyId) return
     setGenerating(true)
@@ -412,65 +557,30 @@ export function RecountLogicTab() {
       // Only shops with a specific product driving the flag generate a
       // recount here — the rest (flagged, but nothing product-specific to
       // point at) show in the Manual Review section below instead.
-      const flaggedWithLoc = flaggedWithProducts.filter((e) => e.locationId)
-      if (flaggedWithLoc.length === 0) {
+      if (flaggedWithProducts.filter((e) => e.locationId).length === 0) {
         toast(manualReview.length > 0
           ? `No shops ready to auto-generate — ${manualReview.length} need manual review below`
           : 'No shops flagged for this period', { icon: 'ℹ️' })
         return
       }
 
-      // Skip locations that already have an auto recount for this period
-      const sb = supabase as any
-      const { data: existing } = await sb.schema('inventory').from('recount_requests')
-        .select('location_id, recount_fields')
-        .eq('company_id', companyId)
-        .filter('recount_fields->>count_month', 'eq', countMonth)
-        .filter('recount_fields->>source', 'eq', 'auto')
-      const already = new Set((existing ?? []).map((r: any) => r.location_id))
-
-      const today = format(new Date(), 'yyyy-MM-dd')
-      const rows = flaggedWithLoc
-        .filter((e) => !already.has(e.locationId))
-        .map((e) => {
-          const catFlags = exceptionsByShop.get(e.locationId!) ?? []
-          const tankFlags = tankVarByShop.get(e.locationId!) ?? []
-          const oilFlags = oilFlagsByShop.get(e.locationId!) ?? []
-          const productFlags = [
-            ...catFlags.map((x) => ({ source: 'category_limit' as const, product_id: x.product_id, category: x.category, basis: x.basis, reason: `${x.on_hand} on hand > ${x.expected_limit} ${x.basis} limit` })),
-            ...tankFlags.map((x) => ({ source: 'tank_variance' as const, product_id: x.product_id, category: null, basis: 'tank_variance', reason: `tank ${x.tank_qts.toFixed(1)} qt vs ${x.on_hand.toFixed(1)} on hand (${x.diff > 0 ? '+' : ''}${x.diff.toFixed(1)} qt)` })),
-            ...oilFlags.map((x) => ({ source: 'unconfigured_oil' as const, product_id: x.product_id, category: x.category, basis: 'unconfigured_oil', reason: `${x.on_hand} qt on hand, not configured to order at this shop` })),
-          ]
-          const requestedProducts = productFlags.map((p) => `${p.product_id} (${p.reason})`)
-          return {
-            company_id: companyId,
-            location_id: e.locationId,
-            recount_type: requestedProducts.length > 0 ? 'Partial Recount Products' : 'Oil Recount',
-            requested_products: requestedProducts,
-            request_date: today,
-            recount_fields: {
-              count_month: countMonth,
-              source: 'auto',
-              flags: e.flags,
-              recount_reason: flagsToReason(e.flags),
-              product_flags: productFlags,
-            },
-            completed_flags: [false],
-            completed_dates: [null],
-            recount_status: 'open',
-          }
-        })
-
-      if (rows.length === 0) {
-        toast('All flagged shops already have recounts for this period', { icon: 'ℹ️' })
-        return
-      }
-
-      const { error } = await sb.schema('inventory').from('recount_requests').insert(rows)
-      if (error) toast.error(error.message)
-      else toast.success(`Generated ${rows.length} recount${rows.length === 1 ? '' : 's'} → see Recounts tab`)
+      const { created } = await generateForShops(flaggedWithProducts)
+      if (created === 0) toast('All flagged shops already have recounts for this period', { icon: 'ℹ️' })
+      else toast.success(`Generated ${created} recount${created === 1 ? '' : 's'} → see Recounts tab`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate recounts')
     } finally {
       setGenerating(false)
+    }
+  }
+
+  async function handlePushOne(e: EvaluatedCount) {
+    try {
+      const { created, alreadyHad } = await generateForShops([e])
+      if (created === 0) toast(alreadyHad > 0 ? 'This shop already has a recount for this period' : 'Nothing to push', { icon: 'ℹ️' })
+      else toast.success('Recount created → see Recounts tab')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create recount')
     }
   }
 
@@ -634,14 +744,86 @@ export function RecountLogicTab() {
         </CardBody>
       </Card>
 
+      {/* Flagged for later — set aside from either list below to revisit;
+          same columns/actions as Live Preview, collapsed to 3 rows by default. */}
+      <Card className="border-sky/40">
+        <CardHeader className="flex items-center justify-between">
+          <button onClick={() => setFlaggedLaterExpanded((v) => !v)} className="text-xs font-mono text-navy uppercase tracking-wide hover:text-navy/70 transition-colors inline-flex items-center gap-1.5">
+            Flagged for Later {flaggedLaterExpanded ? '▾' : '▸'}
+          </button>
+          <span className="text-xs font-mono text-inky">{flaggedLater.length} shop{flaggedLater.length === 1 ? '' : 's'}</span>
+        </CardHeader>
+        <CardBody>
+          {flaggedLater.length === 0 ? (
+            <p className="text-xs font-mono text-inky/60">Nothing set aside right now.</p>
+          ) : (
+            <>
+              <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
+                <RecountPreviewTable
+                  rows={flaggedLaterExpanded ? flaggedLater : flaggedLater.slice(0, 3)}
+                  locations={evalData?.locations ?? []}
+                  tankVarByShop={tankVarByShop}
+                  exceptionsByShop={exceptionsByShop}
+                  oilFlagsByShop={oilFlagsByShop}
+                  hiddenProducts={hiddenProducts}
+                  varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
+                  onToggleHide={toggleHideProduct}
+                  onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
+                  onPushOne={handlePushOne}
+                  onToggleLater={(locId) => removePreviewAction(locId, 'flagged_later')}
+                  laterActionLabel="Restore"
+                />
+              </div>
+              {flaggedLater.length > 3 && (
+                <button onClick={() => setFlaggedLaterExpanded((v) => !v)} className="mt-2 text-[11px] font-mono text-inky/60 hover:text-navy underline">
+                  {flaggedLaterExpanded ? 'Show fewer' : `Show all ${flaggedLater.length}`}
+                </button>
+              )}
+            </>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardBody className="flex items-end justify-between flex-wrap gap-4">
+          <div className="w-40">
+            <Input
+              label="Median Lookback (months)"
+              value={lookback}
+              onChange={(e) => setLookback(e.target.value)}
+              hint={`Median over trailing ${lookbackN} months`}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            {autoSaveStatus === 'pending' && (
+              <span className="text-[10px] font-mono text-inky/50 animate-pulse">Auto-saving…</span>
+            )}
+            {autoSaveStatus === 'saved' && (
+              <span className="text-[10px] font-mono text-green-600">✓ Saved</span>
+            )}
+            <Button loading={generating} onClick={handleApplyGenerate}>Apply &amp; Generate Recounts</Button>
+          </div>
+        </CardBody>
+      </Card>
+
       {/* Live preview — shops that would actually generate a recount */}
       <Card>
-        <CardHeader className="flex items-center justify-between">
+        <CardHeader className="flex items-center justify-between flex-wrap gap-2">
           <span className="text-xs font-mono text-inky uppercase tracking-wide">Live Preview — {format(parseISO(countMonth), 'MMMM yyyy')}</span>
-          <span className="text-xs font-mono">
-            <span className="text-orange-600">{flaggedWithProducts.length}</span>
-            <span className="text-inky"> of {totalShops} eligible shops would generate a recount</span>
-          </span>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-[10px] font-mono text-inky/70 uppercase tracking-wide">
+              Red above $
+              <input
+                value={varianceRedThreshold}
+                onChange={(e) => setVarianceRedThreshold(e.target.value)}
+                className="w-20 rounded border border-navy/30 bg-cream px-1.5 py-0.5 text-xs font-mono text-navy focus:border-sky focus:outline-none"
+              />
+            </label>
+            <span className="text-xs font-mono">
+              <span className="text-orange-600">{flaggedWithProducts.length}</span>
+              <span className="text-inky"> of {totalShops} eligible shops would generate a recount</span>
+            </span>
+          </div>
         </CardHeader>
         <CardBody>
           {!evalData ? (
@@ -650,40 +832,20 @@ export function RecountLogicTab() {
             <p className="text-xs font-mono text-inky/70">No shops flag with a specific product under the current rules.</p>
           ) : (
             <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
-              <table className="w-full text-xs font-mono">
-                <thead className="sticky top-0">
-                  <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                    <th className="px-3 py-2 text-left">Location</th>
-                    <th className="px-3 py-2 text-right">Adj Count</th>
-                    <th className="px-3 py-2 text-right">Ending</th>
-                    <th className="px-3 py-2 text-right">Prev</th>
-                    <th className="px-3 py-2 text-right">Median</th>
-                    <th className="px-3 py-2 text-left">Flags</th>
-                    <th className="px-3 py-2 text-left">Products</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {flaggedWithProducts.map((e) => (
-                    <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
-                      <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, evalData.locations)}</td>
-                      <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
-                      <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
-                      <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
-                      <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-1">
-                          {e.flags.map((f) => (
-                            <Badge key={f} color={f.startsWith('variance') || f.startsWith('high') ? 'red' : 'amber'}>
-                              {RECOUNT_FLAG_LABELS[f] ?? f}
-                            </Badge>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-inky">{productsPreview(e, tankVarByShop, exceptionsByShop, oilFlagsByShop)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <RecountPreviewTable
+                rows={flaggedWithProducts}
+                locations={evalData.locations}
+                tankVarByShop={tankVarByShop}
+                exceptionsByShop={exceptionsByShop}
+                oilFlagsByShop={oilFlagsByShop}
+                hiddenProducts={hiddenProducts}
+                varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
+                onToggleHide={toggleHideProduct}
+                onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
+                onPushOne={handlePushOne}
+                onToggleLater={(locId) => addPreviewAction(locId, 'flagged_later')}
+                laterActionLabel="Flag for Later"
+              />
             </div>
           )}
         </CardBody>
@@ -755,22 +917,104 @@ function fmt(v: number | null | undefined) {
   return v === null || v === undefined ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 })
 }
 
-// Comma-separated product codes that would land in requested_products for
-// this shop — same sources handleApplyGenerate reads, so the preview matches
-// what Apply & Generate actually writes.
-function productsPreview(
-  e: EvaluatedCount,
-  tankVarByShop: Map<string, TankVarianceCandidate[]>,
-  exceptionsByShop: Map<string, ProductExceptionRow[]>,
-  oilFlagsByShop: Map<string, OilOnHandRow[]>,
-): string {
-  if (!e.locationId) return '—'
-  const products = [
-    ...(exceptionsByShop.get(e.locationId) ?? []).map((x) => x.product_id),
-    ...(tankVarByShop.get(e.locationId) ?? []).map((x) => x.product_id),
-    ...(oilFlagsByShop.get(e.locationId) ?? []).map((x) => x.product_id),
-  ]
-  return products.length ? products.join(', ') : '—'
+// Shared by Live Preview and Flagged for Later — same columns, same
+// per-row actions, so a shop looks identical wherever it currently sits.
+function RecountPreviewTable({
+  rows, locations, tankVarByShop, exceptionsByShop, oilFlagsByShop, hiddenProducts,
+  varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
+}: {
+  rows: EvaluatedCount[]
+  locations: Location[]
+  tankVarByShop: Map<string, TankVarianceCandidate[]>
+  exceptionsByShop: Map<string, ProductExceptionRow[]>
+  oilFlagsByShop: Map<string, OilOnHandRow[]>
+  hiddenProducts: Map<string, Set<string>>
+  varianceRedThreshold: number
+  onToggleHide: (locationId: string, productId: string) => void
+  onExclude: (locationId: string) => void
+  onPushOne: (e: EvaluatedCount) => void
+  onToggleLater: (locationId: string) => void
+  laterActionLabel: string
+}) {
+  return (
+    <table className="w-full text-xs font-mono">
+      <thead className="sticky top-0">
+        <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+          <th className="px-3 py-2 text-left">Location</th>
+          <th className="px-3 py-2 text-right">Adj Count</th>
+          <th className="px-3 py-2 text-right">Ending</th>
+          <th className="px-3 py-2 text-right">Prev</th>
+          <th className="px-3 py-2 text-right">Var vs Prev</th>
+          <th className="px-3 py-2 text-right">Median</th>
+          <th className="px-3 py-2 text-left">Flags</th>
+          <th className="px-3 py-2 text-left">Products</th>
+          <th className="px-3 py-2 text-left">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((e) => {
+          const varVsPrev = e.count?.ending_inventory_cost != null && e.prev != null ? e.count.ending_inventory_cost - e.prev : null
+          const isRed = varVsPrev != null && Math.abs(varVsPrev) > varianceRedThreshold
+          const products = [
+            ...(exceptionsByShop.get(e.locationId ?? '') ?? []).map((x) => ({ id: x.product_id, qty: x.on_hand })),
+            ...(tankVarByShop.get(e.locationId ?? '') ?? []).map((x) => ({ id: x.product_id, qty: x.on_hand })),
+            ...(oilFlagsByShop.get(e.locationId ?? '') ?? []).map((x) => ({ id: x.product_id, qty: x.on_hand })),
+          ]
+          const hiddenSet = (e.locationId && hiddenProducts.get(e.locationId)) || new Set<string>()
+          return (
+            <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
+              <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, locations)}</td>
+              <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
+              <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
+              <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
+              <td className={`px-3 py-2 text-right ${isRed ? 'text-[#C0392B] font-bold' : 'text-inky'}`}>
+                {varVsPrev == null ? '—' : `${varVsPrev >= 0 ? '+' : ''}${fmt(varVsPrev)}`}
+              </td>
+              <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
+              <td className="px-3 py-2">
+                <div className="flex flex-wrap gap-1">
+                  {e.flags.map((f) => (
+                    <Badge key={f} color={f.startsWith('variance') || f.startsWith('high') ? 'red' : 'amber'}>
+                      {RECOUNT_FLAG_LABELS[f] ?? f}
+                    </Badge>
+                  ))}
+                </div>
+              </td>
+              <td className="px-3 py-2 text-inky">
+                {products.length === 0 ? '—' : (
+                  <div className="flex flex-wrap gap-1">
+                    {products.map((p, i) => {
+                      const hidden = hiddenSet.has(p.id)
+                      return (
+                        <button
+                          key={`${p.id}-${i}`}
+                          onClick={() => e.locationId && onToggleHide(e.locationId, p.id)}
+                          title={hidden ? 'Click to include in the recount again' : 'Click to hide from the recount'}
+                          className={[
+                            'rounded border px-1.5 py-0.5 transition-colors',
+                            hidden ? 'border-navy/10 text-inky/30 line-through hover:text-inky/60' : 'border-navy/20 text-inky hover:border-[#C0392B]/50 hover:text-[#C0392B]',
+                          ].join(' ')}
+                        >
+                          {p.id} <span className="opacity-70">({fmt(p.qty)})</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </td>
+              <td className="px-3 py-2">
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => e.locationId && onExclude(e.locationId)} className="text-[10px] font-mono text-inky/60 hover:text-[#C0392B] underline">Exclude</button>
+                  <button onClick={() => onPushOne(e)} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">Push to Recounts</button>
+                  <button onClick={() => e.locationId && onToggleLater(e.locationId)} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">{laterActionLabel}</button>
+                </div>
+              </td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
 }
 
 function adjPreview(low: string, high: string): string {
