@@ -552,6 +552,7 @@ Deno.serve(async (req) => {
     // batches) — summing two same-day pulls of the same snapshot would
     // double it, so this is scoped-delete-then-insert, not additive.
     let countProductsWarning: string | null = null
+    console.log(`[MONTHEND-FEED] countProductsMonth=${countProductsMonth} succeededLocIds=${succeededLocIds.length} writeToCountProducts=${writeToCountProducts}`)
     if (countProductsMonth && succeededLocIds.length) {
       try {
         let batchId: string | null = null
@@ -603,11 +604,12 @@ Deno.serve(async (req) => {
           .update({ row_count: countProductRows.length })
           .eq('id', batchId)
           .then(() => {})
+        console.log(`[MONTHEND-FEED] wrote ${countProductRows.length} rows to batch ${batchId} (from ${allUpsertRows.length} total upsert rows)`)
       } catch (cpErr: unknown) {
         // Best-effort — product_usage already succeeded, so the sync itself
         // still reports success; this just didn't also reach Month End.
         countProductsWarning = cpErr instanceof Error ? cpErr.message : String(cpErr)
-        console.error('count_products feed failed:', countProductsWarning)
+        console.error('[MONTHEND-FEED] count_products feed failed:', countProductsWarning)
       }
     }
 
