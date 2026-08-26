@@ -369,12 +369,18 @@ Deno.serve(async (req) => {
     // ── Sync modes: inventory / usage / both ────────────────────────────────
 
     // 3. Load existing product_usage rows — used both to dedup (id match) and,
-    // for partial modes, to carry over the side we aren't pulling. Paginated:
-    // a single un-ranged select is capped at PostgREST's db-max-rows (~1000),
-    // which silently truncated this for any company with more rows than that
-    // (244 locations × their product counts clears it easily) — the missing
-    // rows then looked "new", got a fresh id, and collided with the real
-    // pre-existing row on the (company, location, product) unique index.
+    // for partial modes, to carry over the side we aren't pulling. Scoped to
+    // just this invocation's locations (a chunked "all locations" sync
+    // scopes each call to ~20 of them via locationIds) rather than the whole
+    // company — pulling every row for every chunk added an unpaginated
+    // full-table read per invocation, which is what pushed a heavy "Usage
+    // Only" sync over the platform's execution time limit (see the top-level
+    // comment on non-2xx errors). Still paginated as a safety net in case a
+    // single chunk's own rows somehow clear PostgREST's db-max-rows (~1000)
+    // — that cap is what silently truncated this before scoping was added,
+    // letting rows look "new" and collide with their real pre-existing row
+    // on the (company, location, product) unique index.
+    const chunkLocationIds = locations.map((l: any) => l.id)
     const existingMap = new Map<string, any>()
     {
       const PAGE = 1000
@@ -384,6 +390,7 @@ Deno.serve(async (req) => {
           .schema('inventory').from('product_usage')
           .select('id, location_id, product_id, category, daily_usage, on_hands')
           .eq('company_id', me.company_id)
+          .in('location_id', chunkLocationIds)
           .order('id', { ascending: true })
           .range(from, from + PAGE - 1)
         if (error) throw new Error(`Failed to load existing product_usage: ${error.message}`)
