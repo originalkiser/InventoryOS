@@ -323,7 +323,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           updated_at: !cur?.updated_at || (u.updated_at && u.updated_at > cur.updated_at) ? (u.updated_at ?? cur?.updated_at ?? null) : cur.updated_at,
         })
       }
-      setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({ ...r, usage: r.product_id ? usageByProduct.get(pkey(r.product_id)) ?? null : null })))
+      // Resolve the config row's own product_id through the same mapping
+      // before looking it up — usageByProduct's keys are all post-resolution
+      // (new ids), so looking a config row up by its raw (possibly still-old)
+      // id missed every product a mapping actually applies to, even when the
+      // config and usage rows agreed on the same literal id pre-mapping.
+      const resolvedKey = (pid: string) => pkey(oldToNew.get(pkey(pid)) ?? pid)
+      setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({ ...r, usage: r.product_id ? usageByProduct.get(resolvedKey(r.product_id)) ?? null : null })))
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
