@@ -8,6 +8,8 @@ import type { DataConnectionSyncLog } from '@/types/integrations'
 
 const CONNECTION_LABELS: Record<string, string> = {
   droptop: 'Droptop',
+  droptop_on_hand: 'Droptop — On Hand',
+  droptop_usage: 'Droptop — Usage',
   skybitz_tanks: 'SkyBitz Tanks',
 }
 const connectionLabel = (c: string) => CONNECTION_LABELS[c] ?? c

@@ -33,6 +33,11 @@ export interface DroptopSyncOptions {
   // doc comment for why this is scoped-delete-then-insert, not additive.
   // Only Month End's Daily Pull panel should set this.
   countMonth?: string
+  // Opt-in: also write each change event into inventory.daily_product_activity
+  // (the day-by-day sold/adjusted/other ledger) — see droptop-sync-usage's own
+  // doc comment. Set by the Data Connections tab's "Run Now" for the Usage
+  // connection, matching what its scheduled daily run does.
+  logDailyActivity?: boolean
 }
 
 export interface DroptopSyncProgress {
@@ -81,11 +86,11 @@ export async function runDroptopSync(
   opts: DroptopSyncOptions,
   onProgress?: (p: DroptopSyncProgress) => void,
 ): Promise<DroptopSyncResult> {
-  const { mode, daysBack, categories = [], locationId, countMonth } = opts
+  const { mode, daysBack, categories = [], locationId, countMonth, logDailyActivity } = opts
   const writeToCountProducts = !!countMonth
 
   if (locationId) {
-    return invokeSync({ mode, daysBack, categories, locationId, writeToCountProducts, countMonth })
+    return invokeSync({ mode, daysBack, categories, locationId, writeToCountProducts, countMonth, logDailyActivity })
   }
 
   const ids = await fetchDroptopLocationIds(companyId)
@@ -101,7 +106,7 @@ export async function runDroptopSync(
   for (let i = 0; i < batches.length; i++) {
     onProgress?.({ batch: i + 1, totalBatches: batches.length })
     try {
-      const result = await invokeSync({ mode, daysBack, categories, locationIds: batches[i], writeToCountProducts, countMonth })
+      const result = await invokeSync({ mode, daysBack, categories, locationIds: batches[i], writeToCountProducts, countMonth, logDailyActivity })
       operationsSynced += result.operations_synced
       productsUpserted += result.products_upserted
       if (result.warnings?.length) warnings.push(...result.warnings)

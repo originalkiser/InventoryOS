@@ -17,3 +17,13 @@ verify_jwt = false
 # checked in the function itself instead.
 [functions.skybitz-tank-sync]
 verify_jwt = false
+
+# Same reason as skybitz-tank-sync — now also called unattended by the Data
+# Connections dispatcher, in addition to its existing interactive callers.
+[functions.droptop-sync-usage]
+verify_jwt = false
+
+# Called only by pg_cron -> net.http_post, on the fixed cadence set up once
+# in Supabase's SQL editor — never edited again after that.
+[functions.data-connection-dispatcher]
+verify_jwt = false

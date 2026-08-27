@@ -105,6 +105,25 @@ export interface DataConnectionSyncLog {
   error_message: string | null
 }
 
+// Mirrors inventory.data_connection_schedules — per-connection automation
+// config for the Data Connections config tab. The pg_cron job that fires
+// data-connection-dispatcher on a fixed cadence never changes; editing a row
+// here is the entire mechanism for changing what runs, how often, or at what
+// time.
+export interface DataConnectionSchedule {
+  id: string
+  company_id: string
+  connection_key: string
+  enabled: boolean
+  schedule_mode: 'interval' | 'daily_utc'
+  interval_minutes: number | null
+  daily_time_utc: string | null
+  last_run_at: string | null
+  last_run_status: string | null
+  last_run_message: string | null
+  next_run_at: string | null
+}
+
 // Integration 4 — Placed Orders
 export interface OrderSnapshot {
   location_id?: string

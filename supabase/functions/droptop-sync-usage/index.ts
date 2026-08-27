@@ -62,7 +62,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-sync-token',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
@@ -225,20 +225,38 @@ Deno.serve(async (req) => {
 
     if (!publicKey || !privateKey) return ok({ error: 'credentials_not_configured' })
 
-    // 1. Verify caller
-    const authHeader = req.headers.get('Authorization') ?? ''
-    const caller = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
+    // 1. Verify caller — either a shared secret (pg_cron/the Data Connections
+    // dispatcher, no user session available) or a real logged-in user (the
+    // Config page's "Run Now" button). Same dual-auth shape as
+    // skybitz-tank-sync.
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
     })
-    const { data: who, error: whoErr } = await caller.auth.getUser()
-    if (whoErr || !who.user) return ok({ error: 'Not authenticated' })
+    const syncSecret = Deno.env.get('DROPTOP_SYNC_SECRET')
+    const suppliedSecret = req.headers.get('x-sync-token') ?? ''
+    const secretAuthed = !!syncSecret && suppliedSecret === syncSecret
 
-    const { data: me } = await (caller as any)
-      .schema('platform').from('user_profiles')
-      .select('company_id')
-      .eq('id', who.user.id)
-      .single()
-    if (!me?.company_id) return ok({ error: 'Profile not found' })
+    let companyId: string | null = null
+    if (secretAuthed) {
+      // Single-tenant deployment — every location belongs to the same company.
+      const { data: anyLoc } = await (admin as any)
+        .schema('core').from('locations').select('company_id').limit(1).maybeSingle()
+      companyId = anyLoc?.company_id ?? null
+    } else {
+      const authHeader = req.headers.get('Authorization') ?? ''
+      const caller = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: authHeader } },
+      })
+      const { data: who, error: whoErr } = await caller.auth.getUser()
+      if (whoErr || !who.user) return ok({ error: 'Not authenticated' })
+      const { data: me } = await (caller as any)
+        .schema('platform').from('user_profiles')
+        .select('company_id')
+        .eq('id', who.user.id)
+        .single()
+      companyId = me?.company_id ?? null
+    }
+    if (!companyId) return ok({ error: 'Unable to resolve company' })
 
     const body = await req.json().catch(() => ({}))
     const mode: 'both' | 'inventory' | 'usage' | 'alerts' | 'inspect' =
@@ -259,6 +277,13 @@ Deno.serve(async (req) => {
     // unrelated manual refresh there can't quietly create month-end count data.
     const writeToCountProducts = body.writeToCountProducts === true
     const countProductsMonth: string | null = writeToCountProducts && typeof body.countMonth === 'string' ? body.countMonth : null
+    // Opt-in: also write each change event into inventory.daily_product_activity,
+    // bucketed by the calendar day it actually happened on — a real day-by-day
+    // ledger, unlike product_usage's rolling daily_usage rate. Explicit flag
+    // (not inferred from daysBack) so a manual daysBack:1 "Run Now" doesn't
+    // accidentally start logging — only the Data Connections dispatcher's
+    // scheduled daily run sets this.
+    const logDailyActivity = body.logDailyActivity === true && mode !== 'inventory'
     const matchesCategory = (productType: string | null | undefined): boolean => {
       if (!categories.length) return true
       const pt = (productType ?? '').toLowerCase()
@@ -268,16 +293,12 @@ Deno.serve(async (req) => {
     const startUnix = endUnix - daysBack * 86400
 
     // 2. Load locations with droptop_operation_id mapped
-    const admin = createClient(supabaseUrl, serviceKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    })
-
     let locations: any[]
     {
       let q = (admin as any)
         .schema('core').from('locations')
         .select('id, droptop_operation_id')
-        .eq('company_id', me.company_id)
+        .eq('company_id', companyId)
         .not('droptop_operation_id', 'is', null)
       if (locationId) q = q.eq('id', locationId)
       else if (locationIds.length) q = q.in('id', locationIds)
@@ -313,7 +334,7 @@ Deno.serve(async (req) => {
       const { data: rules, error: rulesErr } = await (admin as any)
         .schema('inventory').from('alert_thresholds')
         .select('id, product_id, category, max_adjustment')
-        .eq('company_id', me.company_id)
+        .eq('company_id', companyId)
         .eq('enabled', true)
       if (rulesErr) return ok({ error: `Thresholds query failed: ${rulesErr.message}` })
       if (!rules?.length) {
@@ -343,7 +364,7 @@ Deno.serve(async (req) => {
             const rule = matchRule(c.product_id ?? '', c.product_type ?? '')
             if (!rule || qty < Number(rule.max_adjustment)) continue
             alertRows.push({
-              company_id: me.company_id,
+              company_id: companyId,
               location_id: loc.id,
               operation_id: loc.droptop_operation_id,
               product_id: c.product_id,
@@ -408,7 +429,7 @@ Deno.serve(async (req) => {
         const { data: rows, error } = await (admin as any)
           .schema('inventory').from('product_usage')
           .select('id, location_id, product_id, category, daily_usage, on_hands')
-          .eq('company_id', me.company_id)
+          .eq('company_id', companyId)
           .in('location_id', chunkLocationIds)
           .order('id', { ascending: true })
           .range(from, from + PAGE - 1)
@@ -424,6 +445,7 @@ Deno.serve(async (req) => {
 
     // 4. Sync each location
     const allUpsertRows: Record<string, unknown>[] = []
+    const dailyActivityRows = new Map<string, Record<string, unknown>>() // key: location|product|date
     let operationsSynced = 0
     // Rows touched but whose daily_usage/on_hands came out identical to what
     // was already there — reported separately from real changes in the
@@ -465,6 +487,41 @@ Deno.serve(async (req) => {
           if (!displayId.has(key)) displayId.set(key, pid)
         }
 
+        // Day-by-day ledger — every change event bucketed by the UTC calendar
+        // date it happened on, split into sold/adjusted/other. Only built
+        // when the caller opted in (the scheduled daily run), so a routine
+        // 30-day resync doesn't churn this table for no reason.
+        if (logDailyActivity) {
+          for (const change of changes) {
+            if (!matchesCategory(change.product_type)) continue
+            const pid: string = change.product_id
+            if (!pid) continue
+            const ts = change.created_timestamp ? Number(change.created_timestamp) * 1000 : null
+            if (ts == null || isNaN(ts)) continue
+            const activityDate = new Date(ts).toISOString().slice(0, 10)
+            const key = pid.toLowerCase()
+            const rowKey = `${loc.id}|${key}|${activityDate}`
+            const type: string = change.change_type ?? ''
+            const qty = parseFloat(change.quantity_change || '0')
+            let row = dailyActivityRows.get(rowKey)
+            if (!row) {
+              row = {
+                company_id: companyId, location_id: loc.id, product_id: pid, activity_date: activityDate,
+                category: change.product_type || null, sold_qty: 0, adjusted_qty: 0, other_qty: 0,
+                raw_change_types: [] as string[], last_change_source: 'droptop', updated_at: new Date().toISOString(),
+              }
+              dailyActivityRows.set(rowKey, row)
+            }
+            if (type === 'sale') row.sold_qty = (row.sold_qty as number) + Math.abs(qty)
+            else if (type.startsWith('adjustment')) row.adjusted_qty = (row.adjusted_qty as number) + qty
+            else {
+              row.other_qty = (row.other_qty as number) + Math.abs(qty)
+              const raw = row.raw_change_types as string[]
+              if (type && !raw.includes(type)) raw.push(type)
+            }
+          }
+        }
+
         // Index inventory by product_id (same case-insensitive keying)
         const invByProduct = new Map<string, { on_hands: number; product_type: string }>()
         for (const item of inventory) {
@@ -475,6 +532,25 @@ Deno.serve(async (req) => {
             product_type: item.product_type || '',
           })
           if (!displayId.has(key)) displayId.set(key, item.product_id)
+        }
+
+        // Stamp today's on-hand snapshot onto today's activity row, when one
+        // exists — the inventory pull is a live "right now" read, so it's
+        // only contemporaneous with the current UTC date, not whichever
+        // historical date a given change event happened to fall on.
+        if (logDailyActivity && mode === 'both') {
+          const today = new Date().toISOString().slice(0, 10)
+          for (const [key, invData] of invByProduct) {
+            const rowKey = `${loc.id}|${key}|${today}`
+            const existingRow = dailyActivityRows.get(rowKey)
+            if (existingRow) existingRow.ending_on_hand = invData.on_hands
+            else dailyActivityRows.set(rowKey, {
+              company_id: companyId, location_id: loc.id, product_id: displayId.get(key) ?? key, activity_date: today,
+              category: invData.product_type || null, sold_qty: 0, adjusted_qty: 0, other_qty: 0,
+              raw_change_types: [] as string[], ending_on_hand: invData.on_hands,
+              last_change_source: 'droptop', updated_at: new Date().toISOString(),
+            })
+          }
         }
 
         // Products touched by the side(s) we pulled
@@ -511,7 +587,7 @@ Deno.serve(async (req) => {
           // supplies that column. Same fix as useConfigTab.ts's importRows.
           allUpsertRows.push({
             id: existing?.id ?? crypto.randomUUID(),
-            company_id: me.company_id,
+            company_id: companyId,
             location_id: loc.id,
             product_id: productId,
             category: invData?.product_type || existing?.category || null,
@@ -543,6 +619,30 @@ Deno.serve(async (req) => {
       productsUpserted += batch.length
     }
 
+    // 5a. Batch upsert the day-by-day ledger, when opted in — full replace
+    // per (location, product, date) via the unique constraint, so re-running
+    // the same day's job is idempotent rather than double-counting.
+    let dailyActivityWritten = 0
+    let dailyActivityWarning: string | null = null
+    if (logDailyActivity && dailyActivityRows.size > 0) {
+      const rows = [...dailyActivityRows.values()]
+      try {
+        for (let i = 0; i < rows.length; i += BATCH) {
+          const slice = rows.slice(i, i + BATCH)
+          const { error: dailyErr } = await (admin as any)
+            .schema('inventory').from('daily_product_activity')
+            .upsert(slice, { onConflict: 'company_id,location_id,product_id,activity_date' })
+          if (dailyErr) throw new Error(dailyErr.message)
+          dailyActivityWritten += slice.length
+        }
+      } catch (dailyErr: unknown) {
+        // Best-effort — product_usage already succeeded, so the sync itself
+        // still reports success; this just didn't also reach the ledger.
+        dailyActivityWarning = dailyErr instanceof Error ? dailyErr.message : String(dailyErr)
+        console.error('[DAILY-ACTIVITY] daily_product_activity upsert failed:', dailyActivityWarning)
+      }
+    }
+
     // 5b. Feed on-hands into Month End's count_products, under one dedicated
     // batch this sync owns per (company, period) — reused across calls
     // rather than one new batch per pull, so re-running "Pull Now" for the
@@ -559,7 +659,7 @@ Deno.serve(async (req) => {
         const { data: existingBatch } = await (admin as any)
           .schema('inventory').from('count_batches')
           .select('id')
-          .eq('company_id', me.company_id)
+          .eq('company_id', companyId)
           .eq('module', 'monthly')
           .eq('count_month', countProductsMonth)
           .eq('source_type', 'api')
@@ -570,7 +670,7 @@ Deno.serve(async (req) => {
         } else {
           const { data: newBatch, error: batchErr } = await (admin as any)
             .schema('inventory').from('count_batches')
-            .insert({ company_id: me.company_id, module: 'monthly', count_month: countProductsMonth, file_name: 'Droptop Daily Pull', source_type: 'api', row_count: 0 })
+            .insert({ company_id: companyId, module: 'monthly', count_month: countProductsMonth, file_name: 'Droptop Daily Pull', source_type: 'api', row_count: 0 })
             .select('id').single()
           if (batchErr) throw new Error(`Batch create failed: ${batchErr.message}`)
           batchId = newBatch.id
@@ -578,14 +678,14 @@ Deno.serve(async (req) => {
 
         await (admin as any).schema('inventory').from('count_products')
           .delete()
-          .eq('company_id', me.company_id)
+          .eq('company_id', companyId)
           .eq('upload_batch_id', batchId)
           .in('location_id', succeededLocIds)
 
         const countProductRows = allUpsertRows
           .filter((r: any) => r.on_hands != null && succeededLocIds.includes(r.location_id))
           .map((r: any) => ({
-            company_id: me.company_id,
+            company_id: companyId,
             upload_batch_id: batchId,
             location_id: r.location_id,
             product_id: r.product_id,
@@ -616,7 +716,7 @@ Deno.serve(async (req) => {
     // 6. Log the sync (best-effort — table may not exist if migration pending)
     ;(admin as any)
       .schema('inventory').from('droptop_sync_log').insert({
-        company_id: me.company_id,
+        company_id: companyId,
         operations_count: operationsSynced,
         products_upserted: productsUpserted,
         status: opErrors.length > 0 ? 'partial' : 'success',
@@ -625,18 +725,22 @@ Deno.serve(async (req) => {
       .then(() => {})
 
     // 6b. Same run, logged to the connection-agnostic history table the
-    // Inventory Alerts "Data Connection Updates" section reads from
-    // (best-effort — table may not exist if migration pending).
+    // Inventory Alerts "Data Connection Updates" section AND the Data
+    // Connections config page both read from (best-effort — table may not
+    // exist if migration pending). Named per-mode so the Data Connections
+    // page's on-hand and usage schedules each get their own accurate last-run
+    // status rather than sharing one generic "droptop" row.
+    const dcConnectionKey = mode === 'inventory' ? 'droptop_on_hand' : mode === 'usage' ? 'droptop_usage' : 'droptop'
     ;(admin as any)
       .schema('inventory').from('data_connection_sync_log').insert({
-        company_id: me.company_id,
-        connection: 'droptop',
+        company_id: companyId,
+        connection: dcConnectionKey,
         started_at: new Date(startedAt).toISOString(),
         duration_ms: Date.now() - startedAt,
         items_updated: productsUpserted - unchangedCount,
         items_unchanged: unchangedCount,
         status: opErrors.length > 0 ? 'partial' : 'success',
-        error_message: opErrors.length > 0 ? opErrors.join(' | ') : null,
+        error_message: [...opErrors, ...(dailyActivityWarning ? [`Daily activity log: ${dailyActivityWarning}`] : [])].join(' | ') || null,
       })
       .then(() => {})
 
@@ -645,12 +749,17 @@ Deno.serve(async (req) => {
       return ok({ error: opErrors.join(' | ') })
     }
 
-    const warnings = [...opErrors, ...(countProductsWarning ? [`Month End feed: ${countProductsWarning}`] : [])]
+    const warnings = [
+      ...opErrors,
+      ...(countProductsWarning ? [`Month End feed: ${countProductsWarning}`] : []),
+      ...(dailyActivityWarning ? [`Daily activity log: ${dailyActivityWarning}`] : []),
+    ]
     return ok({
       success: true,
       mode,
       operations_synced: operationsSynced,
       products_upserted: productsUpserted,
+      ...(logDailyActivity ? { daily_activity_written: dailyActivityWritten } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
     })
   } catch (err: unknown) {
