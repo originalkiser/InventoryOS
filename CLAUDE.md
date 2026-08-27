@@ -228,7 +228,9 @@ Palette from `tailwind.config.ts` — CSS-variable-backed for dark mode:
 ## Database schema reference
 
 ### `core.locations`
-`id, company_id, location_code, name, region, active, metadata (jsonb), order_date, district, monday_item_id (nullable, unique), raw_monday_data, last_synced_at, created_at, updated_at, updated_by, last_change_source`
+`id, company_id, name, region, active, metadata (jsonb), order_date, district, monday_item_id (nullable, unique), raw_monday_data, last_synced_at, created_at, updated_at, updated_by, last_change_source`
+
+- No `location_code` column — confirmed absent in production (`column "location_code" does not exist`) despite this doc previously listing one. `name` holds the short shop identifier (e.g. `"1521"`), not a combined label like "1521-Port Arthur" — that display label is constructed elsewhere. The rest of this column list is unverified beyond `id`/`name`/`active`/`created_at`/`updated_at`; spot-check via `information_schema.columns` before relying on any other field here.
 
 - `metadata` may contain: `owner`, `market`, `area_manager`, `regional_director`, `director`, `type`
 - `meta:regional_director` may fall back to `meta:director` in display code
