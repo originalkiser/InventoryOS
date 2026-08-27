@@ -308,7 +308,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         sb.schema('core').from('location_supplemental').select('data').eq('company_id', companyId).eq('location_id', shopId).maybeSingle().then((r: any) => r).catch(() => ({ data: null })),
         sb.schema('inventory').from('exception_reports').select('*').eq('company_id', companyId).eq('location_id', shopId).order('date_of_finding', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('location_comms').select('*').eq('company_id', companyId).eq('location_id', shopId).order('comm_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
-        sb.schema('inventory').from('vendor_parts').select('part_number, our_part_number, description').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
+        // Company-wide, not location-scoped — same 1000-row cap risk as
+        // product_usage above once the catalog grows past it.
+        fetchAllRows((from, to) =>
+          sb.schema('inventory').from('vendor_parts')
+            .select('part_number, our_part_number, description')
+            .eq('company_id', companyId)
+            .order('id').range(from, to)
+        ).then((data) => ({ data })).catch(() => ({ data: [] })),
         // Best-effort: location_ids is a newer column that may not exist yet.
         sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).is('deleted_at', null).contains('location_ids', [shopId]).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('meeting_notes').select('id, title, meeting_date').eq('company_id', companyId).contains('location_ids', [shopId]).order('meeting_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
