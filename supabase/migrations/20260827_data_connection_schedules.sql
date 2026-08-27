@@ -10,9 +10,10 @@ CREATE TABLE IF NOT EXISTS inventory.data_connection_schedules (
   company_id       uuid        NOT NULL,
   connection_key   text        NOT NULL,   -- 'skybitz_tanks' | 'droptop_on_hand' | 'droptop_usage'
   enabled          boolean     NOT NULL DEFAULT false,
-  schedule_mode    text        NOT NULL DEFAULT 'interval' CHECK (schedule_mode IN ('interval', 'daily_utc')),
+  schedule_mode    text        NOT NULL DEFAULT 'interval' CHECK (schedule_mode IN ('interval', 'daily')),
   interval_minutes integer,    -- used when schedule_mode = 'interval'
-  daily_time_utc   text,       -- 'HH:MM' in UTC — used when schedule_mode = 'daily_utc'
+  daily_time       text,       -- 'HH:MM' in the company timezone (platform.app_settings key
+                                -- 'data_connection_timezone') — used when schedule_mode = 'daily'
   last_run_at      timestamptz,
   last_run_status  text,
   last_run_message text,

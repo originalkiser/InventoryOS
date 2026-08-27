@@ -115,9 +115,9 @@ export interface DataConnectionSchedule {
   company_id: string
   connection_key: string
   enabled: boolean
-  schedule_mode: 'interval' | 'daily_utc'
+  schedule_mode: 'interval' | 'daily'
   interval_minutes: number | null
-  daily_time_utc: string | null
+  daily_time: string | null
   last_run_at: string | null
   last_run_status: string | null
   last_run_message: string | null

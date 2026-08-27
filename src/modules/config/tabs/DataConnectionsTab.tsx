@@ -7,12 +7,25 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { Button, Card, CardHeader, CardBody, Toggle, Badge, SbLoader } from '@/components/ui'
+import { useAppSetting } from '@/hooks/useAppSetting'
+import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader } from '@/components/ui'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync } from '@/services/droptopService'
 import type { DataConnectionSchedule } from '@/types/integrations'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
+
+const TIMEZONE_KEY = 'data_connection_timezone'
+const DEFAULT_TIMEZONE = 'America/Chicago'
+const TIMEZONE_OPTIONS = [
+  { value: 'America/New_York', label: 'Eastern (New York)' },
+  { value: 'America/Chicago', label: 'Central (Chicago)' },
+  { value: 'America/Denver', label: 'Mountain (Denver)' },
+  { value: 'America/Phoenix', label: 'Mountain, no DST (Phoenix)' },
+  { value: 'America/Los_Angeles', label: 'Pacific (Los Angeles)' },
+  { value: 'America/Anchorage', label: 'Alaska (Anchorage)' },
+  { value: 'Pacific/Honolulu', label: 'Hawaii (Honolulu)' },
+]
 
 const CONNECTION_META: Record<string, { label: string; description: string }> = {
   skybitz_tanks: { label: 'SkyBitz Tank Monitors', description: 'Pulls tank telemetry (on-hand, level, battery) over SFTP.' },
@@ -33,6 +46,7 @@ function statusColor(status: string | null): 'green' | 'orange' | 'red' | 'gray'
 export function DataConnectionsTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
+  const [timezone, setTimezone] = useAppSetting<string>(TIMEZONE_KEY, DEFAULT_TIMEZONE)
   const [rows, setRows] = useState<DataConnectionSchedule[] | null>(null)
   const [running, setRunning] = useState<string | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
@@ -87,12 +101,22 @@ export function DataConnectionsTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Data Connections</h2>
-        <p className="text-xs text-inky mt-0.5">
-          Run any sync now, or turn on automation and set how often (or what time of day) it runs — no Supabase-side
-          cron editing needed. All scheduled times are in UTC.
-        </p>
+      <div className="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Data Connections</h2>
+          <p className="text-xs text-inky mt-0.5">
+            Run any sync now, or turn on automation and set how often (or what time of day) it runs — no Supabase-side
+            cron editing needed.
+          </p>
+        </div>
+        <div className="w-56">
+          <Select
+            label="Timezone for daily times"
+            options={TIMEZONE_OPTIONS}
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -120,11 +144,11 @@ export function DataConnectionsTab() {
 
                 <div className={row.enabled ? '' : 'opacity-40 pointer-events-none'}>
                   <div className="flex gap-1 mb-2">
-                    {(['interval', 'daily_utc'] as const).map((m) => (
+                    {(['interval', 'daily'] as const).map((m) => (
                       <button key={m} onClick={() => saveRow(row, { schedule_mode: m })}
                         className={['flex-1 px-2 py-1 rounded border text-xs font-mono transition-colors',
                           row.schedule_mode === m ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy/60'].join(' ')}>
-                        {m === 'interval' ? 'Every N minutes' : 'Daily at (UTC)'}
+                        {m === 'interval' ? 'Every N minutes' : `Daily at (${timezone.split('/').pop()?.replace('_', ' ')})`}
                       </button>
                     ))}
                   </div>
@@ -139,8 +163,8 @@ export function DataConnectionsTab() {
                   ) : (
                     <input
                       type="time"
-                      defaultValue={row.daily_time_utc ?? ''}
-                      onBlur={(e) => e.target.value && saveRow(row, { daily_time_utc: e.target.value })}
+                      defaultValue={row.daily_time ?? ''}
+                      onBlur={(e) => e.target.value && saveRow(row, { daily_time: e.target.value })}
                       className={`${fieldCls} w-full`}
                     />
                   )}

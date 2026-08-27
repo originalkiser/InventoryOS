@@ -36,28 +36,42 @@ interface Schedule {
   id: string
   company_id: string
   connection_key: string
-  schedule_mode: 'interval' | 'daily_utc'
+  schedule_mode: 'interval' | 'daily'
   interval_minutes: number | null
-  daily_time_utc: string | null
+  daily_time: string | null
   last_run_at: string | null
 }
 
-function isDue(s: Schedule, now: Date): boolean {
+// Wall-clock hour/minute/date in an IANA timezone, via Intl (no external
+// library needed — V8/Deno ships full ICU data) — this is what lets "6:00
+// AM" mean 6:00 AM in the company's actual timezone, DST included, rather
+// than requiring a manual UTC offset conversion.
+function wallClockIn(tz: string, at: Date): { hour: number; minute: number; dateKey: string } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    }).formatToParts(at).map((p) => [p.type, p.value]),
+  )
+  return { hour: Number(parts.hour), minute: Number(parts.minute), dateKey: `${parts.year}-${parts.month}-${parts.day}` }
+}
+
+function isDue(s: Schedule, now: Date, tz: string): boolean {
   if (s.schedule_mode === 'interval') {
     if (!s.interval_minutes || s.interval_minutes <= 0) return false
     if (!s.last_run_at) return true
     return now.getTime() - new Date(s.last_run_at).getTime() >= s.interval_minutes * 60_000
   }
-  // daily_utc: due once the clock has passed today's HH:MM (UTC) and it
-  // hasn't already run today — the dispatcher's own cadence (every few
-  // minutes) is what determines how close to that exact minute it fires.
-  if (!s.daily_time_utc) return false
-  const [h, m] = s.daily_time_utc.split(':').map((v) => parseInt(v, 10))
+  // daily: due once the company-local clock has passed today's HH:MM and it
+  // hasn't already run today (in that same local calendar day) — the
+  // dispatcher's own cadence (every few minutes) determines how close to
+  // that exact minute it actually fires.
+  if (!s.daily_time) return false
+  const [h, m] = s.daily_time.split(':').map((v) => parseInt(v, 10))
   if (isNaN(h) || isNaN(m)) return false
-  const todayAtTime = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m, 0))
-  if (now.getTime() < todayAtTime.getTime()) return false
+  const nowLocal = wallClockIn(tz, now)
+  if (nowLocal.hour < h || (nowLocal.hour === h && nowLocal.minute < m)) return false
   if (!s.last_run_at) return true
-  return new Date(s.last_run_at).getTime() < todayAtTime.getTime()
+  return wallClockIn(tz, new Date(s.last_run_at)).dateKey !== nowLocal.dateKey
 }
 
 async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
@@ -124,9 +138,20 @@ Deno.serve(async (req) => {
 
     const now = new Date()
     const results: Record<string, unknown>[] = []
+    const tzByCompany = new Map<string, string>()
+    async function timezoneFor(companyId: string): Promise<string> {
+      if (tzByCompany.has(companyId)) return tzByCompany.get(companyId)!
+      const { data } = await (admin as any)
+        .schema('platform').from('app_settings').select('value')
+        .eq('company_id', companyId).eq('key', 'data_connection_timezone').maybeSingle()
+      const tz = typeof data?.value === 'string' ? data.value : 'America/Chicago'
+      tzByCompany.set(companyId, tz)
+      return tz
+    }
 
     for (const s of (schedules ?? []) as Schedule[]) {
-      if (!isDue(s, now)) continue
+      const tz = await timezoneFor(s.company_id)
+      if (!isDue(s, now, tz)) continue
 
       let outcome: { status: string; message: string | null }
       if (s.connection_key === 'skybitz_tanks') {
