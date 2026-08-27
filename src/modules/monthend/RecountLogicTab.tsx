@@ -99,6 +99,98 @@ function FlagBadge({ flag }: { flag: string }) {
   )
 }
 
+const FLAG_TYPE_TO_FLAG_KEY: Record<FlagType, string> = {
+  exception: 'product_range_exception',
+  tank: 'tank_monitor_variance',
+  oil: 'unconfigured_oil',
+}
+
+// Same base-product-id convention as get_product_expectation_exceptions'
+// oil case-type inference: a trailing run of letters marks the case type
+// (bulk/drum/package variant), the leading part is the product family.
+function baseProductId(id: string): string {
+  const stripped = id.replace(/[A-Z]+$/i, '')
+  return stripped || id
+}
+
+// Fetches "equivalent" on-hand — other case types of the same product family
+// at the same shop/period — only when actually hovered, scoped to one
+// location via the composite index on count_products, rather than loading
+// every product's siblings up front.
+function ProductChip({
+  productId, qty, types, hidden, locationId, companyId, countMonth, onToggleHide,
+}: {
+  productId: string
+  qty: number
+  types: Set<FlagType>
+  hidden: boolean
+  locationId: string | null
+  companyId: string
+  countMonth: string
+  onToggleHide: () => void
+}) {
+  const [equiv, setEquiv] = useState<{ product_id: string; on_hand: number }[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [show, setShow] = useState(false)
+
+  async function loadEquiv() {
+    if (equiv != null || loading || !locationId) return
+    setLoading(true)
+    const base = baseProductId(productId)
+    const sb = supabase as any
+    const { data } = await sb.schema('inventory').from('count_products')
+      .select('product_id, on_hand, created_at')
+      .eq('company_id', companyId).eq('count_month', countMonth).eq('location_id', locationId)
+      .ilike('product_id', `${base}%`)
+      .order('created_at', { ascending: false })
+      .limit(200)
+    const latest = new Map<string, number>()
+    for (const r of (data ?? []) as { product_id: string; on_hand: number | null }[]) {
+      if (!latest.has(r.product_id)) latest.set(r.product_id, r.on_hand ?? 0)
+    }
+    latest.delete(productId)
+    setEquiv([...latest.entries()].map(([product_id, on_hand]) => ({ product_id, on_hand })).sort((a, b) => a.product_id.localeCompare(b.product_id)))
+    setLoading(false)
+  }
+
+  return (
+    <span className="relative inline-block" onMouseEnter={() => { setShow(true); loadEquiv() }} onMouseLeave={() => setShow(false)}>
+      <button
+        onClick={onToggleHide}
+        style={hidden ? undefined : splitBorderStyle(types)}
+        className={[
+          'rounded px-1.5 py-0.5 transition-colors',
+          hidden ? 'border border-navy/10 text-inky/30 line-through hover:text-inky/60' : 'text-inky hover:text-[#C0392B]',
+        ].join(' ')}
+      >
+        {productId} <span className="opacity-70">({fmt(qty)})</span>
+      </button>
+      {show && (
+        <div className="absolute z-50 top-full left-0 mt-1 min-w-[180px] max-w-[260px] rounded border border-navy/30 bg-cream dark:bg-[#0e2638] shadow-xl px-2 py-1.5 text-[11px] font-mono text-navy dark:text-[#F2F1E6]">
+          <div className="text-inky/70 mb-1">
+            {hidden ? 'Hidden from this recount' : `Flagged by: ${[...types].map((t) => RECOUNT_FLAG_LABELS[FLAG_TYPE_TO_FLAG_KEY[t]]).join(', ')}`}
+          </div>
+          <div className="text-inky/50 uppercase tracking-wide text-[9px] mb-1 pt-1 border-t border-navy/10">Other case types on hand</div>
+          {loading ? (
+            <span className="text-inky/50 italic">Loading…</span>
+          ) : !equiv || equiv.length === 0 ? (
+            <span className="text-inky/50 italic">None found</span>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              {equiv.map((r) => (
+                <div key={r.product_id} className="flex justify-between gap-3">
+                  <span>{r.product_id}</span>
+                  <span className="font-bold">{fmt(r.on_hand)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </span>
+  )
+}
+
 interface ProductExceptionRow {
   location_id: string
   product_id: string
@@ -804,6 +896,8 @@ export function RecountLogicTab() {
                 <RecountPreviewTable
                   rows={flaggedLaterExpanded ? flaggedLater : flaggedLater.slice(0, 3)}
                   locations={evalData?.locations ?? []}
+                  companyId={companyId}
+                  countMonth={countMonth}
                   tankVarByShop={tankVarByShop}
                   exceptionsByShop={exceptionsByShop}
                   oilFlagsByShop={oilFlagsByShop}
@@ -855,6 +949,8 @@ export function RecountLogicTab() {
               <RecountPreviewTable
                 rows={flaggedWithProducts}
                 locations={evalData.locations}
+                companyId={companyId}
+                countMonth={countMonth}
                 tankVarByShop={tankVarByShop}
                 exceptionsByShop={exceptionsByShop}
                 oilFlagsByShop={oilFlagsByShop}
@@ -936,11 +1032,13 @@ function fmt(v: number | null | undefined) {
 // Shared by Live Preview and Flagged for Later — same columns, same
 // per-row actions, so a shop looks identical wherever it currently sits.
 function RecountPreviewTable({
-  rows, locations, tankVarByShop, exceptionsByShop, oilFlagsByShop, hiddenProducts,
+  rows, locations, companyId, countMonth, tankVarByShop, exceptionsByShop, oilFlagsByShop, hiddenProducts,
   varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
 }: {
   rows: EvaluatedCount[]
   locations: Location[]
+  companyId: string
+  countMonth: string
   tankVarByShop: Map<string, TankVarianceCandidate[]>
   exceptionsByShop: Map<string, ProductExceptionRow[]>
   oilFlagsByShop: Map<string, OilOnHandRow[]>
@@ -1000,23 +1098,19 @@ function RecountPreviewTable({
               <td className="px-3 py-2 text-inky">
                 {products.length === 0 ? '—' : (
                   <div className="flex flex-wrap gap-1">
-                    {products.map((p) => {
-                      const hidden = hiddenSet.has(p.id)
-                      return (
-                        <button
-                          key={p.id}
-                          onClick={() => e.locationId && onToggleHide(e.locationId, p.id)}
-                          title={hidden ? 'Click to include in the recount again' : `Click to hide from the recount — flagged by: ${[...p.types].join(', ')}`}
-                          style={hidden ? undefined : splitBorderStyle(p.types)}
-                          className={[
-                            'rounded px-1.5 py-0.5 transition-colors',
-                            hidden ? 'border border-navy/10 text-inky/30 line-through hover:text-inky/60' : 'text-inky hover:text-[#C0392B]',
-                          ].join(' ')}
-                        >
-                          {p.id} <span className="opacity-70">({fmt(p.qty)})</span>
-                        </button>
-                      )
-                    })}
+                    {products.map((p) => (
+                      <ProductChip
+                        key={p.id}
+                        productId={p.id}
+                        qty={p.qty}
+                        types={p.types}
+                        hidden={hiddenSet.has(p.id)}
+                        locationId={e.locationId}
+                        companyId={companyId}
+                        countMonth={countMonth}
+                        onToggleHide={() => e.locationId && onToggleHide(e.locationId, p.id)}
+                      />
+                    ))}
                   </div>
                 )}
               </td>
