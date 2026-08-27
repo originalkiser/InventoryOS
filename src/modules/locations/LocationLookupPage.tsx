@@ -271,11 +271,36 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     if (!companyId || !shopId) return
     setLoading(true); setError(null)
     const sb = supabase as any
+    // PostgREST caps an un-ranged select at 1000 rows and truncates silently
+    // (no error) — a shop with ~1200 product_usage rows was quietly losing
+    // whichever ones sorted past row 1000, showing blank on-hand for them in
+    // the order config with no indication anything was cut off. Same fix
+    // pattern already used in droptop-sync-usage/skybitz-tank-sync for the
+    // exact same failure mode.
+    async function fetchAllRows(factory: (from: number, to: number) => any): Promise<any[]> {
+      const PAGE = 1000
+      const out: any[] = []
+      let from = 0
+      for (;;) {
+        const { data, error } = await factory(from, from + PAGE - 1)
+        if (error) break
+        const batch = data ?? []
+        out.push(...batch)
+        if (batch.length < PAGE) break
+        from += PAGE
+      }
+      return out
+    }
     try {
       const [tankRes, cfgRes, usageRes, mapRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
-        sb.schema('inventory').from('product_usage').select('product_id, on_hands, daily_usage, updated_at').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
+        fetchAllRows((from, to) =>
+          sb.schema('inventory').from('product_usage')
+            .select('product_id, on_hands, daily_usage, updated_at')
+            .eq('company_id', companyId).eq('location_id', shopId)
+            .order('product_id').range(from, to)
+        ).then((data) => ({ data })).catch(() => ({ data: [] })),
         sb.schema('inventory').from('product_id_mappings').select('old_product_id, new_product_id').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
         sb.schema('platform').from('issues').select('*').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
