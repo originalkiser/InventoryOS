@@ -27,3 +27,8 @@ verify_jwt = false
 # in Supabase's SQL editor — never edited again after that.
 [functions.data-connection-dispatcher]
 verify_jwt = false
+
+# Called by the dispatcher above (unattended) and by the Data Connections
+# tab's "Run Now" (interactive) — same reason as the others.
+[functions.run-automated-checks]
+verify_jwt = false

@@ -11,6 +11,7 @@ const CONNECTION_LABELS: Record<string, string> = {
   droptop_on_hand: 'Droptop — On Hand',
   droptop_usage: 'Droptop — Usage',
   skybitz_tanks: 'SkyBitz Tanks',
+  automated_checks: 'Automated Checks',
 }
 const connectionLabel = (c: string) => CONNECTION_LABELS[c] ?? c
 

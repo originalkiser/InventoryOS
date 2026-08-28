@@ -25,6 +25,7 @@ import { QuickResponseModal, type QuickResponseSeed } from './QuickResponseModal
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
+import { AutomatedChecksPanel } from './AutomatedChecksPanel'
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -105,6 +106,14 @@ export function ExceptionReportingPage() {
 
   const rows = useMemo(() => (statusFilter === 'All' ? rowsAll : rowsAll.filter((r) => (r.status || 'No Status') === statusFilter)), [rowsAll, statusFilter])
 
+  // System-generated flags from run-automated-checks — same table, marked by
+  // metadata.source, kept in their own tab rather than mixed into Reports.
+  const automatedRows = useMemo(() => rowsAll.filter((r) => (r.metadata as any)?.source === 'automated'), [rowsAll])
+  const automatedOpenCount = useMemo(
+    () => automatedRows.filter((r) => !(r.status ?? '').toLowerCase().includes('closed')).length,
+    [automatedRows],
+  )
+
   // Same predicate the nav badge counts, so the Alerts tab and the sidebar
   // number can never disagree.
   const alertRows = useMemo(
@@ -159,6 +168,7 @@ export function ExceptionReportingPage() {
             <TabsTrigger value="alerts">Alerts{alertRows.length > 0 ? ` (${alertRows.length})` : ''}</TabsTrigger>
             <TabsTrigger value="summary">Summary</TabsTrigger>
             <TabsTrigger value="reports">Reports</TabsTrigger>
+            <TabsTrigger value="automated">Automated Checks{automatedOpenCount > 0 ? ` (${automatedOpenCount})` : ''}</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </div>
         </div>
@@ -207,6 +217,17 @@ export function ExceptionReportingPage() {
           ) : (
             <ExceptionTable rows={rows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
               companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} onQuick={openQuick} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="automated">
+          {loading ? (
+            <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
+          ) : (
+            <AutomatedChecksPanel
+              rows={automatedRows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
+              companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} onQuick={openQuick}
+            />
           )}
         </TabsContent>
 
@@ -261,7 +282,7 @@ function SortableHeaderCell({ id, thBase, children }: { id: string; thBase: stri
   )
 }
 
-function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, onSet, onEdit, onQuick }: {
+export function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, onSet, onEdit, onQuick }: {
   rows: ExceptionReport[]
   config: ExceptionConfig
   shopLabel: (id: string | null) => string

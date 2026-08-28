@@ -31,8 +31,9 @@ const CONNECTION_META: Record<string, { label: string; description: string }> = 
   skybitz_tanks: { label: 'SkyBitz Tank Monitors', description: 'Pulls tank telemetry (on-hand, level, battery) over SFTP.' },
   droptop_on_hand: { label: 'Droptop — On Hand', description: 'Pulls current on-hand quantities from Droptop into Product Usage.' },
   droptop_usage: { label: 'Droptop — Usage', description: 'Pulls sales/adjustment activity from Droptop and logs the daily sold/adjusted ledger.' },
+  automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
 }
-const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage']
+const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'automated_checks']
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -85,6 +86,11 @@ export function DataConnectionsTab() {
       } else if (key === 'droptop_usage') {
         const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true })
         toast.success(`Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`)
+      } else if (key === 'automated_checks') {
+        const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
+        if (error) throw new Error(error.message)
+        if (data?.error) throw new Error(data.error)
+        toast.success(`Automated Checks: ${data.created} new exception${data.created === 1 ? '' : 's'} flagged (${data.checked} anomal${data.checked === 1 ? 'y' : 'ies'} found)`)
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Sync failed')

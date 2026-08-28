@@ -84,6 +84,19 @@ async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ s
   return data?.error ? { status: 'error', message: String(data.error) } : { status: 'success', message: null }
 }
 
+// run-automated-checks reuses this same dispatch secret rather than minting
+// its own — it's only ever called by this dispatcher or an admin's own
+// interactive session, never unattended by anything else.
+async function runAutomatedChecks(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
+  const res = await fetch(`${supabaseUrl}/functions/v1/run-automated-checks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+    body: '{}',
+  })
+  const data = await res.json().catch(() => ({}))
+  return data?.error ? { status: 'error', message: String(data.error) } : { status: 'success', message: null }
+}
+
 // Chunks locations the same way the interactive "Sync All" button does —
 // sequential batches, so one automated run can't run long enough to hit the
 // platform's per-invocation execution time limit.
@@ -163,6 +176,13 @@ Deno.serve(async (req) => {
           supabaseUrl, serviceKey, droptopSecret, s.company_id,
           s.connection_key === 'droptop_on_hand' ? 'inventory' : 'usage',
         )
+      } else if (s.connection_key === 'automated_checks') {
+        // Run after the Droptop pulls so the movement feed it reads is fresh —
+        // schedule its own interval later in the day than droptop_usage's if
+        // they're both daily-at-a-time schedules, since ordering between two
+        // "interval" schedules otherwise isn't guaranteed.
+        outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
+          : await runAutomatedChecks(supabaseUrl, dispatchSecret)
       } else {
         outcome = { status: 'error', message: `Unknown connection_key: ${s.connection_key}` }
       }
