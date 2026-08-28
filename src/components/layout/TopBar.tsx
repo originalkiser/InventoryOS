@@ -14,6 +14,7 @@ import { useNotifications, NOTIF_PROMPT_DISMISSED_KEY, type NotifType } from '@/
 import toast from 'react-hot-toast'
 import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
 import { RecentPagesWidget } from './RecentPagesWidget'
+import { PresenceWidget } from './PresenceWidget'
 import { useRecentPagesTracking } from '@/hooks/useRecentPagesTracking'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format, differenceInDays, endOfWeek, endOfMonth, parseISO } from 'date-fns'
@@ -640,7 +641,8 @@ export function TopBar({
 
       </div>
 
-      {/* Recent Pages — next to the pill config gear */}
+      {/* Who's online + Join Me, and Recent Pages — next to the pill config gear */}
+      <PresenceWidget />
       <RecentPagesWidget />
 
       {/* Pill config gear — next to notifications */}
