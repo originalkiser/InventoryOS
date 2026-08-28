@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
@@ -21,10 +21,12 @@ function initialsFor(name: string): string {
 }
 
 // Presence roster — who's currently in the app. Scope defaults to the
-// user's own department ("team"), with a toggle to widen to company-wide.
-// Switching scope unsubscribes from one channel and subscribes to the
-// other rather than filtering a single company-wide channel client-side, so
-// a "team" roster never has to download company-wide presence data.
+// user's own department(s) ("team"), with a toggle to widen to company-wide.
+// A user can belong to several departments (Config -> Users), so "team"
+// joins one channel per department they're in rather than picking just one
+// — two users only need to share ONE department in common to see each
+// other, and this is how that actually happens. Switching to Company scope
+// swaps to the single company-wide channel instead of filtering client-side.
 //
 // Not authorized via Realtime Authorization (see migration
 // 20260828_realtime_authorization.sql) — presence payloads aren't
@@ -34,18 +36,24 @@ export function usePresence() {
   const location = useLocation()
   const [scope, setScope] = useState<'team' | 'company'>('team')
   const [roster, setRoster] = useState<PresenceUser[]>([])
-  const [departmentId, setDepartmentId] = useState<string | null>(null)
-  const channelRef = useRef<RealtimeChannel | null>(null)
+  const [departmentIds, setDepartmentIds] = useState<string[]>([])
+  const channelsRef = useRef<RealtimeChannel[]>([])
 
   useEffect(() => {
     if (!profile?.id) return
     ;(supabase as any).schema('platform').from('user_department_memberships')
-      .select('department_id').eq('user_id', profile.id).limit(1).maybeSingle()
-      .then(({ data }: { data: { department_id: string } | null }) => setDepartmentId(data?.department_id ?? null))
+      .select('department_id').eq('user_id', profile.id)
+      .then(({ data }: { data: { department_id: string }[] | null }) => {
+        setDepartmentIds([...new Set((data ?? []).map((r) => r.department_id))])
+      })
   }, [profile?.id])
 
-  const hasTeam = !!departmentId
-  const channelName = scope === 'company' || !departmentId ? 'presence:company' : `presence:team:${departmentId}`
+  const hasTeam = departmentIds.length > 0
+  const channelNames = useMemo(
+    () => (scope === 'company' || !hasTeam ? ['presence:company'] : departmentIds.map((id) => `presence:team:${id}`)),
+    [scope, hasTeam, departmentIds],
+  )
+  const channelKey = channelNames.join(',')
 
   function myPresence(): PresenceUser {
     const name = profile?.full_name ?? 'Unknown'
@@ -60,29 +68,39 @@ export function usePresence() {
 
   useEffect(() => {
     if (!profile?.id) return
-    const channel = supabase.channel(channelName, { config: { presence: { key: profile.id } } })
-    channelRef.current = channel
+    const channels = channelNames.map((name) => supabase.channel(name, { config: { presence: { key: profile.id } } }))
+    channelsRef.current = channels
 
-    channel.on('presence', { event: 'sync' }, () => {
-      const state = channel.presenceState<PresenceUser>()
-      const users = Object.values(state).flat().filter((u) => u.user_id !== profile.id)
-      setRoster(users)
+    // A user can appear in more than one joined channel when departments
+    // overlap — merge by user_id (last sync wins, values shouldn't differ)
+    // and always exclude the current user from their own roster.
+    const rosterByChannel = new Map<string, PresenceUser[]>()
+    function recomputeRoster() {
+      const merged = new Map<string, PresenceUser>()
+      for (const list of rosterByChannel.values()) for (const u of list) merged.set(u.user_id, u)
+      merged.delete(profile!.id)
+      setRoster([...merged.values()])
+    }
+
+    channels.forEach((channel, i) => {
+      const name = channelNames[i]
+      channel.on('presence', { event: 'sync' }, () => {
+        rosterByChannel.set(name, Object.values(channel.presenceState<PresenceUser>()).flat())
+        recomputeRoster()
+      })
+      channel.subscribe(async (status) => { if (status === 'SUBSCRIBED') await channel.track(myPresence()) })
     })
 
-    channel.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') await channel.track(myPresence())
-    })
-
-    return () => { channel.unsubscribe(); channelRef.current = null }
+    return () => { channels.forEach((c) => c.unsubscribe()); channelsRef.current = [] }
     // Re-subscribing on every keystroke of navigation would churn the
-    // channel — route changes re-track (below) instead of resubscribing.
+    // channels — route changes re-track (below) instead of resubscribing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelName, profile?.id])
+  }, [channelKey, profile?.id])
 
   // Re-track (not re-subscribe) on route change so "currently on" stays live.
   useEffect(() => {
-    if (!channelRef.current || !profile?.id) return
-    channelRef.current.track(myPresence())
+    if (!profile?.id || channelsRef.current.length === 0) return
+    channelsRef.current.forEach((c) => c.track(myPresence()))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, profile?.id])
 
