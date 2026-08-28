@@ -17,8 +17,24 @@ import type { OrderType } from './types'
 // Fields a source/composite column can reference.
 export const EXPORT_FIELDS = [
   'po_number', 'shop_number', 'shop_name', 'product_id', 'vendor_part_number', 'vendor_description',
-  'uom', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor',
+  'uom', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor', 'weekday',
 ] as const
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+/**
+ * Full weekday name for a draft — the order day the shops were pulled for
+ * (settings_snapshot.__order_dow, set on generation and shown on the
+ * landing page), not just the calendar weekday of order_date. Those
+ * usually match, but can diverge when "Order day" was explicitly switched
+ * to a different weekday's shops than the order date itself falls on.
+ */
+function orderWeekdayName(draft: { order_date: string; settings_snapshot: Record<string, unknown> } | null): string {
+  if (!draft) return ''
+  const dow = (draft.settings_snapshot as any)?.__order_dow
+  const idx = typeof dow === 'number' ? dow : new Date(draft.order_date + 'T00:00:00').getDay()
+  return idx >= 0 && idx < 7 ? WEEKDAYS[idx] : ''
+}
 export type ExportField = (typeof EXPORT_FIELDS)[number]
 
 export type ColumnKind = 'source' | 'constant' | 'blank' | 'composite'
@@ -77,6 +93,9 @@ export function OrdersV2Export() {
 
   const [tpl, setTpl] = useState<ExportTemplate>(DEFAULT_TEMPLATE)
   const [savedTpl, setSavedTpl] = useState<ExportTemplate | null>(null)
+  // Collapsed by default — the column mappings can run long, and the
+  // preview below is what you actually came here to check.
+  const [columnsOpen, setColumnsOpen] = useState(false)
   const [finalizing, setFinalizing] = useState(false)
   const [vendorParts, setVendorParts] = useState<{ our_part_number: string | null; part_number: string | null; description: string | null }[]>([])
   const [productMappings, setProductMappings] = useState<{ old_product_id: string | null; new_product_id: string | null }[]>([])
@@ -164,8 +183,9 @@ export function OrdersV2Export() {
       order_type: orderType,
       order_type_code: orderType === 'bulk' ? 'B' : 'P',
       vendor: vendorName,
+      weekday: orderWeekdayName(draft),
     }
-  }, [draft?.order_date, shopNumber, shopName, vendorName, vendorPartFor])
+  }, [draft, shopNumber, shopName, vendorName, vendorPartFor])
 
   const rows = useMemo(() => included.map((l) => {
     const v = valuesFor(l)
@@ -180,11 +200,11 @@ export function OrdersV2Export() {
   }), [included, tpl.columns, valuesFor, draft?.order_date])
 
   const headerValues = useMemo(() => ({
-    vendor: vendorName, order_date: draft?.order_date ?? '',
+    vendor: vendorName, order_date: draft?.order_date ?? '', weekday: orderWeekdayName(draft),
     shop_count: new Set(included.map((l) => l.location_id)).size,
     line_count: included.length,
     total: included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0).toFixed(2),
-  }), [vendorName, draft?.order_date, included])
+  }), [vendorName, draft, included])
 
   const fileName = renderTemplate(tpl.file_name_template, headerValues, draft?.order_date) || 'order'
   const sheetName = (renderTemplate(tpl.sheet_name_template, headerValues, draft?.order_date) || 'Order').slice(0, 31)
@@ -265,15 +285,21 @@ export function OrdersV2Export() {
         vendor next time.
       </p>
 
-      {/* Column builder */}
+      {/* Column builder — collapsed by default so the preview below is
+          visible without scrolling past every column's mapping first. */}
       <Card><CardBody className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Columns ({tpl.columns.length})</span>
+          <button onClick={() => setColumnsOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-inky/60 hover:text-navy transition-colors">
+            <span className={`inline-block text-[9px] transition-transform ${columnsOpen ? 'rotate-90' : ''}`}>▸</span>
+            Columns ({tpl.columns.length})
+          </button>
           <Button size="sm" variant="secondary"
-            onClick={() => setTpl((t) => ({ ...t, columns: [...t.columns, { id: uid(), kind: 'source', header: 'New Column', field: 'product_id' }] }))}>
+            onClick={() => { setColumnsOpen(true); setTpl((t) => ({ ...t, columns: [...t.columns, { id: uid(), kind: 'source', header: 'New Column', field: 'product_id' }] })) }}>
             <Plus className="w-3.5 h-3.5 mr-1" /> Add column
           </Button>
         </div>
+        {columnsOpen && (<>
         <div className="flex flex-col gap-1.5">
           {tpl.columns.map((c, i) => (
             <div key={c.id} className="flex items-center gap-2 flex-wrap rounded border border-navy/20 px-2 py-1.5">
@@ -310,9 +336,12 @@ export function OrdersV2Export() {
           <p>
             <code>{'{date:MMDDYYYY}'}</code> order date · <code>{'{today:MMDDYYYY}'}</code> today's date ·{' '}
             <code>{'{date+4:MMDDYYYY}'}</code> order date +4 days (use <code>-</code> for earlier) ·{' '}
-            <code>{'{shop_number:00000}'}</code> zero-padded to 5 digits (works on any field, e.g. <code>{'S{shop_number:00000}'}</code> → S00013)
+            <code>{'{shop_number:00000}'}</code> zero-padded to 5 digits (works on any field, e.g. <code>{'S{shop_number:00000}'}</code> → S00013) ·{' '}
+            <code>{'{weekday}'}</code> full weekday name of the order day (e.g. Monday)
           </p>
         </div>
+        </>
+        )}
       </CardBody></Card>
 
       {/* Naming + email */}
@@ -366,7 +395,7 @@ export function OrdersV2Export() {
             </>
           )}
           <span className="text-[10px] font-mono text-inky/50">
-            Header fields: vendor, order_date, shop_count, line_count, total.
+            Header fields: vendor, order_date, weekday, shop_count, line_count, total.
           </span>
         </CardBody></Card>
       </div>
