@@ -13,6 +13,8 @@ import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useNotifications, NOTIF_PROMPT_DISMISSED_KEY, type NotifType } from '@/hooks/useNotifications'
 import toast from 'react-hot-toast'
 import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
+import { RecentPagesWidget } from './RecentPagesWidget'
+import { useRecentPagesTracking } from '@/hooks/useRecentPagesTracking'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format, differenceInDays, endOfWeek, endOfMonth, parseISO } from 'date-fns'
 import type { Profile } from '@/types'
@@ -126,6 +128,7 @@ export function TopBar({
   const navigate = useNavigate()
   const { profile } = useAuthStore()
   useDarkMode() // keep dark-mode class applied
+  useRecentPagesTracking() // records route visits + owns the Alt+Left/Right hotkeys
   const { locations } = useLocations()
   const { isExcluded } = useLocationExclusions()
   const { canNotify, permission, prefs: notifPrefs, setPrefs: setNotifPrefs, requestPermission, notify } = useNotifications()
@@ -636,6 +639,9 @@ export function TopBar({
         ))}
 
       </div>
+
+      {/* Recent Pages — next to the pill config gear */}
+      <RecentPagesWidget />
 
       {/* Pill config gear — next to notifications */}
       <div className="relative flex-shrink-0" ref={pillConfigRef}>
