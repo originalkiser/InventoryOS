@@ -264,6 +264,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
   const flags: LineFlag[] = [...historyFlags(input, ctx)]
   if (n(input.on_hand) <= 0) flags.push('stocked_out')
   if (units > 0 && caps.capacityBound) flags.push('capacity_capped')
+  if (rule.vmi_keepfill_enabled) flags.push('vmi_keepfill')
 
   return {
     location_id: input.location_id,
@@ -279,7 +280,11 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
     dos_before: daysOfSupply(input.on_hand, input.daily_usage),
     dos_after: daysOfSupply(n(input.on_hand) + gallons, input.daily_usage),
     max_capacity_gallons: rule.max_capacity_gallons,
-    included: units > 0,
+    // Vendor-managed inventory is refilled by RelaDyne, not submitted as a
+    // line on this order — it's generated for visibility (and the runway
+    // check) but starts excluded from the order total. A user can still
+    // flip it to Included from Final Review if a one-off order is needed.
+    included: rule.vmi_keepfill_enabled ? false : units > 0,
     flags,
     added_by_smoothing: false,
     triggered_smoothing: false,
@@ -440,6 +445,15 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     }
     if (rule.vmi_keepfill_enabled && !ctx.includeVmi) {
       skipped.push({ ...idOf(input), reason: 'vmi_keepfill' }); continue
+    }
+    // Keep-fill on-hand comes from the tank monitor, not Droptop (see
+    // buildGenerationInputs) — a genuinely unmatched/unread tank reports
+    // on_hand as null, not 0. Treating that as "empty" here would fabricate
+    // a false stocked-out read and generate a bogus catch-up order, so it's
+    // surfaced as its own needs-review skip instead (never silently
+    // included, per the keep-fill rule in CLAUDE.md).
+    if (rule.vmi_keepfill_enabled && ctx.includeVmi && input.on_hand == null) {
+      skipped.push({ ...idOf(input), reason: 'vmi_no_tank_data' }); continue
     }
 
     const dos = daysOfSupply(input.on_hand, input.daily_usage)

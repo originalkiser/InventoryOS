@@ -157,6 +157,8 @@ export type LineFlag =
   | 'over_dos_max'           // pushed past the soft DOS ceiling to reach a minimum
   | 'stocked_out'            // on hand is zero/effectively zero
   | 'alone_default_qty'      // sole line, used default_order_amount_if_alone
+  | 'vmi_keepfill'           // vendor-managed inventory — excluded from the order total by default
+  | 'keepfill_will_run_out'  // tank on-hand + usage won't last to this shop's delivery after next
 
 export interface GeneratedLine {
   location_id: string

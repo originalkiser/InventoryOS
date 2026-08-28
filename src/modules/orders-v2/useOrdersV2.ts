@@ -351,6 +351,7 @@ export function useDraft(draftId: string | null) {
 
 export interface OrderConfigRow { location_id: string; product_id: string; vendor_id: string | null; capacity: number | null; order_limit: number | null; metadata: Record<string, unknown> | null }
 export interface UsageRow { location_id: string; product_id: string; on_hands: number | null; daily_usage: number | null }
+export interface TankOnHandRow { location_id: string | null; product_id: string | null; on_hand: number | null }
 export interface VendorPartRow { vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null }
 export interface GlobalProductRow { product_id: string; unit_of_measure: string | null }
 export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }
@@ -368,11 +369,11 @@ export function useGenerationData() {
   const companyId = profile?.company_id ?? null
 
   const fetchInputs = useCallback(async (vendorId: string | null, lookbackDays: number) => {
-    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
+    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], tankOnHand: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, locRows, schedRows, calRows, history] = await Promise.all([
+    const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, locRows, schedRows, calRows, history] = await Promise.all([
       fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
@@ -388,6 +389,9 @@ export function useGenerationData() {
       // in ounces) gets converted before it reaches the engine — see
       // quartsFromSourceUnit below.
       fetchAll<GlobalProductRow>('inventory', 'global_products', 'product_id, unit_of_measure', companyId),
+      // Keep-fill/VMI products use the tank monitor's own on-hand reading
+      // instead of Droptop's product_usage — see buildGenerationInputs.
+      fetchAll<TankOnHandRow>('inventory', 'tank_monitors', 'location_id, product_id, on_hand', companyId),
       fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
       fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
@@ -433,7 +437,7 @@ export function useGenerationData() {
       (calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']),
     )
 
-    return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, days, schedules, calendar, history: historyFacts }
+    return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
   return { fetchInputs }
@@ -445,6 +449,7 @@ export function buildGenerationInputs(
   productMappings: { old_product_id: string | null; new_product_id: string | null }[] = [],
   vendorParts: VendorPartRow[] = [], uomMappings: UomMappingRow[] = [],
   globalProducts: GlobalProductRow[] = [],
+  tankOnHand: TankOnHandRow[] = [],
 ) {
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
@@ -471,6 +476,18 @@ export function buildGenerationInputs(
       on_hands: add(cur?.on_hands, u.on_hands),
       daily_usage: add(cur?.daily_usage, u.daily_usage),
     })
+  }
+
+  // Keep-fill/VMI products read on-hand from the tank monitor instead —
+  // summed across every monitor matched to that location+product (a shop
+  // can have more than one tank of the same product), resolved through the
+  // same retired-id mapping as usage above.
+  const tankOnHandMap = new Map<string, number>()
+  for (const t of tankOnHand) {
+    if (!t.location_id || !t.product_id || t.on_hand == null) continue
+    const resolved = oldToNew.get(pkey(t.product_id)) ?? t.product_id
+    const k = ruleKey(t.location_id, resolved)
+    tankOnHandMap.set(k, (tankOnHandMap.get(k) ?? 0) + Number(t.on_hand))
   }
 
   // Package size + cost come from vendor_parts (matched vendor + our part
@@ -597,9 +614,21 @@ export function buildGenerationInputs(
     }
 
     const srcFactor = quartsFromSourceUnit(c.product_id)
+    // Keep-fill/VMI: on-hand comes from the tank monitor (gallons, so ×4 to
+    // match this module's quarts-denominated fields — same conversion as
+    // max_capacity_gallons above), not Droptop's product_usage. A monitor
+    // reading of exactly 0 is real data (tank confirmed empty) and stays 0;
+    // no matching monitor at all stays null — the engine treats that as
+    // "needs review", not "empty" (see generateOrder's vmi_no_tank_data
+    // check), so a shop that was never fitted with a monitor can't
+    // silently generate a bogus catch-up order.
+    const tankSum = tankOnHandMap.get(k)
+    const on_hand = rule.vmi_keepfill_enabled
+      ? (tankSum != null ? tankSum * 4 : null)
+      : (u?.on_hands != null ? u.on_hands * srcFactor : null)
     return {
       location_id: c.location_id, product_id: c.product_id, rule,
-      on_hand: u?.on_hands != null ? u.on_hands * srcFactor : null,
+      on_hand,
       daily_usage: u?.daily_usage != null ? u.daily_usage * srcFactor : null,
     }
   })

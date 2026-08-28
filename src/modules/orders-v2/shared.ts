@@ -58,6 +58,8 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   over_dos_max: { label: 'Over DOS max', tone: 'orange', title: 'Pushed past the soft days-of-supply ceiling to reach an order minimum' },
   stocked_out: { label: 'Out of stock', tone: 'red', title: 'No on-hand recorded for this product' },
   alone_default_qty: { label: 'Alone qty', tone: 'sky', title: 'Only line on the order — used its configured alone quantity' },
+  vmi_keepfill: { label: 'VMI / Keep-fill', tone: 'sky', title: 'Vendor-managed inventory, tracked by tank monitor — excluded from this order\'s total by default since the vendor refills it directly' },
+  keepfill_will_run_out: { label: 'Will run dry', tone: 'red', title: 'Tank on-hand and usage won\'t last until this shop\'s delivery after next — may need a vendor keep-fill order before then' },
 }
 
 export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {

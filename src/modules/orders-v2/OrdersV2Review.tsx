@@ -11,7 +11,7 @@ import {
   buildGenerationInputs, eligibleLocations, draftOrderDow, shopsPerOrderDay, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
-import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply } from './engine'
+import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num } from './shared'
 import type { LineFlag, GenerationInput, OrderType } from './types'
 
@@ -55,13 +55,13 @@ export function OrdersV2Review() {
   )
 
   /** Run the engine and replace the draft's lines with the result. */
-  const runGeneration = useCallback(async (includeVmi: boolean, dow?: number) => {
+  const runGeneration = useCallback(async (dow?: number) => {
     if (!draft || !profile?.company_id) return
     const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
     try {
-      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
-      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts)
+      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
+      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand)
       setAllInputs(inputs)
       const result = generateOrder(inputs, {
         settings,
@@ -69,32 +69,67 @@ export function OrdersV2Review() {
         orderDate: draft.order_date,
         eligibleLocationIds: eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow),
         history,
-        includeVmi,
+        // Keep-fill/VMI lines are always generated now (for the runway
+        // check below) — the Review page's "Show VMI / keepfill" toggle
+        // only controls whether they're visible in the table, and they
+        // start excluded from the order total regardless (see buildLine).
+        includeVmi: true,
       })
 
       // Days of supply at delivery uses the shop's configured delivery day.
       const deliveryDow = new Map(days.map((d) => [d.location_id, d.delivery_dow]))
       const ruleByKey = new Map(inputs.map((i) => [`${i.location_id}|${i.product_id}`, i.rule]))
+      // A configured per-shop schedule wins; otherwise fall back to the
+      // RelaDyne weekday from the location list. Shared by the delivery
+      // math below and the keep-fill runway check further down.
+      const deliveryFor = (locationId: string | null, fromDate: string) => {
+        const sched = schedules.get(locationId ?? '')
+        return sched
+          ? resolveDeliveryDate(fromDate, sched, calendar)
+          : nextDeliveryDate(fromDate, deliveryDow.get(locationId ?? '') ?? null)
+      }
+
+      // Keep-fill runway check — independent of the standard reorder
+      // trigger, since a VMI product needs to last to its delivery AFTER
+      // NEXT (the earliest a follow-up keep-fill order placed today could
+      // realistically land) regardless of whether it's currently due for a
+      // normal reorder. Checked against every VMI input, not just the ones
+      // that cleared the trigger and became order lines, so a product with
+      // enough days-of-supply to clear that generic threshold but not
+      // enough to reach this specific date isn't missed.
+      const keepfillAlerts = inputs.filter((i) => i.rule.vmi_keepfill_enabled).map((i) => {
+        const deliver1 = deliveryFor(i.location_id, draft.order_date)
+        const deliver2 = deliver1 ? deliveryFor(i.location_id, deliver1) : null
+        const runwayDays = daysOfSupply(i.on_hand, i.daily_usage)
+        const daysToDeliver2 = deliver2 ? daysBetween(draft.order_date, deliver2) : null
+        return {
+          location_id: i.location_id, product_id: i.product_id,
+          on_hand: i.on_hand, daily_usage: i.daily_usage, runway_days: runwayDays,
+          next_delivery: deliver1, delivery_after_next: deliver2,
+          no_tank_data: i.on_hand == null,
+          will_run_out: runwayDays != null && daysToDeliver2 != null && runwayDays < daysToDeliver2,
+        }
+      }).filter((a) => a.will_run_out || a.no_tank_data)
+      const runOutKeys = new Set(keepfillAlerts.filter((a) => a.will_run_out).map((a) => `${a.location_id}|${a.product_id}`))
+
       const withDelivery = result.lines.map((l) => {
         const rule = ruleByKey.get(`${l.location_id}|${l.product_id}`)
-        // A configured per-shop schedule wins; otherwise fall back to the
-        // RelaDyne weekday from the location list.
-        const sched = schedules.get(l.location_id ?? '')
-        const deliver = sched
-          ? resolveDeliveryDate(draft.order_date, sched, calendar)
-          : nextDeliveryDate(draft.order_date, deliveryDow.get(l.location_id) ?? null)
+        const deliver = deliveryFor(l.location_id, draft.order_date)
         const gallons = rule ? l.qty * gallonsPerUnit(rule) : 0
-        return { ...l, dos_after_delivery: dosAfterDelivery(l.on_hand, l.daily_usage, gallons, draft.order_date, deliver) }
+        const flags = runOutKeys.has(`${l.location_id}|${l.product_id}`) && !l.flags.includes('keepfill_will_run_out')
+          ? [...l.flags, 'keepfill_will_run_out' as const] : l.flags
+        return { ...l, flags, dos_after_delivery: dosAfterDelivery(l.on_hand, l.daily_usage, gallons, draft.order_date, deliver) }
       })
 
       await replaceLines(withDelivery)
       setSkipped(result.skipped)
       const shops = new Set(withDelivery.map((l) => l.location_id)).size
-      // Cache the shop count on the header so the landing page can show it
-      // without loading every line.
+      // Cache the shop count (and keep-fill alerts) on the header so the
+      // landing page / Final Review can read them without loading every
+      // line or re-fetching tank data.
       setDayCounts(shopsPerOrderDay(days))
       await (supabase as any).schema('inventory').from('ov2_order_drafts')
-        .update({ settings_snapshot: { ...settings, __shop_count: shops, __order_dow: useDow }, status: 'review' })
+        .update({ settings_snapshot: { ...settings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts }, status: 'review' })
         .eq('id', draft.id)
       await reload()
       toast.success(`Generated ${withDelivery.length} line${withDelivery.length !== 1 ? 's' : ''} across ${shops} shop${shops !== 1 ? 's' : ''}`)
@@ -107,7 +142,7 @@ export function OrdersV2Review() {
 
   // Generate automatically the first time a fresh draft is opened.
   useEffect(() => {
-    if (draft && draft.status === 'generating' && !loading && lines.length === 0 && !generating) void runGeneration(false)
+    if (draft && draft.status === 'generating' && !loading && lines.length === 0 && !generating) void runGeneration()
   }, [draft, loading, lines.length, generating, runGeneration])
 
   // ---- grouping + derived numbers -----------------------------------------
@@ -136,6 +171,7 @@ export function OrdersV2Review() {
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase()
     let out = [...lines]
+    if (!showVmi) out = out.filter((l) => !(l.flags ?? []).includes('vmi_keepfill'))
     if (q) out = out.filter((l) => `${shopLabel(l.location_id)} ${l.product_id} ${l.uom ?? ''}`.toLowerCase().includes(q))
     const dir = sortDir === 'asc' ? 1 : -1
     const secondary = (a: DraftLineRow, b: DraftLineRow) => {
@@ -155,7 +191,7 @@ export function OrdersV2Review() {
       const s = shopLabel(a.location_id).localeCompare(shopLabel(b.location_id), undefined, { numeric: true })
       return s !== 0 ? s : secondary(a, b)
     })
-  }, [lines, filter, sortKey, sortDir, shopLabel])
+  }, [lines, filter, sortKey, sortDir, shopLabel, showVmi])
 
   function toggleSort(k: SortKey) {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -216,7 +252,7 @@ export function OrdersV2Review() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration(showVmi)}>
+          <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}>
             <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
           </Button>
           <Button size="sm" onClick={async () => { await setStatus('final_review'); navigate(`/orders-v2/draft/${draft.id}/final`) }}>
@@ -228,13 +264,13 @@ export function OrdersV2Review() {
       <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
         <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-56" />
         <label className="flex items-center gap-2 text-xs font-mono text-inky">
-          <Toggle checked={showVmi} onChange={(v) => { setShowVmi(v); void runGeneration(v) }} size="sm" color="cyan" />
+          <Toggle checked={showVmi} onChange={setShowVmi} size="sm" color="cyan" />
           Show VMI / keepfill
         </label>
         {usesOrderDays && (
           <label className="flex items-center gap-2 text-xs font-mono text-inky">
             Order day
-            <select value={String(orderDow)} onChange={(e) => void runGeneration(showVmi, Number(e.target.value))}
+            <select value={String(orderDow)} onChange={(e) => void runGeneration(Number(e.target.value))}
               className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky">
               {DOW.map((d, i) => (
                 <option key={d} value={i}>{d}{dayCounts[i] ? ` (${dayCounts[i]})` : ''}</option>

@@ -5,7 +5,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useDraft, useOrderSettings, useVendorRules, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { Flags } from './OrdersV2Review'
-import { OVERRIDE_CELL, dos, money, num } from './shared'
+import { OVERRIDE_CELL, dos, dShort, money, num } from './shared'
 import type { LineFlag, OrderType } from './types'
 
 /**
@@ -61,6 +61,14 @@ export function OrdersV2FinalReview() {
     () => lines.filter((l) => (l.flags ?? []).includes('stocked_out' as LineFlag)),
     [lines],
   )
+  // Cached at generation time (OrdersV2Review.tsx) from the tank monitor's
+  // on-hand — a keep-fill product needing attention regardless of whether
+  // it cleared the standard reorder trigger and became a line at all.
+  const keepfillAlerts = useMemo(() => ((draft?.settings_snapshot as any)?.__keepfill_alerts ?? []) as {
+    location_id: string; product_id: string; on_hand: number | null; daily_usage: number | null
+    runway_days: number | null; next_delivery: string | null; delivery_after_next: string | null
+    no_tank_data: boolean; will_run_out: boolean
+  }[], [draft?.settings_snapshot])
   const total = useMemo(
     () => lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0),
     [lines],
@@ -167,6 +175,40 @@ export function OrdersV2FinalReview() {
                     <td className="px-2 py-1 text-right text-navy">{num(l.daily_usage)}</td>
                     <td className="px-2 py-1 text-right text-navy">{num(l.qty)}</td>
                     <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after_delivery)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardBody></Card>
+      )}
+
+      {keepfillAlerts.length > 0 && (
+        <Card><CardBody className="flex flex-col gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-[#C0392B]">Keep-fill / VMI needs attention ({keepfillAlerts.length})</span>
+          <p className="text-[11px] font-mono text-inky/60">
+            Vendor-managed inventory, tracked by tank monitor — not included in this order's total by default.
+            These shops/products won&apos;t reach their delivery after this one on current on-hand and usage, or have
+            no tank monitor reading to check at all. Consider a keep-fill order to RelaDyne before then.
+          </p>
+          <div className="overflow-auto max-h-56 rounded border border-[#C0392B]/30">
+            <table className="w-full text-[11px] font-mono">
+              <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
+                <th className="text-left px-2 py-1">Shop</th><th className="text-left px-2 py-1">Product</th>
+                <th className="text-right px-2 py-1">On Hand</th><th className="text-right px-2 py-1">Usage/day</th>
+                <th className="text-right px-2 py-1">Runway (days)</th><th className="text-left px-2 py-1">Delivery After Next</th>
+                <th className="text-left px-2 py-1">Issue</th>
+              </tr></thead>
+              <tbody>
+                {keepfillAlerts.map((a, i) => (
+                  <tr key={`${a.location_id}|${a.product_id}|${i}`} className="border-b border-navy/10">
+                    <td className="px-2 py-1 text-navy">{shopLabel(a.location_id)}</td>
+                    <td className="px-2 py-1 text-navy">{a.product_id}</td>
+                    <td className="px-2 py-1 text-right text-navy">{a.on_hand != null ? num(a.on_hand) : '—'}</td>
+                    <td className="px-2 py-1 text-right text-navy">{num(a.daily_usage)}</td>
+                    <td className="px-2 py-1 text-right text-navy">{a.runway_days != null ? num(a.runway_days, 1) : '—'}</td>
+                    <td className="px-2 py-1 text-navy">{a.delivery_after_next ? dShort(a.delivery_after_next) : '—'}</td>
+                    <td className="px-2 py-1 text-[#C0392B]">{a.no_tank_data ? 'No tank monitor data' : 'Will run dry before then'}</td>
                   </tr>
                 ))}
               </tbody>
