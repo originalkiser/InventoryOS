@@ -89,64 +89,60 @@ export function RecentPagesWidget() {
         </svg>
       </button>
 
-      {/* Inline reveal — grows in the TopBar row itself, not a dropdown. */}
+      {/* Inline reveal — grows in the TopBar row itself, not a dropdown.
+          Renders only the current group's own (<=3) buttons — a sliding
+          track of every group at once was here before, but its percentage
+          transform was relative to the whole track's width rather than one
+          group's, so with more than one group the offset math was wrong
+          (showed more than 3, and going back never landed on the right
+          spot). A key-changed fade is a safe stand-in for the slide. */}
       <div className={`overflow-hidden transition-[max-width,opacity] duration-300 ease-out ${open && groups.length > 0 ? 'max-w-[220px] opacity-100' : 'max-w-0 opacity-0'}`}>
         <div className="relative flex items-center gap-1 pl-0.5">
           {groups.length > 0 && (
-            <div className="relative overflow-hidden w-[168px]">
-              <div
-                className="flex transition-transform duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
-                style={{ transform: `translateX(-${groupIndex * 100}%)` }}
-              >
-                {groups.map((group, gi) => (
-                  <div key={gi} className="flex justify-center gap-3 w-[168px] flex-shrink-0">
-                    {group.map((page, pi) => {
-                      const isFirst = pi === 0
-                      const isLast = pi === group.length - 1
-                      const showLeftEdge = isFirst && gi > 0
-                      const showRightEdge = isLast && gi < groups.length - 1
-                      return (
-                        <div key={page.path} className="group/btn relative">
-                          {/* Left chevron — same hover group as the button below it, plus
-                              invisible padding bridging the gap, so moving the pointer from
-                              the button onto the chevron never triggers a mouseleave. */}
-                          {showLeftEdge && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setGroupIndex((i) => Math.max(0, i - 1)) }}
-                              aria-label="Previous pages"
-                              className="absolute -left-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
-                            >
-                              ‹
-                            </button>
-                          )}
-                          <button
-                            onClick={() => visit(page.path)}
-                            onMouseEnter={(e) => showTip(e, page.label)}
-                            onMouseLeave={hideTip}
-                            className={[
-                              'w-8 h-8 rounded-full border-[1.5px] font-heading font-semibold text-[10px] flex items-center justify-center transition-all',
-                              page.path === activePath
-                                ? 'border-sky bg-sky text-[#002745]'
-                                : 'border-sky/35 bg-[#0F2138] text-sky hover:border-sky',
-                            ].join(' ')}
-                          >
-                            {shortForLabel(page.label)}
-                          </button>
-                          {showRightEdge && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setGroupIndex((i) => Math.min(groups.length - 1, i + 1)) }}
-                              aria-label="More pages"
-                              className="absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
-                            >
-                              ›
-                            </button>
-                          )}
-                        </div>
-                      )
-                    })}
+            <div key={groupIndex} className="flex justify-center gap-3 w-[168px] flex-shrink-0 animate-[fadeIn_150ms_ease-out]">
+              {groups[groupIndex].map((page, pi) => {
+                const showLeftEdge = pi === 0 && groupIndex > 0
+                const showRightEdge = pi === groups[groupIndex].length - 1 && groupIndex < groups.length - 1
+                return (
+                  <div key={page.path} className="group/btn relative">
+                    {/* Chevron shares this hover zone with the button below it
+                        (not the whole carousel), so moving the pointer from
+                        the button onto the chevron never crosses a gap that
+                        would fire mouseleave and hide it first. */}
+                    {showLeftEdge && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setGroupIndex((i) => Math.max(0, i - 1)) }}
+                        aria-label="Previous pages"
+                        className="absolute -left-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
+                      >
+                        ‹
+                      </button>
+                    )}
+                    <button
+                      onClick={() => visit(page.path)}
+                      onMouseEnter={(e) => showTip(e, page.label)}
+                      onMouseLeave={hideTip}
+                      className={[
+                        'w-8 h-8 rounded-full border-[1.5px] font-heading font-semibold text-[10px] flex items-center justify-center transition-all',
+                        page.path === activePath
+                          ? 'border-sky bg-sky text-[#002745]'
+                          : 'border-sky/35 bg-[#0F2138] text-sky hover:border-sky',
+                      ].join(' ')}
+                    >
+                      {shortForLabel(page.label)}
+                    </button>
+                    {showRightEdge && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setGroupIndex((i) => Math.min(groups.length - 1, i + 1)) }}
+                        aria-label="More pages"
+                        className="absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
+                      >
+                        ›
+                      </button>
+                    )}
                   </div>
-                ))}
-              </div>
+                )
+              })}
             </div>
           )}
           {groups.length > 1 && (

@@ -63,9 +63,13 @@ export const useRecentPagesStore = create<RecentPagesState>((set, get) => ({
       return
     }
 
-    const nextRecent = recentPages[0]?.path === path
-      ? [{ path, label, visitedAt: Date.now() }, ...recentPages.slice(1)]
-      : [{ path, label, visitedAt: Date.now() }, ...recentPages].slice(0, MAX_ENTRIES)
+    // De-dupe by path anywhere in the list (not just a repeated consecutive
+    // visit) — revisiting a page after browsing elsewhere should move it to
+    // the front, not add a second entry for the same page.
+    const nextRecent = [
+      { path, label, visitedAt: Date.now() },
+      ...recentPages.filter((p) => p.path !== path),
+    ].slice(0, MAX_ENTRIES)
 
     // Trim anything past the current cursor (browser-history semantics: a
     // fresh navigation from a rewound position discards the old "forward" path).
