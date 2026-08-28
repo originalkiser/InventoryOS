@@ -760,6 +760,9 @@ export interface Issue {
   created_at: string
   updated_at: string
   deleted_at: string | null
+  // New columns (migration 20260828c) — may not exist in production yet.
+  cause_category?: string | null
+  cause_subcause?: string | null
 }
 
 export interface Attachment {

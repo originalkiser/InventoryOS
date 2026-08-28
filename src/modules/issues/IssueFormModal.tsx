@@ -6,6 +6,7 @@ import { RichTextEditor } from '@/components/shared/RichTextEditor'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { byNaturalLabel } from '@/lib/naturalSort'
+import { CAUSE_CATEGORIES, CAUSE_SUBCAUSES } from '@/lib/causeTaxonomy'
 import type { Issue, Location, IssueCategory, IssueStatus, Profile, Department } from '@/types'
 import type { ComboboxOption } from '@/components/ui'
 import toast from 'react-hot-toast'
@@ -55,6 +56,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
   const [assignee, setAssignee] = useState(existing?.assignee ?? '')
   const [issueNotes, setIssueNotes] = useState(existing?.issue_notes ?? '')
   const [notes, setNotes] = useState(existing?.resolution_notes ?? '')
+  const [causeCategory, setCauseCategory] = useState(existing?.cause_category ?? '')
+  const [causeSubcause, setCauseSubcause] = useState(existing?.cause_subcause ?? '')
   const [saving, setSaving] = useState(false)
   const [sharedDeptIds, setSharedDeptIds] = useState<string[]>((existing as any)?.shared_department_ids ?? [])
   const [deleteConfirm, setDeleteConfirm] = useState(false)
@@ -96,6 +99,8 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
     setAssignee(existing?.assignee ?? '')
     setIssueNotes(existing?.issue_notes ?? '')
     setNotes(existing?.resolution_notes ?? '')
+    setCauseCategory(existing?.cause_category ?? '')
+    setCauseSubcause(existing?.cause_subcause ?? '')
     setVisibility((existing as any)?.visibility ?? 'department')
     setSharedDeptIds((existing as any)?.shared_department_ids ?? [])
     setParticipants([])
@@ -224,18 +229,27 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
     if (!existing?.id) corePayload.created_by = profile?.id ?? null
 
     const sb = supabase as any
-    const { error } = existing?.id
-      ? await sb.schema('platform').from('issues').update(corePayload).eq('id', existing.id)
-      : await sb.schema('platform').from('issues').insert(corePayload)
+    const { data: savedRow, error } = existing?.id
+      ? await sb.schema('platform').from('issues').update(corePayload).eq('id', existing.id).select('id').single()
+      : await sb.schema('platform').from('issues').insert(corePayload).select('id').single()
 
     if (error) { toast.error(error.message); setSaving(false); return }
+    const savedId: string | undefined = savedRow?.id ?? existing?.id
 
-    // Best-effort: shared_department_ids may be missing if migration not yet applied
-    const sharedPayload = { shared_department_ids: isPersonal ? [] : sharedDeptIds }
-    if (existing?.id) {
-      sb.schema('platform').from('issues').update(sharedPayload).eq('id', existing.id).then(() => {})
-    } else {
-      // For inserts we'd need the new row id — skip best-effort on insert for now
+    // Best-effort: shared_department_ids may be missing if migration not yet
+    // applied. Selecting the id back above (needed for the cause columns
+    // below anyway) also lets this run on insert, not just update.
+    if (savedId) {
+      sb.schema('platform').from('issues')
+        .update({ shared_department_ids: isPersonal ? [] : sharedDeptIds }).eq('id', savedId).then(() => {})
+    }
+
+    // Best-effort: cause_category/cause_subcause are new columns that may
+    // not exist in production yet.
+    if (savedId) {
+      sb.schema('platform').from('issues')
+        .update({ cause_category: causeCategory || null, cause_subcause: causeSubcause || null })
+        .eq('id', savedId).then(() => {})
     }
 
     toast.success(existing?.id ? 'Issue updated' : 'Issue created')
@@ -300,6 +314,11 @@ export function IssueFormModal({ open, onClose, existing, onSaved, onDelete, def
 
         <Input label="Resolved Date" type="date" value={resolvedDate}
           onChange={(e) => setResolvedDate(e.target.value)} />
+
+        <Combobox label="Cause (optional)" options={CAUSE_CATEGORIES.map((c) => ({ value: c, label: c }))}
+          value={causeCategory} onChange={(v) => { setCauseCategory(v); setCauseSubcause('') }} placeholder="None" />
+        <Combobox label="Cause Detail" options={(CAUSE_SUBCAUSES[causeCategory] ?? []).map((s) => ({ value: s, label: s }))}
+          value={causeSubcause} onChange={setCauseSubcause} placeholder={causeCategory ? 'Select…' : 'Pick a cause first'} />
 
         <div className="col-span-2">
           <label className="text-xs font-mono text-inky uppercase tracking-wide block mb-1">Issue Notes</label>

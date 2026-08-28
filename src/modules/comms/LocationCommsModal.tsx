@@ -9,7 +9,24 @@ import { isEmailMethod, isResolvedStatus, resolutionNotes, type LocationComm, ty
 import { useExceptionConfig } from '@/modules/exceptions/useExceptionConfig'
 import { followUpDate } from '@/modules/exceptions/exceptions'
 import { DEFAULT_STATUS, EXCEPTION_STATUSES } from '@/modules/exceptions/exceptions'
+import { CAUSE_CATEGORIES, CAUSE_SUBCAUSES } from '@/lib/causeTaxonomy'
+import { differenceInCalendarDays, parseISO, startOfToday } from 'date-fns'
 import toast from 'react-hot-toast'
+
+// Comm types that show the Products section expanded by default — anything
+// else still has it available, just collapsed until opened.
+const PRODUCTS_EXPANDED_BY_DEFAULT = ['Product Request', 'Missed Delivery']
+
+// Will the product be at (or under) 1 day of supply by the time its ETA
+// arrives, at its current daily usage? days_of_supply is already
+// "days until stockout at current usage" (product_usage.days_of_supply),
+// so this is just that minus how many days out the ETA is.
+function willRunOutByEta(p: CommProduct): boolean {
+  if (!p.orderable || !p.eta || p.days_of_supply == null) return false
+  const daysUntilEta = differenceInCalendarDays(parseISO(p.eta), startOfToday())
+  if (daysUntilEta < 0) return false
+  return p.days_of_supply - daysUntilEta < 1
+}
 
 interface Props {
   open: boolean
@@ -41,6 +58,9 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
   const [status, setStatus] = useState('')
   const [notes, setNotes] = useState('')
   const [resolution, setResolution] = useState('')
+  const [causeCategory, setCauseCategory] = useState('')
+  const [causeSubcause, setCauseSubcause] = useState('')
+  const [productsExpanded, setProductsExpanded] = useState(false)
   // Exception branch
   const [reportType, setReportType] = useState('')
   const [issue, setIssue] = useState('')
@@ -72,6 +92,9 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
     setStatus(existing?.status ?? (existing?.id ? '' : DEFAULT_STATUS))
     setNotes(existing?.notes ?? '')
     setResolution(resolutionNotes(existing))
+    setCauseCategory(((existing?.metadata as any)?.cause_category as string) ?? '')
+    setCauseSubcause(((existing?.metadata as any)?.cause_subcause as string) ?? '')
+    setProductsExpanded(PRODUCTS_EXPANDED_BY_DEFAULT.includes(existing?.comm_type ?? '') || !!(existing?.products as CommProduct[] | undefined)?.length)
     setReportType(''); setIssue(''); setDetails(''); setResponse(''); setResponseDate(''); setResponseNotes('')
     setFollowUp(''); setExcMetadata({})
     setDeleteConfirm(false)
@@ -104,7 +127,13 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
     })
   }, [open, companyId, locationId])
 
-  const isProductRequest = commType === 'Product Request'
+  // Auto-expand (never auto-collapse — don't fight a manual toggle, or hide
+  // products already entered under a different reason) when the comm type
+  // changes to one of the two that should default open.
+  useEffect(() => {
+    if (PRODUCTS_EXPANDED_BY_DEFAULT.includes(commType)) setProductsExpanded(true)
+  }, [commType])
+
   const isException = commType === 'Exception Reporting'
   const selectedIds = new Set(products.map((p) => p.product_id))
 
@@ -161,10 +190,16 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
       contact_method: contactMethod || null,
       email_subject: isEmailMethod(contactMethod) ? (emailSubject.trim() || null) : null,
       who_contacted: whoContacted || null, comm_type: commType || null,
-      products: isProductRequest ? products : [],
-      action_taken: isProductRequest ? (actionTaken || null) : null,
+      // Products (and Action Taken) are no longer gated to a specific comm
+      // type — available on any communication, just collapsed by default
+      // unless one of PRODUCTS_EXPANDED_BY_DEFAULT is selected.
+      products,
+      action_taken: products.length > 0 ? (actionTaken || null) : null,
       exception_report_id: exceptionId, status: status || null, notes: notes.trim() || null,
-      metadata: { ...(existing?.metadata ?? {}), resolution_notes: resolution.trim() || null },
+      metadata: {
+        ...(existing?.metadata ?? {}), resolution_notes: resolution.trim() || null,
+        cause_category: causeCategory || null, cause_subcause: causeSubcause || null,
+      },
       last_change_source: 'manual', ...stamp,
     }
     const { error } = existing?.id
@@ -197,48 +232,70 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
         <Combobox label="Who Contacted" options={opt(config.whoContacted, whoContacted)} value={whoContacted} onChange={setWhoContacted} placeholder="Select or add…" allowCreate onCreateOption={mkCreate('whoContacted')} />
         <Combobox label="Communication Type" options={opt(config.commTypes, commType)} value={commType} onChange={setCommType} placeholder="Select or add…" allowCreate onCreateOption={mkCreate('commTypes')} />
 
-        {isProductRequest && (
-          <div className="col-span-2 flex flex-col gap-2 rounded-lg border border-navy/20 p-3">
-            <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Products Requested</span>
-            <div className="flex flex-wrap gap-1.5">
-              {configured.length === 0 && <span className="text-[11px] font-mono text-inky/40 italic">No configured products for this shop</span>}
-              {configured.map((pid) => (
-                <button key={pid} onClick={() => (selectedIds.has(pid) ? removeProduct(pid) : addProduct(pid, true))}
-                  className={['px-2 py-1 rounded text-[11px] font-mono border transition-colors', selectedIds.has(pid) ? 'bg-navy text-cream border-navy' : 'bg-cream text-navy border-navy/30 hover:border-navy'].join(' ')}>
-                  {pid}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-mono text-inky/60">Non-configured:</span>
-              <div className="w-64"><Combobox options={nonConfiguredOptions} value={addPick} onChange={(v) => { addProduct(v, false); setAddPick('') }} placeholder="Add another product…" allowCreate onCreateOption={async (v) => ({ value: v, label: v })} /></div>
-            </div>
-            {products.length > 0 && (
-              <div className="overflow-x-auto rounded border border-navy/20 mt-1">
-                <table className="w-full text-xs font-mono">
-                  <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/20">
-                    <th className="text-left px-2 py-1">Product</th><th className="text-right px-2 py-1">On Hand</th><th className="text-right px-2 py-1">Days Supply</th>
-                    <th className="text-center px-2 py-1">Orderable</th><th className="text-left px-2 py-1">ETA</th><th className="px-2 py-1"></th>
-                  </tr></thead>
-                  <tbody>
-                    {products.map((p) => (
-                      <tr key={p.product_id} className="border-b border-navy/10">
-                        <td className="px-2 py-1 text-navy">{p.product_id}{p.configured ? '' : ' *'}</td>
-                        <td className="px-2 py-1 text-right text-navy">{num(p.on_hand)}</td>
-                        <td className="px-2 py-1 text-right text-navy">{num(p.days_of_supply)}</td>
-                        <td className="px-2 py-1 text-center"><input type="checkbox" checked={p.orderable} onChange={(e) => patchProduct(p.product_id, { orderable: e.target.checked })} className="accent-sky" /></td>
-                        <td className="px-2 py-1"><input type="date" value={p.eta ?? ''} disabled={!p.orderable} onChange={(e) => patchProduct(p.product_id, { eta: e.target.value || null })} className="bg-cream border border-navy/30 rounded px-1 py-0.5 text-xs" /></td>
-                        <td className="px-2 py-1 text-right"><button onClick={() => removeProduct(p.product_id)} className="text-inky/50 hover:text-red-500">×</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p className="text-[10px] font-mono text-inky/50 px-2 py-1">* non-configured · uncheck Orderable to exclude a product that couldn't be ordered (ETA hides)</p>
+        <div className="col-span-2 flex flex-col gap-2 rounded-lg border border-navy/20 p-3">
+          <button onClick={() => setProductsExpanded((v) => !v)} className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-inky/60 hover:text-navy self-start">
+            <span className={`inline-block transition-transform ${productsExpanded ? 'rotate-90' : ''}`}>▸</span>
+            Products{products.length > 0 ? ` (${products.length})` : ''}
+          </button>
+          {productsExpanded && (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {configured.length === 0 && <span className="text-[11px] font-mono text-inky/40 italic">No configured products for this shop</span>}
+                {configured.map((pid) => (
+                  <button key={pid} onClick={() => (selectedIds.has(pid) ? removeProduct(pid) : addProduct(pid, true))}
+                    className={['px-2 py-1 rounded text-[11px] font-mono border transition-colors', selectedIds.has(pid) ? 'bg-navy text-cream border-navy' : 'bg-cream text-navy border-navy/30 hover:border-navy'].join(' ')}>
+                    {pid}
+                  </button>
+                ))}
               </div>
-            )}
-            <Combobox label="Action Taken" options={opt(config.actionTaken, actionTaken)} value={actionTaken} onChange={setActionTaken} placeholder="Select or add…" allowCreate onCreateOption={mkCreate('actionTaken')} />
-          </div>
-        )}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono text-inky/60">Non-configured:</span>
+                <div className="w-64"><Combobox options={nonConfiguredOptions} value={addPick} onChange={(v) => { addProduct(v, false); setAddPick('') }} placeholder="Add another product…" allowCreate onCreateOption={async (v) => ({ value: v, label: v })} /></div>
+              </div>
+              {products.length > 0 && (
+                <div className="overflow-x-auto rounded border border-navy/20 mt-1">
+                  <table className="w-full text-xs font-mono">
+                    <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/20">
+                      <th className="text-left px-2 py-1">Product</th><th className="text-right px-2 py-1">On Hand</th><th className="text-right px-2 py-1">Days Supply</th>
+                      <th className="text-center px-2 py-1">Orderable</th><th className="text-left px-2 py-1">ETA</th><th className="px-2 py-1"></th>
+                    </tr></thead>
+                    <tbody>
+                      {products.map((p) => {
+                        const runsOut = willRunOutByEta(p)
+                        return (
+                          <tr key={p.product_id} className="border-b border-navy/10">
+                            <td className="px-2 py-1 text-navy">{p.product_id}{p.configured ? '' : ' *'}</td>
+                            <td className="px-2 py-1 text-right text-navy">{num(p.on_hand)}</td>
+                            <td className="px-2 py-1 text-right text-navy">{num(p.days_of_supply)}</td>
+                            <td className="px-2 py-1 text-center"><input type="checkbox" checked={p.orderable} onChange={(e) => patchProduct(p.product_id, { orderable: e.target.checked })} className="accent-sky" /></td>
+                            <td className="px-2 py-1">
+                              <div className="flex items-center gap-1.5">
+                                <input type="date" value={p.eta ?? ''} disabled={!p.orderable} onChange={(e) => patchProduct(p.product_id, { eta: e.target.value || null })} className="bg-cream border border-navy/30 rounded px-1 py-0.5 text-xs" />
+                                {runsOut && (
+                                  <span title="Projected on-hand at this ETA is under 1 day of supply at the current usage rate" className="text-[10px] font-mono font-bold text-[#C0392B] whitespace-nowrap">
+                                    ⚠ Will run out
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-2 py-1 text-right"><button onClick={() => removeProduct(p.product_id)} className="text-inky/50 hover:text-red-500">×</button></td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-[10px] font-mono text-inky/50 px-2 py-1">* non-configured · uncheck Orderable to exclude a product that couldn't be ordered (ETA hides)</p>
+                </div>
+              )}
+              <Combobox label="Action Taken" options={opt(config.actionTaken, actionTaken)} value={actionTaken} onChange={setActionTaken} placeholder="Select or add…" allowCreate onCreateOption={mkCreate('actionTaken')} />
+            </>
+          )}
+        </div>
+
+        <Combobox label="Cause (optional)" options={CAUSE_CATEGORIES.map((c) => ({ value: c, label: c }))}
+          value={causeCategory} onChange={(v) => { setCauseCategory(v); setCauseSubcause('') }} placeholder="None" />
+        <Combobox label="Cause Detail" options={(CAUSE_SUBCAUSES[causeCategory] ?? []).map((s) => ({ value: s, label: s }))}
+          value={causeSubcause} onChange={setCauseSubcause} placeholder={causeCategory ? 'Select…' : 'Pick a cause first'} />
 
         {isException && (
           <div className="col-span-2 flex flex-col gap-3 rounded-lg border border-navy/20 p-3">
