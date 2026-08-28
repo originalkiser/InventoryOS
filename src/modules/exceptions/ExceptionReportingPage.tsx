@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode, type CSSProperties } from 'react'
-import { Pencil, Filter, GripVertical, ChevronUp, ChevronDown } from 'lucide-react'
+import { Pencil, Filter, GripVertical, ChevronUp, ChevronDown, RefreshCw } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -20,6 +20,7 @@ import {
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
+import { usePageRevisit } from '@/hooks/usePageActive'
 import { ImpactedProductsPicker } from './ImpactedProductsPicker'
 import { QuickResponseModal, type QuickResponseSeed } from './QuickResponseModal'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
@@ -50,9 +51,13 @@ const UPLOAD_FIELDS = [
 
 export function ExceptionReportingPage() {
   const { profile } = useAuthStore()
-  const { data, loading, insert, remove, importRows, clearAll } = useConfigTab<ExceptionReport>('exception_reports', 'inventory')
+  const { data, loading, refresh, insert, remove, importRows, clearAll } = useConfigTab<ExceptionReport>('exception_reports', 'inventory')
   const loc = useLocations()
   const { config, save: saveConfig } = useExceptionConfig()
+
+  // Catch up on anything another user changed (a response added, a status
+  // closed) as soon as this page is looked at again, kept-warm cache or not.
+  usePageRevisit(refresh)
 
   // Local mirror so inline edits apply instantly without waiting on a reload.
   const [rowsAll, setRowsAll] = useState<ExceptionReport[]>([])
@@ -162,8 +167,15 @@ export function ExceptionReportingPage() {
       <Tabs defaultValue="summary">
         {/* Pinned header + tabs */}
         <div className="sticky top-0 z-40 bg-cream pt-1 pb-2">
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Exception Reporting</h1>
-          <p className="text-xs text-inky mt-0.5 mb-2">Inventory findings (PO match, activity, on-hand). Every cell is editable inline; the pencil opens full detail.</p>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Exception Reporting</h1>
+              <p className="text-xs text-inky mt-0.5 mb-2">Inventory findings (PO match, activity, on-hand). Every cell is editable inline; the pencil opens full detail.</p>
+            </div>
+            <Button size="sm" variant="secondary" onClick={refresh} disabled={loading}>
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            </Button>
+          </div>
           <div className="flex gap-1 border-b border-navy/30">
             <TabsTrigger value="alerts">Alerts{alertRows.length > 0 ? ` (${alertRows.length})` : ''}</TabsTrigger>
             <TabsTrigger value="summary">Summary</TabsTrigger>

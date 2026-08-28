@@ -140,6 +140,16 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     if (INVENTORY_SOURCE_TABLES.has(tableName)) invalidateInventoryCache()
   }
 
+  // Force a real refetch even inside the TTL window — `load()` alone would
+  // just re-serve the cached data. For a manual "Refresh" button, or for a
+  // page catching up after being kept warm in the Recent Pages cache
+  // (usePageRevisit) — either case wants to know about a change another
+  // user just made, not whatever was cached up to 5 minutes ago.
+  async function refresh() {
+    invalidate()
+    await load()
+  }
+
   function stamp(row: Record<string, unknown>, source: string) {
     return { ...row, company_id: profile!.company_id, updated_by: profile!.id ?? null, last_change_source: source }
   }
@@ -287,5 +297,5 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     await load()
   }
 
-  return { data, loading, load, insert, update, upsertBatch, importRows, remove, removeMany, clearAll }
+  return { data, loading, load, refresh, insert, update, upsertBatch, importRows, remove, removeMany, clearAll }
 }

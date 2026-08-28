@@ -3,12 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { Card, CardBody, SbLoader, Button, Badge } from '@/components/ui'
 import { useInventoryAlerts, type AlertGroup } from '@/hooks/useInventoryAlerts'
+import { usePageRevisit } from '@/hooks/usePageActive'
 import { DataConnectionUpdatesSection } from './DataConnectionUpdatesSection'
 
 export function InventoryAlertsPage() {
   const { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
   const navigate = useNavigate()
   const [showIgnored, setShowIgnored] = useState(false)
+
+  // Catch up on alerts someone else already resolved as soon as this page
+  // (kept warm in the Recent Pages cache) is looked at again.
+  usePageRevisit(reload)
 
   return (
     <div className="flex flex-col gap-4">

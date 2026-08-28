@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Pencil, Filter } from 'lucide-react'
+import { Pencil, Filter, RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { usePageRevisit } from '@/hooks/usePageActive'
 import { Button, Card, CardBody, SbLoader, Tabs, TabsTrigger, TabsContent } from '@/components/ui'
 import { EditDate, EditSelect, CappedTextarea, inputCls } from '@/components/shared/InlineCells'
 import { LocationCommsModal } from './LocationCommsModal'
@@ -66,6 +67,11 @@ export function LocationCommsPage() {
   }, [companyId])
   useEffect(() => { load() }, [load])
 
+  // Catch up on another user's comm/status change as soon as this page is
+  // looked at again — the whole point of logging a comm here is that
+  // someone else can see it happened, so this can't sit stale for minutes.
+  usePageRevisit(load)
+
   // Optimistic local patch + silent direct write (no reload).
   function silentUpdate(id: string, patch: Partial<LocationComm>) {
     setRowsAll((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)))
@@ -123,8 +129,15 @@ export function LocationCommsPage() {
     <div className="flex flex-col">
       <Tabs defaultValue="summary">
         <div className="sticky top-0 z-40 bg-cream pt-1 pb-2">
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Location Comms</h1>
-          <p className="text-xs text-inky mt-0.5 mb-2">Log of shop/AM communications — product requests, exception reporting, and more. Cells are editable inline.</p>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Location Comms</h1>
+              <p className="text-xs text-inky mt-0.5 mb-2">Log of shop/AM communications — product requests, exception reporting, and more. Cells are editable inline.</p>
+            </div>
+            <Button size="sm" variant="secondary" onClick={load} disabled={loading}>
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            </Button>
+          </div>
           <div className="flex gap-1 border-b border-navy/30">
             <TabsTrigger value="alerts">Alerts{alertRows.length > 0 ? ` (${alertRows.length})` : ''}</TabsTrigger>
             <TabsTrigger value="summary">Summary</TabsTrigger>

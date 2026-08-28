@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Routes, useLocation, type Location } from 'react-router-dom'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { APP_ROUTE_ELEMENTS } from '@/routes/appRoutes'
+import { PageActiveContext } from '@/hooks/usePageActive'
 
 // "A small cache keyed by path, probably just the last few visited pages" —
 // matches the Recent Pages carousel's own group-of-3 convention.
@@ -65,14 +66,16 @@ export function KeepAlivePages({ animClass, animTick }: { animClass: string; ani
         const isActive = entry.key === currentKey
         return (
           <div key={entry.key} style={{ display: isActive ? 'block' : 'none' }}>
-            <SwipeAnimator animTick={animTick} animClass={isActive ? animClass : ''}>
-              <ErrorBoundary>
-                {/* The active entry uses the live location object (full
-                    fidelity — hash/state included); a backgrounded entry
-                    replays the location it was last visited at. */}
-                <Routes location={isActive ? location : entry.location}>{APP_ROUTE_ELEMENTS}</Routes>
-              </ErrorBoundary>
-            </SwipeAnimator>
+            <PageActiveContext.Provider value={isActive}>
+              <SwipeAnimator animTick={animTick} animClass={isActive ? animClass : ''}>
+                <ErrorBoundary>
+                  {/* The active entry uses the live location object (full
+                      fidelity — hash/state included); a backgrounded entry
+                      replays the location it was last visited at. */}
+                  <Routes location={isActive ? location : entry.location}>{APP_ROUTE_ELEMENTS}</Routes>
+                </ErrorBoundary>
+              </SwipeAnimator>
+            </PageActiveContext.Provider>
           </div>
         )
       })}
