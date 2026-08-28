@@ -641,9 +641,9 @@ export function TopBar({
 
       </div>
 
-      {/* Who's online + Join Me, and Recent Pages — next to the pill config gear */}
-      <PresenceWidget />
+      {/* Recent Pages, and who's online + Join Me — next to the pill config gear */}
       <RecentPagesWidget />
+      <PresenceWidget />
 
       {/* Pill config gear — next to notifications */}
       <div className="relative flex-shrink-0" ref={pillConfigRef}>
