@@ -105,8 +105,15 @@ export interface GenerationInput {
   location_id: string
   product_id: string
   rule: ProductRule
-  on_hand: number | null        // in quarts
+  on_hand: number | null        // in quarts — combined with other case types of the same product family, see buildGenerationInputs
   daily_usage: number | null    // quarts/day
+  // Present only when this product has other case types of the same
+  // family (e.g. 5W30D/5W30BB) with on-hand blended into the combined
+  // figure above — own_on_hand is this product's own reading before that,
+  // and equivalent_products lists every sibling considered, flagged
+  // whether its on-hand was actually used or excluded as implausibly high.
+  own_on_hand?: number | null
+  equivalent_products?: { product_id: string; on_hand: number; used: boolean }[]
 }
 
 // How a shop's delivery date is worked out for a vendor.

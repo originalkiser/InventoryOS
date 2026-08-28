@@ -460,6 +460,11 @@ export function buildGenerationInputs(
   // anything landing on the same product — same treatment Location Lookup's
   // order-config table gets.
   const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+  // Same convention as RecountLogicTab.tsx's "equivalent case types" on-hand
+  // lookup: a trailing run of letters marks the case-type suffix (e.g. "D"
+  // for drum, "BB" for bulk/tote) — stripping it gives the product family
+  // both belong to, so 5W30D and 5W30BB both resolve to "5W30".
+  const baseProductId = (id: string): string => id.replace(/[A-Z]+$/i, '') || id
   const oldToNew = new Map<string, string>()
   for (const m of productMappings) {
     if (m.old_product_id && m.new_product_id) oldToNew.set(pkey(m.old_product_id), String(m.new_product_id))
@@ -573,7 +578,11 @@ export function buildGenerationInputs(
   // inactive"). Orders v2 never selected the column before now, so this
   // was silently ignored; excluded here so an inactive product never
   // becomes a candidate at all, not just capped.
-  return configs.filter((c) => c.order_limit !== 0).map((c) => {
+  //
+  // Pass 1: each config row's own rule/on-hand/usage, exactly as before —
+  // "own" on-hand, not yet combined with any other case type of the same
+  // product family.
+  const base = configs.filter((c) => c.order_limit !== 0).map((c) => {
     const k = ruleKey(c.location_id, c.product_id)
     const r = ruleMap.get(k)
     const u = usageMap.get(k)
@@ -628,8 +637,47 @@ export function buildGenerationInputs(
       : (u?.on_hands != null ? u.on_hands * srcFactor : null)
     return {
       location_id: c.location_id, product_id: c.product_id, rule,
-      on_hand,
-      daily_usage: u?.daily_usage != null ? u.daily_usage * srcFactor : null,
+      on_hand, daily_usage: u?.daily_usage != null ? u.daily_usage * srcFactor : null,
+    }
+  })
+
+  // Pass 2: group non-VMI rows by shop + product family for the "equivalent
+  // case types" combine below. Keep-fill/VMI is excluded — its on-hand is
+  // already the tank monitor's own reading, not something another case
+  // type's on-hand should be blended into.
+  const familyMembers = new Map<string, { product_id: string; on_hand: number }[]>()
+  for (const b of base) {
+    if (b.rule.vmi_keepfill_enabled || b.on_hand == null) continue
+    const fam = `${b.location_id}|${pkey(baseProductId(b.product_id))}`
+    if (!familyMembers.has(fam)) familyMembers.set(fam, [])
+    familyMembers.get(fam)!.push({ product_id: b.product_id, on_hand: b.on_hand })
+  }
+
+  // Pass 3: combine each row's own on-hand with its family's other case
+  // types — e.g. 5W30D and 5W30BB both resolve to family "5W30", so
+  // ordering 5W30BB accounts for on-hand sitting under the 5W30D id too.
+  // A sibling reading that's implausibly large next to this product's own
+  // usage (more than a 12-gallon drum's worth, or more than a day's usage,
+  // whichever is smaller) is excluded from the combined total — probably a
+  // stale reading rather than product actually on the shelf at this shop —
+  // but still shown, tagged "not used", never silently dropped.
+  const CASE_CARRYOVER_MAX_QUARTS = 48 // 12 gallons, in this module's quarts convention
+  return base.map((b) => {
+    if (b.rule.vmi_keepfill_enabled || b.on_hand == null) {
+      return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage }
+    }
+    const fam = `${b.location_id}|${pkey(baseProductId(b.product_id))}`
+    const siblings = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== b.product_id)
+    if (siblings.length === 0) {
+      return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage }
+    }
+    const threshold = Math.min(CASE_CARRYOVER_MAX_QUARTS, Number(b.daily_usage ?? 0))
+    const equivalent_products = siblings.map((s) => ({ ...s, used: s.on_hand <= threshold }))
+    const combined = b.on_hand + equivalent_products.filter((e) => e.used).reduce((sum, e) => sum + e.on_hand, 0)
+    return {
+      location_id: b.location_id, product_id: b.product_id, rule: b.rule,
+      on_hand: combined, daily_usage: b.daily_usage,
+      own_on_hand: b.on_hand, equivalent_products,
     }
   })
 }

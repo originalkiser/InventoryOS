@@ -214,6 +214,15 @@ export function OrdersV2Review() {
     return m
   }, [allInputs])
 
+  // The specific (location, product) candidate behind a draft line — for
+  // the "other case types on hand" sub-listing under the main On Hand
+  // column, since own_on_hand/equivalent_products live on the generation
+  // input, not the persisted line (see buildGenerationInputs).
+  const inputByLineKey = useMemo(
+    () => new Map(allInputs.map((i) => [`${i.location_id}|${i.product_id}`, i])),
+    [allInputs],
+  )
+
   async function addConfiguredProduct(input: GenerationInput, qty: number) {
     if (qty <= 0) return
     await addLine({
@@ -352,6 +361,7 @@ export function OrdersV2Review() {
                 const locId = l.location_id ?? ''
                 const isLastOfShop = idx === visible.length - 1 || visible[idx + 1].location_id !== l.location_id
                 const shopOpen = expanded.has(locId)
+                const input = inputByLineKey.get(`${l.location_id}|${l.product_id}`)
                 return (
                   <Fragment key={l.id}>
                     <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
@@ -367,7 +377,19 @@ export function OrdersV2Review() {
                       <Td>{l.product_id}</Td>
                       <Td>{l.uom ?? '—'}</Td>
                       <Td align="right">{num(l.max_capacity_gallons, 0)}</Td>
-                      <Td align="right">{num(l.on_hand)}</Td>
+                      <td className="px-2 py-1 text-right text-navy whitespace-nowrap">
+                        {num(input?.own_on_hand ?? l.on_hand)}
+                        {input?.equivalent_products && input.equivalent_products.length > 0 && (
+                          <div className="text-[9px] text-inky/50 leading-tight font-normal">
+                            {input.equivalent_products.map((e) => (
+                              <div key={e.product_id}
+                                title={e.used ? undefined : 'Not used in the order calculation — on-hand is high relative to usage here, likely stale or not actually on hand at this shop'}>
+                                {e.product_id}: {num(e.on_hand)}{!e.used && ' (not used)'}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <Td align="right">{num(l.daily_usage)}</Td>
                       <Td align="right">{dos(l.dos_before)}</Td>
                       <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
