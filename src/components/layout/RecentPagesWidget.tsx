@@ -8,8 +8,13 @@ import { shortForLabel } from '@/lib/routeLabels'
 // Clicking the clock inline-reveals the group-of-3 buttons in the bar itself
 // (not a dropdown panel); Cmd/Ctrl+K reveals it from anywhere; Alt+Left/
 // Alt+Right (handled by useRecentPagesTracking, called once from TopBar) walk
-// the linear visit stack independently of this carousel's own group paging.
+// the linear visit stack independently of this carousel's own group paging,
+// and are watched here (via the store's lastStackNav) so a hotkey press
+// auto-reveals the widget, jumps to whichever group holds the landed-on
+// page, and "pins" it open — bouncing back and forth between two pages via
+// the hotkeys keeps it open instead of the next click elsewhere closing it.
 const GROUP_SIZE = 3
+const PIN_TIMEOUT_MS = 4000
 
 // Immediate, stylized hover tooltip — mirrors Sidebar.tsx's own flyout
 // (same colors/timing) instead of the browser's native `title` delay/style.
@@ -35,9 +40,13 @@ function useFlyout() {
 export function RecentPagesWidget() {
   const navigate = useNavigate()
   const recentPages = useRecentPagesStore((s) => s.recentPages)
+  const lastStackNav = useRecentPagesStore((s) => s.lastStackNav)
   const [open, setOpen] = useState(false)
+  const [pinned, setPinned] = useState(false)
   const [groupIndex, setGroupIndex] = useState(0)
+  const [direction, setDirection] = useState<'back' | 'forward' | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const pinTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const { show: showTip, hide: hideTip, node: tipNode } = useFlyout()
 
   const groups: typeof recentPages[] = []
@@ -48,14 +57,32 @@ export function RecentPagesWidget() {
     if (groupIndex > 0 && groupIndex > groups.length - 1) setGroupIndex(Math.max(0, groups.length - 1))
   }, [groups.length, groupIndex])
 
+  // A hotkey nav just happened — reveal, jump to that page's group, pick the
+  // slide direction, and pin (an unrelated outside click won't close this
+  // while pinned, so bouncing back and forth keeps it visible). Unpins itself
+  // after a few seconds of no further hotkey activity.
   useEffect(() => {
-    if (!open) return
+    if (!lastStackNav) return
+    const idx = recentPages.findIndex((p) => p.path === lastStackNav.path)
+    if (idx !== -1) setGroupIndex(Math.floor(idx / GROUP_SIZE))
+    setDirection(lastStackNav.direction)
+    setOpen(true)
+    setPinned(true)
+    clearTimeout(pinTimerRef.current)
+    pinTimerRef.current = setTimeout(() => { setPinned(false); setOpen(false) }, PIN_TIMEOUT_MS)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastStackNav?.at])
+
+  useEffect(() => () => clearTimeout(pinTimerRef.current), [])
+
+  useEffect(() => {
+    if (!open || pinned) return
     function onClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [open])
+  }, [open, pinned])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -73,10 +100,23 @@ export function RecentPagesWidget() {
     navigate(path)
   }
 
+  // Explicit click on the clock always wins — closes even while pinned, and
+  // clears the pin so a stray click right after doesn't reopen anything.
+  function toggleOpen() {
+    clearTimeout(pinTimerRef.current)
+    setPinned(false)
+    setDirection(null)
+    setOpen((v) => !v)
+  }
+
+  const animClass = direction === 'back' ? 'animate-[swipeRight_180ms_ease-out]'
+    : direction === 'forward' ? 'animate-[swipeLeft_180ms_ease-out]'
+    : 'animate-[fadeIn_150ms_ease-out]'
+
   return (
-    <div className="relative flex items-center gap-1.5 flex-shrink-0" ref={ref}>
+    <div className={`relative flex items-center flex-shrink-0 ${open ? 'gap-1.5' : 'gap-0'}`} ref={ref}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggleOpen}
         onMouseEnter={(e) => showTip(e, 'Recent pages — Alt+← / Alt+→ / Ctrl+K')}
         onMouseLeave={hideTip}
         className={[
@@ -95,11 +135,11 @@ export function RecentPagesWidget() {
           transform was relative to the whole track's width rather than one
           group's, so with more than one group the offset math was wrong
           (showed more than 3, and going back never landed on the right
-          spot). A key-changed fade is a safe stand-in for the slide. */}
+          spot). A key-changed directional swipe stands in for a true slide. */}
       <div className={`overflow-hidden transition-[max-width,opacity] duration-300 ease-out ${open && groups.length > 0 ? 'max-w-[220px] opacity-100' : 'max-w-0 opacity-0'}`}>
         <div className="relative flex items-center gap-1 pl-0.5">
           {groups.length > 0 && (
-            <div key={groupIndex} className="flex justify-center gap-3 w-[168px] flex-shrink-0 animate-[fadeIn_150ms_ease-out]">
+            <div key={groupIndex} className={`flex justify-center gap-3 w-[168px] flex-shrink-0 ${animClass}`}>
               {groups[groupIndex].map((page, pi) => {
                 const showLeftEdge = pi === 0 && groupIndex > 0
                 const showRightEdge = pi === groups[groupIndex].length - 1 && groupIndex < groups.length - 1
@@ -111,7 +151,7 @@ export function RecentPagesWidget() {
                         would fire mouseleave and hide it first. */}
                     {showLeftEdge && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setGroupIndex((i) => Math.max(0, i - 1)) }}
+                        onClick={(e) => { e.stopPropagation(); setDirection('back'); setGroupIndex((i) => Math.max(0, i - 1)) }}
                         aria-label="Previous pages"
                         className="absolute -left-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
                       >
@@ -133,7 +173,7 @@ export function RecentPagesWidget() {
                     </button>
                     {showRightEdge && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setGroupIndex((i) => Math.min(groups.length - 1, i + 1)) }}
+                        onClick={(e) => { e.stopPropagation(); setDirection('forward'); setGroupIndex((i) => Math.min(groups.length - 1, i + 1)) }}
                         aria-label="More pages"
                         className="absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
                       >

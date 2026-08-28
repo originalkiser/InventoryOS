@@ -42,11 +42,22 @@ function savePersisted(state: Persisted) {
   try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state)) } catch { /* ignore */ }
 }
 
+// Set on every successful goBack/goForward — RecentPagesWidget watches this
+// to auto-reveal itself, jump to the right page, and pick which direction
+// to slide in from. `at` changes on every call (even repeated same-direction
+// presses) so the widget's effect fires each time, not just on first press.
+export interface LastStackNav {
+  path: string
+  direction: 'back' | 'forward'
+  at: number
+}
+
 interface RecentPagesState extends Persisted {
   // True for the one recordVisit() call that follows a goBack/goForward —
   // the stack already reflects that move, so it must not be treated as a
   // fresh visit (which would trim "forward" history and push a duplicate).
   navigatingViaStack: boolean
+  lastStackNav: LastStackNav | null
   recordVisit: (path: string, label: string) => void
   goBack: () => string | null
   goForward: () => string | null
@@ -55,6 +66,7 @@ interface RecentPagesState extends Persisted {
 export const useRecentPagesStore = create<RecentPagesState>((set, get) => ({
   ...loadPersisted(),
   navigatingViaStack: false,
+  lastStackNav: null,
 
   recordVisit: (path, label) => {
     const { navigatingViaStack, recentPages, visitStack, visitCursor } = get()
@@ -86,17 +98,19 @@ export const useRecentPagesStore = create<RecentPagesState>((set, get) => ({
     const { visitStack, visitCursor } = get()
     if (visitCursor <= 0) return null
     const nextCursor = visitCursor - 1
-    set({ visitCursor: nextCursor, navigatingViaStack: true })
+    const path = visitStack[nextCursor]
+    set({ visitCursor: nextCursor, navigatingViaStack: true, lastStackNav: { path, direction: 'back', at: Date.now() } })
     savePersisted({ recentPages: get().recentPages, visitStack, visitCursor: nextCursor })
-    return visitStack[nextCursor]
+    return path
   },
 
   goForward: () => {
     const { visitStack, visitCursor } = get()
     if (visitCursor >= visitStack.length - 1) return null
     const nextCursor = visitCursor + 1
-    set({ visitCursor: nextCursor, navigatingViaStack: true })
+    const path = visitStack[nextCursor]
+    set({ visitCursor: nextCursor, navigatingViaStack: true, lastStackNav: { path, direction: 'forward', at: Date.now() } })
     savePersisted({ recentPages: get().recentPages, visitStack, visitCursor: nextCursor })
-    return visitStack[nextCursor]
+    return path
   },
 }))
