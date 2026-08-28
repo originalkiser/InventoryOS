@@ -22,6 +22,10 @@ export interface HistoryOrder {
   location_count: number
   line_count: number
   total_dollars: number
+  // New column (migration 20260828e_order_history_gallons.sql) — may be
+  // missing on rows finalized before it was added, or in a production
+  // database that hasn't run the migration yet. Saved best-effort below.
+  total_gallons?: number | null
   export_status: string
   export_count: number
   last_exported_at: string | null
@@ -169,6 +173,7 @@ export async function finalizeDraft(
 ): Promise<string | null> {
   const included = lines.filter((l) => l.included && Number(l.qty) > 0)
   const total = included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0)
+  const totalGallons = included.reduce((s, l) => s + (l.quarts_per_unit ? Number(l.qty) * Number(l.quarts_per_unit) : 0), 0) / 4
   const shops = new Set(included.map((l) => l.location_id))
   const types = new Set(included.map((l) => l.order_type))
   const now = new Date().toISOString()
@@ -181,6 +186,12 @@ export async function finalizeDraft(
     settings_snapshot: draft.settings_snapshot, finalized_by: userId, finalized_at: now,
   }).select('id').single()
   if (error) { toast.error(error.message); return null }
+
+  // Best-effort: total_gallons is a new column that may not exist in
+  // production yet. Never let it block the core insert above, which is
+  // what actually finalizes the order.
+  sb().schema('inventory').from('ov2_order_history')
+    .update({ total_gallons: totalGallons }).eq('id', head.id).then(() => {})
 
   const payload = included.map((l) => ({
     company_id: companyId, order_id: head.id, location_id: l.location_id, product_id: l.product_id,

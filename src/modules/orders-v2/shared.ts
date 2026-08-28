@@ -26,6 +26,17 @@ export const money = (v: number | null | undefined) =>
 export const num = (v: number | null | undefined, dp = 2) =>
   v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: dp })
 
+export const gallons = (v: number | null | undefined) =>
+  v == null ? '—' : `${num(v, 0)} gal`
+
+const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/** Which weekday's shops an order/draft was built for, cached on its settings snapshot. */
+export const orderDayLabel = (snapshot: Record<string, unknown> | null | undefined) => {
+  const idx = (snapshot as any)?.__order_dow
+  return typeof idx === 'number' && idx >= 0 && idx < DOW_SHORT.length ? DOW_SHORT[idx] : '—'
+}
+
 export const dos = (v: number | null | undefined) => (v == null ? '∞' : Number(v).toFixed(1))
 
 export const dShort = (d: string | null | undefined) => {

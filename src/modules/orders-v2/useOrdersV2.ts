@@ -212,6 +212,46 @@ export function useDrafts() {
   return { drafts, loading, createDraft, deleteDraft, reload: load }
 }
 
+export interface DraftAggregate { products: number; gallons: number; cost: number }
+
+/**
+ * Per-draft product/gallon/cost totals for the landing page's status
+ * tables. Read live from the lines table (not cached on the draft header
+ * the way ov2_order_history's totals are at finalize time) since a draft
+ * is still being edited — a cached figure would go stale on every line
+ * edit made from the Review/Final Review pages.
+ */
+export function useDraftAggregates(draftIds: string[]) {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const [aggregates, setAggregates] = useState<Record<string, DraftAggregate>>({})
+  const key = draftIds.slice().sort().join(',')
+
+  useEffect(() => {
+    let cancelled = false
+    if (!companyId || !key) { setAggregates({}); return }
+    ;(async () => {
+      const rows = await fetchAll<{ draft_id: string; qty: number; unit_cost: number | null; quarts_per_unit: number | null; included: boolean }>(
+        'inventory', 'ov2_order_draft_lines', 'draft_id, qty, unit_cost, quarts_per_unit, included', companyId,
+        (q: any) => q.in('draft_id', key.split(',')),
+      )
+      if (cancelled) return
+      const out: Record<string, DraftAggregate> = {}
+      for (const r of rows) {
+        if (!r.included || Number(r.qty) <= 0) continue
+        const agg = out[r.draft_id] ?? (out[r.draft_id] = { products: 0, gallons: 0, cost: 0 })
+        agg.products += 1
+        agg.cost += Number(r.qty) * Number(r.unit_cost ?? 0)
+        if (r.quarts_per_unit) agg.gallons += (Number(r.qty) * Number(r.quarts_per_unit)) / 4
+      }
+      setAggregates(out)
+    })()
+    return () => { cancelled = true }
+  }, [companyId, key])
+
+  return aggregates
+}
+
 // ── Single draft (+ lines) ──────────────────────────────────────────────
 
 export function useDraft(draftId: string | null) {

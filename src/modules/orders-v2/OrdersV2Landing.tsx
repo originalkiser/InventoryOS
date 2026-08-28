@@ -4,10 +4,10 @@ import { Plus, Trash2 } from 'lucide-react'
 import { Button, Card, CardBody, Combobox, Input, Modal, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
-import { useDrafts, useOrderSettings, useOrderDayCoverage, type DraftRow } from './useOrdersV2'
+import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow, type DraftAggregate } from './useOrdersV2'
 import { useOrderHistory } from './useOrderHistory'
 import { useVendors, useUserNames } from './useLookups'
-import { STATUS_LABEL, statusRoute, money, dShort, dTime } from './shared'
+import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -62,6 +62,14 @@ export function OrdersV2Landing() {
   const visibleFinalReview = filterDrafts(finalReviewDrafts)
   const visibleCancelled = filterDrafts(cancelledDrafts)
   const visibleOrders = orders.filter((o) => matches(o.vendor_id, o.order_date, [o.finalized_by]))
+
+  // One aggregate query for every visible draft's products/gallons/cost,
+  // instead of each status tab loading its own lines.
+  const visibleDraftIds = useMemo(
+    () => [...visibleReview, ...visibleFinalReview, ...visibleCancelled].map((d) => d.id),
+    [visibleReview, visibleFinalReview, visibleCancelled],
+  )
+  const aggregates = useDraftAggregates(visibleDraftIds)
 
   const vendorName = (id: string | null) => vendors.byId(id)?.name ?? '—'
 
@@ -120,7 +128,7 @@ export function OrdersV2Landing() {
           <DraftTable
             rows={visibleReview} loading={loading}
             emptyMessage={'No orders in progress. "Start New Order" creates one immediately — it\'s saved server-side, so you can leave and pick it back up here.'}
-            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft}
+            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft} aggregates={aggregates}
           />
         </TabsContent>
 
@@ -128,7 +136,7 @@ export function OrdersV2Landing() {
           <DraftTable
             rows={visibleFinalReview} loading={loading}
             emptyMessage="Nothing at the final review step right now."
-            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft}
+            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft} aggregates={aggregates}
           />
         </TabsContent>
 
@@ -136,7 +144,7 @@ export function OrdersV2Landing() {
           <DraftTable
             rows={visibleCancelled} loading={loading}
             emptyMessage="No cancelled drafts."
-            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft}
+            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft} aggregates={aggregates}
           />
         </TabsContent>
 
@@ -147,7 +155,7 @@ export function OrdersV2Landing() {
               <div className="overflow-auto rounded border border-navy/30">
                 <table className="w-full text-xs font-mono">
                   <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-                    <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Lines</Th><Th align="right">Total</Th><Th>Export</Th><Th>Finalized</Th><Th>By</Th>
+                    <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Order Day</Th><Th>Products</Th><Th>Gallons</Th><Th align="right">Cost</Th><Th>Export</Th><Th>Finalized</Th><Th>By</Th>
                   </tr></thead>
                   <tbody>
                     {visibleOrders.map((o) => (
@@ -156,7 +164,9 @@ export function OrdersV2Landing() {
                         <Td>{vendorName(o.vendor_id)}</Td>
                         <Td>{dShort(o.order_date)}</Td>
                         <Td>{o.location_count}</Td>
+                        <Td>{orderDayLabel(o.settings_snapshot)}</Td>
                         <Td>{o.line_count}</Td>
+                        <Td>{gallons(o.total_gallons)}</Td>
                         <Td align="right">{money(o.total_dollars)}</Td>
                         <Td>
                           {o.export_status}
@@ -218,7 +228,7 @@ export function OrdersV2Landing() {
 // Shared by every status tab — a draft's status determines both which tab
 // it's in and where clicking it navigates (statusRoute), so there's exactly
 // one place per draft it can be found, by construction.
-function DraftTable({ rows, loading, emptyMessage, navigate, vendorName, loc, names, deleteDraft }: {
+function DraftTable({ rows, loading, emptyMessage, navigate, vendorName, loc, names, deleteDraft, aggregates }: {
   rows: DraftRow[]
   loading: boolean
   emptyMessage: string
@@ -227,6 +237,7 @@ function DraftTable({ rows, loading, emptyMessage, navigate, vendorName, loc, na
   loc: ReturnType<typeof useLocations>
   names: ReturnType<typeof useUserNames>
   deleteDraft: (id: string) => void | Promise<void>
+  aggregates: Record<string, DraftAggregate>
 }) {
   if (loading) return <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
   if (rows.length === 0) return <p className="text-xs font-mono text-inky/60 py-8">{emptyMessage}</p>
@@ -234,25 +245,33 @@ function DraftTable({ rows, loading, emptyMessage, navigate, vendorName, loc, na
     <div className="overflow-auto rounded border border-navy/30">
       <table className="w-full text-xs font-mono">
         <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-          <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Step</Th><Th>Last Edited</Th><Th>By</Th><Th />
+          <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Step</Th><Th>Order Day</Th><Th>Products</Th><Th>Gallons</Th>
+          <Th align="right">Cost</Th><Th>Last Edited</Th><Th>By</Th><Th />
         </tr></thead>
         <tbody>
-          {rows.map((d) => (
-            <tr key={d.id} className="border-b border-navy/15 hover:bg-sky/10 cursor-pointer"
-              onClick={() => navigate(statusRoute(d))}>
-              <Td>{vendorName(d.vendor_id)}</Td>
-              <Td>{dShort(d.order_date)}</Td>
-              <Td><ShopCount draft={d} loc={loc} /></Td>
-              <Td><span className="rounded-full bg-sky/25 text-navy px-2 py-0.5">{STATUS_LABEL[d.status]}</span></Td>
-              <Td>{dTime(d.updated_at)}</Td>
-              <Td>{names.nameOf(d.last_edited_by ?? d.created_by)}</Td>
-              <Td>
-                <button title="Delete draft"
-                  onClick={(e) => { e.stopPropagation(); if (confirm('Delete this draft order? Its lines are removed too.')) deleteDraft(d.id) }}
-                  className="text-inky/40 hover:text-[#C0392B]"><Trash2 className="w-3.5 h-3.5" /></button>
-              </Td>
-            </tr>
-          ))}
+          {rows.map((d) => {
+            const agg = aggregates[d.id]
+            return (
+              <tr key={d.id} className="border-b border-navy/15 hover:bg-sky/10 cursor-pointer"
+                onClick={() => navigate(statusRoute(d))}>
+                <Td>{vendorName(d.vendor_id)}</Td>
+                <Td>{dShort(d.order_date)}</Td>
+                <Td><ShopCount draft={d} loc={loc} /></Td>
+                <Td><span className="rounded-full bg-sky/25 text-navy px-2 py-0.5">{STATUS_LABEL[d.status]}</span></Td>
+                <Td>{orderDayLabel(d.settings_snapshot)}</Td>
+                <Td>{agg ? agg.products : '—'}</Td>
+                <Td>{agg ? gallons(agg.gallons) : '—'}</Td>
+                <Td align="right">{agg ? money(agg.cost) : '—'}</Td>
+                <Td>{dTime(d.updated_at)}</Td>
+                <Td>{names.nameOf(d.last_edited_by ?? d.created_by)}</Td>
+                <Td>
+                  <button title="Delete draft"
+                    onClick={(e) => { e.stopPropagation(); if (confirm('Delete this draft order? Its lines are removed too.')) deleteDraft(d.id) }}
+                    className="text-inky/40 hover:text-[#C0392B]"><Trash2 className="w-3.5 h-3.5" /></button>
+                </Td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
