@@ -20,7 +20,7 @@ export function OrdersV2FinalReview() {
   const vendors = useVendors()
   const { settings } = useOrderSettings()
   const { rulesFor } = useVendorRules()
-  const { draft, lines, loading, patchLine, removeLine, setStatus } = useDraft(draftId || null)
+  const { draft, lines, loading, patchLine, removeLine } = useDraft(draftId || null)
 
   const [filter, setFilter] = useState('')
   const [openShop, setOpenShop] = useState<{ locationId: string; orderType: OrderType } | null>(null)
@@ -103,7 +103,7 @@ export function OrdersV2FinalReview() {
             {vendors.byId(draft.vendor_id)?.name ?? 'All vendors'} · {groups.length} order{groups.length !== 1 ? 's' : ''} · {money(total)}
           </p>
         </div>
-        <Button size="sm" onClick={async () => { await setStatus('exported'); navigate(`/orders-v2/draft/${draft.id}/export`) }}>
+        <Button size="sm" onClick={() => navigate(`/orders-v2/draft/${draft.id}/export`)}>
           Continue to Export →
         </Button>
       </div>
