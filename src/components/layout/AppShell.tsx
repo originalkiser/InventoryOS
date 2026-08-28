@@ -1,17 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import { CheckCircle2, MapPin, MessageSquare, Package, ChevronUp, ChevronDown } from 'lucide-react'
 import { Sidebar, SECTION_ITEMS, QUICK_FAB_DEFAULT } from './Sidebar'
 import { TopBar } from './TopBar'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
-import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
 import { InventoryOverlay } from '@/components/inventory/InventoryOverlay'
 import { MeetingOverlay } from '@/modules/meetings/MeetingOverlay'
 import type { PanelMode } from '@/components/shared/FloatingPanel'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { useRecentPagesStore } from '@/stores/recentPagesStore'
+import { KeepAlivePages } from './KeepAlivePages'
 
 const LOOKUP_MODE_KEY = 'locationLookup.mode'
 const LOOKUP_WIDTH_KEY = 'locationLookup.width'
@@ -51,6 +51,11 @@ export function AppShell() {
   // untouched (no animation), since that was never asked for.
   const lastStackNav = useRecentPagesStore((s) => s.lastStackNav)
   const [pageAnimClass, setPageAnimClass] = useState('')
+  // Bumped alongside pageAnimClass so KeepAlivePages' animator restarts the
+  // CSS animation even when two navigations in a row resolve to the exact
+  // same class string (e.g. two consecutive "back" hops) — a class
+  // re-applying an unchanged value doesn't replay on its own.
+  const [animTick, setAnimTick] = useState(0)
   const prevPathRef = useRef(location.pathname)
   useEffect(() => {
     if (location.pathname === prevPathRef.current) return
@@ -62,6 +67,7 @@ export function AppShell() {
         : lastStackNav!.direction === 'forward' ? 'animate-[swipeLeft_220ms_ease-out]'
         : 'animate-[fadeIn_180ms_ease-out]',
     )
+    setAnimTick((t) => t + 1)
   }, [location.pathname, lastStackNav])
 
   // Measure TopBar height so panels can stay below it even when it wraps
@@ -181,11 +187,7 @@ export function AppShell() {
         >
           {isInventoryRoute && <InventoryNavBar onHeightChange={setNavBarHeight} />}
           <main className="p-3 sm:p-6">
-            <div key={location.pathname} className={pageAnimClass}>
-              <ErrorBoundary>
-                <Outlet />
-              </ErrorBoundary>
-            </div>
+            <KeepAlivePages animClass={pageAnimClass} animTick={animTick} />
           </main>
           {/* Spacer so scrolled-to-bottom content clears the FAB row */}
           <div className="h-16" />
