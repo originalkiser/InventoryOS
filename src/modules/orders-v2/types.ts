@@ -159,6 +159,8 @@ export type LineFlag =
   | 'alone_default_qty'      // sole line, used default_order_amount_if_alone
   | 'vmi_keepfill'           // vendor-managed inventory — excluded from the order total by default
   | 'keepfill_will_run_out'  // tank on-hand + usage won't last to this shop's delivery after next
+  | 'added_for_smoothing'    // pulled onto the order from the shop's other config to reach the minimum
+  | 'smoothing_topped_up'    // this line's own qty was raised to reach the minimum
 
 export interface GeneratedLine {
   location_id: string

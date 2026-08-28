@@ -566,6 +566,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
         if (take <= 0) { headroom[i] = 0; continue }
         lines[i].qty = roundQty(lines[i].qty + take, lines[i].uom, ctx.settings.bulk_rounding_decimals)
         lines[i].system_qty = lines[i].qty
+        if (!lines[i].flags.includes('smoothing_topped_up')) lines[i].flags.push('smoothing_topped_up')
         headroom[i] -= take
         lines[i].dos_after = daysOfSupply(n(lines[i].on_hand) + lines[i].qty * gallonsPerUnit(inp.rule), lines[i].daily_usage)
         markOverDosMax(lines[i], ctx)
@@ -596,6 +597,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
           if (units <= 0) continue
           const line = buildLine(sp, ctx, units, caps)
           line.added_by_smoothing = true
+          line.flags.push('added_for_smoothing')
           markOverDosMax(line, ctx)
           lines.push(line)
           dollars = groupDollars(lines, ruleOf)

@@ -156,17 +156,7 @@ export function OrdersV2Review() {
     return m
   }, [lines])
 
-  const groupDollars = useCallback(
-    (ls: DraftLineRow[]) => ls.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0),
-    [],
-  )
-
   const overrideCount = useMemo(() => lines.filter((l) => l.is_override).length, [lines])
-  const overridesByShop = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const l of lines) if (l.is_override) m.set(l.location_id ?? '', (m.get(l.location_id ?? '') ?? 0) + 1)
-    return m
-  }, [lines])
 
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -212,21 +202,9 @@ export function OrdersV2Review() {
     return m
   }, [visible])
 
-  // Every candidate the engine saw for a shop/order-type, whether or not it
-  // ended up on the draft — what the smoothing panel below shows per shop.
-  const inputsByGroup = useMemo(() => {
-    const m = new Map<string, GenerationInput[]>()
-    for (const i of allInputs) {
-      const k = `${i.location_id}|${resolvedOrderType(i.rule)}`
-      if (!m.has(k)) m.set(k, [])
-      m.get(k)!.push(i)
-    }
-    return m
-  }, [allInputs])
-
-  // Same, but keyed by shop alone (spans every order type) — for "expand
-  // this shop to everything configured for it", not just the group already
-  // on screen.
+  // Every candidate the engine saw for a shop, whether or not it ended up on
+  // the draft — spans every order type, for "expand this shop to everything
+  // configured for it" (see shopRows below).
   const inputsByLocation = useMemo(() => {
     const m = new Map<string, GenerationInput[]>()
     for (const i of allInputs) {
@@ -386,10 +364,7 @@ export function OrdersV2Review() {
                           {shopLabel(l.location_id)}
                         </button>
                       </td>
-                      <Td>
-                        {l.product_id}
-                        {l.added_by_smoothing && <span className="ml-1 text-[9px] text-sky" title="Added to reach the order minimum">+min</span>}
-                      </Td>
+                      <Td>{l.product_id}</Td>
                       <Td>{l.uom ?? '—'}</Td>
                       <Td align="right">{num(l.max_capacity_gallons, 0)}</Td>
                       <Td align="right">{num(l.on_hand)}</Td>
@@ -449,74 +424,6 @@ export function OrdersV2Review() {
             </tbody>
           </table>
         </div>
-      )}
-
-      {/* Per-shop smoothing transparency */}
-      {[...groups.entries()].some(([, ls]) => ls.some((l) => l.triggered_smoothing || l.added_by_smoothing)) && (
-        <Card><CardBody className="flex flex-col gap-2">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Smoothing detail</span>
-          <p className="text-[11px] font-mono text-inky/60">
-            These shops came in under their order minimum after the first pass. Expand to see every product in the
-            shop's config and which one(s) triggered the top-up.
-          </p>
-          {[...groups.entries()]
-            .filter(([, ls]) => ls.some((l) => l.triggered_smoothing || l.added_by_smoothing))
-            .sort(([a], [b]) => shopLabel(a.split('|')[0]).localeCompare(shopLabel(b.split('|')[0]), undefined, { numeric: true }))
-            .map(([key, ls]) => {
-              const [locId, type] = key.split('|')
-              const open = expanded.has(key)
-
-              // The shop's full config for this order type — including
-              // products the engine decided NOT to order — not just what
-              // landed on the draft, so "what else could close the gap" is
-              // visible alongside what already did.
-              const candidates = inputsByGroup.get(key) ?? []
-              const lineByProduct = new Map(ls.map((l) => [l.product_id, l]))
-              const candidateIds = new Set(candidates.map((c) => c.product_id))
-              const rows: { input?: GenerationInput; line?: DraftLineRow }[] =
-                candidates.map((c) => ({ input: c, line: lineByProduct.get(c.product_id) }))
-              for (const l of ls) if (!candidateIds.has(l.product_id)) rows.push({ line: l })
-              // Actionable rows first (what caused the shortfall, what was
-              // pulled in to close it), then everything else alphabetically.
-              rows.sort((ra, rb) => {
-                const rank = (r: typeof ra) => (r.line?.triggered_smoothing ? 0 : r.line?.added_by_smoothing ? 1 : 2)
-                const d = rank(ra) - rank(rb)
-                if (d !== 0) return d
-                return (ra.line?.product_id ?? ra.input?.product_id ?? '').localeCompare(rb.line?.product_id ?? rb.input?.product_id ?? '')
-              })
-
-              return (
-                <div key={key} className="rounded border border-navy/20">
-                  <button onClick={() => setExpanded((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n })}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-mono text-navy hover:bg-navy/5">
-                    {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                    {shopLabel(locId)} · {type} · {money(groupDollars(ls))}
-                    {overridesByShop.get(locId) ? <span className="text-[#E67E22]">({overridesByShop.get(locId)} override)</span> : null}
-                  </button>
-                  {open && (
-                    <div className="px-3 pb-2">
-                      <table className="w-full text-[11px] font-mono">
-                        <thead><tr className="text-inky/60 uppercase">
-                          <td className="py-1">Product</td><td>UOM</td>
-                          <td className="text-right">Capacity</td><td className="text-right">On Hand</td>
-                          <td className="text-right">Usage/Day</td><td className="text-right">DOS Now</td>
-                          <td className="text-right">Qty</td><td className="text-right">DOS After</td>
-                          <td className="text-right">$</td><td>Why</td>
-                        </tr></thead>
-                        <tbody>
-                          {rows.map((r) => (
-                            <SmoothingRow key={r.line?.id ?? r.input?.product_id}
-                              input={r.input} line={r.line}
-                              onPatch={(id, qty) => patchLine(id, { qty })} onAdd={addConfiguredProduct} />
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-        </CardBody></Card>
       )}
 
       {skipped.length > 0 && (
