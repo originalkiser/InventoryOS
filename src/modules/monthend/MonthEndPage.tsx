@@ -8,6 +8,7 @@ import { MonthEndPullPanel } from '@/components/integrations/MonthEndPullPanel'
 import { CountsTab } from './CountsTab'
 import { RecountLogicTab } from './RecountLogicTab'
 import { RecountsTab } from './RecountsTab'
+import { RecountHistoryTab } from './RecountHistoryTab'
 import { NotSubmittedTab } from './NotSubmittedTab'
 import { ProductExceptionsTab } from './ProductExceptionsTab'
 import { OverviewTab } from './OverviewTab'
@@ -99,6 +100,7 @@ export function MonthEndPage() {
           <TabsTrigger value="product_exceptions">Product Exceptions</TabsTrigger>
           <TabsTrigger value="recount_logic">Recount Logic</TabsTrigger>
           <TabsTrigger value="recounts">Recounts</TabsTrigger>
+          <TabsTrigger value="recount_history">Recount History</TabsTrigger>
           <TabsTrigger value="review">Review</TabsTrigger>
           <TabsTrigger value="not_submitted">Not Submitted</TabsTrigger>
         </TabsList>
@@ -107,6 +109,7 @@ export function MonthEndPage() {
         <TabsContent value="product_exceptions"><ProductExceptionsTab /></TabsContent>
         <TabsContent value="recount_logic"><RecountLogicTab /></TabsContent>
         <TabsContent value="recounts"><RecountsTab /></TabsContent>
+        <TabsContent value="recount_history"><RecountHistoryTab /></TabsContent>
         <TabsContent value="review"><ReviewTab /></TabsContent>
         <TabsContent value="not_submitted"><NotSubmittedTab /></TabsContent>
       </Tabs>
