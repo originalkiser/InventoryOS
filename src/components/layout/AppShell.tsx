@@ -11,6 +11,7 @@ import { InventoryOverlay } from '@/components/inventory/InventoryOverlay'
 import { MeetingOverlay } from '@/modules/meetings/MeetingOverlay'
 import type { PanelMode } from '@/components/shared/FloatingPanel'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { useRecentPagesStore } from '@/stores/recentPagesStore'
 
 const LOOKUP_MODE_KEY = 'locationLookup.mode'
 const LOOKUP_WIDTH_KEY = 'locationLookup.width'
@@ -43,6 +44,25 @@ export function AppShell() {
   const lastTasks = useRef<Exclude<PanelMode, 'hidden'>>(tasksMode === 'docked' ? 'docked' : 'floating')
   const lastMeeting = useRef<Exclude<PanelMode, 'hidden'>>(meetingMode === 'docked' ? 'docked' : 'floating')
   const location = useLocation()
+
+  // A swipe on the page content itself, but only for navigation through the
+  // Recent Pages widget/hotkeys (lastStackNav lands on this exact path
+  // within the last half-second) — an ordinary sidebar click leaves this
+  // untouched (no animation), since that was never asked for.
+  const lastStackNav = useRecentPagesStore((s) => s.lastStackNav)
+  const [pageAnimClass, setPageAnimClass] = useState('')
+  const prevPathRef = useRef(location.pathname)
+  useEffect(() => {
+    if (location.pathname === prevPathRef.current) return
+    prevPathRef.current = location.pathname
+    const viaWidget = lastStackNav && lastStackNav.path === location.pathname && Date.now() - lastStackNav.at < 800
+    setPageAnimClass(
+      !viaWidget ? ''
+        : lastStackNav!.direction === 'back' ? 'animate-[swipeRight_220ms_ease-out]'
+        : lastStackNav!.direction === 'forward' ? 'animate-[swipeLeft_220ms_ease-out]'
+        : 'animate-[fadeIn_180ms_ease-out]',
+    )
+  }, [location.pathname, lastStackNav])
 
   // Measure TopBar height so panels can stay below it even when it wraps
   useLayoutEffect(() => {
@@ -161,9 +181,11 @@ export function AppShell() {
         >
           {isInventoryRoute && <InventoryNavBar onHeightChange={setNavBarHeight} />}
           <main className="p-3 sm:p-6">
-            <ErrorBoundary key={location.pathname}>
-              <Outlet />
-            </ErrorBoundary>
+            <div key={location.pathname} className={pageAnimClass}>
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
+            </div>
           </main>
           {/* Spacer so scrolled-to-bottom content clears the FAB row */}
           <div className="h-16" />

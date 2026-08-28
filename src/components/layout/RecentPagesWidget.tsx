@@ -44,10 +44,11 @@ export function RecentPagesWidget() {
   const visitStack = useRecentPagesStore((s) => s.visitStack)
   const visitCursor = useRecentPagesStore((s) => s.visitCursor)
   const lastStackNav = useRecentPagesStore((s) => s.lastStackNav)
+  const recordJump = useRecentPagesStore((s) => s.recordJump)
   const [open, setOpen] = useState(false)
   const [pinned, setPinned] = useState(false)
   const [groupIndex, setGroupIndex] = useState(0)
-  const [direction, setDirection] = useState<'back' | 'forward' | null>(null)
+  const [direction, setDirection] = useState<'back' | 'forward' | 'jump' | null>(null)
   // Bumped on every navigation through this widget (hotkey or button click)
   // so the swipe replays every time, even when the destination happens to
   // land in the SAME group as before (e.g. bouncing between only 2 pages —
@@ -117,6 +118,7 @@ export function RecentPagesWidget() {
   function visit(path: string) {
     hideTip()
     armPin()
+    recordJump(path)
     navigate(path)
   }
 

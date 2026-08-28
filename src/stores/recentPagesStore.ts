@@ -42,13 +42,16 @@ function savePersisted(state: Persisted) {
   try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state)) } catch { /* ignore */ }
 }
 
-// Set on every successful goBack/goForward — RecentPagesWidget watches this
-// to auto-reveal itself, jump to the right page, and pick which direction
-// to slide in from. `at` changes on every call (even repeated same-direction
-// presses) so the widget's effect fires each time, not just on first press.
+// Set on every successful goBack/goForward/recordJump — RecentPagesWidget
+// watches this to auto-reveal itself, jump to the right page, and pick which
+// direction to slide in from; AppShell watches it too, to decide whether the
+// page content itself should swipe in (only for navigation through this
+// widget/hotkeys, not an ordinary sidebar click). `at` changes on every call
+// (even repeated same-direction presses) so effects fire every time, not
+// just on the first press.
 export interface LastStackNav {
   path: string
-  direction: 'back' | 'forward'
+  direction: 'back' | 'forward' | 'jump'
   at: number
 }
 
@@ -61,6 +64,9 @@ interface RecentPagesState extends Persisted {
   recordVisit: (path: string, label: string) => void
   goBack: () => string | null
   goForward: () => string | null
+  // Clicking a specific page button in the carousel — not a back/forward
+  // step, just "go here" — but still worth a page-transition swipe.
+  recordJump: (path: string) => void
 }
 
 export const useRecentPagesStore = create<RecentPagesState>((set, get) => ({
@@ -113,4 +119,6 @@ export const useRecentPagesStore = create<RecentPagesState>((set, get) => ({
     savePersisted({ recentPages: get().recentPages, visitStack, visitCursor: nextCursor })
     return path
   },
+
+  recordJump: (path) => set({ lastStackNav: { path, direction: 'jump', at: Date.now() } }),
 }))
