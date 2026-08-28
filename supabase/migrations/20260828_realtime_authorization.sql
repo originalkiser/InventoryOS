@@ -11,7 +11,11 @@
 -- single-tenant deployment, so an un-authorized presence channel is an
 -- accepted tradeoff for simplicity. Revisit if that stops being true.
 
-ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
+-- realtime.messages ships with RLS already enabled on Supabase-managed
+-- projects — the SQL editor's role doesn't own the table, so an explicit
+-- ALTER TABLE ... ENABLE ROW LEVEL SECURITY here fails with "must be owner
+-- of table messages" (and isn't needed anyway). Only the policies below
+-- are ours to add.
 
 -- Any authenticated user may send a Join Me invite — the topic itself
 -- (the specific target user's id) is what scopes who receives it, so no
