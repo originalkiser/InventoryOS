@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { RefreshCw, ChevronRight, ChevronDown } from 'lucide-react'
 import { Button, Card, CardBody, Input, SbLoader, Toggle } from '@/components/ui'
@@ -13,7 +13,7 @@ import {
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num } from './shared'
-import type { LineFlag, GenerationInput, OrderType } from './types'
+import type { LineFlag, GenerationInput } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
@@ -224,15 +224,48 @@ export function OrdersV2Review() {
     return m
   }, [allInputs])
 
-  async function addSmoothingProduct(input: GenerationInput, orderType: OrderType, qty: number) {
+  // Same, but keyed by shop alone (spans every order type) — for "expand
+  // this shop to everything configured for it", not just the group already
+  // on screen.
+  const inputsByLocation = useMemo(() => {
+    const m = new Map<string, GenerationInput[]>()
+    for (const i of allInputs) {
+      if (!m.has(i.location_id)) m.set(i.location_id, [])
+      m.get(i.location_id)!.push(i)
+    }
+    return m
+  }, [allInputs])
+
+  async function addConfiguredProduct(input: GenerationInput, qty: number) {
     if (qty <= 0) return
     await addLine({
-      location_id: input.location_id, product_id: input.product_id, order_type: orderType,
+      location_id: input.location_id, product_id: input.product_id, order_type: resolvedOrderType(input.rule),
       uom: input.rule.uom, qty, system_qty: 0,
       unit_cost: input.rule.unit_cost, on_hand: input.on_hand, daily_usage: input.daily_usage,
       dos_before: daysOfSupply(input.on_hand, input.daily_usage),
       max_capacity_gallons: input.rule.max_capacity_gallons, quarts_per_unit: gallonsPerUnit(input.rule),
     })
+  }
+
+  // Every configured product for a shop, ordered products first (any real
+  // line, whether or not it's currently included) then everything else the
+  // shop is set up for but doesn't have a line yet — what the shop-name
+  // expand row below shows.
+  function shopRows(locId: string): { input?: GenerationInput; line?: DraftLineRow }[] {
+    const candidates = inputsByLocation.get(locId) ?? []
+    const shopLines = lines.filter((l) => l.location_id === locId)
+    const lineByProduct = new Map(shopLines.map((l) => [l.product_id, l]))
+    const candidateIds = new Set(candidates.map((c) => c.product_id))
+    const rows: { input?: GenerationInput; line?: DraftLineRow }[] =
+      candidates.map((c) => ({ input: c, line: lineByProduct.get(c.product_id) }))
+    for (const l of shopLines) if (!candidateIds.has(l.product_id)) rows.push({ line: l })
+    rows.sort((ra, rb) => {
+      const rank = (r: typeof ra) => (r.line ? 0 : 1)
+      const d = rank(ra) - rank(rb)
+      if (d !== 0) return d
+      return (ra.line?.product_id ?? ra.input?.product_id ?? '').localeCompare(rb.line?.product_id ?? rb.input?.product_id ?? '')
+    })
+    return rows
   }
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
@@ -336,43 +369,81 @@ export function OrdersV2Review() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((l) => {
+              {visible.map((l, idx) => {
                 const dollars = Number(l.qty) * Number(l.unit_cost ?? 0)
+                const locId = l.location_id ?? ''
+                const isLastOfShop = idx === visible.length - 1 || visible[idx + 1].location_id !== l.location_id
+                const shopOpen = expanded.has(locId)
                 return (
-                  <tr key={l.id} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
-                    <Td>{shopLabel(l.location_id)}</Td>
-                    <Td>
-                      {l.product_id}
-                      {l.added_by_smoothing && <span className="ml-1 text-[9px] text-sky" title="Added to reach the order minimum">+min</span>}
-                    </Td>
-                    <Td>{l.uom ?? '—'}</Td>
-                    <Td align="right">{num(l.max_capacity_gallons, 0)}</Td>
-                    <Td align="right">{num(l.on_hand)}</Td>
-                    <Td align="right">{num(l.daily_usage)}</Td>
-                    <Td align="right">{dos(l.dos_before)}</Td>
-                    <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
-                      <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
-                        onChange={(e) => patchLine(l.id, { qty: Number(e.target.value) || 0 })}
-                        className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-                      {l.quarts_per_unit != null && (
-                        <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
-                      )}
-                    </td>
-                    <Td align="right">{dos(l.dos_after)}</Td>
-                    <Td align="right">{dos(l.dos_after_delivery)}</Td>
-                    <Td align="right">{money(dollars)}</Td>
-                    <Td><Flags flags={(l.flags ?? []) as LineFlag[]} /></Td>
-                    <Td>
-                      <div className="flex items-center gap-1">
-                        <button title={l.included ? 'Exclude from order' : 'Include in order'}
-                          onClick={() => patchLine(l.id, { included: !l.included })}
-                          className="text-[10px] border border-navy/30 rounded px-1 py-0.5 text-inky hover:border-navy">
-                          {l.included ? 'Exclude' : 'Include'}
+                  <Fragment key={l.id}>
+                    <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
+                      <td className="px-2 py-1 text-navy whitespace-nowrap">
+                        <button
+                          onClick={() => setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })}
+                          title="Show every product configured for this shop"
+                          className="inline-flex items-center gap-1 hover:underline hover:text-sky">
+                          {shopOpen ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+                          {shopLabel(l.location_id)}
                         </button>
-                        <button title="Remove line" onClick={() => removeLine(l.id)} className="text-inky/40 hover:text-[#C0392B]">✕</button>
-                      </div>
-                    </Td>
-                  </tr>
+                      </td>
+                      <Td>
+                        {l.product_id}
+                        {l.added_by_smoothing && <span className="ml-1 text-[9px] text-sky" title="Added to reach the order minimum">+min</span>}
+                      </Td>
+                      <Td>{l.uom ?? '—'}</Td>
+                      <Td align="right">{num(l.max_capacity_gallons, 0)}</Td>
+                      <Td align="right">{num(l.on_hand)}</Td>
+                      <Td align="right">{num(l.daily_usage)}</Td>
+                      <Td align="right">{dos(l.dos_before)}</Td>
+                      <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
+                        <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
+                          onChange={(e) => patchLine(l.id, { qty: Number(e.target.value) || 0 })}
+                          className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+                        {l.quarts_per_unit != null && (
+                          <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
+                        )}
+                      </td>
+                      <Td align="right">{dos(l.dos_after)}</Td>
+                      <Td align="right">{dos(l.dos_after_delivery)}</Td>
+                      <Td align="right">{money(dollars)}</Td>
+                      <Td><Flags flags={(l.flags ?? []) as LineFlag[]} /></Td>
+                      <Td>
+                        <div className="flex items-center gap-1">
+                          <button title={l.included ? 'Exclude from order' : 'Include in order'}
+                            onClick={() => patchLine(l.id, { included: !l.included })}
+                            className="text-[10px] border border-navy/30 rounded px-1 py-0.5 text-inky hover:border-navy">
+                            {l.included ? 'Exclude' : 'Include'}
+                          </button>
+                          <button title="Remove line" onClick={() => removeLine(l.id)} className="text-inky/40 hover:text-[#C0392B]">✕</button>
+                        </div>
+                      </Td>
+                    </tr>
+                    {isLastOfShop && shopOpen && (
+                      <tr className="border-b border-navy/15 bg-navy/[0.02]">
+                        <td colSpan={13} className="px-3 py-2">
+                          <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-1">
+                            Every product configured for {shopLabel(l.location_id)}
+                          </p>
+                          <table className="w-full text-[11px] font-mono">
+                            <thead><tr className="text-inky/60 uppercase">
+                              <td className="py-1">Product</td><td>UOM</td>
+                              <td className="text-right">Capacity</td><td className="text-right">On Hand</td>
+                              <td className="text-right">Usage/Day</td><td className="text-right">DOS Now</td>
+                              <td className="text-right">Qty</td><td className="text-right">DOS After</td>
+                              <td className="text-right">$</td><td>Why</td>
+                            </tr></thead>
+                            <tbody>
+                              {shopRows(locId).map((r) => (
+                                <SmoothingRow key={r.line?.id ?? r.input?.product_id}
+                                  input={r.input} line={r.line}
+                                  onPatch={(id, qty) => patchLine(id, { qty })} onAdd={addConfiguredProduct} />
+                              ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 )
               })}
             </tbody>
@@ -435,8 +506,8 @@ export function OrdersV2Review() {
                         <tbody>
                           {rows.map((r) => (
                             <SmoothingRow key={r.line?.id ?? r.input?.product_id}
-                              input={r.input} line={r.line} orderType={type as OrderType}
-                              onPatch={(id, qty) => patchLine(id, { qty })} onAdd={addSmoothingProduct} />
+                              input={r.input} line={r.line}
+                              onPatch={(id, qty) => patchLine(id, { qty })} onAdd={addConfiguredProduct} />
                           ))}
                         </tbody>
                       </table>
@@ -479,12 +550,13 @@ function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }
   return <td className={`px-2 py-1 text-navy whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</td>
 }
 
-/** One row in a shop's smoothing panel — an existing line (editable in
- * place) or a configured-but-not-ordered candidate (typing a qty adds it). */
-function SmoothingRow({ input, line, orderType, onPatch, onAdd }: {
-  input?: GenerationInput; line?: DraftLineRow; orderType: OrderType
+/** One row in a shop's product list — an existing line (editable in place)
+ * or a configured-but-not-ordered candidate (typing a qty adds it). Shared
+ * by the smoothing panel and the shop-name expand row below the table. */
+function SmoothingRow({ input, line, onPatch, onAdd }: {
+  input?: GenerationInput; line?: DraftLineRow
   onPatch: (id: string, qty: number) => void
-  onAdd: (input: GenerationInput, orderType: OrderType, qty: number) => void
+  onAdd: (input: GenerationInput, qty: number) => void
 }) {
   const productId = line?.product_id ?? input?.product_id ?? ''
   const unitCost = Number(line?.unit_cost ?? input?.rule.unit_cost ?? 0)
@@ -518,7 +590,7 @@ function SmoothingRow({ input, line, orderType, onPatch, onAdd }: {
             className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
         ) : input ? (
           <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
-            onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(input, orderType, v) }}
+            onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(input, v) }}
             title="Add this product to the order"
             className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
         ) : null}
