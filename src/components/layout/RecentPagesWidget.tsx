@@ -11,8 +11,9 @@ import { shortForLabel } from '@/lib/routeLabels'
 // the linear visit stack independently of this carousel's own group paging,
 // and are watched here (via the store's lastStackNav) so a hotkey press
 // auto-reveals the widget, jumps to whichever group holds the landed-on
-// page, and "pins" it open — bouncing back and forth between two pages via
-// the hotkeys keeps it open instead of the next click elsewhere closing it.
+// page, and "pins" it open — any navigation through this widget (hotkey or a
+// direct button click) keeps it open for a few seconds instead of the very
+// next click elsewhere closing it.
 const GROUP_SIZE = 3
 const PIN_TIMEOUT_MS = 4000
 
@@ -40,36 +41,51 @@ function useFlyout() {
 export function RecentPagesWidget() {
   const navigate = useNavigate()
   const recentPages = useRecentPagesStore((s) => s.recentPages)
+  const visitStack = useRecentPagesStore((s) => s.visitStack)
+  const visitCursor = useRecentPagesStore((s) => s.visitCursor)
   const lastStackNav = useRecentPagesStore((s) => s.lastStackNav)
   const [open, setOpen] = useState(false)
   const [pinned, setPinned] = useState(false)
   const [groupIndex, setGroupIndex] = useState(0)
   const [direction, setDirection] = useState<'back' | 'forward' | null>(null)
+  // Bumped on every navigation through this widget (hotkey or button click)
+  // so the swipe replays every time, even when the destination happens to
+  // land in the SAME group as before (e.g. bouncing between only 2 pages —
+  // keying the animation off groupIndex alone never changes in that case).
+  const [animTick, setAnimTick] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
   const pinTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const { show: showTip, hide: hideTip, node: tipNode } = useFlyout()
 
   const groups: typeof recentPages[] = []
   for (let i = 0; i < recentPages.length; i += GROUP_SIZE) groups.push(recentPages.slice(i, i + GROUP_SIZE))
-  const activePath = recentPages[0]?.path
+  // The visit stack (not recentPages[0]) is the source of truth for "current
+  // page" — recordVisit deliberately skips reordering recentPages when a
+  // hotkey nav triggers it, so recentPages[0] goes stale the moment you use
+  // Alt+Left/Alt+Right.
+  const activePath = visitStack[visitCursor]
 
   useEffect(() => {
     if (groupIndex > 0 && groupIndex > groups.length - 1) setGroupIndex(Math.max(0, groups.length - 1))
   }, [groups.length, groupIndex])
 
+  function armPin() {
+    setOpen(true)
+    setPinned(true)
+    clearTimeout(pinTimerRef.current)
+    pinTimerRef.current = setTimeout(() => { setPinned(false); setOpen(false) }, PIN_TIMEOUT_MS)
+  }
+
   // A hotkey nav just happened — reveal, jump to that page's group, pick the
-  // slide direction, and pin (an unrelated outside click won't close this
-  // while pinned, so bouncing back and forth keeps it visible). Unpins itself
-  // after a few seconds of no further hotkey activity.
+  // slide direction, and pin. Unpins itself after a few seconds of no
+  // further navigation through this widget.
   useEffect(() => {
     if (!lastStackNav) return
     const idx = recentPages.findIndex((p) => p.path === lastStackNav.path)
     if (idx !== -1) setGroupIndex(Math.floor(idx / GROUP_SIZE))
     setDirection(lastStackNav.direction)
-    setOpen(true)
-    setPinned(true)
-    clearTimeout(pinTimerRef.current)
-    pinTimerRef.current = setTimeout(() => { setPinned(false); setOpen(false) }, PIN_TIMEOUT_MS)
+    setAnimTick((t) => t + 1)
+    armPin()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastStackNav?.at])
 
@@ -95,9 +111,19 @@ export function RecentPagesWidget() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // Clicking a page button is navigation through this widget too — pin it
+  // the same as a hotkey jump, so the panel doesn't vanish the instant you
+  // interact with the page you just landed on.
   function visit(path: string) {
     hideTip()
+    armPin()
     navigate(path)
+  }
+
+  function pageGroup(dir: 'back' | 'forward', nextIndex: number) {
+    setDirection(dir)
+    setAnimTick((t) => t + 1)
+    setGroupIndex(nextIndex)
   }
 
   // Explicit click on the clock always wins — closes even while pinned, and
@@ -139,7 +165,7 @@ export function RecentPagesWidget() {
       <div className={`overflow-hidden transition-[max-width,opacity] duration-300 ease-out ${open && groups.length > 0 ? 'max-w-[220px] opacity-100' : 'max-w-0 opacity-0'}`}>
         <div className="relative flex items-center gap-1 pl-0.5">
           {groups.length > 0 && (
-            <div key={groupIndex} className={`flex justify-center gap-3 w-[168px] flex-shrink-0 ${animClass}`}>
+            <div key={animTick} className={`flex justify-center gap-3 w-[168px] flex-shrink-0 ${animClass}`}>
               {groups[groupIndex].map((page, pi) => {
                 const showLeftEdge = pi === 0 && groupIndex > 0
                 const showRightEdge = pi === groups[groupIndex].length - 1 && groupIndex < groups.length - 1
@@ -151,7 +177,7 @@ export function RecentPagesWidget() {
                         would fire mouseleave and hide it first. */}
                     {showLeftEdge && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setDirection('back'); setGroupIndex((i) => Math.max(0, i - 1)) }}
+                        onClick={(e) => { e.stopPropagation(); pageGroup('back', Math.max(0, groupIndex - 1)) }}
                         aria-label="Previous pages"
                         className="absolute -left-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
                       >
@@ -173,7 +199,7 @@ export function RecentPagesWidget() {
                     </button>
                     {showRightEdge && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setDirection('forward'); setGroupIndex((i) => Math.min(groups.length - 1, i + 1)) }}
+                        onClick={(e) => { e.stopPropagation(); pageGroup('forward', Math.min(groups.length - 1, groupIndex + 1)) }}
                         aria-label="More pages"
                         className="absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-8 flex items-center justify-center text-sky opacity-0 group-hover/btn:opacity-100 pointer-events-none group-hover/btn:pointer-events-auto transition-opacity"
                       >
