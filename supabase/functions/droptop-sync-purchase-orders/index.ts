@@ -204,73 +204,102 @@ Deno.serve(async (req) => {
     const opToLocation = new Map<string, string>(locations.map((l: any) => [l.droptop_operation_id, l.id]))
     const warnings: string[] = []
 
-    // Sequential per location, low concurrency isn't needed here the way it
-    // is for the usage sync — PO volume per shop is small (this isn't a
-    // per-product-per-day feed) and get-purchase-orders is one call per page,
+    // Fetch phase — sequential per location (has to be: each is its own
+    // Droptop API call), low concurrency isn't needed here the way it is
+    // for the usage sync since get-purchase-orders is one call per page,
     // not one call per product.
+    const allPos: any[] = []
     for (const loc of locations) {
       try {
         const pos = await fetchPurchaseOrders(loc.droptop_operation_id, cutoffUnix, poStatus, publicKey, privateKey)
-        for (const po of pos) {
-          const header = {
-            company_id: companyId,
-            location_id: opToLocation.get(loc.droptop_operation_id) ?? null,
-            po_id: po.po_id,
-            custom_po_id: po.custom_po_id ?? null,
-            supplier_id: po.supplier_id ?? null,
-            supplier_name: po.supplier?.name ?? null,
-            po_status: po.po_status ?? null,
-            approved_status: po.approved_status ?? null,
-            delivery_status: po.delivery_status ?? null,
-            pay_status: po.pay_status ?? null,
-            total_cost: po.total_cost != null ? Number(po.total_cost) : null,
-            note: po.note ?? null,
-            ship_to_name: po.ship_to?.name ?? null,
-            last_updated_user_name: po.last_updated_user_name ?? null,
-            created_timestamp: tsToIso(po.created_timestamp),
-            closed_timestamp: tsToIso(po.closed_timestamp),
-            last_updated_timestamp: tsToIso(po.last_updated_timestamp),
-            to_receive_timestamp: tsToIso(po.to_receive_timestamp),
-            delivery_status_updated_timestamp: tsToIso(po.delivery_status_updated_timestamp),
-            raw_data: po,
-            synced_at: new Date().toISOString(),
-          }
-          const { data: saved, error: upsertErr } = await (admin as any)
-            .schema('inventory').from('droptop_purchase_orders')
-            .upsert(header, { onConflict: 'company_id,po_id' })
-            .select('id').single()
-          if (upsertErr) { warnings.push(`${po.po_id}: ${upsertErr.message}`); continue }
-          posUpserted++
-
-          // Replace items wholesale — same "delete then reinsert" approach
-          // as ov2_order_draft_lines' replaceLines, simpler than diffing a
-          // handful of line items per PO.
-          await (admin as any).schema('inventory').from('droptop_purchase_order_items').delete().eq('purchase_order_id', saved.id)
-          const items = (po.items ?? []).map((it: any) => ({
-            purchase_order_id: saved.id,
-            company_id: companyId,
-            purchase_order_item_id: it.purchase_order_item_id ?? null,
-            purchase_order_item_type: it.purchase_order_item_type ?? null,
-            inventory_id: it.inventory_id ?? null,
-            product_id: it.product_id ?? null,
-            name: it.name ?? null,
-            quantity: it.quantity != null ? Number(it.quantity) : null,
-            unit_cost: it.unit_cost != null ? Number(it.unit_cost) : null,
-            received_quantity: it.received_quantity != null ? Number(it.received_quantity) : null,
-            back_ordered_quantity: it.back_ordered_quantity != null ? Number(it.back_ordered_quantity) : null,
-            remaining_quantity: it.remaining_quantity != null ? Number(it.remaining_quantity) : null,
-            total_cost: it.total_cost != null ? Number(it.total_cost) : null,
-            purchase_uom: it.purchase_uom ?? null,
-            sell_uom: it.sell_uom ?? null,
-          }))
-          if (items.length) {
-            const { error: itemsErr } = await (admin as any).schema('inventory').from('droptop_purchase_order_items').insert(items)
-            if (itemsErr) warnings.push(`${po.po_id} items: ${itemsErr.message}`)
-            else itemsWritten += items.length
-          }
-        }
+        for (const po of pos) allPos.push({ po, locationId: opToLocation.get(loc.droptop_operation_id) ?? null })
       } catch (e) {
         warnings.push(`location ${loc.id}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    // Write phase — batched, not one upsert/delete/insert per PO. At real
+    // volume (a shop can carry a couple hundred POs) that per-PO loop was
+    // easily 100,000+ sequential database round-trips company-wide, slow
+    // enough to risk hitting the execution time limit even after chunking
+    // by location. Same "batch of BATCH, insert/upsert once" shape as
+    // ov2_order_draft_lines/history_lines use elsewhere in this app.
+    const BATCH = 500
+    const nowIso = new Date().toISOString()
+    const headers = allPos.map(({ po, locationId }) => ({
+      company_id: companyId,
+      location_id: locationId,
+      po_id: po.po_id,
+      custom_po_id: po.custom_po_id ?? null,
+      supplier_id: po.supplier_id ?? null,
+      supplier_name: po.supplier?.name ?? null,
+      po_status: po.po_status ?? null,
+      approved_status: po.approved_status ?? null,
+      delivery_status: po.delivery_status ?? null,
+      pay_status: po.pay_status ?? null,
+      total_cost: po.total_cost != null ? Number(po.total_cost) : null,
+      note: po.note ?? null,
+      ship_to_name: po.ship_to?.name ?? null,
+      last_updated_user_name: po.last_updated_user_name ?? null,
+      created_timestamp: tsToIso(po.created_timestamp),
+      closed_timestamp: tsToIso(po.closed_timestamp),
+      last_updated_timestamp: tsToIso(po.last_updated_timestamp),
+      to_receive_timestamp: tsToIso(po.to_receive_timestamp),
+      delivery_status_updated_timestamp: tsToIso(po.delivery_status_updated_timestamp),
+      raw_data: po,
+      synced_at: nowIso,
+    }))
+
+    // po_id -> saved row id, filled in as each upsert batch returns.
+    const idByPoId = new Map<string, string>()
+    for (let i = 0; i < headers.length; i += BATCH) {
+      const slice = headers.slice(i, i + BATCH)
+      const { data: saved, error: upsertErr } = await (admin as any)
+        .schema('inventory').from('droptop_purchase_orders')
+        .upsert(slice, { onConflict: 'company_id,po_id' })
+        .select('id, po_id')
+      if (upsertErr) { warnings.push(`PO batch ${i}-${i + slice.length}: ${upsertErr.message}`); continue }
+      for (const row of (saved ?? []) as { id: string; po_id: string }[]) idByPoId.set(row.po_id, row.id)
+      posUpserted += saved?.length ?? 0
+    }
+
+    const savedPoIds = [...idByPoId.values()]
+    if (savedPoIds.length) {
+      // Replace items wholesale for every synced PO — one bulk delete
+      // instead of one per PO — then bulk-insert everything fresh.
+      for (let i = 0; i < savedPoIds.length; i += BATCH) {
+        const { error: delErr } = await (admin as any)
+          .schema('inventory').from('droptop_purchase_order_items')
+          .delete().in('purchase_order_id', savedPoIds.slice(i, i + BATCH))
+        if (delErr) warnings.push(`Item delete batch ${i}: ${delErr.message}`)
+      }
+
+      const allItems = allPos.flatMap(({ po }) => {
+        const purchaseOrderId = idByPoId.get(po.po_id)
+        if (!purchaseOrderId) return []
+        return (po.items ?? []).map((it: any) => ({
+          purchase_order_id: purchaseOrderId,
+          company_id: companyId,
+          purchase_order_item_id: it.purchase_order_item_id ?? null,
+          purchase_order_item_type: it.purchase_order_item_type ?? null,
+          inventory_id: it.inventory_id ?? null,
+          product_id: it.product_id ?? null,
+          name: it.name ?? null,
+          quantity: it.quantity != null ? Number(it.quantity) : null,
+          unit_cost: it.unit_cost != null ? Number(it.unit_cost) : null,
+          received_quantity: it.received_quantity != null ? Number(it.received_quantity) : null,
+          back_ordered_quantity: it.back_ordered_quantity != null ? Number(it.back_ordered_quantity) : null,
+          remaining_quantity: it.remaining_quantity != null ? Number(it.remaining_quantity) : null,
+          total_cost: it.total_cost != null ? Number(it.total_cost) : null,
+          purchase_uom: it.purchase_uom ?? null,
+          sell_uom: it.sell_uom ?? null,
+        }))
+      })
+      for (let i = 0; i < allItems.length; i += BATCH) {
+        const slice = allItems.slice(i, i + BATCH)
+        const { error: itemsErr } = await (admin as any).schema('inventory').from('droptop_purchase_order_items').insert(slice)
+        if (itemsErr) warnings.push(`Item insert batch ${i}: ${itemsErr.message}`)
+        else itemsWritten += slice.length
       }
     }
 
