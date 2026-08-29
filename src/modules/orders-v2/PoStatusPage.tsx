@@ -135,6 +135,27 @@ export function PoStatusPage() {
     }
   }
 
+  // Read-only single-location peek at Droptop's raw get-purchase-orders
+  // response — for diagnosing a real sync that completes but writes nothing
+  // (a response-shape mismatch) without waiting through another full,
+  // multi-minute company-wide sync to find out. Logs to the console, writes
+  // nothing.
+  async function inspectOne() {
+    setSyncing(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'inspect' } })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      // eslint-disable-next-line no-console
+      console.log('Droptop PO inspect result:', data)
+      toast.success(`Inspect complete — logged to the browser console (F12). ${data.parsed_sample?.length ?? 0} PO(s) parsed.`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Inspect failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const shopLabel = useCallback((id: string | null) => (id ? (loc.codeOf(id) || loc.labelOf(id)) : '—') || '—', [loc])
 
   const visible = useMemo(() => {
@@ -186,9 +207,15 @@ export function PoStatusPage() {
             Purchase orders pulled from Droptop — status, line items, and what's still outstanding by shop.
           </p>
         </div>
-        <Button size="sm" variant="secondary" onClick={syncNow} disabled={syncing}>
-          <RefreshCw className={`w-3.5 h-3.5 mr-1 ${syncing ? 'animate-spin' : ''}`} /> Sync Now
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={inspectOne} disabled={syncing}
+            title="Read-only peek at one location's raw Droptop response, logged to the browser console — writes nothing">
+            Inspect
+          </Button>
+          <Button size="sm" variant="secondary" onClick={syncNow} disabled={syncing}>
+            <RefreshCw className={`w-3.5 h-3.5 mr-1 ${syncing ? 'animate-spin' : ''}`} /> Sync Now
+          </Button>
+        </div>
       </div>
 
       <Card><CardBody className="flex items-end gap-3 flex-wrap py-3">

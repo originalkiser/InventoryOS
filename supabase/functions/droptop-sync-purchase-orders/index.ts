@@ -110,14 +110,20 @@ async function fetchPurchaseOrders(
     if (cursor) params.startingAfter = cursor
     if (poStatus) params.poStatus = poStatus
     const res = await callDroptop('get-purchase-orders', params, pub, priv)
-    const pos: any[] = Array.isArray(res?.data) ? res.data : []
+    // Defensive unwrap: get-inventory-changes' real response nests an extra
+    // level below what its own docs show (see fetchChanges in
+    // droptop-sync-usage — needed the same `res?.data ?? res` fallback), so
+    // don't assume get-purchase-orders' documented top-level shape
+    // (more_available/next_cursor/data) is exactly what comes back either.
+    const inner = res?.data && !Array.isArray(res.data) && 'data' in res.data ? res.data : res
+    const pos: any[] = Array.isArray(inner?.data) ? inner.data : []
     let hitCutoff = false
     for (const po of pos) {
       if (Number(po.created_timestamp) < cutoffUnix) { hitCutoff = true; break }
       all.push(po)
     }
-    if (hitCutoff || !res?.more_available || !res?.next_cursor) break
-    cursor = res.next_cursor
+    if (hitCutoff || !inner?.more_available || !inner?.next_cursor) break
+    cursor = inner.next_cursor
   }
   return all
 }
@@ -183,8 +189,14 @@ Deno.serve(async (req) => {
 
     if (mode === 'inspect') {
       const opId = locations[0].droptop_operation_id
+      // Raw, un-parsed response first — so if fetchPurchaseOrders' shape
+      // assumption is still wrong, this shows the real thing to fix it
+      // against instead of another guess.
+      const rawParams: Record<string, string> = { operation_ids: opId, limit: '5' }
+      if (poStatus) rawParams.poStatus = poStatus
+      const raw = await callDroptop('get-purchase-orders', rawParams, publicKey, privateKey)
       const pos = await fetchPurchaseOrders(opId, cutoffUnix, poStatus, publicKey, privateKey)
-      return ok({ success: true, operation_id: opId, purchase_orders_sample: pos.slice(0, 3) })
+      return ok({ success: true, operation_id: opId, raw_response: raw, parsed_sample: pos.slice(0, 3) })
     }
 
     let posUpserted = 0
