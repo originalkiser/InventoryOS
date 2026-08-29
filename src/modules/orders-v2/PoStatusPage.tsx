@@ -124,7 +124,7 @@ export function PoStatusPage() {
   async function syncNow() {
     setSyncing(true)
     try {
-      const r = await runDroptopPurchaseOrderSync({ daysBack: 180 })
+      const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId ?? undefined)
       toast.success(`${r.locations_synced} shop${r.locations_synced !== 1 ? 's' : ''}, ${r.pos_upserted} PO${r.pos_upserted !== 1 ? 's' : ''}, ${r.items_written} line item${r.items_written !== 1 ? 's' : ''}`)
       if (r.warnings?.length) toast.error(r.warnings[0])
       await load()

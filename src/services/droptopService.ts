@@ -127,10 +127,13 @@ export async function runDroptopSync(
 
 // Purchase Orders — separate edge function, separate tables
 // (inventory.droptop_purchase_orders / _items), but same dual-auth/sig
-// conventions as the on-hand/usage sync above. No chunking needed: PO
-// volume per shop is small (this isn't a per-product-per-day feed like
-// usage), so one invocation covering every location stays well inside the
-// platform's execution time limit.
+// conventions as the on-hand/usage sync above. DOES need the same chunking
+// as usage/inventory below — wrongly assumed at first that low per-shop PO
+// volume meant one invocation covering every location would stay inside the
+// platform's execution time limit; in practice, hundreds of locations each
+// making at least one Droptop call (plus 429 backoff/retries) adds up the
+// same way it does for the usage sync, and a real run confirmed it:
+// "Edge Function returned a non-2xx status code" after ~3 minutes.
 export interface DroptopPOSyncResult {
   locations_synced: number
   pos_upserted: number
@@ -138,8 +141,8 @@ export interface DroptopPOSyncResult {
   warnings?: string[]
 }
 
-export async function runDroptopPurchaseOrderSync(opts: { daysBack?: number; poStatus?: string; locationId?: string } = {}): Promise<DroptopPOSyncResult> {
-  const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'sync', ...opts } })
+async function invokePOSync(body: Record<string, unknown>): Promise<DroptopPOSyncResult> {
+  const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'sync', ...body } })
   if (error) throw new Error(error.message)
   if (data?.error) {
     throw new Error(
@@ -149,6 +152,43 @@ export async function runDroptopPurchaseOrderSync(opts: { daysBack?: number; poS
     )
   }
   return data as DroptopPOSyncResult
+}
+
+export async function runDroptopPurchaseOrderSync(
+  opts: { daysBack?: number; poStatus?: string; locationId?: string } = {},
+  companyId?: string,
+  onProgress?: (p: DroptopSyncProgress) => void,
+): Promise<DroptopPOSyncResult> {
+  const { locationId, ...rest } = opts
+  if (locationId) return invokePOSync({ ...rest, locationId })
+  if (!companyId) return invokePOSync(rest) // no company to chunk by — single shot (e.g. inspect-adjacent callers)
+
+  const ids = await fetchDroptopLocationIds(companyId)
+  if (!ids.length) {
+    throw new Error('No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.')
+  }
+  const batches = chunk(ids, CHUNK_SIZE)
+
+  let locationsSynced = 0
+  let posUpserted = 0
+  let itemsWritten = 0
+  const warnings: string[] = []
+
+  for (let i = 0; i < batches.length; i++) {
+    onProgress?.({ batch: i + 1, totalBatches: batches.length })
+    try {
+      const result = await invokePOSync({ ...rest, locationIds: batches[i] })
+      locationsSynced += result.locations_synced
+      posUpserted += result.pos_upserted
+      itemsWritten += result.items_written
+      if (result.warnings?.length) warnings.push(...result.warnings)
+    } catch (err) {
+      warnings.push(`Batch ${i + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  if (locationsSynced === 0 && warnings.length > 0) throw new Error(warnings.join(' | '))
+  return { locations_synced: locationsSynced, pos_upserted: posUpserted, items_written: itemsWritten, ...(warnings.length ? { warnings } : {}) }
 }
 
 export async function getLastDroptopSyncLog(companyId: string): Promise<DroptopSyncLog | null> {

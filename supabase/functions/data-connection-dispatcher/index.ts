@@ -84,14 +84,38 @@ async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ s
   return data?.error ? { status: 'error', message: String(data.error) } : { status: 'success', message: null }
 }
 
-async function runDroptopPurchaseOrders(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-    body: JSON.stringify({ mode: 'sync', daysBack: 180 }),
-  })
-  const data = await res.json().catch(() => ({}))
-  return data?.error ? { status: 'error', message: String(data.error) } : { status: 'success', message: null }
+// Chunked the same way runDroptopChunked (below) handles on-hand/usage — a
+// single invocation covering every location was assumed fine for POs given
+// low per-shop volume, but a real run proved otherwise ("Edge Function
+// returned a non-2xx status code" after ~3 minutes on the full location
+// list). Same fix: bounded batches, one invocation per batch.
+async function runDroptopPurchaseOrders(
+  supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
+): Promise<{ status: string; message: string | null }> {
+  const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+  const { data: locs, error: locErr } = await (admin as any)
+    .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
+  if (locErr) return { status: 'error', message: locErr.message }
+  const ids = (locs ?? []).map((l: { id: string }) => l.id)
+  if (!ids.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
+
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += DROPTOP_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CHUNK_SIZE))
+
+  const warnings: string[] = []
+  let anySucceeded = false
+  for (const locationIds of chunks) {
+    const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+      body: JSON.stringify({ mode: 'sync', daysBack: 180, locationIds }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (data?.error) warnings.push(String(data.error))
+    else { anySucceeded = true; if (data?.warnings?.length) warnings.push(...data.warnings) }
+  }
+  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
+  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
 }
 
 // run-automated-checks reuses this same dispatch secret rather than minting
@@ -188,7 +212,7 @@ Deno.serve(async (req) => {
         )
       } else if (s.connection_key === 'droptop_purchase_orders') {
         if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
-        else outcome = await runDroptopPurchaseOrders(supabaseUrl, droptopSecret)
+        else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
       } else if (s.connection_key === 'automated_checks') {
         // Run after the Droptop pulls so the movement feed it reads is fresh —
         // schedule its own interval later in the day than droptop_usage's if

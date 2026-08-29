@@ -91,7 +91,7 @@ export function DataConnectionsTab() {
         const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true })
         toast.success(`Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`)
       } else if (key === 'droptop_purchase_orders') {
-        const r = await runDroptopPurchaseOrderSync({ daysBack: 180 })
+        const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId)
         toast.success(`Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`)
       } else if (key === 'automated_checks') {
         const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
