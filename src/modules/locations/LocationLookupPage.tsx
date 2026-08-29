@@ -380,6 +380,28 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   useEffect(() => { load() }, [load])
   useEffect(() => { try { if (shopId) localStorage.setItem(LAST_SHOP_KEY, shopId) } catch { /* ignore */ } }, [shopId])
 
+  // Push, not pull: an issue, exception, or comm logged for THIS shop from
+  // anywhere else in the app (another user, another tab) reloads this page
+  // live — the whole point being avoided is two people finding out about
+  // the same problem independently and duplicating each other's work.
+  // Same postgres_changes pattern IssuesPage.tsx already uses. One
+  // location_id=eq.<shopId> filter per table (Realtime only supports a
+  // single column filter), events on all three coalesced into one reload
+  // rather than three separate ones when e.g. an Exception Reporting comm
+  // writes both a location_comms row and an exception_reports row at once.
+  useEffect(() => {
+    if (!companyId || !shopId) return
+    let debounce: ReturnType<typeof setTimeout>
+    const reload = () => { clearTimeout(debounce); debounce = setTimeout(load, 400) }
+    const channel = supabase
+      .channel(`location-lookup-${shopId}`)
+      .on('postgres_changes', { event: '*', schema: 'platform', table: 'issues', filter: `location_id=eq.${shopId}` }, reload)
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'exception_reports', filter: `location_id=eq.${shopId}` }, reload)
+      .on('postgres_changes', { event: '*', schema: 'inventory', table: 'location_comms', filter: `location_id=eq.${shopId}` }, reload)
+      .subscribe()
+    return () => { clearTimeout(debounce); void supabase.removeChannel(channel) }
+  }, [companyId, shopId, load])
+
   const configsByVendor = useMemo(() => {
     const groups = new Map<string, ConfigRow[]>()
     for (const c of configs) {
