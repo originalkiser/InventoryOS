@@ -48,6 +48,7 @@ import { OrdersV2FinalReview } from '@/modules/orders-v2/OrdersV2FinalReview'
 import { OrdersV2Export } from '@/modules/orders-v2/OrdersV2Export'
 import { OrdersV2Settings } from '@/modules/orders-v2/OrdersV2Settings'
 import { OrdersV2History } from '@/modules/orders-v2/OrdersV2History'
+import { PoStatusPage } from '@/modules/orders-v2/PoStatusPage'
 import { UsersPage } from '@/modules/admin/UsersPage'
 import { FeatureRequestsPage } from '@/modules/feature-requests/FeatureRequestsPage'
 import { FeatureRequestForm } from '@/modules/feature-requests/FeatureRequestForm'
@@ -111,6 +112,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="orders-v2/draft/:draftId/final" element={<OrdersV2FinalReview />} />
     <Route path="orders-v2/draft/:draftId/export" element={<OrdersV2Export />} />
     <Route path="orders-v2/history/:orderId" element={<OrdersV2History />} />
+    <Route path="po-status" element={<PoStatusPage />} />
     <Route path="on-hand" element={<OnHandPage />} />
     <Route path="issues" element={<IssuesPage />} />
     <Route path="projects" element={<ProjectsModule />} />

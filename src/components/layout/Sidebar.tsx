@@ -112,6 +112,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'weekly', label: 'Weekly Count', to: '/weekly' },
     { key: 'orders', label: 'Orders', to: '/orders' },
     { key: 'orders-v2', label: 'Orders v2', to: '/orders-v2' },
+    { key: 'po-status', label: 'PO Status', to: '/po-status' },
     { key: 'projects', label: 'Projects', to: '/projects' },
     { key: 'config', label: 'Inventory Config', to: '/config' },
     { key: 'location-lookup', label: 'Location Lookup', to: '/location-lookup' },

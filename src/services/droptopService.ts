@@ -125,6 +125,32 @@ export async function runDroptopSync(
   }
 }
 
+// Purchase Orders — separate edge function, separate tables
+// (inventory.droptop_purchase_orders / _items), but same dual-auth/sig
+// conventions as the on-hand/usage sync above. No chunking needed: PO
+// volume per shop is small (this isn't a per-product-per-day feed like
+// usage), so one invocation covering every location stays well inside the
+// platform's execution time limit.
+export interface DroptopPOSyncResult {
+  locations_synced: number
+  pos_upserted: number
+  items_written: number
+  warnings?: string[]
+}
+
+export async function runDroptopPurchaseOrderSync(opts: { daysBack?: number; poStatus?: string; locationId?: string } = {}): Promise<DroptopPOSyncResult> {
+  const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'sync', ...opts } })
+  if (error) throw new Error(error.message)
+  if (data?.error) {
+    throw new Error(
+      data.error === 'credentials_not_configured'
+        ? 'Droptop API keys not configured — add DROPTOP_PUBLIC_KEY and DROPTOP_PRIVATE_KEY to Supabase secrets.'
+        : data.error
+    )
+  }
+  return data as DroptopPOSyncResult
+}
+
 export async function getLastDroptopSyncLog(companyId: string): Promise<DroptopSyncLog | null> {
   const { data } = await (supabase as any)
     .schema('inventory').from('droptop_sync_log')
