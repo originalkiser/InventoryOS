@@ -231,6 +231,7 @@ Deno.serve(async (req) => {
             closed_timestamp: tsToIso(po.closed_timestamp),
             last_updated_timestamp: tsToIso(po.last_updated_timestamp),
             to_receive_timestamp: tsToIso(po.to_receive_timestamp),
+            delivery_status_updated_timestamp: tsToIso(po.delivery_status_updated_timestamp),
             raw_data: po,
             synced_at: new Date().toISOString(),
           }

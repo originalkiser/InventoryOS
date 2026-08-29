@@ -15,6 +15,7 @@ import toast from 'react-hot-toast'
 import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel'
 import { RecentPagesWidget } from './RecentPagesWidget'
 import { PresenceWidget } from './PresenceWidget'
+import { SyncStatusWidget } from './SyncStatusWidget'
 import { useRecentPagesTracking } from '@/hooks/useRecentPagesTracking'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format, differenceInDays, endOfWeek, endOfMonth, parseISO } from 'date-fns'
@@ -641,7 +642,8 @@ export function TopBar({
 
       </div>
 
-      {/* Recent Pages, and who's online + Join Me — next to the pill config gear */}
+      {/* Sync status, Recent Pages, and who's online + Join Me — next to the pill config gear */}
+      <SyncStatusWidget />
       <RecentPagesWidget />
       <PresenceWidget />
 

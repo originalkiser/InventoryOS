@@ -13,7 +13,19 @@ import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync } from '@/services/droptopService'
 import type { DataConnectionSchedule } from '@/types/integrations'
 import { formatInTz } from '@/lib/tzFormat'
+import {
+  useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
+  DROPTOP_PO_SYNC_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
+} from '@/stores/syncTasksStore'
 import toast from 'react-hot-toast'
+
+const TASK_ID_FOR: Record<string, string> = {
+  skybitz_tanks: SKYBITZ_TANKS_TASK_ID,
+  droptop_on_hand: DROPTOP_ON_HAND_TASK_ID,
+  droptop_usage: DROPTOP_USAGE_TASK_ID,
+  droptop_purchase_orders: DROPTOP_PO_SYNC_TASK_ID,
+  automated_checks: AUTOMATED_CHECKS_TASK_ID,
+}
 
 // Exported so DataConnectionUpdatesSection.tsx's sync-log table can display
 // timestamps in this same company-configured timezone rather than the
@@ -80,27 +92,41 @@ export function DataConnectionsTab() {
   async function runNow(key: string) {
     if (!companyId) return
     setRunning(key)
+    // Progress is tracked globally (syncTasksStore, shown in the TopBar),
+    // not just this local `running` flag — that's what lets the sync keep
+    // reporting correctly even if you navigate away from this tab while
+    // it's still going, since the store isn't tied to this component's
+    // lifecycle the way local state is.
+    const store = useSyncTasksStore.getState()
+    const taskId = TASK_ID_FOR[key] ?? key
+    store.start(taskId, CONNECTION_META[key]?.label ?? key)
+    const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(taskId, p.batch, p.totalBatches)
     try {
+      let summary = ''
       if (key === 'skybitz_tanks') {
         const r = await runSkybitzTankSync()
-        toast.success(`SkyBitz: ${r.updated} updated, ${r.inserted} new, ${r.unchanged} unchanged`)
+        summary = `SkyBitz: ${r.updated} updated, ${r.inserted} new, ${r.unchanged} unchanged`
       } else if (key === 'droptop_on_hand') {
-        const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1 })
-        toast.success(`Droptop on-hand: ${r.operations_synced} shop(s), ${r.products_upserted} products`)
+        const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1 }, onProgress)
+        summary = `Droptop on-hand: ${r.operations_synced} shop(s), ${r.products_upserted} products`
       } else if (key === 'droptop_usage') {
-        const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true })
-        toast.success(`Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`)
+        const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true }, onProgress)
+        summary = `Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`
       } else if (key === 'droptop_purchase_orders') {
-        const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId)
-        toast.success(`Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`)
+        const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId, onProgress)
+        summary = `Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`
       } else if (key === 'automated_checks') {
         const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
         if (error) throw new Error(error.message)
         if (data?.error) throw new Error(data.error)
-        toast.success(`Automated Checks: ${data.created} new exception${data.created === 1 ? '' : 's'} flagged (${data.checked} anomal${data.checked === 1 ? 'y' : 'ies'} found)`)
+        summary = `Automated Checks: ${data.created} new exception${data.created === 1 ? '' : 's'} flagged (${data.checked} anomal${data.checked === 1 ? 'y' : 'ies'} found)`
       }
+      store.finish(taskId, 'success', summary)
+      toast.success(summary)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Sync failed')
+      const message = err instanceof Error ? err.message : 'Sync failed'
+      store.finish(taskId, 'error', message)
+      toast.error(message)
     } finally {
       setRunning(null)
       load()

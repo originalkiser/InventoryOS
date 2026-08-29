@@ -11,6 +11,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { usePageRevisit } from '@/hooks/usePageActive'
 import { runDroptopPurchaseOrderSync } from '@/services/droptopService'
+import { useSyncTasksStore, DROPTOP_PO_SYNC_TASK_ID } from '@/stores/syncTasksStore'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -38,11 +39,13 @@ interface PoRow {
   po_status: string | null
   approved_status: string | null
   delivery_status: string | null
+  delivery_status_updated_timestamp: string | null
   pay_status: string | null
   total_cost: number | null
   note: string | null
   last_updated_user_name: string | null
   created_timestamp: string | null
+  closed_timestamp: string | null
   last_updated_timestamp: string | null
   to_receive_timestamp: string | null
 }
@@ -60,6 +63,19 @@ const dShort = (iso: string | null) => { if (!iso) return '—'; try { return fo
 const dTime = (iso: string | null) => { if (!iso) return '—'; try { return format(new Date(iso), 'MMM d · h:mm a') } catch { return '—' } }
 const money = (v: number | null) => (v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }))
 const num = (v: number | null) => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }))
+
+// Known values from Droptop; anything else still renders (title-cased, not
+// swallowed) rather than falling back to a raw/blank value.
+const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  fully_received: 'Fully Received',
+  partially_received: 'Partially Received',
+  backordered: 'Backordered',
+}
+function deliveryStatusLabel(v: string | null): string {
+  if (!v) return 'None'
+  const key = v.toLowerCase().trim().replace(/[\s-]+/g, '_')
+  return DELIVERY_STATUS_LABELS[key] ?? v.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
 
 // Still outstanding on this line — Droptop's own remaining_quantity when
 // it's provided; otherwise quantity minus whatever's been received so far.
@@ -80,8 +96,13 @@ export function PoStatusPage() {
   const [pos, setPos] = useState<PoRow[]>([])
   const [itemsByPo, setItemsByPo] = useState<Record<string, PoItemRow[]>>({})
   const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
+  const [inspecting, setInspecting] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // Derived from the global sync tracker (not local state) so the button
+  // correctly reflects "is my sync still running" even if this page got
+  // evicted from the Recent Pages cache and remounted while it was going —
+  // see syncTasksStore.ts.
+  const syncing = useSyncTasksStore((s) => s.tasks.find((t) => t.id === DROPTOP_PO_SYNC_TASK_ID)?.status === 'running')
 
   const [fLocation, setFLocation] = useState('')
   const [fStatus, setFStatus] = useState('')
@@ -122,16 +143,23 @@ export function PoStatusPage() {
   usePageRevisit(load)
 
   async function syncNow() {
-    setSyncing(true)
+    if (syncing) return
+    const store = useSyncTasksStore.getState()
+    store.start(DROPTOP_PO_SYNC_TASK_ID, 'Droptop — Purchase Orders')
     try {
-      const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId ?? undefined)
-      toast.success(`${r.locations_synced} shop${r.locations_synced !== 1 ? 's' : ''}, ${r.pos_upserted} PO${r.pos_upserted !== 1 ? 's' : ''}, ${r.items_written} line item${r.items_written !== 1 ? 's' : ''}`)
+      const r = await runDroptopPurchaseOrderSync(
+        { daysBack: 180 }, companyId ?? undefined,
+        (p) => store.setProgress(DROPTOP_PO_SYNC_TASK_ID, p.batch, p.totalBatches),
+      )
+      const summary = `${r.locations_synced} shop${r.locations_synced !== 1 ? 's' : ''}, ${r.pos_upserted} PO${r.pos_upserted !== 1 ? 's' : ''}, ${r.items_written} line item${r.items_written !== 1 ? 's' : ''}`
+      store.finish(DROPTOP_PO_SYNC_TASK_ID, r.warnings?.length ? 'error' : 'success', r.warnings?.length ? r.warnings[0] : summary)
+      toast.success(summary)
       if (r.warnings?.length) toast.error(r.warnings[0])
       await load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Sync failed')
-    } finally {
-      setSyncing(false)
+      const message = e instanceof Error ? e.message : 'Sync failed'
+      store.finish(DROPTOP_PO_SYNC_TASK_ID, 'error', message)
+      toast.error(message)
     }
   }
 
@@ -141,7 +169,7 @@ export function PoStatusPage() {
   // multi-minute company-wide sync to find out. Logs to the console, writes
   // nothing.
   async function inspectOne() {
-    setSyncing(true)
+    setInspecting(true)
     try {
       const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'inspect' } })
       if (error) throw new Error(error.message)
@@ -152,7 +180,7 @@ export function PoStatusPage() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Inspect failed')
     } finally {
-      setSyncing(false)
+      setInspecting(false)
     }
   }
 
@@ -208,12 +236,13 @@ export function PoStatusPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={inspectOne} disabled={syncing}
+          <Button size="sm" variant="secondary" onClick={inspectOne} disabled={inspecting || syncing} loading={inspecting}
             title="Read-only peek at one location's raw Droptop response, logged to the browser console — writes nothing">
             Inspect
           </Button>
           <Button size="sm" variant="secondary" onClick={syncNow} disabled={syncing}>
-            <RefreshCw className={`w-3.5 h-3.5 mr-1 ${syncing ? 'animate-spin' : ''}`} /> Sync Now
+            <RefreshCw className={`w-3.5 h-3.5 mr-1 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing… (see status ↑ in top bar)' : 'Sync Now'}
           </Button>
         </div>
       </div>
@@ -247,6 +276,9 @@ export function PoStatusPage() {
               <th className="text-left px-2 py-2">Shop</th>
               <th className="text-left px-2 py-2">Supplier</th>
               <th className="text-left px-2 py-2">Status</th>
+              <th className="text-left px-2 py-2">Delivery Status</th>
+              <th className="text-left px-2 py-2">Delivery Updated</th>
+              <th className="text-left px-2 py-2">Closed</th>
               <th className="text-left px-2 py-2">Created</th>
               <th className="text-left px-2 py-2">Last Updated</th>
               <th className="text-right px-2 py-2">Total</th>
@@ -271,6 +303,9 @@ export function PoStatusPage() {
                       <td className="px-2 py-1.5">
                         <span className="rounded-full bg-sky/25 text-navy px-2 py-0.5 capitalize">{p.po_status ?? '—'}</span>
                       </td>
+                      <td className="px-2 py-1.5 text-navy whitespace-nowrap">{deliveryStatusLabel(p.delivery_status)}</td>
+                      <td className="px-2 py-1.5 text-navy">{dShort(p.delivery_status_updated_timestamp)}</td>
+                      <td className="px-2 py-1.5 text-navy">{dShort(p.closed_timestamp)}</td>
                       <td className="px-2 py-1.5 text-navy">{dShort(p.created_timestamp)}</td>
                       <td className="px-2 py-1.5 text-navy">{dTime(p.last_updated_timestamp)}{p.last_updated_user_name ? ` · ${p.last_updated_user_name}` : ''}</td>
                       <td className="px-2 py-1.5 text-right text-navy">{money(p.total_cost)}</td>
@@ -278,7 +313,7 @@ export function PoStatusPage() {
                     </tr>
                     {open && (
                       <tr className="border-b border-navy/15 bg-navy/[0.02]">
-                        <td colSpan={8} className="px-3 py-2">
+                        <td colSpan={11} className="px-3 py-2">
                           {p.note && <p className="text-[11px] font-mono text-inky/60 mb-2">Note: {p.note}</p>}
                           <table className="w-full text-[11px] font-mono">
                             <thead><tr className="text-inky/60 uppercase">
