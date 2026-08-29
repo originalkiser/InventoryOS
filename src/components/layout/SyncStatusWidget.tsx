@@ -18,7 +18,11 @@ export function SyncStatusWidget() {
   const tasks = useSyncTasksStore((s) => s.tasks)
   const dismiss = useSyncTasksStore((s) => s.dismiss)
   const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState({ top: 0, left: 0 })
+  // Right-anchored, same as PresenceWidget's own panel — the button sits
+  // near the right edge of the TopBar, so anchoring by left edge could push
+  // a fixed-width panel past the viewport's right edge instead of lining up
+  // with the button that opened it.
+  const [pos, setPos] = useState({ top: 0, right: 0 })
   const buttonRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -27,7 +31,7 @@ export function SyncStatusWidget() {
 
   function openPanel() {
     const r = buttonRef.current?.getBoundingClientRect()
-    if (r) setPos({ top: r.bottom + 4, left: r.left })
+    if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right })
     setOpen((v) => !v)
   }
 
@@ -70,7 +74,7 @@ export function SyncStatusWidget() {
       {open && createPortal(
         <div
           ref={panelRef}
-          style={{ top: pos.top, left: pos.left }}
+          style={{ top: pos.top, right: pos.right }}
           className="fixed z-[100] w-72 bg-[#002745] border border-[#F2F1E6]/20 rounded-xl shadow-xl p-3 flex flex-col gap-2 animate-[fadeIn_120ms_ease-out]"
         >
           <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Data Syncs</span>
