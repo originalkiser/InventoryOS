@@ -120,7 +120,7 @@ function TaskRow({ task, onDismiss }: { task: SyncTask; onDismiss: () => void })
         </div>
       )}
       {task.status === 'error' && task.message && (
-        <p className="text-[10px] font-mono text-[#C0392B]/90 truncate" title={task.message}>{task.message}</p>
+        <p className="text-[10px] font-mono text-[#C0392B]/90 whitespace-normal break-words">{task.message}</p>
       )}
     </div>
   )

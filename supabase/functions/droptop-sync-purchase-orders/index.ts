@@ -208,15 +208,23 @@ Deno.serve(async (req) => {
     // Droptop API call), low concurrency isn't needed here the way it is
     // for the usage sync since get-purchase-orders is one call per page,
     // not one call per product.
-    const allPos: any[] = []
+    // Keyed by po_id, not pushed to an array — a real run surfaced Postgres'
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time",
+    // meaning the same po_id showed up more than once within one batch
+    // (seemingly the same PO visible under more than one operation_id —
+    // Droptop's po_id apparently isn't strictly per-operation the way the
+    // docs imply). A Map here means a repeat just overwrites in place
+    // instead of the upsert ever seeing the same conflict key twice.
+    const posByPoId = new Map<string, { po: any; locationId: string | null }>()
     for (const loc of locations) {
       try {
         const pos = await fetchPurchaseOrders(loc.droptop_operation_id, cutoffUnix, poStatus, publicKey, privateKey)
-        for (const po of pos) allPos.push({ po, locationId: opToLocation.get(loc.droptop_operation_id) ?? null })
+        for (const po of pos) posByPoId.set(po.po_id, { po, locationId: opToLocation.get(loc.droptop_operation_id) ?? null })
       } catch (e) {
         warnings.push(`location ${loc.id}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
+    const allPos = [...posByPoId.values()]
 
     // Write phase — batched, not one upsert/delete/insert per PO. At real
     // volume (a shop can carry a couple hundred POs) that per-PO loop was

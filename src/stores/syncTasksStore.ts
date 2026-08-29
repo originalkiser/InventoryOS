@@ -35,7 +35,8 @@ interface SyncTasksState {
   dismiss: (id: string) => void
 }
 
-const AUTO_DISMISS_MS = { success: 8000, error: 30000 } as const
+// Errors don't auto-dismiss at all (see finish() below) — only success does.
+const SUCCESS_AUTO_DISMISS_MS = 8000
 
 // Stable task ids shared between wherever a given sync can be triggered
 // from (Data Connections' "Run Now", a module's own page like PO Status)
@@ -67,12 +68,16 @@ export const useSyncTasksStore = create<SyncTasksState>((set, get) => ({
 
   finish: (id, status, message = null) => {
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, status, message, finishedAt: Date.now() } : t)) }))
+    // Errors stay until manually dismissed — an error message (a Postgres
+    // conflict, a Droptop rate limit, whatever) is exactly the kind of
+    // thing that shouldn't quietly disappear before anyone's read it.
+    if (status === 'error') return
     setTimeout(() => {
       // Only auto-dismiss if it's still the same finished task (not
       // restarted in the meantime).
       const t = get().tasks.find((t) => t.id === id)
       if (t && t.status !== 'running') get().dismiss(id)
-    }, AUTO_DISMISS_MS[status])
+    }, SUCCESS_AUTO_DISMISS_MS)
   },
 
   dismiss: (id) => set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) })),

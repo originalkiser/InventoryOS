@@ -153,13 +153,13 @@ export function PoStatusPage() {
       )
       const summary = `${r.locations_synced} shop${r.locations_synced !== 1 ? 's' : ''}, ${r.pos_upserted} PO${r.pos_upserted !== 1 ? 's' : ''}, ${r.items_written} line item${r.items_written !== 1 ? 's' : ''}`
       store.finish(DROPTOP_PO_SYNC_TASK_ID, r.warnings?.length ? 'error' : 'success', r.warnings?.length ? r.warnings[0] : summary)
-      toast.success(summary)
-      if (r.warnings?.length) toast.error(r.warnings[0])
+      if (r.warnings?.length) toast.error(r.warnings[0], { duration: 12000 })
+      else toast.success(summary)
       await load()
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Sync failed'
       store.finish(DROPTOP_PO_SYNC_TASK_ID, 'error', message)
-      toast.error(message)
+      toast.error(message, { duration: 12000 })
     }
   }
 

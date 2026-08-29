@@ -126,7 +126,7 @@ export function DataConnectionsTab() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Sync failed'
       store.finish(taskId, 'error', message)
-      toast.error(message)
+      toast.error(message, { duration: 12000 })
     } finally {
       setRunning(null)
       load()

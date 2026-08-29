@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -7,6 +8,31 @@ import { Card, CardBody, CardHeader, Button, Badge, Select, SbLoader } from '@/c
 import type { DataConnectionSyncLog } from '@/types/integrations'
 import { formatInTz } from '@/lib/tzFormat'
 import { TIMEZONE_KEY, DEFAULT_TIMEZONE } from '@/modules/config/tabs/DataConnectionsTab'
+
+// Immediate, stylized hover reveal for a status's error_message — a native
+// `title` tooltip is slow to appear, easy to miss entirely, and truncates
+// awkwardly for a long Postgres error. Same portal-to-body + dark-card
+// styling already established for this kind of thing (Sidebar.tsx's
+// flyout, RecentPagesWidget's own hover labels), sized for wrapped
+// paragraph text rather than a short one-line label.
+function useErrorFlyout() {
+  const [flyout, setFlyout] = useState<{ text: string; top: number; left: number } | null>(null)
+  const show = (e: React.MouseEvent, text: string) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setFlyout({ text, top: r.bottom + 6, left: r.left })
+  }
+  const hide = () => setFlyout(null)
+  const node = flyout && createPortal(
+    <div
+      style={{ top: flyout.top, left: flyout.left }}
+      className="fixed z-[60] max-w-sm bg-[#002745] text-[#F2F1E6] text-[11px] font-mono px-2.5 py-1.5 rounded-md shadow-xl border border-[#F2F1E6]/15 pointer-events-none whitespace-normal break-words animate-[fadeIn_120ms_ease-out]"
+    >
+      {flyout.text}
+    </div>,
+    document.body,
+  )
+  return { show, hide, node }
+}
 
 const CONNECTION_LABELS: Record<string, string> = {
   droptop: 'Droptop',
@@ -52,6 +78,7 @@ export function DataConnectionUpdatesSection() {
   const [expanded, setExpanded] = useState(false)
   const [connectionFilter, setConnectionFilter] = useState('all')
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'finished_at', dir: 'desc' })
+  const { show: showError, hide: hideError, node: errorFlyout } = useErrorFlyout()
 
   const load = useCallback(async () => {
     if (!profile?.company_id) return
@@ -150,9 +177,18 @@ export function DataConnectionUpdatesSection() {
                     <td className="px-3 py-1.5 text-right text-navy">{r.items_updated ?? '—'}</td>
                     <td className="px-3 py-1.5 text-right text-inky">{r.items_unchanged ?? '—'}</td>
                     <td className="px-3 py-1.5">
-                      <span title={r.error_message ?? undefined}>
+                      {r.error_message ? (
+                        <span
+                          onMouseEnter={(e) => showError(e, r.error_message!)}
+                          onMouseLeave={hideError}
+                          className="inline-flex items-center gap-1 cursor-help"
+                        >
+                          <Badge color={STATUS_COLOR[r.status] ?? 'inky'}>{r.status}</Badge>
+                          <span className="text-[9px] text-inky/40">ⓘ</span>
+                        </span>
+                      ) : (
                         <Badge color={STATUS_COLOR[r.status] ?? 'inky'}>{r.status}</Badge>
-                      </span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -161,6 +197,7 @@ export function DataConnectionUpdatesSection() {
           </div>
         )}
       </CardBody>
+      {errorFlyout}
     </Card>
   )
 }
