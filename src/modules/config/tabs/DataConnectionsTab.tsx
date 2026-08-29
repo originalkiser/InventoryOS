@@ -107,6 +107,28 @@ export function DataConnectionsTab() {
     }
   }
 
+  // Read-only peek at Droptop's raw, unmapped change-event shape — the same
+  // "run it and read the console" step needed to confirm what a receiving
+  // event's real change_type looks like before an abnormal-receipt check
+  // can be built. A button here (using the app's own already-authenticated
+  // client) is more reliable than reconstructing a session token by hand in
+  // a pasted console script.
+  async function inspectDroptopUsage() {
+    setRunning('inspect')
+    try {
+      const { data, error } = await supabase.functions.invoke('droptop-sync-usage', { body: { mode: 'inspect' } })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      // eslint-disable-next-line no-console
+      console.log('Droptop inspect result:', data)
+      toast.success(`Inspect complete — ${data.changes_sample?.length ?? 0} sample change(s) logged to the browser console (press F12 to view).`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Inspect failed')
+    } finally {
+      setRunning(null)
+    }
+  }
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   if (rows === null) return <div className="py-8"><SbLoader /></div>
 
@@ -188,9 +210,17 @@ export function DataConnectionsTab() {
                     {row.last_run_at ? `Last run ${formatInTz(row.last_run_at, timezone)}` : 'Never run'}
                     {saving === row.id && ' · saving…'}
                   </span>
-                  <Button size="sm" loading={running === row.connection_key} onClick={() => runNow(row.connection_key)}>
-                    Run Now
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {row.connection_key === 'droptop_usage' && (
+                      <Button size="sm" variant="secondary" loading={running === 'inspect'} onClick={inspectDroptopUsage}
+                        title="Read-only peek at Droptop's raw change-event shape, logged to the browser console — no data written">
+                        Inspect
+                      </Button>
+                    )}
+                    <Button size="sm" loading={running === row.connection_key} onClick={() => runNow(row.connection_key)}>
+                      Run Now
+                    </Button>
+                  </div>
                 </div>
                 {row.last_run_status === 'error' && row.last_run_message && (
                   <p className="text-[11px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-2 py-1">

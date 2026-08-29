@@ -32,3 +32,11 @@ verify_jwt = false
 # tab's "Run Now" (interactive) — same reason as the others.
 [functions.run-automated-checks]
 verify_jwt = false
+
+# Same reason as droptop-sync-usage — called unattended by the dispatcher
+# (X-Sync-Token) in addition to interactive "Run Now"/PO Status "Sync Now"
+# calls. Missed when the function was first added — Supabase's own
+# dashboard "Verify JWT" toggle was flipped off manually as a workaround;
+# this makes that the tracked, reproducible source of truth instead.
+[functions.droptop-sync-purchase-orders]
+verify_jwt = false
