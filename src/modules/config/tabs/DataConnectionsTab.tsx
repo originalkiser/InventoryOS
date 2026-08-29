@@ -10,13 +10,16 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader } from '@/components/ui'
 import { runSkybitzTankSync } from '@/services/skybitzService'
-import { runDroptopSync } from '@/services/droptopService'
+import { runDroptopSync, runDroptopPurchaseOrderSync } from '@/services/droptopService'
 import type { DataConnectionSchedule } from '@/types/integrations'
-import { format } from 'date-fns'
+import { formatInTz } from '@/lib/tzFormat'
 import toast from 'react-hot-toast'
 
-const TIMEZONE_KEY = 'data_connection_timezone'
-const DEFAULT_TIMEZONE = 'America/Chicago'
+// Exported so DataConnectionUpdatesSection.tsx's sync-log table can display
+// timestamps in this same company-configured timezone rather than the
+// viewer's own browser timezone.
+export const TIMEZONE_KEY = 'data_connection_timezone'
+export const DEFAULT_TIMEZONE = 'America/Chicago'
 const TIMEZONE_OPTIONS = [
   { value: 'America/New_York', label: 'Eastern (New York)' },
   { value: 'America/Chicago', label: 'Central (Chicago)' },
@@ -31,9 +34,10 @@ const CONNECTION_META: Record<string, { label: string; description: string }> = 
   skybitz_tanks: { label: 'SkyBitz Tank Monitors', description: 'Pulls tank telemetry (on-hand, level, battery) over SFTP.' },
   droptop_on_hand: { label: 'Droptop — On Hand', description: 'Pulls current on-hand quantities from Droptop into Product Usage.' },
   droptop_usage: { label: 'Droptop — Usage', description: 'Pulls sales/adjustment activity from Droptop and logs the daily sold/adjusted ledger.' },
+  droptop_purchase_orders: { label: 'Droptop — Purchase Orders', description: 'Pulls open/recent POs and their line items — feeds the PO Status page and Orders v2\'s "already on order" check.' },
   automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
 }
-const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'automated_checks']
+const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'automated_checks']
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -86,6 +90,9 @@ export function DataConnectionsTab() {
       } else if (key === 'droptop_usage') {
         const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true })
         toast.success(`Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`)
+      } else if (key === 'droptop_purchase_orders') {
+        const r = await runDroptopPurchaseOrderSync({ daysBack: 180 })
+        toast.success(`Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`)
       } else if (key === 'automated_checks') {
         const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
         if (error) throw new Error(error.message)
@@ -178,7 +185,7 @@ export function DataConnectionsTab() {
 
                 <div className="flex items-center justify-between pt-2 border-t border-navy/10">
                   <span className="text-[10px] font-mono text-inky/60">
-                    {row.last_run_at ? `Last run ${format(new Date(row.last_run_at), 'MMM d, h:mm a')}` : 'Never run'}
+                    {row.last_run_at ? `Last run ${formatInTz(row.last_run_at, timezone)}` : 'Never run'}
                     {saving === row.id && ' · saving…'}
                   </span>
                   <Button size="sm" loading={running === row.connection_key} onClick={() => runNow(row.connection_key)}>

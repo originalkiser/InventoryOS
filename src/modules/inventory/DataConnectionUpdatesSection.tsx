@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { format } from 'date-fns'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { Card, CardBody, CardHeader, Button, Badge, Select, SbLoader } from '@/components/ui'
 import type { DataConnectionSyncLog } from '@/types/integrations'
+import { formatInTz } from '@/lib/tzFormat'
+import { TIMEZONE_KEY, DEFAULT_TIMEZONE } from '@/modules/config/tabs/DataConnectionsTab'
 
 const CONNECTION_LABELS: Record<string, string> = {
   droptop: 'Droptop',
   droptop_on_hand: 'Droptop — On Hand',
   droptop_usage: 'Droptop — Usage',
+  droptop_purchase_orders: 'Droptop — Purchase Orders',
   skybitz_tanks: 'SkyBitz Tanks',
   automated_checks: 'Automated Checks',
 }
@@ -42,6 +45,7 @@ const COLUMNS: Col[] = [
 
 export function DataConnectionUpdatesSection() {
   const { profile } = useAuthStore()
+  const [timezone] = useAppSetting<string>(TIMEZONE_KEY, DEFAULT_TIMEZONE)
   const [rows, setRows] = useState<DataConnectionSyncLog[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -141,7 +145,7 @@ export function DataConnectionUpdatesSection() {
                 {displayRows.map((r) => (
                   <tr key={r.id} className="border-b border-navy/20">
                     <td className="px-3 py-1.5 text-navy">{connectionLabel(r.connection)}</td>
-                    <td className="px-3 py-1.5 text-navy">{format(new Date(r.finished_at), 'MMM d, h:mm a')}</td>
+                    <td className="px-3 py-1.5 text-navy">{formatInTz(r.finished_at, timezone)}</td>
                     <td className="px-3 py-1.5 text-right text-inky">{fmtDuration(r.duration_ms)}</td>
                     <td className="px-3 py-1.5 text-right text-navy">{r.items_updated ?? '—'}</td>
                     <td className="px-3 py-1.5 text-right text-inky">{r.items_unchanged ?? '—'}</td>
