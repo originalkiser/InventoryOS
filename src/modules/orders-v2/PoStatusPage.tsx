@@ -97,7 +97,13 @@ export function PoStatusPage() {
   const [itemsByPo, setItemsByPo] = useState<Record<string, PoItemRow[]>>({})
   const [loading, setLoading] = useState(true)
   const [inspecting, setInspecting] = useState(false)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // Accordion — one PO's line-item detail open at a time, not a multi-select
+  // set. RelaDyne's own PO numbering (<shop>-<date><B/P>) makes adjacent PO
+  // rows look similar at a glance; with several expanded simultaneously it
+  // was genuinely hard to tell where one PO's item table ended and the next
+  // PO's own row began (looked like items nested inside items, which never
+  // happens — the data itself was always correct).
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   // Derived from the global sync tracker (not local state) so the button
   // correctly reflects "is my sync still running" even if this page got
   // evicted from the Recent Pages cache and remounted while it was going —
@@ -287,11 +293,11 @@ export function PoStatusPage() {
             <tbody>
               {visible.map((p) => {
                 const items = itemsByPo[p.id] ?? []
-                const open = expanded.has(p.id)
+                const open = expandedId === p.id
                 return (
                   <Fragment key={p.id}>
-                    <tr className="border-b border-navy/15 hover:bg-sky/10 cursor-pointer"
-                      onClick={() => setExpanded((prev) => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n })}>
+                    <tr className={`border-b border-navy/15 hover:bg-sky/10 cursor-pointer ${open ? 'bg-sky/[0.08]' : ''}`}
+                      onClick={() => setExpandedId((prev) => (prev === p.id ? null : p.id))}>
                       <td className="px-2 py-1.5 text-navy whitespace-nowrap">
                         <span className="inline-flex items-center gap-1">
                           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -313,7 +319,10 @@ export function PoStatusPage() {
                     </tr>
                     {open && (
                       <tr className="border-b border-navy/15 bg-navy/[0.02]">
-                        <td colSpan={11} className="px-3 py-2">
+                        <td colSpan={11} className="px-3 py-2 border-l-2 border-sky">
+                          <p className="text-[10px] font-mono uppercase tracking-widest text-inky/50 mb-1">
+                            Line items — {p.custom_po_id || p.po_id}
+                          </p>
                           {p.note && <p className="text-[11px] font-mono text-inky/60 mb-2">Note: {p.note}</p>}
                           <table className="w-full text-[11px] font-mono">
                             <thead><tr className="text-inky/60 uppercase">
