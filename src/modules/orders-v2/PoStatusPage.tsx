@@ -9,7 +9,6 @@ import { Button, Card, CardBody, Combobox, Input, Select, SbLoader, Toggle } fro
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
-import { usePageRevisit } from '@/hooks/usePageActive'
 import { runDroptopPurchaseOrderSync } from '@/services/droptopService'
 import { useSyncTasksStore, DROPTOP_PO_SYNC_TASK_ID } from '@/stores/syncTasksStore'
 import { format } from 'date-fns'
@@ -97,13 +96,11 @@ export function PoStatusPage() {
   const [itemsByPo, setItemsByPo] = useState<Record<string, PoItemRow[]>>({})
   const [loading, setLoading] = useState(true)
   const [inspecting, setInspecting] = useState(false)
-  // Accordion — one PO's line-item detail open at a time, not a multi-select
-  // set. RelaDyne's own PO numbering (<shop>-<date><B/P>) makes adjacent PO
-  // rows look similar at a glance; with several expanded simultaneously it
-  // was genuinely hard to tell where one PO's item table ended and the next
-  // PO's own row began (looked like items nested inside items, which never
-  // happens — the data itself was always correct).
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Multi-select on purpose — comparing several POs' line items side by
+  // side is the actual use case. The real bug behind "items look wrong"
+  // wasn't multiple rows being open (see load()'s fetchAllRows fix above),
+  // so there's no need to trade away that comparison workflow for it.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   // Derived from the global sync tracker (not local state) so the button
   // correctly reflects "is my sync still running" even if this page got
   // evicted from the Recent Pages cache and remounted while it was going —
@@ -119,22 +116,43 @@ export function PoStatusPage() {
     if (!companyId) return
     setLoading(true)
     const sb = supabase as any
-    const { data: poRows, error } = await sb.schema('inventory').from('droptop_purchase_orders')
-      .select('*').eq('company_id', companyId).order('created_timestamp', { ascending: false }).limit(1000)
-    if (error) {
-      toast.error(error.message.includes('does not exist') ? 'Purchase order tables not found — apply migration 20260829_droptop_purchase_orders.sql' : error.message)
+    // PostgREST caps an un-ranged select at 1000 rows by default — silently,
+    // no error. Applied to both queries here: the PO count alone might fit
+    // under that, but ~3 items/PO puts the item rows well past it, so most
+    // POs' items were getting silently dropped (the exact same bug already
+    // root-caused once this session, in LocationLookupPage.tsx — same fix).
+    const fetchAllRows = async <T,>(table: string, apply: (q: any) => any): Promise<T[]> => {
+      const out: T[] = []
+      const PAGE = 1000
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await apply(sb.schema('inventory').from(table).select('*')).range(from, from + PAGE - 1)
+        if (error) throw error
+        const batch = (data ?? []) as T[]
+        out.push(...batch)
+        if (batch.length < PAGE) break
+      }
+      return out
+    }
+
+    let poRows: PoRow[]
+    try {
+      poRows = await fetchAllRows<PoRow>('droptop_purchase_orders', (q) =>
+        q.eq('company_id', companyId).order('created_timestamp', { ascending: false }))
+    } catch (error: any) {
+      toast.error(error.message?.includes('does not exist') ? 'Purchase order tables not found — apply migration 20260829_droptop_purchase_orders.sql' : error.message)
       setLoading(false)
       return
     }
-    setPos((poRows ?? []) as PoRow[])
-    const ids = (poRows ?? []).map((p: PoRow) => p.id)
-    if (ids.length) {
-      const { data: itemRows } = await sb.schema('inventory').from('droptop_purchase_order_items')
-        .select('*').in('purchase_order_id', ids)
+    setPos(poRows)
+    if (poRows.length) {
+      // Filtered by company_id directly (a single value, not an .in() list
+      // of every PO id) — avoids also risking a URL-length limit once the
+      // PO count grows past a couple hundred.
+      const itemRows = await fetchAllRows<PoItemRow & { purchase_order_id: string }>(
+        'droptop_purchase_order_items', (q) => q.eq('company_id', companyId),
+      )
       const grouped: Record<string, PoItemRow[]> = {}
-      for (const it of (itemRows ?? []) as (PoItemRow & { purchase_order_id: string })[]) {
-        (grouped[it.purchase_order_id] ??= []).push(it)
-      }
+      for (const it of itemRows) (grouped[it.purchase_order_id] ??= []).push(it)
       setItemsByPo(grouped)
     } else {
       setItemsByPo({})
@@ -143,10 +161,11 @@ export function PoStatusPage() {
   }, [companyId])
 
   useEffect(() => { load() }, [load])
-  // Someone else finalizing a PO in Droptop directly doesn't reach us until
-  // the next sync — but at least don't show a stale view of what WE already
-  // pulled if you're coming back to this page after a while.
-  usePageRevisit(load)
+  // Deliberately no usePageRevisit here (unlike Comms/Alerts/Exceptions) —
+  // this data only changes when a sync runs, not from other users clicking
+  // around, so an automatic refetch every time you switch back to this
+  // browser tab was just a disruptive reload with nothing new to show for
+  // it. Sync Now (and its own load() afterward) is the actual refresh path.
 
   async function syncNow() {
     if (syncing) return
@@ -293,11 +312,11 @@ export function PoStatusPage() {
             <tbody>
               {visible.map((p) => {
                 const items = itemsByPo[p.id] ?? []
-                const open = expandedId === p.id
+                const open = expanded.has(p.id)
                 return (
                   <Fragment key={p.id}>
                     <tr className={`border-b border-navy/15 hover:bg-sky/10 cursor-pointer ${open ? 'bg-sky/[0.08]' : ''}`}
-                      onClick={() => setExpandedId((prev) => (prev === p.id ? null : p.id))}>
+                      onClick={() => setExpanded((prev) => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n })}>
                       <td className="px-2 py-1.5 text-navy whitespace-nowrap">
                         <span className="inline-flex items-center gap-1">
                           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
