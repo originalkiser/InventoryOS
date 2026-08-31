@@ -33,6 +33,7 @@ export const ROUTE_LABELS: Record<string, string> = {
   '/forms': 'Forms',
   '/forms/new': 'New Form',
   '/marketing-planner': 'Marketing Planner',
+  '/customer-heatmap': 'Customer Heatmap',
   '/schedule': 'Calendar',
   '/tasks': 'Tasks',
   '/issues': 'Issues',
