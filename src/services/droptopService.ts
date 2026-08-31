@@ -28,6 +28,11 @@ export interface DroptopSyncOptions {
   daysBack: number
   categories?: string[]
   locationId?: string // sync a single location — skips chunking entirely
+  // Sync exactly this set of locations, chunked the same way "every
+  // location" is — for callers (e.g. the one-time historical backfill)
+  // that need an explicit, caller-chosen subset rather than every
+  // Droptop-mapped location in the company.
+  locationIds?: string[]
   // Opt-in: also feed this pull's on-hands into inventory.count_products for
   // the given Month End period (YYYY-MM-01) — see droptop-sync-usage's own
   // doc comment for why this is scoped-delete-then-insert, not additive.
@@ -87,14 +92,14 @@ export async function runDroptopSync(
   opts: DroptopSyncOptions,
   onProgress?: (p: DroptopSyncProgress) => void,
 ): Promise<DroptopSyncResult> {
-  const { mode, daysBack, categories = [], locationId, countMonth, logDailyActivity } = opts
+  const { mode, daysBack, categories = [], locationId, locationIds, countMonth, logDailyActivity } = opts
   const writeToCountProducts = !!countMonth
 
   if (locationId) {
     return invokeSync({ mode, daysBack, categories, locationId, writeToCountProducts, countMonth, logDailyActivity })
   }
 
-  const ids = await fetchDroptopLocationIds(companyId)
+  const ids = locationIds?.length ? locationIds : await fetchDroptopLocationIds(companyId)
   if (!ids.length) {
     throw new Error('No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.')
   }

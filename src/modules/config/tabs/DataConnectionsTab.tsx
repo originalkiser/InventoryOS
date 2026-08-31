@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader } from '@/components/ui'
+import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown } from '@/components/ui'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync } from '@/services/droptopService'
 import type { DataConnectionSchedule } from '@/types/integrations'
@@ -69,6 +69,8 @@ export function DataConnectionsTab() {
   const [saving, setSaving] = useState<string | null>(null)
   const [inspectShop, setInspectShop] = useState('')
   const [inspectProductId, setInspectProductId] = useState('')
+  const [backfillOptions, setBackfillOptions] = useState<{ id: string; label: string }[]>([])
+  const [backfillShops, setBackfillShops] = useState<string[]>([])
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -79,6 +81,24 @@ export function DataConnectionsTab() {
   }, [companyId])
 
   useEffect(() => { load() }, [load])
+
+  // Locations eligible for the historical backfill — only shops already
+  // mapped to a Droptop Operation ID, same scope as the routine usage sync.
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    const sb = supabase as any
+    sb.schema('core').from('locations')
+      .select('id, name, shop_city')
+      .eq('company_id', companyId)
+      .not('droptop_operation_id', 'is', null)
+      .order('name')
+      .then(({ data }: any) => {
+        if (cancelled) return
+        setBackfillOptions((data ?? []).map((l: any) => ({ id: l.id, label: l.shop_city ? `${l.name} — ${l.shop_city}` : l.name })))
+      })
+    return () => { cancelled = true }
+  }, [companyId])
 
   async function saveRow(row: DataConnectionSchedule, patch: Partial<DataConnectionSchedule>) {
     setSaving(row.id)
@@ -193,34 +213,34 @@ export function DataConnectionsTab() {
     }
   }
 
-  // One-time historical backfill: the routine daily usage sync runs with
-  // daysBack:1 to keep Droptop API load light, appending one day at a time
-  // to inventory.daily_product_activity — so a rolling 30-day daily_usage
-  // average (droptop-sync-usage's step 5b) only has real 30-day coverage
-  // once 30 daily runs have accumulated. This pulls one real 30-day window
-  // right now and buckets every event by its actual date, backfilling the
-  // ledger's last 30 days in one shot so the rolling average is accurate
-  // immediately instead of ramping up over the next month. Heavier than a
-  // routine daily run (a full 30-day Droptop pull per location) — meant to
-  // be run once, not on a schedule.
-  async function backfillUsageHistory() {
-    if (!companyId) return
+  // One-time historical backfill for a chosen set of shops — meant for a
+  // newly-acquired shop already on Droptop before it acquisition, where the
+  // ongoing daysBack:1 daily job (appending one day at a time to
+  // inventory.daily_product_activity, see droptop-sync-usage's step 5b) has
+  // no history to average over yet. Never defaults to "all locations" —
+  // every other shop already has its rolling average building up naturally
+  // from the routine daily job and doesn't need this. Manual-only: no
+  // schedule, no automation toggle.
+  async function runBackfill() {
+    if (!companyId || !backfillShops.length) return
     setRunning('backfill')
     const store = useSyncTasksStore.getState()
-    store.start(DROPTOP_USAGE_TASK_ID, 'Droptop Usage — 30-day backfill')
+    store.start(DROPTOP_USAGE_TASK_ID, `Droptop Usage — 30-day backfill (${backfillShops.length} shop${backfillShops.length === 1 ? '' : 's'})`)
     const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(DROPTOP_USAGE_TASK_ID, p.batch, p.totalBatches)
     try {
-      const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 30, logDailyActivity: true }, onProgress)
+      const labelToId = new Map(backfillOptions.map((o) => [o.label, o.id]))
+      const locationIds = backfillShops.map((label) => labelToId.get(label)).filter((id): id is string => !!id)
+      const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 30, logDailyActivity: true, locationIds }, onProgress)
       const summary = `Backfill complete: ${r.operations_synced} shop(s), ${r.products_upserted} products — 30 days of history now in the ledger`
       store.finish(DROPTOP_USAGE_TASK_ID, 'success', summary)
       toast.success(summary)
+      setBackfillShops([])
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Backfill failed'
       store.finish(DROPTOP_USAGE_TASK_ID, 'error', message)
       toast.error(message, { duration: 12000 })
     } finally {
       setRunning(null)
-      load()
     }
   }
 
@@ -322,10 +342,6 @@ export function DataConnectionsTab() {
                           title="Read-only peek at Droptop's raw change-event shape, logged to the browser console — no data written">
                           Inspect
                         </Button>
-                        <Button size="sm" variant="secondary" loading={running === 'backfill'} onClick={backfillUsageHistory}
-                          title="One-time: pulls a real 30-day window and backfills the daily activity ledger, so the rolling daily_usage average is accurate immediately instead of building up over the next month. Heavier than a routine daily run — run once, not on a schedule.">
-                          Backfill 30 Days
-                        </Button>
                       </>
                     )}
                     <Button size="sm" loading={running === row.connection_key} onClick={() => runNow(row.connection_key)}>
@@ -343,6 +359,38 @@ export function DataConnectionsTab() {
           )
         })}
       </div>
+
+      <Card>
+        <CardHeader>
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Historical Usage Backfill</span>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-3">
+          <p className="text-[11px] font-mono text-inky/60">
+            The routine Droptop Usage sync above only pulls one day at a time and builds up its 30-day rolling average
+            naturally — no action needed for shops already on Droptop. This is for a shop that's <em>already</em> on
+            Droptop when it's acquired (or any other case a shop's history needs pulling in from scratch): it runs a
+            real 30-day pull once and backfills the daily activity ledger immediately instead of waiting a month.
+            Manual only — always pick the shop(s) explicitly, never runs on a schedule.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Shop(s)</span>
+              <MultiSelectDropdown
+                options={backfillOptions.map((o) => ({ value: o.label }))}
+                selected={backfillShops}
+                onChange={setBackfillShops}
+                placeholder="Select shop(s)…"
+                showAllOption={false}
+                searchable
+                countNoun="shops"
+              />
+            </div>
+            <Button size="sm" loading={running === 'backfill'} disabled={!backfillShops.length} onClick={runBackfill}>
+              Run Backfill
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
     </div>
   )
 }
