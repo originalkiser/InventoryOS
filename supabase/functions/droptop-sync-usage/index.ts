@@ -321,11 +321,61 @@ Deno.serve(async (req) => {
         fetchInventory(opId, publicKey, privateKey),
         fetchChanges(opId, startUnix, endUnix, publicKey, privateKey),
       ])
+
+      // Per-product breakdown — the exact same aggregation the real sync
+      // uses to compute daily_usage (sum of change_type:'sale' quantity_change
+      // over the window, divided by daysBack), surfaced raw so one location's
+      // numbers can be checked against an independent manual count. Built
+      // to investigate a case (Aug 2026, 239-Warr Acres) where daily_usage
+      // came out well above a manual last-30-days calc for several products.
+      type Breakdown = {
+        product_id: string; sale_event_count: number; sale_qty_sum: number
+        daily_usage: number; other_change_types: Record<string, number>
+      }
+      const breakdownByKey = new Map<string, Breakdown>()
+      const displayId = new Map<string, string>()
+      for (const change of changes) {
+        if (!matchesCategory(change.product_type)) continue
+        const pid: string = change.product_id
+        if (!pid) continue
+        const key = pid.toLowerCase()
+        if (!displayId.has(key)) displayId.set(key, pid)
+        let row = breakdownByKey.get(key)
+        if (!row) {
+          row = { product_id: displayId.get(key)!, sale_event_count: 0, sale_qty_sum: 0, daily_usage: 0, other_change_types: {} }
+          breakdownByKey.set(key, row)
+        }
+        if (change.change_type === 'sale') {
+          row.sale_event_count++
+          row.sale_qty_sum += Math.abs(parseFloat(change.quantity_change || '0'))
+        } else {
+          const t = change.change_type || 'unknown'
+          row.other_change_types[t] = (row.other_change_types[t] ?? 0) + 1
+        }
+      }
+      const productBreakdown = Array.from(breakdownByKey.values())
+        .map((r) => ({ ...r, daily_usage: Math.round((r.sale_qty_sum / daysBack) * 1000) / 1000 }))
+        .sort((a, b) => b.sale_qty_sum - a.sale_qty_sum)
+
+      // Optional: hand back every raw change event for one product (not just
+      // a 5-row sample) so individual events can be eyeballed — duplicate
+      // inventory_change_id, an out-of-window timestamp, an unexpectedly
+      // large single quantity_change, etc.
+      const requestedProductId: string | null = typeof body.productId === 'string' && body.productId.trim() ? body.productId.trim() : null
+      const matchingRawChanges = requestedProductId
+        ? changes.filter((c: any) => (c.product_id ?? '').toLowerCase() === requestedProductId.toLowerCase())
+        : []
+
       return ok({
         success: true,
         operation_id: opId,
+        location_id: locations[0].id,
+        window_days: daysBack,
+        total_change_events: changes.length,
         inventory_sample: inventory.slice(0, 3),
         changes_sample: changes.slice(0, 5),
+        product_breakdown: productBreakdown,
+        ...(requestedProductId ? { requested_product_id: requestedProductId, matching_raw_changes: matchingRawChanges } : {}),
       })
     }
 

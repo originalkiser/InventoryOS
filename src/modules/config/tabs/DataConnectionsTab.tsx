@@ -67,6 +67,8 @@ export function DataConnectionsTab() {
   const [rows, setRows] = useState<DataConnectionSchedule[] | null>(null)
   const [running, setRunning] = useState<string | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
+  const [inspectShop, setInspectShop] = useState('')
+  const [inspectProductId, setInspectProductId] = useState('')
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -139,15 +141,49 @@ export function DataConnectionsTab() {
   // can be built. A button here (using the app's own already-authenticated
   // client) is more reliable than reconstructing a session token by hand in
   // a pasted console script.
+  // Scoped variant: pass a shop name (or id) to inspect that one location
+  // instead of an arbitrary first location, and get back a per-product
+  // sale-event breakdown (count, summed qty, resulting daily_usage) — not
+  // just a 5-row sample — so a specific product's number can be checked
+  // against an independent manual calculation. An optional product id also
+  // dumps every raw matching change event, for spotting duplicates or an
+  // unexpected change_type by eye.
   async function inspectDroptopUsage() {
     setRunning('inspect')
     try {
-      const { data, error } = await supabase.functions.invoke('droptop-sync-usage', { body: { mode: 'inspect' } })
+      let locationId: string | undefined
+      const shopQuery = inspectShop.trim()
+      if (shopQuery) {
+        const sb = supabase as any
+        const { data: loc, error: locErr } = await sb.schema('core').from('locations')
+          .select('id, name')
+          .eq('company_id', companyId)
+          .ilike('name', `%${shopQuery}%`)
+          .limit(1)
+          .maybeSingle()
+        if (locErr) throw new Error(locErr.message)
+        if (!loc) throw new Error(`No location matching "${shopQuery}"`)
+        locationId = loc.id
+      }
+      const productId = inspectProductId.trim() || undefined
+      const { data, error } = await supabase.functions.invoke('droptop-sync-usage', {
+        body: { mode: 'inspect', ...(locationId ? { locationId } : {}), ...(productId ? { productId } : {}) },
+      })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
       // eslint-disable-next-line no-console
       console.log('Droptop inspect result:', data)
-      toast.success(`Inspect complete — ${data.changes_sample?.length ?? 0} sample change(s) logged to the browser console (press F12 to view).`)
+      if (data.product_breakdown?.length) {
+        // eslint-disable-next-line no-console
+        console.table(data.product_breakdown)
+      }
+      if (data.matching_raw_changes?.length) {
+        // eslint-disable-next-line no-console
+        console.log(`Raw '${data.requested_product_id}' change events:`, data.matching_raw_changes)
+      }
+      toast.success(
+        `Inspect complete — ${data.product_breakdown?.length ?? 0} product(s) over ${data.window_days} day(s) logged to the browser console (press F12, check the table${productId ? ' and raw events' : ''}).`,
+      )
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Inspect failed')
     } finally {
@@ -238,10 +274,22 @@ export function DataConnectionsTab() {
                   </span>
                   <div className="flex items-center gap-2">
                     {row.connection_key === 'droptop_usage' && (
-                      <Button size="sm" variant="secondary" loading={running === 'inspect'} onClick={inspectDroptopUsage}
-                        title="Read-only peek at Droptop's raw change-event shape, logged to the browser console — no data written">
-                        Inspect
-                      </Button>
+                      <>
+                        <input
+                          value={inspectShop} onChange={(e) => setInspectShop(e.target.value)}
+                          placeholder="Shop (optional)" title="Location name to scope the Inspect to — leave blank for an arbitrary location"
+                          className={`${fieldCls} w-28`}
+                        />
+                        <input
+                          value={inspectProductId} onChange={(e) => setInspectProductId(e.target.value)}
+                          placeholder="Product id (optional)" title="Also dump every raw change event for this product id"
+                          className={`${fieldCls} w-32`}
+                        />
+                        <Button size="sm" variant="secondary" loading={running === 'inspect'} onClick={inspectDroptopUsage}
+                          title="Read-only peek at Droptop's raw change-event shape, logged to the browser console — no data written">
+                          Inspect
+                        </Button>
+                      </>
                     )}
                     <Button size="sm" loading={running === row.connection_key} onClick={() => runNow(row.connection_key)}>
                       Run Now
