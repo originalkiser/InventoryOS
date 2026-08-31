@@ -145,11 +145,13 @@ export function tableHtml(cols: TableCol[], rows: TableRow[]): string {
   // color. Text is nested in a legacy <font color> tag, not just inline CSS
   // — Outlook's Word-based rendering engine has a long-standing bug where it
   // drops/overrides inline `color` on table cells (especially once pasted
-  // through Excel first), silently turning cream-on-navy into illegible
-  // black-on-navy. <font color> is the one thing that reliably survives that
-  // pipeline; the inline color stays too for clients that do respect it.
+  // through Excel first). That fallback used to land on a navy fill (cream
+  // text intended) — illegible once the color's dropped. Header fill is sky
+  // blue instead so the black fallback stays legible either way; the
+  // intended navy text color is also wrapped in <font color> for when it
+  // does survive.
   const headCell = (t: string) =>
-    `<td style="border:1px solid #002745;background:#002745;color:#F2F1E6;padding:5px 10px;text-align:left;font-weight:bold;"><font color="#F2F1E6">${escapeHtml(t)}</font></td>`
+    `<td style="border:1px solid #002745;background:#B7E0DE;color:#002745;padding:5px 10px;text-align:left;font-weight:bold;"><font color="#002745">${escapeHtml(t)}</font></td>`
   const head = `<tr>${cols.map((c) => headCell(c.label)).join('')}</tr>`
   const body = rows
     .map((r, i) => {
