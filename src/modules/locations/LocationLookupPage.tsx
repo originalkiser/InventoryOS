@@ -958,7 +958,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                             {visibleTankCols.map((c) => (
                               <th key={c.id} className={`px-3 py-2 align-bottom max-w-[10ch] ${alignCls(c.align)}`}>
                                 <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-start gap-0.5 text-left leading-tight">
-                                  <span className="break-words">{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</span>{sortArrow(tankSort, c.id)}
+                                  <span className="[overflow-wrap:normal]">{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</span>{sortArrow(tankSort, c.id)}
                                 </button>
                               </th>
                             ))}
@@ -983,7 +983,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                         <thead>
                           <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                             {['Product ID', 'On Hand (Qts)', 'Droptop On Hand', 'Variance', 'Droptop Usage', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update'].map((h) => (
-                              <th key={h} className="px-3 py-2 align-bottom max-w-[10ch] break-words leading-tight text-right first:text-left last:text-left">{h}</th>
+                              <th key={h} className="px-3 py-2 align-bottom max-w-[10ch] [overflow-wrap:normal] leading-tight text-right first:text-left last:text-left">{h}</th>
                             ))}
                           </tr>
                         </thead>
