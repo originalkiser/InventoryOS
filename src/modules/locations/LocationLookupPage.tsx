@@ -24,7 +24,7 @@ const VIEW_KEY = 'location-lookup:view'
 interface TankRow {
   id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null; system_tank_id?: string | null
   on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
-  height: number | null; total_capacity: number | null; raw_capacity: number | null
+  height: number | null; total_capacity: number | null; raw_capacity: number | null; level_inches: number | null
   updated_at?: string | null
   internal?: string // resolved internal product id (manual map → vendor parts)
 }
@@ -180,6 +180,7 @@ const TANK_COLS: Col<TankRow>[] = [
   { id: 'internal', label: 'Product ID', align: 'left', render: (t) => t.internal || t.product_id || '—', sort: (t) => t.internal || t.product_id },
   { id: 'serial', label: 'Serial #', align: 'left', render: (t) => t.serial_rtu_id ?? '—', sort: (t) => t.serial_rtu_id },
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand), sort: (t) => t.on_hand },
+  { id: 'level_inches', label: 'Level (in)', align: 'right', render: (t) => num(t.level_inches), sort: (t) => t.level_inches },
   { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity), sort: (t) => t.available_capacity },
   { id: 'total_capacity', label: 'Capacity', align: 'right', render: (t) => num(tankCapacity(t)), sort: (t) => tankCapacity(t) },
   { id: 'uncapped_capacity', label: 'Uncapped Capacity', align: 'right', render: (t) => num(uncappedCapacity(t)), sort: (t) => uncappedCapacity(t) },
@@ -736,6 +737,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         case 'available': return t.available_capacity == null ? '' : String(t.available_capacity)
         case 'total_capacity': return String(tankCapacity(t))
         case 'uncapped_capacity': return String(uncappedCapacity(t))
+        case 'level_inches': return t.level_inches == null ? '' : String(t.level_inches)
         case 'height': return t.height == null ? '' : String(t.height)
         case 'keepfill': return t.keep_fill ? 'yes' : ''
         case 'updated': return dateTime(t.inventory_time ?? t.reading_date)
@@ -954,9 +956,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                         <thead>
                           <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                             {visibleTankCols.map((c) => (
-                              <th key={c.id} className={`px-3 py-2 whitespace-nowrap ${alignCls(c.align)}`}>
-                                <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
-                                  {(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}{sortArrow(tankSort, c.id)}
+                              <th key={c.id} className={`px-3 py-2 align-bottom max-w-[10ch] ${alignCls(c.align)}`}>
+                                <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-start gap-0.5 text-left leading-tight">
+                                  <span className="break-words">{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</span>{sortArrow(tankSort, c.id)}
                                 </button>
                               </th>
                             ))}
@@ -981,7 +983,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                         <thead>
                           <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                             {['Product ID', 'On Hand (Qts)', 'Droptop On Hand', 'Variance', 'Droptop Usage', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update'].map((h) => (
-                              <th key={h} className="px-3 py-2 whitespace-nowrap text-right first:text-left last:text-left">{h}</th>
+                              <th key={h} className="px-3 py-2 align-bottom max-w-[10ch] break-words leading-tight text-right first:text-left last:text-left">{h}</th>
                             ))}
                           </tr>
                         </thead>
