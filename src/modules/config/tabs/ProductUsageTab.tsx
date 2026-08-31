@@ -242,33 +242,35 @@ export function ProductUsageTab() {
   const zeroExcludedCount = data.length - displayData.length
 
   // ---- Data loader ----
-  // Direct paginated select instead of the get_product_usage RPC: a single
-  // .range() is capped by PostgREST's db-max-rows (~1000). We count first, then
-  // fetch all pages (6 at a time) so the whole table loads even at ~300k rows.
+  // Keyset (cursor) pagination, not OFFSET/.range() — a table this size (a
+  // real company hit ~59,000+ rows) makes OFFSET pagination progressively
+  // more expensive per page since Postgres has to walk and discard every
+  // row before the offset, and running several such pages concurrently
+  // made it worse: real production run hit "canceling statement due to
+  // statement timeout" (57014) around offset 59000, taking the whole tab
+  // down. `WHERE id > <last id> ORDER BY id LIMIT 1000` costs the same
+  // regardless of how deep into the table it is, since it's a direct index
+  // seek — no rows to skip. Necessarily sequential (each page needs the
+  // previous page's last id), trading the old concurrency for reliability.
   const loadRpc = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
     const sb = supabase as any
-    const PAGE = 1000, CONCURRENCY = 6
-    const fetchPage = (p: number) => sb.schema('inventory').from('product_usage')
-      .select('*').eq('company_id', profile.company_id)
-      .order('id', { ascending: true }).range(p * PAGE, p * PAGE + PAGE - 1)
-    const { count, error: cErr } = await sb.schema('inventory').from('product_usage')
-      .select('id', { count: 'exact', head: true }).eq('company_id', profile.company_id)
-    if (cErr) { toast.error('Product usage load failed'); setLoading(false); return }
-    const total = count ?? 0
-    const pages = Math.ceil(total / PAGE)
+    const PAGE = 1000
     const all: ProductUsage[] = []
+    let cursor: string | null = null
     let failed = false
-    for (let i = 0; i < pages && !failed; i += CONCURRENCY) {
-      const group = Array.from({ length: Math.min(CONCURRENCY, pages - i) }, (_, j) => i + j)
-      const results = await Promise.all(group.map((p) => fetchPage(p)))
-      for (const { data: rows, error } of results) {
-        if (error) { failed = true; break }
-        for (const r of (rows ?? []) as ProductUsage[]) {
-          all.push({ ...r, category: (String(r.category ?? '').trim() || null) })
-        }
-      }
+    for (;;) {
+      let q = sb.schema('inventory').from('product_usage')
+        .select('*').eq('company_id', profile.company_id)
+        .order('id', { ascending: true }).limit(PAGE)
+      if (cursor) q = q.gt('id', cursor)
+      const { data: rows, error } = await q
+      if (error) { failed = true; break }
+      const batch = (rows ?? []) as ProductUsage[]
+      for (const r of batch) all.push({ ...r, category: (String(r.category ?? '').trim() || null) })
+      if (batch.length < PAGE) break
+      cursor = batch[batch.length - 1].id
     }
     if (failed) toast.error('Product usage load failed')
     else setData(all)
