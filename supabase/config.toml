@@ -40,3 +40,6 @@ verify_jwt = false
 # this makes that the tracked, reproducible source of truth instead.
 [functions.droptop-sync-purchase-orders]
 verify_jwt = false
+
+[functions.droptop-sync-customers]
+verify_jwt = false

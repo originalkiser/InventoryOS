@@ -200,6 +200,68 @@ export async function runDroptopPurchaseOrderSync(
   return { locations_synced: locationsSynced, pos_upserted: posUpserted, items_written: itemsWritten, ...(warnings.length ? { warnings } : {}) }
 }
 
+// Customers — separate edge function, separate table
+// (inventory.droptop_customers), same dual-auth/sig/chunking conventions as
+// the PO sync above. Feeds the Customer Heatmap (marketing module).
+export interface DroptopCustomerSyncResult {
+  locations_synced: number
+  customers_upserted: number
+  customers_with_coordinates: number
+  customers_missing_zip_match: number
+  warnings?: string[]
+}
+
+async function invokeCustomerSync(body: Record<string, unknown>): Promise<DroptopCustomerSyncResult> {
+  const { data, error } = await supabase.functions.invoke('droptop-sync-customers', { body: { mode: 'sync', ...body } })
+  if (error) throw new Error(error.message)
+  if (data?.error) {
+    throw new Error(
+      data.error === 'credentials_not_configured'
+        ? 'Droptop API keys not configured — add DROPTOP_PUBLIC_KEY and DROPTOP_PRIVATE_KEY to Supabase secrets.'
+        : data.error
+    )
+  }
+  return data as DroptopCustomerSyncResult
+}
+
+export async function runDroptopCustomerSync(
+  companyId: string,
+  onProgress?: (p: DroptopSyncProgress) => void,
+): Promise<DroptopCustomerSyncResult> {
+  const ids = await fetchDroptopLocationIds(companyId)
+  if (!ids.length) {
+    throw new Error('No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.')
+  }
+  const batches = chunk(ids, CHUNK_SIZE)
+
+  let locationsSynced = 0
+  let customersUpserted = 0
+  let withCoords = 0
+  let missingZip = 0
+  const warnings: string[] = []
+
+  for (let i = 0; i < batches.length; i++) {
+    onProgress?.({ batch: i + 1, totalBatches: batches.length })
+    try {
+      const result = await invokeCustomerSync({ locationIds: batches[i] })
+      locationsSynced += result.locations_synced
+      customersUpserted += result.customers_upserted
+      withCoords += result.customers_with_coordinates
+      missingZip += result.customers_missing_zip_match
+      if (result.warnings?.length) warnings.push(...result.warnings)
+    } catch (err) {
+      warnings.push(`Batch ${i + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  if (locationsSynced === 0 && warnings.length > 0) throw new Error(warnings.join(' | '))
+  return {
+    locations_synced: locationsSynced, customers_upserted: customersUpserted,
+    customers_with_coordinates: withCoords, customers_missing_zip_match: missingZip,
+    ...(warnings.length ? { warnings } : {}),
+  }
+}
+
 export async function getLastDroptopSyncLog(companyId: string): Promise<DroptopSyncLog | null> {
   const { data } = await (supabase as any)
     .schema('inventory').from('droptop_sync_log')

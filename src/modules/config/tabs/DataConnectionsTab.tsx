@@ -10,12 +10,12 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown } from '@/components/ui'
 import { runSkybitzTankSync } from '@/services/skybitzService'
-import { runDroptopSync, runDroptopPurchaseOrderSync } from '@/services/droptopService'
+import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopCustomerSync } from '@/services/droptopService'
 import type { DataConnectionSchedule } from '@/types/integrations'
 import { formatInTz } from '@/lib/tzFormat'
 import {
   useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
-  DROPTOP_PO_SYNC_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
+  DROPTOP_PO_SYNC_TASK_ID, DROPTOP_CUSTOMERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
 } from '@/stores/syncTasksStore'
 import toast from 'react-hot-toast'
 
@@ -24,6 +24,7 @@ const TASK_ID_FOR: Record<string, string> = {
   droptop_on_hand: DROPTOP_ON_HAND_TASK_ID,
   droptop_usage: DROPTOP_USAGE_TASK_ID,
   droptop_purchase_orders: DROPTOP_PO_SYNC_TASK_ID,
+  droptop_customers: DROPTOP_CUSTOMERS_TASK_ID,
   automated_checks: AUTOMATED_CHECKS_TASK_ID,
 }
 
@@ -47,9 +48,10 @@ const CONNECTION_META: Record<string, { label: string; description: string }> = 
   droptop_on_hand: { label: 'Droptop — On Hand', description: 'Pulls current on-hand quantities from Droptop into Product Usage.' },
   droptop_usage: { label: 'Droptop — Usage', description: 'Pulls sales/adjustment activity from Droptop and logs the daily sold/adjusted ledger.' },
   droptop_purchase_orders: { label: 'Droptop — Purchase Orders', description: 'Pulls open/recent POs and their line items — feeds the PO Status page and Orders v2\'s "already on order" check.' },
+  droptop_customers: { label: 'Droptop — Customers', description: 'Pulls each shop\'s active customer profiles (name/address/contact) and resolves a lat/lng by zip — feeds the Customer Heatmap. Changes slowly; a daily or weekly cadence is plenty.' },
   automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
 }
-const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'automated_checks']
+const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_customers', 'automated_checks']
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -138,6 +140,10 @@ export function DataConnectionsTab() {
       } else if (key === 'droptop_purchase_orders') {
         const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId, onProgress)
         summary = `Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`
+      } else if (key === 'droptop_customers') {
+        const r = await runDroptopCustomerSync(companyId, onProgress)
+        summary = `Droptop customers: ${r.locations_synced} shop(s), ${r.customers_upserted} customers`
+          + (r.customers_missing_zip_match ? ` (${r.customers_missing_zip_match} missing a zip match — excluded from the heatmap)` : '')
       } else if (key === 'automated_checks') {
         const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
         if (error) throw new Error(error.message)

@@ -45,6 +45,7 @@ const SUCCESS_AUTO_DISMISS_MS = 8000
 export const DROPTOP_ON_HAND_TASK_ID = 'droptop-on-hand'
 export const DROPTOP_USAGE_TASK_ID = 'droptop-usage'
 export const DROPTOP_PO_SYNC_TASK_ID = 'droptop-po-sync'
+export const DROPTOP_CUSTOMERS_TASK_ID = 'droptop-customers'
 export const SKYBITZ_TANKS_TASK_ID = 'skybitz-tanks'
 export const AUTOMATED_CHECKS_TASK_ID = 'automated-checks'
 

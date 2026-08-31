@@ -139,6 +139,37 @@ async function runDroptopPurchaseOrders(
   return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
 }
 
+// Same chunking as runDroptopPurchaseOrders above — one invocation per
+// batch of locations, not one call covering every location.
+async function runDroptopCustomers(
+  supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
+): Promise<{ status: string; message: string | null }> {
+  const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+  const { data: locs, error: locErr } = await (admin as any)
+    .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
+  if (locErr) return { status: 'error', message: locErr.message }
+  const ids = (locs ?? []).map((l: { id: string }) => l.id)
+  if (!ids.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
+
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += DROPTOP_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CHUNK_SIZE))
+
+  const warnings: string[] = []
+  let anySucceeded = false
+  for (const locationIds of chunks) {
+    const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-customers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+      body: JSON.stringify({ mode: 'sync', locationIds }),
+    })
+    const { data, error } = await parseSyncResponse(res)
+    if (error) warnings.push(error)
+    else { anySucceeded = true; if (data?.warnings?.length) warnings.push(...data.warnings) }
+  }
+  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
+  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
+}
+
 // run-automated-checks reuses this same dispatch secret rather than minting
 // its own — it's only ever called by this dispatcher or an admin's own
 // interactive session, never unattended by anything else.
@@ -234,6 +265,9 @@ Deno.serve(async (req) => {
       } else if (s.connection_key === 'droptop_purchase_orders') {
         if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
         else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
+      } else if (s.connection_key === 'droptop_customers') {
+        if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
+        else outcome = await runDroptopCustomers(supabaseUrl, serviceKey, droptopSecret, s.company_id)
       } else if (s.connection_key === 'automated_checks') {
         // Run after the Droptop pulls so the movement feed it reads is fresh —
         // schedule its own interval later in the day than droptop_usage's if
