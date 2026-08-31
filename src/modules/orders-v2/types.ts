@@ -114,6 +114,12 @@ export interface GenerationInput {
   // whether its on-hand was actually used or excluded as implausibly high.
   own_on_hand?: number | null
   equivalent_products?: { product_id: string; on_hand: number; used: boolean }[]
+  // Outstanding quantity (quarts) on this product's still-open (not closed/
+  // cancelled) Droptop POs for this shop — see buildGenerationInputs. Never
+  // folded into on_hand automatically; a line with this set gets the
+  // covered_by_open_po flag and waits for an explicit user decision
+  // (override/exclude/combine) rather than silently changing the order.
+  pendingPoQty?: number | null
 }
 
 // How a shop's delivery date is worked out for a vendor.
@@ -168,6 +174,10 @@ export type LineFlag =
   | 'keepfill_will_run_out'  // tank on-hand + usage won't last to this shop's delivery after next
   | 'added_for_smoothing'    // pulled onto the order from the shop's other config to reach the minimum
   | 'smoothing_topped_up'    // this line's own qty was raised to reach the minimum
+  | 'covered_by_open_po'     // an open (not closed/cancelled) PO already has this product outstanding — needs a decision
+  | 'po_decision_override'   // user chose: order the full suggested qty anyway
+  | 'po_decision_exclude'    // user chose: the open PO covers it, don't order more
+  | 'po_decision_combine'    // user chose: factor the open PO's outstanding qty into on-hand and re-target
 
 export interface GeneratedLine {
   location_id: string

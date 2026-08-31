@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGenerationInputs, type OrderConfigRow, type UsageRow } from './useOrdersV2'
+import { buildGenerationInputs, type OrderConfigRow, type UsageRow, type PurchaseOrderRow, type PoItemRow } from './useOrdersV2'
 
 // buildGenerationInputs' "equivalent case types" combine — 5W30D and
 // 5W30BB both resolve to the family "5W30" (a trailing run of letters is
@@ -61,5 +61,66 @@ describe('buildGenerationInputs — equivalent case types', () => {
     expect(hm.on_hand).toBe(42)
     expect(hm.own_on_hand).toBeUndefined()
     expect(hm.equivalent_products).toBeUndefined()
+  })
+})
+
+describe('buildGenerationInputs — pending PO coverage', () => {
+  function po(id: string, po_status: string): PurchaseOrderRow {
+    return { id, location_id: 'L1', po_status }
+  }
+  function item(purchase_order_id: string, overrides: Partial<PoItemRow> = {}): PoItemRow {
+    return { purchase_order_id, product_id: 'HM0806', quantity: 10, received_quantity: null, remaining_quantity: null, purchase_uom: 'GA', ...overrides }
+  }
+
+  it('flags pendingPoQty (in quarts) for an open PO, never adjusting on_hand itself', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 42, 3)]
+    const purchaseOrders = [po('PO1', 'accepted')]
+    const items = [item('PO1', { remaining_quantity: 5, purchase_uom: 'GA' })] // 5 gal = 20 quarts
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], purchaseOrders, items)
+
+    const hm = inputs.find((i) => i.product_id === 'HM0806')!
+    expect(hm.on_hand).toBe(42) // unchanged — never auto-combined
+    expect(hm.pendingPoQty).toBe(20)
+  })
+
+  it('ignores closed/cancelled POs', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 42, 3)]
+    const purchaseOrders = [po('PO1', 'closed')]
+    const items = [item('PO1', { remaining_quantity: 5, purchase_uom: 'GA' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], purchaseOrders, items)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.pendingPoQty).toBeNull()
+  })
+
+  it('falls back to quantity minus received when remaining_quantity is null', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 42, 3)]
+    const purchaseOrders = [po('PO1', 'sent')]
+    const items = [item('PO1', { quantity: 10, received_quantity: 4, remaining_quantity: null, purchase_uom: 'QT' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], purchaseOrders, items)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.pendingPoQty).toBe(6) // 10 - 4, already quarts
+  })
+
+  it('skips items in a purchase UOM that has no reliable quarts conversion (e.g. CASE/EA)', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 42, 3)]
+    const purchaseOrders = [po('PO1', 'accepted')]
+    const items = [item('PO1', { remaining_quantity: 5, purchase_uom: 'CASE' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], purchaseOrders, items)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.pendingPoQty).toBeNull()
+  })
+
+  it('never applies to a VMI/keep-fill product', () => {
+    const configs = [config('HM0806', { metadata: { vmi: 'yes' } })]
+    const usageRows = [usage('HM0806', 42, 3)]
+    const purchaseOrders = [po('PO1', 'accepted')]
+    const items = [item('PO1', { remaining_quantity: 5, purchase_uom: 'GA' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], purchaseOrders, items)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.pendingPoQty).toBeNull()
   })
 })

@@ -292,7 +292,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
 }
 
 /** Units needed to reach the DOS target, before caps. */
-function unitsToTarget(input: GenerationInput, ctx: GenerationContext): number {
+export function unitsToTarget(input: GenerationInput, ctx: GenerationContext): number {
   const u = n(input.daily_usage)
   if (u <= 0) return 0
   const targetGallons = ctx.settings.days_of_supply_target * u

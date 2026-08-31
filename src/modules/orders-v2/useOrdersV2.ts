@@ -352,6 +352,12 @@ export function useDraft(draftId: string | null) {
 export interface OrderConfigRow { location_id: string; product_id: string; vendor_id: string | null; capacity: number | null; order_limit: number | null; metadata: Record<string, unknown> | null }
 export interface UsageRow { location_id: string; product_id: string; on_hands: number | null; daily_usage: number | null }
 export interface TankOnHandRow { location_id: string | null; product_id: string | null; on_hand: number | null }
+export interface PurchaseOrderRow { id: string; location_id: string | null; po_status: string | null }
+export interface PoItemRow {
+  purchase_order_id: string; product_id: string | null
+  quantity: number | null; received_quantity: number | null; remaining_quantity: number | null
+  purchase_uom: string | null
+}
 export interface VendorPartRow { vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null }
 export interface GlobalProductRow { product_id: string; unit_of_measure: string | null }
 export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }
@@ -369,11 +375,11 @@ export function useGenerationData() {
   const companyId = profile?.company_id ?? null
 
   const fetchInputs = useCallback(async (vendorId: string | null, lookbackDays: number) => {
-    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], tankOnHand: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
+    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], tankOnHand: [], openPurchaseOrders: [], poItems: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, locRows, schedRows, calRows, history] = await Promise.all([
+    const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, locRows, schedRows, calRows, history] = await Promise.all([
       fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
@@ -392,6 +398,13 @@ export function useGenerationData() {
       // Keep-fill/VMI products use the tank monitor's own on-hand reading
       // instead of Droptop's product_usage — see buildGenerationInputs.
       fetchAll<TankOnHandRow>('inventory', 'tank_monitors', 'location_id, product_id, on_hand', companyId),
+      // Still-open POs (not closed/cancelled) — filtered server-side since
+      // most POs in practice ARE closed and there's no reason to pull them
+      // just to discard them. Flags a line as covered_by_open_po rather than
+      // silently adjusting anything; see buildGenerationInputs.
+      fetchAll<PurchaseOrderRow>('inventory', 'droptop_purchase_orders', 'id, location_id, po_status', companyId,
+        (q: any) => q.in('po_status', ['draft', 'sent', 'accepted'])),
+      fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId),
       fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
       fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
       fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
@@ -437,7 +450,7 @@ export function useGenerationData() {
       (calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']),
     )
 
-    return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history: historyFacts }
+    return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
   return { fetchInputs }
@@ -450,6 +463,8 @@ export function buildGenerationInputs(
   vendorParts: VendorPartRow[] = [], uomMappings: UomMappingRow[] = [],
   globalProducts: GlobalProductRow[] = [],
   tankOnHand: TankOnHandRow[] = [],
+  openPurchaseOrders: PurchaseOrderRow[] = [],
+  poItems: PoItemRow[] = [],
 ) {
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
@@ -493,6 +508,42 @@ export function buildGenerationInputs(
     const resolved = oldToNew.get(pkey(t.product_id)) ?? t.product_id
     const k = ruleKey(t.location_id, resolved)
     tankOnHandMap.set(k, (tankOnHandMap.get(k) ?? 0) + Number(t.on_hand))
+  }
+
+  // Outstanding quantity on still-open POs — summed per location+product, in
+  // quarts. fetchInputs already filters to draft/sent/accepted server-side,
+  // but this also checks status here rather than trusting that unconditionally
+  // — cheap insurance against a caller passing an unfiltered list. A PO
+  // item's purchase_uom ("GA", "QT", ...) is the vendor's own purchase
+  // unit, not necessarily quarts; only real volume units convert cleanly,
+  // so a case/each-counted item (no reliable quarts equivalent without
+  // knowing package size) is left out of the sum rather than guessed —
+  // same "don't silently fabricate a number" stance as the keep-fill
+  // on-hand handling above.
+  const OPEN_PO_STATUSES = new Set(['draft', 'sent', 'accepted'])
+  const poQuartsPerUnit = (raw: string | null): number | null => {
+    const u = pkey(raw).replace(/\./g, '')
+    if (['qt', 'qts', 'quart', 'quarts'].includes(u)) return 1
+    if (['pt', 'pts', 'pint', 'pints'].includes(u)) return 0.5
+    if (['ga', 'gal', 'gals', 'gallon', 'gallons'].includes(u)) return 4
+    return null
+  }
+  const openPoLocationById = new Map(
+    openPurchaseOrders.filter((po) => OPEN_PO_STATUSES.has(po.po_status ?? '')).map((po) => [po.id, po.location_id]),
+  )
+  const pendingPoMap = new Map<string, number>()
+  for (const it of poItems) {
+    const locationId = openPoLocationById.get(it.purchase_order_id)
+    if (!locationId || !it.product_id) continue
+    const outstanding = it.remaining_quantity != null
+      ? Number(it.remaining_quantity)
+      : Math.max(0, Number(it.quantity ?? 0) - Number(it.received_quantity ?? 0))
+    if (outstanding <= 0) continue
+    const perUnit = poQuartsPerUnit(it.purchase_uom)
+    if (perUnit == null) continue
+    const resolved = oldToNew.get(pkey(it.product_id)) ?? it.product_id
+    const k = ruleKey(locationId, resolved)
+    pendingPoMap.set(k, (pendingPoMap.get(k) ?? 0) + outstanding * perUnit)
   }
 
   // Package size + cost come from vendor_parts (matched vendor + our part
@@ -663,13 +714,20 @@ export function buildGenerationInputs(
   // but still shown, tagged "not used", never silently dropped.
   const CASE_CARRYOVER_MAX_QUARTS = 48 // 12 gallons, in this module's quarts convention
   return base.map((b) => {
+    // Never applies to VMI/keep-fill — its on-hand already comes from the
+    // tank monitor and any "order" is really a vendor-notify recommendation,
+    // not a normal PO decision.
+    const pendingPoQty = b.rule.vmi_keepfill_enabled
+      ? null
+      : pendingPoMap.get(ruleKey(b.location_id, b.product_id)) ?? null
+
     if (b.rule.vmi_keepfill_enabled || b.on_hand == null) {
-      return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage }
+      return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
     const fam = `${b.location_id}|${pkey(baseProductId(b.product_id))}`
     const siblings = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== b.product_id)
     if (siblings.length === 0) {
-      return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage }
+      return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
     const threshold = Math.min(CASE_CARRYOVER_MAX_QUARTS, Number(b.daily_usage ?? 0))
     const equivalent_products = siblings.map((s) => ({ ...s, used: s.on_hand <= threshold }))
@@ -677,7 +735,7 @@ export function buildGenerationInputs(
     return {
       location_id: b.location_id, product_id: b.product_id, rule: b.rule,
       on_hand: combined, daily_usage: b.daily_usage,
-      own_on_hand: b.on_hand, equivalent_products,
+      own_on_hand: b.on_hand, equivalent_products, pendingPoQty,
     }
   })
 }

@@ -11,13 +11,20 @@ import {
   buildGenerationInputs, eligibleLocations, draftOrderDow, shopsPerOrderDay, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
-import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween } from './engine'
+import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num } from './shared'
 import type { LineFlag, GenerationInput } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+const PO_DECISION_FLAGS: LineFlag[] = ['po_decision_override', 'po_decision_exclude', 'po_decision_combine']
+/** Swaps in one of the three mutually-exclusive PO-coverage decision flags,
+ * leaving covered_by_open_po (the trigger) and everything else untouched. */
+function withPoDecision(flags: LineFlag[], decision: LineFlag): LineFlag[] {
+  return [...flags.filter((f) => !PO_DECISION_FLAGS.includes(f)), decision]
+}
 
 /**
  * Step 2 — the working order. Generates on demand, then every edit autosaves
@@ -111,13 +118,20 @@ export function OrdersV2Review() {
         }
       }).filter((a) => a.will_run_out || a.no_tank_data)
       const runOutKeys = new Set(keepfillAlerts.filter((a) => a.will_run_out).map((a) => `${a.location_id}|${a.product_id}`))
+      // Flagged for a decision, never auto-resolved — see engine
+      // buildGenerationInputs' pendingPoQty comment. A line here still
+      // ordered its normal suggested quantity; the flag just means "an
+      // open PO already has some of this outstanding, take a look."
+      const openPoKeys = new Set(inputs.filter((i) => (i.pendingPoQty ?? 0) > 0).map((i) => `${i.location_id}|${i.product_id}`))
 
       const withDelivery = result.lines.map((l) => {
         const rule = ruleByKey.get(`${l.location_id}|${l.product_id}`)
         const deliver = deliveryFor(l.location_id, draft.order_date)
         const gallons = rule ? l.qty * gallonsPerUnit(rule) : 0
-        const flags = runOutKeys.has(`${l.location_id}|${l.product_id}`) && !l.flags.includes('keepfill_will_run_out')
-          ? [...l.flags, 'keepfill_will_run_out' as const] : l.flags
+        const key = `${l.location_id}|${l.product_id}`
+        let flags = l.flags
+        if (runOutKeys.has(key) && !flags.includes('keepfill_will_run_out')) flags = [...flags, 'keepfill_will_run_out' as const]
+        if (openPoKeys.has(key) && !flags.includes('covered_by_open_po')) flags = [...flags, 'covered_by_open_po' as const]
         return { ...l, flags, dos_after_delivery: dosAfterDelivery(l.on_hand, l.daily_usage, gallons, draft.order_date, deliver) }
       })
 
@@ -222,6 +236,32 @@ export function OrdersV2Review() {
     () => new Map(allInputs.map((i) => [`${i.location_id}|${i.product_id}`, i])),
     [allInputs],
   )
+
+  // Three explicit choices for a line flagged covered_by_open_po — never
+  // auto-resolved (see buildGenerationInputs' pendingPoQty comment).
+  // "Combine" recomputes the suggested qty using the exact same targeting
+  // formula the engine itself used (unitsToTarget/capsFor, now exported for
+  // this), with the open PO's outstanding quantity added to on-hand first —
+  // not a bespoke approximation of the real math.
+  function decidePoOverride(l: DraftLineRow) {
+    patchLine(l.id, { flags: withPoDecision(l.flags, 'po_decision_override'), included: true })
+  }
+  function decidePoExclude(l: DraftLineRow) {
+    patchLine(l.id, { flags: withPoDecision(l.flags, 'po_decision_exclude'), included: false })
+  }
+  function decidePoCombine(l: DraftLineRow) {
+    const input = inputByLineKey.get(`${l.location_id}|${l.product_id}`)
+    const pending = input?.pendingPoQty ?? 0
+    if (!input || pending <= 0) return
+    const adjusted: GenerationInput = { ...input, on_hand: Number(input.on_hand ?? 0) + pending }
+    // unitsToTarget/capsFor only read ctx.settings — no need to reconstruct
+    // eligibleLocationIds/history/includeVmi for this one-line recompute.
+    const ctx = { settings } as unknown as Parameters<typeof unitsToTarget>[1]
+    const caps = capsFor(adjusted, ctx)
+    const want = unitsToTarget(adjusted, ctx)
+    const newQty = roundQty(Math.min(want, caps.maxUnits), l.uom, settings.bulk_rounding_decimals, want > caps.maxUnits ? 'down' : 'nearest')
+    patchLine(l.id, { qty: newQty, flags: withPoDecision(l.flags, 'po_decision_combine'), included: newQty > 0 })
+  }
 
   async function addConfiguredProduct(input: GenerationInput, qty: number) {
     if (qty <= 0) return
@@ -403,7 +443,12 @@ export function OrdersV2Review() {
                       <Td align="right">{dos(l.dos_after)}</Td>
                       <Td align="right">{dos(l.dos_after_delivery)}</Td>
                       <Td align="right">{money(dollars)}</Td>
-                      <Td><Flags flags={(l.flags ?? []) as LineFlag[]} /></Td>
+                      <td className="px-2 py-1">
+                        <Flags flags={(l.flags ?? []) as LineFlag[]} />
+                        {(l.flags ?? []).includes('covered_by_open_po') && (
+                          <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
+                        )}
+                      </td>
                       <Td>
                         <div className="flex items-center gap-1">
                           <button title={l.included ? 'Exclude from order' : 'Include in order'}
@@ -546,5 +591,34 @@ export function Flags({ flags }: { flags: LineFlag[] }) {
         )
       })}
     </span>
+  )
+}
+
+/** Decision row for a covered_by_open_po line — Order Anyway / Exclude /
+ * Combine, whichever's already chosen (if any) highlighted. Never picks a
+ * default on its own; the line just sits at its normal suggested qty until
+ * someone decides. */
+function PoDecisionButtons({ line, onOverride, onExclude, onCombine }: {
+  line: DraftLineRow
+  onOverride: (l: DraftLineRow) => void
+  onExclude: (l: DraftLineRow) => void
+  onCombine: (l: DraftLineRow) => void
+}) {
+  const flags = (line.flags ?? []) as LineFlag[]
+  const chosen = PO_DECISION_FLAGS.find((f) => flags.includes(f))
+  const btnCls = (active: boolean) =>
+    `text-[9px] rounded border px-1 py-0.5 whitespace-nowrap ${active ? 'bg-sky text-navy border-sky' : 'border-navy/25 text-inky hover:border-navy'}`
+  return (
+    <div className="flex gap-1 mt-1 flex-wrap">
+      <button title="Order the full suggested quantity anyway" className={btnCls(chosen === 'po_decision_override')} onClick={() => onOverride(line)}>
+        Order anyway
+      </button>
+      <button title="The open PO already covers this — exclude from the order" className={btnCls(chosen === 'po_decision_exclude')} onClick={() => onExclude(line)}>
+        Exclude
+      </button>
+      <button title="Factor the open PO's outstanding quantity into on-hand and re-target the quantity" className={btnCls(chosen === 'po_decision_combine')} onClick={() => onCombine(line)}>
+        Combine
+      </button>
+    </div>
   )
 }

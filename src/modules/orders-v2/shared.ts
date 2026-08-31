@@ -62,6 +62,10 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   keepfill_will_run_out: { label: 'Will run dry', tone: 'red', title: 'Tank on-hand and usage won\'t last until this shop\'s delivery after next — may need a vendor keep-fill order before then' },
   added_for_smoothing: { label: 'Added: smoothing', tone: 'sky', title: 'Pulled onto this order from the shop\'s other configured products to help it reach its order minimum' },
   smoothing_topped_up: { label: 'Qty increased: smoothing', tone: 'sky', title: 'Ordered amount raised above what usage alone called for, to help the shop reach its order minimum' },
+  covered_by_open_po: { label: 'On open PO', tone: 'orange', title: 'Already has outstanding quantity on a still-open purchase order — decide whether to order anyway, exclude, or combine it into the on-hand calculation' },
+  po_decision_override: { label: 'PO: order anyway', tone: 'sky', title: 'Decided to order the full suggested quantity regardless of the open PO' },
+  po_decision_exclude: { label: 'PO: excluded', tone: 'sky', title: 'Decided the open PO already covers this — excluded from the order' },
+  po_decision_combine: { label: 'PO: combined', tone: 'sky', title: 'Decided to factor the open PO\'s outstanding quantity into on-hand and re-target the order quantity' },
 }
 
 export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {
