@@ -20,6 +20,14 @@ import { supabase } from '@/lib/supabase'
 import type { DroptopSyncResult, DroptopSyncLog } from '@/types/integrations'
 
 const CHUNK_SIZE = 20
+// Customers get their own, much smaller chunk size — get-customers pages at
+// 250/call, and a shop with (for example) 10,000 customers is ~40 calls on
+// its own. 20 such locations in one invocation could mean 800 Droptop
+// calls, very likely to hit the platform's execution time limit the same
+// way the PO sync did at far lower per-location volume before it was
+// chunked down. A handful of locations per invocation keeps this bounded
+// regardless of how large any one shop's customer list turns out to be.
+const CUSTOMER_CHUNK_SIZE = 3
 
 type SyncMode = 'both' | 'inventory' | 'usage'
 
@@ -232,7 +240,7 @@ export async function runDroptopCustomerSync(
   if (!ids.length) {
     throw new Error('No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.')
   }
-  const batches = chunk(ids, CHUNK_SIZE)
+  const batches = chunk(ids, CUSTOMER_CHUNK_SIZE)
 
   let locationsSynced = 0
   let customersUpserted = 0

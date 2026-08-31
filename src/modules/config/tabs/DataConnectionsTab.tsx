@@ -73,6 +73,7 @@ export function DataConnectionsTab() {
   const [inspectProductId, setInspectProductId] = useState('')
   const [backfillOptions, setBackfillOptions] = useState<{ id: string; label: string }[]>([])
   const [backfillShops, setBackfillShops] = useState<string[]>([])
+  const [testCustomerShop, setTestCustomerShop] = useState('')
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -250,6 +251,41 @@ export function DataConnectionsTab() {
     }
   }
 
+  // Scoped single-shop test — deliberately bypasses the chunked "every
+  // location" path entirely (one location, one edge function invocation) so
+  // real per-shop volume/timing can be checked before running company-wide.
+  // Worth having: get-customers pages at 250/call, so a shop with a large
+  // customer list can be dozens of calls on its own — exactly the kind of
+  // volume that's worth seeing on one shop first, given how many customers
+  // a single location can carry.
+  async function testOneShopCustomers() {
+    if (!companyId || !testCustomerShop.trim()) return
+    setRunning('test-customers')
+    try {
+      const sb = supabase as any
+      const { data: loc, error: locErr } = await sb.schema('core').from('locations')
+        .select('id, name').eq('company_id', companyId)
+        .ilike('name', `%${testCustomerShop.trim()}%`).limit(1).maybeSingle()
+      if (locErr) throw new Error(locErr.message)
+      if (!loc) throw new Error(`No location matching "${testCustomerShop.trim()}"`)
+      const startedAt = Date.now()
+      const { data, error } = await supabase.functions.invoke('droptop-sync-customers', {
+        body: { mode: 'sync', locationId: loc.id },
+      })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
+      toast.success(
+        `${data.customers_upserted} customers in ${seconds}s (${data.customers_with_coordinates} mapped, ${data.customers_missing_zip_match} missing a zip match)`,
+        { duration: 10000 },
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Test pull failed', { duration: 12000 })
+    } finally {
+      setRunning(null)
+    }
+  }
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   if (rows === null) return <div className="py-8"><SbLoader /></div>
 
@@ -347,6 +383,18 @@ export function DataConnectionsTab() {
                         <Button size="sm" variant="secondary" loading={running === 'inspect'} onClick={inspectDroptopUsage}
                           title="Read-only peek at Droptop's raw change-event shape, logged to the browser console — no data written">
                           Inspect
+                        </Button>
+                      </>
+                    )}
+                    {row.connection_key === 'droptop_customers' && (
+                      <>
+                        <input
+                          value={testCustomerShop} onChange={(e) => setTestCustomerShop(e.target.value)}
+                          placeholder="Shop to test" title="Pull just this one shop's customers — bypasses chunking entirely, for checking real volume/timing before Run Now"
+                          className={`${fieldCls} w-28`}
+                        />
+                        <Button size="sm" variant="secondary" loading={running === 'test-customers'} disabled={!testCustomerShop.trim()} onClick={testOneShopCustomers}>
+                          Test One Shop
                         </Button>
                       </>
                     )}

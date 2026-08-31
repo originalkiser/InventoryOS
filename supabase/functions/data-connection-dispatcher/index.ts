@@ -31,6 +31,12 @@ function ok(body: unknown) {
 // keeps each droptop-sync-usage invocation's location count bounded well
 // inside the platform's execution time limit.
 const DROPTOP_CHUNK_SIZE = 20
+// Customers get their own, much smaller chunk size — same reasoning as
+// CUSTOMER_CHUNK_SIZE in droptopService.ts: get-customers pages at
+// 250/call, so a shop with thousands of customers can be dozens of calls
+// on its own, and 20 such locations in one invocation risks the same
+// execution-time-limit failure the PO sync hit at far lower volume.
+const DROPTOP_CUSTOMER_CHUNK_SIZE = 3
 
 // A non-2xx response (timeout, crash, killed invocation) or a body that
 // isn't valid JSON both used to fall through a bare `.catch(() => ({}))` as
@@ -139,8 +145,8 @@ async function runDroptopPurchaseOrders(
   return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
 }
 
-// Same chunking as runDroptopPurchaseOrders above — one invocation per
-// batch of locations, not one call covering every location.
+// Much smaller chunk size than runDroptopPurchaseOrders above — see
+// DROPTOP_CUSTOMER_CHUNK_SIZE's own comment.
 async function runDroptopCustomers(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
 ): Promise<{ status: string; message: string | null }> {
@@ -152,7 +158,7 @@ async function runDroptopCustomers(
   if (!ids.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
 
   const chunks: string[][] = []
-  for (let i = 0; i < ids.length; i += DROPTOP_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CHUNK_SIZE))
+  for (let i = 0; i < ids.length; i += DROPTOP_CUSTOMER_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CUSTOMER_CHUNK_SIZE))
 
   const warnings: string[] = []
   let anySucceeded = false

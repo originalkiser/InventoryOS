@@ -106,10 +106,17 @@ async function callDroptop(
 
 // Fetches every active customer for one operation, paginating via
 // startingAfter until Droptop says more_available: false.
+// Hard sanity ceiling, not a real expected limit — 1000 pages is 250,000
+// customers for one shop, far past anything plausible. Guards against a
+// pathological response (e.g. a cursor that never actually advances)
+// looping forever rather than erroring, which would otherwise show up as
+// "the sync just never finishes" instead of a clear failure.
+const MAX_PAGES_PER_LOCATION = 1000
+
 async function fetchCustomers(operationId: string, pub: string, priv: string): Promise<any[]> {
   const all: any[] = []
   let cursor: string | null = null
-  while (true) {
+  for (let page = 0; page < MAX_PAGES_PER_LOCATION; page++) {
     const params: Record<string, string> = { operation_ids: operationId, limit: '250' }
     if (cursor) params.startingAfter = cursor
     const res = await callDroptop('get-customers', params, pub, priv)
