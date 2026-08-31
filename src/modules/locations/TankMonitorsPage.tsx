@@ -75,6 +75,11 @@ export function TankMonitorsPage() {
   const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
   const [emailTargets, setEmailTargets] = useState<EmailTarget[]>([])
   const [prodMap, setProdMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
+  // On Hand view's variance-flagging cushion (Location Lookup) — a percent
+  // of a tank's total capacity, added on top of the flat qt floor so small
+  // day-to-day noise around an accepted baseline (or zero, before one
+  // exists) doesn't keep re-flagging. Read from the same key there.
+  const [variancePct, setVariancePct] = useAppSetting<number>('tank_variance_cushion_pct', 14)
   // Same skip settings as the email modal itself (shared app_settings keys)
   // so "already emailed" monitors drop out of Offline (and Low VMI) here
   // too, not just once you're inside the draft.
@@ -267,6 +272,7 @@ export function TankMonitorsPage() {
           <TabsTrigger value="lowvmi">Low VMI Coverage{lowVmiCount ? ` (${lowVmiCount})` : ''}</TabsTrigger>
           <TabsTrigger value="mapping">Product Mapping{unmatchedProducts.length ? ` (${unmatchedProducts.length})` : ''}</TabsTrigger>
           <TabsTrigger value="templates">Email Templates</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="all">
@@ -386,6 +392,31 @@ export function TankMonitorsPage() {
 
         <TabsContent value="templates">
           <TankEmailTemplates offline={offlineTpl} lowvmi={lowvmiTpl} onSave={saveTpl} />
+        </TabsContent>
+
+        <TabsContent value="settings">
+          <Card className="max-w-md">
+            <CardBody className="flex flex-col gap-3">
+              <div>
+                <span className="text-xs font-mono text-navy uppercase tracking-wide">Variance Flagging Cushion</span>
+                <p className="text-[11px] font-mono text-inky/60 mt-1">
+                  Used by Location Lookup's Tank Monitors "On Hand" view. A tank-vs-Droptop variance only flags for
+                  a decision once it's outside a floor of 100 quarts <em>or</em> this percentage of the tank's total
+                  capacity, whichever cushion is larger — so small day-to-day noise around an accepted baseline
+                  doesn't keep re-flagging.
+                </p>
+              </div>
+              <label className="flex items-center gap-2">
+                <input
+                  type="number" min={0} max={100} step={0.5}
+                  defaultValue={variancePct}
+                  onBlur={(e) => { const v = Number(e.target.value); if (v >= 0) setVariancePct(v) }}
+                  className="w-20 bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky"
+                />
+                <span className="text-xs font-mono text-inky">% of tank capacity, ± (currently {variancePct}%)</span>
+              </label>
+            </CardBody>
+          </Card>
         </TabsContent>
       </Tabs>
 

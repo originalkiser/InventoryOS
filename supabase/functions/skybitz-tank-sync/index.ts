@@ -111,6 +111,7 @@ interface ExistingTank {
   keep_fill: boolean | null
   on_hand: number | null
   available_capacity: number | null
+  raw_capacity: number | null
   level_inches: number | null
   battery_pct: number | null
   system_tank_id: string | null
@@ -189,7 +190,7 @@ Deno.serve(async (req) => {
       for (;;) {
         const { data: rows, error } = await (admin as any)
           .schema('inventory').from('tank_monitors')
-          .select('id, company_id, location_id, product_id, keep_fill, serial_rtu_id, on_hand, available_capacity, level_inches, battery_pct, system_tank_id, inventory_time, reading_date')
+          .select('id, company_id, location_id, product_id, keep_fill, serial_rtu_id, on_hand, available_capacity, raw_capacity, level_inches, battery_pct, system_tank_id, inventory_time, reading_date')
           .eq('company_id', companyId)
           .not('serial_rtu_id', 'is', null)
           .order('id', { ascending: true })
@@ -199,7 +200,7 @@ Deno.serve(async (req) => {
         for (const r of batch) {
           existingBySerial.set(String(r.serial_rtu_id).trim().toLowerCase(), {
             id: r.id, company_id: r.company_id, location_id: r.location_id, product_id: r.product_id, keep_fill: r.keep_fill,
-            on_hand: r.on_hand, available_capacity: r.available_capacity,
+            on_hand: r.on_hand, available_capacity: r.available_capacity, raw_capacity: r.raw_capacity,
             level_inches: r.level_inches, battery_pct: r.battery_pct,
             system_tank_id: r.system_tank_id, inventory_time: r.inventory_time, reading_date: r.reading_date,
           })
@@ -253,6 +254,7 @@ Deno.serve(async (req) => {
           system_tank_id: systemTankId,
           on_hand: onHand,
           available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : null,
+          raw_capacity: capacity,
           level_inches: level,
           battery_pct: battery,
           inventory_time: isoTime,
@@ -280,6 +282,7 @@ Deno.serve(async (req) => {
         keep_fill: existing.keep_fill,
         on_hand: resolvedOnHand,
         available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : existing.available_capacity,
+        raw_capacity: capacity ?? existing.raw_capacity,
         level_inches: resolvedLevel,
         battery_pct: resolvedBattery,
         system_tank_id: systemTankId ?? existing.system_tank_id,

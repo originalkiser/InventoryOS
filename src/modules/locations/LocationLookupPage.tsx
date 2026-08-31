@@ -24,7 +24,7 @@ const VIEW_KEY = 'location-lookup:view'
 interface TankRow {
   id: string; product_id: string | null; value: number | null; unit: string | null; serial_rtu_id: string | null; system_tank_id?: string | null
   on_hand: number | null; available_capacity: number | null; keep_fill: boolean | null; reading_date: string | null; inventory_time: string | null
-  height: number | null; total_capacity: number | null
+  height: number | null; total_capacity: number | null; raw_capacity: number | null
   updated_at?: string | null
   internal?: string // resolved internal product id (manual map → vendor parts)
 }
@@ -32,6 +32,16 @@ interface TankRow {
 // total_capacity is a stored generated column (on_hand + available_capacity);
 // fall back to computing it for rows written before that column existed.
 const tankCapacity = (t: TankRow) => t.total_capacity ?? ((t.on_hand ?? 0) + (t.available_capacity ?? 0))
+// Some tanks have their working capacity (on_hand + available) deliberately
+// reduced below the tank's real physical size — raw_capacity is the
+// unreduced value straight from the SkyBitz feed, for comparison. Falls
+// back to the (possibly-reduced) working capacity for tanks synced before
+// this column existed, so it never shows blank.
+const uncappedCapacity = (t: TankRow) => t.raw_capacity ?? tankCapacity(t)
+// Tanks default to gallons — see normUnit below. Order-engine/product_usage
+// figures are quart-based site-wide, so the On Hand view converts to match.
+const toQuarts = (v: number | null, unit: string | null): number | null =>
+  v == null ? null : (normUnit(unit) === 'Qts' ? v : v * 4)
 interface ConfigRow {
   id: string; vendor_id: string | null; product_id: string | null
   capacity: number | null; order_trigger: number | null; order_limit: number | null
@@ -46,7 +56,7 @@ interface IssueRow {
 }
 
 // Per-device view customization: ids hidden from each section.
-interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[]; nonVmiOfflineBtn?: boolean }
+interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand' }
 
 const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 }))
 const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy') } catch { return d } }
@@ -172,6 +182,7 @@ const TANK_COLS: Col<TankRow>[] = [
   { id: 'on_hand', label: 'On Hand', align: 'right', render: (t) => num(t.on_hand), sort: (t) => t.on_hand },
   { id: 'available', label: 'Available', align: 'right', render: (t) => num(t.available_capacity), sort: (t) => t.available_capacity },
   { id: 'total_capacity', label: 'Capacity', align: 'right', render: (t) => num(tankCapacity(t)), sort: (t) => tankCapacity(t) },
+  { id: 'uncapped_capacity', label: 'Uncapped Capacity', align: 'right', render: (t) => num(uncappedCapacity(t)), sort: (t) => uncappedCapacity(t) },
   { id: 'height', label: 'Height', align: 'right', render: (t) => num(t.height), sort: (t) => t.height },
   { id: 'keepfill', label: 'Keepfill', align: 'center', render: (t) => (t.keep_fill ? <Badge color="sky">yes</Badge> : <span className="text-inky/40">—</span>), sort: (t) => (t.keep_fill ? 1 : 0) },
   {
@@ -258,12 +269,27 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [modalView, setModalView] = useState<'pending' | 'resolved'>('pending')
   const [editIssue, setEditIssue] = useState<Partial<Issue> | null | undefined>(undefined)
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
-    try { const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false } }
-    catch { return { sidebar: [], tank: [], config: [], nonVmiOfflineBtn: false } }
+    try {
+      const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}')
+      return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration' }
+    }
+    catch { return { sidebar: [], tank: [], config: [], nonVmiOfflineBtn: false, tankView: 'configuration' } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
   const toggleHidden = (group: 'sidebar' | 'tank' | 'config', id: string) =>
     setPrefs((p) => ({ ...p, [group]: p[group].includes(id) ? p[group].filter((x) => x !== id) : [...p[group], id] }))
+  const tankView = prefs.tankView ?? 'configuration'
+  const setTankView = (v: 'configuration' | 'onhand') => setPrefs((p) => ({ ...p, tankView: v }))
+
+  // On Hand view: Droptop on-hand/usage (by resolved product id) and any
+  // accepted variance baselines for this shop — both loaded in `load()`
+  // below, alongside (not replacing) the existing configs-usage join.
+  const [usageByProduct, setUsageByProduct] = useState<Map<string, { on_hands: number | null; daily_usage: number | null; updated_at: string | null }>>(new Map())
+  const [idMappings, setIdMappings] = useState<{ old_product_id: string | null; new_product_id: string | null }[]>([])
+  const [varianceBaselines, setVarianceBaselines] = useState<{ product_id: string; baseline_qty: number }[]>([])
+  const [varianceModal, setVarianceModal] = useState<{ productId: string; rawVariance: number } | null>(null)
+  const [savingBaseline, setSavingBaseline] = useState(false)
+  const [variancePct] = useAppSetting<number>('tank_variance_cushion_pct', 14)
 
   const location = loc.byId(shopId)
 
@@ -292,7 +318,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       return out
     }
     try {
-      const [tankRes, cfgRes, usageRes, mapRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes] = await Promise.all([
+      const [tankRes, cfgRes, usageRes, mapRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         fetchAllRows((from, to) =>
@@ -319,6 +345,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // Best-effort: location_ids is a newer column that may not exist yet.
         sb.schema('inventory').from('projects').select('id, project_name, status').eq('company_id', companyId).is('deleted_at', null).contains('location_ids', [shopId]).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('meeting_notes').select('id, title, meeting_date').eq('company_id', companyId).contains('location_ids', [shopId]).order('meeting_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
+        // Best-effort: brand-new table, may not be migrated in production yet.
+        sb.schema('inventory').from('tank_variance_baselines').select('product_id, baseline_qty').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       // Collapse to the newest reading per tank (serial, then system id, then
       // row id) so leftover duplicate readings don't stack or inflate counts.
@@ -362,6 +390,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // config and usage rows agreed on the same literal id pre-mapping.
       const resolvedKey = (pid: string) => pkey(oldToNew.get(pkey(pid)) ?? pid)
       setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({ ...r, usage: r.product_id ? usageByProduct.get(resolvedKey(r.product_id)) ?? null : null })))
+      // Also exposed at component scope (not just baked into `configs`) —
+      // the Tank Monitors "On Hand" view matches keep-fill tanks against
+      // this same Droptop usage/on-hand data by their resolved product id.
+      setUsageByProduct(usageByProduct)
+      setIdMappings((mapRes?.data ?? []) as any[])
+      setVarianceBaselines((baselineRes?.data ?? []) as any[])
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
@@ -441,6 +475,82 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     const k = t.product_id ? t.product_id.toLowerCase().trim() : ''
     return { ...t, internal: (k && (prodMap[k] || internalMap.get(k))) || t.product_id || '' }
   }), [tankRows, internalMap, prodMap])
+
+  // On Hand view: same old-id -> new-id resolution product_usage matching
+  // already uses elsewhere on this page (see load()'s configs-usage join) —
+  // duplicated here rather than lifted out of load(), so that existing,
+  // working join is left untouched.
+  const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+  const oldToNewMap = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const r of idMappings) if (r.old_product_id && r.new_product_id) m.set(pkey(r.old_product_id), String(r.new_product_id))
+    return m
+  }, [idMappings])
+  const resolvedProductKey = (pid: string) => pkey(oldToNewMap.get(pkey(pid)) ?? pid)
+  const baselineByProduct = useMemo(() => new Map(varianceBaselines.map((b) => [pkey(b.product_id), Number(b.baseline_qty)])), [varianceBaselines])
+  // The larger of a flat qt floor and a percentage of the tank's total
+  // capacity — see the Tank Monitors Settings tab for what drives the pct.
+  const varianceThreshold = (capacityQt: number) => Math.max(100, (variancePct / 100) * capacityQt)
+
+  // Keep-fill/VMI tanks only — this comparison (tank sensor vs Droptop's own
+  // tracked on-hand) is specifically the VMI reconciliation use case.
+  // Multiple physical tanks on the same product are combined into one row.
+  interface OnHandRow {
+    productId: string; tankOnHandQt: number; totalCapacityQt: number; lastUpdate: string | null; tankCount: number
+    droptopOnHand: number | null; droptopUsage: number | null
+    rawVariance: number | null; baseline: number | null; netVariance: number | null
+    dosMonitor: number | null; dosDroptop: number | null
+  }
+  const onHandRows = useMemo<OnHandRow[]>(() => {
+    const groups = new Map<string, { productId: string; tankOnHandQt: number; totalCapacityQt: number; lastUpdate: string | null; tankCount: number }>()
+    for (const t of tanks) {
+      if (!t.keep_fill) continue
+      const key = t.internal || t.product_id || ''
+      if (!key) continue
+      const qty = toQuarts(t.on_hand, t.unit) ?? 0
+      const capQt = toQuarts(tankCapacity(t), t.unit) ?? 0
+      const tUpdated = t.inventory_time ?? t.reading_date
+      const existing = groups.get(key)
+      if (!existing) groups.set(key, { productId: key, tankOnHandQt: qty, totalCapacityQt: capQt, lastUpdate: tUpdated, tankCount: 1 })
+      else {
+        existing.tankOnHandQt += qty
+        existing.totalCapacityQt += capQt
+        existing.tankCount += 1
+        if (tUpdated && (!existing.lastUpdate || tUpdated > existing.lastUpdate)) existing.lastUpdate = tUpdated
+      }
+    }
+    return [...groups.values()]
+      .sort((a, b) => a.productId.localeCompare(b.productId, undefined, { sensitivity: 'base' }))
+      .map((g) => {
+        const usage = usageByProduct.get(resolvedProductKey(g.productId))
+        const droptopOnHand = usage?.on_hands ?? null
+        const droptopUsage = usage?.daily_usage ?? null
+        const rawVariance = droptopOnHand != null ? g.tankOnHandQt - droptopOnHand : null
+        const baseline = baselineByProduct.get(resolvedProductKey(g.productId)) ?? null
+        const netVariance = rawVariance != null ? rawVariance - (baseline ?? 0) : null
+        const dosMonitor = droptopUsage && droptopUsage > 0 ? g.tankOnHandQt / droptopUsage : null
+        const dosDroptop = droptopUsage && droptopUsage > 0 && droptopOnHand != null ? droptopOnHand / droptopUsage : null
+        return { ...g, droptopOnHand, droptopUsage, rawVariance, baseline, netVariance, dosMonitor, dosDroptop }
+      })
+  }, [tanks, usageByProduct, baselineByProduct, oldToNewMap])
+
+  async function saveVarianceBaseline(productId: string, value: number) {
+    if (!companyId || !shopId) return
+    setSavingBaseline(true)
+    const sb = supabase as any
+    const canonicalId = resolvedProductKey(productId)
+    const { error: saveErr } = await sb.schema('inventory').from('tank_variance_baselines')
+      .upsert({
+        company_id: companyId, location_id: shopId, product_id: canonicalId,
+        baseline_qty: value, accepted_by: profile?.id ?? null,
+        accepted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }, { onConflict: 'company_id,location_id,product_id' })
+    setSavingBaseline(false)
+    if (saveErr) { toast.error('Failed to save baseline'); return }
+    toast.success('New baseline accepted')
+    setVarianceModal(null)
+    load()
+  }
 
   // "Last updated" for the tank card = newest reading/write across its monitors.
   const tanksUpdated = useMemo(() => lastUpdated(tankRows as any[], ['updated_at', 'inventory_time', 'reading_date']), [tankRows])
@@ -612,7 +722,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   async function copyTanks() {
     const cols = visibleTankCols
     const rows = tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks
-    const unitCols = new Set(['on_hand', 'available', 'total_capacity'])
+    const unitCols = new Set(['on_hand', 'available', 'total_capacity', 'uncapped_capacity'])
     const label = (c: Col<TankRow>) => (unitCols.has(c.id) && tankUnit ? `${c.label} (${tankUnit})` : c.label)
     // Every id in TANK_COLS needs a case here — anything unhandled falls to
     // `default` and silently copies as an empty cell (which is how the
@@ -625,6 +735,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         case 'on_hand': return t.on_hand == null ? '' : String(t.on_hand)
         case 'available': return t.available_capacity == null ? '' : String(t.available_capacity)
         case 'total_capacity': return String(tankCapacity(t))
+        case 'uncapped_capacity': return String(uncappedCapacity(t))
         case 'height': return t.height == null ? '' : String(t.height)
         case 'keepfill': return t.keep_fill ? 'yes' : ''
         case 'updated': return dateTime(t.inventory_time ?? t.reading_date)
@@ -634,15 +745,15 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const align = (c: Col<TankRow>) => (c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left')
 
-    const title = `${shopLabel(shopId)} — Tank Monitors`
+    const title = `${shopLabel(shopId)} — Tank Monitors (Configuration)`
     // Bold <td> rather than <th>: Outlook/Word drop the colour off <th> and
-    // fall back to black, which is unreadable on the navy fill. Inline color
-    // alone isn't reliable either — Outlook's Word rendering engine can still
-    // drop/override it on table cells (especially once pasted through Excel
-    // first) — so the text is also wrapped in a legacy <font color> tag,
-    // which survives that pipeline. Same fix as tableHtml() in tankEmail.ts.
-    const thStyle = (c: Col<TankRow>) => `border:1px solid #002745;background:#002745;color:#F2F1E6;padding:4px 8px;text-align:${align(c)};font-weight:bold;`
-    const head = `<tr>${cols.map((c) => `<td style="${thStyle(c)}"><font color="#F2F1E6">${esc(label(c))}</font></td>`).join('')}</tr>`
+    // fall back to black. That fallback used to land on a navy fill (white
+    // text intended) — unreadable once the color's dropped. Header fill is
+    // sky blue instead so the same black fallback stays legible; the intended
+    // color is also wrapped in a legacy <font color> tag for when it does
+    // survive. Same fix as tableHtml() in tankEmail.ts.
+    const thStyle = (c: Col<TankRow>) => `border:1px solid #002745;background:#B7E0DE;color:#002745;padding:4px 8px;text-align:${align(c)};font-weight:bold;`
+    const head = `<tr>${cols.map((c) => `<td style="${thStyle(c)}"><font color="#002745">${esc(label(c))}</font></td>`).join('')}</tr>`
     const body = rows.map((t, i) => {
       const bg = i % 2 ? '#F2F1E6' : '#FFFFFF'
       return `<tr>${cols.map((c) => `<td style="border:1px solid #4F7489;padding:3px 8px;text-align:${align(c)};background:${bg};">${esc(text(c, t))}</td>`).join('')}</tr>`
@@ -651,6 +762,47 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       + `<div style="font-weight:bold;margin-bottom:4px;">${esc(title)}</div>`
       + `<table style="border-collapse:collapse;font-size:12px;"><thead>${head}</thead><tbody>${body}</tbody></table></div>`
     const plain = [title, cols.map(label).join('\t'), ...rows.map((t) => cols.map((c) => text(c, t)).join('\t'))].join('\n')
+
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+        })])
+      } else {
+        await navigator.clipboard.writeText(plain)
+      }
+      toast.success('Copied to clipboard')
+    } catch { toast.error('Copy failed') }
+  }
+
+  // Copy the On Hand view — same HTML-table-with-plain-text-fallback
+  // approach and sky-blue header as copyTanks() above, for the same
+  // Outlook-legibility reason.
+  async function copyOnHand() {
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const cols = ['Product ID', 'On Hand (Qts)', 'Droptop On Hand (Qts)', 'Variance (Qts)', 'Droptop Usage (Qts/day)', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update']
+    const text = (r: OnHandRow): string[] => [
+      r.productId,
+      num(r.tankOnHandQt),
+      r.droptopOnHand == null ? '—' : num(r.droptopOnHand),
+      r.netVariance == null ? '—' : num(r.netVariance),
+      r.droptopUsage == null ? '—' : num(r.droptopUsage),
+      r.dosMonitor == null ? '—' : num(r.dosMonitor),
+      r.dosDroptop == null ? '—' : num(r.dosDroptop),
+      dateTime(r.lastUpdate),
+    ]
+    const title = `${shopLabel(shopId)} — Tank Monitors (On Hand)`
+    const thStyle = `border:1px solid #002745;background:#B7E0DE;color:#002745;padding:4px 8px;text-align:left;font-weight:bold;`
+    const head = `<tr>${cols.map((c) => `<td style="${thStyle}"><font color="#002745">${esc(c)}</font></td>`).join('')}</tr>`
+    const body = onHandRows.map((r, i) => {
+      const bg = i % 2 ? '#F2F1E6' : '#FFFFFF'
+      return `<tr>${text(r).map((v) => `<td style="border:1px solid #4F7489;padding:3px 8px;background:${bg};">${esc(v)}</td>`).join('')}</tr>`
+    }).join('')
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#002745;">`
+      + `<div style="font-weight:bold;margin-bottom:4px;">${esc(title)}</div>`
+      + `<table style="border-collapse:collapse;font-size:12px;"><thead>${head}</thead><tbody>${body}</tbody></table></div>`
+    const plain = [title, cols.join('\t'), ...onHandRows.map((r) => text(r).join('\t'))].join('\n')
 
     try {
       if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
@@ -762,12 +914,23 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           <div className="flex flex-col gap-4">
             <Card className="w-fit max-w-full">
               <CardBody className="flex flex-col gap-2">
-                <div className="flex items-center gap-3 self-start">
+                <div className="flex items-center gap-3 self-start flex-wrap">
                   <span className="text-xs font-mono text-navy uppercase tracking-wide">
                     Tank Monitors ({tanks.length})
                   </span>
-                  {tanks.length > 0 && (
+                  <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
+                    {(['configuration', 'onhand'] as const).map((v) => (
+                      <button key={v} onClick={() => setTankView(v)}
+                        className={['px-2 py-1 uppercase tracking-wide transition-colors', tankView === v ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}>
+                        {v === 'configuration' ? 'Configuration' : 'On Hand'}
+                      </button>
+                    ))}
+                  </div>
+                  {tankView === 'configuration' && tanks.length > 0 && (
                     <button onClick={copyTanks} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
+                  )}
+                  {tankView === 'onhand' && onHandRows.length > 0 && (
+                    <button onClick={copyOnHand} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
                   )}
                   {showOfflineBtn && (
                     <button onClick={() => { setEmailMonitorOverride(null); setEmailKind('offline') }} title="Draft an email for offline monitors"
@@ -780,33 +943,81 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   )}
                 </div>
                 <UpdatedCallout date={tanks.length > 0 ? tanksUpdated : null} onOpen={() => navigate('/config?tab=tank-monitor')} openTitle="Open Tank Monitor config" />
-                {tanks.length === 0 ? (
-                  <p className="text-xs font-mono text-inky/60">No tank monitor readings for this shop.</p>
-                ) : visibleTankCols.length === 0 ? (
-                  <p className="text-xs font-mono text-inky/60">All tank columns hidden — enable some under Customize.</p>
-                ) : (
-                  <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
-                    <table className="text-xs font-mono">
-                      <thead>
-                        <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                          {visibleTankCols.map((c) => (
-                            <th key={c.id} className={`px-3 py-2 whitespace-nowrap ${alignCls(c.align)}`}>
-                              <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
-                                {(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}{sortArrow(tankSort, c.id)}
-                              </button>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t) => (
-                          <tr key={t.id} className="border-b border-navy/20">
-                            {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)}`}>{c.id === 'updated' ? renderUpdatedCell(t) : c.render(t)}</td>)}
+                {tankView === 'configuration' ? (
+                  tanks.length === 0 ? (
+                    <p className="text-xs font-mono text-inky/60">No tank monitor readings for this shop.</p>
+                  ) : visibleTankCols.length === 0 ? (
+                    <p className="text-xs font-mono text-inky/60">All tank columns hidden — enable some under Customize.</p>
+                  ) : (
+                    <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+                      <table className="text-xs font-mono">
+                        <thead>
+                          <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+                            {visibleTankCols.map((c) => (
+                              <th key={c.id} className={`px-3 py-2 whitespace-nowrap ${alignCls(c.align)}`}>
+                                <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
+                                  {(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}{sortArrow(tankSort, c.id)}
+                                </button>
+                              </th>
+                            ))}
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t) => (
+                            <tr key={t.id} className="border-b border-navy/20">
+                              {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)}`}>{c.id === 'updated' ? renderUpdatedCell(t) : c.render(t)}</td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                ) : (
+                  onHandRows.length === 0 ? (
+                    <p className="text-xs font-mono text-inky/60">No keep-fill/VMI tank monitors for this shop.</p>
+                  ) : (
+                    <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+                      <table className="text-xs font-mono">
+                        <thead>
+                          <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+                            {['Product ID', 'On Hand (Qts)', 'Droptop On Hand', 'Variance', 'Droptop Usage', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update'].map((h) => (
+                              <th key={h} className="px-3 py-2 whitespace-nowrap text-right first:text-left last:text-left">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {onHandRows.map((r) => {
+                            const threshold = varianceThreshold(r.totalCapacityQt)
+                            const flagged = r.netVariance != null && Math.abs(r.netVariance) > threshold
+                            return (
+                              <tr key={r.productId} className="border-b border-navy/20">
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-left">{r.productId}{r.tankCount > 1 && <span className="text-inky/50"> ({r.tankCount} tanks)</span>}</td>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{num(r.tankOnHandQt)}</td>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.droptopOnHand == null ? '—' : num(r.droptopOnHand)}</td>
+                                <td className="px-3 py-1.5 whitespace-nowrap text-right">
+                                  {r.netVariance == null ? (
+                                    <span className="text-inky/40">—</span>
+                                  ) : (
+                                    <span
+                                      className={`${flagged ? 'text-[#E67E22] font-bold cursor-pointer hover:underline decoration-dotted' : 'text-navy'}`}
+                                      title={flagged ? 'Click to accept a new baseline variance' : undefined}
+                                      onClick={() => flagged && setVarianceModal({ productId: r.productId, rawVariance: r.rawVariance ?? 0 })}
+                                    >
+                                      {num(r.netVariance)}{r.baseline != null && <span className="text-inky/40"> (net)</span>}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.droptopUsage == null ? '—' : num(r.droptopUsage)}</td>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.dosMonitor == null ? '—' : num(r.dosMonitor)}</td>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.dosDroptop == null ? '—' : num(r.dosDroptop)}</td>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-left">{dateTime(r.lastUpdate)}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
                 )}
               </CardBody>
             </Card>
@@ -907,7 +1118,50 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           {callout.text}
         </div>
       )}
+
+      {varianceModal && (
+        <VarianceBaselineModal
+          productId={varianceModal.productId}
+          initialValue={varianceModal.rawVariance}
+          saving={savingBaseline}
+          onClose={() => setVarianceModal(null)}
+          onSave={(v) => saveVarianceBaseline(varianceModal.productId, v)}
+        />
+      )}
     </div>
+  )
+}
+
+// "Accept new baseline variance" — prepopulated with today's raw gap
+// (tank on-hand minus Droptop on-hand) but freely adjustable. Whatever gets
+// saved becomes the new absolute offset the On Hand view nets future
+// readings against — it replaces any prior baseline for this product,
+// it doesn't add to it.
+function VarianceBaselineModal({ productId, initialValue, saving, onClose, onSave }: {
+  productId: string; initialValue: number; saving: boolean; onClose: () => void; onSave: (v: number) => void
+}) {
+  const [value, setValue] = useState(String(Math.round(initialValue * 100) / 100))
+  return (
+    <Modal open onClose={onClose} title={`Accept New Baseline Variance — ${productId}`} size="sm">
+      <div className="flex flex-col gap-3">
+        <p className="text-xs font-mono text-inky/70">
+          Sets the new "normal" gap between the tank monitor's on-hand and Droptop's on-hand for this product at this
+          shop. The On Hand view will flag future variance only when it drifts meaningfully away from this new value.
+        </p>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-mono text-inky uppercase tracking-wide">New baseline (quarts)</span>
+          <input
+            type="number" step="0.1" value={value} onChange={(e) => setValue(e.target.value)}
+            className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-sm font-mono text-navy focus:outline-none focus:border-sky"
+            autoFocus
+          />
+        </label>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <Button size="sm" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button size="sm" loading={saving} onClick={() => { const n = Number(value); if (!isNaN(n)) onSave(n) }}>Accept Baseline</Button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
