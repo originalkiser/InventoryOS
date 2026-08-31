@@ -68,45 +68,45 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       setLoading(true)
     }
 
-    // Count first so we know exactly how many pages to fire in parallel
-    const { count, error: countErr } = await tbl()
-      .select('*', { count: 'exact', head: true })
-      .eq('company_id', profile.company_id)
-
-    if (countErr) { toast.error(`Failed to load ${tableName}`); setLoading(false); return }
-
-    if (!count) {
-      const empty: T[] = []
-      tabCache.set(key, { data: empty, ts: Date.now() })
-      setData(empty)
-      setLoading(false)
-      return
+    // Sequential keyset (seek) pagination, not OFFSET/.range() fired all at
+    // once. The old approach had two compounding problems on a table that
+    // grows large: OFFSET pagination gets progressively more expensive per
+    // page (Postgres has to walk and discard every preceding row before it
+    // can return one), AND firing every page concurrently via Promise.all
+    // meant a six-figure-row table fired 100+ simultaneous large queries at
+    // the database at once. A real run hit "canceling statement due to
+    // statement timeout" (57014) — same failure class already found and
+    // fixed once in ProductUsageTab.tsx, but worse here because of the
+    // added concurrency. The seek predicate below keeps the exact same
+    // (created_at desc, id asc) ordering — id is still the tiebreaker bulk
+    // uploads sharing one created_at need to paginate without gaps/dupes —
+    // while costing the same regardless of how deep into the table it is,
+    // since it's a direct index seek with nothing to skip.
+    const all: T[] = []
+    let cursor: { createdAt: string; id: string } | null = null
+    for (;;) {
+      let q = tbl().select('*')
+        .eq('company_id', profile.company_id)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(PAGE)
+      if (cursor) {
+        q = q.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.gt.${cursor.id})`)
+      }
+      const { data: rows, error } = await q
+      if (error) { toast.error(`Failed to load ${tableName}`); setLoading(false); return }
+      const batch = (rows ?? []) as any[]
+      all.push(...batch)
+      if (batch.length < PAGE) break
+      const last = batch[batch.length - 1]
+      // Fallback sentinel for a null created_at (shouldn't happen — every
+      // config table carries it as an audit column — but a well-defined
+      // comparison here matters more than a rare row briefly sorting first).
+      cursor = { createdAt: last.created_at ?? '1970-01-01T00:00:00Z', id: last.id }
     }
 
-    // Fire all pages concurrently — Promise.all preserves insertion order.
-    // `id` is a required tiebreaker: bulk uploads share a created_at, and without
-    // a unique secondary sort the concurrent range windows overlap/gap at page
-    // boundaries — duplicating one chunk of rows and dropping another.
-    const pageCount = Math.ceil(count / PAGE)
-    const results = await Promise.all(
-      Array.from({ length: pageCount }, (_, i) =>
-        tbl().select('*')
-          .eq('company_id', profile.company_id)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: true })
-          .range(i * PAGE, (i + 1) * PAGE - 1)
-      )
-    )
-
-    if (results.some((r: any) => r.error)) {
-      toast.error(`Failed to load ${tableName}`)
-      setLoading(false)
-      return
-    }
-
-    const all = results.flatMap((r: any) => (r.data ?? []) as T[])
-    tabCache.set(key, { data: all, ts: Date.now() })
-    setData(all)
+    tabCache.set(key, { data: all as T[], ts: Date.now() })
+    setData(all as T[])
     setLoading(false)
   }, [profile?.company_id, tableName, schemaName])
 
