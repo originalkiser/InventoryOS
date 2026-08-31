@@ -126,6 +126,13 @@ export interface DataConnectionSchedule {
   last_run_status: string | null
   last_run_message: string | null
   next_run_at: string | null
+  // Written by manual "Run Now" clicks — last_run_* above is scheduled-run
+  // only (written by the dispatcher). New column, may be null until a
+  // manual run happens post-migration.
+  last_manual_run_at?: string | null
+  last_manual_run_status?: string | null
+  last_manual_run_message?: string | null
+  last_manual_run_by?: string | null
 }
 
 // Integration 4 — Placed Orders

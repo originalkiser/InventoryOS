@@ -17,7 +17,7 @@ import { create } from 'zustand'
 export interface SyncTask {
   id: string
   label: string
-  status: 'running' | 'success' | 'error'
+  status: 'running' | 'success' | 'partial' | 'error'
   currentBatch: number
   totalBatches: number // 0 = not a batched/chunked sync — shown as an indeterminate spinner, not a fraction
   message: string | null
@@ -30,12 +30,14 @@ interface SyncTasksState {
   /** Begin tracking a task — replaces any existing task with the same id. */
   start: (id: string, label: string, totalBatches?: number) => void
   setProgress: (id: string, currentBatch: number, totalBatches?: number) => void
-  /** Marks done; auto-dismisses after a delay (longer for errors, so they don't flash by unnoticed). */
-  finish: (id: string, status: 'success' | 'error', message?: string | null) => void
+  /** Marks done; auto-dismisses after a delay — errors and partials stay until dismissed by hand. */
+  finish: (id: string, status: 'success' | 'partial' | 'error', message?: string | null) => void
   dismiss: (id: string) => void
 }
 
-// Errors don't auto-dismiss at all (see finish() below) — only success does.
+// Errors and partials don't auto-dismiss at all (see finish() below) — only
+// a clean success does. A partial run has warnings worth actually reading,
+// same reasoning as an outright error.
 const SUCCESS_AUTO_DISMISS_MS = 8000
 
 // Stable task ids shared between wherever a given sync can be triggered
@@ -45,7 +47,7 @@ const SUCCESS_AUTO_DISMISS_MS = 8000
 export const DROPTOP_ON_HAND_TASK_ID = 'droptop-on-hand'
 export const DROPTOP_USAGE_TASK_ID = 'droptop-usage'
 export const DROPTOP_PO_SYNC_TASK_ID = 'droptop-po-sync'
-export const DROPTOP_CUSTOMERS_TASK_ID = 'droptop-customers'
+export const DROPTOP_ORDERS_TASK_ID = 'droptop-orders'
 export const SKYBITZ_TANKS_TASK_ID = 'skybitz-tanks'
 export const AUTOMATED_CHECKS_TASK_ID = 'automated-checks'
 
@@ -69,10 +71,11 @@ export const useSyncTasksStore = create<SyncTasksState>((set, get) => ({
 
   finish: (id, status, message = null) => {
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, status, message, finishedAt: Date.now() } : t)) }))
-    // Errors stay until manually dismissed — an error message (a Postgres
-    // conflict, a Droptop rate limit, whatever) is exactly the kind of
-    // thing that shouldn't quietly disappear before anyone's read it.
-    if (status === 'error') return
+    // Errors and partials stay until manually dismissed — a message (a
+    // Postgres conflict, a Droptop rate limit, "N missing a zip match",
+    // whatever) is exactly the kind of thing that shouldn't quietly
+    // disappear before anyone's read it.
+    if (status === 'error' || status === 'partial') return
     setTimeout(() => {
       // Only auto-dismiss if it's still the same finished task (not
       // restarted in the meantime).

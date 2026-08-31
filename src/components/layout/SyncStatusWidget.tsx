@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, CheckCircle2, XCircle, X } from 'lucide-react'
+import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, X } from 'lucide-react'
 import { useSyncTasksStore, type SyncTask } from '@/stores/syncTasksStore'
 
 // Live progress for in-flight data syncs (Droptop, SkyBitz, Automated
@@ -99,6 +99,7 @@ function TaskRow({ task, onDismiss }: { task: SyncTask; onDismiss: () => void })
       <div className="flex items-center gap-2">
         {task.status === 'running' && <RefreshCw className="w-3.5 h-3.5 text-sky animate-spin flex-shrink-0" />}
         {task.status === 'success' && <CheckCircle2 className="w-3.5 h-3.5 text-[#2ECC71] flex-shrink-0" />}
+        {task.status === 'partial' && <AlertTriangle className="w-3.5 h-3.5 text-[#E67E22] flex-shrink-0" />}
         {task.status === 'error' && <XCircle className="w-3.5 h-3.5 text-[#C0392B] flex-shrink-0" />}
         <span className="text-xs font-mono text-[#F2F1E6] flex-1 truncate">{task.label}</span>
         {task.status === 'running' && task.totalBatches > 0 && (
@@ -119,8 +120,8 @@ function TaskRow({ task, onDismiss }: { task: SyncTask; onDismiss: () => void })
           )}
         </div>
       )}
-      {task.status === 'error' && task.message && (
-        <p className="text-[10px] font-mono text-[#C0392B]/90 whitespace-normal break-words">{task.message}</p>
+      {(task.status === 'error' || task.status === 'partial') && task.message && (
+        <p className={`text-[10px] font-mono whitespace-normal break-words ${task.status === 'error' ? 'text-[#C0392B]/90' : 'text-[#E67E22]/90'}`}>{task.message}</p>
       )}
     </div>
   )
