@@ -32,6 +32,27 @@ function ok(body: unknown) {
 // inside the platform's execution time limit.
 const DROPTOP_CHUNK_SIZE = 20
 
+// A non-2xx response (timeout, crash, killed invocation) or a body that
+// isn't valid JSON both used to fall through a bare `.catch(() => ({}))` as
+// an empty object at every call site below — no `.error` key, so it read as
+// "success" even though nothing actually ran. That's the likely explanation
+// for a schedule row marked success with no matching sync_log entry: the
+// real failure got masked, so isDue() considered the day's run already
+// done and never retried. Centralized here so every call site gets the
+// real check instead of repeating (or missing) it.
+async function parseSyncResponse(res: Response): Promise<{ data: any; error: string | null }> {
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    return { data: null, error: `HTTP ${res.status}${text ? `: ${text.slice(0, 300)}` : ''}` }
+  }
+  try {
+    const data = await res.json()
+    return { data, error: data?.error ? String(data.error) : null }
+  } catch {
+    return { data: null, error: 'Response was not valid JSON (likely a timed-out or killed invocation)' }
+  }
+}
+
 interface Schedule {
   id: string
   company_id: string
@@ -80,8 +101,8 @@ async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ s
     headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
     body: '{}',
   })
-  const data = await res.json().catch(() => ({}))
-  return data?.error ? { status: 'error', message: String(data.error) } : { status: 'success', message: null }
+  const { error } = await parseSyncResponse(res)
+  return error ? { status: 'error', message: error } : { status: 'success', message: null }
 }
 
 // Chunked the same way runDroptopChunked (below) handles on-hand/usage — a
@@ -110,8 +131,8 @@ async function runDroptopPurchaseOrders(
       headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
       body: JSON.stringify({ mode: 'sync', daysBack: 180, locationIds }),
     })
-    const data = await res.json().catch(() => ({}))
-    if (data?.error) warnings.push(String(data.error))
+    const { data, error } = await parseSyncResponse(res)
+    if (error) warnings.push(error)
     else { anySucceeded = true; if (data?.warnings?.length) warnings.push(...data.warnings) }
   }
   if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
@@ -127,8 +148,8 @@ async function runAutomatedChecks(supabaseUrl: string, secret: string): Promise<
     headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
     body: '{}',
   })
-  const data = await res.json().catch(() => ({}))
-  return data?.error ? { status: 'error', message: String(data.error) } : { status: 'success', message: null }
+  const { error } = await parseSyncResponse(res)
+  return error ? { status: 'error', message: error } : { status: 'success', message: null }
 }
 
 // Chunks locations the same way the interactive "Sync All" button does —
@@ -157,8 +178,8 @@ async function runDroptopChunked(
       headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
       body: JSON.stringify(body),
     })
-    const data = await res.json().catch(() => ({}))
-    if (data?.error) warnings.push(String(data.error))
+    const { data, error } = await parseSyncResponse(res)
+    if (error) warnings.push(error)
     else { anySucceeded = true; if (data?.warnings?.length) warnings.push(...data.warnings) }
   }
   if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
