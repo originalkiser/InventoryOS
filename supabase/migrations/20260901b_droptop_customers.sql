@@ -12,8 +12,10 @@
 --
 -- lat/lng are resolved from inventory.zip_centroids by zip at sync time,
 -- not from Droptop (which doesn't provide coordinates) — see
--- 20260901_zip_centroids.sql. Null when the zip isn't in that table yet;
--- such rows are excluded from the heatmap rather than mis-plotted.
+-- 20260901_zip_centroids_01.sql (that seed is split across 9 numbered
+-- part files — see that file's own header for why). Null when the zip
+-- isn't in that table yet; such rows are excluded from the heatmap
+-- rather than mis-plotted.
 CREATE TABLE IF NOT EXISTS inventory.droptop_customers (
   id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id         uuid        NOT NULL,
