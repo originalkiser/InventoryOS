@@ -31,12 +31,11 @@ function ok(body: unknown) {
 // keeps each droptop-sync-usage invocation's location count bounded well
 // inside the platform's execution time limit.
 const DROPTOP_CHUNK_SIZE = 20
-// Customers get their own, much smaller chunk size — same reasoning as
-// CUSTOMER_CHUNK_SIZE in droptopService.ts: get-customers pages at
-// 250/call, so a shop with thousands of customers can be dozens of calls
-// on its own, and 20 such locations in one invocation risks the same
-// execution-time-limit failure the PO sync hit at far lower volume.
-const DROPTOP_CUSTOMER_CHUNK_SIZE = 3
+// Orders aren't paginated per-call the way the old customer-list sync's
+// get-customers was (one call per 31-day sub-window per location, not up
+// to dozens), so this can stay closer to the general chunk size — matches
+// ORDER_CHUNK_SIZE in droptopService.ts.
+const DROPTOP_ORDER_CHUNK_SIZE = 10
 
 // A non-2xx response (timeout, crash, killed invocation) or a body that
 // isn't valid JSON both used to fall through a bare `.catch(() => ({}))` as
@@ -145,9 +144,9 @@ async function runDroptopPurchaseOrders(
   return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
 }
 
-// Much smaller chunk size than runDroptopPurchaseOrders above — see
-// DROPTOP_CUSTOMER_CHUNK_SIZE's own comment.
-async function runDroptopCustomers(
+// Replaces the earlier runDroptopCustomers (droptop-sync-customers is
+// superseded — see droptop-sync-orders' own header comment).
+async function runDroptopOrders(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
 ): Promise<{ status: string; message: string | null }> {
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
@@ -158,15 +157,15 @@ async function runDroptopCustomers(
   if (!ids.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
 
   const chunks: string[][] = []
-  for (let i = 0; i < ids.length; i += DROPTOP_CUSTOMER_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CUSTOMER_CHUNK_SIZE))
+  for (let i = 0; i < ids.length; i += DROPTOP_ORDER_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_ORDER_CHUNK_SIZE))
 
   const warnings: string[] = []
   let anySucceeded = false
   for (const locationIds of chunks) {
-    const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-customers`, {
+    const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-      body: JSON.stringify({ mode: 'sync', locationIds }),
+      body: JSON.stringify({ mode: 'sync', daysBack: 30, locationIds }),
     })
     const { data, error } = await parseSyncResponse(res)
     if (error) warnings.push(error)
@@ -271,9 +270,9 @@ Deno.serve(async (req) => {
       } else if (s.connection_key === 'droptop_purchase_orders') {
         if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
         else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
-      } else if (s.connection_key === 'droptop_customers') {
+      } else if (s.connection_key === 'droptop_orders') {
         if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
-        else outcome = await runDroptopCustomers(supabaseUrl, serviceKey, droptopSecret, s.company_id)
+        else outcome = await runDroptopOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
       } else if (s.connection_key === 'automated_checks') {
         // Run after the Droptop pulls so the movement feed it reads is fresh —
         // schedule its own interval later in the day than droptop_usage's if

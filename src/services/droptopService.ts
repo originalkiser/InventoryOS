@@ -20,14 +20,6 @@ import { supabase } from '@/lib/supabase'
 import type { DroptopSyncResult, DroptopSyncLog } from '@/types/integrations'
 
 const CHUNK_SIZE = 20
-// Customers get their own, much smaller chunk size — get-customers pages at
-// 250/call, and a shop with (for example) 10,000 customers is ~40 calls on
-// its own. 20 such locations in one invocation could mean 800 Droptop
-// calls, very likely to hit the platform's execution time limit the same
-// way the PO sync did at far lower per-location volume before it was
-// chunked down. A handful of locations per invocation keeps this bounded
-// regardless of how large any one shop's customer list turns out to be.
-const CUSTOMER_CHUNK_SIZE = 3
 
 type SyncMode = 'both' | 'inventory' | 'usage'
 
@@ -208,19 +200,29 @@ export async function runDroptopPurchaseOrderSync(
   return { locations_synced: locationsSynced, pos_upserted: posUpserted, items_written: itemsWritten, ...(warnings.length ? { warnings } : {}) }
 }
 
-// Customers — separate edge function, separate table
-// (inventory.droptop_customers), same dual-auth/sig/chunking conventions as
-// the PO sync above. Feeds the Customer Heatmap (marketing module).
-export interface DroptopCustomerSyncResult {
+// Orders — separate edge function, separate table (inventory.droptop_orders),
+// same dual-auth/sig conventions as the PO sync above. Feeds the Customer
+// Heatmap (marketing module). Replaces the earlier customer-list approach
+// (droptop-sync-customers / inventory.droptop_customers, still deployed and
+// holding real data, but no longer written to or read by anything) — that
+// pulled a shop's entire customer history every run (10,000+ per location
+// in practice); orders are naturally date-bounded, so a routine pull only
+// ever touches a recent window. Chunk size can stay close to the PO sync's
+// (orders aren't paginated per-call the way get-customers was, so the
+// per-location call count is much lower — one call per 31-day sub-window,
+// not up to dozens).
+const ORDER_CHUNK_SIZE = 10
+
+export interface DroptopOrderSyncResult {
   locations_synced: number
-  customers_upserted: number
-  customers_with_coordinates: number
-  customers_missing_zip_match: number
+  orders_upserted: number
+  orders_with_coordinates: number
+  orders_missing_zip_match: number
   warnings?: string[]
 }
 
-async function invokeCustomerSync(body: Record<string, unknown>): Promise<DroptopCustomerSyncResult> {
-  const { data, error } = await supabase.functions.invoke('droptop-sync-customers', { body: { mode: 'sync', ...body } })
+async function invokeOrderSync(body: Record<string, unknown>): Promise<DroptopOrderSyncResult> {
+  const { data, error } = await supabase.functions.invoke('droptop-sync-orders', { body: { mode: 'sync', ...body } })
   if (error) throw new Error(error.message)
   if (data?.error) {
     throw new Error(
@@ -229,21 +231,25 @@ async function invokeCustomerSync(body: Record<string, unknown>): Promise<Dropto
         : data.error
     )
   }
-  return data as DroptopCustomerSyncResult
+  return data as DroptopOrderSyncResult
 }
 
-export async function runDroptopCustomerSync(
+export async function runDroptopOrderSync(
   companyId: string,
+  opts: { daysBack?: number; startUnix?: number; endUnix?: number; statusTypes?: string; locationId?: string } = {},
   onProgress?: (p: DroptopSyncProgress) => void,
-): Promise<DroptopCustomerSyncResult> {
+): Promise<DroptopOrderSyncResult> {
+  const { locationId, ...rest } = opts
+  if (locationId) return invokeOrderSync({ ...rest, locationId })
+
   const ids = await fetchDroptopLocationIds(companyId)
   if (!ids.length) {
     throw new Error('No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.')
   }
-  const batches = chunk(ids, CUSTOMER_CHUNK_SIZE)
+  const batches = chunk(ids, ORDER_CHUNK_SIZE)
 
   let locationsSynced = 0
-  let customersUpserted = 0
+  let ordersUpserted = 0
   let withCoords = 0
   let missingZip = 0
   const warnings: string[] = []
@@ -251,11 +257,11 @@ export async function runDroptopCustomerSync(
   for (let i = 0; i < batches.length; i++) {
     onProgress?.({ batch: i + 1, totalBatches: batches.length })
     try {
-      const result = await invokeCustomerSync({ locationIds: batches[i] })
+      const result = await invokeOrderSync({ ...rest, locationIds: batches[i] })
       locationsSynced += result.locations_synced
-      customersUpserted += result.customers_upserted
-      withCoords += result.customers_with_coordinates
-      missingZip += result.customers_missing_zip_match
+      ordersUpserted += result.orders_upserted
+      withCoords += result.orders_with_coordinates
+      missingZip += result.orders_missing_zip_match
       if (result.warnings?.length) warnings.push(...result.warnings)
     } catch (err) {
       warnings.push(`Batch ${i + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`)
@@ -264,8 +270,8 @@ export async function runDroptopCustomerSync(
 
   if (locationsSynced === 0 && warnings.length > 0) throw new Error(warnings.join(' | '))
   return {
-    locations_synced: locationsSynced, customers_upserted: customersUpserted,
-    customers_with_coordinates: withCoords, customers_missing_zip_match: missingZip,
+    locations_synced: locationsSynced, orders_upserted: ordersUpserted,
+    orders_with_coordinates: withCoords, orders_missing_zip_match: missingZip,
     ...(warnings.length ? { warnings } : {}),
   }
 }

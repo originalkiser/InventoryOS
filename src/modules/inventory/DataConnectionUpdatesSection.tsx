@@ -39,6 +39,7 @@ const CONNECTION_LABELS: Record<string, string> = {
   droptop_on_hand: 'Droptop — On Hand',
   droptop_usage: 'Droptop — Usage',
   droptop_purchase_orders: 'Droptop — Purchase Orders',
+  droptop_orders: 'Droptop — Orders (Customers)',
   skybitz_tanks: 'SkyBitz Tanks',
   automated_checks: 'Automated Checks',
 }

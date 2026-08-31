@@ -1,13 +1,19 @@
-// Customer Heatmap — where Droptop customers are physically coming from,
-// by zip-code cluster. Reads inventory.droptop_customers (populated by the
-// droptop-sync-customers Edge Function — see Config -> Data Connections)
-// joined at sync time against inventory.zip_centroids for lat/lng, since
-// Droptop's customer records carry an address but no coordinates.
+// Customer Heatmap — where customers placing orders are physically coming
+// from, by zip-code cluster, over a date range. Reads inventory.droptop_orders
+// (populated by the droptop-sync-orders Edge Function — see Config -> Data
+// Connections' "Droptop — Orders (Customers)" row) joined at sync time
+// against inventory.zip_centroids for lat/lng, since Droptop's order/
+// customer records carry an address but no coordinates.
+//
+// Deliberately orders-based, not a full customer-list pull (an earlier
+// version of this page read inventory.droptop_customers, which pulled a
+// shop's ENTIRE customer history regardless of recency — 10,000+ per
+// location in practice). Orders are naturally date-bounded, so this stays
+// fast and light: filtering already-synced data by date range is free, and
+// pulling a range that hasn't been synced yet is one explicit action away.
 //
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
-// areas customers cluster in, not a pin-per-customer map. A customer whose
-// zip isn't in zip_centroids yet has no lat/lng and is excluded here (see
-// the "not on the map" count below) rather than mis-plotted.
+// areas customers cluster in, not a pin-per-order map.
 import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -15,9 +21,12 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useDarkMode } from '@/hooks/useDarkMode'
-import { Card, CardBody, Combobox, SbLoader } from '@/components/ui'
+import { Card, CardBody, Combobox, Button, SbLoader } from '@/components/ui'
+import { useSyncTasksStore, DROPTOP_ORDERS_TASK_ID } from '@/stores/syncTasksStore'
+import { runDroptopOrderSync } from '@/services/droptopService'
+import toast from 'react-hot-toast'
 
-interface CustomerRow {
+interface OrderRow {
   id: string
   location_id: string | null
   city: string | null
@@ -25,6 +34,7 @@ interface CustomerRow {
   zip: string | null
   lat: number | null
   lng: number | null
+  order_finalized_at: string | null
 }
 
 interface ZipCluster {
@@ -37,8 +47,8 @@ interface ZipCluster {
 }
 
 // Radius/color scale — same brand palette used everywhere else, just
-// stepped by density so a handful of customers reads very differently
-// from a couple hundred at a glance.
+// stepped by density so a handful of orders reads very differently from a
+// couple hundred at a glance.
 function styleFor(count: number, max: number): { radius: number; color: string; fill: string } {
   const t = max > 0 ? count / max : 0
   const radius = 5 + t * 25
@@ -47,6 +57,10 @@ function styleFor(count: number, max: number): { radius: number; color: string; 
   return { radius, color: '#4F7489', fill: '#B7E0DE' }
 }
 
+const isoDate = (d: Date) => d.toISOString().slice(0, 10)
+const today = () => new Date()
+const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d }
+
 export function CustomerHeatmapPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -54,57 +68,73 @@ export function CustomerHeatmapPage() {
   const { dark } = useDarkMode()
 
   const [shopId, setShopId] = useState('')
-  const [rows, setRows] = useState<CustomerRow[]>([])
-  const [totalCustomers, setTotalCustomers] = useState(0)
+  const [startDate, setStartDate] = useState(() => isoDate(daysAgo(30)))
+  const [endDate, setEndDate] = useState(() => isoDate(today()))
+  const [rows, setRows] = useState<OrderRow[]>([])
+  const [totalOrders, setTotalOrders] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [pulling, setPulling] = useState(false)
+  // Bumped after a successful "Pull This Range" to force the display query
+  // to re-run for the same start/end/shop — those state values don't
+  // themselves change on a pull, so they wouldn't otherwise re-trigger it.
+  const [reloadTick, setReloadTick] = useState(0)
+
+  const load = useMemo(() => {
+    let cancelled = false
+    return { cancel: () => { cancelled = true }, isCancelled: () => cancelled }
+  }, [companyId, shopId, startDate, endDate, reloadTick])
 
   useEffect(() => {
     if (!companyId) return
-    let cancelled = false
     setLoading(true)
     setError(null)
     const sb = supabase as any
+    const startIso = `${startDate}T00:00:00.000Z`
+    const endIso = `${endDate}T23:59:59.999Z`
 
-    async function load() {
-      // Keyset pagination, not OFFSET — see ProductUsageTab.tsx's own fix
-      // for why an un-ranged/OFFSET-based select degrades badly once a
-      // company's customer table gets into the tens of thousands of rows.
+    async function run() {
+      // Keyset pagination, not OFFSET — same fix already applied to
+      // ProductUsageTab.tsx/useConfigTab.ts for the same reason: an
+      // un-ranged/OFFSET-based select degrades badly once a table gets
+      // large, and there's no reason to reintroduce that here.
       const PAGE = 1000
-      const all: CustomerRow[] = []
+      const all: OrderRow[] = []
       let cursor: string | null = null
       for (;;) {
-        let q = sb.schema('inventory').from('droptop_customers')
-          .select('id, location_id, city, region, zip, lat, lng')
+        let q = sb.schema('inventory').from('droptop_orders')
+          .select('id, location_id, city, region, zip, lat, lng, order_finalized_at')
           .eq('company_id', companyId)
+          .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
           .not('lat', 'is', null)
           .order('id', { ascending: true }).limit(PAGE)
         if (shopId) q = q.eq('location_id', shopId)
         if (cursor) q = q.gt('id', cursor)
         const { data, error: err } = await q
-        if (err) { if (!cancelled) setError(err.message); break }
-        const batch = (data ?? []) as CustomerRow[]
+        if (err) { if (!load.isCancelled()) setError(err.message); break }
+        const batch = (data ?? []) as OrderRow[]
         all.push(...batch)
         if (batch.length < PAGE) break
         cursor = batch[batch.length - 1].id
       }
-      if (cancelled) return
+      if (load.isCancelled()) return
 
-      // Separate count of everything (including no-coordinate rows) for the
-      // "N not shown on the map" callout — cheap head-count query.
-      let countQuery = sb.schema('inventory').from('droptop_customers')
+      // Separate count of everything in range (including no-coordinate
+      // rows) for the "not on map" callout.
+      let countQuery = sb.schema('inventory').from('droptop_orders')
         .select('id', { count: 'exact', head: true }).eq('company_id', companyId)
+        .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
       if (shopId) countQuery = countQuery.eq('location_id', shopId)
       const { count } = await countQuery
-      if (cancelled) return
+      if (load.isCancelled()) return
 
       setRows(all)
-      setTotalCustomers(count ?? all.length)
+      setTotalOrders(count ?? all.length)
       setLoading(false)
     }
-    load().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load customers'); setLoading(false) } })
-    return () => { cancelled = true }
-  }, [companyId, shopId])
+    run().catch((e) => { if (!load.isCancelled()) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
+    return () => load.cancel()
+  }, [companyId, shopId, startDate, endDate, reloadTick, load])
 
   const clusters = useMemo<ZipCluster[]>(() => {
     const byZip = new Map<string, ZipCluster>()
@@ -120,7 +150,7 @@ export function CustomerHeatmapPage() {
 
   const maxCount = clusters.length ? clusters[0].count : 0
   const mappedCount = rows.length
-  const notMapped = Math.max(0, totalCustomers - mappedCount)
+  const notMapped = Math.max(0, totalOrders - mappedCount)
 
   const mapCenter = useMemo((): [number, number] => {
     if (clusters.length > 0) return [clusters[0].lat, clusters[0].lng]
@@ -131,6 +161,33 @@ export function CustomerHeatmapPage() {
     () => [{ value: '', label: 'All Shops' }, ...loc.includedOptions],
     [loc.includedOptions],
   )
+
+  // Pulls fresh order data for exactly the currently-selected range/shop —
+  // separate from Data Connections' routine "last 30 days" sync, for
+  // exploring a custom range that hasn't been synced yet.
+  async function pullThisRange() {
+    if (!companyId) return
+    setPulling(true)
+    const store = useSyncTasksStore.getState()
+    const shopLabel = shopId ? (shopOptions.find((o) => o.value === shopId)?.label ?? 'shop') : 'all shops'
+    store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — ${startDate} to ${endDate} (${shopLabel})`)
+    const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(DROPTOP_ORDERS_TASK_ID, p.batch, p.totalBatches)
+    const startUnix = Math.floor(new Date(`${startDate}T00:00:00.000Z`).getTime() / 1000)
+    const endUnix = Math.floor(new Date(`${endDate}T23:59:59.999Z`).getTime() / 1000)
+    try {
+      const r = await runDroptopOrderSync(companyId, { startUnix, endUnix, ...(shopId ? { locationId: shopId } : {}) }, onProgress)
+      const summary = `Pulled ${r.orders_upserted} orders (${r.locations_synced} shop${r.locations_synced === 1 ? '' : 's'})`
+      store.finish(DROPTOP_ORDERS_TASK_ID, r.warnings?.length ? 'partial' : 'success', summary)
+      toast.success(summary)
+      setReloadTick((t) => t + 1) // re-trigger the display query for the same range/shop
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Pull failed'
+      store.finish(DROPTOP_ORDERS_TASK_ID, 'error', message)
+      toast.error(message, { duration: 12000 })
+    } finally {
+      setPulling(false)
+    }
+  }
 
   const tileUrl = dark
     ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
@@ -145,12 +202,28 @@ export function CustomerHeatmapPage() {
         <div>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Customer Heatmap</h1>
           <p className="text-xs text-inky mt-0.5">
-            Where Droptop customers are coming from, by zip-code cluster. Populated by Config → Data Connections'
-            Droptop — Customers sync.
+            Where orders in this date range came from, by zip-code cluster. Populated by Config → Data Connections'
+            Droptop — Orders sync.
           </p>
         </div>
-        <div className="w-64">
-          <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="All Shops" />
+        <div className="flex items-end gap-2 flex-wrap">
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Start</span>
+            <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
+              className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">End</span>
+            <input type="date" value={endDate} min={startDate} max={isoDate(today())} onChange={(e) => setEndDate(e.target.value)}
+              className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
+          </label>
+          <div className="w-56">
+            <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="All Shops" />
+          </div>
+          <Button size="sm" variant="secondary" loading={pulling} onClick={pullThisRange}
+            title="Pull fresh order data from Droptop for exactly this range/shop — separate from the routine last-30-days sync">
+            Pull This Range
+          </Button>
         </div>
       </div>
 
@@ -163,16 +236,16 @@ export function CustomerHeatmapPage() {
       ) : rows.length === 0 ? (
         <Card><CardBody>
           <p className="text-xs font-mono text-inky/60">
-            No mapped customers yet{shopId ? ' for this shop' : ''}. Run the Droptop — Customers sync from Config →
-            Data Connections, then come back here.
+            No mapped orders for this range{shopId ? ' at this shop' : ''} yet. Run the Droptop — Orders sync from
+            Config → Data Connections (or click "Pull This Range" above), then come back here.
           </p>
         </CardBody></Card>
       ) : (
         <>
           <div className="flex gap-3 flex-wrap">
             <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Customers</p>
-              <p className="text-lg font-heading font-bold text-navy">{totalCustomers.toLocaleString()}</p>
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Orders</p>
+              <p className="text-lg font-heading font-bold text-navy">{totalOrders.toLocaleString()}</p>
             </CardBody></Card>
             <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
               <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Zip Clusters</p>
@@ -207,7 +280,7 @@ export function CustomerHeatmapPage() {
                   >
                     <Tooltip>
                       <span className="font-mono text-xs">
-                        {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} customer{c.count !== 1 ? 's' : ''}
+                        {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} order{c.count !== 1 ? 's' : ''}
                       </span>
                     </Tooltip>
                   </CircleMarker>
@@ -221,7 +294,7 @@ export function CustomerHeatmapPage() {
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Low density</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Medium</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />High</span>
-            <span className="ml-auto text-inky/50">Circle size + color both scale with customer count per zip</span>
+            <span className="ml-auto text-inky/50">Circle size + color both scale with order count per zip</span>
           </div>
         </>
       )}

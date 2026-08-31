@@ -10,12 +10,12 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown } from '@/components/ui'
 import { runSkybitzTankSync } from '@/services/skybitzService'
-import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopCustomerSync } from '@/services/droptopService'
+import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
 import type { DataConnectionSchedule } from '@/types/integrations'
 import { formatInTz } from '@/lib/tzFormat'
 import {
   useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
-  DROPTOP_PO_SYNC_TASK_ID, DROPTOP_CUSTOMERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
+  DROPTOP_PO_SYNC_TASK_ID, DROPTOP_ORDERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
 } from '@/stores/syncTasksStore'
 import toast from 'react-hot-toast'
 
@@ -24,7 +24,7 @@ const TASK_ID_FOR: Record<string, string> = {
   droptop_on_hand: DROPTOP_ON_HAND_TASK_ID,
   droptop_usage: DROPTOP_USAGE_TASK_ID,
   droptop_purchase_orders: DROPTOP_PO_SYNC_TASK_ID,
-  droptop_customers: DROPTOP_CUSTOMERS_TASK_ID,
+  droptop_orders: DROPTOP_ORDERS_TASK_ID,
   automated_checks: AUTOMATED_CHECKS_TASK_ID,
 }
 
@@ -48,10 +48,10 @@ const CONNECTION_META: Record<string, { label: string; description: string }> = 
   droptop_on_hand: { label: 'Droptop — On Hand', description: 'Pulls current on-hand quantities from Droptop into Product Usage.' },
   droptop_usage: { label: 'Droptop — Usage', description: 'Pulls sales/adjustment activity from Droptop and logs the daily sold/adjusted ledger.' },
   droptop_purchase_orders: { label: 'Droptop — Purchase Orders', description: 'Pulls open/recent POs and their line items — feeds the PO Status page and Orders v2\'s "already on order" check.' },
-  droptop_customers: { label: 'Droptop — Customers', description: 'Pulls each shop\'s active customer profiles (name/address/contact) and resolves a lat/lng by zip — feeds the Customer Heatmap. Changes slowly; a daily or weekly cadence is plenty.' },
+  droptop_orders: { label: 'Droptop — Orders (Customers)', description: 'Pulls orders from a recent window (default last 30 days) with the placing customer\'s address, and resolves a lat/lng by zip — feeds the Customer Heatmap. Date-bounded by design, not a full customer-list pull.' },
   automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
 }
-const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_customers', 'automated_checks']
+const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_orders', 'automated_checks']
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -73,7 +73,7 @@ export function DataConnectionsTab() {
   const [inspectProductId, setInspectProductId] = useState('')
   const [backfillOptions, setBackfillOptions] = useState<{ id: string; label: string }[]>([])
   const [backfillShops, setBackfillShops] = useState<string[]>([])
-  const [testCustomerShop, setTestCustomerShop] = useState('')
+  const [testOrderShop, setTestOrderShop] = useState('')
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -126,38 +126,67 @@ export function DataConnectionsTab() {
     const taskId = TASK_ID_FOR[key] ?? key
     store.start(taskId, CONNECTION_META[key]?.label ?? key)
     const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(taskId, p.batch, p.totalBatches)
+    let manualStatus: 'success' | 'partial' | 'error' = 'success'
+    let manualMessage: string | null = null
     try {
       let summary = ''
+      let warnings: string[] | undefined
       if (key === 'skybitz_tanks') {
         const r = await runSkybitzTankSync()
         summary = `SkyBitz: ${r.updated} updated, ${r.inserted} new, ${r.unchanged} unchanged`
       } else if (key === 'droptop_on_hand') {
         const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1 }, onProgress)
         summary = `Droptop on-hand: ${r.operations_synced} shop(s), ${r.products_upserted} products`
+        warnings = r.warnings
       } else if (key === 'droptop_usage') {
         const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true }, onProgress)
         summary = `Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`
           + (r.rolling_usage_applied ? ` (${r.rolling_usage_applied} using a rolling 30-day average)` : '')
+        warnings = r.warnings
       } else if (key === 'droptop_purchase_orders') {
         const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId, onProgress)
         summary = `Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`
-      } else if (key === 'droptop_customers') {
-        const r = await runDroptopCustomerSync(companyId, onProgress)
-        summary = `Droptop customers: ${r.locations_synced} shop(s), ${r.customers_upserted} customers`
-          + (r.customers_missing_zip_match ? ` (${r.customers_missing_zip_match} missing a zip match — excluded from the heatmap)` : '')
+        warnings = r.warnings
+      } else if (key === 'droptop_orders') {
+        const r = await runDroptopOrderSync(companyId, { daysBack: 30 }, onProgress)
+        summary = `Droptop orders: ${r.locations_synced} shop(s), ${r.orders_upserted} orders (last 30 days)`
+          + (r.orders_missing_zip_match ? ` (${r.orders_missing_zip_match} missing a zip match — excluded from the heatmap)` : '')
+        warnings = r.warnings
       } else if (key === 'automated_checks') {
         const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
         if (error) throw new Error(error.message)
         if (data?.error) throw new Error(data.error)
         summary = `Automated Checks: ${data.created} new exception${data.created === 1 ? '' : 's'} flagged (${data.checked} anomal${data.checked === 1 ? 'y' : 'ies'} found)`
       }
-      store.finish(taskId, 'success', summary)
-      toast.success(summary)
+      if (warnings?.length) { manualStatus = 'partial'; manualMessage = `${summary} — ${warnings.join(' | ')}` }
+      else manualMessage = summary
+      store.finish(taskId, manualStatus === 'partial' ? 'partial' : 'success', manualMessage)
+      if (manualStatus === 'partial') toast(manualMessage ?? summary, { icon: '⚠️', duration: 10000 })
+      else toast.success(summary)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Sync failed'
+      manualStatus = 'error'; manualMessage = message
       store.finish(taskId, 'error', message)
       toast.error(message, { duration: 12000 })
     } finally {
+      // Best-effort — last_manual_run_* is a newer column set that may not
+      // exist yet in production. A manual "Run Now" previously never wrote
+      // back to this table at all (only the dispatcher's scheduled runs
+      // did), so "Last run" silently only ever reflected the most recent
+      // automated run no matter how many times someone ran it by hand.
+      const row = rows?.find((r) => r.connection_key === key)
+      if (row) {
+        const sb = supabase as any
+        sb.schema('inventory').from('data_connection_schedules')
+          .update({
+            last_manual_run_at: new Date().toISOString(),
+            last_manual_run_status: manualStatus,
+            last_manual_run_message: manualMessage,
+            last_manual_run_by: profile?.id ?? null,
+          })
+          .eq('id', row.id)
+          .then(() => {})
+      }
       setRunning(null)
       load()
     }
@@ -251,36 +280,38 @@ export function DataConnectionsTab() {
     }
   }
 
-  // Scoped single-shop test — deliberately bypasses the chunked "every
-  // location" path entirely (one location, one edge function invocation) so
-  // real per-shop volume/timing can be checked before running company-wide.
-  // Worth having: get-customers pages at 250/call, so a shop with a large
-  // customer list can be dozens of calls on its own — exactly the kind of
-  // volume that's worth seeing on one shop first, given how many customers
-  // a single location can carry.
-  async function testOneShopCustomers() {
-    if (!companyId || !testCustomerShop.trim()) return
-    setRunning('test-customers')
+  // Scoped single-shop test — one location, one edge function invocation,
+  // last 30 days — so real per-shop volume/timing can be checked before
+  // running company-wide. Also reports into the same global sync tracker
+  // Run Now uses (a prior version of this button — back when it targeted
+  // the now-superseded customer-list sync — only showed a toast, not
+  // TopBar progress, which read as "did this actually do anything?").
+  async function testOneShopOrders() {
+    if (!companyId || !testOrderShop.trim()) return
+    setRunning('test-orders')
+    const store = useSyncTasksStore.getState()
+    store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — test (${testOrderShop.trim()})`)
     try {
       const sb = supabase as any
       const { data: loc, error: locErr } = await sb.schema('core').from('locations')
         .select('id, name').eq('company_id', companyId)
-        .ilike('name', `%${testCustomerShop.trim()}%`).limit(1).maybeSingle()
+        .ilike('name', `%${testOrderShop.trim()}%`).limit(1).maybeSingle()
       if (locErr) throw new Error(locErr.message)
-      if (!loc) throw new Error(`No location matching "${testCustomerShop.trim()}"`)
+      if (!loc) throw new Error(`No location matching "${testOrderShop.trim()}"`)
       const startedAt = Date.now()
-      const { data, error } = await supabase.functions.invoke('droptop-sync-customers', {
-        body: { mode: 'sync', locationId: loc.id },
+      const { data, error } = await supabase.functions.invoke('droptop-sync-orders', {
+        body: { mode: 'sync', daysBack: 30, locationId: loc.id },
       })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
       const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
-      toast.success(
-        `${data.customers_upserted} customers in ${seconds}s (${data.customers_with_coordinates} mapped, ${data.customers_missing_zip_match} missing a zip match)`,
-        { duration: 10000 },
-      )
+      const summary = `${data.orders_upserted} orders in ${seconds}s (${data.orders_with_coordinates} mapped, ${data.orders_missing_zip_match} missing a zip match)`
+      store.finish(DROPTOP_ORDERS_TASK_ID, 'success', summary)
+      toast.success(summary, { duration: 10000 })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Test pull failed', { duration: 12000 })
+      const message = err instanceof Error ? err.message : 'Test pull failed'
+      store.finish(DROPTOP_ORDERS_TASK_ID, 'error', message)
+      toast.error(message, { duration: 12000 })
     } finally {
       setRunning(null)
     }
@@ -314,12 +345,19 @@ export function DataConnectionsTab() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {ordered.map((row) => {
           const meta = CONNECTION_META[row.connection_key] ?? { label: row.connection_key, description: '' }
+          // Whichever of scheduled/manual happened most recently drives the
+          // header badge — a quick "is this connection currently healthy"
+          // signal, with the full breakdown (both, separately) below.
+          const scheduledAt = row.last_run_at
+          const manualAt = row.last_manual_run_at ?? null
+          const manualIsNewer = !!manualAt && (!scheduledAt || new Date(manualAt) > new Date(scheduledAt))
+          const latestStatus = manualIsNewer ? row.last_manual_run_status : row.last_run_status
           return (
             <Card key={row.id}>
               <CardHeader className="flex items-center justify-between">
                 <span className="text-xs font-mono text-navy uppercase tracking-wide">{meta.label}</span>
-                <Badge color={statusColor(row.last_run_status)}>
-                  {row.last_run_status ?? 'never run'}
+                <Badge color={statusColor(latestStatus ?? null)}>
+                  {latestStatus ?? 'never run'}
                 </Badge>
               </CardHeader>
               <CardBody className="flex flex-col gap-3">
@@ -363,10 +401,21 @@ export function DataConnectionsTab() {
                 </div>
 
                 <div className="flex items-center justify-between pt-2 border-t border-navy/10">
-                  <span className="text-[10px] font-mono text-inky/60">
-                    {row.last_run_at ? `Last run ${formatInTz(row.last_run_at, timezone)}` : 'Never run'}
-                    {saving === row.id && ' · saving…'}
-                  </span>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] font-mono text-inky/60">
+                      <span className="text-inky/40 uppercase tracking-wide">Scheduled: </span>
+                      {row.last_run_at
+                        ? <>{row.last_run_status ?? 'success'} · {formatInTz(row.last_run_at, timezone)}</>
+                        : 'never run'}
+                    </span>
+                    <span className="text-[10px] font-mono text-inky/60">
+                      <span className="text-inky/40 uppercase tracking-wide">Manual: </span>
+                      {row.last_manual_run_at
+                        ? <>{row.last_manual_run_status ?? 'success'} · {formatInTz(row.last_manual_run_at, timezone)}</>
+                        : 'never run'}
+                      {saving === row.id && ' · saving…'}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-2">
                     {row.connection_key === 'droptop_usage' && (
                       <>
@@ -386,14 +435,14 @@ export function DataConnectionsTab() {
                         </Button>
                       </>
                     )}
-                    {row.connection_key === 'droptop_customers' && (
+                    {row.connection_key === 'droptop_orders' && (
                       <>
                         <input
-                          value={testCustomerShop} onChange={(e) => setTestCustomerShop(e.target.value)}
-                          placeholder="Shop to test" title="Pull just this one shop's customers — bypasses chunking entirely, for checking real volume/timing before Run Now"
+                          value={testOrderShop} onChange={(e) => setTestOrderShop(e.target.value)}
+                          placeholder="Shop to test" title="Pull just this one shop's last 30 days of orders — bypasses chunking entirely, for checking real volume/timing before Run Now"
                           className={`${fieldCls} w-28`}
                         />
-                        <Button size="sm" variant="secondary" loading={running === 'test-customers'} disabled={!testCustomerShop.trim()} onClick={testOneShopCustomers}>
+                        <Button size="sm" variant="secondary" loading={running === 'test-orders'} disabled={!testOrderShop.trim()} onClick={testOneShopOrders}>
                           Test One Shop
                         </Button>
                       </>
@@ -403,9 +452,14 @@ export function DataConnectionsTab() {
                     </Button>
                   </div>
                 </div>
-                {row.last_run_status === 'error' && row.last_run_message && (
+                {(row.last_run_status === 'error' || row.last_run_status === 'partial') && row.last_run_message && (
                   <p className="text-[11px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-2 py-1">
-                    {row.last_run_message}
+                    <span className="text-inky/50 uppercase">Scheduled — </span>{row.last_run_message}
+                  </p>
+                )}
+                {(row.last_manual_run_status === 'error' || row.last_manual_run_status === 'partial') && row.last_manual_run_message && (
+                  <p className="text-[11px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-2 py-1">
+                    <span className="text-inky/50 uppercase">Manual — </span>{row.last_manual_run_message}
                   </p>
                 )}
               </CardBody>

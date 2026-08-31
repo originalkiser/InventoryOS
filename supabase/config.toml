@@ -43,3 +43,6 @@ verify_jwt = false
 
 [functions.droptop-sync-customers]
 verify_jwt = false
+
+[functions.droptop-sync-orders]
+verify_jwt = false
