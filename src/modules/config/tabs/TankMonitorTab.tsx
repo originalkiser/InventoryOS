@@ -1,5 +1,6 @@
 ﻿import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
+import { supabase } from '@/lib/supabase'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
@@ -11,6 +12,7 @@ import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
 import { runSkybitzTankSync, type SkybitzSyncResult } from '@/services/skybitzService'
+import { useSyncTasksStore, SKYBITZ_TANKS_TASK_ID } from '@/stores/syncTasksStore'
 import type { TankMonitor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -53,22 +55,53 @@ export function TankMonitorTab() {
   const [skybitzSyncing, setSkybitzSyncing] = useState(false)
   const [skybitzResult, setSkybitzResult] = useState<SkybitzSyncResult | null>(null)
   const [skybitzError, setSkybitzError] = useState<string | null>(null)
+  const [inspectingSkybitz, setInspectingSkybitz] = useState(false)
 
   async function syncFromSkybitz() {
     setSkybitzSyncing(true)
     setSkybitzError(null)
     setSkybitzResult(null)
+    // Reported into the same global sync tracker the Data Connections tab's
+    // "Run Now" uses (shown in the TopBar) — this button used to run
+    // invisibly to that widget, so a failure here only ever showed up as
+    // this tab's own inline error text, never in "Data Syncs".
+    const store = useSyncTasksStore.getState()
+    store.start(SKYBITZ_TANKS_TASK_ID, 'SkyBitz Tank Monitors')
     try {
       const result = await runSkybitzTankSync()
       setSkybitzResult(result)
-      toast.success(`SkyBitz sync complete — ${result.updated.toLocaleString()} updated, ${result.inserted.toLocaleString()} new`)
+      const summary = `SkyBitz sync complete — ${result.updated.toLocaleString()} updated, ${result.inserted.toLocaleString()} new`
+      store.finish(SKYBITZ_TANKS_TASK_ID, 'success', summary)
+      toast.success(summary)
       await load()
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'SkyBitz sync failed'
       setSkybitzError(msg)
-      toast.error('SkyBitz sync failed')
+      store.finish(SKYBITZ_TANKS_TASK_ID, 'error', msg)
+      toast.error('SkyBitz sync failed', { duration: 12000 })
     } finally {
       setSkybitzSyncing(false)
+    }
+  }
+
+  // Read-only peek at the file's actual column headers — never writes
+  // anything. For confirming an exact header name (e.g. is capacity really
+  // under "Tank Capacity"?) before wiring a new field to it.
+  async function inspectSkybitzColumns() {
+    setInspectingSkybitz(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('skybitz-tank-sync', { body: { mode: 'inspect' } })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      // eslint-disable-next-line no-console
+      console.log('SkyBitz columns:', data.headers)
+      // eslint-disable-next-line no-console
+      console.table(data.sample_rows)
+      toast.success(`${data.headers?.length ?? 0} column(s) logged to the browser console (press F12 to view).`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Inspect failed')
+    } finally {
+      setInspectingSkybitz(false)
     }
   }
 
@@ -199,9 +232,13 @@ export function TankMonitorTab() {
               Never touches Location, Product, or Keep-fill on an existing tank — set those here or by re-upload.
             </p>
           </div>
-          <div>
+          <div className="flex items-center gap-2">
             <Button size="sm" onClick={syncFromSkybitz} disabled={skybitzSyncing}>
               {skybitzSyncing ? 'Syncing…' : 'Pull from SkyBitz'}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={inspectSkybitzColumns} loading={inspectingSkybitz}
+              title="Read-only peek at the file's real column headers, logged to the browser console — no data written">
+              Inspect Columns
             </Button>
           </div>
           {skybitzResult && (

@@ -47,6 +47,19 @@ function ok(body: unknown) {
   })
 }
 
+// Same bounded-concurrency helper as droptop-sync-usage/index.ts — used
+// here for the best-effort per-row raw_capacity update pass.
+async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const item = items[next++]
+      await fn(item)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+}
+
 interface ParsedTarget { host: string; port: number; path: string }
 
 function parseTarget(raw: string): ParsedTarget {
@@ -173,6 +186,23 @@ Deno.serve(async (req) => {
     const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0)
     if (lines.length < 2) return ok({ error: 'File had no data rows' })
     const headers = parseCsvLine(lines[0]).map((h) => h.trim())
+
+    // Inspect mode: read-only peek at the file's real column headers (plus a
+    // couple of sample rows) — never writes anything. For confirming an
+    // exact header name (e.g. is it really "Tank Capacity"?) before wiring
+    // a new column to it, rather than guessing and finding out via a
+    // missing-column error downstream.
+    if (body.mode === 'inspect') {
+      return ok({
+        success: true,
+        headers,
+        sample_rows: lines.slice(1, 4).map((l) => {
+          const cols = parseCsvLine(l)
+          return Object.fromEntries(headers.map((h, i) => [h, cols[i] ?? null]))
+        }),
+      })
+    }
+
     const idx = (name: string) => headers.indexOf(name)
     const iRtuid = idx('RTUID'), iTankId = idx('TankID'), iInventory = idx('Inventory'),
       iLevel = idx('Level'), iLevelUom = idx('Level UOM'), iCapacity = idx('Tank Capacity'),
@@ -182,7 +212,11 @@ Deno.serve(async (req) => {
 
     // Existing tank_monitors, keyed by serial — paginated (the Droptop sync
     // in this same codebase learned the hard way that an un-ranged select
-    // silently truncates at PostgREST's row cap).
+    // silently truncates at PostgREST's row cap). Deliberately never
+    // touches raw_capacity here — that's a newer optional column (see the
+    // best-effort pass near the end of this function) and an un-ranged
+    // SELECT on a missing column fails the *entire* query, which took
+    // down this whole sync in production before the migration had run.
     const existingBySerial = new Map<string, ExistingTank>()
     {
       const PAGE = 1000
@@ -190,7 +224,7 @@ Deno.serve(async (req) => {
       for (;;) {
         const { data: rows, error } = await (admin as any)
           .schema('inventory').from('tank_monitors')
-          .select('id, company_id, location_id, product_id, keep_fill, serial_rtu_id, on_hand, available_capacity, raw_capacity, level_inches, battery_pct, system_tank_id, inventory_time, reading_date')
+          .select('id, company_id, location_id, product_id, keep_fill, serial_rtu_id, on_hand, available_capacity, level_inches, battery_pct, system_tank_id, inventory_time, reading_date')
           .eq('company_id', companyId)
           .not('serial_rtu_id', 'is', null)
           .order('id', { ascending: true })
@@ -200,7 +234,7 @@ Deno.serve(async (req) => {
         for (const r of batch) {
           existingBySerial.set(String(r.serial_rtu_id).trim().toLowerCase(), {
             id: r.id, company_id: r.company_id, location_id: r.location_id, product_id: r.product_id, keep_fill: r.keep_fill,
-            on_hand: r.on_hand, available_capacity: r.available_capacity, raw_capacity: r.raw_capacity,
+            on_hand: r.on_hand, available_capacity: r.available_capacity, raw_capacity: null,
             level_inches: r.level_inches, battery_pct: r.battery_pct,
             system_tank_id: r.system_tank_id, inventory_time: r.inventory_time, reading_date: r.reading_date,
           })
@@ -219,6 +253,10 @@ Deno.serve(async (req) => {
     const updates: Record<string, unknown>[] = []
     const inserts: Record<string, unknown>[] = []
     const seenNewRtuids = new Set<string>() // dedupe brand-new rows within this one file
+    // raw_capacity is written in a separate best-effort pass after the main
+    // upsert below (see there for why) — collected here, keyed by the same
+    // row id already being assigned to updates/inserts.
+    const capacityById = new Map<string, number>()
     let skippedNoRtuid = 0, unchangedCount = 0
     for (let li = 1; li < lines.length; li++) {
       const cols = parseCsvLine(lines[li])
@@ -243,8 +281,10 @@ Deno.serve(async (req) => {
         seenNewRtuids.add(rtuidKey)
         const rawLocation = iLocation !== -1 ? ((cols[iLocation] ?? '').trim() || null) : null
         const rawProduct = iProduct !== -1 ? ((cols[iProduct] ?? '').trim() || null) : null
+        const newId = crypto.randomUUID()
+        if (capacity != null) capacityById.set(newId, capacity)
         inserts.push({
-          id: crypto.randomUUID(),
+          id: newId,
           company_id: companyId,
           location_id: null,
           product_id: rawProduct,
@@ -254,7 +294,6 @@ Deno.serve(async (req) => {
           system_tank_id: systemTankId,
           on_hand: onHand,
           available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : null,
-          raw_capacity: capacity,
           level_inches: level,
           battery_pct: battery,
           inventory_time: isoTime,
@@ -274,6 +313,7 @@ Deno.serve(async (req) => {
         unchangedCount++
       }
 
+      if (capacity != null) capacityById.set(existing.id, capacity)
       updates.push({
         id: existing.id,
         company_id: existing.company_id,
@@ -282,7 +322,6 @@ Deno.serve(async (req) => {
         keep_fill: existing.keep_fill,
         on_hand: resolvedOnHand,
         available_capacity: onHand != null && capacity != null ? Math.max(capacity - onHand, 0) : existing.available_capacity,
-        raw_capacity: capacity ?? existing.raw_capacity,
         level_inches: resolvedLevel,
         battery_pct: resolvedBattery,
         system_tank_id: systemTankId ?? existing.system_tank_id,
@@ -310,6 +349,27 @@ Deno.serve(async (req) => {
         if (error) { upsertError = error.message; break }
         inserted += slice.length
       }
+    }
+
+    // Best-effort: raw_capacity is a newer optional column that may not be
+    // migrated in production yet. Deliberately its own pass, run only after
+    // the core sync above has already succeeded — every id in capacityById
+    // now exists in the table either way, so a plain per-id UPDATE (not a
+    // batch upsert) is safe: a partial-column upsert would try to satisfy
+    // every NOT NULL constraint on the columns it omits for any row that
+    // doesn't already exist, which raw_capacity-only rows never would.
+    // Stops immediately (not per-row) once it's clear the column is missing.
+    if (!upsertError && capacityById.size > 0) {
+      let columnMissing = false
+      await mapWithConcurrency([...capacityById.entries()], 10, async ([id, raw_capacity]) => {
+        if (columnMissing) return
+        const { error } = await (admin as any).schema('inventory').from('tank_monitors')
+          .update({ raw_capacity }).eq('id', id)
+        if (error && !columnMissing) {
+          columnMissing = true
+          console.warn('[SKYBITZ] raw_capacity not written (likely a pending migration):', error.message)
+        }
+      })
     }
 
     // Log the run to the connection-agnostic history table the Inventory
