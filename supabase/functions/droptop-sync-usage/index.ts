@@ -693,7 +693,87 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 5b. Feed on-hands into Month End's count_products, under one dedicated
+    // 5b. Turn today's single-day pull into a real rolling average. When
+    // daysBack < 30 (the routine daily job runs with daysBack:1 to keep the
+    // Droptop API load light — see runDroptopChunked in
+    // data-connection-dispatcher/index.ts), the daily_usage written in step
+    // 5 above is just this call's own short window's total ÷ daysBack — for
+    // a 1-day pull that's literally "today's raw sale total", not a rate,
+    // and it overwrites whatever more-representative value was there before.
+    // Recompute it here from the accumulated day-by-day ledger
+    // (inventory.daily_product_activity, written in step 5a) instead: sum
+    // sold_qty over the trailing 30 days and divide by however many of
+    // those days the ledger actually has data for (min 1, so a
+    // brand-new product doesn't divide by 30 on day one). Needs
+    // logDailyActivity so the ledger this reads is actually being kept
+    // current — without it there's no history to average over, so the
+    // step-5 value (a plain window average, already correct for daysBack
+    // >= 30) is left alone.
+    let rollingUsageApplied = 0
+    if (mode !== 'inventory' && logDailyActivity && daysBack < 30 && allUpsertRows.length > 0) {
+      const windowStart = new Date(endUnix * 1000)
+      windowStart.setUTCDate(windowStart.getUTCDate() - 29)
+      const rollingStartDate = windowStart.toISOString().slice(0, 10)
+      const todayDate = new Date(endUnix * 1000).toISOString().slice(0, 10)
+
+      // The ledger can easily hold more than PostgREST's 1000-row default
+      // cap once locations/products/30 days multiply out, so page through
+      // it explicitly rather than trusting an un-ranged select.
+      const ledgerRows: { location_id: string; product_id: string; activity_date: string; sold_qty: number | null }[] = []
+      {
+        const PAGE = 1000
+        let from = 0
+        for (;;) {
+          const { data: page, error: ledgerErr } = await (admin as any)
+            .schema('inventory').from('daily_product_activity')
+            .select('location_id, product_id, activity_date, sold_qty')
+            .eq('company_id', companyId)
+            .in('location_id', succeededLocIds)
+            .gte('activity_date', rollingStartDate)
+            .range(from, from + PAGE - 1)
+          if (ledgerErr) { console.error('[USAGE-ROLLING] ledger read failed:', ledgerErr.message); break }
+          ledgerRows.push(...(page ?? []))
+          if (!page || page.length < PAGE) break
+          from += PAGE
+        }
+      }
+
+      if (ledgerRows.length) {
+        const agg = new Map<string, { sum: number; minDate: string }>() // key: location_id|lowercased product_id
+        for (const r of ledgerRows) {
+          const key = `${r.location_id}|${String(r.product_id).toLowerCase()}`
+          const sold = Number(r.sold_qty) || 0
+          const entry = agg.get(key)
+          if (!entry) agg.set(key, { sum: sold, minDate: r.activity_date })
+          else {
+            entry.sum += sold
+            if (r.activity_date < entry.minDate) entry.minDate = r.activity_date
+          }
+        }
+        const msPerDay = 86_400_000
+        for (const row of allUpsertRows) {
+          const key = `${row.location_id}|${String(row.product_id).toLowerCase()}`
+          const entry = agg.get(key)
+          if (!entry) continue // no ledger history yet for this product — leave step 5's value as-is
+          const daysTracked = Math.min(30, Math.max(1, Math.round((Date.parse(todayDate) - Date.parse(entry.minDate)) / msPerDay) + 1))
+          const rollingUsage = entry.sum / daysTracked
+          row.daily_usage = rollingUsage
+          row.days_of_supply = rollingUsage > 0 && row.on_hands != null ? (row.on_hands as number) / rollingUsage : null
+          rollingUsageApplied++
+        }
+
+        // Re-upsert with the corrected values — step 5's batch already ran
+        // with the naive per-call figure.
+        for (let i = 0; i < allUpsertRows.length; i += BATCH) {
+          const batch = allUpsertRows.slice(i, i + BATCH)
+          const { error: reupsertErr } = await (admin as any)
+            .schema('inventory').from('product_usage').upsert(batch)
+          if (reupsertErr) console.error('[USAGE-ROLLING] re-upsert with rolling average failed:', reupsertErr.message)
+        }
+      }
+    }
+
+    // 5c. Feed on-hands into Month End's count_products, under one dedicated
     // batch this sync owns per (company, period) — reused across calls
     // rather than one new batch per pull, so re-running "Pull Now" for the
     // same day/period replaces its own contribution instead of stacking a
@@ -810,6 +890,7 @@ Deno.serve(async (req) => {
       operations_synced: operationsSynced,
       products_upserted: productsUpserted,
       ...(logDailyActivity ? { daily_activity_written: dailyActivityWritten } : {}),
+      ...(rollingUsageApplied > 0 ? { rolling_usage_applied: rollingUsageApplied } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
     })
   } catch (err: unknown) {

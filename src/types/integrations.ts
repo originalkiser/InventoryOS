@@ -71,6 +71,10 @@ export type DroptopSyncMode = 'both' | 'inventory' | 'usage' | 'alerts'
 export interface DroptopSyncResult {
   operations_synced: number
   products_upserted: number
+  // Count of product_usage rows whose daily_usage got recomputed as a
+  // rolling average from inventory.daily_product_activity instead of the
+  // raw per-call window total — see droptop-sync-usage's step 5b.
+  rolling_usage_applied?: number
   warnings?: string[]
 }
 

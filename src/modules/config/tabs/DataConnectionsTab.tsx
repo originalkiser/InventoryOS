@@ -114,6 +114,7 @@ export function DataConnectionsTab() {
       } else if (key === 'droptop_usage') {
         const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true }, onProgress)
         summary = `Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`
+          + (r.rolling_usage_applied ? ` (${r.rolling_usage_applied} using a rolling 30-day average)` : '')
       } else if (key === 'droptop_purchase_orders') {
         const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId, onProgress)
         summary = `Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`
@@ -141,6 +142,7 @@ export function DataConnectionsTab() {
   // can be built. A button here (using the app's own already-authenticated
   // client) is more reliable than reconstructing a session token by hand in
   // a pasted console script.
+  //
   // Scoped variant: pass a shop name (or id) to inspect that one location
   // instead of an arbitrary first location, and get back a per-product
   // sale-event breakdown (count, summed qty, resulting daily_usage) — not
@@ -188,6 +190,37 @@ export function DataConnectionsTab() {
       toast.error(err instanceof Error ? err.message : 'Inspect failed')
     } finally {
       setRunning(null)
+    }
+  }
+
+  // One-time historical backfill: the routine daily usage sync runs with
+  // daysBack:1 to keep Droptop API load light, appending one day at a time
+  // to inventory.daily_product_activity — so a rolling 30-day daily_usage
+  // average (droptop-sync-usage's step 5b) only has real 30-day coverage
+  // once 30 daily runs have accumulated. This pulls one real 30-day window
+  // right now and buckets every event by its actual date, backfilling the
+  // ledger's last 30 days in one shot so the rolling average is accurate
+  // immediately instead of ramping up over the next month. Heavier than a
+  // routine daily run (a full 30-day Droptop pull per location) — meant to
+  // be run once, not on a schedule.
+  async function backfillUsageHistory() {
+    if (!companyId) return
+    setRunning('backfill')
+    const store = useSyncTasksStore.getState()
+    store.start(DROPTOP_USAGE_TASK_ID, 'Droptop Usage — 30-day backfill')
+    const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(DROPTOP_USAGE_TASK_ID, p.batch, p.totalBatches)
+    try {
+      const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 30, logDailyActivity: true }, onProgress)
+      const summary = `Backfill complete: ${r.operations_synced} shop(s), ${r.products_upserted} products — 30 days of history now in the ledger`
+      store.finish(DROPTOP_USAGE_TASK_ID, 'success', summary)
+      toast.success(summary)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Backfill failed'
+      store.finish(DROPTOP_USAGE_TASK_ID, 'error', message)
+      toast.error(message, { duration: 12000 })
+    } finally {
+      setRunning(null)
+      load()
     }
   }
 
@@ -288,6 +321,10 @@ export function DataConnectionsTab() {
                         <Button size="sm" variant="secondary" loading={running === 'inspect'} onClick={inspectDroptopUsage}
                           title="Read-only peek at Droptop's raw change-event shape, logged to the browser console — no data written">
                           Inspect
+                        </Button>
+                        <Button size="sm" variant="secondary" loading={running === 'backfill'} onClick={backfillUsageHistory}
+                          title="One-time: pulls a real 30-day window and backfills the daily activity ledger, so the rolling daily_usage average is accurate immediately instead of building up over the next month. Heavier than a routine daily run — run once, not on a schedule.">
+                          Backfill 30 Days
                         </Button>
                       </>
                     )}

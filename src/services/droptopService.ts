@@ -58,6 +58,7 @@ async function invokeSync(body: Record<string, unknown>): Promise<DroptopSyncRes
   return {
     operations_synced: data.operations_synced ?? 0,
     products_upserted: data.products_upserted ?? 0,
+    ...(data.rolling_usage_applied ? { rolling_usage_applied: data.rolling_usage_applied as number } : {}),
     ...(data.warnings ? { warnings: data.warnings as string[] } : {}),
   }
 }
@@ -101,6 +102,7 @@ export async function runDroptopSync(
 
   let operationsSynced = 0
   let productsUpserted = 0
+  let rollingUsageApplied = 0
   const warnings: string[] = []
 
   for (let i = 0; i < batches.length; i++) {
@@ -109,6 +111,7 @@ export async function runDroptopSync(
       const result = await invokeSync({ mode, daysBack, categories, locationIds: batches[i], writeToCountProducts, countMonth, logDailyActivity })
       operationsSynced += result.operations_synced
       productsUpserted += result.products_upserted
+      rollingUsageApplied += result.rolling_usage_applied ?? 0
       if (result.warnings?.length) warnings.push(...result.warnings)
     } catch (err) {
       warnings.push(`Batch ${i + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`)
@@ -121,6 +124,7 @@ export async function runDroptopSync(
   return {
     operations_synced: operationsSynced,
     products_upserted: productsUpserted,
+    ...(rollingUsageApplied ? { rolling_usage_applied: rollingUsageApplied } : {}),
     ...(warnings.length ? { warnings } : {}),
   }
 }
