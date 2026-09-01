@@ -19,10 +19,17 @@ export function isRealShopLocation(l: Pick<Location, 'name'>): boolean {
 // plus access to each location's custom metadata for cross-section linking.
 // Also consults the POS location map so uploads whose location value is a POS
 // string ("001 - Thomasville") resolve to the right location.
-export function useLocations() {
+//
+// `surface` controls whether franchise (non-Corporate-owner) locations are
+// excluded by default — 'inventory' (default, matches every existing call
+// site unchanged) excludes them unless the user has set their own Owner
+// rule; 'other' (Customer Heatmap, Droptop Orders, and other
+// non-operational surfaces) includes them by default instead. See
+// useLocationExclusions' own comment for the full reasoning.
+export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { isExcluded } = useLocationExclusions()
+  const { isExcluded } = useLocationExclusions(surface)
   const [locations, setLocations] = useState<Location[]>([])
   const [posMaps, setPosMaps] = useState<PosLocationMap[]>([])
 

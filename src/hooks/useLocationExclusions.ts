@@ -15,16 +15,29 @@ export interface ExclusionRule {
   mode?: 'exclude' | 'only'
 }
 
-// Applied to every user unless they configure their own Owner rule: only
-// Corporate-owned locations are shown (franchise/other owners are hidden).
+// Applied on 'inventory'-surface pages unless the user configures their own
+// Owner rule: only Corporate-owned locations are shown (franchise/other
+// owners hidden). Non-inventory surfaces (Customer Heatmap, Droptop
+// Orders, and future non-operational pages) default to including
+// franchise instead — Inventory-side workflows (exception reporting, tank
+// monitors, location lookup, etc.) are the ones franchise shouldn't
+// silently get pulled into unless a user explicitly opts in, per explicit
+// product decision 2026-09-01.
 export const DEFAULT_OWNER_RULE: ExclusionRule = { field: 'meta:owner', values: ['Corporate'], mode: 'only' }
 
 const isOwnerField = (field: string) => (field.startsWith('meta:') ? field.slice(5) : field) === 'owner'
 
-// The user's rules, plus the default Corporate-owner rule when they haven't set
-// an Owner rule of their own.
-export function effectiveRules(rules: ExclusionRule[]): ExclusionRule[] {
-  return rules.some((r) => isOwnerField(r.field)) ? rules : [...rules, DEFAULT_OWNER_RULE]
+// 'inventory' (default — matches every existing call site unchanged) applies
+// DEFAULT_OWNER_RULE when the user hasn't set their own Owner rule. 'other'
+// skips that default entirely, so franchise shows unless the user has
+// explicitly set an Owner rule of their own (same override mechanism
+// either way — a user's own Owner rule, once set via the existing
+// exclusions UI, applies globally across every surface, not per-surface;
+// it's a single reversible "my Owner preference" setting, not a
+// surface-scoped one).
+export function effectiveRules(rules: ExclusionRule[], surface: 'inventory' | 'other' = 'inventory'): ExclusionRule[] {
+  if (rules.some((r) => isOwnerField(r.field))) return rules
+  return surface === 'inventory' ? [...rules, DEFAULT_OWNER_RULE] : rules
 }
 
 // Columns a user may exclude on. Base columns read straight off the row;
@@ -93,7 +106,7 @@ const useExclusionStore = create<ExclusionStore>((set) => ({
   },
 }))
 
-export function useLocationExclusions() {
+export function useLocationExclusions(surface: 'inventory' | 'other' = 'inventory') {
   const { user } = useAuthStore()
   const rules = useExclusionStore((s) => s.rules)
   const loadedFor = useExclusionStore((s) => s.loadedFor)
@@ -109,7 +122,7 @@ export function useLocationExclusions() {
   }, [user?.id, save])
 
   const isExcluded = useCallback((loc: Location): boolean => {
-    for (const rule of effectiveRules(rules)) {
+    for (const rule of effectiveRules(rules, surface)) {
       if (!rule.values?.length) continue
       const v = locExclusionValue(loc, rule.field).trim().toLowerCase()
       const inList = rule.values.some((rv) => rv.trim().toLowerCase() === v)
@@ -117,7 +130,7 @@ export function useLocationExclusions() {
       else if (v && inList) return true                            // exclude these
     }
     return false
-  }, [rules])
+  }, [rules, surface])
 
   const filterLocations = useCallback(<T extends Location>(locs: T[]): T[] => locs.filter((l) => !isExcluded(l)), [isExcluded])
 

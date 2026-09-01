@@ -85,7 +85,9 @@ async function fetchByOrderIds<T>(table: string, orderIds: string[], select: str
 export function DroptopOrdersPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const loc = useLocations()
+  // 'other' surface — franchise shops included by default here (unlike
+  // Inventory-side pages), per explicit product decision 2026-09-01.
+  const loc = useLocations('other')
   const earliestDate = useEarliestOrderDate(companyId)
   const { period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, range } = useDateRangePeriod('droptop-orders:period', 'last_week')
 
