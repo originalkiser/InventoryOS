@@ -19,6 +19,29 @@ import {
 } from '@/stores/syncTasksStore'
 import toast from 'react-hot-toast'
 
+// Exact match first, then substring fallback — a plain ilike substring
+// search on a numeric shop code ("55") also matches unrelated shops that
+// merely contain that code as a substring ("155"), and with no explicit
+// ordering .limit(1) can silently pick either one. This is what made
+// Inspect/Test One Shop look "broken" (returning 0 orders) when they'd
+// actually resolved to the wrong shop entirely. Ambiguous substring
+// matches are surfaced as an error instead of guessed at.
+async function resolveShopLocation(sb: any, companyId: string, query: string): Promise<{ id: string; name: string }> {
+  const trimmed = query.trim()
+  const { data: exact, error: exactErr } = await sb.schema('core').from('locations')
+    .select('id, name').eq('company_id', companyId).eq('name', trimmed).maybeSingle()
+  if (exactErr) throw new Error(exactErr.message)
+  if (exact) return exact
+  const { data: matches, error: likeErr } = await sb.schema('core').from('locations')
+    .select('id, name').eq('company_id', companyId).ilike('name', `%${trimmed}%`).order('name').limit(5)
+  if (likeErr) throw new Error(likeErr.message)
+  if (!matches?.length) throw new Error(`No location matching "${trimmed}"`)
+  if (matches.length > 1) {
+    throw new Error(`"${trimmed}" matches multiple shops (${matches.map((m: { name: string }) => m.name).join(', ')}) — type the exact shop number`)
+  }
+  return matches[0]
+}
+
 const TASK_ID_FOR: Record<string, string> = {
   skybitz_tanks: SKYBITZ_TANKS_TASK_ID,
   droptop_on_hand: DROPTOP_ON_HAND_TASK_ID,
@@ -216,20 +239,13 @@ export function DataConnectionsTab() {
   // dumps every raw matching change event, for spotting duplicates or an
   // unexpected change_type by eye.
   async function inspectDroptopUsage() {
+    if (!companyId) return
     setRunning('inspect')
     try {
       let locationId: string | undefined
       const shopQuery = inspectShop.trim()
       if (shopQuery) {
-        const sb = supabase as any
-        const { data: loc, error: locErr } = await sb.schema('core').from('locations')
-          .select('id, name')
-          .eq('company_id', companyId)
-          .ilike('name', `%${shopQuery}%`)
-          .limit(1)
-          .maybeSingle()
-        if (locErr) throw new Error(locErr.message)
-        if (!loc) throw new Error(`No location matching "${shopQuery}"`)
+        const loc = await resolveShopLocation(supabase, companyId, shopQuery)
         locationId = loc.id
       }
       const productId = inspectProductId.trim() || undefined
@@ -301,12 +317,7 @@ export function DataConnectionsTab() {
     const store = useSyncTasksStore.getState()
     store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — test (${testOrderShop.trim()})`)
     try {
-      const sb = supabase as any
-      const { data: loc, error: locErr } = await sb.schema('core').from('locations')
-        .select('id, name').eq('company_id', companyId)
-        .ilike('name', `%${testOrderShop.trim()}%`).limit(1).maybeSingle()
-      if (locErr) throw new Error(locErr.message)
-      if (!loc) throw new Error(`No location matching "${testOrderShop.trim()}"`)
+      const loc = await resolveShopLocation(supabase, companyId, testOrderShop.trim())
       const startedAt = Date.now()
       const { data, error } = await supabase.functions.invoke('droptop-sync-orders', {
         body: { mode: 'sync', daysBack: 30, locationId: loc.id },
@@ -350,14 +361,9 @@ export function DataConnectionsTab() {
     if (!companyId || !inspectOrdersShop.trim()) return
     setRunning('inspect-orders')
     try {
-      const sb = supabase as any
-      const { data: loc, error: locErr } = await sb.schema('core').from('locations')
-        .select('id, name').eq('company_id', companyId)
-        .ilike('name', `%${inspectOrdersShop.trim()}%`).limit(1).maybeSingle()
-      if (locErr) throw new Error(locErr.message)
-      if (!loc) throw new Error(`No location matching "${inspectOrdersShop.trim()}"`)
+      const loc = await resolveShopLocation(supabase, companyId, inspectOrdersShop.trim())
       const { data, error } = await supabase.functions.invoke('droptop-sync-orders', {
-        body: { mode: 'inspect', locationId: loc.id, daysBack: 30 },
+        body: { mode: 'inspect', locationId: loc.id },
       })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
@@ -365,7 +371,7 @@ export function DataConnectionsTab() {
       // eslint-disable-next-line no-console
       console.log(`Droptop orders inspect — "${loc.name}", raw response:`, raw)
       if (raw.length === 0) {
-        toast(`0 orders for "${loc.name}" in the last 30 days — try a shop known to have recent volume.`, { icon: '⚠️', duration: 10000 })
+        toast(`0 orders for "${loc.name}" in the last 3 days — try a shop known to have very recent volume.`, { icon: '⚠️', duration: 10000 })
         return
       }
       const summary = raw.map((o) => ({
@@ -380,7 +386,7 @@ export function DataConnectionsTab() {
       console.table(summary)
       const anyTopLevel = raw.some((o) => Array.isArray(o.products) && o.products.length > 0)
       toast(
-        `${raw.length} order(s) for "${loc.name}" (last 30 days) — top-level "products" populated on ${anyTopLevel ? 'at least one order' : 'NONE of them'}. Full breakdown logged to the console (F12).`,
+        `${raw.length} order(s) for "${loc.name}" (last 3 days) — top-level "products" populated on ${anyTopLevel ? 'at least one order' : 'NONE of them'}. Full breakdown logged to the console (F12).`,
         { icon: anyTopLevel ? undefined : '🔎', duration: 12000 },
       )
     } catch (err) {
@@ -565,7 +571,7 @@ export function DataConnectionsTab() {
                         </Button>
                         <input
                           value={inspectOrdersShop} onChange={(e) => setInspectOrdersShop(e.target.value)}
-                          placeholder="Shop to inspect" title="Read-only: pulls this shop's last 30 days straight from Droptop's live API, no writes — logs the raw response and a per-order products/services breakdown to the console"
+                          placeholder="Shop to inspect" title="Read-only: pulls this shop's last 3 days straight from Droptop's live API, no writes — logs the raw response and a per-order products/services breakdown to the console"
                           className={`${fieldCls} w-28`}
                         />
                         <Button size="sm" variant="secondary" loading={running === 'inspect-orders'} disabled={!inspectOrdersShop.trim()} onClick={inspectDroptopOrders}>
