@@ -23,7 +23,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
-import { Card, CardBody, Input, MultiSelectDropdown, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, Input, MultiSelectDropdown, SbLoader } from '@/components/ui'
 
 interface OrderRow {
   id: string
@@ -103,6 +103,15 @@ export function DroptopOrdersPage() {
 
   useEffect(() => {
     if (!companyId) return
+    // Require at least one shop — an unscoped company-wide pull for a date
+    // range (all locations, no filter) is the slow/laggy path the shop
+    // filter exists to avoid; default to showing nothing rather than
+    // attempting it automatically on every page load or period change.
+    if (!shopIds.length) {
+      setOrders([]); setPackages([]); setProducts([]); setServices([])
+      setLoading(false); setError(null)
+      return
+    }
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -111,25 +120,30 @@ export function DroptopOrdersPage() {
     const endIso = `${range.end}T23:59:59.999Z`
 
     async function run() {
-      // Keyset pagination by id, not OFFSET — same fix already applied
-      // elsewhere this session for the same reason.
+      // Keyset pagination by (order_finalized_at, id), not plain id — a
+      // cursor ordered by id while filtering on order_finalized_at can't
+      // use an index to seek to the matching date range (see
+      // 20260907_droptop_orders_date_index.sql), which is what made a
+      // narrow custom range time out even though a wide one loaded fine.
       const PAGE = 1000
       const allOrders: OrderRow[] = []
-      let cursor: string | null = null
+      let cursor: { date: string; id: string } | null = null
       for (;;) {
         let q = sb.schema('inventory').from('droptop_orders')
           .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at')
           .eq('company_id', companyId)
           .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+          .order('order_finalized_at', { ascending: true })
           .order('id', { ascending: true }).limit(PAGE)
         if (shopIds.length) q = q.in('location_id', shopIds)
-        if (cursor) q = q.gt('id', cursor)
+        if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
         const { data, error: err } = await q
         if (err) throw new Error(err.message)
         const batch = (data ?? []) as OrderRow[]
         allOrders.push(...batch)
         if (batch.length < PAGE) break
-        cursor = batch[batch.length - 1].id
+        const last = batch[batch.length - 1]
+        cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
       }
       if (cancelled) return
 
@@ -218,6 +232,19 @@ export function DroptopOrdersPage() {
 
   const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
 
+  // Paginated for render — the underlying filtered set can be tens of
+  // thousands of rows (a busy shop over a wide range), and rendering all of
+  // them into the DOM at once is what was making the page laggy after load,
+  // separately from how long the initial query itself took.
+  const ORDERS_PAGE_SIZE = 100
+  const [ordersPage, setOrdersPage] = useState(0)
+  useEffect(() => { setOrdersPage(0) }, [filteredOrders])
+  const totalOrderPages = Math.max(1, Math.ceil(filteredOrders.length / ORDERS_PAGE_SIZE))
+  const pagedOrders = useMemo(
+    () => filteredOrders.slice(ordersPage * ORDERS_PAGE_SIZE, (ordersPage + 1) * ORDERS_PAGE_SIZE),
+    [filteredOrders, ordersPage],
+  )
+
   // package_id -> display name, built globally (Droptop's package_id is a
   // stable identifier across every order it appears on, so one lookup
   // covers the whole loaded set rather than needing to search per-order).
@@ -299,7 +326,14 @@ export function DroptopOrdersPage() {
         <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{error}</p>
       )}
 
-      {loading ? (
+      {!shopIds.length ? (
+        <Card><CardBody>
+          <p className="text-xs font-mono text-inky/60">
+            Select at least one shop above to load orders — an unscoped pull across every shop for a date range is
+            slow and disabled by default.
+          </p>
+        </CardBody></Card>
+      ) : loading ? (
         <div className="py-16"><SbLoader /></div>
       ) : (
         <>
@@ -354,10 +388,22 @@ export function DroptopOrdersPage() {
             </CardBody>
           </Card>
 
-          {/* Orders table */}
+          {/* Orders table — paginated client-side; rendering the full
+              filtered set (can be tens of thousands of rows) at once was
+              what made the page laggy after loading, separately from load
+              time itself. */}
           <Card>
             <CardBody className="flex flex-col gap-2">
-              <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length})</span>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length.toLocaleString()})</span>
+                {filteredOrders.length > ORDERS_PAGE_SIZE && (
+                  <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
+                    <Button size="sm" variant="secondary" disabled={ordersPage === 0} onClick={() => setOrdersPage((p) => Math.max(0, p - 1))}>Prev</Button>
+                    <span>Page {ordersPage + 1} of {totalOrderPages}</span>
+                    <Button size="sm" variant="secondary" disabled={ordersPage >= totalOrderPages - 1} onClick={() => setOrdersPage((p) => Math.min(totalOrderPages - 1, p + 1))}>Next</Button>
+                  </div>
+                )}
+              </div>
               {filteredOrders.length === 0 ? (
                 <p className="text-xs font-mono text-inky/60">No orders match these filters.</p>
               ) : (
@@ -376,7 +422,7 @@ export function DroptopOrdersPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredOrders.map((o) => (
+                      {pagedOrders.map((o) => (
                         <tr key={o.id} className="border-b border-navy/10">
                           <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
                           <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>

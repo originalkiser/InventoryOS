@@ -12,7 +12,7 @@
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
 // areas customers cluster in, not a pin-per-order map.
 import { useEffect, useMemo, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Marker, Tooltip, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '@/lib/supabase'
@@ -23,6 +23,7 @@ import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { Card, CardBody, MultiSelectDropdown, Modal, SbLoader } from '@/components/ui'
+import { getMarketSolidColor } from '@/lib/marketColors'
 
 interface OrderRow {
   id: string
@@ -80,19 +81,29 @@ function styleFor(count: number, bp: DensityBreakpoints, zoom: number): { radius
   return { radius, color: '#4F7489', fill: '#B7E0DE' } // bottom half
 }
 
-// Store-location pin — visually distinct (teardrop, not a circle) from the
+// Store-location pin — visually distinct (teardrop, not a circle, per
+// explicit request — Map & Routes' own round pins stay there) from the
 // customer-density CircleMarkers so a shop's own marker doesn't get lost
-// among or mistaken for a zip cluster right on top of it.
-const shopPinIcon = L.divIcon({
-  className: 'shop-pin-marker',
-  html: '<svg width="22" height="30" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">'
-    + '<path d="M11 0C4.9 0 0 4.9 0 11c0 8.25 11 19 11 19s11-10.75 11-19C22 4.9 17.1 0 11 0z" fill="#002745" stroke="#F2F1E6" stroke-width="1.5"/>'
-    + '<circle cx="11" cy="11" r="4.5" fill="#B7E0DE"/>'
-    + '</svg>',
-  iconSize: [22, 30],
-  iconAnchor: [11, 30], // tip points at the actual coordinate
-  tooltipAnchor: [0, -26],
-})
+// among or mistaken for a zip cluster right on top of it. Color is by
+// market (getMarketSolidColor, shared with Map & Routes so a market's
+// color matches across both pages); an optional label shows the shop
+// number above the pin, matching Map & Routes' own "Labels" toggle.
+function makeShopPinIcon(color: string, label: string | null): L.DivIcon {
+  const labelHtml = label
+    ? `<span style="position:absolute;top:-3px;left:50%;transform:translateX(-50%);font-size:10px;font-family:monospace;font-weight:700;color:#002745;background:rgba(242,241,230,0.92);padding:0 3px;border-radius:3px;white-space:nowrap;pointer-events:none;">${label}</span>`
+    : ''
+  return L.divIcon({
+    className: 'shop-pin-marker',
+    html: `<div style="position:relative;width:22px;height:30px;">`
+      + `<svg width="22" height="30" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">`
+      + `<path d="M11 0C4.9 0 0 4.9 0 11c0 8.25 11 19 11 19s11-10.75 11-19C22 4.9 17.1 0 11 0z" fill="${color}" stroke="#F2F1E6" stroke-width="1.5"/>`
+      + `<circle cx="11" cy="11" r="4.5" fill="#B7E0DE"/>`
+      + `</svg>${labelHtml}</div>`,
+    iconSize: [22, 30],
+    iconAnchor: [11, 30], // tip points at the actual coordinate
+    tooltipAnchor: [0, -26],
+  })
+}
 
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const dateShort = (v: string | null) => v ? new Date(v).toLocaleDateString() : '—'
@@ -124,6 +135,14 @@ function ZoomTracker({ onZoom }: { onZoom: (z: number) => void }) {
   return null
 }
 
+// Clicking empty map background deselects the current zip — each zip
+// CircleMarker stops its own click from bubbling here (L.DomEvent.
+// stopPropagation), so this only fires for a genuine "click out".
+function DeselectOnMapClick({ onDeselect }: { onDeselect: () => void }) {
+  useMapEvents({ click: onDeselect })
+  return null
+}
+
 export function CustomerHeatmapPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -141,10 +160,52 @@ export function CustomerHeatmapPage() {
   const [orderModal, setOrderModal] = useState<{ title: string; rows: OrderRow[] } | null>(null)
   const [zoom, setZoom] = useState(5)
 
+  // Pin filters (Market/Region/AM) + Labels toggle — same controls as Map &
+  // Routes, brought over to narrow/label the store pins specifically. These
+  // are separate from the Shop(s) picker above, which scopes the actual
+  // order data query; these only filter which of the resulting pins show.
+  const [showPinLabels, setShowPinLabels] = useState<boolean>(() => {
+    try { return localStorage.getItem('heatmap:pin-labels') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:pin-labels', showPinLabels ? '1' : '0') } catch { /* ignore */ }
+  }, [showPinLabels])
+  const [filterRegions, setFilterRegions] = useState<string[]>([])
+  const [filterMarkets, setFilterMarkets] = useState<string[]>([])
+  const [filterAMs, setFilterAMs] = useState<string[]>([])
+
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
   const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
   const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
+
+  // Company-wide market list (not just the currently-visible shops) so a
+  // market's color-by-index stays the same regardless of what's filtered —
+  // matching Map & Routes' own allMarkets, which is what makes the colors
+  // consistent between the two pages.
+  const allMarkets = useMemo(() => {
+    const s = new Set(loc.locations.map((l) => loc.fieldValue(l.id, 'market')).filter(Boolean))
+    return [...s].sort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations])
+
+  const regionOptions = useMemo(
+    () => [...new Set(loc.locations.map((l) => l.region ?? '').filter(Boolean))].sort().map((v) => ({ value: v })),
+    [loc.locations],
+  )
+  const marketOptions = useMemo(() => {
+    let r = loc.locations
+    if (filterRegions.length) r = r.filter((l) => filterRegions.includes(l.region ?? ''))
+    return [...new Set(r.map((l) => loc.fieldValue(l.id, 'market')).filter(Boolean))].sort().map((v) => ({ value: v }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations, filterRegions])
+  const amOptions = useMemo(() => {
+    let r = loc.locations
+    if (filterRegions.length) r = r.filter((l) => filterRegions.includes(l.region ?? ''))
+    if (filterMarkets.length) r = r.filter((l) => filterMarkets.includes(loc.fieldValue(l.id, 'market')))
+    return [...new Set(r.map((l) => loc.fieldValue(l.id, 'area_manager')).filter(Boolean))].sort().map((v) => ({ value: v }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations, filterRegions, filterMarkets])
 
   useEffect(() => {
     if (!companyId) return
@@ -157,28 +218,33 @@ export function CustomerHeatmapPage() {
     const endIso = `${range.end}T23:59:59.999Z`
 
     async function run() {
-      // Keyset pagination, not OFFSET — same fix already applied to
-      // ProductUsageTab.tsx/useConfigTab.ts for the same reason. Loads
+      // Keyset pagination by (order_finalized_at, id), not plain id — a
+      // cursor ordered by id while filtering on order_finalized_at can't use
+      // an index to seek to the matching date range (see
+      // 20260907_droptop_orders_date_index.sql), which is what made a narrow
+      // custom range time out even though a wide one loaded fine. Loads
       // every order in range/shop scope, mapped or not — the "Not On Map"
       // card/modal needs the unmapped ones too, so there's no separate
       // count-only query anymore; everything comes from one load.
       const PAGE = 1000
       const all: OrderRow[] = []
-      let cursor: string | null = null
+      let cursor: { date: string; id: string } | null = null
       for (;;) {
         let q = sb.schema('inventory').from('droptop_orders')
           .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, final_price, order_finalized_at')
           .eq('company_id', companyId)
           .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+          .order('order_finalized_at', { ascending: true })
           .order('id', { ascending: true }).limit(PAGE)
         if (shopIds.length) q = q.in('location_id', shopIds)
-        if (cursor) q = q.gt('id', cursor)
+        if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
         const { data, error: err } = await q
         if (err) { if (!cancelled) setError(err.message); break }
         const batch = (data ?? []) as OrderRow[]
         all.push(...batch)
         if (batch.length < PAGE) break
-        cursor = batch[batch.length - 1].id
+        const last = batch[batch.length - 1]
+        cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
       }
       if (cancelled) return
       setRows(all)
@@ -231,19 +297,26 @@ export function CustomerHeatmapPage() {
 
   // Store pins — one per shop that actually has orders in this view (not
   // every shop company-wide, which would clutter the map with locations
-  // unrelated to what's currently being looked at). core.locations'
-  // latitude/longitude (the shop's own geocoded address, maintained on the
-  // Map Routes tab) is what places these — a different coordinate source
-  // than the zip-centroid lat/lng the customer clusters use.
+  // unrelated to what's currently being looked at), further narrowed by the
+  // Region/Market/AM pin filters. core.locations' latitude/longitude (the
+  // shop's own geocoded address, maintained on the Map Routes tab) is what
+  // places these — a different coordinate source than the zip-centroid
+  // lat/lng the customer clusters use. Each pin carries its market's shared
+  // color (getMarketSolidColor, same function/list Map & Routes uses) so
+  // the two pages agree on what color a given market is.
   const shopPins = useMemo(() => {
     const ids = new Set<string>()
     for (const r of rows) if (r.location_id) ids.add(r.location_id)
     return [...ids]
       .map((id) => loc.byId(id))
       .filter((l): l is NonNullable<typeof l> => !!l && l.latitude != null && l.longitude != null)
+      .filter((l) => !filterRegions.length || filterRegions.includes(l.region ?? ''))
+      .filter((l) => !filterMarkets.length || filterMarkets.includes(loc.fieldValue(l.id, 'market')))
+      .filter((l) => !filterAMs.length || filterAMs.includes(loc.fieldValue(l.id, 'area_manager')))
+      .map((l) => ({ loc: l, color: getMarketSolidColor(loc.fieldValue(l.id, 'market'), allMarkets) }))
     // depends on loc.locations (stable across renders), not the loc object
     // itself, which useLocations() recreates every render
-  }, [rows, loc.locations]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, loc.locations, filterRegions, filterMarkets, filterAMs, allMarkets]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Plain OpenStreetMap tiles — see index.css's .map-tiles-dark comment for
   // why (CartoDB's raster basemaps now need a key and are being retired).
@@ -267,7 +340,7 @@ export function CustomerHeatmapPage() {
             onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
           <div className="flex flex-col gap-0.5">
             <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
-            <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
+            <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable align="right" />
           </div>
           {shopIds.length >= 2 && (
             <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
@@ -341,6 +414,30 @@ export function CustomerHeatmapPage() {
             </CardBody></Card>
           ) : (
             <>
+              {/* Pin filters — narrow/label the store pins only (same
+                  controls and shared color function as Map & Routes); the
+                  Shop(s) picker above still scopes the actual order data. */}
+              <div className="flex items-end gap-2 flex-wrap">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
+                  <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Market</span>
+                  <MultiSelectDropdown options={marketOptions} selected={filterMarkets} onChange={setFilterMarkets} placeholder="All Markets" countNoun="markets" searchable />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
+                  <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
+                </div>
+                <button onClick={() => setShowPinLabels((v) => !v)}
+                  className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
+                    showPinLabels ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
+                  title="Show the shop number above each store pin">
+                  Labels
+                </button>
+              </div>
+
               {/* isolate: Leaflet's own panes/controls run up to z-index 1000,
                   but .leaflet-container never sets a z-index on itself, so
                   without a stacking context of its own here those values
@@ -353,8 +450,10 @@ export function CustomerHeatmapPage() {
                   <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
                   <FocusZip target={focusTarget} />
                   <ZoomTracker onZoom={setZoom} />
-                  {shopPins.map((l) => (
-                    <Marker key={l.id} position={[l.latitude as number, l.longitude as number]} icon={shopPinIcon}>
+                  <DeselectOnMapClick onDeselect={() => setSelectedZip(null)} />
+                  {shopPins.map(({ loc: l, color }) => (
+                    <Marker key={l.id} position={[l.latitude as number, l.longitude as number]}
+                      icon={makeShopPinIcon(color, showPinLabels ? l.name : null)}>
                       <Tooltip>
                         <span className="font-mono text-xs font-bold">{l.name} — {l.shop_city ?? ''}</span>
                       </Tooltip>
@@ -368,7 +467,18 @@ export function CustomerHeatmapPage() {
                         center={[c.lat, c.lng]}
                         radius={style.radius}
                         pathOptions={{ color: style.color, fillColor: style.fill, fillOpacity: 0.55, weight: 1.5 }}
-                        eventHandlers={{ click: () => setSelectedZip(c.zip) }}
+                        eventHandlers={{
+                          // stopPropagation so this doesn't also trigger
+                          // DeselectOnMapClick's background-click handler —
+                          // clicking the already-selected circle again toggles
+                          // it off (a second way to "click out" besides
+                          // clicking elsewhere on the map).
+                          click: (e) => { L.DomEvent.stopPropagation(e); setSelectedZip((prev) => (prev === c.zip ? null : c.zip)) },
+                          dblclick: (e) => {
+                            L.DomEvent.stopPropagation(e)
+                            setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })
+                          },
+                        }}
                       >
                         <Tooltip>
                           <span className="font-mono text-xs">
@@ -402,7 +512,7 @@ export function CustomerHeatmapPage() {
                     <path d="M11 0C4.9 0 0 4.9 0 11c0 8.25 11 19 11 19s11-10.75 11-19C22 4.9 17.1 0 11 0z" fill="#002745" />
                     <circle cx="11" cy="11" r="4.5" fill="#B7E0DE" />
                   </svg>
-                  Store location
+                  Store location (colored by market)
                 </span>
                 <span className="ml-auto text-inky/50">Colored by percentile of this range's own zips, not a fixed scale</span>
               </div>
@@ -424,7 +534,11 @@ export function CustomerHeatmapPage() {
                       </thead>
                       <tbody>
                         {clusters.map((c) => (
-                          <tr key={c.zip} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10"
+                          <tr key={c.zip}
+                            className={[
+                              'border-b border-navy/10 cursor-pointer hover:bg-sky/10',
+                              c.zip === selectedZip ? 'bg-sky/20' : '',
+                            ].join(' ')}
                             onClick={() => setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })}>
                             <td className="px-3 py-1.5 text-navy">{c.zip}</td>
                             <td className="px-3 py-1.5 text-navy">{c.city || '—'}</td>
@@ -444,7 +558,7 @@ export function CustomerHeatmapPage() {
       )}
 
       {orderModal && (
-        <Modal open onClose={() => setOrderModal(null)} title={orderModal.title} size="lg">
+        <Modal open onClose={() => setOrderModal(null)} title={orderModal.title} size="2xl">
           <div className="overflow-x-auto rounded border border-navy/30 max-h-[60vh] overflow-y-auto">
             <table className="w-full text-xs font-mono">
               <thead className="sticky top-0 bg-cream">
