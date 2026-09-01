@@ -15,6 +15,25 @@
   filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9) saturate(0.8);
 }
 
+/* Leaflet raster tile seams — a long-standing browser sub-pixel-rounding
+   bug (tiles are positioned with fractional pixel offsets during
+   pan/zoom, leaving a faint gap at each edge) that reads as a visible grid
+   over the map. Oversizing each tile by half a pixel is the standard,
+   widely-used workaround. */
+.leaflet-tile {
+  width: 256.5px !important;
+  height: 256.5px !important;
+}
+
+/* Leaflet's clickable SVG paths (CircleMarker etc.) are focusable and get
+   the browser's default focus ring, which is always a rectangle — wrong
+   shape for a circular marker. Selection is instead shown as an explicit
+   circular ring drawn around the selected marker (see
+   CustomerHeatmapPage.tsx), so the default square outline is suppressed. */
+.leaflet-interactive:focus {
+  outline: none;
+}
+
 /* Shared UI animations (referenced via Tailwind arbitrary animate-[...]). */
 @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
 @keyframes fabRise { from { opacity: 0; transform: translateY(10px) scale(0.9) } to { opacity: 1; transform: translateY(0) scale(1) } }
