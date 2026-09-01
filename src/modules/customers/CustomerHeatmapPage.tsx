@@ -12,7 +12,8 @@
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
 // areas customers cluster in, not a pin-per-order map.
 import { useEffect, useMemo, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Marker, Tooltip, useMap } from 'react-leaflet'
+import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -65,13 +66,33 @@ function densityBreakpoints(counts: number[]): DensityBreakpoints {
   return { median: at(0.5), p80: at(0.8), max: sorted[sorted.length - 1] }
 }
 
-function styleFor(count: number, bp: DensityBreakpoints): { radius: number; color: string; fill: string } {
+// `zoom` grows the base radius the further in the viewer zooms — the pixel
+// radius itself was always zoom-independent (CircleMarker, not Circle), but
+// a fixed handful of pixels reads as "too small to be valuable" once zoomed
+// in far enough to see individual streets, since everything else on the map
+// is now much larger. Capped so it doesn't balloon at max zoom.
+function styleFor(count: number, bp: DensityBreakpoints, zoom: number): { radius: number; color: string; fill: string } {
   const t = bp.max > 0 ? count / bp.max : 0
-  const radius = 4 + Math.sqrt(t) * 22
+  const zoomBoost = Math.min(30, Math.max(0, zoom - 5) * 2.5)
+  const radius = 4 + Math.sqrt(t) * 22 + zoomBoost
   if (count > bp.p80) return { radius, color: '#C0392B', fill: '#C0392B' } // top ~20% of zips
   if (count > bp.median) return { radius, color: '#E67E22', fill: '#E67E22' } // above the middle
   return { radius, color: '#4F7489', fill: '#B7E0DE' } // bottom half
 }
+
+// Store-location pin — visually distinct (teardrop, not a circle) from the
+// customer-density CircleMarkers so a shop's own marker doesn't get lost
+// among or mistaken for a zip cluster right on top of it.
+const shopPinIcon = L.divIcon({
+  className: 'shop-pin-marker',
+  html: '<svg width="22" height="30" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">'
+    + '<path d="M11 0C4.9 0 0 4.9 0 11c0 8.25 11 19 11 19s11-10.75 11-19C22 4.9 17.1 0 11 0z" fill="#002745" stroke="#F2F1E6" stroke-width="1.5"/>'
+    + '<circle cx="11" cy="11" r="4.5" fill="#B7E0DE"/>'
+    + '</svg>',
+  iconSize: [22, 30],
+  iconAnchor: [11, 30], // tip points at the actual coordinate
+  tooltipAnchor: [0, -26],
+})
 
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const dateShort = (v: string | null) => v ? new Date(v).toLocaleDateString() : '—'
@@ -86,6 +107,20 @@ function FocusZip({ target }: { target: ZipCluster | null }) {
     if (!target) return
     map.flyTo([target.lat, target.lng], Math.max(map.getZoom(), 9), { duration: 0.6 })
   }, [target, map])
+  return null
+}
+
+// Reports the live zoom level up to the parent (via useState setter) so
+// circle radii can grow with it — same useMap()-in-a-child pattern as
+// FocusZip, since useMap() only works inside MapContainer's own subtree.
+function ZoomTracker({ onZoom }: { onZoom: (z: number) => void }) {
+  const map = useMap()
+  useEffect(() => {
+    onZoom(map.getZoom())
+    const handler = () => onZoom(map.getZoom())
+    map.on('zoomend', handler)
+    return () => { map.off('zoomend', handler) }
+  }, [map, onZoom])
   return null
 }
 
@@ -104,6 +139,7 @@ export function CustomerHeatmapPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedZip, setSelectedZip] = useState<string | null>(null)
   const [orderModal, setOrderModal] = useState<{ title: string; rows: OrderRow[] } | null>(null)
+  const [zoom, setZoom] = useState(5)
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
@@ -192,6 +228,22 @@ export function CustomerHeatmapPage() {
   function ordersForZip(zip: string): OrderRow[] {
     return mappedRows.filter((r) => (r.zip ?? '—') === zip)
   }
+
+  // Store pins — one per shop that actually has orders in this view (not
+  // every shop company-wide, which would clutter the map with locations
+  // unrelated to what's currently being looked at). core.locations'
+  // latitude/longitude (the shop's own geocoded address, maintained on the
+  // Map Routes tab) is what places these — a different coordinate source
+  // than the zip-centroid lat/lng the customer clusters use.
+  const shopPins = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of rows) if (r.location_id) ids.add(r.location_id)
+    return [...ids]
+      .map((id) => loc.byId(id))
+      .filter((l): l is NonNullable<typeof l> => !!l && l.latitude != null && l.longitude != null)
+    // depends on loc.locations (stable across renders), not the loc object
+    // itself, which useLocations() recreates every render
+  }, [rows, loc.locations]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Plain OpenStreetMap tiles — see index.css's .map-tiles-dark comment for
   // why (CartoDB's raster basemaps now need a key and are being retired).
@@ -293,8 +345,16 @@ export function CustomerHeatmapPage() {
                 <MapContainer center={mapCenter} zoom={5} style={{ height: '100%', width: '100%' }}>
                   <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
                   <FocusZip target={focusTarget} />
+                  <ZoomTracker onZoom={setZoom} />
+                  {shopPins.map((l) => (
+                    <Marker key={l.id} position={[l.latitude as number, l.longitude as number]} icon={shopPinIcon}>
+                      <Tooltip>
+                        <span className="font-mono text-xs font-bold">{l.name} — {l.shop_city ?? ''}</span>
+                      </Tooltip>
+                    </Marker>
+                  ))}
                   {clusters.map((c) => {
-                    const style = styleFor(c.count, densityBp)
+                    const style = styleFor(c.count, densityBp, zoom)
                     return (
                       <CircleMarker
                         key={c.zip}
@@ -317,7 +377,7 @@ export function CustomerHeatmapPage() {
                   {focusTarget && (
                     <CircleMarker
                       center={[focusTarget.lat, focusTarget.lng]}
-                      radius={styleFor(focusTarget.count, densityBp).radius + 6}
+                      radius={styleFor(focusTarget.count, densityBp, zoom).radius + 6}
                       pathOptions={{ color: '#002745', weight: 2, dashArray: '4 3', fillOpacity: 0 }}
                       interactive={false}
                     />
@@ -326,10 +386,17 @@ export function CustomerHeatmapPage() {
               </div>
 
               {/* Legend */}
-              <div className="flex items-center gap-4 text-[10px] font-mono text-inky/70">
+              <div className="flex items-center gap-4 text-[10px] font-mono text-inky/70 flex-wrap">
                 <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Bottom half of zips</span>
                 <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Above median</span>
                 <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />Top 20%</span>
+                <span className="flex items-center gap-1.5">
+                  <svg width="11" height="15" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M11 0C4.9 0 0 4.9 0 11c0 8.25 11 19 11 19s11-10.75 11-19C22 4.9 17.1 0 11 0z" fill="#002745" />
+                    <circle cx="11" cy="11" r="4.5" fill="#B7E0DE" />
+                  </svg>
+                  Store location
+                </span>
                 <span className="ml-auto text-inky/50">Colored by percentile of this range's own zips, not a fixed scale</span>
               </div>
 
