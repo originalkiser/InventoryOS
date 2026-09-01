@@ -484,25 +484,61 @@ export function DataConnectionsTab() {
     const store = useSyncTasksStore.getState()
     const labelToId = new Map(backfillOptions.map((o) => [o.label, o.id]))
     const locationIds = orderBackfillShops.map((label) => labelToId.get(label)).filter((id): id is string => !!id)
-    store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — historical backfill (${orderBackfillStart} to ${orderBackfillEnd})`, locationIds.length)
-    const startUnix = Math.floor(new Date(`${orderBackfillStart}T00:00:00.000Z`).getTime() / 1000)
-    const endUnix = Math.floor(new Date(`${orderBackfillEnd}T23:59:59.999Z`).getTime() / 1000)
+
+    // Split into weekly sub-windows per shop rather than one request
+    // covering the whole selected range. Confirmed 2026-09 — a single
+    // 31-day request for an unusually busy shop can push that one edge
+    // function invocation past its execution time limit, returning
+    // "Edge Function returned a non-2xx status code" with ZERO orders
+    // written (not a partial write — the whole invocation dies with no
+    // useful diagnostic, and there's no CLI log access to see why). A
+    // week-sized window bounds each invocation's work regardless of how
+    // busy any one shop turns out to be, and a failed week only costs
+    // that week — not the shop's whole range — so it's cheap to retry.
+    const WINDOW_DAYS = 7
+    const rangeStart = new Date(`${orderBackfillStart}T00:00:00.000Z`)
+    const rangeEnd = new Date(`${orderBackfillEnd}T23:59:59.999Z`)
+    const windows: { startUnix: number; endUnix: number }[] = []
+    for (let winStart = rangeStart; winStart <= rangeEnd; ) {
+      const winEndMs = Math.min(winStart.getTime() + WINDOW_DAYS * 86400_000 - 1, rangeEnd.getTime())
+      windows.push({ startUnix: Math.floor(winStart.getTime() / 1000), endUnix: Math.floor(winEndMs / 1000) })
+      winStart = new Date(winEndMs + 1)
+    }
+
+    const totalSteps = locationIds.length * windows.length
+    store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — historical backfill (${orderBackfillStart} to ${orderBackfillEnd})`, totalSteps)
     let ordersTotal = 0
     const warnings: string[] = []
+    let step = 0
     for (let i = 0; i < locationIds.length; i++) {
-      store.setProgress(DROPTOP_ORDERS_TASK_ID, i + 1, locationIds.length)
-      try {
-        const r = await runDroptopOrderSync(companyId, { startUnix, endUnix, locationId: locationIds[i] })
-        ordersTotal += r.orders_upserted
-        if (r.warnings?.length) warnings.push(...r.warnings)
-      } catch (err) {
-        warnings.push(`${orderBackfillShops[i] ?? locationIds[i]}: ${err instanceof Error ? err.message : String(err)}`)
+      for (const w of windows) {
+        step++
+        store.setProgress(DROPTOP_ORDERS_TASK_ID, step, totalSteps)
+        const wLabel = `${new Date(w.startUnix * 1000).toISOString().slice(0, 10)} to ${new Date(w.endUnix * 1000).toISOString().slice(0, 10)}`
+        try {
+          const r = await runDroptopOrderSync(companyId, { startUnix: w.startUnix, endUnix: w.endUnix, locationId: locationIds[i] })
+          ordersTotal += r.orders_upserted
+          if (r.warnings?.length) warnings.push(...r.warnings)
+        } catch (err) {
+          // One retry on the SAME narrow window before giving up — a
+          // platform-level timeout kill is often a one-off (cold start,
+          // momentary contention), not deterministic, so this alone
+          // resolves a meaningful share of failures without needing an
+          // even narrower re-split.
+          try {
+            const r = await runDroptopOrderSync(companyId, { startUnix: w.startUnix, endUnix: w.endUnix, locationId: locationIds[i] })
+            ordersTotal += r.orders_upserted
+            if (r.warnings?.length) warnings.push(...r.warnings)
+          } catch (err2) {
+            warnings.push(`${orderBackfillShops[i] ?? locationIds[i]} (${wLabel}): ${err2 instanceof Error ? err2.message : String(err2)}`)
+          }
+        }
       }
     }
     const summary = `Backfill: ${ordersTotal} orders across ${locationIds.length} shop(s), ${orderBackfillStart} to ${orderBackfillEnd}`
     if (warnings.length) {
       store.finish(DROPTOP_ORDERS_TASK_ID, 'partial', `${summary} — ${warnings.join(' | ')}`)
-      toast(`${summary} (${warnings.length} shop(s) had issues — see Data Syncs)`, { icon: '⚠️', duration: 12000 })
+      toast(`${summary} (${warnings.length} issue(s) — see Data Syncs)`, { icon: '⚠️', duration: 12000 })
     } else {
       store.finish(DROPTOP_ORDERS_TASK_ID, 'success', summary)
       toast.success(summary)
