@@ -241,7 +241,12 @@ Deno.serve(async (req) => {
         lat: coords?.lat ?? null,
         lng: coords?.lng ?? null,
         status: o.status ?? null,
+        subtotal: o.subtotal != null ? Number(o.subtotal) : null,
         final_price: o.final_price != null ? Number(o.final_price) : null,
+        casual_items: o.casual_items ?? [],
+        coupons: o.coupons ?? [],
+        discounts: o.discounts ?? [],
+        raw_data: o,
         order_finalized_at: tsToIso(o.order_finalized),
         order_scheduled_at: tsToIso(o.order_scheduled_at),
         synced_at: nowIso,
@@ -251,13 +256,98 @@ Deno.serve(async (req) => {
     })
 
     const BATCH = 500
+    // location_id|order_id -> saved row id, filled in as each upsert batch
+    // returns — needed below to attach package/product line items to the
+    // right order via its internal uuid, not Droptop's own order_id.
+    const idByOrderKey = new Map<string, string>()
     for (let i = 0; i < rows.length; i += BATCH) {
       const slice = rows.slice(i, i + BATCH)
-      const { error: upsertErr } = await (admin as any)
+      const { data: saved, error: upsertErr } = await (admin as any)
         .schema('inventory').from('droptop_orders')
         .upsert(slice, { onConflict: 'company_id,location_id,order_id' })
+        .select('id, location_id, order_id')
       if (upsertErr) { warnings.push(`Order batch ${i}-${i + slice.length}: ${upsertErr.message}`); continue }
+      for (const r of (saved ?? []) as { id: string; location_id: string; order_id: string }[]) {
+        idByOrderKey.set(`${r.location_id}|${r.order_id}`, r.id)
+      }
       ordersUpserted += slice.length
+    }
+
+    // Package/product line items — replaced wholesale per synced order
+    // (delete then insert), same pattern as droptop_purchase_order_items.
+    const savedOrderIds = [...idByOrderKey.values()]
+    let packagesWritten = 0
+    let productsWritten = 0
+    if (savedOrderIds.length) {
+      for (let i = 0; i < savedOrderIds.length; i += BATCH) {
+        const slice = savedOrderIds.slice(i, i + BATCH)
+        const [{ error: pkgDelErr }, { error: prodDelErr }] = await Promise.all([
+          (admin as any).schema('inventory').from('droptop_order_packages').delete().in('order_id', slice),
+          (admin as any).schema('inventory').from('droptop_order_products').delete().in('order_id', slice),
+        ])
+        if (pkgDelErr) warnings.push(`Package delete batch ${i}: ${pkgDelErr.message}`)
+        if (prodDelErr) warnings.push(`Product delete batch ${i}: ${prodDelErr.message}`)
+      }
+
+      const packageRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        return (o.packages ?? []).map((p: any) => ({
+          order_id: orderUuid,
+          company_id: companyId,
+          package_id: p.package_id ?? null,
+          name: p.name ?? null,
+          description: p.description ?? null,
+          internal_name: p.internal_name ?? null,
+          base_service_price: p.base_service_price != null ? Number(p.base_service_price) : null,
+          price: p.price != null ? Number(p.price) : null,
+          price_total: p.price_total != null ? Number(p.price_total) : null,
+          price_total_after_discount: p.price_total_aft_discount != null ? Number(p.price_total_aft_discount) : null,
+          vin: p.vin ?? null,
+          license_plate: p.license_plate ?? null,
+          vehicle_name: p.vehicle_name ?? null,
+          financial_category_id: p.financial_category?.financial_category_id ?? null,
+          financial_category_name: p.financial_category?.name ?? null,
+          financial_category_code: p.financial_category?.code ?? null,
+          coupons: p.coupons ?? [],
+        }))
+      })
+      const productRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        return (o.products ?? []).map((pr: any) => ({
+          order_id: orderUuid,
+          company_id: companyId,
+          inventory_id: pr.inventory_id ?? null,
+          product_id: pr.product_id ?? null,
+          sequence_id: pr.sequence_id ?? null,
+          product_type: pr.product_type ?? null,
+          product_type_pcdb_id: pr.product_type_pcdb_id ?? null,
+          brand_name: pr.brand_name ?? null,
+          uom: pr.uom ?? null,
+          restocked: pr.restocked ?? null,
+          quantity_total: pr.quantity_total != null ? Number(pr.quantity_total) : null,
+          price_total: pr.price_total != null ? Number(pr.price_total) : null,
+          cost_total: pr.cost_total != null ? Number(pr.cost_total) : null,
+          quantity_on_hand: pr.quantity_on_hand != null ? Number(pr.quantity_on_hand) : null,
+          financial_category_id: pr.financial_category?.financial_category_id ?? null,
+          financial_category_name: pr.financial_category?.name ?? null,
+          financial_category_code: pr.financial_category?.code ?? null,
+        }))
+      })
+
+      for (let i = 0; i < packageRows.length; i += BATCH) {
+        const slice = packageRows.slice(i, i + BATCH)
+        const { error } = await (admin as any).schema('inventory').from('droptop_order_packages').insert(slice)
+        if (error) warnings.push(`Package insert batch ${i}: ${error.message}`)
+        else packagesWritten += slice.length
+      }
+      for (let i = 0; i < productRows.length; i += BATCH) {
+        const slice = productRows.slice(i, i + BATCH)
+        const { error } = await (admin as any).schema('inventory').from('droptop_order_products').insert(slice)
+        if (error) warnings.push(`Product insert batch ${i}: ${error.message}`)
+        else productsWritten += slice.length
+      }
     }
 
     const withCoords = rows.filter((r) => r.lat != null).length
@@ -281,6 +371,8 @@ Deno.serve(async (req) => {
       orders_upserted: ordersUpserted,
       orders_with_coordinates: withCoords,
       orders_missing_zip_match: ordersUpserted - withCoords,
+      packages_written: packagesWritten,
+      products_written: productsWritten,
       window: { startUnix, endUnix },
       warnings,
     })

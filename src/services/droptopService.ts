@@ -218,6 +218,8 @@ export interface DroptopOrderSyncResult {
   orders_upserted: number
   orders_with_coordinates: number
   orders_missing_zip_match: number
+  packages_written?: number
+  products_written?: number
   warnings?: string[]
 }
 
@@ -252,6 +254,8 @@ export async function runDroptopOrderSync(
   let ordersUpserted = 0
   let withCoords = 0
   let missingZip = 0
+  let packagesWritten = 0
+  let productsWritten = 0
   const warnings: string[] = []
 
   for (let i = 0; i < batches.length; i++) {
@@ -262,6 +266,8 @@ export async function runDroptopOrderSync(
       ordersUpserted += result.orders_upserted
       withCoords += result.orders_with_coordinates
       missingZip += result.orders_missing_zip_match
+      packagesWritten += result.packages_written ?? 0
+      productsWritten += result.products_written ?? 0
       if (result.warnings?.length) warnings.push(...result.warnings)
     } catch (err) {
       warnings.push(`Batch ${i + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`)
@@ -272,6 +278,7 @@ export async function runDroptopOrderSync(
   return {
     locations_synced: locationsSynced, orders_upserted: ordersUpserted,
     orders_with_coordinates: withCoords, orders_missing_zip_match: missingZip,
+    packages_written: packagesWritten, products_written: productsWritten,
     ...(warnings.length ? { warnings } : {}),
   }
 }
