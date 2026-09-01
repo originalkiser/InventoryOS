@@ -46,15 +46,37 @@ interface ZipCluster {
   count: number
 }
 
-// Radius/color scale — same brand palette used everywhere else, just
-// stepped by density so a handful of orders reads very differently from a
-// couple hundred at a glance.
-function styleFor(count: number, max: number): { radius: number; color: string; fill: string } {
-  const t = max > 0 ? count / max : 0
-  const radius = 5 + t * 25
-  if (t > 0.66) return { radius, color: '#C0392B', fill: '#C0392B' }
-  if (t > 0.33) return { radius, color: '#E67E22', fill: '#E67E22' }
-  return { radius, color: '#4F7489', fill: '#B7E0DE' }
+// Radius/color scale — same brand palette used everywhere else. Two fixes
+// over an earlier version that looked "off": real customer geography is
+// heavily skewed (a shop's own zip and its immediate neighbors dominate,
+// then a long tail of 1-2-order zips), which broke a scale based on a
+// fixed fraction of the single max value — almost everything landed in
+// the same "low" bucket since almost nothing gets within 33-66% of
+// whichever zip happens to be the single biggest.
+//   1. Radius scales by sqrt(count/max), not count/max linearly — circle
+//      AREA (not radius) should be proportional to the value for a
+//      graduated-symbol map to read correctly at a glance; linear radius
+//      scaling makes low counts look proportionally far smaller than they
+//      really are relative to the top one.
+//   2. Color buckets are median/80th-percentile of the actual cluster
+//      counts, not fixed fractions of max — robust to a skewed
+//      distribution instead of collapsing everything below the top
+//      handful of zips into one color.
+interface DensityBreakpoints { median: number; p80: number; max: number }
+
+function densityBreakpoints(counts: number[]): DensityBreakpoints {
+  if (!counts.length) return { median: 0, p80: 0, max: 0 }
+  const sorted = [...counts].sort((a, b) => a - b)
+  const at = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]
+  return { median: at(0.5), p80: at(0.8), max: sorted[sorted.length - 1] }
+}
+
+function styleFor(count: number, bp: DensityBreakpoints): { radius: number; color: string; fill: string } {
+  const t = bp.max > 0 ? count / bp.max : 0
+  const radius = 4 + Math.sqrt(t) * 22
+  if (count > bp.p80) return { radius, color: '#C0392B', fill: '#C0392B' } // top ~20% of zips
+  if (count > bp.median) return { radius, color: '#E67E22', fill: '#E67E22' } // above the middle
+  return { radius, color: '#4F7489', fill: '#B7E0DE' } // bottom half
 }
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10)
@@ -148,7 +170,7 @@ export function CustomerHeatmapPage() {
     return [...byZip.values()].sort((a, b) => b.count - a.count)
   }, [rows])
 
-  const maxCount = clusters.length ? clusters[0].count : 0
+  const densityBp = useMemo(() => densityBreakpoints(clusters.map((c) => c.count)), [clusters])
   const mappedCount = rows.length
   const notMapped = Math.max(0, totalOrders - mappedCount)
 
@@ -270,7 +292,7 @@ export function CustomerHeatmapPage() {
             <MapContainer center={mapCenter} zoom={5} style={{ height: '100%', width: '100%' }}>
               <TileLayer url={tileUrl} attribution={tileAttribution} />
               {clusters.map((c) => {
-                const style = styleFor(c.count, maxCount)
+                const style = styleFor(c.count, densityBp)
                 return (
                   <CircleMarker
                     key={c.zip}
@@ -291,11 +313,44 @@ export function CustomerHeatmapPage() {
 
           {/* Legend */}
           <div className="flex items-center gap-4 text-[10px] font-mono text-inky/70">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Low density</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Medium</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />High</span>
-            <span className="ml-auto text-inky/50">Circle size + color both scale with order count per zip</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Bottom half of zips</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Above median</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />Top 20%</span>
+            <span className="ml-auto text-inky/50">Colored by percentile of this range's own zips, not a fixed scale</span>
           </div>
+
+          {/* Visits by zip — the same clusters as the map, as a plain
+              sortable-by-eye table for anyone who wants the numbers
+              directly rather than reading them off circle size/color. */}
+          <Card>
+            <CardBody className="flex flex-col gap-2">
+              <span className="text-xs font-mono text-navy uppercase tracking-wide">Visits by Zip ({clusters.length})</span>
+              <div className="overflow-x-auto rounded border border-navy/30 max-h-96 overflow-y-auto">
+                <table className="w-full text-xs font-mono">
+                  <thead className="sticky top-0 bg-cream">
+                    <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                      <th className="px-3 py-2 text-left">Zip</th>
+                      <th className="px-3 py-2 text-left">City</th>
+                      <th className="px-3 py-2 text-left">Region</th>
+                      <th className="px-3 py-2 text-right">Orders</th>
+                      <th className="px-3 py-2 text-right">% of Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clusters.map((c) => (
+                      <tr key={c.zip} className="border-b border-navy/10">
+                        <td className="px-3 py-1.5 text-navy">{c.zip}</td>
+                        <td className="px-3 py-1.5 text-navy">{c.city || '—'}</td>
+                        <td className="px-3 py-1.5 text-navy">{c.region || '—'}</td>
+                        <td className="px-3 py-1.5 text-navy text-right">{c.count}</td>
+                        <td className="px-3 py-1.5 text-inky/70 text-right">{mappedCount ? ((c.count / mappedCount) * 100).toFixed(1) : '0.0'}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardBody>
+          </Card>
         </>
       )}
     </div>
