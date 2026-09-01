@@ -198,6 +198,11 @@ export function CustomerHeatmapPage() {
   const [matchMode, setMatchMode] = useState<'all' | 'shared'>('all')
   const [rows, setRows] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
+  // Separate from `loading` — that now only gates the FIRST page arriving
+  // (so the map/stats/table appear and are interactive as soon as there's
+  // anything to show); this stays true while later pages keep streaming in
+  // behind it, so the page can say "still loading more" without blocking.
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedZip, setSelectedZip] = useState<string | null>(null)
   const [orderModal, setOrderModal] = useState<{ title: string; rows: OrderRow[] } | null>(null)
@@ -310,6 +315,7 @@ export function CustomerHeatmapPage() {
     if (!companyId) return
     let cancelled = false
     setLoading(true)
+    setLoadingMore(true)
     setError(null)
     setSelectedZip(null)
     const sb = supabase as any
@@ -343,6 +349,17 @@ export function CustomerHeatmapPage() {
       const PAGE = 1000
       const all: OrderRow[] = []
       let cursor: { date: string; id: string } | null = null
+      // Progressive rendering: the map/stats/table update as pages arrive
+      // instead of only once at the very end, so a large company-wide load
+      // is interactive almost immediately rather than staring at a blank
+      // spinner for however long the full load takes. Throttled to roughly
+      // once a second (not once per 1000-row page) — a full month for
+      // every shop is dozens of pages, and re-clustering/re-rendering the
+      // map on every single one would be its own source of jank, exactly
+      // what this is meant to avoid.
+      const FLUSH_INTERVAL_MS = 800
+      let lastFlush = 0
+      let gotFirstPage = false
       for (;;) {
         let q = sb.schema('inventory').from('droptop_orders')
           .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at')
@@ -353,18 +370,27 @@ export function CustomerHeatmapPage() {
         if (shopIds.length) q = q.in('location_id', shopIds)
         if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
         const { data, error: err } = await q
-        if (err) { if (!cancelled) setError(err.message); break }
+        if (err) { if (!cancelled) { setError(err.message); setLoading(false) }; break }
         const batch = (data ?? []) as OrderRow[]
-        all.push(...batch)
+        if (batch.length > 0) {
+          all.push(...batch)
+          const now = Date.now()
+          if (!cancelled && (!gotFirstPage || now - lastFlush > FLUSH_INTERVAL_MS)) {
+            setRows([...all])
+            lastFlush = now
+            if (!gotFirstPage) { setLoading(false); gotFirstPage = true }
+          }
+        }
         if (batch.length === 0) break
         const last = batch[batch.length - 1]
         cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
       }
       if (cancelled) return
-      setRows(all)
-      setLoading(false)
+      if (!gotFirstPage) { setRows([]); setLoading(false) } // genuinely zero orders for this range
+      else setRows([...all]) // final flush — guarantees the throttle never drops the tail end
+      setLoadingMore(false)
     }
-    run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
+    run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false); setLoadingMore(false) } })
     return () => { cancelled = true }
   }, [companyId, shopIds.join(','), range.start, range.end]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -749,6 +775,17 @@ export function CustomerHeatmapPage() {
 
       {error && (
         <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{error}</p>
+      )}
+
+      {/* Non-blocking — the map/stats/table below are already interactive
+          on partial data by the time this shows; it just says more is
+          still streaming in behind what's rendered so counts aren't
+          mistaken for final. */}
+      {!loading && loadingMore && (
+        <p className="flex items-center gap-2 text-[11px] font-mono text-sky border border-sky/30 bg-sky/5 rounded px-2 py-1.5">
+          <span className="inline-block w-2 h-2 rounded-full bg-sky animate-pulse" />
+          Loading more orders — the map and totals below will keep updating as they arrive.
+        </p>
       )}
 
       {loading ? (
