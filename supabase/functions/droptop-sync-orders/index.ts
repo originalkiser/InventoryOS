@@ -273,20 +273,28 @@ Deno.serve(async (req) => {
       ordersUpserted += slice.length
     }
 
-    // Package/product line items — replaced wholesale per synced order
-    // (delete then insert), same pattern as droptop_purchase_order_items.
+    // Package/product/service line items — replaced wholesale per synced
+    // order (delete then insert), same pattern as
+    // droptop_purchase_order_items. services is captured separately from
+    // the top-level products array: it's the only place a product is
+    // linked to the package it was used to perform (package_id + its own
+    // nested products[]) — see droptop_order_services' own migration
+    // comment for why that distinction matters.
     const savedOrderIds = [...idByOrderKey.values()]
     let packagesWritten = 0
     let productsWritten = 0
+    let servicesWritten = 0
     if (savedOrderIds.length) {
       for (let i = 0; i < savedOrderIds.length; i += BATCH) {
         const slice = savedOrderIds.slice(i, i + BATCH)
-        const [{ error: pkgDelErr }, { error: prodDelErr }] = await Promise.all([
+        const [{ error: pkgDelErr }, { error: prodDelErr }, { error: svcDelErr }] = await Promise.all([
           (admin as any).schema('inventory').from('droptop_order_packages').delete().in('order_id', slice),
           (admin as any).schema('inventory').from('droptop_order_products').delete().in('order_id', slice),
+          (admin as any).schema('inventory').from('droptop_order_services').delete().in('order_id', slice),
         ])
         if (pkgDelErr) warnings.push(`Package delete batch ${i}: ${pkgDelErr.message}`)
         if (prodDelErr) warnings.push(`Product delete batch ${i}: ${prodDelErr.message}`)
+        if (svcDelErr) warnings.push(`Service delete batch ${i}: ${svcDelErr.message}`)
       }
 
       const packageRows = allOrders.flatMap(({ o, locationId: locId }) => {
@@ -335,6 +343,21 @@ Deno.serve(async (req) => {
           financial_category_code: pr.financial_category?.code ?? null,
         }))
       })
+      const serviceRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        return (o.services ?? []).map((s: any) => ({
+          order_id: orderUuid,
+          company_id: companyId,
+          package_id: s.package_id ?? null,
+          service_id: s.service_id ?? null,
+          service_name: s.service_name ?? null,
+          vin: s.vin ?? null,
+          license_plate: s.license_plate ?? null,
+          vehicle_name: s.vehicle_name ?? null,
+          products: s.products ?? [],
+        }))
+      })
 
       for (let i = 0; i < packageRows.length; i += BATCH) {
         const slice = packageRows.slice(i, i + BATCH)
@@ -347,6 +370,12 @@ Deno.serve(async (req) => {
         const { error } = await (admin as any).schema('inventory').from('droptop_order_products').insert(slice)
         if (error) warnings.push(`Product insert batch ${i}: ${error.message}`)
         else productsWritten += slice.length
+      }
+      for (let i = 0; i < serviceRows.length; i += BATCH) {
+        const slice = serviceRows.slice(i, i + BATCH)
+        const { error } = await (admin as any).schema('inventory').from('droptop_order_services').insert(slice)
+        if (error) warnings.push(`Service insert batch ${i}: ${error.message}`)
+        else servicesWritten += slice.length
       }
     }
 
@@ -373,6 +402,7 @@ Deno.serve(async (req) => {
       orders_missing_zip_match: ordersUpserted - withCoords,
       packages_written: packagesWritten,
       products_written: productsWritten,
+      services_written: servicesWritten,
       window: { startUnix, endUnix },
       warnings,
     })
