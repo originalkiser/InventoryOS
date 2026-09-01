@@ -4,7 +4,7 @@
 // inventory.data_connection_schedules — a single fixed-cadence pg_cron job
 // (data-connection-dispatcher) checks these rows and fires whatever's due;
 // changing a connection's frequency or time is just a row update here.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -101,6 +101,7 @@ export function DataConnectionsTab() {
   const [orderBackfillShops, setOrderBackfillShops] = useState<string[]>([])
   const [orderBackfillStart, setOrderBackfillStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().slice(0, 10) })
   const [orderBackfillEnd, setOrderBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
+  const [syncedLocationIds, setSyncedLocationIds] = useState<Set<string> | null>(null)
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -129,6 +130,31 @@ export function DataConnectionsTab() {
       })
     return () => { cancelled = true }
   }, [companyId])
+
+  // For the "Select Gap Shops" convenience below — inventory.
+  // droptop_order_sync_state only ever gets a row for a location once it has
+  // at least one order actually synced (see 20260906/20260907b migrations),
+  // so a backfill-eligible location missing from this set has never had a
+  // single order land, ever. One un-paginated fetch is safe here (this
+  // table has one row per location, not per order — nowhere near
+  // PostgREST's 1000-row default cap the way a raw droptop_orders query
+  // would be).
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    const sb = supabase as any
+    sb.schema('inventory').from('droptop_order_sync_state').select('location_id').eq('company_id', companyId)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        setSyncedLocationIds(new Set((data ?? []).map((r: any) => r.location_id)))
+      })
+    return () => { cancelled = true }
+  }, [companyId])
+
+  const gapShopLabels = useMemo(
+    () => syncedLocationIds === null ? [] : backfillOptions.filter((o) => !syncedLocationIds.has(o.id)).map((o) => o.label),
+    [backfillOptions, syncedLocationIds],
+  )
 
   async function saveRow(row: DataConnectionSchedule, patch: Partial<DataConnectionSchedule>) {
     setSaving(row.id)
@@ -708,6 +734,15 @@ export function DataConnectionsTab() {
               Run Backfill
             </Button>
           </div>
+          {gapShopLabels.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap text-[11px] font-mono text-inky/60">
+              <span className="text-[#E67E22]">{gapShopLabels.length} shop(s) have never had a single order synced</span>
+              <Button size="sm" variant="secondary" onClick={() => setOrderBackfillShops(gapShopLabels)}
+                title="Selects every backfill-eligible shop with zero rows in inventory.droptop_orders">
+                Select Gap Shops
+              </Button>
+            </div>
+          )}
         </CardBody>
       </Card>
     </div>
