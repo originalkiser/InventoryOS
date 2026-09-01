@@ -12,7 +12,7 @@
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
 // areas customers cluster in, not a pin-per-order map.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Marker, GeoJSON as GeoJSONLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import * as XLSX from 'xlsx'
@@ -189,6 +189,20 @@ export function CustomerHeatmapPage() {
   const [zoom, setZoom] = useState(5)
   const [zipExportMode, setZipExportMode] = useState<'total' | 'by-shop'>('total')
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
+
+  // Choropleth (actual zip outlines) as a toggleable alternative to the
+  // circle view, not a replacement — persisted like the other view toggles.
+  const [mapViewMode, setMapViewMode] = useState<'circles' | 'choropleth'>(() => {
+    try { return localStorage.getItem('heatmap:view-mode') === 'choropleth' ? 'choropleth' : 'circles' } catch { return 'circles' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:view-mode', mapViewMode) } catch { /* ignore */ }
+  }, [mapViewMode])
+  // zip -> raw GeoJSON geometry (Polygon/MultiPolygon), fetched only in
+  // choropleth mode. A zip missing here (a small fraction of ZCTAs — water/
+  // unpopulated areas have no boundary in the source data) falls back to
+  // its normal circle rather than silently vanishing from the map.
+  const [zipGeometries, setZipGeometries] = useState<Map<string, GeoJSON.Geometry>>(new Map())
 
   // Pin filters (Market/Region/AM) + Labels toggle — same controls as Map &
   // Routes, brought over to narrow/label the store pins specifically. These
@@ -386,6 +400,42 @@ export function CustomerHeatmapPage() {
     if (clusters.length > 0) return [clusters[0].lat, clusters[0].lng]
     return [39.5, -98.35] // continental US fallback
   }, [clusters.length > 0 ? clusters[0].zip : null]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Choropleth boundaries — fetched only in choropleth mode, only for the
+  // zips actually on the map right now (never the whole 31k-zip table).
+  // Chunked .in() the same defensive way as everything else this session,
+  // though a realistic cluster count (hundreds, not tens of thousands)
+  // would never approach the platform's 1000-row response cap here.
+  useEffect(() => {
+    if (mapViewMode !== 'choropleth' || !clusters.length) return
+    let cancelled = false
+    const zips = [...new Set(clusters.map((c) => c.zip))]
+    const sb = supabase as any
+    const CHUNK = 200
+    ;(async () => {
+      const m = new Map<string, GeoJSON.Geometry>()
+      for (let i = 0; i < zips.length; i += CHUNK) {
+        const slice = zips.slice(i, i + CHUNK)
+        const { data, error } = await sb.schema('inventory').from('zip_boundaries').select('zip, geometry').in('zip', slice)
+        if (error) break
+        for (const r of (data ?? []) as { zip: string; geometry: GeoJSON.Geometry }[]) m.set(r.zip, r.geometry)
+      }
+      if (!cancelled) setZipGeometries(m)
+    })()
+    return () => { cancelled = true }
+  }, [mapViewMode, clusters])
+
+  // Stable per-zip Feature object references (react-leaflet's <GeoJSON>
+  // doesn't cleanly re-parse on every render the way a Path's pathOptions
+  // does — building a fresh { type: 'Feature', ... } wrapper inline in the
+  // render loop would hand it a new object identity every render even
+  // when the underlying geometry hasn't changed). Only recomputed when
+  // zipGeometries itself changes, i.e. when a new fetch actually completes.
+  const zipFeatures = useMemo(() => {
+    const m = new Map<string, GeoJSON.Feature>()
+    for (const [zip, geometry] of zipGeometries) m.set(zip, { type: 'Feature', properties: {}, geometry })
+    return m
+  }, [zipGeometries])
 
   // On-screen "By Shop" table — one row per (shop, zip), mirroring the
   // export's grouping (minus avg ticket/packages, which stay export-only).
@@ -691,6 +741,15 @@ export function CustomerHeatmapPage() {
               title="Show the shop number above each store pin">
               Labels
             </button>
+            <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
+              {(['circles', 'choropleth'] as const).map((m) => (
+                <button key={m} onClick={() => setMapViewMode(m)}
+                  className={['px-2 py-1.5 uppercase tracking-wide transition-colors', mapViewMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
+                  title={m === 'circles' ? 'Density circles, sized and colored by order count' : 'Actual zip outlines, colored the same way as the circles'}>
+                  {m === 'circles' ? 'Circles' : 'Choropleth'}
+                </button>
+              ))}
+            </div>
           </div>
 
           {filteredRows.length === 0 ? (
@@ -767,30 +826,51 @@ export function CustomerHeatmapPage() {
                   ))}
                   {clusters.map((c) => {
                     const style = styleFor(c.count, densityBp, zoom)
+                    const feature = mapViewMode === 'choropleth' ? zipFeatures.get(c.zip) : undefined
+                    const eventHandlers = {
+                      // stopPropagation so this doesn't also trigger
+                      // DeselectOnMapClick's background-click handler —
+                      // clicking the already-selected zip again toggles it
+                      // off (a second way to "click out" besides clicking
+                      // elsewhere on the map).
+                      click: (e: L.LeafletMouseEvent) => { L.DomEvent.stopPropagation(e); setSelectedZip((prev) => (prev === c.zip ? null : c.zip)) },
+                      dblclick: (e: L.LeafletMouseEvent) => {
+                        L.DomEvent.stopPropagation(e)
+                        setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })
+                      },
+                    }
+                    const tooltip = (
+                      <Tooltip>
+                        <span className="font-mono text-xs">
+                          {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} order{c.count !== 1 ? 's' : ''}
+                        </span>
+                      </Tooltip>
+                    )
+                    // Choropleth with a real boundary on file — otherwise
+                    // (circles mode, or the small fraction of ZCTAs with no
+                    // boundary in the source data) fall back to the circle
+                    // rather than silently dropping the zip from the map.
+                    if (feature) {
+                      return (
+                        <GeoJSONLayer
+                          key={c.zip}
+                          data={feature}
+                          style={{ color: style.color, fillColor: style.fill, fillOpacity: 0.55, weight: 1.5 }}
+                          eventHandlers={eventHandlers}
+                        >
+                          {tooltip}
+                        </GeoJSONLayer>
+                      )
+                    }
                     return (
                       <CircleMarker
                         key={c.zip}
                         center={[c.lat, c.lng]}
                         radius={style.radius}
                         pathOptions={{ color: style.color, fillColor: style.fill, fillOpacity: 0.55, weight: 1.5 }}
-                        eventHandlers={{
-                          // stopPropagation so this doesn't also trigger
-                          // DeselectOnMapClick's background-click handler —
-                          // clicking the already-selected circle again toggles
-                          // it off (a second way to "click out" besides
-                          // clicking elsewhere on the map).
-                          click: (e) => { L.DomEvent.stopPropagation(e); setSelectedZip((prev) => (prev === c.zip ? null : c.zip)) },
-                          dblclick: (e) => {
-                            L.DomEvent.stopPropagation(e)
-                            setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })
-                          },
-                        }}
+                        eventHandlers={eventHandlers}
                       >
-                        <Tooltip>
-                          <span className="font-mono text-xs">
-                            {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} order{c.count !== 1 ? 's' : ''}
-                          </span>
-                        </Tooltip>
+                        {tooltip}
                       </CircleMarker>
                     )
                   })}
