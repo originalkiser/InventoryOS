@@ -87,9 +87,13 @@ export function DroptopOrdersPage() {
   const { period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, range } = useDateRangePeriod('droptop-orders:period', 'last_week')
 
   const [shopLabels, setShopLabels] = useState<string[]>([])
+  const [loadAllShops, setLoadAllShops] = useState(false)
   const [packageFilters, setPackageFilters] = useState<string[]>([])
   const [productIdFilter, setProductIdFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [filterRegions, setFilterRegions] = useState<string[]>([])
+  const [filterMarkets, setFilterMarkets] = useState<string[]>([])
+  const [filterAMs, setFilterAMs] = useState<string[]>([])
 
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [packages, setPackages] = useState<PackageRow[]>([])
@@ -103,13 +107,47 @@ export function DroptopOrdersPage() {
   const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
   const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
 
+  // Region/Market/AM — same shape as Customer Heatmap's pin filters, but
+  // here they narrow the SELECTED shops (whichever the query already
+  // scoped to, via Shop(s) or Load All), not a separate pin layer. null =
+  // no restriction.
+  const regionOptions = useMemo(
+    () => [...new Set(loc.locations.map((l) => l.region ?? '').filter(Boolean))].sort().map((v) => ({ value: v })),
+    [loc.locations],
+  )
+  const marketOptions = useMemo(() => {
+    let r = loc.locations
+    if (filterRegions.length) r = r.filter((l) => filterRegions.includes(l.region ?? ''))
+    return [...new Set(r.map((l) => loc.fieldValue(l.id, 'market')).filter(Boolean))].sort().map((v) => ({ value: v }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations, filterRegions])
+  const amOptions = useMemo(() => {
+    let r = loc.locations
+    if (filterRegions.length) r = r.filter((l) => filterRegions.includes(l.region ?? ''))
+    if (filterMarkets.length) r = r.filter((l) => filterMarkets.includes(loc.fieldValue(l.id, 'market')))
+    return [...new Set(r.map((l) => loc.fieldValue(l.id, 'area_manager')).filter(Boolean))].sort().map((v) => ({ value: v }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations, filterRegions, filterMarkets])
+  const allowedLocationIds = useMemo(() => {
+    if (!filterRegions.length && !filterMarkets.length && !filterAMs.length) return null
+    const ids = new Set<string>()
+    for (const l of loc.locations) {
+      if (filterRegions.length && !filterRegions.includes(l.region ?? '')) continue
+      if (filterMarkets.length && !filterMarkets.includes(loc.fieldValue(l.id, 'market'))) continue
+      if (filterAMs.length && !filterAMs.includes(loc.fieldValue(l.id, 'area_manager'))) continue
+      ids.add(l.id)
+    }
+    return ids
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations, filterRegions, filterMarkets, filterAMs])
+
   useEffect(() => {
     if (!companyId) return
-    // Require at least one shop — an unscoped company-wide pull for a date
-    // range (all locations, no filter) is the slow/laggy path the shop
-    // filter exists to avoid; default to showing nothing rather than
-    // attempting it automatically on every page load or period change.
-    if (!shopIds.length) {
+    // Require at least one shop OR an explicit "load all" opt-in — an
+    // unscoped company-wide pull for a date range is the slow/laggy path
+    // this gate exists to avoid by default, but it's still available on
+    // request rather than blocked outright.
+    if (!shopIds.length && !loadAllShops) {
       setOrders([]); setPackages([]); setProducts([]); setServices([])
       setLoading(false); setError(null)
       return
@@ -167,7 +205,7 @@ export function DroptopOrdersPage() {
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
-  }, [companyId, range.start, range.end, shopIds.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const packagesByOrder = useMemo(() => {
     const m = new Map<string, PackageRow[]>()
@@ -218,6 +256,7 @@ export function DroptopOrdersPage() {
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase()
     return orders.filter((o) => {
+      if (allowedLocationIds !== null && (!o.location_id || !allowedLocationIds.has(o.location_id))) return false
       if (packageFilters.length && !(packagesByOrder.get(o.id) ?? []).some((p) => p.name && packageFilters.includes(p.name))) return false
       if (productIdFilter) {
         const inTopLevel = (productsByOrder.get(o.id) ?? []).some((p) => p.product_id === productIdFilter)
@@ -230,7 +269,7 @@ export function DroptopOrdersPage() {
       }
       return true
     })
-  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, search, packageFilters, productIdFilter])
+  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, search, packageFilters, productIdFilter, allowedLocationIds])
 
   const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
 
@@ -344,7 +383,21 @@ export function DroptopOrdersPage() {
           onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
-          <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
+          <MultiSelectDropdown options={shopOptions} selected={shopLabels}
+            onChange={(labels) => { setShopLabels(labels); if (labels.length) setLoadAllShops(false) }}
+            placeholder="All Shops" countNoun="shops" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
+          <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Market</span>
+          <MultiSelectDropdown options={marketOptions} selected={filterMarkets} onChange={setFilterMarkets} placeholder="All Markets" countNoun="markets" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
+          <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
         </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Package(s)</span>
@@ -357,6 +410,13 @@ export function DroptopOrdersPage() {
             {allProductIds.map((id) => <option key={id} value={id}>{id}</option>)}
           </select>
         </label>
+        {loadAllShops && (
+          <button onClick={() => setLoadAllShops(false)}
+            className="px-2 py-1.5 rounded border border-[#E67E22]/40 bg-[#E67E22]/10 text-[10px] font-mono uppercase tracking-wide text-[#E67E22] hover:bg-[#E67E22]/20 transition-colors"
+            title="Click to stop loading every shop and go back to requiring a shop selection">
+            Showing All Shops ✕
+          </button>
+        )}
         <label className="flex flex-col gap-0.5 flex-1 min-w-[180px]">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Search</span>
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Order #, customer name, city…" />
@@ -367,12 +427,15 @@ export function DroptopOrdersPage() {
         <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{error}</p>
       )}
 
-      {!shopIds.length ? (
-        <Card><CardBody>
+      {!shopIds.length && !loadAllShops ? (
+        <Card><CardBody className="flex flex-col gap-2">
           <p className="text-xs font-mono text-inky/60">
             Select at least one shop above to load orders — an unscoped pull across every shop for a date range is
             slow and disabled by default.
           </p>
+          <Button size="sm" variant="secondary" className="self-start" onClick={() => setLoadAllShops(true)}>
+            Load All Shops for This Period
+          </Button>
         </CardBody></Card>
       ) : loading ? (
         <div className="py-16"><SbLoader /></div>
