@@ -74,6 +74,7 @@ export function DataConnectionsTab() {
   const [backfillOptions, setBackfillOptions] = useState<{ id: string; label: string }[]>([])
   const [backfillShops, setBackfillShops] = useState<string[]>([])
   const [testOrderShop, setTestOrderShop] = useState('')
+  const [inspectOrdersShop, setInspectOrdersShop] = useState('')
   const [orderBackfillShops, setOrderBackfillShops] = useState<string[]>([])
   const [orderBackfillStart, setOrderBackfillStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().slice(0, 10) })
   const [orderBackfillEnd, setOrderBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
@@ -338,6 +339,53 @@ export function DataConnectionsTab() {
     }
   }
 
+  // Read-only peek at Droptop's raw get-orders response for one shop, no
+  // writes at all (mode:'inspect') — built to settle whether the top-level
+  // "products" array is ever really populated by the LIVE API for this
+  // account, vs. only the already-synced historical raw_data. Logs full raw
+  // JSON to the console and a per-order table (top-level products count vs.
+  // services' own nested products count) so the answer doesn't require
+  // manually reading through raw JSON by eye.
+  async function inspectDroptopOrders() {
+    if (!companyId || !inspectOrdersShop.trim()) return
+    setRunning('inspect-orders')
+    try {
+      const sb = supabase as any
+      const { data: loc, error: locErr } = await sb.schema('core').from('locations')
+        .select('id, name').eq('company_id', companyId)
+        .ilike('name', `%${inspectOrdersShop.trim()}%`).limit(1).maybeSingle()
+      if (locErr) throw new Error(locErr.message)
+      if (!loc) throw new Error(`No location matching "${inspectOrdersShop.trim()}"`)
+      const { data, error } = await supabase.functions.invoke('droptop-sync-orders', {
+        body: { mode: 'inspect', locationId: loc.id, daysBack: 7 },
+      })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      const raw: any[] = Array.isArray(data.raw_response) ? data.raw_response : []
+      // eslint-disable-next-line no-console
+      console.log(`Droptop orders inspect — "${loc.name}", raw response:`, raw)
+      const summary = raw.map((o) => ({
+        order_id: o.order_id,
+        top_level_products: Array.isArray(o.products) ? o.products.length : 'missing field',
+        services: Array.isArray(o.services) ? o.services.length : 'missing field',
+        services_nested_products: Array.isArray(o.services)
+          ? o.services.reduce((n: number, s: any) => n + (Array.isArray(s.products) ? s.products.length : 0), 0)
+          : 0,
+      }))
+      // eslint-disable-next-line no-console
+      console.table(summary)
+      const anyTopLevel = raw.some((o) => Array.isArray(o.products) && o.products.length > 0)
+      toast(
+        `${raw.length} order(s) for "${loc.name}" (last 7 days) — top-level "products" populated on ${anyTopLevel ? 'at least one order' : 'NONE of them'}. Full breakdown logged to the console (F12).`,
+        { icon: anyTopLevel ? undefined : '🔎', duration: 12000 },
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Inspect failed')
+    } finally {
+      setRunning(null)
+    }
+  }
+
   // One-time historical pull for building up real order/pricing history —
   // the routine sync only pulls a rolling 30-day window (light on Droptop's
   // API and this app's database), so anything older than that never gets
@@ -510,6 +558,14 @@ export function DataConnectionsTab() {
                         />
                         <Button size="sm" variant="secondary" loading={running === 'test-orders'} disabled={!testOrderShop.trim()} onClick={testOneShopOrders}>
                           Test One Shop
+                        </Button>
+                        <input
+                          value={inspectOrdersShop} onChange={(e) => setInspectOrdersShop(e.target.value)}
+                          placeholder="Shop to inspect" title="Read-only: pulls this shop's last 7 days straight from Droptop's live API, no writes — logs the raw response and a per-order products/services breakdown to the console"
+                          className={`${fieldCls} w-28`}
+                        />
+                        <Button size="sm" variant="secondary" loading={running === 'inspect-orders'} disabled={!inspectOrdersShop.trim()} onClick={inspectDroptopOrders}>
+                          Inspect
                         </Button>
                       </>
                     )}
