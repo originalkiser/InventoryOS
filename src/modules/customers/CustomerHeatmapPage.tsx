@@ -15,6 +15,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import * as XLSX from 'xlsx'
+import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -22,7 +24,7 @@ import { useDarkMode } from '@/hooks/useDarkMode'
 import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
-import { Card, CardBody, MultiSelectDropdown, Modal, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, MultiSelectDropdown, Modal, SbLoader } from '@/components/ui'
 import { getMarketSolidColor } from '@/lib/marketColors'
 
 interface OrderRow {
@@ -159,6 +161,8 @@ export function CustomerHeatmapPage() {
   const [selectedZip, setSelectedZip] = useState<string | null>(null)
   const [orderModal, setOrderModal] = useState<{ title: string; rows: OrderRow[] } | null>(null)
   const [zoom, setZoom] = useState(5)
+  const [zipExportMode, setZipExportMode] = useState<'total' | 'by-shop'>('total')
+  const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
 
   // Pin filters (Market/Region/AM) + Labels toggle — same controls as Map &
   // Routes, brought over to narrow/label the store pins specifically. These
@@ -254,8 +258,31 @@ export function CustomerHeatmapPage() {
     return () => { cancelled = true }
   }, [companyId, shopIds.join(','), range.start, range.end]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const mappedRows = useMemo(() => rows.filter((r) => r.lat != null && r.lng != null), [rows])
-  const unmappedRows = useMemo(() => rows.filter((r) => r.lat == null || r.lng == null), [rows])
+  // Region/Market/AM pin filters now also scope the heatmap itself (zip
+  // clusters, stats cards, Visits by Zip), not just which pins draw — an
+  // order counts toward the heatmap only if its shop matches the active
+  // filters. null = no restriction (every loaded order counts), matching
+  // how shopPins itself used to filter before this was unified.
+  const allowedLocationIds = useMemo(() => {
+    if (!filterRegions.length && !filterMarkets.length && !filterAMs.length) return null
+    const ids = new Set<string>()
+    for (const l of loc.locations) {
+      if (filterRegions.length && !filterRegions.includes(l.region ?? '')) continue
+      if (filterMarkets.length && !filterMarkets.includes(loc.fieldValue(l.id, 'market'))) continue
+      if (filterAMs.length && !filterAMs.includes(loc.fieldValue(l.id, 'area_manager'))) continue
+      ids.add(l.id)
+    }
+    return ids
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations, filterRegions, filterMarkets, filterAMs])
+
+  const filteredRows = useMemo(
+    () => allowedLocationIds === null ? rows : rows.filter((r) => r.location_id && allowedLocationIds.has(r.location_id)),
+    [rows, allowedLocationIds],
+  )
+
+  const mappedRows = useMemo(() => filteredRows.filter((r) => r.lat != null && r.lng != null), [filteredRows])
+  const unmappedRows = useMemo(() => filteredRows.filter((r) => r.lat == null || r.lng == null), [filteredRows])
 
   const allClusters = useMemo<ZipCluster[]>(() => {
     const byZip = new Map<string, ZipCluster>()
@@ -295,10 +322,89 @@ export function CustomerHeatmapPage() {
     return mappedRows.filter((r) => (r.zip ?? '—') === zip)
   }
 
-  // Store pins — one per shop that actually has orders in this view (not
-  // every shop company-wide, which would clutter the map with locations
-  // unrelated to what's currently being looked at), further narrowed by the
-  // Region/Market/AM pin filters. core.locations' latitude/longitude (the
+  // Visits by Zip export — richer than the on-screen table (which stays a
+  // simple zip aggregate): per (zip) or per (shop, zip) row, includes
+  // average ticket and a count-per-package breakdown. Packages aren't part
+  // of the page's normal query (would mean joining a child table for every
+  // order just to render a map/table that doesn't need it), so they're
+  // fetched only when actually exporting, chunked the same way
+  // DroptopOrdersPage.tsx already does for the same table.
+  async function fetchPackageNamesByOrderIds(orderIds: string[]): Promise<Map<string, string[]>> {
+    const sb = supabase as any
+    const CHUNK = 200
+    const byOrder = new Map<string, string[]>()
+    for (let i = 0; i < orderIds.length; i += CHUNK) {
+      const slice = orderIds.slice(i, i + CHUNK)
+      const { data, error } = await sb.schema('inventory').from('droptop_order_packages').select('order_id, name').in('order_id', slice)
+      if (error) throw new Error(error.message)
+      for (const p of (data ?? []) as { order_id: string; name: string | null }[]) {
+        if (!p.name) continue
+        const arr = byOrder.get(p.order_id) ?? []
+        arr.push(p.name)
+        byOrder.set(p.order_id, arr)
+      }
+    }
+    return byOrder
+  }
+
+  async function exportVisits(format: 'csv' | 'xlsx') {
+    if (!mappedRows.length) { toast.error('Nothing to export for this range'); return }
+    setExporting(format)
+    try {
+      const orderIds = mappedRows.map((r) => r.id)
+      const packagesByOrder = await fetchPackageNamesByOrderIds(orderIds)
+      const allPackageNames = [...new Set([...packagesByOrder.values()].flat())].sort()
+
+      interface Group { shop: string; zip: string; city: string; region: string; count: number; ticketTotal: number; packageCounts: Map<string, number> }
+      const groups = new Map<string, Group>()
+      for (const r of mappedRows) {
+        const shop = zipExportMode === 'by-shop' ? (r.location_id ? idToLabel.get(r.location_id) ?? r.location_id : '—') : ''
+        const key = `${shop}|${r.zip ?? '—'}`
+        let g = groups.get(key)
+        if (!g) { g = { shop, zip: r.zip ?? '—', city: r.city ?? '', region: r.region ?? '', count: 0, ticketTotal: 0, packageCounts: new Map() }; groups.set(key, g) }
+        g.count++
+        g.ticketTotal += r.final_price ?? 0
+        for (const name of packagesByOrder.get(r.id) ?? []) g.packageCounts.set(name, (g.packageCounts.get(name) ?? 0) + 1)
+      }
+      const sorted = [...groups.values()].sort((a, b) => a.shop.localeCompare(b.shop) || b.count - a.count)
+
+      const baseHeaders = zipExportMode === 'by-shop'
+        ? ['Shop', 'Zip', 'City', 'Region', 'Customer Count', 'Avg Ticket']
+        : ['Zip', 'City', 'Region', 'Customer Count', 'Avg Ticket']
+      const headers = [...baseHeaders, ...allPackageNames]
+      const dataRows = sorted.map((g) => {
+        const base = zipExportMode === 'by-shop'
+          ? [g.shop, g.zip, g.city, g.region, g.count, (g.ticketTotal / g.count).toFixed(2)]
+          : [g.zip, g.city, g.region, g.count, (g.ticketTotal / g.count).toFixed(2)]
+        return [...base, ...allPackageNames.map((name) => g.packageCounts.get(name) ?? 0)]
+      })
+
+      const fileBase = `customer-heatmap-visits-${zipExportMode}-${range.start}-to-${range.end}`
+      if (format === 'csv') {
+        const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+        const csv = [headers, ...dataRows].map((r) => r.map(esc).join(',')).join('\n')
+        triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileBase}.csv`)
+      } else {
+        const wb = XLSX.utils.book_new()
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
+        XLSX.utils.book_append_sheet(wb, ws, 'Visits by Zip')
+        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+        triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileBase}.xlsx`)
+      }
+      toast.success('Export downloaded')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  // Store pins — one per shop that actually has orders in this (now
+  // pin-filter-scoped) view, not every shop company-wide. Sourced from
+  // filteredRows rather than re-applying the Region/Market/AM filters here
+  // too — filteredRows already only contains orders from matching shops, so
+  // this stays in sync with the heatmap by construction instead of two
+  // independent filter copies. core.locations' latitude/longitude (the
   // shop's own geocoded address, maintained on the Map Routes tab) is what
   // places these — a different coordinate source than the zip-centroid
   // lat/lng the customer clusters use. Each pin carries its market's shared
@@ -306,17 +412,14 @@ export function CustomerHeatmapPage() {
   // the two pages agree on what color a given market is.
   const shopPins = useMemo(() => {
     const ids = new Set<string>()
-    for (const r of rows) if (r.location_id) ids.add(r.location_id)
+    for (const r of filteredRows) if (r.location_id) ids.add(r.location_id)
     return [...ids]
       .map((id) => loc.byId(id))
       .filter((l): l is NonNullable<typeof l> => !!l && l.latitude != null && l.longitude != null)
-      .filter((l) => !filterRegions.length || filterRegions.includes(l.region ?? ''))
-      .filter((l) => !filterMarkets.length || filterMarkets.includes(loc.fieldValue(l.id, 'market')))
-      .filter((l) => !filterAMs.length || filterAMs.includes(loc.fieldValue(l.id, 'area_manager')))
       .map((l) => ({ loc: l, color: getMarketSolidColor(loc.fieldValue(l.id, 'market'), allMarkets) }))
     // depends on loc.locations (stable across renders), not the loc object
     // itself, which useLocations() recreates every render
-  }, [rows, loc.locations, filterRegions, filterMarkets, filterAMs, allMarkets]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filteredRows, loc.locations, allMarkets]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Plain OpenStreetMap tiles — see index.css's .map-tiles-dark comment for
   // why (CartoDB's raster basemaps now need a key and are being retired).
@@ -371,12 +474,47 @@ export function CustomerHeatmapPage() {
         </CardBody></Card>
       ) : (
         <>
-          <div className="flex gap-3 flex-wrap">
+          {/* Region/Market/AM/Labels — now scope the heatmap itself, not
+              just the pins, so kept visible whenever there's raw data to
+              filter (even if the current combination zeroes out the
+              result) rather than nested inside the "has clusters" branch,
+              which would otherwise strand the user with no way to widen
+              a filter that produced zero matches. */}
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
+              <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Market</span>
+              <MultiSelectDropdown options={marketOptions} selected={filterMarkets} onChange={setFilterMarkets} placeholder="All Markets" countNoun="markets" searchable />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
+              <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
+            </div>
+            <button onClick={() => setShowPinLabels((v) => !v)}
+              className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
+                showPinLabels ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
+              title="Show the shop number above each store pin">
+              Labels
+            </button>
+          </div>
+
+          {filteredRows.length === 0 ? (
+            <Card><CardBody>
+              <p className="text-xs font-mono text-inky/60">
+                No orders match the selected Region/Market/AM filter for this range. Clear a filter above to widen it.
+              </p>
+            </CardBody></Card>
+          ) : (
+            <>
+              <div className="flex gap-3 flex-wrap">
             <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
-              onClick={() => setOrderModal({ title: `Orders (${rows.length})`, rows })}>
+              onClick={() => setOrderModal({ title: `Orders (${filteredRows.length})`, rows: filteredRows })}>
               <CardBody className="py-3">
                 <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Orders</p>
-                <p className="text-lg font-heading font-bold text-navy">{rows.length.toLocaleString()}</p>
+                <p className="text-lg font-heading font-bold text-navy">{filteredRows.length.toLocaleString()}</p>
               </CardBody>
             </Card>
             <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
@@ -414,30 +552,6 @@ export function CustomerHeatmapPage() {
             </CardBody></Card>
           ) : (
             <>
-              {/* Pin filters — narrow/label the store pins only (same
-                  controls and shared color function as Map & Routes); the
-                  Shop(s) picker above still scopes the actual order data. */}
-              <div className="flex items-end gap-2 flex-wrap">
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
-                  <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Market</span>
-                  <MultiSelectDropdown options={marketOptions} selected={filterMarkets} onChange={setFilterMarkets} placeholder="All Markets" countNoun="markets" searchable />
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
-                  <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
-                </div>
-                <button onClick={() => setShowPinLabels((v) => !v)}
-                  className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
-                    showPinLabels ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
-                  title="Show the shop number above each store pin">
-                  Labels
-                </button>
-              </div>
-
               {/* isolate: Leaflet's own panes/controls run up to z-index 1000,
                   but .leaflet-container never sets a z-index on itself, so
                   without a stacking context of its own here those values
@@ -520,7 +634,22 @@ export function CustomerHeatmapPage() {
               {/* Visits by zip — click a row to see its orders. */}
               <Card>
                 <CardBody className="flex flex-col gap-2">
-                  <span className="text-xs font-mono text-navy uppercase tracking-wide">Visits by Zip ({clusters.length})</span>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-mono text-navy uppercase tracking-wide">Visits by Zip ({clusters.length})</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
+                        {(['total', 'by-shop'] as const).map((m) => (
+                          <button key={m} onClick={() => setZipExportMode(m)}
+                            className={['px-2 py-1 uppercase tracking-wide transition-colors', zipExportMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
+                            title={m === 'total' ? 'Export: one row per zip, totaled across shops' : 'Export: one row per shop + zip combination'}>
+                            {m === 'total' ? 'Total by Zip' : 'By Shop'}
+                          </button>
+                        ))}
+                      </div>
+                      <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportVisits('csv')}>Export CSV</Button>
+                      <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportVisits('xlsx')}>Export Excel</Button>
+                    </div>
+                  </div>
                   <div className="overflow-x-auto rounded border border-navy/30 max-h-96 overflow-y-auto">
                     <table className="w-full text-xs font-mono">
                       <thead className="sticky top-0 bg-cream">
@@ -553,6 +682,8 @@ export function CustomerHeatmapPage() {
                 </CardBody>
               </Card>
             </>
+          )}
+        </>
           )}
         </>
       )}
@@ -591,4 +722,12 @@ export function CustomerHeatmapPage() {
       )}
     </div>
   )
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = filename
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
