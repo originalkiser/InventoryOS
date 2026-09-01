@@ -80,6 +80,7 @@ export const ICONS: Record<string, JSX.Element> = {
 
 const SECTION_ICONS: Record<string, JSX.Element> = {
   inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
+  droptop: <MapPin className="w-3.5 h-3.5 flex-shrink-0 text-inky" />,
   'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-[#F2F1E6]/70" />,
   operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-[#E67E22]" />,
   finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-[#2ECC71]" />,
@@ -88,9 +89,14 @@ const SECTION_ICONS: Record<string, JSX.Element> = {
 }
 
 // Subtle per-section tint + colored left accent so the section headers stand
-// apart from each other on the dark sidebar (brand tokens only).
+// apart from each other on the dark sidebar (brand tokens only). Droptop
+// reuses accounting's inky accent — every distinct brand/exception color is
+// already spoken for by the other 6 sections, and inky is the only one not
+// directly adjacent to Droptop's position (between Inventory and
+// Global Config/Operations), so it's the least confusing reuse.
 const SECTION_ACCENT: Record<string, string> = {
   inventory: 'bg-sky/15 border-l-2 border-sky',
+  droptop: 'bg-inky/25 border-l-2 border-inky',
   'global-config': 'bg-[#F2F1E6]/[0.08] border-l-2 border-[#F2F1E6]/40',
   operations: 'bg-[#E67E22]/15 border-l-2 border-[#E67E22]',
   finance: 'bg-[#2ECC71]/15 border-l-2 border-[#2ECC71]',
@@ -124,6 +130,10 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'exception-reporting', label: 'Exception Reporting', to: '/exception-reporting' },
     { key: 'location-comms', label: 'Location Comms', to: '/location-comms' },
   ],
+  droptop: [
+    { key: 'customer-heatmap', label: 'Customer Heatmap', to: '/customer-heatmap' },
+    { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
+  ],
   'global-config': [
     { key: 'global-config', label: 'Global Config', to: '/global-config' },
   ],
@@ -136,13 +146,12 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
   accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
   marketing: [
     { key: 'marketing-planner', label: 'Marketing Planner', to: '/marketing-planner' },
-    { key: 'customer-heatmap', label: 'Customer Heatmap', to: '/customer-heatmap' },
-    { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
   ],
 }
 
 const SECTION_META: Record<string, { label: string }> = {
   inventory: { label: 'Inventory' },
+  droptop: { label: 'Droptop' },
   'global-config': { label: 'Configuration' },
   operations: { label: 'Operations' },
   finance: { label: 'Finance' },
