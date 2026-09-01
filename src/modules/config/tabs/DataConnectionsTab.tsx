@@ -357,13 +357,17 @@ export function DataConnectionsTab() {
       if (locErr) throw new Error(locErr.message)
       if (!loc) throw new Error(`No location matching "${inspectOrdersShop.trim()}"`)
       const { data, error } = await supabase.functions.invoke('droptop-sync-orders', {
-        body: { mode: 'inspect', locationId: loc.id, daysBack: 7 },
+        body: { mode: 'inspect', locationId: loc.id, daysBack: 30 },
       })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
       const raw: any[] = Array.isArray(data.raw_response) ? data.raw_response : []
       // eslint-disable-next-line no-console
       console.log(`Droptop orders inspect — "${loc.name}", raw response:`, raw)
+      if (raw.length === 0) {
+        toast(`0 orders for "${loc.name}" in the last 30 days — try a shop known to have recent volume.`, { icon: '⚠️', duration: 10000 })
+        return
+      }
       const summary = raw.map((o) => ({
         order_id: o.order_id,
         top_level_products: Array.isArray(o.products) ? o.products.length : 'missing field',
@@ -376,7 +380,7 @@ export function DataConnectionsTab() {
       console.table(summary)
       const anyTopLevel = raw.some((o) => Array.isArray(o.products) && o.products.length > 0)
       toast(
-        `${raw.length} order(s) for "${loc.name}" (last 7 days) — top-level "products" populated on ${anyTopLevel ? 'at least one order' : 'NONE of them'}. Full breakdown logged to the console (F12).`,
+        `${raw.length} order(s) for "${loc.name}" (last 30 days) — top-level "products" populated on ${anyTopLevel ? 'at least one order' : 'NONE of them'}. Full breakdown logged to the console (F12).`,
         { icon: anyTopLevel ? undefined : '🔎', duration: 12000 },
       )
     } catch (err) {
@@ -561,7 +565,7 @@ export function DataConnectionsTab() {
                         </Button>
                         <input
                           value={inspectOrdersShop} onChange={(e) => setInspectOrdersShop(e.target.value)}
-                          placeholder="Shop to inspect" title="Read-only: pulls this shop's last 7 days straight from Droptop's live API, no writes — logs the raw response and a per-order products/services breakdown to the console"
+                          placeholder="Shop to inspect" title="Read-only: pulls this shop's last 30 days straight from Droptop's live API, no writes — logs the raw response and a per-order products/services breakdown to the console"
                           className={`${fieldCls} w-28`}
                         />
                         <Button size="sm" variant="secondary" loading={running === 'inspect-orders'} disabled={!inspectOrdersShop.trim()} onClick={inspectDroptopOrders}>
