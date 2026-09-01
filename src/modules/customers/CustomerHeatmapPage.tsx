@@ -341,7 +341,14 @@ export function CustomerHeatmapPage() {
             </CardBody></Card>
           ) : (
             <>
-              <div className="rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
+              {/* isolate: Leaflet's own panes/controls run up to z-index 1000,
+                  but .leaflet-container never sets a z-index on itself, so
+                  without a stacking context of its own here those values
+                  leak out and out-rank the shop dropdown (z-40) and order
+                  modal (z-50) at the page's root stacking level. `isolate`
+                  contains all of Leaflet's internal stacking inside this div
+                  so it can never climb above app UI outside it. */}
+              <div className="isolate rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
                 <MapContainer center={mapCenter} zoom={5} style={{ height: '100%', width: '100%' }}>
                   <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
                   <FocusZip target={focusTarget} />

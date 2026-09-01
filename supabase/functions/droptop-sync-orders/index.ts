@@ -91,6 +91,15 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// 502/503/504 are transient gateway/timeout errors, not a signal that the
+// request itself is invalid (unlike a 4xx) — confirmed happening for real on
+// busy shops (get-orders apparently takes long enough to generate a large
+// response that Droptop's own infrastructure gateway-times-out before it
+// finishes). Worth retrying with backoff the same way 429 already is,
+// rather than failing the whole location on what's often a one-off slow
+// response.
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+
 async function callDroptop(
   endpoint: string, params: Record<string, string>, publicKey: string, privateKey: string, maxRetries = 5,
 ): Promise<any> {
@@ -99,7 +108,7 @@ async function callDroptop(
     const qs = new URLSearchParams({ sig, ...params })
     const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
     const res = await fetch(url, { headers: { 'x-api-key': publicKey.trim() }, redirect: 'follow' })
-    if (res.status === 429 && attempt < maxRetries) {
+    if (RETRYABLE_STATUSES.has(res.status) && attempt < maxRetries) {
       const retryAfterHeader = Number(res.headers.get('retry-after'))
       const waitMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 ? retryAfterHeader * 1000 : 2000 * 2 ** attempt
       await res.text().catch(() => {})
@@ -223,7 +232,15 @@ Deno.serve(async (req) => {
 
     if (mode === 'inspect') {
       const opId = locations[0].droptop_operation_id
-      const params: Record<string, string> = { operation_ids: opId, startUnix: String(startUnix), endUnix: String(Math.min(endUnix, startUnix + MAX_RANGE_SECONDS)) }
+      // Deliberately small and independent of the caller's daysBack — inspect
+      // is a raw-shape peek (does this shop's real payload have products[]
+      // populated?), not exhaustive coverage. A wide window on a genuinely
+      // busy shop (confirmed on shop 55, 1200+ orders/month) makes Droptop's
+      // own get-orders response slow enough to 504 for no benefit here; a
+      // few days is already more than enough orders to inspect.
+      const INSPECT_WINDOW_SECONDS = 3 * 86400
+      const inspectStart = Math.max(startUnix, endUnix - INSPECT_WINDOW_SECONDS)
+      const params: Record<string, string> = { operation_ids: opId, startUnix: String(inspectStart), endUnix: String(endUnix) }
       if (statusTypes) params.statusTypes = statusTypes
       const raw = await callDroptop('get-orders', params, publicKey, privateKey)
       return ok({ success: true, operation_id: opId, raw_response: raw })
