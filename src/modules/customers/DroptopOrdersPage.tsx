@@ -17,6 +17,8 @@
 // search kept coming up empty: most consumed products (oil, filters, etc.)
 // only ever show up inside services, not the flat top-level array.
 import { useEffect, useMemo, useState } from 'react'
+import * as XLSX from 'xlsx'
+import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -286,6 +288,45 @@ export function DroptopOrdersPage() {
     }
   }, [filteredOrders])
 
+  const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
+
+  // Exports the full filtered set (every order matching the current
+  // filters), not just the current page of pagedOrders — pagination is a
+  // rendering concern only, the export should match what "Orders (N)"
+  // above it says, not what's currently scrolled into view.
+  function exportOrders(format: 'csv' | 'xlsx') {
+    if (!filteredOrders.length) { toast.error('Nothing to export for these filters'); return }
+    setExporting(format)
+    try {
+      const headers = ['Order #', 'Shop', 'Customer', 'City', 'Status', 'Packages', 'Total', 'Finalized']
+      const dataRows = filteredOrders.map((o) => [
+        o.order_id,
+        o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—',
+        [o.first_name, o.last_name].filter(Boolean).join(' ') || '—',
+        o.city || '—',
+        o.status || '—',
+        (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—',
+        o.final_price ?? 0,
+        o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—',
+      ])
+      const fileBase = `droptop-orders-${range.start}-to-${range.end}`
+      if (format === 'csv') {
+        const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+        const csv = [headers, ...dataRows].map((r) => r.map(esc).join(',')).join('\n')
+        triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileBase}.csv`)
+      } else {
+        const wb = XLSX.utils.book_new()
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
+        XLSX.utils.book_append_sheet(wb, ws, 'Droptop Orders')
+        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+        triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileBase}.xlsx`)
+      }
+      toast.success('Export downloaded')
+    } finally {
+      setExporting(null)
+    }
+  }
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
@@ -396,13 +437,17 @@ export function DroptopOrdersPage() {
             <CardBody className="flex flex-col gap-2">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length.toLocaleString()})</span>
-                {filteredOrders.length > ORDERS_PAGE_SIZE && (
-                  <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
-                    <Button size="sm" variant="secondary" disabled={ordersPage === 0} onClick={() => setOrdersPage((p) => Math.max(0, p - 1))}>Prev</Button>
-                    <span>Page {ordersPage + 1} of {totalOrderPages}</span>
-                    <Button size="sm" variant="secondary" disabled={ordersPage >= totalOrderPages - 1} onClick={() => setOrdersPage((p) => Math.min(totalOrderPages - 1, p + 1))}>Next</Button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportOrders('csv')}>Export CSV</Button>
+                  <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportOrders('xlsx')}>Export Excel</Button>
+                  {filteredOrders.length > ORDERS_PAGE_SIZE && (
+                    <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
+                      <Button size="sm" variant="secondary" disabled={ordersPage === 0} onClick={() => setOrdersPage((p) => Math.max(0, p - 1))}>Prev</Button>
+                      <span>Page {ordersPage + 1} of {totalOrderPages}</span>
+                      <Button size="sm" variant="secondary" disabled={ordersPage >= totalOrderPages - 1} onClick={() => setOrdersPage((p) => Math.min(totalOrderPages - 1, p + 1))}>Next</Button>
+                    </div>
+                  )}
+                </div>
               </div>
               {filteredOrders.length === 0 ? (
                 <p className="text-xs font-mono text-inky/60">No orders match these filters.</p>
@@ -444,4 +489,12 @@ export function DroptopOrdersPage() {
       )}
     </div>
   )
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = filename
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
