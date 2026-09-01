@@ -74,6 +74,9 @@ export function DataConnectionsTab() {
   const [backfillOptions, setBackfillOptions] = useState<{ id: string; label: string }[]>([])
   const [backfillShops, setBackfillShops] = useState<string[]>([])
   const [testOrderShop, setTestOrderShop] = useState('')
+  const [orderBackfillShops, setOrderBackfillShops] = useState<string[]>([])
+  const [orderBackfillStart, setOrderBackfillStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().slice(0, 10) })
+  const [orderBackfillEnd, setOrderBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -330,6 +333,51 @@ export function DataConnectionsTab() {
     }
   }
 
+  // One-time historical pull for building up real order/pricing history —
+  // the routine sync only pulls a rolling 30-day window (light on Droptop's
+  // API and this app's database), so anything older than that never gets
+  // captured unless something explicitly asks for it. Runs one shop at a
+  // time, sequentially (not chunked into groups) — a wide date range on
+  // even a single shop can already mean many sequential 31-day sub-window
+  // calls internally (get-orders' own per-request cap), so this keeps the
+  // one variable that's actually unbounded (the date range you choose) from
+  // compounding with concurrent shops in the same invocation. If a single
+  // shop's range is too wide to finish in one invocation, narrow the dates
+  // and run it again in smaller pieces — every write here is an upsert, so
+  // that's always safe to do.
+  async function runOrderBackfill() {
+    if (!companyId || !orderBackfillShops.length) return
+    setRunning('order-backfill')
+    const store = useSyncTasksStore.getState()
+    const labelToId = new Map(backfillOptions.map((o) => [o.label, o.id]))
+    const locationIds = orderBackfillShops.map((label) => labelToId.get(label)).filter((id): id is string => !!id)
+    store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — historical backfill (${orderBackfillStart} to ${orderBackfillEnd})`, locationIds.length)
+    const startUnix = Math.floor(new Date(`${orderBackfillStart}T00:00:00.000Z`).getTime() / 1000)
+    const endUnix = Math.floor(new Date(`${orderBackfillEnd}T23:59:59.999Z`).getTime() / 1000)
+    let ordersTotal = 0
+    const warnings: string[] = []
+    for (let i = 0; i < locationIds.length; i++) {
+      store.setProgress(DROPTOP_ORDERS_TASK_ID, i + 1, locationIds.length)
+      try {
+        const r = await runDroptopOrderSync(companyId, { startUnix, endUnix, locationId: locationIds[i] })
+        ordersTotal += r.orders_upserted
+        if (r.warnings?.length) warnings.push(...r.warnings)
+      } catch (err) {
+        warnings.push(`${orderBackfillShops[i] ?? locationIds[i]}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    const summary = `Backfill: ${ordersTotal} orders across ${locationIds.length} shop(s), ${orderBackfillStart} to ${orderBackfillEnd}`
+    if (warnings.length) {
+      store.finish(DROPTOP_ORDERS_TASK_ID, 'partial', `${summary} — ${warnings.join(' | ')}`)
+      toast(`${summary} (${warnings.length} shop(s) had issues — see Data Syncs)`, { icon: '⚠️', duration: 12000 })
+    } else {
+      store.finish(DROPTOP_ORDERS_TASK_ID, 'success', summary)
+      toast.success(summary)
+      setOrderBackfillShops([])
+    }
+    setRunning(null)
+  }
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   if (rows === null) return <div className="py-8"><SbLoader /></div>
 
@@ -507,6 +555,47 @@ export function DataConnectionsTab() {
               />
             </div>
             <Button size="sm" loading={running === 'backfill'} disabled={!backfillShops.length} onClick={runBackfill}>
+              Run Backfill
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Historical Orders Backfill</span>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-3">
+          <p className="text-[11px] font-mono text-inky/60">
+            The routine Droptop Orders sync above only pulls a rolling last-30-days window — enough to keep the
+            Customer Heatmap and Droptop Orders page current, but it won't build a deep pricing/sales history on its
+            own since anything older than 30 days simply isn't in the window it re-pulls each time. This pulls a
+            specific date range once, for the shop(s) you pick. Runs one shop at a time (not chunked) — a wide range
+            on a busy shop can still take a while or need splitting into smaller pieces if it times out; every write
+            here is an upsert, so re-running any part of it is always safe.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Shop(s)</span>
+              <MultiSelectDropdown
+                options={backfillOptions.map((o) => ({ value: o.label }))}
+                selected={orderBackfillShops}
+                onChange={setOrderBackfillShops}
+                placeholder="Select shop(s)…"
+                showAllOption={false}
+                searchable
+                countNoun="shops"
+              />
+            </div>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Start</span>
+              <input type="date" value={orderBackfillStart} max={orderBackfillEnd} onChange={(e) => setOrderBackfillStart(e.target.value)} className={fieldCls} />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">End</span>
+              <input type="date" value={orderBackfillEnd} min={orderBackfillStart} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setOrderBackfillEnd(e.target.value)} className={fieldCls} />
+            </label>
+            <Button size="sm" loading={running === 'order-backfill'} disabled={!orderBackfillShops.length} onClick={runOrderBackfill}>
               Run Backfill
             </Button>
           </div>
