@@ -285,15 +285,21 @@ export function CustomerHeatmapPage() {
       // card/modal needs the unmapped ones too, so there's no separate
       // count-only query anymore; everything comes from one load.
       //
-      // PAGE raised from 1000 (a full-company month, ~140k orders, needed
-      // ~140 sequential round trips at 1000/page — each one individually
-      // fast per EXPLAIN ANALYZE, but the sheer count meant any single one
-      // hitting a moment of connection-pool contention could exceed the
-      // statement timeout). This is safe to raise past 1000 specifically
-      // because every call here already passes an explicit .limit() —
-      // PostgREST's 1000-row default only silently truncates queries with
-      // NO limit/range specified at all (see project memory on that bug).
-      const PAGE = 3000
+      // PAGE was briefly raised to 3000 to cut round trips, but this
+      // Supabase project's API "Max Rows" setting silently caps EVERY
+      // response at 1000 regardless of what .limit() requests — that's a
+      // project-level API setting, not a Postgres GUC, so it didn't show up
+      // in the pg_settings check that (wrongly) cleared raising it. The
+      // real bug this caused wasn't the cap itself, it was the loop's exit
+      // condition (`batch.length < PAGE`) reading "server gave me fewer
+      // than I asked for" as "that's the last page" — with PAGE=3000 and
+      // every response silently capped at 1000, EVERY page looked short,
+      // so the loop stopped after page one. Fixed the exit condition to
+      // only stop on a genuinely EMPTY page (batch.length === 0), which is
+      // correct regardless of whatever the real cap is now or later, and
+      // reverted PAGE to 1000 to match the actual ceiling instead of
+      // requesting more than will ever be honored.
+      const PAGE = 1000
       const all: OrderRow[] = []
       let cursor: { date: string; id: string } | null = null
       for (;;) {
@@ -309,7 +315,7 @@ export function CustomerHeatmapPage() {
         if (err) { if (!cancelled) setError(err.message); break }
         const batch = (data ?? []) as OrderRow[]
         all.push(...batch)
-        if (batch.length < PAGE) break
+        if (batch.length === 0) break
         const last = batch[batch.length - 1]
         cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
       }
@@ -487,21 +493,35 @@ export function CustomerHeatmapPage() {
   // DroptopOrdersPage.tsx already does for the same table.
   async function fetchPackageNamesByOrderIds(orderIds: string[]): Promise<Map<string, string[]>> {
     const sb = supabase as any
-    // Raised from 200 — droptop_order_packages.order_id is indexed, so a
-    // bigger .in() list per round trip cuts total requests (86k orders at
-    // 200/chunk was 430 round trips) without meaningfully slowing any one
-    // of them.
-    const CHUNK = 1000
+    // CHUNK bounds the input (.in() list size); PAGE properly paginates
+    // each chunk's OUTPUT. Chunking input alone isn't enough — this
+    // project's Supabase "Max Rows" API setting silently caps every
+    // response at 1000 regardless of .limit(), and a chunk of order ids
+    // can produce more result rows than input ids (an order can have
+    // multiple packages), so an unpaginated .in() could silently drop
+    // rows past 1000 with no error. Same fix as the main orders loop:
+    // keep fetching by (id) cursor until a genuinely empty page.
+    const CHUNK = 200
+    const PAGE = 1000
     const byOrder = new Map<string, string[]>()
     for (let i = 0; i < orderIds.length; i += CHUNK) {
       const slice = orderIds.slice(i, i + CHUNK)
-      const { data, error } = await sb.schema('inventory').from('droptop_order_packages').select('order_id, name').in('order_id', slice)
-      if (error) throw new Error(error.message)
-      for (const p of (data ?? []) as { order_id: string; name: string | null }[]) {
-        if (!p.name) continue
-        const arr = byOrder.get(p.order_id) ?? []
-        arr.push(p.name)
-        byOrder.set(p.order_id, arr)
+      let cursor: string | null = null
+      for (;;) {
+        let q = sb.schema('inventory').from('droptop_order_packages').select('id, order_id, name')
+          .in('order_id', slice).order('id', { ascending: true }).limit(PAGE)
+        if (cursor) q = q.gt('id', cursor)
+        const { data, error } = await q
+        if (error) throw new Error(error.message)
+        const batch = (data ?? []) as { id: string; order_id: string; name: string | null }[]
+        for (const p of batch) {
+          if (!p.name) continue
+          const arr = byOrder.get(p.order_id) ?? []
+          arr.push(p.name)
+          byOrder.set(p.order_id, arr)
+        }
+        if (batch.length === 0) break
+        cursor = batch[batch.length - 1].id
       }
     }
     return byOrder

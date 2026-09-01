@@ -64,20 +64,33 @@ const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleSt
 const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
-// Fetch rows for a batch of order ids in chunks — avoids one giant .in()
-// URL for a wide date range with a lot of orders. CHUNK raised from 200 —
-// every child table's order_id column is indexed, so a bigger .in() list
-// per round trip cuts total requests substantially at full-company scale
-// without meaningfully slowing any one of them.
+// Fetch rows for a batch of order ids, chunking the input AND paginating
+// each chunk's output. CHUNK alone isn't enough — this project's Supabase
+// "Max Rows" API setting silently caps every response at 1000 regardless
+// of .limit(), and a chunk of order ids can produce more result rows than
+// input ids (an order can have multiple packages/products/services), so
+// an unpaginated .in() could silently drop rows past 1000 with no error.
+// Same fix as the main orders loop: keep fetching by (id) cursor per
+// chunk until a genuinely empty page.
 async function fetchByOrderIds<T>(table: string, orderIds: string[], select: string): Promise<T[]> {
   const sb = supabase as any
-  const CHUNK = 1000
+  const CHUNK = 200
+  const PAGE = 1000
   const out: T[] = []
   for (let i = 0; i < orderIds.length; i += CHUNK) {
     const slice = orderIds.slice(i, i + CHUNK)
-    const { data, error } = await sb.schema('inventory').from(table).select(select).in('order_id', slice)
-    if (error) throw new Error(error.message)
-    out.push(...((data ?? []) as T[]))
+    let cursor: string | null = null
+    for (;;) {
+      let q = sb.schema('inventory').from(table).select(`id, ${select}`)
+        .in('order_id', slice).order('id', { ascending: true }).limit(PAGE)
+      if (cursor) q = q.gt('id', cursor)
+      const { data, error } = await q
+      if (error) throw new Error(error.message)
+      const batch = (data ?? []) as ({ id: string } & T)[]
+      out.push(...batch)
+      if (batch.length === 0) break
+      cursor = batch[batch.length - 1].id
+    }
   }
   return out
 }
@@ -171,14 +184,20 @@ export function DroptopOrdersPage() {
       // 20260907_droptop_orders_date_index.sql), which is what made a
       // narrow custom range time out even though a wide one loaded fine.
       //
-      // Raised from 1000 — a full-company month needed ~140 sequential
-      // round trips at 1000/page, each individually fast but the count
-      // alone raised the odds any single one hit a moment of connection-
-      // pool contention and exceeded the statement timeout. Safe past
-      // 1000 because every call here already passes an explicit .limit()
-      // — PostgREST's 1000-row default only silently truncates queries
-      // with no limit/range specified at all.
-      const PAGE = 3000
+      // PAGE was briefly raised to 3000 to cut round trips, but this
+      // Supabase project's API "Max Rows" setting silently caps EVERY
+      // response at 1000 regardless of what .limit() requests. That alone
+      // was harmless — the real bug was the loop's exit condition
+      // (`batch.length < PAGE`) reading "server gave me fewer than I
+      // asked for" as "that's the last page": with every response capped
+      // at 1000 and PAGE=3000, every page looked short, so the loop
+      // stopped after page one and silently dropped everything past the
+      // first 1000 orders. Fixed the exit condition to only stop on a
+      // genuinely EMPTY page, which is correct regardless of whatever the
+      // real cap is now or later, and reverted PAGE to 1000 to match the
+      // actual ceiling instead of requesting more than will ever be
+      // honored.
+      const PAGE = 1000
       const allOrders: OrderRow[] = []
       let cursor: { date: string; id: string } | null = null
       for (;;) {
@@ -194,7 +213,7 @@ export function DroptopOrdersPage() {
         if (err) throw new Error(err.message)
         const batch = (data ?? []) as OrderRow[]
         allOrders.push(...batch)
-        if (batch.length < PAGE) break
+        if (batch.length === 0) break
         const last = batch[batch.length - 1]
         cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
       }
