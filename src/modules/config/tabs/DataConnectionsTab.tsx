@@ -393,10 +393,38 @@ export function DataConnectionsTab() {
           : 0,
       }))
       // eslint-disable-next-line no-console
+      console.log('Per-order counts:')
+      // eslint-disable-next-line no-console
       console.table(summary)
+      // Flattened service/product detail — one row per product a service
+      // actually consumed (or one row for a service with no products, so it
+      // still shows up rather than silently vanishing from the table).
+      const servicesDetail = raw.flatMap((o) => {
+        const services = Array.isArray(o.services) ? o.services : []
+        if (!services.length) return []
+        return services.flatMap((s: any) => {
+          const products = Array.isArray(s.products) ? s.products : []
+          if (!products.length) {
+            return [{ order_id: o.order_id, package_id: s.package_id, service_name: s.service_name, product_id: null, product_type: null, uom: null, quantity_total: null }]
+          }
+          return products.map((p: any) => ({
+            order_id: o.order_id,
+            package_id: s.package_id,
+            service_name: s.service_name,
+            product_id: p.product_id,
+            product_type: p.product_type,
+            uom: p.uom,
+            quantity_total: p.quantity_total,
+          }))
+        })
+      })
+      // eslint-disable-next-line no-console
+      console.log('Service/product detail (one row per product a service consumed):')
+      // eslint-disable-next-line no-console
+      console.table(servicesDetail)
       const anyTopLevel = raw.some((o) => Array.isArray(o.products) && o.products.length > 0)
       toast(
-        `${raw.length} order(s) for "${loc.name}" (last 3 days) — top-level "products" populated on ${anyTopLevel ? 'at least one order' : 'NONE of them'}. Full breakdown logged to the console (F12).`,
+        `${raw.length} order(s) for "${loc.name}" (last 3 days) — top-level "products" populated on ${anyTopLevel ? 'at least one order' : 'NONE of them'}. Per-order counts and service/product detail logged to the console (F12).`,
         { icon: anyTopLevel ? undefined : '🔎', duration: 12000 },
       )
     } catch (err) {
