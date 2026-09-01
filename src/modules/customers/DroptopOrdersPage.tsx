@@ -1,0 +1,374 @@
+// Droptop Orders explorer — searchable/filterable table of synced orders
+// (inventory.droptop_orders + its package/product/service line items),
+// plus a summary section of high-level stats. Complements the Customer
+// Heatmap (same underlying data, different lens: this is about what got
+// sold, not where customers came from).
+//
+// "Average oil quarts by package" specifically needs the services table
+// (inventory.droptop_order_services), not the top-level products table —
+// only services links a consumed product back to the package it was used
+// to perform. A product is treated as "oil" here by unit of measure (QT)
+// rather than by name/category text, matching this app's existing
+// quart-based convention for oil products (see orders-v2's engine).
+import { useEffect, useMemo, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/authStore'
+import { useLocations } from '@/hooks/useLocations'
+import { Card, CardBody, Input, MultiSelectDropdown, SbLoader } from '@/components/ui'
+
+interface OrderRow {
+  id: string
+  location_id: string | null
+  order_id: string
+  first_name: string | null
+  last_name: string | null
+  city: string | null
+  region: string | null
+  status: string | null
+  subtotal: number | null
+  final_price: number | null
+  order_finalized_at: string | null
+}
+interface PackageRow {
+  order_id: string
+  package_id: string | null
+  name: string | null
+  price_total: number | null
+  price_total_after_discount: number | null
+}
+interface ProductRow {
+  order_id: string
+  product_id: string | null
+  product_type: string | null
+  uom: string | null
+  quantity_total: number | null
+}
+interface ServiceRow {
+  order_id: string
+  package_id: string | null
+  products: { product_id?: string; uom?: string; quantity_total?: string | number }[] | null
+}
+
+const isoDate = (d: Date) => d.toISOString().slice(0, 10)
+const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d }
+const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
+
+// Fetch rows for a batch of order ids in chunks — avoids one giant .in()
+// URL for a wide date range with a lot of orders.
+async function fetchByOrderIds<T>(table: string, orderIds: string[], select: string): Promise<T[]> {
+  const sb = supabase as any
+  const CHUNK = 200
+  const out: T[] = []
+  for (let i = 0; i < orderIds.length; i += CHUNK) {
+    const slice = orderIds.slice(i, i + CHUNK)
+    const { data, error } = await sb.schema('inventory').from(table).select(select).in('order_id', slice)
+    if (error) throw new Error(error.message)
+    out.push(...((data ?? []) as T[]))
+  }
+  return out
+}
+
+export function DroptopOrdersPage() {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const loc = useLocations()
+
+  const [shopLabels, setShopLabels] = useState<string[]>([])
+  const [startDate, setStartDate] = useState(() => isoDate(daysAgo(30)))
+  const [endDate, setEndDate] = useState(() => isoDate(new Date()))
+  const [packageFilter, setPackageFilter] = useState('')
+  const [productIdFilter, setProductIdFilter] = useState('')
+  const [search, setSearch] = useState('')
+
+  const [orders, setOrders] = useState<OrderRow[]>([])
+  const [packages, setPackages] = useState<PackageRow[]>([])
+  const [products, setProducts] = useState<ProductRow[]>([])
+  const [services, setServices] = useState<ServiceRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
+  const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
+  const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
+  const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
+
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    const sb = supabase as any
+    const startIso = `${startDate}T00:00:00.000Z`
+    const endIso = `${endDate}T23:59:59.999Z`
+
+    async function run() {
+      // Keyset pagination by id, not OFFSET — same fix already applied
+      // elsewhere this session for the same reason.
+      const PAGE = 1000
+      const allOrders: OrderRow[] = []
+      let cursor: string | null = null
+      for (;;) {
+        let q = sb.schema('inventory').from('droptop_orders')
+          .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at')
+          .eq('company_id', companyId)
+          .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+          .order('id', { ascending: true }).limit(PAGE)
+        if (shopIds.length) q = q.in('location_id', shopIds)
+        if (cursor) q = q.gt('id', cursor)
+        const { data, error: err } = await q
+        if (err) throw new Error(err.message)
+        const batch = (data ?? []) as OrderRow[]
+        allOrders.push(...batch)
+        if (batch.length < PAGE) break
+        cursor = batch[batch.length - 1].id
+      }
+      if (cancelled) return
+
+      const orderIds = allOrders.map((o) => o.id)
+      const [pkgRows, prodRows, svcRows] = orderIds.length
+        ? await Promise.all([
+          fetchByOrderIds<PackageRow>('droptop_order_packages', orderIds, 'order_id, package_id, name, price_total, price_total_after_discount'),
+          fetchByOrderIds<ProductRow>('droptop_order_products', orderIds, 'order_id, product_id, product_type, uom, quantity_total'),
+          fetchByOrderIds<ServiceRow>('droptop_order_services', orderIds, 'order_id, package_id, products'),
+        ])
+        : [[], [], []]
+      if (cancelled) return
+
+      setOrders(allOrders)
+      setPackages(pkgRows)
+      setProducts(prodRows)
+      setServices(svcRows)
+      setLoading(false)
+    }
+    run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
+    return () => { cancelled = true }
+  }, [companyId, startDate, endDate, shopIds.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const packagesByOrder = useMemo(() => {
+    const m = new Map<string, PackageRow[]>()
+    for (const p of packages) { const a = m.get(p.order_id) ?? []; a.push(p); m.set(p.order_id, a) }
+    return m
+  }, [packages])
+  const productsByOrder = useMemo(() => {
+    const m = new Map<string, ProductRow[]>()
+    for (const p of products) { const a = m.get(p.order_id) ?? []; a.push(p); m.set(p.order_id, a) }
+    return m
+  }, [products])
+
+  const allPackageNames = useMemo(
+    () => [...new Set(packages.map((p) => p.name).filter((n): n is string => !!n))].sort(),
+    [packages],
+  )
+
+  // Client-side filtering — package/product filters need the joined child
+  // rows, and order volumes for a date-scoped, one-company query are light
+  // enough that filtering after load (this app's usual convention for
+  // config-tab-style pages) is simpler than a server-side join here.
+  const filteredOrders = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const pf = packageFilter.trim().toLowerCase()
+    const prf = productIdFilter.trim().toLowerCase()
+    return orders.filter((o) => {
+      if (pf && !(packagesByOrder.get(o.id) ?? []).some((p) => (p.name ?? '').toLowerCase() === pf)) return false
+      if (prf && !(productsByOrder.get(o.id) ?? []).some((p) => (p.product_id ?? '').toLowerCase().includes(prf))) return false
+      if (q) {
+        const hay = `${o.order_id} ${o.first_name ?? ''} ${o.last_name ?? ''} ${o.city ?? ''}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [orders, packagesByOrder, productsByOrder, search, packageFilter, productIdFilter])
+
+  const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
+
+  // package_id -> display name, built globally (Droptop's package_id is a
+  // stable identifier across every order it appears on, so one lookup
+  // covers the whole loaded set rather than needing to search per-order).
+  const packageNameById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of packages) if (p.name && p.package_id && !m.has(p.package_id)) m.set(p.package_id, p.name)
+    return m
+  }, [packages])
+
+  // Package-level stats: count + average oil quarts (services-linked
+  // products with uom = QT), scoped to the currently-filtered order set.
+  const packageStats = useMemo(() => {
+    const stats = new Map<string, { count: number; oilQuartsTotal: number }>()
+    for (const p of packages) {
+      if (!filteredOrderIds.has(p.order_id) || !p.name) continue
+      const s = stats.get(p.name) ?? { count: 0, oilQuartsTotal: 0 }
+      s.count++
+      stats.set(p.name, s)
+    }
+    for (const s of services) {
+      if (!filteredOrderIds.has(s.order_id) || !s.package_id) continue
+      const pkgName = packageNameById.get(s.package_id)
+      if (!pkgName) continue
+      const oilQty = (s.products ?? []).filter((pr) => isQuart(pr.uom)).reduce((sum, pr) => sum + (Number(pr.quantity_total) || 0), 0)
+      const entry = stats.get(pkgName)
+      if (entry) entry.oilQuartsTotal += oilQty
+    }
+    return [...stats.entries()]
+      .map(([name, s]) => ({ name, count: s.count, avgOilQuarts: s.count > 0 ? s.oilQuartsTotal / s.count : 0 }))
+      .sort((a, b) => b.count - a.count)
+  }, [packages, services, packageNameById, filteredOrderIds])
+
+  const totals = useMemo(() => {
+    const revenue = filteredOrders.reduce((sum, o) => sum + (o.final_price ?? 0), 0)
+    return {
+      count: filteredOrders.length,
+      revenue,
+      avgOrderValue: filteredOrders.length ? revenue / filteredOrders.length : 0,
+    }
+  }, [filteredOrders])
+
+  if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Droptop Orders</h1>
+        <p className="text-xs text-inky mt-0.5">
+          Search, filter, and summarize synced orders. Populated by Config → Data Connections' Droptop — Orders sync.
+        </p>
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-end gap-2 flex-wrap">
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Start</span>
+          <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
+            className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">End</span>
+          <input type="date" value={endDate} min={startDate} max={isoDate(new Date())} onChange={(e) => setEndDate(e.target.value)}
+            className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
+        </label>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
+          <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
+        </div>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Package</span>
+          <select value={packageFilter} onChange={(e) => setPackageFilter(e.target.value)}
+            className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky min-w-[160px]">
+            <option value="">All Packages</option>
+            {allPackageNames.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Product ID</span>
+          <Input value={productIdFilter} onChange={(e) => setProductIdFilter(e.target.value)} placeholder="e.g. 0W16-FLSYN" className="w-40" />
+        </label>
+        <label className="flex flex-col gap-0.5 flex-1 min-w-[180px]">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Search</span>
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Order #, customer name, city…" />
+        </label>
+      </div>
+
+      {error && (
+        <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{error}</p>
+      )}
+
+      {loading ? (
+        <div className="py-16"><SbLoader /></div>
+      ) : (
+        <>
+          {/* High-level stats */}
+          <div className="flex gap-3 flex-wrap">
+            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Orders</p>
+              <p className="text-lg font-heading font-bold text-navy">{totals.count.toLocaleString()}</p>
+            </CardBody></Card>
+            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Revenue</p>
+              <p className="text-lg font-heading font-bold text-navy">{money(totals.revenue)}</p>
+            </CardBody></Card>
+            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Order Value</p>
+              <p className="text-lg font-heading font-bold text-navy">{money(totals.avgOrderValue)}</p>
+            </CardBody></Card>
+            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Distinct Packages</p>
+              <p className="text-lg font-heading font-bold text-navy">{packageStats.length}</p>
+            </CardBody></Card>
+          </div>
+
+          {/* Package summary: count + avg oil quarts */}
+          <Card>
+            <CardBody className="flex flex-col gap-2">
+              <span className="text-xs font-mono text-navy uppercase tracking-wide">By Package</span>
+              {packageStats.length === 0 ? (
+                <p className="text-xs font-mono text-inky/60">No packages in this filtered set.</p>
+              ) : (
+                <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
+                  <table className="w-full text-xs font-mono">
+                    <thead className="sticky top-0 bg-cream">
+                      <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                        <th className="px-3 py-2 text-left">Package</th>
+                        <th className="px-3 py-2 text-right">Count</th>
+                        <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {packageStats.map((s) => (
+                        <tr key={s.name} className="border-b border-navy/10">
+                          <td className="px-3 py-1.5 text-navy">{s.name}</td>
+                          <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
+                          <td className="px-3 py-1.5 text-navy text-right">{s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+
+          {/* Orders table */}
+          <Card>
+            <CardBody className="flex flex-col gap-2">
+              <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length})</span>
+              {filteredOrders.length === 0 ? (
+                <p className="text-xs font-mono text-inky/60">No orders match these filters.</p>
+              ) : (
+                <div className="overflow-x-auto rounded border border-navy/30 max-h-[32rem] overflow-y-auto">
+                  <table className="w-full text-xs font-mono">
+                    <thead className="sticky top-0 bg-cream">
+                      <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                        <th className="px-3 py-2 text-left">Order #</th>
+                        <th className="px-3 py-2 text-left">Shop</th>
+                        <th className="px-3 py-2 text-left">Customer</th>
+                        <th className="px-3 py-2 text-left">City</th>
+                        <th className="px-3 py-2 text-left">Status</th>
+                        <th className="px-3 py-2 text-left">Packages</th>
+                        <th className="px-3 py-2 text-right">Total</th>
+                        <th className="px-3 py-2 text-left">Finalized</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredOrders.map((o) => (
+                        <tr key={o.id} className="border-b border-navy/10">
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{[o.first_name, o.last_name].filter(Boolean).join(' ') || '—'}</td>
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.city || '—'}</td>
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.status || '—'}</td>
+                          <td className="px-3 py-1.5 text-navy">{(packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—'}</td>
+                          <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        </>
+      )}
+    </div>
+  )
+}

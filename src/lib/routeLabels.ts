@@ -34,6 +34,7 @@ export const ROUTE_LABELS: Record<string, string> = {
   '/forms/new': 'New Form',
   '/marketing-planner': 'Marketing Planner',
   '/customer-heatmap': 'Customer Heatmap',
+  '/droptop-orders': 'Droptop Orders',
   '/schedule': 'Calendar',
   '/tasks': 'Tasks',
   '/issues': 'Issues',
