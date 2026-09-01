@@ -131,19 +131,23 @@ export function DataConnectionsTab() {
     return () => { cancelled = true }
   }, [companyId])
 
-  // For the "Select Gap Shops" convenience below — inventory.
-  // droptop_order_sync_state only ever gets a row for a location once it has
-  // at least one order actually synced (see 20260906/20260907b migrations),
-  // so a backfill-eligible location missing from this set has never had a
-  // single order land, ever. One un-paginated fetch is safe here (this
-  // table has one row per location, not per order — nowhere near
-  // PostgREST's 1000-row default cap the way a raw droptop_orders query
-  // would be).
+  // For the "Select Gap Shops" convenience below — reads
+  // droptop_orders_synced_locations, NOT droptop_order_sync_state. That
+  // table only ever gets a row from mode:'incremental', never mode:'sync'
+  // (what Historical Backfill itself uses) — a shop backfilled via that
+  // button would still show up as a "gap" forever if checked against it
+  // (confirmed live 2026-09-01: shops 145-175 got real orders from a
+  // backfill run but never got a sync_state row). This view instead
+  // pre-aggregates distinct (company_id, location_id) pairs straight from
+  // droptop_orders — the actual source of truth for "has this location ever
+  // had an order land, via any sync mode" — so it's safe to fetch
+  // unpaginated (one row per location, not per order, nowhere near
+  // PostgREST's 1000-row default cap).
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
     const sb = supabase as any
-    sb.schema('inventory').from('droptop_order_sync_state').select('location_id').eq('company_id', companyId)
+    sb.schema('inventory').from('droptop_orders_synced_locations').select('location_id').eq('company_id', companyId)
       .then(({ data }: any) => {
         if (cancelled) return
         setSyncedLocationIds(new Set((data ?? []).map((r: any) => r.location_id)))
