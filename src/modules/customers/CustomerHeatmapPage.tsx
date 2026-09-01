@@ -9,8 +9,13 @@
 // version of this page read inventory.droptop_customers, which pulled a
 // shop's ENTIRE customer history regardless of recency — 10,000+ per
 // location in practice). Orders are naturally date-bounded, so this stays
-// fast and light: filtering already-synced data by date range is free, and
-// pulling a range that hasn't been synced yet is one explicit action away.
+// fast and light: filtering already-synced data by date range is free.
+//
+// This page is read-only against already-synced data — it never calls the
+// Droptop API itself (an earlier "Pull This Range" button that did was
+// removed; syncing lives solely in Config -> Data Connections now, so
+// there's exactly one place a page click can trigger an outbound API call
+// from, not two).
 //
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
 // areas customers cluster in, not a pin-per-order map.
@@ -21,10 +26,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useDarkMode } from '@/hooks/useDarkMode'
-import { Card, CardBody, Combobox, Button, SbLoader } from '@/components/ui'
-import { useSyncTasksStore, DROPTOP_ORDERS_TASK_ID } from '@/stores/syncTasksStore'
-import { runDroptopOrderSync } from '@/services/droptopService'
-import toast from 'react-hot-toast'
+import { Card, CardBody, Combobox, SbLoader } from '@/components/ui'
 
 interface OrderRow {
   id: string
@@ -96,19 +98,10 @@ export function CustomerHeatmapPage() {
   const [totalOrders, setTotalOrders] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [pulling, setPulling] = useState(false)
-  // Bumped after a successful "Pull This Range" to force the display query
-  // to re-run for the same start/end/shop — those state values don't
-  // themselves change on a pull, so they wouldn't otherwise re-trigger it.
-  const [reloadTick, setReloadTick] = useState(0)
-
-  const load = useMemo(() => {
-    let cancelled = false
-    return { cancel: () => { cancelled = true }, isCancelled: () => cancelled }
-  }, [companyId, shopId, startDate, endDate, reloadTick])
 
   useEffect(() => {
     if (!companyId) return
+    let cancelled = false
     setLoading(true)
     setError(null)
     const sb = supabase as any
@@ -133,13 +126,13 @@ export function CustomerHeatmapPage() {
         if (shopId) q = q.eq('location_id', shopId)
         if (cursor) q = q.gt('id', cursor)
         const { data, error: err } = await q
-        if (err) { if (!load.isCancelled()) setError(err.message); break }
+        if (err) { if (!cancelled) setError(err.message); break }
         const batch = (data ?? []) as OrderRow[]
         all.push(...batch)
         if (batch.length < PAGE) break
         cursor = batch[batch.length - 1].id
       }
-      if (load.isCancelled()) return
+      if (cancelled) return
 
       // Separate count of everything in range (including no-coordinate
       // rows) for the "not on map" callout.
@@ -148,15 +141,15 @@ export function CustomerHeatmapPage() {
         .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
       if (shopId) countQuery = countQuery.eq('location_id', shopId)
       const { count } = await countQuery
-      if (load.isCancelled()) return
+      if (cancelled) return
 
       setRows(all)
       setTotalOrders(count ?? all.length)
       setLoading(false)
     }
-    run().catch((e) => { if (!load.isCancelled()) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
-    return () => load.cancel()
-  }, [companyId, shopId, startDate, endDate, reloadTick, load])
+    run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
+    return () => { cancelled = true }
+  }, [companyId, shopId, startDate, endDate])
 
   const clusters = useMemo<ZipCluster[]>(() => {
     const byZip = new Map<string, ZipCluster>()
@@ -184,37 +177,14 @@ export function CustomerHeatmapPage() {
     [loc.includedOptions],
   )
 
-  // Pulls fresh order data for exactly the currently-selected range/shop —
-  // separate from Data Connections' routine "last 30 days" sync, for
-  // exploring a custom range that hasn't been synced yet.
-  async function pullThisRange() {
-    if (!companyId) return
-    setPulling(true)
-    const store = useSyncTasksStore.getState()
-    const shopLabel = shopId ? (shopOptions.find((o) => o.value === shopId)?.label ?? 'shop') : 'all shops'
-    store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — ${startDate} to ${endDate} (${shopLabel})`)
-    const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(DROPTOP_ORDERS_TASK_ID, p.batch, p.totalBatches)
-    const startUnix = Math.floor(new Date(`${startDate}T00:00:00.000Z`).getTime() / 1000)
-    const endUnix = Math.floor(new Date(`${endDate}T23:59:59.999Z`).getTime() / 1000)
-    try {
-      const r = await runDroptopOrderSync(companyId, { startUnix, endUnix, ...(shopId ? { locationId: shopId } : {}) }, onProgress)
-      const summary = `Pulled ${r.orders_upserted} orders (${r.locations_synced} shop${r.locations_synced === 1 ? '' : 's'})`
-      store.finish(DROPTOP_ORDERS_TASK_ID, r.warnings?.length ? 'partial' : 'success', summary)
-      toast.success(summary)
-      setReloadTick((t) => t + 1) // re-trigger the display query for the same range/shop
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Pull failed'
-      store.finish(DROPTOP_ORDERS_TASK_ID, 'error', message)
-      toast.error(message, { duration: 12000 })
-    } finally {
-      setPulling(false)
-    }
-  }
-
-  const tileUrl = dark
-    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
-  const tileAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  // Plain OpenStreetMap tiles — CartoDB's raster basemaps (previously used
+  // here) now require an API key and are being retired outright in favor
+  // of vector basemaps, so this uses OSM's own tiles instead: free, no
+  // signup, not going anywhere. No native dark style, so dark mode is
+  // approximated with a CSS filter (map-tiles-dark, in index.css) scoped
+  // to just the tile images via TileLayer's className.
+  const tileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+  const tileAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
@@ -242,10 +212,6 @@ export function CustomerHeatmapPage() {
           <div className="w-56">
             <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="All Shops" />
           </div>
-          <Button size="sm" variant="secondary" loading={pulling} onClick={pullThisRange}
-            title="Pull fresh order data from Droptop for exactly this range/shop — separate from the routine last-30-days sync">
-            Pull This Range
-          </Button>
         </div>
       </div>
 
@@ -259,7 +225,7 @@ export function CustomerHeatmapPage() {
         <Card><CardBody>
           <p className="text-xs font-mono text-inky/60">
             No mapped orders for this range{shopId ? ' at this shop' : ''} yet. Run the Droptop — Orders sync from
-            Config → Data Connections (or click "Pull This Range" above), then come back here.
+            Config → Data Connections, then come back here.
           </p>
         </CardBody></Card>
       ) : (
@@ -290,7 +256,7 @@ export function CustomerHeatmapPage() {
 
           <div className="rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
             <MapContainer center={mapCenter} zoom={5} style={{ height: '100%', width: '100%' }}>
-              <TileLayer url={tileUrl} attribution={tileAttribution} />
+              <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
               {clusters.map((c) => {
                 const style = styleFor(c.count, densityBp)
                 return (

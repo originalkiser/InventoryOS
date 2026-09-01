@@ -822,12 +822,15 @@ export function MapRoutesTab({ locations }: Props) {
     setEditingLatLng(null)
   }
 
-  // Tile URL: auto follows dark mode, light = Voyager, dark = Dark Matter
+  // Tile URL: plain OpenStreetMap — CartoDB's raster basemaps (previously
+  // used here) now require an API key and are being retired outright in
+  // favor of vector basemaps, so this uses OSM's own tiles instead: free,
+  // no signup, not going anywhere. No native dark style, so dark mode is
+  // approximated with a CSS filter (map-tiles-dark, in index.css) applied
+  // only to the tile images via TileLayer's className.
   const resolvedDark = mapTheme === 'auto' ? dark : mapTheme === 'dark'
-  const tileUrl = resolvedDark
-    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
-  const tileAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  const tileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+  const tileAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
   // ─── Sidebar content (shared between desktop panel and mobile sheet) ────────
 
@@ -1248,7 +1251,7 @@ export function MapRoutesTab({ locations }: Props) {
         </div>
       ) : (
         <MapContainer center={mapCenter} zoom={zoom} style={{ height: '100%', width: '100%' }} zoomControl>
-          <TileLayer url={tileUrl} attribution={tileAttribution} />
+          <TileLayer url={tileUrl} attribution={tileAttribution} className={resolvedDark ? 'map-tiles-dark' : undefined} />
           <ZoomTracker onZoom={setZoom} />
           <MapResizer />
           <BoundsWatcher onChange={setMapBounds} />
