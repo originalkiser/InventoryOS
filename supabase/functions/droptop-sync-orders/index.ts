@@ -359,23 +359,25 @@ Deno.serve(async (req) => {
         }))
       })
 
-      for (let i = 0; i < packageRows.length; i += BATCH) {
-        const slice = packageRows.slice(i, i + BATCH)
-        const { error } = await (admin as any).schema('inventory').from('droptop_order_packages').insert(slice)
-        if (error) warnings.push(`Package insert batch ${i}: ${error.message}`)
-        else packagesWritten += slice.length
-      }
-      for (let i = 0; i < productRows.length; i += BATCH) {
-        const slice = productRows.slice(i, i + BATCH)
-        const { error } = await (admin as any).schema('inventory').from('droptop_order_products').insert(slice)
-        if (error) warnings.push(`Product insert batch ${i}: ${error.message}`)
-        else productsWritten += slice.length
-      }
-      for (let i = 0; i < serviceRows.length; i += BATCH) {
-        const slice = serviceRows.slice(i, i + BATCH)
-        const { error } = await (admin as any).schema('inventory').from('droptop_order_services').insert(slice)
-        if (error) warnings.push(`Service insert batch ${i}: ${error.message}`)
-        else servicesWritten += slice.length
+      // Insert the 3 child tables' batches in parallel per batch-index
+      // (they're independent tables, no reason to wait on one before
+      // starting the next) — cuts this phase's wall time roughly 3x versus
+      // running them one after another, which matters now that every
+      // location invocation is doing meaningfully more write work than
+      // when this sync only wrote order headers.
+      const maxLen = Math.max(packageRows.length, productRows.length, serviceRows.length)
+      for (let i = 0; i < maxLen; i += BATCH) {
+        const pkgSlice = packageRows.slice(i, i + BATCH)
+        const prodSlice = productRows.slice(i, i + BATCH)
+        const svcSlice = serviceRows.slice(i, i + BATCH)
+        const [pkgRes, prodRes, svcRes] = await Promise.all([
+          pkgSlice.length ? (admin as any).schema('inventory').from('droptop_order_packages').insert(pkgSlice) : Promise.resolve({ error: null }),
+          prodSlice.length ? (admin as any).schema('inventory').from('droptop_order_products').insert(prodSlice) : Promise.resolve({ error: null }),
+          svcSlice.length ? (admin as any).schema('inventory').from('droptop_order_services').insert(svcSlice) : Promise.resolve({ error: null }),
+        ])
+        if (pkgRes.error) warnings.push(`Package insert batch ${i}: ${pkgRes.error.message}`); else packagesWritten += pkgSlice.length
+        if (prodRes.error) warnings.push(`Product insert batch ${i}: ${prodRes.error.message}`); else productsWritten += prodSlice.length
+        if (svcRes.error) warnings.push(`Service insert batch ${i}: ${svcRes.error.message}`); else servicesWritten += svcSlice.length
       }
     }
 

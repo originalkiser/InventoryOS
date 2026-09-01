@@ -31,11 +31,11 @@ function ok(body: unknown) {
 // keeps each droptop-sync-usage invocation's location count bounded well
 // inside the platform's execution time limit.
 const DROPTOP_CHUNK_SIZE = 20
-// Orders aren't paginated per-call the way the old customer-list sync's
-// get-customers was (one call per 31-day sub-window per location, not up
-// to dozens), so this can stay closer to the general chunk size — matches
-// ORDER_CHUNK_SIZE in droptopService.ts.
-const DROPTOP_ORDER_CHUNK_SIZE = 10
+// Dropped from 10 to match ORDER_CHUNK_SIZE in droptopService.ts — a real
+// company-wide run timed out on 24 of 25 batches once packages/products/
+// services line items were added (up to 4 tables' worth of rows per order
+// now, not 1). See that constant's own comment for the full story.
+const DROPTOP_ORDER_CHUNK_SIZE = 3
 
 // A non-2xx response (timeout, crash, killed invocation) or a body that
 // isn't valid JSON both used to fall through a bare `.catch(() => ({}))` as

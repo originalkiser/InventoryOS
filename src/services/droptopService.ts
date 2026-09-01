@@ -207,11 +207,18 @@ export async function runDroptopPurchaseOrderSync(
 // holding real data, but no longer written to or read by anything) — that
 // pulled a shop's entire customer history every run (10,000+ per location
 // in practice); orders are naturally date-bounded, so a routine pull only
-// ever touches a recent window. Chunk size can stay close to the PO sync's
-// (orders aren't paginated per-call the way get-customers was, so the
-// per-location call count is much lower — one call per 31-day sub-window,
-// not up to dozens).
-const ORDER_CHUNK_SIZE = 10
+// ever touches a recent window.
+//
+// Chunk size was originally set assuming the PO sync's per-location call
+// count was the only real constraint (orders aren't paginated per-call the
+// way get-customers was — one call per 31-day sub-window, not up to
+// dozens). A real company-wide run proved that assumption wrong once
+// packages/products/services line items were added: 10 locations' worth
+// of orders can mean thousands of child rows to write in one invocation
+// (up to 4 tables per order now, not 1), and most batches timed out
+// ("Edge Function returned a non-2xx status code" on 24 of 25 batches).
+// Dropped down to match the customer sync's proven-safe value.
+const ORDER_CHUNK_SIZE = 3
 
 export interface DroptopOrderSyncResult {
   locations_synced: number
