@@ -243,7 +243,20 @@ Deno.serve(async (req) => {
       const params: Record<string, string> = { operation_ids: opId, startUnix: String(inspectStart), endUnix: String(endUnix) }
       if (statusTypes) params.statusTypes = statusTypes
       const raw = await callDroptop('get-orders', params, publicKey, privateKey)
-      return ok({ success: true, operation_id: opId, raw_response: raw })
+      // Full diagnostic echo — a "0 orders" result here is otherwise
+      // impossible to root-cause from the client alone (was it really the
+      // right operation_id? the right window? did Droptop return [] or
+      // null?). resolved_location_id/name in particular catches a bad
+      // shop-name match at the source, before even looking at the window.
+      return ok({
+        success: true,
+        operation_id: opId,
+        resolved_location_id: locations[0].id,
+        requested_params: params,
+        requested_window_human: { start: new Date(inspectStart * 1000).toISOString(), end: new Date(endUnix * 1000).toISOString() },
+        raw_response_type: raw === null ? 'null' : Array.isArray(raw) ? 'array' : typeof raw,
+        raw_response: raw,
+      })
     }
 
     let ordersUpserted = 0

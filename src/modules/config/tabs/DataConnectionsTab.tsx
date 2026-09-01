@@ -369,9 +369,19 @@ export function DataConnectionsTab() {
       if (data?.error) throw new Error(data.error)
       const raw: any[] = Array.isArray(data.raw_response) ? data.raw_response : []
       // eslint-disable-next-line no-console
-      console.log(`Droptop orders inspect — "${loc.name}", raw response:`, raw)
+      console.log(`Droptop orders inspect — "${loc.name}" (resolved location id: ${loc.id})`, {
+        resolved_location_id_from_server: data.resolved_location_id,
+        operation_id: data.operation_id,
+        requested_params: data.requested_params,
+        requested_window_human: data.requested_window_human,
+        raw_response_type: data.raw_response_type,
+        raw_response: raw,
+      })
       if (raw.length === 0) {
-        toast(`0 orders for "${loc.name}" in the last 3 days — try a shop known to have very recent volume.`, { icon: '⚠️', duration: 10000 })
+        toast(
+          `0 orders for "${loc.name}" in the last 3 days — full request/response details (operation id, exact window, what Droptop actually returned) logged to the console (F12).`,
+          { icon: '⚠️', duration: 12000 },
+        )
         return
       }
       const summary = raw.map((o) => ({
