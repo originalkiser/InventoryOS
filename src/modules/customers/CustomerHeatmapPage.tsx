@@ -11,7 +11,7 @@
 //
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
 // areas customers cluster in, not a pin-per-order map.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -24,7 +24,7 @@ import { useDarkMode } from '@/hooks/useDarkMode'
 import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
-import { Button, Card, CardBody, MultiSelectDropdown, Modal, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal, SbLoader } from '@/components/ui'
 import { getMarketSolidColor } from '@/lib/marketColors'
 
 interface OrderRow {
@@ -123,6 +123,17 @@ function normalizeCityCase(city: string): string {
   return city.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+// "#-City" label — some locations' shop_city already comes prefixed with
+// the shop number itself ("169-Lexington" as the raw value, not just
+// "Lexington"), so naively concatenating name + shop_city doubles it up
+// ("169 — 169-Lexington"). Strips a redundant leading "<name>-" before
+// rebuilding, so this is correct either way the data's shaped.
+function shopNumberCityLabel(name: string, shopCity: string | null | undefined): string {
+  const rawCity = normalizeCityCase(shopCity ?? '')
+  const cleaned = rawCity.replace(new RegExp(`^${name}[\\s-]+`, 'i'), '')
+  return cleaned ? `${name}-${cleaned}` : name
+}
+
 // Imperatively pans/zooms the map when the selected zip changes — a plain
 // state change on <MapContainer center> only sets the *initial* view, not
 // a live one, so this needs react-leaflet's useMap() the same way
@@ -187,13 +198,41 @@ export function CustomerHeatmapPage() {
   useEffect(() => {
     try { localStorage.setItem('heatmap:pin-labels', showPinLabels ? '1' : '0') } catch { /* ignore */ }
   }, [showPinLabels])
+  const [showPins, setShowPins] = useState<boolean>(() => {
+    try { return localStorage.getItem('heatmap:show-pins') !== '0' } catch { return true }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:show-pins', showPins ? '1' : '0') } catch { /* ignore */ }
+  }, [showPins])
   const [filterRegions, setFilterRegions] = useState<string[]>([])
   const [filterMarkets, setFilterMarkets] = useState<string[]>([])
   const [filterAMs, setFilterAMs] = useState<string[]>([])
+  const [zipSearch, setZipSearch] = useState('')
+  const [orderModalPackages, setOrderModalPackages] = useState<Map<string, string[]> | null>(null)
+  const [orderModalExporting, setOrderModalExporting] = useState<'csv' | 'xlsx' | null>(null)
+  const zipRowRefs = useRef(new Map<string, HTMLTableRowElement>())
 
-  const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
+  // Dynamic based on Region/Market/AM — narrows which shops even show up
+  // as pickable once one of those is set, rather than a full always-the-
+  // same list. Doesn't prune an already-selected shop that a later filter
+  // change makes invalid (it stays effectively selected, just hidden from
+  // the visible checklist) — matches this page's existing "good enough,
+  // not full cascade-pruning" precedent for the Region/Market/AM filters.
+  const shopOptions = useMemo(() => {
+    if (!filterRegions.length && !filterMarkets.length && !filterAMs.length) {
+      return loc.includedOptions.map((o) => ({ value: o.label }))
+    }
+    return loc.includedOptions.filter((o) => {
+      const l = loc.byId(o.value)
+      if (!l) return false
+      if (filterRegions.length && !filterRegions.includes(l.region ?? '')) return false
+      if (filterMarkets.length && !filterMarkets.includes(loc.fieldValue(l.id, 'market'))) return false
+      if (filterAMs.length && !filterAMs.includes(loc.fieldValue(l.id, 'area_manager'))) return false
+      return true
+    }).map((o) => ({ value: o.label }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.includedOptions, filterRegions, filterMarkets, filterAMs])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
-  const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
   const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
 
   // Company-wide market list (not just the currently-visible shops) so a
@@ -304,7 +343,7 @@ export function CustomerHeatmapPage() {
       const existing = byZip.get(key)
       if (existing) { existing.count++; if (r.location_id) existing.locationIds.add(r.location_id) }
       else byZip.set(key, {
-        zip: r.zip ?? '—', city: r.city ?? '', region: r.region ?? '', lat: r.lat as number, lng: r.lng as number,
+        zip: r.zip ?? '—', city: normalizeCityCase(r.city ?? ''), region: r.region ?? '', lat: r.lat as number, lng: r.lng as number,
         count: 1, locationIds: new Set(r.location_id ? [r.location_id] : []),
       })
     }
@@ -331,8 +370,101 @@ export function CustomerHeatmapPage() {
     return [39.5, -98.35] // continental US fallback
   }, [clusters.length > 0 ? clusters[0].zip : null]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // On-screen "By Shop" table — one row per (shop, zip), mirroring the
+  // export's grouping (minus avg ticket/packages, which stay export-only).
+  interface ShopZipRow { locationId: string; shopNumber: string; shopLabel: string; zip: string; city: string; region: string; count: number }
+  const shopZipRows = useMemo(() => {
+    const m = new Map<string, ShopZipRow>()
+    for (const r of mappedRows) {
+      if (!r.location_id) continue
+      const l = loc.byId(r.location_id)
+      const shopNumber = l?.name ?? r.location_id
+      const key = `${r.location_id}|${r.zip ?? '—'}`
+      let g = m.get(key)
+      if (!g) {
+        g = { locationId: r.location_id, shopNumber, shopLabel: shopNumberCityLabel(shopNumber, l?.shop_city), zip: r.zip ?? '—', city: normalizeCityCase(r.city ?? ''), region: r.region ?? '', count: 0 }
+        m.set(key, g)
+      }
+      g.count++
+    }
+    return [...m.values()].sort((a, b) => a.shopNumber.localeCompare(b.shopNumber, undefined, { numeric: true }) || b.count - a.count)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mappedRows, loc.locations])
+
+  const zipSearchQ = zipSearch.trim().toLowerCase()
+  const visibleClusters = useMemo(
+    () => zipSearchQ ? clusters.filter((c) => c.zip.toLowerCase().includes(zipSearchQ) || c.city.toLowerCase().includes(zipSearchQ) || c.region.toLowerCase().includes(zipSearchQ)) : clusters,
+    [clusters, zipSearchQ],
+  )
+  const visibleShopZipRows = useMemo(
+    () => zipSearchQ ? shopZipRows.filter((r) => r.zip.toLowerCase().includes(zipSearchQ) || r.city.toLowerCase().includes(zipSearchQ) || r.region.toLowerCase().includes(zipSearchQ) || r.shopLabel.toLowerCase().includes(zipSearchQ)) : shopZipRows,
+    [shopZipRows, zipSearchQ],
+  )
+
+  // Clicking a zip circle scrolls the Visits-by-Zip table to that row, not
+  // just highlighting it — with hundreds of zips loaded, "highlighted
+  // somewhere in a long table" isn't findable without this.
+  useEffect(() => {
+    if (!selectedZip) return
+    const el = zipRowRefs.current.get(selectedZip)
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [selectedZip, zipExportMode, visibleClusters, visibleShopZipRows])
+
   function ordersForZip(zip: string): OrderRow[] {
     return mappedRows.filter((r) => (r.zip ?? '—') === zip)
+  }
+
+  function ordersForShopZip(locationId: string, zip: string): OrderRow[] {
+    return mappedRows.filter((r) => r.location_id === locationId && (r.zip ?? '—') === zip)
+  }
+
+  // Order modal packages — fetched only once the modal actually opens, for
+  // just that modal's order set (same reasoning as the export: package data
+  // isn't part of the page's normal query).
+  useEffect(() => {
+    if (!orderModal) { setOrderModalPackages(null); return }
+    let cancelled = false
+    fetchPackageNamesByOrderIds(orderModal.rows.map((o) => o.id))
+      .then((m) => { if (!cancelled) setOrderModalPackages(m) })
+      .catch(() => { if (!cancelled) setOrderModalPackages(new Map()) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderModal])
+
+  function exportOrderModal(format: 'csv' | 'xlsx') {
+    if (!orderModal || !orderModal.rows.length) return
+    setOrderModalExporting(format)
+    try {
+      const headers = ['Order #', 'Shop', 'Customer', 'City', 'Zip', 'Total', 'Finalized', 'Package(s)']
+      const dataRows = orderModal.rows.map((o) => {
+        const l = o.location_id ? loc.byId(o.location_id) : undefined
+        return [
+          o.order_id,
+          l ? shopNumberCityLabel(l.name, l.shop_city) : (o.location_id ?? '—'),
+          [o.first_name, o.last_name].filter(Boolean).join(' ') || '—',
+          o.city || '—',
+          o.zip || '—',
+          o.final_price ?? 0,
+          dateShort(o.order_finalized_at),
+          (orderModalPackages?.get(o.id) ?? []).join(', '),
+        ]
+      })
+      const fileBase = `heatmap-orders-${range.start}-to-${range.end}`
+      if (format === 'csv') {
+        const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+        const csv = [headers, ...dataRows].map((r) => r.map(esc).join(',')).join('\n')
+        triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileBase}.csv`)
+      } else {
+        const wb = XLSX.utils.book_new()
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
+        XLSX.utils.book_append_sheet(wb, ws, 'Orders')
+        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+        triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileBase}.xlsx`)
+      }
+      toast.success('Export downloaded')
+    } finally {
+      setOrderModalExporting(null)
+    }
   }
 
   // Visits by Zip export — richer than the on-screen table (which stays a
@@ -460,10 +592,6 @@ export function CustomerHeatmapPage() {
         <div className="flex items-end gap-3 flex-wrap">
           <PeriodPicker period={period} onPeriodChange={setPeriod} customStart={customStart} customEnd={customEnd}
             onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
-            <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable align="right" />
-          </div>
           {shopIds.length >= 2 && (
             <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
               {(['all', 'shared'] as const).map((m) => (
@@ -512,6 +640,16 @@ export function CustomerHeatmapPage() {
               <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
               <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
             </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
+              <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
+            </div>
+            <button onClick={() => setShowPins((v) => !v)}
+              className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
+                showPins ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
+              title="Show or hide store location pins">
+              Pins
+            </button>
             <button onClick={() => setShowPinLabels((v) => !v)}
               className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
                 showPinLabels ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
@@ -546,7 +684,7 @@ export function CustomerHeatmapPage() {
                 <CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Top Zip</p>
                   <p className="text-sm font-mono font-bold text-navy">
-                    {clusters[0].zip} {clusters[0].city && `— ${clusters[0].city}`} <span className="text-inky/60">({clusters[0].count})</span>
+                    {clusters[0].zip} {clusters[0].city && `— ${normalizeCityCase(clusters[0].city)}`} <span className="text-inky/60">({clusters[0].count})</span>
                   </p>
                 </CardBody>
               </Card>
@@ -584,11 +722,11 @@ export function CustomerHeatmapPage() {
                   <FocusZip target={focusTarget} />
                   <ZoomTracker onZoom={setZoom} />
                   <DeselectOnMapClick onDeselect={() => setSelectedZip(null)} />
-                  {shopPins.map(({ loc: l, color }) => (
+                  {showPins && shopPins.map(({ loc: l, color }) => (
                     <Marker key={l.id} position={[l.latitude as number, l.longitude as number]}
                       icon={makeShopPinIcon(color, showPinLabels ? l.name : null)}>
                       <Tooltip>
-                        <span className="font-mono text-xs font-bold">{l.name} — {l.shop_city ?? ''}</span>
+                        <span className="font-mono text-xs font-bold">{shopNumberCityLabel(l.name, l.shop_city)}</span>
                       </Tooltip>
                     </Marker>
                   ))}
@@ -635,11 +773,18 @@ export function CustomerHeatmapPage() {
                 </MapContainer>
               </div>
 
-              {/* Legend */}
+              {/* Legend — color is each zip's own order-count percentile
+                  among the zips CURRENTLY on the map (not a fixed
+                  threshold, and not grouped by shop/location) — narrowing
+                  by shop, region, market, AM, or date range recomputes
+                  every zip's percentile against that new, smaller set. */}
               <div className="flex items-center gap-4 text-[10px] font-mono text-inky/70 flex-wrap">
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Bottom half of zips</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Above median</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />Top 20%</span>
+                <span className="flex items-center gap-1.5" title="This zip's order count is in the bottom half of every zip currently on the map">
+                  <span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Bottom half of zips</span>
+                <span className="flex items-center gap-1.5" title="This zip's order count is above the median of every zip currently on the map">
+                  <span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Above median</span>
+                <span className="flex items-center gap-1.5" title="This zip's order count is in the top 20% of every zip currently on the map">
+                  <span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />Top 20% of zips</span>
                 <span className="flex items-center gap-1.5">
                   <svg width="11" height="15" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">
                     <path d="M11 0C4.9 0 0 4.9 0 11c0 8.25 11 19 11 19s11-10.75 11-19C22 4.9 17.1 0 11 0z" fill="#002745" />
@@ -647,20 +792,26 @@ export function CustomerHeatmapPage() {
                   </svg>
                   Store location (colored by market)
                 </span>
-                <span className="ml-auto text-inky/50">Colored by percentile of this range's own zips, not a fixed scale</span>
+                <span className="ml-auto text-inky/50" title="Recomputed against whatever's currently loaded — narrower filters mean fewer zips to rank against, so the same raw order count can land in a different bucket">
+                  Percentile of THIS view's own zips, not a fixed order count — not grouped by shop
+                </span>
               </div>
 
-              {/* Visits by zip — click a row to see its orders. */}
+              {/* Visits by zip — click a row to see its orders; the Total
+                  by Zip / By Shop toggle now switches this table's own
+                  grouping too, not just the export. */}
               <Card>
                 <CardBody className="flex flex-col gap-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="text-xs font-mono text-navy uppercase tracking-wide">Visits by Zip ({clusters.length})</span>
+                    <span className="text-xs font-mono text-navy uppercase tracking-wide">
+                      Visits by Zip ({zipExportMode === 'by-shop' ? visibleShopZipRows.length : visibleClusters.length})
+                    </span>
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
                         {(['total', 'by-shop'] as const).map((m) => (
                           <button key={m} onClick={() => setZipExportMode(m)}
                             className={['px-2 py-1 uppercase tracking-wide transition-colors', zipExportMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
-                            title={m === 'total' ? 'Export: one row per zip, totaled across shops' : 'Export: one row per shop + zip combination'}>
+                            title={m === 'total' ? 'One row per zip, totaled across shops' : 'One row per shop + zip combination'}>
                             {m === 'total' ? 'Total by Zip' : 'By Shop'}
                           </button>
                         ))}
@@ -669,27 +820,44 @@ export function CustomerHeatmapPage() {
                       <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportVisits('xlsx')}>Export Excel</Button>
                     </div>
                   </div>
+                  <Input value={zipSearch} onChange={(e) => setZipSearch(e.target.value)} placeholder="Search zip, city, or region…" className="max-w-xs" />
                   <div className="overflow-x-auto rounded border border-navy/30 max-h-96 overflow-y-auto">
                     <table className="w-full text-xs font-mono">
                       <thead className="sticky top-0 bg-cream">
                         <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                          {zipExportMode === 'by-shop' && <th className="px-3 py-2 text-left">Shop</th>}
                           <th className="px-3 py-2 text-left">Zip</th>
                           <th className="px-3 py-2 text-left">City</th>
                           <th className="px-3 py-2 text-left">Region</th>
                           <th className="px-3 py-2 text-right">Orders</th>
-                          <th className="px-3 py-2 text-right">% of Total</th>
+                          {zipExportMode === 'total' && <th className="px-3 py-2 text-right">% of Total</th>}
                         </tr>
                       </thead>
                       <tbody>
-                        {clusters.map((c) => (
+                        {zipExportMode === 'by-shop' ? visibleShopZipRows.map((r, i) => (
+                          <tr key={`${r.shopNumber}|${r.zip}|${i}`}
+                            ref={(el) => { if (el) zipRowRefs.current.set(r.zip, el) }}
+                            className={[
+                              'border-b border-navy/10 cursor-pointer hover:bg-sky/10',
+                              r.zip === selectedZip ? 'bg-sky/20' : '',
+                            ].join(' ')}
+                            onClick={() => setOrderModal({ title: `Orders — ${r.shopLabel}, ${r.zip}${r.city ? ` (${r.city}, ${r.region})` : ''}`, rows: ordersForShopZip(r.locationId, r.zip) })}>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{r.shopLabel}</td>
+                            <td className="px-3 py-1.5 text-navy">{r.zip}</td>
+                            <td className="px-3 py-1.5 text-navy">{r.city || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy">{r.region || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy text-right">{r.count}</td>
+                          </tr>
+                        )) : visibleClusters.map((c) => (
                           <tr key={c.zip}
+                            ref={(el) => { if (el) zipRowRefs.current.set(c.zip, el) }}
                             className={[
                               'border-b border-navy/10 cursor-pointer hover:bg-sky/10',
                               c.zip === selectedZip ? 'bg-sky/20' : '',
                             ].join(' ')}
                             onClick={() => setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })}>
                             <td className="px-3 py-1.5 text-navy">{c.zip}</td>
-                            <td className="px-3 py-1.5 text-navy">{c.city || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy">{normalizeCityCase(c.city) || '—'}</td>
                             <td className="px-3 py-1.5 text-navy">{c.region || '—'}</td>
                             <td className="px-3 py-1.5 text-navy text-right">{c.count}</td>
                             <td className="px-3 py-1.5 text-inky/70 text-right">{mappedRows.length ? ((c.count / mappedRows.length) * 100).toFixed(1) : '0.0'}%</td>
@@ -709,6 +877,10 @@ export function CustomerHeatmapPage() {
 
       {orderModal && (
         <Modal open onClose={() => setOrderModal(null)} title={orderModal.title} size="2xl">
+          <div className="flex justify-end gap-2 mb-2">
+            <Button size="sm" variant="secondary" loading={orderModalExporting === 'csv'} onClick={() => exportOrderModal('csv')}>Export CSV</Button>
+            <Button size="sm" variant="secondary" loading={orderModalExporting === 'xlsx'} onClick={() => exportOrderModal('xlsx')}>Export Excel</Button>
+          </div>
           <div className="overflow-x-auto rounded border border-navy/30 max-h-[60vh] overflow-y-auto">
             <table className="w-full text-xs font-mono">
               <thead className="sticky top-0 bg-cream">
@@ -720,20 +892,25 @@ export function CustomerHeatmapPage() {
                   <th className="px-3 py-2 text-left">Zip</th>
                   <th className="px-3 py-2 text-right">Total</th>
                   <th className="px-3 py-2 text-left">Finalized</th>
+                  <th className="px-3 py-2 text-left">Package(s)</th>
                 </tr>
               </thead>
               <tbody>
-                {orderModal.rows.map((o) => (
-                  <tr key={o.id} className="border-b border-navy/10">
-                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
-                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>
-                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{[o.first_name, o.last_name].filter(Boolean).join(' ') || '—'}</td>
-                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.city || '—'}</td>
-                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.zip || '—'}</td>
-                    <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
-                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{dateShort(o.order_finalized_at)}</td>
-                  </tr>
-                ))}
+                {orderModal.rows.map((o) => {
+                  const shopLoc = o.location_id ? loc.byId(o.location_id) : undefined
+                  return (
+                    <tr key={o.id} className="border-b border-navy/10">
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{shopLoc ? shopNumberCityLabel(shopLoc.name, shopLoc.shop_city) : (o.location_id ?? '—')}</td>
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{[o.first_name, o.last_name].filter(Boolean).join(' ') || '—'}</td>
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{normalizeCityCase(o.city ?? '') || '—'}</td>
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.zip || '—'}</td>
+                      <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{dateShort(o.order_finalized_at)}</td>
+                      <td className="px-3 py-1.5 text-navy">{orderModalPackages ? ((orderModalPackages.get(o.id) ?? []).join(', ') || '—') : '…'}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
