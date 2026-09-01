@@ -245,11 +245,15 @@ async function invokeOrderSync(body: Record<string, unknown>): Promise<DroptopOr
 
 export async function runDroptopOrderSync(
   companyId: string,
-  opts: { daysBack?: number; startUnix?: number; endUnix?: number; statusTypes?: string; locationId?: string } = {},
+  opts: { daysBack?: number; startUnix?: number; endUnix?: number; statusTypes?: string; locationId?: string; incremental?: boolean } = {},
   onProgress?: (p: DroptopSyncProgress) => void,
 ): Promise<DroptopOrderSyncResult> {
-  const { locationId, ...rest } = opts
-  if (locationId) return invokeOrderSync({ ...rest, locationId })
+  const { locationId, incremental, ...rest } = opts
+  // Steady-state mode: per-location "pull what's new since last time"
+  // instead of an explicit daysBack/startUnix-endUnix window — see
+  // droptop-sync-orders' own header comment for the full design.
+  const modeBody = incremental ? { mode: 'incremental' } : {}
+  if (locationId) return invokeOrderSync({ ...rest, ...modeBody, locationId })
 
   const ids = await fetchDroptopLocationIds(companyId)
   if (!ids.length) {

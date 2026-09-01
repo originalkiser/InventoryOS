@@ -48,7 +48,7 @@ const CONNECTION_META: Record<string, { label: string; description: string }> = 
   droptop_on_hand: { label: 'Droptop — On Hand', description: 'Pulls current on-hand quantities from Droptop into Product Usage.' },
   droptop_usage: { label: 'Droptop — Usage', description: 'Pulls sales/adjustment activity from Droptop and logs the daily sold/adjusted ledger.' },
   droptop_purchase_orders: { label: 'Droptop — Purchase Orders', description: 'Pulls open/recent POs and their line items — feeds the PO Status page and Orders v2\'s "already on order" check.' },
-  droptop_orders: { label: 'Droptop — Orders (Customers)', description: 'Pulls orders from a recent window (default last 30 days) with the placing customer\'s address, and resolves a lat/lng by zip — feeds the Customer Heatmap. Date-bounded by design, not a full customer-list pull.' },
+  droptop_orders: { label: 'Droptop — Orders (Customers)', description: 'Pulls each location\'s orders forward from its last successful sync (yesterday, or a wider catch-up after a missed day) with the placing customer\'s address, and resolves a lat/lng by zip — feeds the Customer Heatmap. Use the Historical Backfill below for a one-time date-ranged pull.' },
   automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
 }
 const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_orders', 'automated_checks']
@@ -151,8 +151,13 @@ export function DataConnectionsTab() {
         summary = `Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`
         warnings = r.warnings
       } else if (key === 'droptop_orders') {
-        const r = await runDroptopOrderSync(companyId, { daysBack: 30 }, onProgress)
-        summary = `Droptop orders: ${r.locations_synced} shop(s), ${r.orders_upserted} orders (last 30 days)`
+        // Steady-state: each location pulls forward from wherever it last
+        // successfully synced through yesterday (30-day catch-up cap) — see
+        // inventory.droptop_order_sync_state / droptop-sync-orders' header
+        // comment. Use the Historical Backfill controls below for a
+        // one-time date-ranged pull instead.
+        const r = await runDroptopOrderSync(companyId, { incremental: true }, onProgress)
+        summary = `Droptop orders: ${r.locations_synced} shop(s), ${r.orders_upserted} new order(s)`
           + (r.orders_missing_zip_match ? ` (${r.orders_missing_zip_match} missing a zip match — excluded from the heatmap)` : '')
         warnings = r.warnings
       } else if (key === 'automated_checks') {

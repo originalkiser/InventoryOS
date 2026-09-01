@@ -162,10 +162,14 @@ async function runDroptopOrders(
   const warnings: string[] = []
   let anySucceeded = false
   for (const locationIds of chunks) {
+    // Steady-state: pull each location's orders since the last date it
+    // successfully synced (tracked in inventory.droptop_order_sync_state),
+    // capped at a 30-day catch-up window. See droptop-sync-orders' own
+    // header comment for why this is Sunday-closure-safe.
     const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-      body: JSON.stringify({ mode: 'sync', daysBack: 30, locationIds }),
+      body: JSON.stringify({ mode: 'incremental', locationIds }),
     })
     const { data, error } = await parseSyncResponse(res)
     if (error) warnings.push(error)

@@ -24,12 +24,20 @@
 // (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are injected.)
 //
 // POST body: { mode?, daysBack?, startUnix?, endUnix?, statusTypes?, locationId?, locationIds? }
-//   mode        — 'sync' (default) | 'inspect' (read-only raw-shape peek)
-//   daysBack    — window size ending now; default 30. Ignored if
-//                 startUnix/endUnix are both given.
-//   startUnix/endUnix — explicit window (unix seconds) — lets the Customer
-//                 Heatmap's "Pull this range" pull an arbitrary custom
-//                 range on demand instead of the routine daysBack default.
+//   mode        — 'sync' (explicit range, daysBack or startUnix/endUnix) |
+//                 'incremental' (routine steady-state mode — per location,
+//                 pulls from the day after inventory.droptop_order_
+//                 sync_state's last_synced_date through yesterday, capped
+//                 at a 30-day catch-up; see that table's own migration
+//                 comment for the full design, including why it's safe
+//                 for shops closed on Sundays) | 'inspect' (read-only
+//                 raw-shape peek)
+//   daysBack    — mode:'sync' only: window size ending now; default 30.
+//                 Ignored if startUnix/endUnix are both given.
+//   startUnix/endUnix — mode:'sync' only: explicit window (unix seconds) —
+//                 lets the Historical Orders Backfill (Data Connections)
+//                 and the Customer Heatmap pull an arbitrary custom range
+//                 on demand.
 //   statusTypes — forwarded to Droptop's own filter (comma-separated:
 //                 Finalized, Void, Uncollectible, Scheduled). Unset = the
 //                 API's own default (Finalized, Void, Uncollectible).
@@ -166,7 +174,8 @@ Deno.serve(async (req) => {
     if (!companyId) return ok({ error: 'Unable to resolve company' })
 
     const body = await req.json().catch(() => ({}))
-    const mode: 'sync' | 'inspect' = body.mode === 'inspect' ? 'inspect' : 'sync'
+    const mode: 'sync' | 'inspect' | 'incremental' =
+      body.mode === 'inspect' ? 'inspect' : body.mode === 'incremental' ? 'incremental' : 'sync'
     const nowUnix = Math.floor(Date.now() / 1000)
     const hasExplicitRange = Number.isFinite(Number(body.startUnix)) && Number.isFinite(Number(body.endUnix))
     const daysBack = Math.min(3650, Math.max(1, Number(body.daysBack) || 30))
@@ -175,6 +184,31 @@ Deno.serve(async (req) => {
     const statusTypes: string | undefined = typeof body.statusTypes === 'string' ? body.statusTypes : undefined
     const locationId: string | undefined = body.locationId
     const locationIds: string[] = Array.isArray(body.locationIds) ? body.locationIds : []
+
+    // Incremental mode: per-location "pull just what's new" instead of one
+    // shared window for every location. Each location's own start date is
+    // the day after inventory.droptop_order_sync_state's last_synced_date
+    // for it — a location that's never been tracked (e.g. the first
+    // incremental run right after a historical backfill covered it some
+    // other way) falls back to a bounded lookback rather than erroring or
+    // guessing further back than is safe. A location whose sync failed
+    // yesterday, or for several days running, simply never advanced its
+    // tracked date — so the very next run's start date is still "the day
+    // after whatever last succeeded", naturally widening to cover the gap
+    // with no separate catch-up code path needed. Capped at
+    // MAX_CATCHUP_DAYS so a location stuck for a long time catches up over
+    // several runs instead of one huge, timeout-prone pull.
+    //
+    // This also already does the right thing for the real cohort of
+    // locations closed on Sundays: the tracked date advances on a
+    // *successful fetch*, not on "did we find any orders" — a closed
+    // Sunday with zero real orders is indistinguishable here from any
+    // other successfully-checked day, so it's never mistaken for a gap
+    // that needs re-catching-up.
+    const MAX_CATCHUP_DAYS = 30
+    const todayUtc = new Date(); todayUtc.setUTCHours(0, 0, 0, 0)
+    const yesterdayUtc = new Date(todayUtc); yesterdayUtc.setUTCDate(yesterdayUtc.getUTCDate() - 1)
+    const yesterdayEndUnix = Math.floor(yesterdayUtc.getTime() / 1000) + 86399 // 23:59:59 UTC
 
     let locQuery = (admin as any).schema('core').from('locations')
       .select('id, droptop_operation_id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
@@ -198,10 +232,54 @@ Deno.serve(async (req) => {
     let ordersUpserted = 0
     const warnings: string[] = []
     const ordersByKey = new Map<string, { o: any; locationId: string }>()
+    // location_id -> the endUnix its fetch actually succeeded through —
+    // only these get their sync-state advanced afterward.
+    const succeededThrough = new Map<string, number>()
+    // Widest [start,end] actually fetched this run, across all locations —
+    // for incremental mode the response's `window` below reports this
+    // instead of the unused shared-range fallback, since each location can
+    // have a different real start date.
+    let incrementalMinStart = Infinity
+    let incrementalMaxEnd = -Infinity
+
+    // Best-effort — brand-new table, may not be migrated in production yet.
+    const syncStateByLocation = new Map<string, string>() // location_id -> last_synced_date (yyyy-mm-dd)
+    if (mode === 'incremental') {
+      const { data: stateRows, error: stateReadErr } = await (admin as any)
+        .schema('inventory').from('droptop_order_sync_state')
+        .select('location_id, last_synced_date')
+        .eq('company_id', companyId)
+        .in('location_id', locations.map((l: any) => l.id))
+      if (stateReadErr) warnings.push(`sync-state read: ${stateReadErr.message}`)
+      for (const r of (stateRows ?? []) as { location_id: string; last_synced_date: string }[]) {
+        syncStateByLocation.set(r.location_id, r.last_synced_date)
+      }
+    }
+
     for (const loc of locations) {
       try {
-        const orders = await fetchOrders(loc.droptop_operation_id, startUnix, endUnix, statusTypes, publicKey, privateKey)
+        let locStartUnix: number
+        let locEndUnix: number
+        if (mode === 'incremental') {
+          const lastDate = syncStateByLocation.get(loc.id)
+          const earliestAllowed = new Date(yesterdayUtc.getTime() - MAX_CATCHUP_DAYS * 86400_000)
+          let start = lastDate ? new Date(`${lastDate}T00:00:00.000Z`) : earliestAllowed
+          if (lastDate) start.setUTCDate(start.getUTCDate() + 1) // day AFTER last synced, not that day again
+          if (start < earliestAllowed) start = earliestAllowed
+          locStartUnix = Math.floor(start.getTime() / 1000)
+          locEndUnix = yesterdayEndUnix
+          if (locStartUnix > locEndUnix) continue // already caught up (e.g. run more than once today)
+        } else {
+          locStartUnix = startUnix
+          locEndUnix = endUnix
+        }
+        const orders = await fetchOrders(loc.droptop_operation_id, locStartUnix, locEndUnix, statusTypes, publicKey, privateKey)
         for (const o of orders) ordersByKey.set(`${loc.id}|${o.order_id}`, { o, locationId: loc.id })
+        if (mode === 'incremental') {
+          succeededThrough.set(loc.id, locEndUnix)
+          incrementalMinStart = Math.min(incrementalMinStart, locStartUnix)
+          incrementalMaxEnd = Math.max(incrementalMaxEnd, locEndUnix)
+        }
       } catch (e) {
         warnings.push(`location ${loc.id}: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -381,6 +459,23 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Advance sync-state only for locations whose fetch actually succeeded
+    // this run — a location that errored keeps its prior last_synced_date,
+    // so the next run's start date naturally widens to cover the gap.
+    // Best-effort: never fails the whole sync (brand-new table).
+    if (mode === 'incremental' && succeededThrough.size > 0) {
+      const stateRows = [...succeededThrough.entries()].map(([locationId2, endUnix2]) => ({
+        company_id: companyId,
+        location_id: locationId2,
+        last_synced_date: new Date(endUnix2 * 1000).toISOString().slice(0, 10),
+        updated_at: nowIso,
+      }))
+      const { error: stateErr } = await (admin as any)
+        .schema('inventory').from('droptop_order_sync_state')
+        .upsert(stateRows, { onConflict: 'company_id,location_id' })
+      if (stateErr) warnings.push(`sync-state update: ${stateErr.message}`)
+    }
+
     const withCoords = rows.filter((r) => r.lat != null).length
     const status = warnings.length ? (ordersUpserted > 0 ? 'partial' : 'error') : 'success'
     await (admin as any).schema('inventory').from('data_connection_sync_log').insert({
@@ -405,7 +500,9 @@ Deno.serve(async (req) => {
       packages_written: packagesWritten,
       products_written: productsWritten,
       services_written: servicesWritten,
-      window: { startUnix, endUnix },
+      window: mode === 'incremental'
+        ? (incrementalMaxEnd >= incrementalMinStart ? { startUnix: incrementalMinStart, endUnix: incrementalMaxEnd } : null)
+        : { startUnix, endUnix },
       warnings,
     })
   } catch (err: unknown) {
