@@ -10,10 +10,19 @@
 // to perform. A product is treated as "oil" here by unit of measure (QT)
 // rather than by name/category text, matching this app's existing
 // quart-based convention for oil products (see orders-v2's engine).
+//
+// The product-id filter checks BOTH inventory.droptop_order_products (the
+// top-level products array) AND droptop_order_services' nested products —
+// an earlier version only checked the former, which is why product-id
+// search kept coming up empty: most consumed products (oil, filters, etc.)
+// only ever show up inside services, not the flat top-level array.
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
+import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
+import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { Card, CardBody, Input, MultiSelectDropdown, SbLoader } from '@/components/ui'
 
 interface OrderRow {
@@ -49,10 +58,9 @@ interface ServiceRow {
   products: { product_id?: string; uom?: string; quantity_total?: string | number }[] | null
 }
 
-const isoDate = (d: Date) => d.toISOString().slice(0, 10)
-const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d }
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
+const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
 // Fetch rows for a batch of order ids in chunks — avoids one giant .in()
 // URL for a wide date range with a lot of orders.
@@ -73,11 +81,11 @@ export function DroptopOrdersPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
+  const earliestDate = useEarliestOrderDate(companyId)
+  const { period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, range } = useDateRangePeriod('droptop-orders:period', 'last_week')
 
   const [shopLabels, setShopLabels] = useState<string[]>([])
-  const [startDate, setStartDate] = useState(() => isoDate(daysAgo(30)))
-  const [endDate, setEndDate] = useState(() => isoDate(new Date()))
-  const [packageFilter, setPackageFilter] = useState('')
+  const [packageFilters, setPackageFilters] = useState<string[]>([])
   const [productIdFilter, setProductIdFilter] = useState('')
   const [search, setSearch] = useState('')
 
@@ -99,8 +107,8 @@ export function DroptopOrdersPage() {
     setLoading(true)
     setError(null)
     const sb = supabase as any
-    const startIso = `${startDate}T00:00:00.000Z`
-    const endIso = `${endDate}T23:59:59.999Z`
+    const startIso = `${range.start}T00:00:00.000Z`
+    const endIso = `${range.end}T23:59:59.999Z`
 
     async function run() {
       // Keyset pagination by id, not OFFSET — same fix already applied
@@ -143,7 +151,7 @@ export function DroptopOrdersPage() {
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
-  }, [companyId, startDate, endDate, shopIds.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [companyId, range.start, range.end, shopIds.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const packagesByOrder = useMemo(() => {
     const m = new Map<string, PackageRow[]>()
@@ -155,11 +163,37 @@ export function DroptopOrdersPage() {
     for (const p of products) { const a = m.get(p.order_id) ?? []; a.push(p); m.set(p.order_id, a) }
     return m
   }, [products])
+  const servicesByOrder = useMemo(() => {
+    const m = new Map<string, ServiceRow[]>()
+    for (const s of services) { const a = m.get(s.order_id) ?? []; a.push(s); m.set(s.order_id, a) }
+    return m
+  }, [services])
 
   const allPackageNames = useMemo(
     () => [...new Set(packages.map((p) => p.name).filter((n): n is string => !!n))].sort(),
     [packages],
   )
+  // How many package rows (in the current date/shop scope, before the
+  // package/product/search filters below) carry each name — shown in the
+  // multi-select so picking a package is informed by real volume.
+  const packageOptionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of packages) if (p.name) m.set(p.name, (m.get(p.name) ?? 0) + 1)
+    return m
+  }, [packages])
+  const packageOptions = useMemo(
+    () => allPackageNames.map((n) => ({ value: n, count: packageOptionCounts.get(n) ?? 0 })),
+    [allPackageNames, packageOptionCounts],
+  )
+
+  // Every product id that actually shows up on an order in scope, from
+  // both sources — see the file header comment for why both are needed.
+  const allProductIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const p of products) if (p.product_id) s.add(p.product_id)
+    for (const svc of services) for (const pr of (svc.products ?? [])) if (pr.product_id) s.add(pr.product_id)
+    return [...s].sort()
+  }, [products, services])
 
   // Client-side filtering — package/product filters need the joined child
   // rows, and order volumes for a date-scoped, one-company query are light
@@ -167,18 +201,20 @@ export function DroptopOrdersPage() {
   // config-tab-style pages) is simpler than a server-side join here.
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const pf = packageFilter.trim().toLowerCase()
-    const prf = productIdFilter.trim().toLowerCase()
     return orders.filter((o) => {
-      if (pf && !(packagesByOrder.get(o.id) ?? []).some((p) => (p.name ?? '').toLowerCase() === pf)) return false
-      if (prf && !(productsByOrder.get(o.id) ?? []).some((p) => (p.product_id ?? '').toLowerCase().includes(prf))) return false
+      if (packageFilters.length && !(packagesByOrder.get(o.id) ?? []).some((p) => p.name && packageFilters.includes(p.name))) return false
+      if (productIdFilter) {
+        const inTopLevel = (productsByOrder.get(o.id) ?? []).some((p) => p.product_id === productIdFilter)
+        const inServices = (servicesByOrder.get(o.id) ?? []).some((s) => (s.products ?? []).some((p) => p.product_id === productIdFilter))
+        if (!inTopLevel && !inServices) return false
+      }
       if (q) {
         const hay = `${o.order_id} ${o.first_name ?? ''} ${o.last_name ?? ''} ${o.city ?? ''}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
     })
-  }, [orders, packagesByOrder, productsByOrder, search, packageFilter, productIdFilter])
+  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, search, packageFilters, productIdFilter])
 
   const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
 
@@ -236,31 +272,22 @@ export function DroptopOrdersPage() {
 
       {/* Filters */}
       <div className="flex items-end gap-2 flex-wrap">
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Start</span>
-          <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
-            className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
-        </label>
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">End</span>
-          <input type="date" value={endDate} min={startDate} max={isoDate(new Date())} onChange={(e) => setEndDate(e.target.value)}
-            className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
-        </label>
+        <PeriodPicker period={period} onPeriodChange={setPeriod} customStart={customStart} customEnd={customEnd}
+          onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
           <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
         </div>
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Package</span>
-          <select value={packageFilter} onChange={(e) => setPackageFilter(e.target.value)}
-            className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky min-w-[160px]">
-            <option value="">All Packages</option>
-            {allPackageNames.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </label>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Package(s)</span>
+          <MultiSelectDropdown options={packageOptions} selected={packageFilters} onChange={setPackageFilters} placeholder="All Packages" countNoun="packages" searchable />
+        </div>
         <label className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Product ID</span>
-          <Input value={productIdFilter} onChange={(e) => setProductIdFilter(e.target.value)} placeholder="e.g. 0W16-FLSYN" className="w-40" />
+          <select value={productIdFilter} onChange={(e) => setProductIdFilter(e.target.value)} className={`${fieldCls} min-w-[160px]`}>
+            <option value="">All Products</option>
+            {allProductIds.map((id) => <option key={id} value={id}>{id}</option>)}
+          </select>
         </label>
         <label className="flex flex-col gap-0.5 flex-1 min-w-[180px]">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Search</span>
