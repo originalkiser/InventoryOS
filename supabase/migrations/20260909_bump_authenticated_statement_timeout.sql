@@ -1,0 +1,15 @@
+-- Raises the 'authenticated' role's statement_timeout from Supabase's
+-- default 8s to 30s. Applies to every query issued by every logged-in app
+-- user (not just Droptop Orders/Customer Heatmap), so this is a real,
+-- if modest, tradeoff: a genuinely runaway query anywhere in the app now
+-- has more time to run before Postgres kills it.
+--
+-- Confirmed via EXPLAIN ANALYZE that a single page of the Droptop Orders/
+-- Customer Heatmap keyset-paginated query is fast (~280ms) even at
+-- ~140,000 total rows, using idx_droptop_orders_company_finalized — the
+-- timeouts reported at full-company/month scale were from the sheer
+-- NUMBER of sequential page round trips (~140 at 1000 rows/page) rather
+-- than any single slow query, so this is paired with raising those pages'
+-- PAGE/CHUNK sizes client-side (cuts round trips ~3-5x) rather than
+-- relying on the timeout bump alone to paper over it.
+ALTER ROLE authenticated SET statement_timeout = '30s';

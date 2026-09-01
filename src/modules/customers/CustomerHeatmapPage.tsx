@@ -282,7 +282,16 @@ export function CustomerHeatmapPage() {
       // every order in range/shop scope, mapped or not — the "Not On Map"
       // card/modal needs the unmapped ones too, so there's no separate
       // count-only query anymore; everything comes from one load.
-      const PAGE = 1000
+      //
+      // PAGE raised from 1000 (a full-company month, ~140k orders, needed
+      // ~140 sequential round trips at 1000/page — each one individually
+      // fast per EXPLAIN ANALYZE, but the sheer count meant any single one
+      // hitting a moment of connection-pool contention could exceed the
+      // statement timeout). This is safe to raise past 1000 specifically
+      // because every call here already passes an explicit .limit() —
+      // PostgREST's 1000-row default only silently truncates queries with
+      // NO limit/range specified at all (see project memory on that bug).
+      const PAGE = 3000
       const all: OrderRow[] = []
       let cursor: { date: string; id: string } | null = null
       for (;;) {
@@ -476,7 +485,11 @@ export function CustomerHeatmapPage() {
   // DroptopOrdersPage.tsx already does for the same table.
   async function fetchPackageNamesByOrderIds(orderIds: string[]): Promise<Map<string, string[]>> {
     const sb = supabase as any
-    const CHUNK = 200
+    // Raised from 200 — droptop_order_packages.order_id is indexed, so a
+    // bigger .in() list per round trip cuts total requests (86k orders at
+    // 200/chunk was 430 round trips) without meaningfully slowing any one
+    // of them.
+    const CHUNK = 1000
     const byOrder = new Map<string, string[]>()
     for (let i = 0; i < orderIds.length; i += CHUNK) {
       const slice = orderIds.slice(i, i + CHUNK)

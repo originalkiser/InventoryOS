@@ -65,10 +65,13 @@ const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCa
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
 // Fetch rows for a batch of order ids in chunks — avoids one giant .in()
-// URL for a wide date range with a lot of orders.
+// URL for a wide date range with a lot of orders. CHUNK raised from 200 —
+// every child table's order_id column is indexed, so a bigger .in() list
+// per round trip cuts total requests substantially at full-company scale
+// without meaningfully slowing any one of them.
 async function fetchByOrderIds<T>(table: string, orderIds: string[], select: string): Promise<T[]> {
   const sb = supabase as any
-  const CHUNK = 200
+  const CHUNK = 1000
   const out: T[] = []
   for (let i = 0; i < orderIds.length; i += CHUNK) {
     const slice = orderIds.slice(i, i + CHUNK)
@@ -165,7 +168,15 @@ export function DroptopOrdersPage() {
       // use an index to seek to the matching date range (see
       // 20260907_droptop_orders_date_index.sql), which is what made a
       // narrow custom range time out even though a wide one loaded fine.
-      const PAGE = 1000
+      //
+      // Raised from 1000 — a full-company month needed ~140 sequential
+      // round trips at 1000/page, each individually fast but the count
+      // alone raised the odds any single one hit a moment of connection-
+      // pool contention and exceeded the statement timeout. Safe past
+      // 1000 because every call here already passes an explicit .limit()
+      // — PostgREST's 1000-row default only silently truncates queries
+      // with no limit/range specified at all.
+      const PAGE = 3000
       const allOrders: OrderRow[] = []
       let cursor: { date: string; id: string } | null = null
       for (;;) {
