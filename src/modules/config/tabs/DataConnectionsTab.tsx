@@ -305,9 +305,22 @@ export function DataConnectionsTab() {
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
       const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
-      const summary = `${data.orders_upserted} orders in ${seconds}s (${data.orders_with_coordinates} mapped, ${data.orders_missing_zip_match} missing a zip match)`
-      store.finish(DROPTOP_ORDERS_TASK_ID, 'success', summary)
-      toast.success(summary, { duration: 10000 })
+      // "0 orders" and "orders pulled but 0 mapped" read identically as
+      // "no data" on the Heatmap afterward if this isn't loud about which
+      // one actually happened — surfacing the matched location's real name
+      // too, since a fuzzy name search silently resolving to the wrong
+      // shop would otherwise look exactly like "it worked" here.
+      const summary = `Matched "${loc.name}" — ${data.orders_upserted} orders in ${seconds}s (${data.orders_with_coordinates} mapped, ${data.orders_missing_zip_match} missing a zip match)`
+      if (data.orders_upserted === 0) {
+        store.finish(DROPTOP_ORDERS_TASK_ID, 'partial', `${summary} — no orders in this window for "${loc.name}". Wrong shop matched, or genuinely none placed?`)
+        toast(`No orders found for "${loc.name}" in the last 30 days.`, { icon: '⚠️', duration: 10000 })
+      } else if (data.orders_with_coordinates === 0) {
+        store.finish(DROPTOP_ORDERS_TASK_ID, 'partial', `${summary} — none had a zip match, so none will show on the Heatmap.`)
+        toast(`${data.orders_upserted} orders pulled for "${loc.name}", but 0 mapped — none will show on the Heatmap (all missing a zip match).`, { icon: '⚠️', duration: 12000 })
+      } else {
+        store.finish(DROPTOP_ORDERS_TASK_ID, 'success', summary)
+        toast.success(summary, { duration: 10000 })
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Test pull failed'
       store.finish(DROPTOP_ORDERS_TASK_ID, 'error', message)
