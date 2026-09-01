@@ -20,9 +20,14 @@ interface Props {
   // Adds a text filter above the checklist — for option lists too long to
   // scan (e.g. every product ID in the catalog).
   searchable?: boolean
+  // 'right' anchors the open panel to the trigger's right edge instead of
+  // its left — for a dropdown near the right side of a narrow container,
+  // where left-anchoring pushes the panel (and the page) past the viewport
+  // edge instead of opening back over the page.
+  align?: 'left' | 'right'
 }
 
-export function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All', showAllOption = true, countNoun = 'selected', searchable = false }: Props) {
+export function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All', showAllOption = true, countNoun = 'selected', searchable = false, align = 'left' }: Props) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef<HTMLDivElement>(null)
@@ -72,7 +77,7 @@ export function MultiSelectDropdown({ options, selected, onChange, placeholder =
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-40 bg-cream dark:bg-[#0e2638] border border-navy/30 rounded shadow-xl overflow-hidden min-w-[160px] max-w-[240px]">
+        <div className={`absolute top-full ${align === 'right' ? 'right-0' : 'left-0'} mt-1 z-40 bg-cream dark:bg-[#0e2638] border border-navy/30 rounded shadow-xl overflow-hidden min-w-[160px] max-w-[240px]`}>
           {searchable && (
             <div className="p-1 border-b border-navy/10">
               <input

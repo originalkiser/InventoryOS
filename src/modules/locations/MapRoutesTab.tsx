@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { MARKET_PALETTE, getMarketSolidColor } from '@/lib/marketColors'
 import toast from 'react-hot-toast'
 import { ManualRouteModal } from './ManualRouteModal'
 import { ApiConfirmModal } from './ApiConfirmModal'
@@ -33,11 +34,6 @@ type SheetSnap = 0 | 1 | 2
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const MARKET_PALETTE = [
-  '#002745', '#C0392B', '#E67E22', '#2ECC71',
-  '#4F7489', '#9B59B6', '#1ABC9C', '#E91E63',
-  '#FF5722', '#3F51B5', '#00BCD4', '#FFC107',
-]
 const MARKET_PATTERNS = ['solid', 'diag', 'horiz'] as const
 type MarketPattern = typeof MARKET_PATTERNS[number]
 
@@ -70,12 +66,6 @@ function getMarketBackground(market: string, allMarkets: string[]): string {
     return `repeating-linear-gradient(0deg,${color},${color} 3px,rgba(255,255,255,0.45) 3px,rgba(255,255,255,0.45) 6px)`
   }
   return color
-}
-
-function getMarketSolidColor(market: string, allMarkets: string[]): string {
-  if (!market) return '#4F7489'
-  const idx = allMarkets.indexOf(market)
-  return MARKET_PALETTE[idx % MARKET_PALETTE.length]
 }
 
 /** Decode a Google encoded polyline to [lat, lng] pairs */
