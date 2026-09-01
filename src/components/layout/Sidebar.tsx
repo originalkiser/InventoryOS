@@ -36,6 +36,7 @@ import { LocationExclusionsConfig } from './LocationExclusionsConfig'
 import { isAdminOrDeveloper, getRoleLabel } from '@/lib/roles'
 import sbLogo from '@/assets/logo-cream.png'
 import sbIcon from '@/assets/SBOC-IconCream.png'
+import droptopLogo from '@/assets/droptop-logo.png'
 import {
   Package, Settings, Building2, DollarSign, TrendingUp, Megaphone,
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
@@ -80,7 +81,7 @@ export const ICONS: Record<string, JSX.Element> = {
 
 const SECTION_ICONS: Record<string, JSX.Element> = {
   inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
-  droptop: <MapPin className="w-3.5 h-3.5 flex-shrink-0 text-inky" />,
+  droptop: <img src={droptopLogo} alt="" className="w-3.5 h-3.5 flex-shrink-0 object-contain" />,
   'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-[#F2F1E6]/70" />,
   operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-[#E67E22]" />,
   finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-[#2ECC71]" />,
