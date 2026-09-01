@@ -5,37 +5,36 @@
 // against inventory.zip_centroids for lat/lng, since Droptop's order/
 // customer records carry an address but no coordinates.
 //
-// Deliberately orders-based, not a full customer-list pull (an earlier
-// version of this page read inventory.droptop_customers, which pulled a
-// shop's ENTIRE customer history regardless of recency — 10,000+ per
-// location in practice). Orders are naturally date-bounded, so this stays
-// fast and light: filtering already-synced data by date range is free.
-//
-// This page is read-only against already-synced data — it never calls the
-// Droptop API itself (an earlier "Pull This Range" button that did was
-// removed; syncing lives solely in Config -> Data Connections now, so
-// there's exactly one place a page click can trigger an outbound API call
-// from, not two).
+// Read-only against already-synced data — never calls the Droptop API
+// itself (an earlier "Pull This Range" button that did was removed;
+// syncing lives solely in Config -> Data Connections now).
 //
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
 // areas customers cluster in, not a pin-per-order map.
 import { useEffect, useMemo, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Tooltip } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useDarkMode } from '@/hooks/useDarkMode'
-import { Card, CardBody, Combobox, SbLoader } from '@/components/ui'
+import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
+import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
+import { PeriodPicker } from '@/components/shared/PeriodPicker'
+import { Card, CardBody, MultiSelectDropdown, Modal, SbLoader } from '@/components/ui'
 
 interface OrderRow {
   id: string
   location_id: string | null
+  order_id: string
+  first_name: string | null
+  last_name: string | null
   city: string | null
   region: string | null
   zip: string | null
   lat: number | null
   lng: number | null
+  final_price: number | null
   order_finalized_at: string | null
 }
 
@@ -46,24 +45,17 @@ interface ZipCluster {
   lat: number
   lng: number
   count: number
+  locationIds: Set<string>
 }
 
-// Radius/color scale — same brand palette used everywhere else. Two fixes
-// over an earlier version that looked "off": real customer geography is
-// heavily skewed (a shop's own zip and its immediate neighbors dominate,
-// then a long tail of 1-2-order zips), which broke a scale based on a
-// fixed fraction of the single max value — almost everything landed in
-// the same "low" bucket since almost nothing gets within 33-66% of
-// whichever zip happens to be the single biggest.
-//   1. Radius scales by sqrt(count/max), not count/max linearly — circle
-//      AREA (not radius) should be proportional to the value for a
-//      graduated-symbol map to read correctly at a glance; linear radius
-//      scaling makes low counts look proportionally far smaller than they
-//      really are relative to the top one.
-//   2. Color buckets are median/80th-percentile of the actual cluster
-//      counts, not fixed fractions of max — robust to a skewed
-//      distribution instead of collapsing everything below the top
-//      handful of zips into one color.
+// Radius/color scale — same brand palette used everywhere else. Real
+// customer geography is heavily skewed (a shop's own zip and its
+// neighbors dominate, then a long tail of 1-2-order zips), so:
+//   1. Radius scales by sqrt(count/max), not linearly — circle AREA
+//      should be proportional to the value for a graduated-symbol map to
+//      read correctly at a glance.
+//   2. Color buckets are the median/80th-percentile of the actual loaded
+//      cluster counts, not fixed fractions of max — robust to skew.
 interface DensityBreakpoints { median: number; p80: number; max: number }
 
 function densityBreakpoints(counts: number[]): DensityBreakpoints {
@@ -81,49 +73,69 @@ function styleFor(count: number, bp: DensityBreakpoints): { radius: number; colo
   return { radius, color: '#4F7489', fill: '#B7E0DE' } // bottom half
 }
 
-const isoDate = (d: Date) => d.toISOString().slice(0, 10)
-const today = () => new Date()
-const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d }
+const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+const dateShort = (v: string | null) => v ? new Date(v).toLocaleDateString() : '—'
+
+// Imperatively pans/zooms the map when the selected zip changes — a plain
+// state change on <MapContainer center> only sets the *initial* view, not
+// a live one, so this needs react-leaflet's useMap() the same way
+// MapRoutesTab.tsx already does for its own pan/fit calls.
+function FocusZip({ target }: { target: ZipCluster | null }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!target) return
+    map.flyTo([target.lat, target.lng], Math.max(map.getZoom(), 9), { duration: 0.6 })
+  }, [target, map])
+  return null
+}
 
 export function CustomerHeatmapPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
   const { dark } = useDarkMode()
+  const earliestDate = useEarliestOrderDate(companyId)
+  const { period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, range } = useDateRangePeriod('heatmap:period', 'last_week')
 
-  const [shopId, setShopId] = useState('')
-  const [startDate, setStartDate] = useState(() => isoDate(daysAgo(30)))
-  const [endDate, setEndDate] = useState(() => isoDate(today()))
+  const [shopLabels, setShopLabels] = useState<string[]>([])
+  const [matchMode, setMatchMode] = useState<'all' | 'shared'>('all')
   const [rows, setRows] = useState<OrderRow[]>([])
-  const [totalOrders, setTotalOrders] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [selectedZip, setSelectedZip] = useState<string | null>(null)
+  const [orderModal, setOrderModal] = useState<{ title: string; rows: OrderRow[] } | null>(null)
+
+  const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
+  const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
+  const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
+  const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
 
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
     setLoading(true)
     setError(null)
+    setSelectedZip(null)
     const sb = supabase as any
-    const startIso = `${startDate}T00:00:00.000Z`
-    const endIso = `${endDate}T23:59:59.999Z`
+    const startIso = `${range.start}T00:00:00.000Z`
+    const endIso = `${range.end}T23:59:59.999Z`
 
     async function run() {
       // Keyset pagination, not OFFSET — same fix already applied to
-      // ProductUsageTab.tsx/useConfigTab.ts for the same reason: an
-      // un-ranged/OFFSET-based select degrades badly once a table gets
-      // large, and there's no reason to reintroduce that here.
+      // ProductUsageTab.tsx/useConfigTab.ts for the same reason. Loads
+      // every order in range/shop scope, mapped or not — the "Not On Map"
+      // card/modal needs the unmapped ones too, so there's no separate
+      // count-only query anymore; everything comes from one load.
       const PAGE = 1000
       const all: OrderRow[] = []
       let cursor: string | null = null
       for (;;) {
         let q = sb.schema('inventory').from('droptop_orders')
-          .select('id, location_id, city, region, zip, lat, lng, order_finalized_at')
+          .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, final_price, order_finalized_at')
           .eq('company_id', companyId)
           .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
-          .not('lat', 'is', null)
           .order('id', { ascending: true }).limit(PAGE)
-        if (shopId) q = q.eq('location_id', shopId)
+        if (shopIds.length) q = q.in('location_id', shopIds)
         if (cursor) q = q.gt('id', cursor)
         const { data, error: err } = await q
         if (err) { if (!cancelled) setError(err.message); break }
@@ -133,56 +145,56 @@ export function CustomerHeatmapPage() {
         cursor = batch[batch.length - 1].id
       }
       if (cancelled) return
-
-      // Separate count of everything in range (including no-coordinate
-      // rows) for the "not on map" callout.
-      let countQuery = sb.schema('inventory').from('droptop_orders')
-        .select('id', { count: 'exact', head: true }).eq('company_id', companyId)
-        .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
-      if (shopId) countQuery = countQuery.eq('location_id', shopId)
-      const { count } = await countQuery
-      if (cancelled) return
-
       setRows(all)
-      setTotalOrders(count ?? all.length)
       setLoading(false)
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
-  }, [companyId, shopId, startDate, endDate])
+  }, [companyId, shopIds.join(','), range.start, range.end]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const clusters = useMemo<ZipCluster[]>(() => {
+  const mappedRows = useMemo(() => rows.filter((r) => r.lat != null && r.lng != null), [rows])
+  const unmappedRows = useMemo(() => rows.filter((r) => r.lat == null || r.lng == null), [rows])
+
+  const allClusters = useMemo<ZipCluster[]>(() => {
     const byZip = new Map<string, ZipCluster>()
-    for (const r of rows) {
-      if (r.lat == null || r.lng == null) continue
+    for (const r of mappedRows) {
       const key = r.zip || `${r.lat},${r.lng}`
       const existing = byZip.get(key)
-      if (existing) existing.count++
-      else byZip.set(key, { zip: r.zip ?? '—', city: r.city ?? '', region: r.region ?? '', lat: r.lat, lng: r.lng, count: 1 })
+      if (existing) { existing.count++; if (r.location_id) existing.locationIds.add(r.location_id) }
+      else byZip.set(key, {
+        zip: r.zip ?? '—', city: r.city ?? '', region: r.region ?? '', lat: r.lat as number, lng: r.lng as number,
+        count: 1, locationIds: new Set(r.location_id ? [r.location_id] : []),
+      })
     }
-    return [...byZip.values()].sort((a, b) => b.count - a.count)
-  }, [rows])
+    return [...byZip.values()]
+  }, [mappedRows])
+
+  // "Shared" = only zips with a customer at EVERY selected shop.
+  // "All" (default) = zips from ANY selected shop (plain union — already
+  // what the query itself returns once 2+ shops are picked).
+  const clusters = useMemo(() => {
+    let list = allClusters
+    if (matchMode === 'shared' && shopIds.length >= 2) {
+      const need = shopIds
+      list = list.filter((c) => need.every((id) => c.locationIds.has(id)))
+    }
+    return [...list].sort((a, b) => b.count - a.count)
+  }, [allClusters, matchMode, shopIds])
 
   const densityBp = useMemo(() => densityBreakpoints(clusters.map((c) => c.count)), [clusters])
-  const mappedCount = rows.length
-  const notMapped = Math.max(0, totalOrders - mappedCount)
+  const focusTarget = useMemo(() => clusters.find((c) => c.zip === selectedZip) ?? null, [clusters, selectedZip])
 
   const mapCenter = useMemo((): [number, number] => {
     if (clusters.length > 0) return [clusters[0].lat, clusters[0].lng]
     return [39.5, -98.35] // continental US fallback
   }, [clusters.length > 0 ? clusters[0].zip : null]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const shopOptions = useMemo(
-    () => [{ value: '', label: 'All Shops' }, ...loc.includedOptions],
-    [loc.includedOptions],
-  )
+  function ordersForZip(zip: string): OrderRow[] {
+    return mappedRows.filter((r) => (r.zip ?? '—') === zip)
+  }
 
-  // Plain OpenStreetMap tiles — CartoDB's raster basemaps (previously used
-  // here) now require an API key and are being retired outright in favor
-  // of vector basemaps, so this uses OSM's own tiles instead: free, no
-  // signup, not going anywhere. No native dark style, so dark mode is
-  // approximated with a CSS filter (map-tiles-dark, in index.css) scoped
-  // to just the tile images via TileLayer's className.
+  // Plain OpenStreetMap tiles — see index.css's .map-tiles-dark comment for
+  // why (CartoDB's raster basemaps now need a key and are being retired).
   const tileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
   const tileAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
@@ -198,20 +210,24 @@ export function CustomerHeatmapPage() {
             Droptop — Orders sync.
           </p>
         </div>
-        <div className="flex items-end gap-2 flex-wrap">
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Start</span>
-            <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
-              className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
-          </label>
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">End</span>
-            <input type="date" value={endDate} min={startDate} max={isoDate(today())} onChange={(e) => setEndDate(e.target.value)}
-              className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky" />
-          </label>
-          <div className="w-56">
-            <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="All Shops" />
+        <div className="flex items-end gap-3 flex-wrap">
+          <PeriodPicker period={period} onPeriodChange={setPeriod} customStart={customStart} customEnd={customEnd}
+            onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
+            <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
           </div>
+          {shopIds.length >= 2 && (
+            <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
+              {(['all', 'shared'] as const).map((m) => (
+                <button key={m} onClick={() => setMatchMode(m)}
+                  className={['px-2 py-1.5 uppercase tracking-wide transition-colors', matchMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
+                  title={m === 'all' ? 'Show all customers for any selected location' : 'Only zips with a customer at every selected location'}>
+                  {m === 'all' ? 'All Customers' : 'Shared Only'}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -224,100 +240,166 @@ export function CustomerHeatmapPage() {
       ) : rows.length === 0 ? (
         <Card><CardBody>
           <p className="text-xs font-mono text-inky/60">
-            No mapped orders for this range{shopId ? ' at this shop' : ''} yet. Run the Droptop — Orders sync from
-            Config → Data Connections, then come back here.
+            No orders for this range{shopIds.length ? ' at these shop(s)' : ''} yet. Run the Droptop — Orders sync
+            from Config → Data Connections, then come back here.
           </p>
         </CardBody></Card>
       ) : (
         <>
           <div className="flex gap-3 flex-wrap">
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Orders</p>
-              <p className="text-lg font-heading font-bold text-navy">{totalOrders.toLocaleString()}</p>
-            </CardBody></Card>
+            <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
+              onClick={() => setOrderModal({ title: `Orders (${rows.length})`, rows })}>
+              <CardBody className="py-3">
+                <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Orders</p>
+                <p className="text-lg font-heading font-bold text-navy">{rows.length.toLocaleString()}</p>
+              </CardBody>
+            </Card>
             <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
               <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Zip Clusters</p>
               <p className="text-lg font-heading font-bold text-navy">{clusters.length.toLocaleString()}</p>
             </CardBody></Card>
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Top Zip</p>
-              <p className="text-sm font-mono font-bold text-navy">
-                {clusters[0]?.zip} {clusters[0]?.city && `— ${clusters[0].city}`} <span className="text-inky/60">({clusters[0]?.count})</span>
-              </p>
-            </CardBody></Card>
-            {notMapped > 0 && (
-              <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-                <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Not On Map</p>
-                <p className="text-lg font-heading font-bold text-[#E67E22]">{notMapped.toLocaleString()}</p>
-                <p className="text-[10px] font-mono text-inky/50">no zip match in zip_centroids yet</p>
-              </CardBody></Card>
+            {clusters[0] && (
+              <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
+                onClick={() => setSelectedZip(clusters[0].zip)}>
+                <CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Top Zip</p>
+                  <p className="text-sm font-mono font-bold text-navy">
+                    {clusters[0].zip} {clusters[0].city && `— ${clusters[0].city}`} <span className="text-inky/60">({clusters[0].count})</span>
+                  </p>
+                </CardBody>
+              </Card>
+            )}
+            {unmappedRows.length > 0 && (
+              <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
+                onClick={() => setOrderModal({ title: `Not On Map (${unmappedRows.length})`, rows: unmappedRows })}>
+                <CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Not On Map</p>
+                  <p className="text-lg font-heading font-bold text-[#E67E22]">{unmappedRows.length.toLocaleString()}</p>
+                  <p className="text-[10px] font-mono text-inky/50">no zip match — click to see which</p>
+                </CardBody>
+              </Card>
             )}
           </div>
 
-          <div className="rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
-            <MapContainer center={mapCenter} zoom={5} style={{ height: '100%', width: '100%' }}>
-              <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
-              {clusters.map((c) => {
-                const style = styleFor(c.count, densityBp)
-                return (
-                  <CircleMarker
-                    key={c.zip}
-                    center={[c.lat, c.lng]}
-                    radius={style.radius}
-                    pathOptions={{ color: style.color, fillColor: style.fill, fillOpacity: 0.55, weight: 1.5 }}
-                  >
-                    <Tooltip>
-                      <span className="font-mono text-xs">
-                        {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} order{c.count !== 1 ? 's' : ''}
-                      </span>
-                    </Tooltip>
-                  </CircleMarker>
-                )
-              })}
-            </MapContainer>
-          </div>
-
-          {/* Legend */}
-          <div className="flex items-center gap-4 text-[10px] font-mono text-inky/70">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Bottom half of zips</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Above median</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />Top 20%</span>
-            <span className="ml-auto text-inky/50">Colored by percentile of this range's own zips, not a fixed scale</span>
-          </div>
-
-          {/* Visits by zip — the same clusters as the map, as a plain
-              sortable-by-eye table for anyone who wants the numbers
-              directly rather than reading them off circle size/color. */}
-          <Card>
-            <CardBody className="flex flex-col gap-2">
-              <span className="text-xs font-mono text-navy uppercase tracking-wide">Visits by Zip ({clusters.length})</span>
-              <div className="overflow-x-auto rounded border border-navy/30 max-h-96 overflow-y-auto">
-                <table className="w-full text-xs font-mono">
-                  <thead className="sticky top-0 bg-cream">
-                    <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                      <th className="px-3 py-2 text-left">Zip</th>
-                      <th className="px-3 py-2 text-left">City</th>
-                      <th className="px-3 py-2 text-left">Region</th>
-                      <th className="px-3 py-2 text-right">Orders</th>
-                      <th className="px-3 py-2 text-right">% of Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {clusters.map((c) => (
-                      <tr key={c.zip} className="border-b border-navy/10">
-                        <td className="px-3 py-1.5 text-navy">{c.zip}</td>
-                        <td className="px-3 py-1.5 text-navy">{c.city || '—'}</td>
-                        <td className="px-3 py-1.5 text-navy">{c.region || '—'}</td>
-                        <td className="px-3 py-1.5 text-navy text-right">{c.count}</td>
-                        <td className="px-3 py-1.5 text-inky/70 text-right">{mappedCount ? ((c.count / mappedCount) * 100).toFixed(1) : '0.0'}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {clusters.length === 0 ? (
+            <Card><CardBody>
+              <p className="text-xs font-mono text-inky/60">
+                {matchMode === 'shared' ? 'No zip is shared across every selected shop for this range.' : 'No mapped orders for this range.'}
+              </p>
+            </CardBody></Card>
+          ) : (
+            <>
+              <div className="rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
+                <MapContainer center={mapCenter} zoom={5} style={{ height: '100%', width: '100%' }}>
+                  <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
+                  <FocusZip target={focusTarget} />
+                  {clusters.map((c) => {
+                    const style = styleFor(c.count, densityBp)
+                    return (
+                      <CircleMarker
+                        key={c.zip}
+                        center={[c.lat, c.lng]}
+                        radius={style.radius}
+                        pathOptions={{ color: style.color, fillColor: style.fill, fillOpacity: 0.55, weight: 1.5 }}
+                        eventHandlers={{ click: () => setSelectedZip(c.zip) }}
+                      >
+                        <Tooltip>
+                          <span className="font-mono text-xs">
+                            {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} order{c.count !== 1 ? 's' : ''}
+                          </span>
+                        </Tooltip>
+                      </CircleMarker>
+                    )
+                  })}
+                  {/* Selection ring — a circular indicator instead of the
+                      browser's default square focus outline (suppressed
+                      globally for Leaflet paths, see index.css). */}
+                  {focusTarget && (
+                    <CircleMarker
+                      center={[focusTarget.lat, focusTarget.lng]}
+                      radius={styleFor(focusTarget.count, densityBp).radius + 6}
+                      pathOptions={{ color: '#002745', weight: 2, dashArray: '4 3', fillOpacity: 0 }}
+                      interactive={false}
+                    />
+                  )}
+                </MapContainer>
               </div>
-            </CardBody>
-          </Card>
+
+              {/* Legend */}
+              <div className="flex items-center gap-4 text-[10px] font-mono text-inky/70">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Bottom half of zips</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Above median</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />Top 20%</span>
+                <span className="ml-auto text-inky/50">Colored by percentile of this range's own zips, not a fixed scale</span>
+              </div>
+
+              {/* Visits by zip — click a row to see its orders. */}
+              <Card>
+                <CardBody className="flex flex-col gap-2">
+                  <span className="text-xs font-mono text-navy uppercase tracking-wide">Visits by Zip ({clusters.length})</span>
+                  <div className="overflow-x-auto rounded border border-navy/30 max-h-96 overflow-y-auto">
+                    <table className="w-full text-xs font-mono">
+                      <thead className="sticky top-0 bg-cream">
+                        <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                          <th className="px-3 py-2 text-left">Zip</th>
+                          <th className="px-3 py-2 text-left">City</th>
+                          <th className="px-3 py-2 text-left">Region</th>
+                          <th className="px-3 py-2 text-right">Orders</th>
+                          <th className="px-3 py-2 text-right">% of Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clusters.map((c) => (
+                          <tr key={c.zip} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10"
+                            onClick={() => setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })}>
+                            <td className="px-3 py-1.5 text-navy">{c.zip}</td>
+                            <td className="px-3 py-1.5 text-navy">{c.city || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy">{c.region || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy text-right">{c.count}</td>
+                            <td className="px-3 py-1.5 text-inky/70 text-right">{mappedRows.length ? ((c.count / mappedRows.length) * 100).toFixed(1) : '0.0'}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardBody>
+              </Card>
+            </>
+          )}
         </>
+      )}
+
+      {orderModal && (
+        <Modal open onClose={() => setOrderModal(null)} title={orderModal.title} size="lg">
+          <div className="overflow-x-auto rounded border border-navy/30 max-h-[60vh] overflow-y-auto">
+            <table className="w-full text-xs font-mono">
+              <thead className="sticky top-0 bg-cream">
+                <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                  <th className="px-3 py-2 text-left">Order #</th>
+                  <th className="px-3 py-2 text-left">Shop</th>
+                  <th className="px-3 py-2 text-left">Customer</th>
+                  <th className="px-3 py-2 text-left">City</th>
+                  <th className="px-3 py-2 text-left">Zip</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                  <th className="px-3 py-2 text-left">Finalized</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orderModal.rows.map((o) => (
+                  <tr key={o.id} className="border-b border-navy/10">
+                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
+                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>
+                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{[o.first_name, o.last_name].filter(Boolean).join(' ') || '—'}</td>
+                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.city || '—'}</td>
+                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.zip || '—'}</td>
+                    <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
+                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{dateShort(o.order_finalized_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Modal>
       )}
     </div>
   )
