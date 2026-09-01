@@ -46,3 +46,8 @@ verify_jwt = false
 
 [functions.droptop-sync-orders]
 verify_jwt = false
+
+# Same dual-auth pattern as the droptop-sync-* functions above (shared
+# X-Sync-Token OR a real user JWT checked in the function itself).
+[functions.geocode-orders]
+verify_jwt = false

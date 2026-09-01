@@ -50,6 +50,7 @@ export const DROPTOP_PO_SYNC_TASK_ID = 'droptop-po-sync'
 export const DROPTOP_ORDERS_TASK_ID = 'droptop-orders'
 export const SKYBITZ_TANKS_TASK_ID = 'skybitz-tanks'
 export const AUTOMATED_CHECKS_TASK_ID = 'automated-checks'
+export const GEOCODE_ORDERS_TASK_ID = 'geocode-orders'
 
 export const useSyncTasksStore = create<SyncTasksState>((set, get) => ({
   tasks: [],

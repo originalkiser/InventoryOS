@@ -38,8 +38,23 @@ interface OrderRow {
   zip: string | null
   lat: number | null
   lng: number | null
+  geocoded_lat: number | null
+  geocoded_lng: number | null
+  geocode_status: string | null
   final_price: number | null
   order_finalized_at: string | null
+}
+
+// Address-level mode uses geocoded_lat/lng when a real Census match
+// exists; any order not yet geocoded (or one Census couldn't match) falls
+// back to its zip-centroid position rather than disappearing from the
+// map — geocoding is opt-in and gradual (Data Connections' "Run
+// Geocoding"), so most orders won't have it on day one.
+function effectiveCoords(r: OrderRow, mode: 'zip' | 'address'): { lat: number | null; lng: number | null } {
+  if (mode === 'address' && r.geocode_status === 'matched' && r.geocoded_lat != null && r.geocoded_lng != null) {
+    return { lat: r.geocoded_lat, lng: r.geocoded_lng }
+  }
+  return { lat: r.lat, lng: r.lng }
 }
 
 interface ZipCluster {
@@ -204,6 +219,18 @@ export function CustomerHeatmapPage() {
   // its normal circle rather than silently vanishing from the map.
   const [zipGeometries, setZipGeometries] = useState<Map<string, GeoJSON.Geometry>>(new Map())
 
+  // Address-level plotting (real geocoded lat/lng per order) vs the
+  // default zip-centroid — an optional, more precise alternative, not a
+  // replacement (see effectiveCoords()). Geocoding itself runs from Data
+  // Connections' "Run Geocoding" — this toggle just changes which
+  // coordinates already-geocoded orders plot at.
+  const [coordinateMode, setCoordinateMode] = useState<'zip' | 'address'>(() => {
+    try { return localStorage.getItem('heatmap:coordinate-mode') === 'address' ? 'address' : 'zip' } catch { return 'zip' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:coordinate-mode', coordinateMode) } catch { /* ignore */ }
+  }, [coordinateMode])
+
   // Pin filters (Market/Region/AM) + Labels toggle — same controls as Map &
   // Routes, brought over to narrow/label the store pins specifically. These
   // are separate from the Shop(s) picker above, which scopes the actual
@@ -318,7 +345,7 @@ export function CustomerHeatmapPage() {
       let cursor: { date: string; id: string } | null = null
       for (;;) {
         let q = sb.schema('inventory').from('droptop_orders')
-          .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, final_price, order_finalized_at')
+          .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at')
           .eq('company_id', companyId)
           .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
           .order('order_finalized_at', { ascending: true })
@@ -363,23 +390,52 @@ export function CustomerHeatmapPage() {
     () => allowedLocationIds === null ? rows : rows.filter((r) => r.location_id && allowedLocationIds.has(r.location_id)),
     [rows, allowedLocationIds],
   )
+  const geocodedOrderCount = useMemo(() => filteredRows.filter((r) => r.geocode_status === 'matched').length, [filteredRows])
 
-  const mappedRows = useMemo(() => filteredRows.filter((r) => r.lat != null && r.lng != null), [filteredRows])
-  const unmappedRows = useMemo(() => filteredRows.filter((r) => r.lat == null || r.lng == null), [filteredRows])
+  const mappedRows = useMemo(
+    () => filteredRows.filter((r) => { const c = effectiveCoords(r, coordinateMode); return c.lat != null && c.lng != null }),
+    [filteredRows, coordinateMode],
+  )
+  const unmappedRows = useMemo(
+    () => filteredRows.filter((r) => { const c = effectiveCoords(r, coordinateMode); return c.lat == null || c.lng == null }),
+    [filteredRows, coordinateMode],
+  )
 
+  // Grouping stays zip-based in BOTH modes — the entire selection/scroll/
+  // table system downstream is built around a zip uniquely identifying one
+  // cluster, and a finer-grained "cluster by exact address" key would
+  // break that (multiple address-level points legitimately sharing one
+  // zip, making selectedZip no longer unique). Address mode instead just
+  // changes WHICH coordinate a zip's dot plots at: the average of that
+  // zip's actual geocoded order positions when any exist, falling back to
+  // the zip centroid otherwise — a real, meaningful improvement (the dot
+  // shifts to reflect where within the zip customers actually are) without
+  // needing a parallel selection model.
   const allClusters = useMemo<ZipCluster[]>(() => {
-    const byZip = new Map<string, ZipCluster>()
+    interface Accum { zip: string; city: string; region: string; count: number; locationIds: Set<string>; centroidLat: number; centroidLng: number; geoLatSum: number; geoLngSum: number; geoCount: number }
+    const byZip = new Map<string, Accum>()
     for (const r of mappedRows) {
       const key = r.zip || `${r.lat},${r.lng}`
-      const existing = byZip.get(key)
-      if (existing) { existing.count++; if (r.location_id) existing.locationIds.add(r.location_id) }
-      else byZip.set(key, {
-        zip: r.zip ?? '—', city: normalizeCityCase(r.city ?? ''), region: r.region ?? '', lat: r.lat as number, lng: r.lng as number,
-        count: 1, locationIds: new Set(r.location_id ? [r.location_id] : []),
-      })
+      const geocoded = coordinateMode === 'address' && r.geocode_status === 'matched' && r.geocoded_lat != null && r.geocoded_lng != null
+      let a = byZip.get(key)
+      if (!a) {
+        a = {
+          zip: r.zip ?? '—', city: normalizeCityCase(r.city ?? ''), region: r.region ?? '',
+          count: 0, locationIds: new Set(), centroidLat: r.lat as number, centroidLng: r.lng as number,
+          geoLatSum: 0, geoLngSum: 0, geoCount: 0,
+        }
+        byZip.set(key, a)
+      }
+      a.count++
+      if (r.location_id) a.locationIds.add(r.location_id)
+      if (geocoded) { a.geoLatSum += r.geocoded_lat as number; a.geoLngSum += r.geocoded_lng as number; a.geoCount++ }
     }
-    return [...byZip.values()]
-  }, [mappedRows])
+    return [...byZip.values()].map((a): ZipCluster => ({
+      zip: a.zip, city: a.city, region: a.region, count: a.count, locationIds: a.locationIds,
+      lat: a.geoCount > 0 ? a.geoLatSum / a.geoCount : a.centroidLat,
+      lng: a.geoCount > 0 ? a.geoLngSum / a.geoCount : a.centroidLng,
+    }))
+  }, [mappedRows, coordinateMode])
 
   // "Shared" = only zips with a customer at EVERY selected shop.
   // "All" (default) = zips from ANY selected shop (plain union — already
@@ -750,6 +806,20 @@ export function CustomerHeatmapPage() {
                 </button>
               ))}
             </div>
+            <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
+              {(['zip', 'address'] as const).map((m) => (
+                <button key={m} onClick={() => setCoordinateMode(m)}
+                  className={['px-2 py-1.5 uppercase tracking-wide transition-colors', coordinateMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
+                  title={m === 'zip' ? 'Every order plots at its zip code’s center point' : 'Geocoded orders plot at their real address (Data Connections → Run Geocoding); orders not yet geocoded still fall back to zip centroid'}>
+                  {m === 'zip' ? 'Zip Centroid' : 'Address-Level'}
+                </button>
+              ))}
+            </div>
+            {coordinateMode === 'address' && (
+              <span className="text-[10px] font-mono text-inky/50 self-center">
+                {geocodedOrderCount.toLocaleString()} of {filteredRows.length.toLocaleString()} orders geocoded
+              </span>
+            )}
           </div>
 
           {filteredRows.length === 0 ? (

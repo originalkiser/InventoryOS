@@ -11,11 +11,13 @@ import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown } from '@/components/ui'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
+import { runGeocoding } from '@/services/geocodingService'
 import type { DataConnectionSchedule } from '@/types/integrations'
 import { formatInTz } from '@/lib/tzFormat'
 import {
   useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
   DROPTOP_PO_SYNC_TASK_ID, DROPTOP_ORDERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
+  GEOCODE_ORDERS_TASK_ID,
 } from '@/stores/syncTasksStore'
 import toast from 'react-hot-toast'
 
@@ -509,6 +511,37 @@ export function DataConnectionsTab() {
     setRunning(null)
   }
 
+  // Address-level geocoding for the Customer Heatmap — resolves each
+  // order's street address to real lat/lng via the free Census Geocoder,
+  // as an alternative to zip-centroid plotting. Loops the Edge Function
+  // (bounded orders per invocation server-side) until nothing's left to
+  // geocode, same "many small calls" reasoning as the Droptop syncs.
+  async function runGeocodingJob() {
+    if (!companyId) return
+    setRunning('geocoding')
+    const store = useSyncTasksStore.getState()
+    store.start(GEOCODE_ORDERS_TASK_ID, 'Address Geocoding — resolving order addresses via Census')
+    try {
+      const summary = await runGeocoding(companyId, (p) => {
+        store.setProgress(GEOCODE_ORDERS_TASK_ID, p.totalProcessed, p.totalProcessed + p.remaining)
+      })
+      const text = `Geocoding: ${summary.totalMatched} matched, ${summary.totalNoMatch} no match, ${summary.totalCachedHits} from cache (${summary.totalProcessed} orders processed)`
+      if (summary.warnings.length) {
+        store.finish(GEOCODE_ORDERS_TASK_ID, 'partial', `${text} — ${summary.warnings.length} warning(s)`)
+        toast(`${text} — some rows had issues, see Data Syncs`, { icon: '⚠️', duration: 12000 })
+      } else {
+        store.finish(GEOCODE_ORDERS_TASK_ID, 'success', text)
+        toast.success(text, { duration: 10000 })
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Geocoding failed'
+      store.finish(GEOCODE_ORDERS_TASK_ID, 'error', message)
+      toast.error(message, { duration: 12000 })
+    } finally {
+      setRunning(null)
+    }
+  }
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   if (rows === null) return <div className="py-8"><SbLoader /></div>
 
@@ -747,6 +780,26 @@ export function DataConnectionsTab() {
               </Button>
             </div>
           )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Address Geocoding</span>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-3">
+          <p className="text-[11px] font-mono text-inky/60">
+            Resolves each order's actual street address to real coordinates via the free US Census Geocoder — an
+            optional, more precise alternative to the Customer Heatmap's default zip-centroid plotting (toggle it on
+            the Heatmap page once addresses are geocoded here). Repeat customers only cost one lookup, not one per
+            order — results are cached by address. Runs in small batches automatically; click again anytime to pick
+            up any new orders since the last run.
+          </p>
+          <div>
+            <Button size="sm" loading={running === 'geocoding'} onClick={runGeocodingJob}>
+              Run Geocoding
+            </Button>
+          </div>
         </CardBody>
       </Card>
     </div>
