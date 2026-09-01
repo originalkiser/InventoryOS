@@ -110,6 +110,19 @@ function makeShopPinIcon(color: string, label: string | null): L.DivIcon {
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const dateShort = (v: string | null) => v ? new Date(v).toLocaleDateString() : '—'
 
+// City names sometimes come through from Droptop as all-caps or all-lower
+// ("PORT ARTHUR", "port arthur") — normalize those to title case for
+// exports. Leaves anything already mixed-case alone (e.g. "McAllen") rather
+// than guessing at capitalization rules for names this can't reliably get
+// right.
+function normalizeCityCase(city: string): string {
+  if (!city) return city
+  const isAllUpper = city === city.toUpperCase()
+  const isAllLower = city === city.toLowerCase()
+  if (!isAllUpper && !isAllLower) return city
+  return city.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 // Imperatively pans/zooms the map when the selected zip changes — a plain
 // state change on <MapContainer center> only sets the *initial* view, not
 // a live one, so this needs react-leaflet's useMap() the same way
@@ -355,28 +368,34 @@ export function CustomerHeatmapPage() {
       const packagesByOrder = await fetchPackageNamesByOrderIds(orderIds)
       const allPackageNames = [...new Set([...packagesByOrder.values()].flat())].sort()
 
-      interface Group { shop: string; zip: string; city: string; region: string; count: number; ticketTotal: number; packageCounts: Map<string, number> }
+      interface Group { shopNumber: string; shopLabel: string; zip: string; city: string; region: string; count: number; ticketTotal: number; packageCounts: Map<string, number> }
       const groups = new Map<string, Group>()
       for (const r of mappedRows) {
-        const shop = zipExportMode === 'by-shop' ? (r.location_id ? idToLabel.get(r.location_id) ?? r.location_id : '—') : ''
-        const key = `${shop}|${r.zip ?? '—'}`
+        const shopLoc = r.location_id ? loc.byId(r.location_id) : undefined
+        const shopNumber = zipExportMode === 'by-shop' ? (shopLoc?.name ?? r.location_id ?? '—') : ''
+        const shopCity = normalizeCityCase(shopLoc?.shop_city ?? '')
+        const shopLabel = zipExportMode === 'by-shop' ? (shopCity ? `${shopNumber}-${shopCity}` : shopNumber) : ''
+        const key = `${shopNumber}|${r.zip ?? '—'}`
         let g = groups.get(key)
-        if (!g) { g = { shop, zip: r.zip ?? '—', city: r.city ?? '', region: r.region ?? '', count: 0, ticketTotal: 0, packageCounts: new Map() }; groups.set(key, g) }
+        if (!g) { g = { shopNumber, shopLabel, zip: r.zip ?? '—', city: normalizeCityCase(r.city ?? ''), region: r.region ?? '', count: 0, ticketTotal: 0, packageCounts: new Map() }; groups.set(key, g) }
         g.count++
         g.ticketTotal += r.final_price ?? 0
         for (const name of packagesByOrder.get(r.id) ?? []) g.packageCounts.set(name, (g.packageCounts.get(name) ?? 0) + 1)
       }
-      const sorted = [...groups.values()].sort((a, b) => a.shop.localeCompare(b.shop) || b.count - a.count)
+      const sorted = [...groups.values()].sort((a, b) => a.shopNumber.localeCompare(b.shopNumber, undefined, { numeric: true }) || b.count - a.count)
 
       const baseHeaders = zipExportMode === 'by-shop'
-        ? ['Shop', 'Zip', 'City', 'Region', 'Customer Count', 'Avg Ticket']
+        ? ['Shop Number', 'Shop', 'Zip', 'City', 'Region', 'Customer Count', 'Avg Ticket']
         : ['Zip', 'City', 'Region', 'Customer Count', 'Avg Ticket']
       const headers = [...baseHeaders, ...allPackageNames]
       const dataRows = sorted.map((g) => {
+        const avgTicket = money(g.ticketTotal / g.count)
         const base = zipExportMode === 'by-shop'
-          ? [g.shop, g.zip, g.city, g.region, g.count, (g.ticketTotal / g.count).toFixed(2)]
-          : [g.zip, g.city, g.region, g.count, (g.ticketTotal / g.count).toFixed(2)]
-        return [...base, ...allPackageNames.map((name) => g.packageCounts.get(name) ?? 0)]
+          ? [g.shopNumber, g.shopLabel, g.zip, g.city, g.region, g.count, avgTicket]
+          : [g.zip, g.city, g.region, g.count, avgTicket]
+        // Blank instead of 0 for a package this row had none of — reads
+        // cleaner in a spreadsheet with lots of package columns.
+        return [...base, ...allPackageNames.map((name) => g.packageCounts.get(name) || '')]
       })
 
       const fileBase = `customer-heatmap-visits-${zipExportMode}-${range.start}-to-${range.end}`
