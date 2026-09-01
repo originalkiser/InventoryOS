@@ -374,7 +374,7 @@ export function DataConnectionsTab() {
         operation_id: data.operation_id,
         requested_params: data.requested_params,
         requested_window_human: data.requested_window_human,
-        raw_response_type: data.raw_response_type,
+        raw_result_shape: data.raw_result_shape,
         raw_response: raw,
       })
       if (raw.length === 0) {

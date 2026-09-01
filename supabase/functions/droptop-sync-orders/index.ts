@@ -242,19 +242,30 @@ Deno.serve(async (req) => {
       const inspectStart = Math.max(startUnix, endUnix - INSPECT_WINDOW_SECONDS)
       const params: Record<string, string> = { operation_ids: opId, startUnix: String(inspectStart), endUnix: String(endUnix) }
       if (statusTypes) params.statusTypes = statusTypes
-      const raw = await callDroptop('get-orders', params, publicKey, privateKey)
+      const rawResult = await callDroptop('get-orders', params, publicKey, privateKey)
+      // Found via the raw_response_type diagnostic below: Droptop's real
+      // response here was an object ({ data: [...] }), not a bare array —
+      // exactly the "nests one level deeper than its docs claim" quirk
+      // fetchOrders() (used by sync/incremental) already defends against.
+      // inspect mode never had that unwrap, so `raw_response` was silently
+      // the whole envelope object instead of the orders inside it — the
+      // client's own Array.isArray fallback then coerced that non-array
+      // object down to [], which is what actually produced the "0 orders"
+      // result. Not a data problem at all.
+      const raw: any[] = Array.isArray(rawResult) ? rawResult : Array.isArray(rawResult?.data) ? rawResult.data : []
       // Full diagnostic echo — a "0 orders" result here is otherwise
       // impossible to root-cause from the client alone (was it really the
       // right operation_id? the right window? did Droptop return [] or
-      // null?). resolved_location_id/name in particular catches a bad
-      // shop-name match at the source, before even looking at the window.
+      // null or a wrapped envelope?). resolved_location_id in particular
+      // catches a bad shop-name match at the source, before even looking
+      // at the window.
       return ok({
         success: true,
         operation_id: opId,
         resolved_location_id: locations[0].id,
         requested_params: params,
         requested_window_human: { start: new Date(inspectStart * 1000).toISOString(), end: new Date(endUnix * 1000).toISOString() },
-        raw_response_type: raw === null ? 'null' : Array.isArray(raw) ? 'array' : typeof raw,
+        raw_result_shape: rawResult === null ? 'null' : Array.isArray(rawResult) ? 'array' : typeof rawResult,
         raw_response: raw,
       })
     }
