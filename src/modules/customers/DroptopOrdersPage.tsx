@@ -76,20 +76,30 @@ async function fetchByOrderIds<T>(table: string, orderIds: string[], select: str
   const sb = supabase as any
   const CHUNK = 200
   const PAGE = 1000
+  const MAX_PAGE_RETRIES = 2
   const out: T[] = []
   for (let i = 0; i < orderIds.length; i += CHUNK) {
     const slice = orderIds.slice(i, i + CHUNK)
     let cursor: string | null = null
     for (;;) {
-      let q = sb.schema('inventory').from(table).select(`id, ${select}`)
-        .in('order_id', slice).order('id', { ascending: true }).limit(PAGE)
-      if (cursor) q = q.gt('id', cursor)
-      const { data, error } = await q
-      if (error) throw new Error(error.message)
-      const batch = (data ?? []) as ({ id: string } & T)[]
-      out.push(...batch)
-      if (batch.length === 0) break
-      cursor = batch[batch.length - 1].id
+      let data: ({ id: string } & T)[] | null = null
+      let lastErr: string | null = null
+      for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+        let q = sb.schema('inventory').from(table).select(`id, ${select}`)
+          .in('order_id', slice).order('id', { ascending: true }).limit(PAGE)
+        if (cursor) q = q.gt('id', cursor)
+        const { data: pageData, error } = await q
+        if (!error) { data = (pageData ?? []) as ({ id: string } & T)[]; break }
+        lastErr = error.message
+        if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+      }
+      // Same "retry a page before giving up" fix as the main orders loop
+      // above — a single chunk/page timing out used to throw immediately
+      // and discard every package/product/service row fetched so far.
+      if (data === null) throw new Error(`${table}: ${lastErr ?? 'Failed to load'}`)
+      out.push(...data)
+      if (data.length === 0) break
+      cursor = data[data.length - 1].id
     }
   }
   return out
@@ -200,21 +210,39 @@ export function DroptopOrdersPage() {
       const PAGE = 1000
       const allOrders: OrderRow[] = []
       let cursor: { date: string; id: string } | null = null
+      // A full company-wide range is 100+ sequential page requests — one
+      // page hitting "canceling statement due to statement timeout" (a
+      // real report — transient contention, not a structural problem,
+      // since this exact query pattern runs in ~280ms per page normally)
+      // used to throw immediately and discard everything fetched so far,
+      // even 100+ pages in. One page is now retried up to twice (with a
+      // short backoff) before actually giving up — same fix already
+      // applied to the Heatmap's identical fetch loop.
+      const MAX_PAGE_RETRIES = 2
       for (;;) {
-        let q = sb.schema('inventory').from('droptop_orders')
-          .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at')
-          .eq('company_id', companyId)
-          .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
-          .order('order_finalized_at', { ascending: true })
-          .order('id', { ascending: true }).limit(PAGE)
-        if (shopIds.length) q = q.in('location_id', shopIds)
-        if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
-        const { data, error: err } = await q
-        if (err) throw new Error(err.message)
-        const batch = (data ?? []) as OrderRow[]
-        allOrders.push(...batch)
-        if (batch.length === 0) break
-        const last = batch[batch.length - 1]
+        let data: OrderRow[] | null = null
+        let lastErr: string | null = null
+        for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+          if (cancelled) return
+          let q = sb.schema('inventory').from('droptop_orders')
+            .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at')
+            .eq('company_id', companyId)
+            .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+            .order('order_finalized_at', { ascending: true })
+            .order('id', { ascending: true }).limit(PAGE)
+          if (shopIds.length) q = q.in('location_id', shopIds)
+          if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
+          const { data: pageData, error: err } = await q
+          if (!err) { data = (pageData ?? []) as OrderRow[]; break }
+          lastErr = err.message
+          if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+        }
+        if (data === null) {
+          throw new Error(`${lastErr ?? 'Failed to load orders'} — loaded ${allOrders.length.toLocaleString()} order(s) before this happened`)
+        }
+        allOrders.push(...data)
+        if (data.length === 0) break
+        const last = data[data.length - 1]
         cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
       }
       if (cancelled) return
