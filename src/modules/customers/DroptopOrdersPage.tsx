@@ -40,6 +40,9 @@ interface OrderRow {
   subtotal: number | null
   final_price: number | null
   order_finalized_at: string | null
+  // From the Droptop expanded-fields work — set when the order is a
+  // fleet/B2B account, null for an ordinary retail order.
+  fleet_company_name: string | null
 }
 interface PackageRow {
   order_id: string
@@ -59,6 +62,15 @@ interface ServiceRow {
   order_id: string
   package_id: string | null
   products: { product_id?: string; uom?: string; quantity_total?: string | number }[] | null
+}
+interface VehicleRow {
+  order_id: string
+  vin: string | null
+  license_plate: string | null
+  vehicle_name: string | null
+  vin_vehicle_make: string | null
+  vin_vehicle_model: string | null
+  vin_vehicle_year: number | null
 }
 
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
@@ -137,6 +149,7 @@ export function DroptopOrdersPage() {
   const [packages, setPackages] = useState<PackageRow[]>([])
   const [products, setProducts] = useState<ProductRow[]>([])
   const [services, setServices] = useState<ServiceRow[]>([])
+  const [vehicles, setVehicles] = useState<VehicleRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // Real progress instead of a bare spinner — same pattern as Customer
@@ -263,7 +276,7 @@ export function DroptopOrdersPage() {
         for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
           if (cancelled) return
           let q = applyFilters(sb.schema('inventory').from('droptop_orders')
-            .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at'))
+            .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at, fleet_company_name'))
             .order('order_finalized_at', { ascending: true })
             .order('id', { ascending: true }).limit(PAGE)
           if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
@@ -284,15 +297,16 @@ export function DroptopOrdersPage() {
       if (cancelled) return
 
       const orderIds = allOrders.map((o) => o.id)
-      let pkgRows: PackageRow[] = [], prodRows: ProductRow[] = [], svcRows: ServiceRow[] = []
+      let pkgRows: PackageRow[] = [], prodRows: ProductRow[] = [], svcRows: ServiceRow[] = [], vehRows: VehicleRow[] = []
       if (orderIds.length) {
         const chunksPerTable = Math.ceil(orderIds.length / ORDER_ID_CHUNK)
-        if (!cancelled) setDetailProgress({ loaded: 0, total: chunksPerTable * 3 })
+        if (!cancelled) setDetailProgress({ loaded: 0, total: chunksPerTable * 4 })
         const onChunk = () => { if (!cancelled) setDetailProgress((p) => (p ? { ...p, loaded: p.loaded + 1 } : p)) }
-        ;[pkgRows, prodRows, svcRows] = await Promise.all([
+        ;[pkgRows, prodRows, svcRows, vehRows] = await Promise.all([
           fetchByOrderIds<PackageRow>('droptop_order_packages', orderIds, 'order_id, package_id, name, price_total, price_total_after_discount', onChunk),
           fetchByOrderIds<ProductRow>('droptop_order_products', orderIds, 'order_id, product_id, product_type, uom, quantity_total', onChunk),
           fetchByOrderIds<ServiceRow>('droptop_order_services', orderIds, 'order_id, package_id, products', onChunk),
+          fetchByOrderIds<VehicleRow>('droptop_order_vehicles', orderIds, 'order_id, vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year', onChunk),
         ])
       }
       if (cancelled) return
@@ -301,6 +315,7 @@ export function DroptopOrdersPage() {
       setPackages(pkgRows)
       setProducts(prodRows)
       setServices(svcRows)
+      setVehicles(vehRows)
       setLoading(false)
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
@@ -322,6 +337,39 @@ export function DroptopOrdersPage() {
     for (const s of services) { const a = m.get(s.order_id) ?? []; a.push(s); m.set(s.order_id, a) }
     return m
   }, [services])
+  const vehiclesByOrder = useMemo(() => {
+    const m = new Map<string, VehicleRow[]>()
+    for (const v of vehicles) { const a = m.get(v.order_id) ?? []; a.push(v); m.set(v.order_id, a) }
+    return m
+  }, [vehicles])
+
+  // Distinct product ids on an order, from both sources (top-level products
+  // array + services' nested products — see the file header comment).
+  function productIdsFor(orderId: string): string[] {
+    const s = new Set<string>()
+    for (const p of productsByOrder.get(orderId) ?? []) if (p.product_id) s.add(p.product_id)
+    for (const svc of servicesByOrder.get(orderId) ?? []) for (const pr of (svc.products ?? [])) if (pr.product_id) s.add(pr.product_id)
+    return [...s]
+  }
+  // Total oil quarts on an order — same QT-uom convention as
+  // packageStats' own oil-quarts calc, just summed across the whole order
+  // instead of grouped by package.
+  function quartsFor(orderId: string): number {
+    let total = 0
+    for (const p of productsByOrder.get(orderId) ?? []) if (isQuart(p.uom)) total += Number(p.quantity_total) || 0
+    for (const svc of servicesByOrder.get(orderId) ?? []) for (const pr of (svc.products ?? [])) if (isQuart(pr.uom)) total += Number(pr.quantity_total) || 0
+    return total
+  }
+  // One line per vehicle, joined — an order occasionally carries more than
+  // one (a multi-vehicle fleet drop-off).
+  function vehicleLabelFor(orderId: string): string {
+    const vs = vehiclesByOrder.get(orderId) ?? []
+    if (!vs.length) return '—'
+    return vs.map((v) => {
+      const yearMakeModel = [v.vin_vehicle_year, v.vin_vehicle_make, v.vin_vehicle_model].filter(Boolean).join(' ')
+      return yearMakeModel || v.vehicle_name || v.license_plate || v.vin || '—'
+    }).join('; ')
+  }
 
   const allPackageNames = useMemo(
     () => [...new Set(packages.map((p) => p.name).filter((n): n is string => !!n))].sort(),
@@ -433,12 +481,49 @@ export function DroptopOrdersPage() {
 
   const totals = useMemo(() => {
     const revenue = filteredOrders.reduce((sum, o) => sum + (o.final_price ?? 0), 0)
+    // Average quarts per order, counting only orders that actually had a
+    // quart-uom (oil-change) product on them — an order with no oil at all
+    // (a tire rotation, a filter-only visit) would just drag this toward
+    // zero rather than answer "for the oil changes we did, how much oil".
+    let oilOrderCount = 0, oilQuartsTotal = 0
+    for (const o of filteredOrders) {
+      const q = quartsFor(o.id)
+      if (q > 0) { oilOrderCount++; oilQuartsTotal += q }
+    }
     return {
       count: filteredOrders.length,
       revenue,
       avgOrderValue: filteredOrders.length ? revenue / filteredOrders.length : 0,
+      avgQuartsPerOilOrder: oilOrderCount ? oilQuartsTotal / oilOrderCount : 0,
+      oilOrderCount,
     }
-  }, [filteredOrders])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredOrders, productsByOrder, servicesByOrder])
+
+  // Shop-level rollup: how many orders per shop, and (of the ones that
+  // included an oil-change product) the average quarts per order — same
+  // "only count orders that actually had oil" reasoning as totals above,
+  // just broken out by shop instead of company-wide.
+  const shopStats = useMemo(() => {
+    const stats = new Map<string, { count: number; oilOrderCount: number; oilQuartsTotal: number }>()
+    for (const o of filteredOrders) {
+      const key = o.location_id ?? '—'
+      const s = stats.get(key) ?? { count: 0, oilOrderCount: 0, oilQuartsTotal: 0 }
+      s.count++
+      const q = quartsFor(o.id)
+      if (q > 0) { s.oilOrderCount++; s.oilQuartsTotal += q }
+      stats.set(key, s)
+    }
+    return [...stats.entries()]
+      .map(([locationId, s]) => ({
+        locationId,
+        shopLabel: locationId === '—' ? '—' : (idToLabel.get(locationId) ?? locationId),
+        count: s.count,
+        avgQuarts: s.oilOrderCount ? s.oilQuartsTotal / s.oilOrderCount : 0,
+      }))
+      .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredOrders, productsByOrder, servicesByOrder, idToLabel])
 
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
 
@@ -450,7 +535,7 @@ export function DroptopOrdersPage() {
     if (!filteredOrders.length) { toast.error('Nothing to export for these filters'); return }
     setExporting(format)
     try {
-      const headers = ['Order #', 'Shop', 'Customer', 'City', 'Status', 'Packages', 'Total', 'Finalized']
+      const headers = ['Order #', 'Shop', 'Customer', 'City', 'Status', 'Packages', 'Products', 'Quarts', 'Vehicle', 'Fleet', 'Total', 'Finalized']
       const dataRows = filteredOrders.map((o) => [
         o.order_id,
         o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—',
@@ -458,6 +543,10 @@ export function DroptopOrdersPage() {
         o.city || '—',
         o.status || '—',
         (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—',
+        productIdsFor(o.id).join(', ') || '—',
+        quartsFor(o.id) || 0,
+        vehicleLabelFor(o.id),
+        o.fleet_company_name || '—',
         o.final_price ?? 0,
         o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—',
       ])
@@ -589,38 +678,76 @@ export function DroptopOrdersPage() {
               <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Distinct Packages</p>
               <p className="text-lg font-heading font-bold text-navy">{packageStats.length}</p>
             </CardBody></Card>
+            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Quarts (Oil Change)</p>
+              <p className="text-lg font-heading font-bold text-navy">{totals.avgQuartsPerOilOrder > 0 ? totals.avgQuartsPerOilOrder.toFixed(2) : '—'}</p>
+            </CardBody></Card>
           </div>
 
-          {/* Package summary: count + avg oil quarts */}
-          <Card>
-            <CardBody className="flex flex-col gap-2">
-              <span className="text-xs font-mono text-navy uppercase tracking-wide">By Package</span>
-              {packageStats.length === 0 ? (
-                <p className="text-xs font-mono text-inky/60">No packages in this filtered set.</p>
-              ) : (
-                <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
-                  <table className="w-full text-xs font-mono">
-                    <thead className="sticky top-0 bg-cream">
-                      <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                        <th className="px-3 py-2 text-left">Package</th>
-                        <th className="px-3 py-2 text-right">Count</th>
-                        <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {packageStats.map((s) => (
-                        <tr key={s.name} className="border-b border-navy/10">
-                          <td className="px-3 py-1.5 text-navy">{s.name}</td>
-                          <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
-                          <td className="px-3 py-1.5 text-navy text-right">{s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
+          {/* Package + Shop summaries, side by side — each half the width
+              this used to take full-width, freeing room for the shop
+              breakdown next to it. */}
+          <div className="flex gap-3 flex-wrap items-start">
+            <Card className="flex-1 min-w-[280px]">
+              <CardBody className="flex flex-col gap-2">
+                <span className="text-xs font-mono text-navy uppercase tracking-wide">By Package</span>
+                {packageStats.length === 0 ? (
+                  <p className="text-xs font-mono text-inky/60">No packages in this filtered set.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
+                    <table className="w-full text-xs font-mono">
+                      <thead className="sticky top-0 bg-cream">
+                        <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                          <th className="px-3 py-2 text-left">Package</th>
+                          <th className="px-3 py-2 text-right">Count</th>
+                          <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardBody>
-          </Card>
+                      </thead>
+                      <tbody>
+                        {packageStats.map((s) => (
+                          <tr key={s.name} className="border-b border-navy/10">
+                            <td className="px-3 py-1.5 text-navy">{s.name}</td>
+                            <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
+                            <td className="px-3 py-1.5 text-navy text-right">{s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+
+            <Card className="flex-1 min-w-[280px]">
+              <CardBody className="flex flex-col gap-2">
+                <span className="text-xs font-mono text-navy uppercase tracking-wide">By Shop ({shopStats.length})</span>
+                {shopStats.length === 0 ? (
+                  <p className="text-xs font-mono text-inky/60">No shops in this filtered set.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
+                    <table className="w-full text-xs font-mono">
+                      <thead className="sticky top-0 bg-cream">
+                        <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                          <th className="px-3 py-2 text-left">Shop</th>
+                          <th className="px-3 py-2 text-right">Orders</th>
+                          <th className="px-3 py-2 text-right">Avg Quarts / Order</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shopStats.map((s) => (
+                          <tr key={s.locationId} className="border-b border-navy/10">
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{s.shopLabel}</td>
+                            <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
+                            <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          </div>
 
           {/* Orders table — paginated client-side; rendering the full
               filtered set (can be tens of thousands of rows) at once was
@@ -655,12 +782,18 @@ export function DroptopOrdersPage() {
                         <th className="px-3 py-2 text-left">City</th>
                         <th className="px-3 py-2 text-left">Status</th>
                         <th className="px-3 py-2 text-left">Packages</th>
+                        <th className="px-3 py-2 text-left">Products</th>
+                        <th className="px-3 py-2 text-right">Quarts</th>
+                        <th className="px-3 py-2 text-left">Vehicle</th>
+                        <th className="px-3 py-2 text-left">Fleet</th>
                         <th className="px-3 py-2 text-right">Total</th>
                         <th className="px-3 py-2 text-left">Finalized</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedOrders.map((o) => (
+                      {pagedOrders.map((o) => {
+                        const quarts = quartsFor(o.id)
+                        return (
                         <tr key={o.id} className="border-b border-navy/10">
                           <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
                           <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>
@@ -668,10 +801,15 @@ export function DroptopOrdersPage() {
                           <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.city || '—'}</td>
                           <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.status || '—'}</td>
                           <td className="px-3 py-1.5 text-navy">{(packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—'}</td>
+                          <td className="px-3 py-1.5 text-navy">{productIdsFor(o.id).join(', ') || '—'}</td>
+                          <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{quarts > 0 ? quarts.toFixed(2) : '—'}</td>
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{vehicleLabelFor(o.id)}</td>
+                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.fleet_company_name || '—'}</td>
                           <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
                           <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—'}</td>
                         </tr>
-                      ))}
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
