@@ -192,6 +192,20 @@ async function runAutomatedChecks(supabaseUrl: string, secret: string): Promise<
   return error ? { status: 'error', message: error } : { status: 'success', message: null }
 }
 
+// Same reasoning as runAutomatedChecks above — reuses the dispatch secret,
+// no secret of its own. Recomputes Customer Heatmap's pre-aggregated zip
+// rollups for whatever droptop_orders rows changed since the last run.
+async function runHeatmapRollupRefresh(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
+  const res = await fetch(`${supabaseUrl}/functions/v1/heatmap-rollup-refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+    body: '{}',
+  })
+  const { data, error } = await parseSyncResponse(res)
+  if (error) return { status: 'error', message: error }
+  return { status: 'success', message: `${data?.dates_recomputed ?? 0} location-day(s) recomputed, ${data?.rows_upserted ?? 0} zip row(s) written` }
+}
+
 // Chunks locations the same way the interactive "Sync All" button does —
 // sequential batches, so one automated run can't run long enough to hit the
 // platform's per-invocation execution time limit.
@@ -284,6 +298,9 @@ Deno.serve(async (req) => {
         // "interval" schedules otherwise isn't guaranteed.
         outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
           : await runAutomatedChecks(supabaseUrl, dispatchSecret)
+      } else if (s.connection_key === 'heatmap_rollup_refresh') {
+        outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
+          : await runHeatmapRollupRefresh(supabaseUrl, dispatchSecret)
       } else {
         outcome = { status: 'error', message: `Unknown connection_key: ${s.connection_key}` }
       }

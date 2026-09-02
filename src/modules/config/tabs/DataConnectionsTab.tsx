@@ -17,7 +17,7 @@ import { formatInTz } from '@/lib/tzFormat'
 import {
   useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
   DROPTOP_PO_SYNC_TASK_ID, DROPTOP_ORDERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
-  GEOCODE_ORDERS_TASK_ID,
+  GEOCODE_ORDERS_TASK_ID, HEATMAP_ROLLUP_TASK_ID,
 } from '@/stores/syncTasksStore'
 import toast from 'react-hot-toast'
 
@@ -51,6 +51,7 @@ const TASK_ID_FOR: Record<string, string> = {
   droptop_purchase_orders: DROPTOP_PO_SYNC_TASK_ID,
   droptop_orders: DROPTOP_ORDERS_TASK_ID,
   automated_checks: AUTOMATED_CHECKS_TASK_ID,
+  heatmap_rollup_refresh: HEATMAP_ROLLUP_TASK_ID,
 }
 
 // Exported so DataConnectionUpdatesSection.tsx's sync-log table can display
@@ -75,8 +76,9 @@ const CONNECTION_META: Record<string, { label: string; description: string }> = 
   droptop_purchase_orders: { label: 'Droptop — Purchase Orders', description: 'Pulls open/recent POs and their line items — feeds the PO Status page and Orders v2\'s "already on order" check.' },
   droptop_orders: { label: 'Droptop — Orders (Customers)', description: 'Pulls each location\'s orders forward from its last successful sync (yesterday, or a wider catch-up after a missed day) with the placing customer\'s address, and resolves a lat/lng by zip — feeds the Customer Heatmap. Use the Historical Backfill below for a one-time date-ranged pull.' },
   automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
+  heatmap_rollup_refresh: { label: 'Customer Heatmap — Zip Rollups', description: 'Recomputes the pre-aggregated zip/day rollup table Customer Heatmap reads for period-preset ranges, so those loads skip scanning the full orders table. Run Now right after a large Historical Backfill to skip the ~24h staleness window.' },
 }
-const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_orders', 'automated_checks']
+const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_orders', 'automated_checks', 'heatmap_rollup_refresh']
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -221,6 +223,11 @@ export function DataConnectionsTab() {
         if (error) throw new Error(error.message)
         if (data?.error) throw new Error(data.error)
         summary = `Automated Checks: ${data.created} new exception${data.created === 1 ? '' : 's'} flagged (${data.checked} anomal${data.checked === 1 ? 'y' : 'ies'} found)`
+      } else if (key === 'heatmap_rollup_refresh') {
+        const { data, error } = await supabase.functions.invoke('heatmap-rollup-refresh', { body: {} })
+        if (error) throw new Error(error.message)
+        if (data?.error) throw new Error(data.error)
+        summary = `Zip Rollups: ${data.dates_recomputed} location-day(s) recomputed, ${data.rows_upserted} zip row(s) written`
       }
       if (warnings?.length) { manualStatus = 'partial'; manualMessage = `${summary} — ${warnings.join(' | ')}` }
       else manualMessage = summary

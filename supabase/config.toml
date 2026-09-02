@@ -51,3 +51,10 @@ verify_jwt = false
 # X-Sync-Token OR a real user JWT checked in the function itself).
 [functions.geocode-orders]
 verify_jwt = false
+
+# Same dual-auth pattern as run-automated-checks — the dispatcher (shared
+# DATA_CONNECTION_DISPATCH_SECRET) plus the Data Connections "Refresh
+# Rollups Now" button (real user JWT). No cron entry of its own; runs on
+# the dispatcher's existing schedule via a data_connection_schedules row.
+[functions.heatmap-rollup-refresh]
+verify_jwt = false
