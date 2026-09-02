@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { orderDayFromDelivery, parseWeekday } from '@/lib/orderDay'
+import { ownerBucket } from '@/hooks/useLocationExclusions'
 import toast from 'react-hot-toast'
 import {
   DEFAULT_ORDER_SETTINGS, orderTypeOf,
@@ -405,7 +406,7 @@ export function useGenerationData() {
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const FETCH_STEPS = 15 // 3 fast lookups fetched first (configs, productMappings, openPurchaseOrders), 11 more fetchAll calls, + the trailing order-history-dates query
+    const FETCH_STEPS = 15 // 4 fast lookups fetched first (configs, productMappings, openPurchaseOrders, locations), 10 more fetchAll calls, + the trailing order-history-dates query
     let stepsDone = 0
     const step = <T,>(p: Promise<T>): Promise<T> => p.then((r) => { onProgress?.(++stepsDone, FETCH_STEPS); return r })
 
@@ -422,7 +423,7 @@ export function useGenerationData() {
     // have used anyway. product_id_mappings' old ids are included too, since
     // a usage row can still be keyed by a retired id whose own text doesn't
     // share the current id's prefix.
-    const [configs, productMappings, openPurchaseOrders] = await Promise.all([
+    const [configsRaw, productMappings, openPurchaseOrders, locRows] = await Promise.all([
       step(fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'product_id_mappings', 'old_product_id, new_product_id', companyId)),
@@ -435,7 +436,23 @@ export function useGenerationData() {
       // fetch that would otherwise pull every item ever, open or not.
       step(fetchAll<PurchaseOrderRow>('inventory', 'droptop_purchase_orders', 'id, location_id, po_status', companyId,
         (q: any) => q.in('po_status', ['draft', 'sent', 'accepted']))),
+      // Fetched here (not with the rest of the second batch) so it's ready
+      // before `configs` gets filtered below — Orders v2 is an operational
+      // flow, but per explicit 2026-09-02 direction it now follows the same
+      // "no non-corporate locations anywhere in the inventory section" rule
+      // as every other inventory-surface page (see useLocationExclusions.ts)
+      // rather than the exemption that page documents for order generation.
+      step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day, owner, metadata', companyId)),
     ])
+    // Same Corporate/Franchise bucketing as useLocationExclusions.ts's
+    // DEFAULT_OWNER_RULE (mode 'only', values ['Corporate']) — a location
+    // with no owner set at all buckets to '' and is excluded too, matching
+    // that rule's behavior everywhere else it's enforced.
+    const corporateIds = new Set(
+      locRows.filter((l: any) => ownerBucket(String(l.owner ?? l.metadata?.owner ?? '')) === 'Corporate').map((l: any) => l.id),
+    )
+    const configs = configsRaw.filter((c) => corporateIds.has(c.location_id))
+
     const families = new Set<string>()
     for (const c of configs) families.add(baseProductId(c.product_id))
     for (const m of productMappings) if (m.old_product_id) families.add(baseProductId(m.old_product_id))
@@ -447,7 +464,7 @@ export function useGenerationData() {
     const familyList = [...families].filter(Boolean)
     const openPoIds = openPurchaseOrders.map((po) => po.id)
 
-    const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, poItems, locRows, schedRows, calRows, history] = await Promise.all([
+    const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, poItems, schedRows, calRows, history] = await Promise.all([
       step(fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId)),
       step(fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId,
         familyList.length ? (q: any) => q.or(familyList.map((f) => `product_id.ilike.${escapeIlike(f)}%`).join(',')) : undefined)),
@@ -474,7 +491,6 @@ export function useGenerationData() {
         ? step(fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId,
             (q: any) => q.in('purchase_order_id', openPoIds)))
         : step(Promise.resolve([] as PoItemRow[])),
-      step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId)),
       step(fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, order_id', companyId)),
@@ -497,7 +513,11 @@ export function useGenerationData() {
       }))
 
     // Order day = RelaDyne delivery day − 3 business days (lib/orderDay).
-    const days: VendorDayRow[] = (locRows ?? []).map((l: any) => {
+    // Franchise-excluded here too, not just from `configs` above — `days`
+    // drives eligibleLocations()/"Shops With No Orders" independently of
+    // configs, so a franchise shop with no order config at all would still
+    // show up there if this filter were skipped.
+    const days: VendorDayRow[] = (locRows ?? []).filter((l: any) => corporateIds.has(l.id)).map((l: any) => {
       const deliv = parseWeekday(l.reladyne_delivery_day)
       return {
         location_id: l.id,
