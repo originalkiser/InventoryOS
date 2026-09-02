@@ -227,6 +227,16 @@ export function CustomerHeatmapPage() {
   // unpopulated areas have no boundary in the source data) falls back to
   // its normal circle rather than silently vanishing from the map.
   const [zipGeometries, setZipGeometries] = useState<Map<string, GeoJSON.Geometry>>(new Map())
+  // Optional: drop the fallback-circle zips from choropleth mode entirely
+  // instead of showing them as dots — purely visual preference, persisted
+  // like the other view toggles. Off by default (no data silently hidden
+  // unless asked for).
+  const [hideNoBoundaryZips, setHideNoBoundaryZips] = useState<boolean>(() => {
+    try { return localStorage.getItem('heatmap:hide-no-boundary') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:hide-no-boundary', hideNoBoundaryZips ? '1' : '0') } catch { /* ignore */ }
+  }, [hideNoBoundaryZips])
 
   // Address-level plotting (real geocoded lat/lng per order) vs the
   // default zip-centroid — an optional, more precise alternative, not a
@@ -545,6 +555,12 @@ export function CustomerHeatmapPage() {
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zipsKey])
+  // How many zips on the current map have no boundary on file — drives the
+  // "N No Boundary" toggle button (only shown in choropleth mode).
+  const noBoundaryCount = useMemo(
+    () => [...zipMeta.keys()].filter((zip) => !zipGeometries.has(zip)).length,
+    [zipMeta, zipGeometries],
+  )
 
   // ONE merged GeoJSON layer for the whole map, instead of a React
   // component PER zip. A company-wide month can put 5,000-7,000+ zips on
@@ -555,15 +571,20 @@ export function CustomerHeatmapPage() {
   // changes (zipsKey/zipGeometries), not on every progressive-load flush;
   // per-zip fill color updates imperatively via .setStyle() below instead
   // of by rebuilding the layer. A zip with no boundary on file falls back
-  // to a Point feature, rendered as a circle via pointToLayer.
+  // to a Point feature, rendered as a circle via pointToLayer — unless
+  // hideNoBoundaryZips is on, in which case it's dropped from the map
+  // entirely (a visual-only choice, not a data change — it still counts in
+  // every stat/table, just doesn't draw).
   const choroplethFeatureCollection = useMemo((): GeoJSON.FeatureCollection => ({
     type: 'FeatureCollection',
-    features: [...zipMeta.entries()].map(([zip, meta]) => ({
-      type: 'Feature',
-      properties: { zip },
-      geometry: zipGeometries.get(zip) ?? { type: 'Point', coordinates: [meta.lng, meta.lat] },
-    })),
-  }), [zipMeta, zipGeometries])
+    features: [...zipMeta.entries()]
+      .filter(([zip]) => !hideNoBoundaryZips || zipGeometries.has(zip))
+      .map(([zip, meta]) => ({
+        type: 'Feature',
+        properties: { zip },
+        geometry: zipGeometries.get(zip) ?? { type: 'Point', coordinates: [meta.lng, meta.lat] },
+      })),
+  }), [zipMeta, zipGeometries, hideNoBoundaryZips])
 
   // Refs so the layer's style function / event handlers (bound once per
   // feature, at layer-build time — see onEachChoroplethFeature/
@@ -759,9 +780,21 @@ export function CustomerHeatmapPage() {
     // keep fetching by (id) cursor until a genuinely empty page.
     const CHUNK = 200
     const PAGE = 1000
+    // Chunks used to run one-at-a-time — fine when a full month's worth of
+    // orders was a few hundred, but a real company-wide export (167k+
+    // orders = 800+ chunks) at ~150-300ms each meant 2+ minutes of purely
+    // sequential round trips. Bounded concurrency (8 in flight at a time,
+    // same pattern already used server-side in skybitz-tank-sync) cuts
+    // that by roughly the concurrency factor without firing all 800+ at
+    // the database simultaneously. Safe to write into a shared Map from
+    // concurrent workers — each chunk owns a disjoint slice of order ids,
+    // so no two workers ever write the same key.
+    const CONCURRENCY = 8
     const byOrder = new Map<string, string[]>()
-    for (let i = 0; i < orderIds.length; i += CHUNK) {
-      const slice = orderIds.slice(i, i + CHUNK)
+    const slices: string[][] = []
+    for (let i = 0; i < orderIds.length; i += CHUNK) slices.push(orderIds.slice(i, i + CHUNK))
+
+    async function fetchSlice(slice: string[]) {
       let cursor: string | null = null
       for (;;) {
         let q = sb.schema('inventory').from('droptop_order_packages').select('id, order_id, name')
@@ -780,6 +813,15 @@ export function CustomerHeatmapPage() {
         cursor = batch[batch.length - 1].id
       }
     }
+
+    let next = 0
+    async function worker() {
+      while (next < slices.length) {
+        const slice = slices[next++]
+        await fetchSlice(slice)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, slices.length) }, worker))
     return byOrder
   }
 
@@ -821,14 +863,20 @@ export function CustomerHeatmapPage() {
         return [...base, ...allPackageNames.map((name) => g.packageCounts.get(name) || '')]
       })
 
+      // Title + date range above the real table so the export is
+      // self-describing once it's out of the app (renamed, forwarded,
+      // opened weeks later) — a blank row separates it from the header row.
+      const title = zipExportMode === 'by-shop' ? 'Visits by Zip and Shop' : 'Visits by Zip'
+      const sheetRows: (string | number)[][] = [[title], [`${range.start} to ${range.end}`], [], headers, ...dataRows]
+
       const fileBase = `customer-heatmap-visits-${zipExportMode}-${range.start}-to-${range.end}`
       if (format === 'csv') {
         const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
-        const csv = [headers, ...dataRows].map((r) => r.map(esc).join(',')).join('\n')
+        const csv = sheetRows.map((r) => r.map(esc).join(',')).join('\n')
         triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileBase}.csv`)
       } else {
         const wb = XLSX.utils.book_new()
-        const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
+        const ws = XLSX.utils.aoa_to_sheet(sheetRows)
         XLSX.utils.book_append_sheet(wb, ws, 'Visits by Zip')
         const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
         triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileBase}.xlsx`)
@@ -974,6 +1022,14 @@ export function CustomerHeatmapPage() {
                 </button>
               ))}
             </div>
+            {mapViewMode === 'choropleth' && noBoundaryCount > 0 && (
+              <button onClick={() => setHideNoBoundaryZips((v) => !v)}
+                className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
+                  hideNoBoundaryZips ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
+                title={`${noBoundaryCount.toLocaleString()} zip(s) on this map have no boundary on file and show as a plain dot — toggle to hide them instead`}>
+                {hideNoBoundaryZips ? `Hiding ${noBoundaryCount.toLocaleString()} No-Boundary` : `${noBoundaryCount.toLocaleString()} No Boundary`}
+              </button>
+            )}
             <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
               {(['zip', 'address'] as const).map((m) => (
                 <button key={m} onClick={() => setCoordinateMode(m)}
