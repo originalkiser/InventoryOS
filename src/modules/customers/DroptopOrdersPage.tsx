@@ -65,6 +65,12 @@ const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleSt
 const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
+// Order-id chunk size for fetchByOrderIds below — module-level so the
+// caller's own progress tracking (how many chunks are left across the 3
+// parallel calls) can compute the same total without the two ever drifting
+// apart.
+const ORDER_ID_CHUNK = 200
+
 // Fetch rows for a batch of order ids, chunking the input AND paginating
 // each chunk's output. CHUNK alone isn't enough — this project's Supabase
 // "Max Rows" API setting silently caps every response at 1000 regardless
@@ -72,10 +78,12 @@ const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs fon
 // input ids (an order can have multiple packages/products/services), so
 // an unpaginated .in() could silently drop rows past 1000 with no error.
 // Same fix as the main orders loop: keep fetching by (id) cursor per
-// chunk until a genuinely empty page.
-async function fetchByOrderIds<T>(table: string, orderIds: string[], select: string): Promise<T[]> {
+// chunk until a genuinely empty page. `onChunk` fires once per outer
+// chunk (not per inner page) — enough resolution for a progress bar
+// without the caller needing to know about the inner pagination at all.
+async function fetchByOrderIds<T>(table: string, orderIds: string[], select: string, onChunk?: () => void): Promise<T[]> {
   const sb = supabase as any
-  const CHUNK = 200
+  const CHUNK = ORDER_ID_CHUNK
   const PAGE = 1000
   const MAX_PAGE_RETRIES = 2
   const out: T[] = []
@@ -102,6 +110,7 @@ async function fetchByOrderIds<T>(table: string, orderIds: string[], select: str
       if (data.length === 0) break
       cursor = data[data.length - 1].id
     }
+    onChunk?.()
   }
   return out
 }
@@ -118,7 +127,7 @@ export function DroptopOrdersPage() {
   const [shopLabels, setShopLabels] = useState<string[]>([])
   const [loadAllShops, setLoadAllShops] = useState(false)
   const [packageFilters, setPackageFilters] = useState<string[]>([])
-  const [productIdFilter, setProductIdFilter] = useState('')
+  const [productIdFilters, setProductIdFilters] = useState<string[]>([])
   const [search, setSearch] = useState('')
   const [filterRegions, setFilterRegions] = useState<string[]>([])
   const [filterMarkets, setFilterMarkets] = useState<string[]>([])
@@ -134,6 +143,14 @@ export function DroptopOrdersPage() {
   // Heatmap's full-detail load: a cheap COUNT-only request up front gives
   // a denominator, `loaded` ticks up per page.
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
+  // Second phase — package/product/service child rows for every order
+  // header just loaded. loadProgress alone used to sit frozen at 100% while
+  // this ran (visible on a big pull — 47k+ orders' worth of child fetching
+  // is not instant), with nothing telling the user anything was still
+  // happening. total is chunks-to-fetch across all 3 tables combined
+  // (see ORDER_ID_CHUNK), not row counts — coarser than the header phase's
+  // per-order count, but real movement instead of a stall.
+  const [detailProgress, setDetailProgress] = useState<{ loaded: number; total: number } | null>(null)
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
@@ -189,6 +206,7 @@ export function DroptopOrdersPage() {
     setLoading(true)
     setError(null)
     setLoadProgress({ loaded: 0, total: null })
+    setDetailProgress(null)
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
     const endIso = `${range.end}T23:59:59.999Z`
@@ -266,13 +284,17 @@ export function DroptopOrdersPage() {
       if (cancelled) return
 
       const orderIds = allOrders.map((o) => o.id)
-      const [pkgRows, prodRows, svcRows] = orderIds.length
-        ? await Promise.all([
-          fetchByOrderIds<PackageRow>('droptop_order_packages', orderIds, 'order_id, package_id, name, price_total, price_total_after_discount'),
-          fetchByOrderIds<ProductRow>('droptop_order_products', orderIds, 'order_id, product_id, product_type, uom, quantity_total'),
-          fetchByOrderIds<ServiceRow>('droptop_order_services', orderIds, 'order_id, package_id, products'),
+      let pkgRows: PackageRow[] = [], prodRows: ProductRow[] = [], svcRows: ServiceRow[] = []
+      if (orderIds.length) {
+        const chunksPerTable = Math.ceil(orderIds.length / ORDER_ID_CHUNK)
+        if (!cancelled) setDetailProgress({ loaded: 0, total: chunksPerTable * 3 })
+        const onChunk = () => { if (!cancelled) setDetailProgress((p) => (p ? { ...p, loaded: p.loaded + 1 } : p)) }
+        ;[pkgRows, prodRows, svcRows] = await Promise.all([
+          fetchByOrderIds<PackageRow>('droptop_order_packages', orderIds, 'order_id, package_id, name, price_total, price_total_after_discount', onChunk),
+          fetchByOrderIds<ProductRow>('droptop_order_products', orderIds, 'order_id, product_id, product_type, uom, quantity_total', onChunk),
+          fetchByOrderIds<ServiceRow>('droptop_order_services', orderIds, 'order_id, package_id, products', onChunk),
         ])
-        : [[], [], []]
+      }
       if (cancelled) return
 
       setOrders(allOrders)
@@ -326,6 +348,19 @@ export function DroptopOrdersPage() {
     for (const svc of services) for (const pr of (svc.products ?? [])) if (pr.product_id) s.add(pr.product_id)
     return [...s].sort()
   }, [products, services])
+  // Occurrence counts across both sources, same convention as
+  // packageOptionCounts — shown in the multi-select so picking a product is
+  // informed by real volume.
+  const productIdOptionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of products) if (p.product_id) m.set(p.product_id, (m.get(p.product_id) ?? 0) + 1)
+    for (const svc of services) for (const pr of (svc.products ?? [])) if (pr.product_id) m.set(pr.product_id, (m.get(pr.product_id) ?? 0) + 1)
+    return m
+  }, [products, services])
+  const productIdOptions = useMemo(
+    () => allProductIds.map((id) => ({ value: id, count: productIdOptionCounts.get(id) ?? 0 })),
+    [allProductIds, productIdOptionCounts],
+  )
 
   // Client-side filtering — package/product filters need the joined child
   // rows, and order volumes for a date-scoped, one-company query are light
@@ -336,9 +371,9 @@ export function DroptopOrdersPage() {
     return orders.filter((o) => {
       if (allowedLocationIds !== null && (!o.location_id || !allowedLocationIds.has(o.location_id))) return false
       if (packageFilters.length && !(packagesByOrder.get(o.id) ?? []).some((p) => p.name && packageFilters.includes(p.name))) return false
-      if (productIdFilter) {
-        const inTopLevel = (productsByOrder.get(o.id) ?? []).some((p) => p.product_id === productIdFilter)
-        const inServices = (servicesByOrder.get(o.id) ?? []).some((s) => (s.products ?? []).some((p) => p.product_id === productIdFilter))
+      if (productIdFilters.length) {
+        const inTopLevel = (productsByOrder.get(o.id) ?? []).some((p) => p.product_id && productIdFilters.includes(p.product_id))
+        const inServices = (servicesByOrder.get(o.id) ?? []).some((s) => (s.products ?? []).some((p) => p.product_id && productIdFilters.includes(p.product_id)))
         if (!inTopLevel && !inServices) return false
       }
       if (q) {
@@ -347,7 +382,7 @@ export function DroptopOrdersPage() {
       }
       return true
     })
-  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, search, packageFilters, productIdFilter, allowedLocationIds])
+  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, search, packageFilters, productIdFilters, allowedLocationIds])
 
   const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
 
@@ -481,13 +516,10 @@ export function DroptopOrdersPage() {
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Package(s)</span>
           <MultiSelectDropdown options={packageOptions} selected={packageFilters} onChange={setPackageFilters} placeholder="All Packages" countNoun="packages" searchable />
         </div>
-        <label className="flex flex-col gap-0.5">
+        <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Product ID</span>
-          <select value={productIdFilter} onChange={(e) => setProductIdFilter(e.target.value)} className={`${fieldCls} min-w-[160px]`}>
-            <option value="">All Products</option>
-            {allProductIds.map((id) => <option key={id} value={id}>{id}</option>)}
-          </select>
-        </label>
+          <MultiSelectDropdown options={productIdOptions} selected={productIdFilters} onChange={setProductIdFilters} placeholder="All Products" countNoun="products" searchable />
+        </div>
         {loadAllShops && (
           <button onClick={() => setLoadAllShops(false)}
             className="px-2 py-1.5 rounded border border-[#E67E22]/40 bg-[#E67E22]/10 text-[10px] font-mono uppercase tracking-wide text-[#E67E22] hover:bg-[#E67E22]/20 transition-colors"
@@ -517,13 +549,18 @@ export function DroptopOrdersPage() {
         </CardBody></Card>
       ) : loading ? (
         <LoadingProgress
-          fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
+          fraction={
+            detailProgress ? detailProgress.loaded / detailProgress.total
+              : loadProgress.total ? loadProgress.loaded / loadProgress.total : null
+          }
           countText={
-            loadProgress.total
-              ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
-              : loadProgress.loaded > 0
-                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
-                : 'Loading orders…'
+            detailProgress
+              ? `Loading package/product details — ${detailProgress.loaded.toLocaleString()} of ${detailProgress.total.toLocaleString()} batches (${Math.min(100, Math.round((detailProgress.loaded / detailProgress.total) * 100))}%)`
+              : loadProgress.total
+                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+                : loadProgress.loaded > 0
+                  ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                  : 'Loading orders…'
           }
           messages={[
             'Pulling order headers…',
