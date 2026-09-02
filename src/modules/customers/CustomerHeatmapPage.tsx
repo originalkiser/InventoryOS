@@ -1224,7 +1224,7 @@ export function CustomerHeatmapPage() {
           }
           messages={[
             'Pulling orders by zip code…',
-            'Matching shops to territories…',
+            'Matching shops to markets…',
             'Rolling up visit counts…',
             'Mixing the gradient…',
           ]}

@@ -10,19 +10,28 @@ interface LoadingProgressProps {
   messages: string[]
 }
 
+// Slide in (600ms) + hold at center (4000ms) + slide out (600ms) + wait
+// off-screen (4000ms) = one full cycle. Matches the `loadingMessageCycle`
+// keyframes in index.css — keep the two in sync if either changes.
+const MESSAGE_CYCLE_MS = 9200
+
 /**
  * Shared "big load in progress" block — branded spinner above a progress
  * bar, with a rotating line of fun status messages underneath so a long
  * pull (Heatmap orders, Droptop Orders, Orders v2 generation) doesn't read
  * as a single static spinner the whole time. Purely decorative rotation —
  * `messages` doesn't need to map 1:1 to real sub-steps, just read like it
- * could.
+ * could. Each message slides in from the right across the full bar width,
+ * settles at center, then slides back out — see loadingMessageCycle in
+ * index.css. The CSS animation loops continuously on its own; this only
+ * swaps the text once per cycle, timed to land while it's off-screen so
+ * nothing visibly pops mid-slide.
  */
 export function LoadingProgress({ fraction, countText, messages }: LoadingProgressProps) {
   const [msgIndex, setMsgIndex] = useState(0)
   useEffect(() => {
     if (messages.length < 2) return
-    const id = setInterval(() => setMsgIndex((i) => (i + 1) % messages.length), 1800)
+    const id = setInterval(() => setMsgIndex((i) => (i + 1) % messages.length), MESSAGE_CYCLE_MS)
     return () => clearInterval(id)
   }, [messages.length])
 
@@ -41,9 +50,14 @@ export function LoadingProgress({ fraction, countText, messages }: LoadingProgre
       </div>
       <p className="text-[11px] font-mono text-inky/70">{countText}</p>
       {messages.length > 0 && (
-        <p key={msgIndex} className="text-[10px] font-mono text-inky/50 italic animate-[swipeRight_220ms_ease-out]">
-          {messages[msgIndex]}
-        </p>
+        <div className="w-full max-w-md h-4 relative overflow-hidden">
+          <p
+            className="absolute inset-0 w-full text-center text-[10px] font-mono text-inky/50 italic"
+            style={messages.length > 1 ? { animation: `loadingMessageCycle ${MESSAGE_CYCLE_MS}ms linear infinite` } : undefined}
+          >
+            {messages[msgIndex]}
+          </p>
+        </div>
       )}
     </div>
   )
