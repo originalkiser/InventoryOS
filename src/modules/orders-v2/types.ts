@@ -108,12 +108,15 @@ export interface GenerationInput {
   on_hand: number | null        // in quarts — combined with other case types of the same product family, see buildGenerationInputs
   daily_usage: number | null    // quarts/day
   // Present only when this product has other case types of the same
-  // family (e.g. 5W30D/5W30BB) with on-hand blended into the combined
-  // figure above — own_on_hand is this product's own reading before that,
-  // and equivalent_products lists every sibling considered, flagged
-  // whether its on-hand was actually used or excluded as implausibly high.
+  // family (e.g. 5W30D/5W30BB) — own_on_hand is this product's own reading
+  // before combining, and equivalent_products lists every sibling folded
+  // into the combined figure above (on-hand always combined; daily_usage
+  // too, for a sibling that has its own usage recorded). No exclusion
+  // threshold — a slow-moving product legitimately carries weeks of
+  // on-hand, so an "implausibly large" cutoff excluded exactly the
+  // readings combining exists to catch.
   own_on_hand?: number | null
-  equivalent_products?: { product_id: string; on_hand: number; used: boolean }[]
+  equivalent_products?: { product_id: string; on_hand: number }[]
   // Outstanding quantity (quarts) on this product's still-open (not closed/
   // cancelled) Droptop POs for this shop — see buildGenerationInputs. Never
   // folded into on_hand automatically; a line with this set gets the

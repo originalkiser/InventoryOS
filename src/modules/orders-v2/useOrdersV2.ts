@@ -760,24 +760,28 @@ export function buildGenerationInputs(
   // on-hand should be blended into; `vmiKeys` covers this from the actual
   // order configs since a bare usage row has no VMI flag of its own.
   const vmiKeys = new Set(base.filter((b) => b.rule.vmi_keepfill_enabled).map((b) => ruleKey(b.location_id, b.product_id)))
-  const familyMembers = new Map<string, { product_id: string; on_hand: number }[]>()
+  const familyMembers = new Map<string, { product_id: string; on_hand: number; daily_usage: number | null }[]>()
   for (const u of usageMap.values()) {
     if (u.on_hands == null || vmiKeys.has(ruleKey(u.location_id, u.product_id))) continue
-    const onHand = Number(u.on_hands) * quartsFromSourceUnit(u.product_id)
+    const factor = quartsFromSourceUnit(u.product_id)
+    const onHand = Number(u.on_hands) * factor
+    const dailyUsage = u.daily_usage != null ? Number(u.daily_usage) * factor : null
     const fam = `${u.location_id}|${pkey(baseProductId(u.product_id))}`
     if (!familyMembers.has(fam)) familyMembers.set(fam, [])
-    familyMembers.get(fam)!.push({ product_id: u.product_id, on_hand: onHand })
+    familyMembers.get(fam)!.push({ product_id: u.product_id, on_hand: onHand, daily_usage: dailyUsage })
   }
 
   // Pass 3: combine each row's own on-hand with its family's other case
   // types — e.g. 5W30D and 5W30BB both resolve to family "5W30", so
   // ordering 5W30BB accounts for on-hand sitting under the 5W30D id too.
-  // A sibling reading that's implausibly large next to this product's own
-  // usage (more than a 12-gallon drum's worth, or more than a day's usage,
-  // whichever is smaller) is excluded from the combined total — probably a
-  // stale reading rather than product actually on the shelf at this shop —
-  // but still shown, tagged "not used", never silently dropped.
-  const CASE_CARRYOVER_MAX_QUARTS = 48 // 12 gallons, in this module's quarts convention
+  // Every sibling's on-hand is folded in unconditionally — no "implausibly
+  // large" cutoff. That cutoff used to compare a sibling's on-hand against
+  // THIS product's own daily usage, which excluded exactly the case
+  // combining exists for: a slow mover legitimately carries weeks of
+  // on-hand, so a low usage rate made almost any real sibling reading look
+  // "implausible." A sibling's daily_usage is combined too, but only when
+  // both sides actually have a usage figure of their own — never inventing
+  // a rate for a side that has none.
   return base.map((b) => {
     // Never applies to VMI/keep-fill — its on-hand already comes from the
     // tank monitor and any "order" is really a vendor-notify recommendation,
@@ -794,12 +798,15 @@ export function buildGenerationInputs(
     if (siblings.length === 0) {
       return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
-    const threshold = Math.min(CASE_CARRYOVER_MAX_QUARTS, Number(b.daily_usage ?? 0))
-    const equivalent_products = siblings.map((s) => ({ ...s, used: s.on_hand <= threshold }))
-    const combined = b.on_hand + equivalent_products.filter((e) => e.used).reduce((sum, e) => sum + e.on_hand, 0)
+    const equivalent_products = siblings.map((s) => ({ product_id: s.product_id, on_hand: s.on_hand }))
+    const combinedOnHand = b.on_hand + siblings.reduce((sum, s) => sum + s.on_hand, 0)
+    const usageSiblings = siblings.filter((s) => s.daily_usage != null)
+    const combinedUsage = b.daily_usage != null
+      ? Number(b.daily_usage) + usageSiblings.reduce((sum, s) => sum + Number(s.daily_usage), 0)
+      : b.daily_usage
     return {
       location_id: b.location_id, product_id: b.product_id, rule: b.rule,
-      on_hand: combined, daily_usage: b.daily_usage,
+      on_hand: combinedOnHand, daily_usage: combinedUsage,
       own_on_hand: b.on_hand, equivalent_products, pendingPoQty,
     }
   })

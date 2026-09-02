@@ -3,40 +3,51 @@ import { buildGenerationInputs, type OrderConfigRow, type UsageRow, type Purchas
 
 // buildGenerationInputs' "equivalent case types" combine — 5W30D and
 // 5W30BB both resolve to the family "5W30" (a trailing run of letters is
-// the case-type suffix), so on-hand recorded under either id should feed
-// the same order calculation, with an implausibly-large sibling reading
-// excluded from the combined total but still surfaced for review.
+// the case-type suffix), so on-hand (and usage, when both sides have their
+// own) recorded under either id feeds the same order calculation. No
+// exclusion threshold — every sibling's on-hand is folded in regardless of
+// size, since a slow-moving product legitimately carries weeks of on-hand
+// and comparing a sibling's on-hand against this product's own usage rate
+// only ever penalized exactly that case.
 
 function config(product_id: string, overrides: Partial<OrderConfigRow> = {}): OrderConfigRow {
   return { location_id: 'L1', product_id, vendor_id: 'V1', capacity: null, order_limit: null, metadata: {}, ...overrides }
 }
-function usage(product_id: string, on_hands: number, daily_usage: number): UsageRow {
+function usage(product_id: string, on_hands: number, daily_usage: number | null): UsageRow {
   return { location_id: 'L1', product_id, on_hands, daily_usage }
 }
 
 describe('buildGenerationInputs — equivalent case types', () => {
-  it('combines a small sibling reading into the ordered product\'s on-hand', () => {
+  it('combines a sibling reading into the ordered product\'s on-hand and usage', () => {
     const configs = [config('5W30BB'), config('5W30D')]
     const usageRows = [usage('5W30BB', 100, 20), usage('5W30D', 10, 5)]
     const inputs = buildGenerationInputs(configs, [], usageRows)
 
     const bb = inputs.find((i) => i.product_id === '5W30BB')!
     expect(bb.own_on_hand).toBe(100)
-    expect(bb.on_hand).toBe(110) // 100 + 10, since 10 <= min(48, 20)
-    expect(bb.equivalent_products).toEqual([{ product_id: '5W30D', on_hand: 10, used: true }])
+    expect(bb.on_hand).toBe(110) // 100 + 10
+    expect(bb.daily_usage).toBe(25) // 20 + 5 — both sides have their own usage
+    expect(bb.equivalent_products).toEqual([{ product_id: '5W30D', on_hand: 10 }])
   })
 
-  it('excludes a sibling reading larger than 12gal-equivalent or daily usage, but still reports it', () => {
+  it('combines a sibling reading no matter how large — no implausibility cutoff', () => {
     const configs = [config('5W30BB'), config('5W30D')]
-    // Sibling on-hand (60) exceeds both the 48-quart cap and this
-    // product's own daily usage (20) — implausibly large, so it's not
-    // folded into the order math.
     const usageRows = [usage('5W30BB', 100, 20), usage('5W30D', 60, 5)]
     const inputs = buildGenerationInputs(configs, [], usageRows)
 
     const bb = inputs.find((i) => i.product_id === '5W30BB')!
-    expect(bb.on_hand).toBe(100) // unchanged — sibling excluded
-    expect(bb.equivalent_products).toEqual([{ product_id: '5W30D', on_hand: 60, used: false }])
+    expect(bb.on_hand).toBe(160) // 100 + 60, no cutoff
+    expect(bb.equivalent_products).toEqual([{ product_id: '5W30D', on_hand: 60 }])
+  })
+
+  it('leaves daily_usage as-is when the sibling has no usage of its own', () => {
+    const configs = [config('5W30BB'), config('5W30D')]
+    const usageRows = [usage('5W30BB', 100, 20), usage('5W30D', 10, null)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+
+    const bb = inputs.find((i) => i.product_id === '5W30BB')!
+    expect(bb.on_hand).toBe(110) // on-hand still combines
+    expect(bb.daily_usage).toBe(20) // usage unchanged — sibling has none to add
   })
 
   it('never combines case types for a VMI/keep-fill product', () => {
@@ -77,7 +88,7 @@ describe('buildGenerationInputs — equivalent case types', () => {
     const bb = inputs.find((i) => i.product_id === '5W30BB')!
     expect(bb.own_on_hand).toBe(100)
     expect(bb.on_hand).toBe(110)
-    expect(bb.equivalent_products).toEqual([{ product_id: '5W30D', on_hand: 10, used: true }])
+    expect(bb.equivalent_products).toEqual([{ product_id: '5W30D', on_hand: 10 }])
   })
 })
 

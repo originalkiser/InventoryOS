@@ -479,14 +479,9 @@ export function OrdersV2Review() {
                         {num(input?.own_on_hand ?? l.on_hand)}
                         {input?.equivalent_products && input.equivalent_products.length > 0 && (
                           <div className="text-[9px] text-inky/50 leading-tight font-normal">
-                            {input.equivalent_products.some((e) => e.used) && (
-                              <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
-                            )}
+                            <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
                             {input.equivalent_products.map((e) => (
-                              <div key={e.product_id}
-                                title={e.used ? undefined : 'Not used in the order calculation — on-hand is high relative to usage here, likely stale or not actually on hand at this shop'}>
-                                {e.product_id}: {num(e.on_hand)}{!e.used && ' (not used)'}
-                              </div>
+                              <div key={e.product_id}>{e.product_id}: {num(e.on_hand)}</div>
                             ))}
                           </div>
                         )}
@@ -676,14 +671,9 @@ function SmoothingRow({ input, line, onPatch, onAdd }: {
         {num(input?.own_on_hand ?? onHand)}
         {input?.equivalent_products && input.equivalent_products.length > 0 && (
           <div className="text-[9px] text-inky/50 leading-tight font-normal">
-            {input.equivalent_products.some((e) => e.used) && (
-              <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
-            )}
+            <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
             {input.equivalent_products.map((e) => (
-              <div key={e.product_id}
-                title={e.used ? undefined : 'Not used in the order calculation — on-hand is high relative to usage here, likely stale or not actually on hand at this shop'}>
-                {e.product_id}: {num(e.on_hand)}{!e.used && ' (not used)'}
-              </div>
+              <div key={e.product_id}>{e.product_id}: {num(e.on_hand)}</div>
             ))}
           </div>
         )}
