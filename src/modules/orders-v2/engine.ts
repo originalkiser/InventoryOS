@@ -328,6 +328,13 @@ function groupDollars(lines: GeneratedLine[], ruleOf: (l: GeneratedLine) => Prod
   }, 0)
 }
 
+// The engine's own internal unit convention is quarts throughout (see this
+// file's header comment) — a 'gallons_per_product' minimum is entered on
+// the Order Settings screen as REAL gallons, so it has to cross that
+// boundary once here rather than being divided straight into a quarts-per-
+// unit figure as if it were already in the same unit.
+const QUARTS_PER_GALLON = 4
+
 /**
  * A per-product minimum ("bulk must be >= 250 gallons of each product") is a
  * floor on every line, not on the order total — so it's satisfied line by
@@ -344,8 +351,15 @@ function applyPerProductMinimum(
     const inp = inputs.get(`${l.location_id}|${l.product_id}`)
     if (!inp) continue
     const per = gallonsPerUnit(inp.rule)
-    // 'gallons_per_product' is expressed in gallons; convert to units.
-    const floorUnits = min.type === 'gallons_per_product' ? floor / per : floor
+    // 'gallons_per_product' is entered in REAL gallons; convert to quarts
+    // (this module's internal unit) before dividing by the per-unit quarts
+    // figure to get a unit count. Missing the *QUARTS_PER_GALLON step here
+    // silently let a configured "55 gallons" floor act as "55 quarts"
+    // instead — a real production order for ROT-T6-5W40 (4 quarts/unit)
+    // landed at 13 units (52 quarts = 13 real gallons) against a configured
+    // 55-gallon minimum: 55/4 (missing the gallons->quarts step) = 13.75,
+    // floored to 13 — exactly the bug. Correct: (55*4)/4 = 55 units.
+    const floorUnits = min.type === 'gallons_per_product' ? (floor * QUARTS_PER_GALLON) / per : floor
     if (l.qty >= floorUnits) continue
     // Physical capacity still wins — never order more than the shop can hold.
     const hard = capsFor(inp, ctx, { respectDosMax: false })

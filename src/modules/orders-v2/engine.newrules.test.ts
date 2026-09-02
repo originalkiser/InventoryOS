@@ -77,9 +77,17 @@ describe('DOS ceilings are soft, capacity is hard', () => {
 })
 
 describe('per-product minimums', () => {
+  // units_per_uom_gallons: 4 here means one order UNIT is a real gallon (4
+  // quarts, this module's internal unit) — deliberately NOT 1, which is
+  // what let the real conversion bug through undetected: 'gallons_per_
+  // product' is entered in REAL gallons, but with a 1-quart-per-unit
+  // fixture, "real gallons" and "quarts-space units" are numerically
+  // identical, so a missing gallons->quarts conversion produced the exact
+  // same test result as the correct formula. A per-unit factor that isn't
+  // 1 is required for these tests to actually catch that class of bug.
   it('raises each bulk line to the configured gallons per product', () => {
-    const a = input({ product_id: 'B1', on_hand: 10, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 1, unit_cost: 4 } })
-    const b = input({ product_id: 'B2', on_hand: 12, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 1, unit_cost: 4 } })
+    const a = input({ product_id: 'B1', on_hand: 10, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 4 } })
+    const b = input({ product_id: 'B2', on_hand: 12, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 4 } })
     const c = ctx({
       settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_max: 30 },
       vendor: { vendor_id: 'V1', caseTypeMinimums: {}, usesOrderDays: false,
@@ -87,14 +95,17 @@ describe('per-product minimums', () => {
     })
     const res = generateOrder([a, b], c)
     expect(res.groups[0].meetsMinimum).toBe(true)
+    // 100 real gallons at 4 quarts/unit (1 unit = 1 gallon) = 100 units.
+    // The unfixed formula (floor / per, no gallons->quarts step) would have
+    // given 100/4 = 25 units here — a quarter of the real floor.
     for (const l of res.lines) expect(l.qty).toBeGreaterThanOrEqual(100)
   })
 
   it('is a floor per line, not a floor on the order total', () => {
     // Two products, 100 gal each — the total is 200, but each line must
     // independently clear 100 rather than the pair summing to it.
-    const a = input({ product_id: 'B1', on_hand: 0, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 1, unit_cost: 4 } })
-    const b = input({ product_id: 'B2', on_hand: 0, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 1, unit_cost: 4 } })
+    const a = input({ product_id: 'B1', on_hand: 0, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 4 } })
+    const b = input({ product_id: 'B2', on_hand: 0, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 4 } })
     const c = ctx({
       settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_max: 200 },
       vendor: { vendor_id: 'V1', caseTypeMinimums: {}, usesOrderDays: false,
@@ -106,15 +117,33 @@ describe('per-product minimums', () => {
   })
 
   it('reports the group short when capacity blocks the per-product floor', () => {
-    const a = input({ product_id: 'B1', on_hand: 0, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 1, unit_cost: 4, max_capacity_gallons: 40 } })
+    // max_capacity_gallons is in quarts (this module's internal unit,
+    // despite the name) — 40 quarts at 4 quarts/unit caps the line at 10
+    // units, well under the 100-unit floor 100 real gallons works out to.
+    const a = input({ product_id: 'B1', on_hand: 0, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 4, max_capacity_gallons: 40 } })
     const c = ctx({
       vendor: { vendor_id: 'V1', caseTypeMinimums: {}, usesOrderDays: false,
         minimums: { bulk: { type: 'gallons_per_product', dollars: 0, qty: 100 } } },
     })
     const res = generateOrder([a], c)
-    expect(res.lines[0].qty).toBeLessThanOrEqual(40)
+    expect(res.lines[0].qty).toBeLessThanOrEqual(10)
     expect(res.groups[0].meetsMinimum).toBe(false)
     expect(res.lines[0].flags).toContain('below_minimum')
+  })
+
+  it('regression: a 55-gallon floor at 4 quarts/unit orders 55 units, not 13', () => {
+    // The exact real-world numbers from the production report that
+    // surfaced this bug: ROT-T6-5W40 (4 quarts/unit — "52 qt" shown under
+    // a qty of 13 in the review table) against a configured 55-gallon
+    // bulk minimum landed at 13 units instead of 55.
+    const a = input({ product_id: 'ROT-T6-5W40', on_hand: 0, daily_usage: 1, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 27 } })
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_max: 200 },
+      vendor: { vendor_id: 'V1', caseTypeMinimums: {}, usesOrderDays: false,
+        minimums: { bulk: { type: 'gallons_per_product', dollars: 0, qty: 55 } } },
+    })
+    const res = generateOrder([a], c)
+    expect(res.lines[0].qty).toBe(55)
   })
 })
 
