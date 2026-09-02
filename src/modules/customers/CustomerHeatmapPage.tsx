@@ -971,8 +971,15 @@ export function CustomerHeatmapPage() {
       for (const r of mappedRows) {
         const shopLoc = r.location_id ? loc.byId(r.location_id) : undefined
         const shopNumber = zipExportMode === 'by-shop' ? (shopLoc?.name ?? r.location_id ?? '—') : ''
-        const shopCity = normalizeCityCase(shopLoc?.shop_city ?? '')
-        const shopLabel = zipExportMode === 'by-shop' ? (shopCity ? `${shopNumber}-${shopCity}` : shopNumber) : ''
+        // shopNumberCityLabel(), not a manual `${shopNumber}-${shopCity}`
+        // concat — some locations' shop_city already comes prefixed with
+        // the shop number as its raw stored value ("1-Thomasville", not
+        // just "Thomasville"), so concatenating naively doubled it up into
+        // "1-1-Thomasville". Same bug, same fix already applied to every
+        // other shop-label spot in this file (the on-screen ShopZipRow
+        // table, the order modal) — this export path was the one place
+        // still doing it manually.
+        const shopLabel = zipExportMode === 'by-shop' ? shopNumberCityLabel(shopNumber, shopLoc?.shop_city) : ''
         const key = `${shopNumber}|${r.zip ?? '—'}`
         let g = groups.get(key)
         if (!g) { g = { shopNumber, shopLabel, zip: r.zip ?? '—', city: normalizeCityCase(r.city ?? ''), region: r.region ?? '', count: 0, ticketTotal: 0, packageCounts: new Map() }; groups.set(key, g) }
