@@ -25,7 +25,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
-import { Button, Card, CardBody, Input, MultiSelectDropdown, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, Input, MultiSelectDropdown } from '@/components/ui'
 
 interface OrderRow {
   id: string
@@ -129,6 +129,10 @@ export function DroptopOrdersPage() {
   const [services, setServices] = useState<ServiceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Real progress instead of a bare spinner — same pattern as Customer
+  // Heatmap's full-detail load: a cheap COUNT-only request up front gives
+  // a denominator, `loaded` ticks up per page.
+  const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
@@ -183,11 +187,26 @@ export function DroptopOrdersPage() {
     let cancelled = false
     setLoading(true)
     setError(null)
+    setLoadProgress({ loaded: 0, total: null })
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
     const endIso = `${range.end}T23:59:59.999Z`
 
+    function applyFilters(q: any) {
+      q = q.eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+      if (shopIds.length) q = q.in('location_id', shopIds)
+      return q
+    }
+
     async function run() {
+      // Real progress instead of an indeterminate spinner: a cheap
+      // COUNT-only request (head:true — no rows returned, the count is
+      // computed server-side) using the exact same filters as the real
+      // fetch below. Best-effort — if it fails for any reason the load
+      // still proceeds, just without a percentage.
+      const { count } = await applyFilters(sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true }))
+      if (!cancelled) setLoadProgress({ loaded: 0, total: count ?? null })
+
       // Keyset pagination by (order_finalized_at, id), not plain id — a
       // cursor ordered by id while filtering on order_finalized_at can't
       // use an index to seek to the matching date range (see
@@ -224,13 +243,10 @@ export function DroptopOrdersPage() {
         let lastErr: string | null = null
         for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
           if (cancelled) return
-          let q = sb.schema('inventory').from('droptop_orders')
-            .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at')
-            .eq('company_id', companyId)
-            .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+          let q = applyFilters(sb.schema('inventory').from('droptop_orders')
+            .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at'))
             .order('order_finalized_at', { ascending: true })
             .order('id', { ascending: true }).limit(PAGE)
-          if (shopIds.length) q = q.in('location_id', shopIds)
           if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
           const { data: pageData, error: err } = await q
           if (!err) { data = (pageData ?? []) as OrderRow[]; break }
@@ -241,6 +257,7 @@ export function DroptopOrdersPage() {
           throw new Error(`${lastErr ?? 'Failed to load orders'} — loaded ${allOrders.length.toLocaleString()} order(s) before this happened`)
         }
         allOrders.push(...data)
+        if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: allOrders.length }))
         if (data.length === 0) break
         const last = data[data.length - 1]
         cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
@@ -498,7 +515,25 @@ export function DroptopOrdersPage() {
           </Button>
         </CardBody></Card>
       ) : loading ? (
-        <div className="py-16"><SbLoader /></div>
+        <div className="py-16 flex flex-col items-center gap-3">
+          <div className="w-full max-w-md h-2 bg-navy/10 rounded-full overflow-hidden">
+            {loadProgress.total ? (
+              <div
+                className="h-full bg-sky transition-[width] duration-300 ease-out"
+                style={{ width: `${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%` }}
+              />
+            ) : (
+              <div className="h-full w-full bg-sky/40 animate-pulse" />
+            )}
+          </div>
+          <p className="text-[11px] font-mono text-inky/70">
+            {loadProgress.total
+              ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+              : loadProgress.loaded > 0
+                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                : 'Loading orders…'}
+          </p>
+        </div>
       ) : (
         <>
           {/* High-level stats */}
