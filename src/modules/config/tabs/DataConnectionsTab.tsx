@@ -105,6 +105,15 @@ export function DataConnectionsTab() {
   const [orderBackfillShops, setOrderBackfillShops] = useState<string[]>([])
   const [orderBackfillStart, setOrderBackfillStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().slice(0, 10) })
   const [orderBackfillEnd, setOrderBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
+  // Tracked checklist for the "backfill order history back to May 2025,
+  // month by month" project — scaffolding only, per explicit direction: a
+  // durable cross-session list of which months are done, NOT an automated
+  // runner. "Use This Month" just pre-fills the Start/End fields above;
+  // Run Backfill still has to be clicked same as any other range.
+  const [backfillPlan, setBackfillPlan] = useState<{
+    id: string; year_month: string; status: 'pending' | 'in_progress' | 'done'; orders_synced: number | null; notes: string | null
+  }[]>([])
+  const [backfillPlanLoading, setBackfillPlanLoading] = useState(true)
   // Which eligible shops have at least one order WITHIN the currently
   // selected backfill range (not "ever, at any date" — see the effect
   // below for why that distinction turned out to matter). null = still
@@ -143,6 +152,34 @@ export function DataConnectionsTab() {
       })
     return () => { cancelled = true }
   }, [companyId])
+
+  const loadBackfillPlan = useCallback(async () => {
+    if (!companyId) return
+    setBackfillPlanLoading(true)
+    const sb = supabase as any
+    const { data, error } = await sb.schema('inventory').from('droptop_order_backfill_plan')
+      .select('id, year_month, status, orders_synced, notes')
+      .eq('company_id', companyId)
+      .order('year_month', { ascending: false })
+    // Best-effort — brand-new table, may not be migrated in production yet
+    // (see the decoupled-save convention in CLAUDE.md); the checklist card
+    // itself just doesn't render if this comes back empty/erroring.
+    if (!error) setBackfillPlan((data ?? []) as typeof backfillPlan)
+    setBackfillPlanLoading(false)
+  }, [companyId])
+  useEffect(() => { loadBackfillPlan() }, [loadBackfillPlan])
+
+  async function updateBackfillPlanRow(id: string, patch: Partial<{ status: 'pending' | 'in_progress' | 'done'; orders_synced: number | null; notes: string | null }>) {
+    const sb = supabase as any
+    const extra: Record<string, unknown> = {}
+    if (patch.status === 'in_progress') extra.started_at = new Date().toISOString()
+    if (patch.status === 'done') extra.completed_at = new Date().toISOString()
+    const { error } = await sb.schema('inventory').from('droptop_order_backfill_plan')
+      .update({ ...patch, ...extra, updated_by: profile?.id ?? null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) { toast.error(`Couldn't save: ${error.message}`); return }
+    setBackfillPlan((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  }
 
   // For the "Select Gap Shops" convenience below. Originally checked
   // inventory.droptop_orders_synced_locations ("has this location EVER had
@@ -890,6 +927,72 @@ export function DataConnectionsTab() {
           )}
         </CardBody>
       </Card>
+
+      {!backfillPlanLoading && backfillPlan.length > 0 && (
+        <Card>
+          <CardHeader>
+            <span className="text-xs font-mono text-navy uppercase tracking-wide">
+              Historical Backfill Plan — {backfillPlan.filter((r) => r.status === 'done').length} / {backfillPlan.length} months
+            </span>
+          </CardHeader>
+          <CardBody className="flex flex-col gap-2">
+            <p className="text-[11px] font-mono text-inky/60">
+              Tracked checklist only — working backwards month by month is still done manually with the Historical
+              Orders Backfill controls above. "Use This Month" just fills in that range; Run Backfill still has to be
+              clicked there yourself.
+            </p>
+            <div className="overflow-x-auto rounded border border-navy/20">
+              <table className="w-full text-[11px] font-mono">
+                <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
+                  <th className="text-left px-2 py-1">Month</th>
+                  <th className="text-left px-2 py-1">Status</th>
+                  <th className="text-right px-2 py-1">Orders Synced</th>
+                  <th className="text-left px-2 py-1">Notes</th>
+                  <th className="text-left px-2 py-1"></th>
+                </tr></thead>
+                <tbody>
+                  {backfillPlan.map((r) => {
+                    const [y, m] = r.year_month.split('-').map(Number)
+                    const monthStart = `${r.year_month}-01`
+                    const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10) // day 0 of next month = last day of this one
+                    const monthLabel = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+                    return (
+                      <tr key={r.id} className="border-b border-navy/10">
+                        <td className="px-2 py-1 text-navy whitespace-nowrap">{monthLabel}</td>
+                        <td className="px-2 py-1">
+                          <Select value={r.status} onChange={(e) => updateBackfillPlanRow(r.id, { status: e.target.value as 'pending' | 'in_progress' | 'done' })}
+                            options={[{ value: 'pending', label: 'Pending' }, { value: 'in_progress', label: 'In Progress' }, { value: 'done', label: 'Done' }]} />
+                        </td>
+                        <td className="px-2 py-1 text-right">
+                          <input type="number" min={0} defaultValue={r.orders_synced ?? ''} placeholder="—"
+                            onBlur={(e) => {
+                              const v = e.target.value === '' ? null : Number(e.target.value)
+                              if (v !== r.orders_synced) updateBackfillPlanRow(r.id, { orders_synced: v })
+                            }}
+                            className={`${fieldCls} w-24 text-right`} />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input type="text" defaultValue={r.notes ?? ''} placeholder="—"
+                            onBlur={(e) => { const v = e.target.value || null; if (v !== r.notes) updateBackfillPlanRow(r.id, { notes: v }) }}
+                            className={`${fieldCls} w-full min-w-[140px]`} />
+                        </td>
+                        <td className="px-2 py-1">
+                          <button
+                            onClick={() => { setOrderBackfillStart(monthStart); setOrderBackfillEnd(monthEnd) }}
+                            className="text-[10px] font-mono text-sky hover:underline whitespace-nowrap"
+                            title="Fill the Historical Orders Backfill Start/End fields above with this month's range">
+                            Use This Month
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
