@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { byNaturalLabel } from '@/lib/naturalSort'
+import { shopNumberCityLabel } from '@/lib/shopLabels'
 import type { Location, PosLocationMap } from '@/types'
 
 // Section-header/divider rows (e.g. a Monday.com group header like "Open Car
@@ -130,7 +131,7 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
 
   function labelOf(id: string | null): string {
     const l = byId(id)
-    return l ? `${l.name} — ${l.shop_city ?? ''}` : '—'
+    return l ? shopNumberCityLabel(l.name, l.shop_city) : '—'
   }
 
   // Resolve a (possibly linked) field value for a location: base columns first,
@@ -155,14 +156,14 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
   }
 
   const options = locations.filter((l) => l.active)
-    .map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
+    .map((l) => ({ value: l.id, label: shopNumberCityLabel(l.name, l.shop_city) }))
     .sort(byNaturalLabel)
 
   // Exclusion-aware variants for listing/lookup dropdowns (config/operational
   // flows keep using `locations`/`options`, which intentionally ignore these).
   const included = locations.filter((l) => !isExcluded(l))
   const includedOptions = included.filter((l) => l.active)
-    .map((l) => ({ value: l.id, label: `${l.name} — ${l.shop_city ?? ''}` }))
+    .map((l) => ({ value: l.id, label: shopNumberCityLabel(l.name, l.shop_city) }))
     .sort(byNaturalLabel)
 
   // Resolve to a location name (code) string (for tables that key on code).

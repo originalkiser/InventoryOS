@@ -26,6 +26,7 @@ import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal } from '@/components/ui'
 import { getMarketSolidColor } from '@/lib/marketColors'
+import { normalizeCityCase, shopNumberCityLabel } from '@/lib/shopLabels'
 
 interface OrderRow {
   id: string
@@ -125,29 +126,9 @@ function makeShopPinIcon(color: string, label: string | null): L.DivIcon {
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const dateShort = (v: string | null) => v ? new Date(v).toLocaleDateString() : '—'
 
-// City names sometimes come through from Droptop as all-caps or all-lower
-// ("PORT ARTHUR", "port arthur") — normalize those to title case for
-// exports. Leaves anything already mixed-case alone (e.g. "McAllen") rather
-// than guessing at capitalization rules for names this can't reliably get
-// right.
-function normalizeCityCase(city: string): string {
-  if (!city) return city
-  const isAllUpper = city === city.toUpperCase()
-  const isAllLower = city === city.toLowerCase()
-  if (!isAllUpper && !isAllLower) return city
-  return city.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-// "#-City" label — some locations' shop_city already comes prefixed with
-// the shop number itself ("169-Lexington" as the raw value, not just
-// "Lexington"), so naively concatenating name + shop_city doubles it up
-// ("169 — 169-Lexington"). Strips a redundant leading "<name>-" before
-// rebuilding, so this is correct either way the data's shaped.
-function shopNumberCityLabel(name: string, shopCity: string | null | undefined): string {
-  const rawCity = normalizeCityCase(shopCity ?? '')
-  const cleaned = rawCity.replace(new RegExp(`^${name}[\\s-]+`, 'i'), '')
-  return cleaned ? `${name}-${cleaned}` : name
-}
+// normalizeCityCase/shopNumberCityLabel moved to src/lib/shopLabels.ts so
+// useLocations.ts (labelOf/options/includedOptions) can share the same fix
+// instead of carrying its own separate, and until 2026-09-02, un-fixed copy.
 
 // Imperatively pans/zooms the map when the selected zip changes — a plain
 // state change on <MapContainer center> only sets the *initial* view, not
