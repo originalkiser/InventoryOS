@@ -27,13 +27,39 @@ interface Props {
   align?: 'left' | 'right'
 }
 
+// Selected-first ordering: computed once when the panel opens with a
+// snapshot of `selected` at that moment (not `selectedOrder`, which would
+// also want to move on every check/uncheck — deliberately kept OUT of the
+// live-toggle loop, since re-sorting the list while someone's still
+// clicking through it makes it hard to find the next item to un/check).
+// Anything checked at that moment sorts first (in the option list's own
+// order), everything else keeps its normal order after.
+function selectedFirstOrder(options: Option[], selected: string[]): Option[] {
+  const selectedSet = new Set(selected)
+  return [...options].sort((a, b) => {
+    const as = selectedSet.has(a.value) ? 0 : 1
+    const bs = selectedSet.has(b.value) ? 0 : 1
+    return as - bs
+  })
+}
+
 export function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All', showAllOption = true, countNoun = 'selected', searchable = false, align = 'left' }: Props) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  // Snapshotted on open (not recomputed on every render) — see
+  // selectedFirstOrder's own comment for why this doesn't just live-sort
+  // off `selected` directly.
+  const [orderedOptions, setOrderedOptions] = useState<Option[]>(() => selectedFirstOrder(options, selected))
+  const wasOpen = useRef(open)
+  useEffect(() => {
+    if (open && !wasOpen.current) setOrderedOptions(selectedFirstOrder(options, selected))
+    wasOpen.current = open
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
   const visibleOptions = searchable && query.trim()
-    ? options.filter((o) => o.value.toLowerCase().includes(query.trim().toLowerCase()))
-    : options
+    ? orderedOptions.filter((o) => o.value.toLowerCase().includes(query.trim().toLowerCase()))
+    : orderedOptions
 
   useEffect(() => {
     if (!open) return

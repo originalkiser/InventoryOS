@@ -68,21 +68,69 @@ interface ZipCluster {
   locationIds: Set<string>
 }
 
-// Radius/color scale — same brand palette used everywhere else. Real
-// customer geography is heavily skewed (a shop's own zip and its
-// neighbors dominate, then a long tail of 1-2-order zips), so:
-//   1. Radius scales by sqrt(count/max), not linearly — circle AREA
-//      should be proportional to the value for a graduated-symbol map to
-//      read correctly at a glance.
-//   2. Color buckets are the median/80th-percentile of the actual loaded
-//      cluster counts, not fixed fractions of max — robust to skew.
-interface DensityBreakpoints { median: number; p80: number; max: number }
+// Radius/color scale. Real customer geography is heavily skewed (a shop's
+// own zip and its neighbors dominate, then a long tail of 1-2-order zips):
+//   1. Radius scales by sqrt(count/max), not linearly — circle AREA should
+//      be proportional to the value for a graduated-symbol map to read
+//      correctly at a glance.
+//   2. Color is a continuous gradient positioned by each zip's PERCENTILE
+//      RANK among the currently-loaded zips, not raw count/max — a linear
+//      count/max gradient on this skewed a distribution would leave
+//      almost everything at the blue end with only a couple of extreme
+//      reds. Percentile rank spreads the same data evenly across the full
+//      gradient (same "robust to skew" reasoning the old median/80th-
+//      percentile 3-bucket scheme used, just continuous instead of 3
+//      discrete steps).
+interface DensityBreakpoints { sorted: number[]; max: number }
 
 function densityBreakpoints(counts: number[]): DensityBreakpoints {
-  if (!counts.length) return { median: 0, p80: 0, max: 0 }
   const sorted = [...counts].sort((a, b) => a - b)
-  const at = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]
-  return { median: at(0.5), p80: at(0.8), max: sorted[sorted.length - 1] }
+  return { sorted, max: sorted.length ? sorted[sorted.length - 1] : 0 }
+}
+
+// Blue -> green -> yellow -> orange -> red. Four of these five stops are
+// already-approved brand tokens (sky/sb-green/sb-orange/sb-red); #F1C40F
+// (a warm yellow) was added specifically for this gradient — the one stop
+// the existing palette had no equivalent for — per explicit design
+// decision rather than an ad hoc addition.
+const GRADIENT_STOPS: [number, string][] = [
+  [0, '#B7E0DE'], [0.25, '#2ECC71'], [0.5, '#F1C40F'], [0.75, '#E67E22'], [1, '#C0392B'],
+]
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function rgbToHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')
+  return `#${c(r)}${c(g)}${c(b)}`
+}
+// Exported (via module scope) so the legend can render the exact same
+// gradient as a CSS background instead of a hand-tuned approximation.
+function gradientColor(t: number): string {
+  const clamped = Math.max(0, Math.min(1, t))
+  for (let i = 0; i < GRADIENT_STOPS.length - 1; i++) {
+    const [t0, c0] = GRADIENT_STOPS[i]
+    const [t1, c1] = GRADIENT_STOPS[i + 1]
+    if (clamped <= t1) {
+      const localT = t1 === t0 ? 0 : (clamped - t0) / (t1 - t0)
+      const [r0, g0, b0] = hexToRgb(c0)
+      const [r1, g1, b1] = hexToRgb(c1)
+      return rgbToHex(r0 + (r1 - r0) * localT, g0 + (g1 - g0) * localT, b0 + (b1 - b0) * localT)
+    }
+  }
+  return GRADIENT_STOPS[GRADIENT_STOPS.length - 1][1]
+}
+
+// Percentile rank of `count` within `sorted` (ascending), as a 0-1
+// fraction — the midpoint of its run of equal values, so a tie among many
+// zips sharing one count doesn't all round toward the same edge.
+function percentileRank(count: number, sorted: number[]): number {
+  if (sorted.length <= 1) return sorted.length === 1 ? 1 : 0
+  let lo = 0, hi = sorted.length
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < count) lo = mid + 1; else hi = mid }
+  let hi2 = lo
+  while (hi2 < sorted.length && sorted[hi2] === count) hi2++
+  return ((lo + hi2 - 1) / 2) / (sorted.length - 1)
 }
 
 // `zoom` grows the base radius the further in the viewer zooms — the pixel
@@ -94,9 +142,8 @@ function styleFor(count: number, bp: DensityBreakpoints, zoom: number): { radius
   const t = bp.max > 0 ? count / bp.max : 0
   const zoomBoost = Math.min(30, Math.max(0, zoom - 5) * 2.5)
   const radius = 4 + Math.sqrt(t) * 22 + zoomBoost
-  if (count > bp.p80) return { radius, color: '#C0392B', fill: '#C0392B' } // top ~20% of zips
-  if (count > bp.median) return { radius, color: '#E67E22', fill: '#E67E22' } // above the middle
-  return { radius, color: '#4F7489', fill: '#B7E0DE' } // bottom half
+  const color = gradientColor(percentileRank(count, bp.sorted))
+  return { radius, color, fill: color }
 }
 
 // Store-location pin — visually distinct (teardrop, not a circle, per
@@ -220,6 +267,18 @@ export function CustomerHeatmapPage() {
   const [zoom, setZoom] = useState(5)
   const [zipExportMode, setZipExportMode] = useState<'total' | 'by-shop'>('total')
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
+
+  // Skip the map entirely — the stats cards and Visits-by-Zip table below
+  // are what most "just tell me the numbers" checks actually need, and the
+  // map (thousands of DOM/Leaflet elements, plus a real network fetch for
+  // choropleth boundaries) is the most expensive thing on this page to
+  // render. Persisted like the other view toggles.
+  const [hideMap, setHideMap] = useState<boolean>(() => {
+    try { return localStorage.getItem('heatmap:hide-map') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:hide-map', hideMap ? '1' : '0') } catch { /* ignore */ }
+  }, [hideMap])
 
   // Choropleth (actual zip outlines) as a toggleable alternative to the
   // circle view, not a replacement — persisted like the other view toggles.
@@ -677,7 +736,7 @@ export function CustomerHeatmapPage() {
   // zips actually on the map right now (never the whole 31k-zip table).
   // Chunked .in() the same defensive way as everything else this session.
   useEffect(() => {
-    if (mapViewMode !== 'choropleth' || !zipsKey) return
+    if (hideMap || mapViewMode !== 'choropleth' || !zipsKey) return
     let cancelled = false
     const zips = zipsKey.split(',')
     const sb = supabase as any
@@ -693,7 +752,7 @@ export function CustomerHeatmapPage() {
       if (!cancelled) setZipGeometries(m)
     })()
     return () => { cancelled = true }
-  }, [mapViewMode, zipsKey])
+  }, [hideMap, mapViewMode, zipsKey])
 
   // Per-zip lat/lng snapshot, also keyed off zipsKey rather than `clusters`
   // directly — used only as the fallback point position for a zip with no
@@ -749,12 +808,6 @@ export function CustomerHeatmapPage() {
   const zoomRef = useRef(zoom)
   useEffect(() => { zoomRef.current = zoom }, [zoom])
   const ordersForZipRef = useRef<(zip: string) => OrderRow[]>(() => [])
-  // Lets the choropleth's stable (bind-once) dblclick handler know whether
-  // a real order set even exists to show — in rollup preview there are no
-  // raw rows yet, so double-clicking a zip should offer Load Full Detail
-  // instead of opening an empty modal.
-  const showRollupPreviewRef = useRef(showRollupPreview)
-  useEffect(() => { showRollupPreviewRef.current = showRollupPreview }, [showRollupPreview])
 
   const choroplethLayerRef = useRef<L.GeoJSON | null>(null)
   // react-leaflet's <GeoJSON> only reliably parses `data` at MOUNT time — an
@@ -808,7 +861,9 @@ export function CustomerHeatmapPage() {
     })
     layer.on('dblclick', (e: L.LeafletMouseEvent) => {
       L.DomEvent.stopPropagation(e)
-      if (showRollupPreviewRef.current) { setFullDetailRequested(true); return }
+      // Always opens — in rollup preview this has no real rows yet, and
+      // the modal itself shows a "Load Full Detail" prompt rather than a
+      // silently-empty table (see the Modal render below).
       const c = clustersByZipRef.current.get(zip)
       setOrderModal({ title: `Orders — ${zip}${c?.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZipRef.current(zip) })
     })
@@ -1068,14 +1123,24 @@ export function CustomerHeatmapPage() {
   // the two pages agree on what color a given market is.
   const shopPins = useMemo(() => {
     const ids = new Set<string>()
-    for (const r of filteredRows) if (r.location_id) ids.add(r.location_id)
+    // Rollup preview has no raw rows to read location_id off of — the
+    // rollup RPC's location_ids per zip (already carried on each
+    // ZipCluster for "Shared Only" matching) is the only source available,
+    // so pins fall back to that instead of silently showing none. Real bug
+    // this fixes: pins vanished entirely whenever showRollupPreview was
+    // true, since filteredRows is always empty in that mode.
+    if (showRollupPreview) {
+      for (const c of clusters) for (const id of c.locationIds) ids.add(id)
+    } else {
+      for (const r of filteredRows) if (r.location_id) ids.add(r.location_id)
+    }
     return [...ids]
       .map((id) => loc.byId(id))
       .filter((l): l is NonNullable<typeof l> => !!l && l.latitude != null && l.longitude != null)
       .map((l) => ({ loc: l, color: getMarketSolidColor(loc.fieldValue(l.id, 'market'), allMarkets) }))
     // depends on loc.locations (stable across renders), not the loc object
     // itself, which useLocations() recreates every render
-  }, [filteredRows, loc.locations, allMarkets]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filteredRows, clusters, showRollupPreview, loc.locations, allMarkets]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Plain OpenStreetMap tiles — see index.css's .map-tiles-dark comment for
   // why (CartoDB's raster basemaps now need a key and are being retired).
@@ -1170,6 +1235,9 @@ export function CustomerHeatmapPage() {
         <div className="py-16 flex flex-col items-center gap-3">
           <div className="h-2 w-full max-w-md rounded-full bg-sky/40 animate-pulse" />
           <p className="text-[11px] font-mono text-inky/70">Loading fast preview from cached data…</p>
+          <Button size="sm" variant="secondary" onClick={() => setFullDetailRequested(true)}>
+            Skip preview — load full detail instead
+          </Button>
         </div>
       ) : !showRollupPreview && rows.length === 0 ? (
         <Card><CardBody>
@@ -1184,8 +1252,15 @@ export function CustomerHeatmapPage() {
               comment there for why); these stay here since they're only
               meaningful once there's actually a map to show. */}
           <div className="flex items-end gap-2 flex-wrap">
-            <button onClick={() => setShowPins((v) => !v)}
+            <button onClick={() => setHideMap((v) => !v)}
               className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
+                hideMap ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
+              title="Skip rendering the map — just the stats and Visits by Zip table below, for a quicker load">
+              {hideMap ? 'Show Map' : 'Hide Map'}
+            </button>
+            <button onClick={() => setShowPins((v) => !v)}
+              disabled={hideMap}
+              className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors disabled:opacity-40',
                 showPins ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
               title="Show or hide store location pins">
               Pins
@@ -1252,7 +1327,7 @@ export function CustomerHeatmapPage() {
             <>
               <div className="flex gap-3 flex-wrap">
             <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
-              onClick={() => showRollupPreview ? setFullDetailRequested(true) : setOrderModal({ title: `Orders (${filteredRows.length})`, rows: filteredRows })}>
+              onClick={() => setOrderModal({ title: `Orders (${filteredRows.length})`, rows: filteredRows })}>
               <CardBody className="py-3">
                 <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Orders</p>
                 <p className="text-lg font-heading font-bold text-navy">
@@ -1277,7 +1352,7 @@ export function CustomerHeatmapPage() {
             )}
             {(showRollupPreview ? (rollupTotals?.unmapped ?? 0) > 0 : unmappedRows.length > 0) && (
               <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
-                onClick={() => showRollupPreview ? setFullDetailRequested(true) : setOrderModal({ title: `Not On Map (${unmappedRows.length})`, rows: unmappedRows })}>
+                onClick={() => setOrderModal({ title: `Not On Map (${unmappedRows.length})`, rows: unmappedRows })}>
                 <CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Not On Map</p>
                   <p className="text-lg font-heading font-bold text-[#E67E22]">
@@ -1304,6 +1379,7 @@ export function CustomerHeatmapPage() {
                   modal (z-50) at the page's root stacking level. `isolate`
                   contains all of Leaflet's internal stacking inside this div
                   so it can never climb above app UI outside it. */}
+              {!hideMap && (
               <div className="isolate rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
                 <MapContainer center={mapCenter} zoom={5} preferCanvas style={{ height: '100%', width: '100%' }}>
                   <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
@@ -1351,7 +1427,6 @@ export function CustomerHeatmapPage() {
                       click: (e: L.LeafletMouseEvent) => { L.DomEvent.stopPropagation(e); setSelectedZip((prev) => (prev === c.zip ? null : c.zip)) },
                       dblclick: (e: L.LeafletMouseEvent) => {
                         L.DomEvent.stopPropagation(e)
-                        if (showRollupPreview) { setFullDetailRequested(true); return }
                         setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })
                       },
                     }
@@ -1384,19 +1459,20 @@ export function CustomerHeatmapPage() {
                   )}
                 </MapContainer>
               </div>
+              )}
 
-              {/* Legend — color is each zip's own order-count percentile
-                  among the zips CURRENTLY on the map (not a fixed
-                  threshold, and not grouped by shop/location) — narrowing
-                  by shop, region, market, AM, or date range recomputes
-                  every zip's percentile against that new, smaller set. */}
+              {/* Legend — a continuous gradient by each zip's own order-count
+                  percentile among the zips CURRENTLY on the map (not a
+                  fixed threshold, and not grouped by shop/location) —
+                  narrowing by shop, region, market, AM, or date range
+                  recomputes every zip's percentile against that new,
+                  smaller set. */}
+              {!hideMap && (
               <div className="flex items-center gap-4 text-[10px] font-mono text-inky/70 flex-wrap">
-                <span className="flex items-center gap-1.5" title="This zip's order count is in the bottom half of every zip currently on the map">
-                  <span className="w-3 h-3 rounded-full inline-block" style={{ background: '#B7E0DE', border: '1.5px solid #4F7489' }} />Bottom half of zips</span>
-                <span className="flex items-center gap-1.5" title="This zip's order count is above the median of every zip currently on the map">
-                  <span className="w-3 h-3 rounded-full inline-block" style={{ background: '#E67E22' }} />Above median</span>
-                <span className="flex items-center gap-1.5" title="This zip's order count is in the top 20% of every zip currently on the map">
-                  <span className="w-3 h-3 rounded-full inline-block" style={{ background: '#C0392B' }} />Top 20% of zips</span>
+                <span className="flex items-center gap-1.5" title="Color reflects each zip's order-count percentile among every zip currently on the map">
+                  <span className="w-24 h-2.5 rounded-full inline-block" style={{ background: `linear-gradient(to right, ${GRADIENT_STOPS.map(([, c]) => c).join(', ')})` }} />
+                  Fewer orders <span className="text-inky/40">→</span> More orders
+                </span>
                 <span className="flex items-center gap-1.5">
                   <svg width="11" height="15" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">
                     <path d="M11 0C4.9 0 0 4.9 0 11c0 8.25 11 19 11 19s11-10.75 11-19C22 4.9 17.1 0 11 0z" fill="#002745" />
@@ -1408,6 +1484,7 @@ export function CustomerHeatmapPage() {
                   Percentile of THIS view's own zips, not a fixed order count — not grouped by shop
                 </span>
               </div>
+              )}
 
               {/* Visits by zip — click a row to see its orders; the Total
                   by Zip / By Shop toggle now switches this table's own
@@ -1495,6 +1572,21 @@ export function CustomerHeatmapPage() {
 
       {orderModal && (
         <Modal open onClose={() => setOrderModal(null)} title={orderModal.title} size="2xl">
+          {showRollupPreview ? (
+            // Every zip/shop/Total-Orders/Not-On-Map click now always opens
+            // this modal, even in rollup preview (which has no raw rows) —
+            // this message is the reason, rather than silently opening on
+            // an empty table or redirecting away without saying why.
+            <div className="flex flex-col items-center gap-3 py-10">
+              <p className="text-xs font-mono text-inky/70 text-center max-w-sm">
+                Load full detail to see order list — this is a fast preview from cached zip-level totals; individual orders aren't loaded yet.
+              </p>
+              <Button size="sm" onClick={() => { setOrderModal(null); setFullDetailRequested(true) }}>
+                Load Full Detail
+              </Button>
+            </div>
+          ) : (
+            <>
           <div className="flex justify-end gap-2 mb-2">
             <Button size="sm" variant="secondary" loading={orderModalExporting === 'csv'} onClick={() => exportOrderModal('csv')}>Export CSV</Button>
             <Button size="sm" variant="secondary" loading={orderModalExporting === 'xlsx'} onClick={() => exportOrderModal('xlsx')}>Export Excel</Button>
@@ -1532,6 +1624,8 @@ export function CustomerHeatmapPage() {
               </tbody>
             </table>
           </div>
+            </>
+          )}
         </Modal>
       )}
     </div>
