@@ -361,7 +361,14 @@ export interface PoItemRow {
   quantity: number | null; received_quantity: number | null; remaining_quantity: number | null
   purchase_uom: string | null
 }
-export interface VendorPartRow { vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null }
+export interface VendorPartRow {
+  vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null
+  // description/part_number added for the tank-monitor product-name match
+  // below (buildGenerationInputs' tankOnHandMap) — same automatic
+  // description/part_number -> our_part_number match LocationLookupPage.tsx
+  // already does for its own "internal id" column.
+  description?: string | null; part_number?: string | null
+}
 export interface GlobalProductRow { product_id: string; unit_of_measure: string | null }
 export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }
 // Derived from core.locations.reladyne_delivery_day rather than a table of
@@ -391,7 +398,7 @@ export function useGenerationData() {
       // Cost + package size come from here, not from ov2_product_rules (that
       // table has no editing UI and is empty in practice) — see
       // resolveVendorPart below.
-      fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata', companyId),
+      fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata, description, part_number', companyId),
       fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor, order_type', companyId),
       // Most products report on-hand/usage in quarts already; a product
       // whose global_products.unit_of_measure says otherwise (e.g. HM0806
@@ -468,6 +475,15 @@ export function buildGenerationInputs(
   tankOnHand: TankOnHandRow[] = [],
   openPurchaseOrders: PurchaseOrderRow[] = [],
   poItems: PoItemRow[] = [],
+  // Manual raw-tank-name -> our_part_number overrides (platform.app_settings
+  // key 'tank_product_map', edited from Tank Monitors' Product Mapping tab)
+  // — same resolution LocationLookupPage.tsx already applies to its own
+  // on-hand display. Without this, a keep-fill product's tank reading never
+  // matches its order-config product_id at all (tank_monitors.product_id is
+  // whatever raw name the telemetry provider uses — e.g. "DMX SYN 0W20" —
+  // not the shop's canonical "SYN-0W20"), so every VMI product with a real
+  // tank installed still showed "no data" here.
+  tankProductMap: Record<string, string> = {},
 ) {
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
@@ -501,14 +517,35 @@ export function buildGenerationInputs(
     })
   }
 
+  // Tank monitor telemetry names its own products however the provider
+  // does ("DMX SYN 0W20"), never the shop's canonical product_id — so a
+  // plain product_id join here would never match anything. Resolve through
+  // the SAME two-step lookup LocationLookupPage.tsx already uses for its
+  // own on-hand display: the manual tankProductMap override first, then an
+  // automatic match against vendor_parts' description/part_number.
+  const vendorPartByDescOrPart = new Map<string, string>()
+  for (const vp of vendorParts) {
+    const our = vp.our_part_number; if (!our) continue
+    const desc = vp.description ? pkey(vp.description) : ''
+    if (desc) vendorPartByDescOrPart.set(desc, our)
+    const pn = vp.part_number ? pkey(vp.part_number) : ''
+    if (pn && !vendorPartByDescOrPart.has(pn)) vendorPartByDescOrPart.set(pn, our)
+  }
+  const resolveTankProductId = (rawProductId: string): string => {
+    const k = pkey(rawProductId)
+    if (!k) return rawProductId
+    return tankProductMap[k] || vendorPartByDescOrPart.get(k) || rawProductId
+  }
+
   // Keep-fill/VMI products read on-hand from the tank monitor instead —
   // summed across every monitor matched to that location+product (a shop
   // can have more than one tank of the same product), resolved through the
-  // same retired-id mapping as usage above.
+  // tank-name match above and then the same retired-id mapping as usage.
   const tankOnHandMap = new Map<string, number>()
   for (const t of tankOnHand) {
     if (!t.location_id || !t.product_id || t.on_hand == null) continue
-    const resolved = oldToNew.get(pkey(t.product_id)) ?? t.product_id
+    const tankResolved = resolveTankProductId(t.product_id)
+    const resolved = oldToNew.get(pkey(tankResolved)) ?? tankResolved
     const k = ruleKey(t.location_id, resolved)
     tankOnHandMap.set(k, (tankOnHandMap.get(k) ?? 0) + Number(t.on_hand))
   }

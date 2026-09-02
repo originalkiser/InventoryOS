@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { RefreshCw, ChevronRight, ChevronDown } from 'lucide-react'
 import { Button, Card, CardBody, Input, SbLoader, Toggle } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -40,6 +41,13 @@ export function OrdersV2Review() {
   const { rulesFor } = useVendorRules()
   const { fetchInputs } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
+  // Manual raw-tank-name -> our_part_number overrides (Tank Monitors'
+  // Product Mapping tab) — needed so a keep-fill product's tank reading
+  // actually matches its order-config product_id (tank telemetry names
+  // products however the provider does, e.g. "DMX SYN 0W20", never the
+  // shop's canonical id). Same setting LocationLookupPage.tsx already
+  // reads for its own on-hand display.
+  const [tankProductMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
 
   const [generating, setGenerating] = useState(false)
   const [showVmi, setShowVmi] = useState(false)
@@ -68,7 +76,7 @@ export function OrdersV2Review() {
     setGenerating(true)
     try {
       const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
-      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand)
+      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap)
       setAllInputs(inputs)
       const result = generateOrder(inputs, {
         settings,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGenerationInputs, type OrderConfigRow, type UsageRow, type PurchaseOrderRow, type PoItemRow } from './useOrdersV2'
+import { buildGenerationInputs, type OrderConfigRow, type UsageRow, type PurchaseOrderRow, type PoItemRow, type TankOnHandRow, type VendorPartRow } from './useOrdersV2'
 
 // buildGenerationInputs' "equivalent case types" combine — 5W30D and
 // 5W30BB both resolve to the family "5W30" (a trailing run of letters is
@@ -122,5 +122,51 @@ describe('buildGenerationInputs — pending PO coverage', () => {
     const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], purchaseOrders, items)
 
     expect(inputs.find((i) => i.product_id === 'HM0806')!.pendingPoQty).toBeNull()
+  })
+})
+
+// A keep-fill/VMI product's on-hand comes from the tank monitor, but tank
+// telemetry names its own products however the provider does ("DMX SYN
+// 0W20"), never the shop's canonical product_id — a plain product_id join
+// would never match anything (this was a real bug: every keep-fill product
+// with a real tank installed still showed "no data" in Orders v2, even
+// though the same tank's reading displayed correctly on Location Lookup).
+// Resolution mirrors LocationLookupPage.tsx exactly: the manual
+// tankProductMap override first, then an automatic match against
+// vendor_parts' description/part_number.
+describe('buildGenerationInputs — tank monitor product-name resolution', () => {
+  function tank(product_id: string, on_hand: number): TankOnHandRow {
+    return { location_id: 'L1', product_id, on_hand }
+  }
+  function vendorPart(our_part_number: string, description: string): VendorPartRow {
+    return { vendor_id: 'V1', our_part_number, unit_of_measure: null, metadata: null, description }
+  }
+
+  it('resolves a tank reading through the manual tankProductMap override', () => {
+    const configs = [config('SYN-0W20', { metadata: { vmi: 'yes' } })]
+    const tankOnHand = [tank('DMX SYN 0W20', 100.25)]
+    const tankProductMap = { 'dmx syn 0w20': 'SYN-0W20' }
+    const inputs = buildGenerationInputs(configs, [], [], [], [], [], [], tankOnHand, [], [], tankProductMap)
+
+    // Keep-fill on-hand is gallons -> quarts (×4) — same convention as
+    // max_capacity_gallons elsewhere in this module.
+    expect(inputs.find((i) => i.product_id === 'SYN-0W20')!.on_hand).toBe(401)
+  })
+
+  it('falls back to an automatic vendor_parts description/part_number match with no manual override', () => {
+    const configs = [config('SYN-0W20', { metadata: { vmi: 'yes' } })]
+    const tankOnHand = [tank('dmx syn 0w20 bu', 50)]
+    const vendorParts = [vendorPart('SYN-0W20', 'DMX SYN 0W20 BU')]
+    const inputs = buildGenerationInputs(configs, [], [], [], vendorParts, [], [], tankOnHand)
+
+    expect(inputs.find((i) => i.product_id === 'SYN-0W20')!.on_hand).toBe(200)
+  })
+
+  it('leaves on_hand null (needs-review) when no mapping matches at all', () => {
+    const configs = [config('SYN-0W20', { metadata: { vmi: 'yes' } })]
+    const tankOnHand = [tank('some unrecognized raw name', 50)]
+    const inputs = buildGenerationInputs(configs, [], [], [], [], [], [], tankOnHand)
+
+    expect(inputs.find((i) => i.product_id === 'SYN-0W20')!.on_hand).toBeNull()
   })
 })
