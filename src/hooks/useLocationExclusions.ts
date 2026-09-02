@@ -39,25 +39,40 @@ export function ownerBucket(raw: string): string {
   return v ? (v === 'Corporate' ? 'Corporate' : 'Franchise') : ''
 }
 
-// 'inventory' (default — matches every existing call site unchanged) applies
-// DEFAULT_OWNER_RULE when the user hasn't set their own Owner rule. 'other'
-// skips that default entirely, so franchise shows unless the user has
-// explicitly set an Owner rule of their own (same override mechanism
-// either way — a user's own Owner rule, once set via the existing
-// exclusions UI, applies globally across every surface, not per-surface;
-// it's a single reversible "my Owner preference" setting, not a
-// surface-scoped one).
+// CORRECTED 2026-09-02 (explicit instruction): 'inventory' surfaces now
+// force DEFAULT_OWNER_RULE unconditionally — a user's own Owner rule can
+// no longer override it there. Previously a user's Owner rule (a single
+// preference applied globally across every surface, not per-surface) could
+// win over the default, which is exactly what let franchise locations
+// leak into Inventory Alerts once a real "keep only Corporate, Franchise"
+// override actually started working correctly (see ownerBucket() above,
+// fixed the same day) — that override is still exactly what 'other'
+// surfaces (Customer Heatmap, Droptop Orders) are meant to respect, but
+// "under no circumstances" was the explicit instruction for inventory-side
+// pages: no per-user opt-out, automatic, no exceptions. A user's own
+// Owner rule (if any) is stripped out entirely for 'inventory' — only
+// their non-owner rules (region/market/etc, if any) still apply alongside
+// the forced default. 'other' surfaces are unaffected by this change.
 export function effectiveRules(rules: ExclusionRule[], surface: 'inventory' | 'other' = 'inventory'): ExclusionRule[] {
-  if (rules.some((r) => isOwnerField(r.field))) return rules
-  return surface === 'inventory' ? [...rules, DEFAULT_OWNER_RULE] : rules
+  if (surface !== 'inventory') return rules
+  return [...rules.filter((r) => !isOwnerField(r.field)), DEFAULT_OWNER_RULE]
 }
 
 // Columns a user may exclude on. Base columns read straight off the row;
 // "meta:" fields read from the location's metadata jsonb.
+//
+// Owner deliberately removed (2026-09-02) — effectiveRules() above now
+// forces DEFAULT_OWNER_RULE unconditionally for 'inventory' surfaces, so a
+// user-set Owner rule here would be silently ineffective there (stripped
+// every time), and 'other' surfaces (Customer Heatmap, Droptop Orders)
+// each have their own local Owner filter now instead. Leaving it
+// selectable here was exactly the footgun that let franchise locations
+// leak into Inventory Alerts once a "keep only Corporate, Franchise"
+// override actually started working (see ownerBucket()'s own fix, same
+// day) — removed rather than left inert.
 export const EXCLUDABLE_COLUMNS: { field: string; label: string }[] = [
   { field: 'region', label: 'Region' },
   { field: 'district', label: 'District' },
-  { field: 'meta:owner', label: 'Owner' },
   { field: 'meta:market', label: 'Market' },
   { field: 'meta:area_manager', label: 'Area Manager' },
   { field: 'meta:regional_director', label: 'Regional Director' },
