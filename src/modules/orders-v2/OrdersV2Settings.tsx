@@ -13,6 +13,24 @@ import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './typ
  */
 export function OrdersV2Settings() {
   const navigate = useNavigate()
+  return (
+    <div className="flex flex-col gap-4 max-w-4xl">
+      <div>
+        <button onClick={() => navigate('/orders-v2')} className="text-[11px] font-mono text-inky/60 hover:text-navy hover:underline">← Orders v2</button>
+        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Order Settings</h1>
+        <p className="text-xs text-inky mt-0.5">Scoped to the ordering module. Changes apply to the next order generated, not to drafts already created.</p>
+      </div>
+      <OrdersV2SettingsBody />
+    </div>
+  )
+}
+
+/**
+ * The settings form itself, with no page chrome — shared by the standalone
+ * page above and the "Order Settings" modal opened from Review Order, so
+ * the two never drift apart.
+ */
+export function OrdersV2SettingsBody() {
   const { settings, loading, save } = useOrderSettings()
   const [draft, setDraft] = useState<OrderSettings>(settings)
   useEffect(() => { setDraft(settings) }, [settings])
@@ -29,13 +47,7 @@ export function OrdersV2Settings() {
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
 
   return (
-    <div className="flex flex-col gap-4 max-w-4xl">
-      <div>
-        <button onClick={() => navigate('/orders-v2')} className="text-[11px] font-mono text-inky/60 hover:text-navy hover:underline">← Orders v2</button>
-        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Order Settings</h1>
-        <p className="text-xs text-inky mt-0.5">Scoped to the ordering module. Changes apply to the next order generated, not to drafts already created.</p>
-      </div>
-
+    <div className="flex flex-col gap-4">
       <Card><CardBody className="flex flex-col gap-3">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Days of Supply</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

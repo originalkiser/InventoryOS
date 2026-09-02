@@ -5,6 +5,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useDraft, useOrderSettings, useVendorRules, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { Flags } from './OrdersV2Review'
+import { OrderStepper } from './OrderStepper'
 import { OVERRIDE_CELL, dos, dShort, money, num } from './shared'
 import type { LineFlag, OrderType } from './types'
 
@@ -103,9 +104,11 @@ export function OrdersV2FinalReview() {
 
   return (
     <div className="flex flex-col gap-4">
+      <OrderStepper draftId={draft.id} current="final" />
+
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <button onClick={() => navigate(`/orders-v2/draft/${draft.id}`)} className="text-[11px] font-mono text-inky/60 hover:text-navy hover:underline">← Review</button>
+          <Button size="sm" variant="muted" onClick={() => navigate(`/orders-v2/draft/${draft.id}`)} className="mb-1">← Review</Button>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Final Review</h1>
           <p className="text-xs text-inky mt-0.5">
             {vendors.byId(draft.vendor_id)?.name ?? 'All vendors'} · {groups.length} order{groups.length !== 1 ? 's' : ''} · {money(total)}

@@ -1,8 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { RefreshCw, ChevronRight, ChevronDown } from 'lucide-react'
-import { Button, Card, CardBody, Input, SbLoader, Toggle } from '@/components/ui'
+import { RefreshCw, ChevronRight, ChevronDown, Settings } from 'lucide-react'
+import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
+import { OrdersV2SettingsBody } from './OrdersV2Settings'
+import { OrderStepper } from './OrderStepper'
 import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
@@ -38,7 +40,7 @@ export function OrdersV2Review() {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const vendors = useVendors()
-  const { settings } = useOrderSettings()
+  const { settings, loading: settingsLoading } = useOrderSettings()
   const { rulesFor } = useVendorRules()
   const { fetchInputs } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
@@ -75,11 +77,47 @@ export function OrdersV2Review() {
   // section below doesn't need to recompute it separately.
   const [eligibleLocationIds, setEligibleLocationIds] = useState<Set<string> | null>(null)
   const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false)
+  // Per-order DOS target/trigger/max — seeded from the real company settings
+  // once they load, then edited freely without ever writing back to them
+  // ("does not automatically update the settings", per request). Only
+  // Regenerate (below) actually applies whatever's currently in these
+  // fields; editing alone does nothing until then.
+  const [dosOverride, setDosOverride] = useState<{ target: number; trigger: number; max: number } | null>(null)
+  const dosOverrideSeeded = useRef(false)
+  useEffect(() => {
+    if (dosOverrideSeeded.current || settingsLoading) return
+    dosOverrideSeeded.current = true
+    setDosOverride({
+      target: settings.days_of_supply_target,
+      trigger: settings.days_of_supply_min_trigger,
+      max: settings.days_of_supply_max,
+    })
+  }, [settings, settingsLoading])
+  // What generation (and the DOS After color coding below) actually uses —
+  // the real settings with just the three DOS fields swapped for whatever's
+  // in the card, once seeded.
+  const effectiveSettings = useMemo(
+    () => (dosOverride ? { ...settings, days_of_supply_target: dosOverride.target, days_of_supply_min_trigger: dosOverride.trigger, days_of_supply_max: dosOverride.max } : settings),
+    [settings, dosOverride],
+  )
 
   const shopLabel = useCallback(
     (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
     [loc],
   )
+
+  // DOS After coloring, against this order's own target/max (the card
+  // above, not necessarily the saved company settings) — over max is
+  // orange (overstocked past the soft ceiling), at/above target but within
+  // max is green (right where it should be), under target is red (the
+  // order didn't get this product where it needs to be).
+  const dosAfterColorClass = useCallback((v: number | null): string => {
+    if (v == null || !dosOverride) return 'text-navy'
+    if (v > dosOverride.max) return 'text-[#E67E22]'
+    if (v >= dosOverride.target) return 'text-[#2ECC71]'
+    return 'text-[#C0392B]'
+  }, [dosOverride])
 
   /** Run the engine and replace the draft's lines with the result. */
   const runGeneration = useCallback(async (dow?: number) => {
@@ -97,7 +135,7 @@ export function OrdersV2Review() {
       const eligibleIds = eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
       setEligibleLocationIds(eligibleIds)
       const result = generateOrder(inputs, {
-        settings,
+        settings: effectiveSettings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
         orderDate: draft.order_date,
         eligibleLocationIds: eligibleIds,
@@ -169,7 +207,7 @@ export function OrdersV2Review() {
       // line or re-fetching tank data.
       setDayCounts(shopsPerOrderDay(days))
       await (supabase as any).schema('inventory').from('ov2_order_drafts')
-        .update({ settings_snapshot: { ...settings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts }, status: 'review' })
+        .update({ settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts }, status: 'review' })
         .eq('id', draft.id)
       await reload()
       toast.success(`Generated ${withDelivery.length} line${withDelivery.length !== 1 ? 's' : ''} across ${shops} shop${shops !== 1 ? 's' : ''}`)
@@ -178,7 +216,7 @@ export function OrdersV2Review() {
     } finally {
       setGenerating(false)
     }
-  }, [draft, profile?.company_id, fetchInputs, settings, rulesFor, replaceLines, reload, vendors])
+  }, [draft, profile?.company_id, fetchInputs, settings, effectiveSettings, rulesFor, replaceLines, reload, vendors])
 
   // Generate automatically the first time a fresh draft is opened.
   useEffect(() => {
@@ -344,23 +382,64 @@ export function OrdersV2Review() {
 
   return (
     <div className="flex flex-col gap-4">
+      <OrderStepper draftId={draft.id} current="review" />
+
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <button onClick={() => navigate('/orders-v2')} className="text-[11px] font-mono text-inky/60 hover:text-navy hover:underline">← Orders v2</button>
+          <Button size="sm" variant="muted" onClick={() => navigate('/orders-v2')} className="mb-1">← Orders v2</Button>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
           <p className="text-xs text-inky mt-0.5">
             {vendorName} · {draft.order_date}{usesOrderDays ? ` · ${DOW[orderDow]} shops` : ''} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}>
-            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
+          <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
+            <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
           <Button size="sm" onClick={async () => { await setStatus('final_review'); navigate(`/orders-v2/draft/${draft.id}/final`) }}>
             Final Review →
           </Button>
         </div>
       </div>
+
+      <Modal open={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} title="Order Settings" size="xl">
+        <OrdersV2SettingsBody />
+      </Modal>
+
+      {dosOverride && (
+        <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">This order&apos;s DOS targets</span>
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-inky/50">Target</span>
+            <input type="number" min={0} value={dosOverride.target}
+              onChange={(e) => setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d))}
+              className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-inky/50">Min trigger</span>
+            <input type="number" min={0} value={dosOverride.trigger}
+              onChange={(e) => setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d))}
+              className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-inky/50">Max</span>
+            <input type="number" min={0} value={dosOverride.max}
+              onChange={(e) => setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d))}
+              className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+          </label>
+          <p className="text-[10px] font-mono text-inky/50 max-w-xs">
+            Adjusts this order only — never saved to Order Settings.
+            <span className="inline-flex items-center gap-1 ml-1">
+              <span className="text-[#C0392B]">■</span> under target
+              <span className="text-[#2ECC71]">■</span> at target
+              <span className="text-[#E67E22]">■</span> over max
+            </span>
+          </p>
+          <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()} className="ml-auto">
+            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
+          </Button>
+        </CardBody></Card>
+      )}
 
       <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
         <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-56" />
@@ -496,7 +575,7 @@ export function OrdersV2Review() {
                           <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
                         )}
                       </td>
-                      <Td align="right">{dos(l.dos_after)}</Td>
+                      <td className={`px-2 py-1 text-right whitespace-nowrap font-bold ${dosAfterColorClass(l.dos_after)}`}>{dos(l.dos_after)}</td>
                       <Td align="right">{dos(l.dos_after_delivery)}</Td>
                       <Td align="right">{money(dollars)}</Td>
                       <td className="px-2 py-1">

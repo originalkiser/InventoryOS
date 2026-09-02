@@ -1,6 +1,6 @@
 import React from 'react'
 
-type Variant = 'primary' | 'secondary' | 'danger' | 'ghost'
+type Variant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'muted'
 type Size = 'sm' | 'md' | 'lg'
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -18,6 +18,13 @@ const variantClasses: Record<Variant, string> = {
     'bg-[#C0392B] text-cream font-heading uppercase tracking-wide hover:opacity-90 transition-opacity',
   ghost:
     'text-inky hover:text-navy font-heading uppercase tracking-wide bg-transparent transition-colors',
+  // Same solid-fill shape as primary, just a grey/neutral fill instead of an
+  // accent color — for a "Back" action that should read as a real button
+  // (not a link) but shouldn't compete with the page's actual forward/save
+  // action. Built from the inky token at low opacity rather than a new hex,
+  // per the brand rules — no literal grey exists in the palette.
+  muted:
+    'bg-inky/15 text-navy font-heading uppercase tracking-wide hover:bg-inky/25 transition-colors',
 }
 
 const sizeClasses: Record<Size, string> = {

@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { useDraft, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
+import { OrderStepper } from './OrderStepper'
 import { finalizeDraft } from './useOrderHistory'
 import { poNumber, renderTemplate } from './engine'
 import { money } from './shared'
@@ -263,9 +264,11 @@ export function OrdersV2Export() {
 
   return (
     <div className="flex flex-col gap-4">
+      <OrderStepper draftId={draft.id} current="export" />
+
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <button onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)} className="text-[11px] font-mono text-inky/60 hover:text-navy hover:underline">← Final Review</button>
+          <Button size="sm" variant="muted" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)} className="mb-1">← Final Review</Button>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Export</h1>
           <p className="text-xs text-inky mt-0.5">
             {vendorName || 'No vendor'} · {included.length} line{included.length !== 1 ? 's' : ''} · {money(Number(headerValues.total))}
