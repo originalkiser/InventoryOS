@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { RefreshCw, ChevronRight, ChevronDown } from 'lucide-react'
 import { Button, Card, CardBody, Input, SbLoader, Toggle } from '@/components/ui'
+import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
@@ -50,6 +51,7 @@ export function OrdersV2Review() {
   const [tankProductMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
 
   const [generating, setGenerating] = useState(false)
+  const [genProgress, setGenProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 })
   const [showVmi, setShowVmi] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('location')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
@@ -84,8 +86,12 @@ export function OrdersV2Review() {
     if (!draft || !profile?.company_id) return
     const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
+    setGenProgress({ loaded: 0, total: 0 })
     try {
-      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
+      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history } = await fetchInputs(
+        draft.vendor_id, settings.flag_cumulative_days,
+        (loaded, total) => setGenProgress({ loaded, total }),
+      )
       const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap)
       setAllInputs(inputs)
       const eligibleIds = eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
@@ -386,7 +392,24 @@ export function OrdersV2Review() {
         </span>
       </CardBody></Card>
 
-      {generating && <div className="py-8 flex justify-center"><SbLoader size={32} /></div>}
+      {generating && (
+        <LoadingProgress
+          fraction={genProgress.total ? genProgress.loaded / genProgress.total : null}
+          countText={
+            genProgress.total
+              ? `Loading order data — ${genProgress.loaded} of ${genProgress.total} sources (${Math.min(100, Math.round((genProgress.loaded / genProgress.total) * 100))}%)`
+              : 'Loading order data…'
+          }
+          messages={[
+            'Gathering on-hand levels…',
+            'Calculating daily usage…',
+            'Combining equivalent case types…',
+            'Checking keep-fill tanks…',
+            'Applying vendor minimums…',
+            'Adjusting orders to meet minimums…',
+          ]}
+        />
+      )}
 
       {!generating && lines.length === 0 && (
         <div className="py-8 flex flex-col gap-2">

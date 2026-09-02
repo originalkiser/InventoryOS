@@ -25,6 +25,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
+import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { Button, Card, CardBody, Input, MultiSelectDropdown } from '@/components/ui'
 
 interface OrderRow {
@@ -515,25 +516,22 @@ export function DroptopOrdersPage() {
           </Button>
         </CardBody></Card>
       ) : loading ? (
-        <div className="py-16 flex flex-col items-center gap-3">
-          <div className="w-full max-w-md h-2 bg-navy/10 rounded-full overflow-hidden">
-            {loadProgress.total ? (
-              <div
-                className="h-full bg-sky transition-[width] duration-300 ease-out"
-                style={{ width: `${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%` }}
-              />
-            ) : (
-              <div className="h-full w-full bg-sky/40 animate-pulse" />
-            )}
-          </div>
-          <p className="text-[11px] font-mono text-inky/70">
-            {loadProgress.total
+        <LoadingProgress
+          fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
+          countText={
+            loadProgress.total
               ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
               : loadProgress.loaded > 0
                 ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
-                : 'Loading orders…'}
-          </p>
-        </div>
+                : 'Loading orders…'
+          }
+          messages={[
+            'Pulling order headers…',
+            'Matching packages to services…',
+            'Tallying up totals…',
+            'Sorting by date…',
+          ]}
+        />
       ) : (
         <>
           {/* High-level stats */}

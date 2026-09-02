@@ -62,6 +62,23 @@ describe('buildGenerationInputs — equivalent case types', () => {
     expect(hm.own_on_hand).toBeUndefined()
     expect(hm.equivalent_products).toBeUndefined()
   })
+
+  it('combines a sibling reading even when that sibling is not itself configured for order', () => {
+    // Only 5W30BB is configured/ordered at this shop — 5W30D has real
+    // usage/on-hand data (someone's tracking it) but no order_config row of
+    // its own. Its on-hand still belongs to the same family and should
+    // still feed 5W30BB's combined total. Regression check for a bug where
+    // family membership was built only from `base` (configured products),
+    // so a non-configured sibling's on-hand was silently never considered.
+    const configs = [config('5W30BB')]
+    const usageRows = [usage('5W30BB', 100, 20), usage('5W30D', 10, 5)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+
+    const bb = inputs.find((i) => i.product_id === '5W30BB')!
+    expect(bb.own_on_hand).toBe(100)
+    expect(bb.on_hand).toBe(110)
+    expect(bb.equivalent_products).toEqual([{ product_id: '5W30D', on_hand: 10, used: true }])
+  })
 })
 
 describe('buildGenerationInputs — pending PO coverage', () => {

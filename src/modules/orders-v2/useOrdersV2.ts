@@ -384,46 +384,61 @@ export function useGenerationData() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
 
-  const fetchInputs = useCallback(async (vendorId: string | null, lookbackDays: number) => {
+  const fetchInputs = useCallback(async (
+    vendorId: string | null, lookbackDays: number,
+    // Fires once per source table as it finishes (out of the fixed total
+    // below) — coarse, since a couple of these tables page through tens of
+    // thousands of rows internally while others return instantly, but
+    // enough to drive a real progress bar instead of a bare spinner for
+    // what's usually the slowest step in generating an order.
+    onProgress?: (loaded: number, total: number) => void,
+  ) => {
     if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], tankOnHand: [], openPurchaseOrders: [], poItems: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
+    const FETCH_STEPS = 14 // 13 fetchAll calls below + the trailing order-history-dates query
+    let stepsDone = 0
+    const step = <T,>(p: Promise<T>): Promise<T> => p.then((r) => { onProgress?.(++stepsDone, FETCH_STEPS); return r })
+
     const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, locRows, schedRows, calRows, history] = await Promise.all([
-      fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
-        vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
-      fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId),
-      fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId),
-      fetchAll<any>('inventory', 'product_id_mappings', 'old_product_id, new_product_id', companyId),
+      step(fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
+        vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
+      step(fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId)),
+      // By far the largest table this fetches (every product at every shop,
+      // not just oil) — usually the long pole in the whole generation run.
+      step(fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId)),
+      step(fetchAll<any>('inventory', 'product_id_mappings', 'old_product_id, new_product_id', companyId)),
       // Cost + package size come from here, not from ov2_product_rules (that
       // table has no editing UI and is empty in practice) — see
       // resolveVendorPart below.
-      fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata, description, part_number', companyId),
-      fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor, order_type', companyId),
+      step(fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata, description, part_number', companyId)),
+      step(fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor, order_type', companyId)),
       // Most products report on-hand/usage in quarts already; a product
       // whose global_products.unit_of_measure says otherwise (e.g. HM0806
       // in ounces) gets converted before it reaches the engine — see
       // quartsFromSourceUnit below.
-      fetchAll<GlobalProductRow>('inventory', 'global_products', 'product_id, unit_of_measure', companyId),
+      step(fetchAll<GlobalProductRow>('inventory', 'global_products', 'product_id, unit_of_measure', companyId)),
       // Keep-fill/VMI products use the tank monitor's own on-hand reading
       // instead of Droptop's product_usage — see buildGenerationInputs.
-      fetchAll<TankOnHandRow>('inventory', 'tank_monitors', 'location_id, product_id, on_hand', companyId),
+      step(fetchAll<TankOnHandRow>('inventory', 'tank_monitors', 'location_id, product_id, on_hand', companyId)),
       // Still-open POs (not closed/cancelled) — filtered server-side since
       // most POs in practice ARE closed and there's no reason to pull them
       // just to discard them. Flags a line as covered_by_open_po rather than
       // silently adjusting anything; see buildGenerationInputs.
-      fetchAll<PurchaseOrderRow>('inventory', 'droptop_purchase_orders', 'id, location_id, po_status', companyId,
-        (q: any) => q.in('po_status', ['draft', 'sent', 'accepted'])),
-      fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId),
-      fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
-      fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
-      fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
-      fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, order_id', companyId),
+      step(fetchAll<PurchaseOrderRow>('inventory', 'droptop_purchase_orders', 'id, location_id, po_status', companyId,
+        (q: any) => q.in('po_status', ['draft', 'sent', 'accepted']))),
+      step(fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId)),
+      step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId)),
+      step(fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
+      step(fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
+      step(fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, order_id', companyId)),
     ])
 
     // History lines carry no date of their own; join the header dates in.
     const { data: heads } = await sb().schema('inventory').from('ov2_order_history')
       .select('id, order_date').eq('company_id', companyId).gte('order_date', sinceStr)
+    onProgress?.(++stepsDone, FETCH_STEPS)
     const dateById = new Map<string, string>(((heads ?? []) as any[]).map((h) => [h.id, h.order_date]))
     const historyFacts = history
       .filter((h) => dateById.has(h.order_id))
@@ -733,15 +748,25 @@ export function buildGenerationInputs(
   })
 
   // Pass 2: group non-VMI rows by shop + product family for the "equivalent
-  // case types" combine below. Keep-fill/VMI is excluded — its on-hand is
-  // already the tank monitor's own reading, not something another case
-  // type's on-hand should be blended into.
+  // case types" combine below. Built from EVERY product with a usage/on-hand
+  // record (usageMap — the full product_usage universe for this location),
+  // not just products actually configured for order here — a sibling case
+  // type can carry real on-hand at a shop without ever being an order-config
+  // row itself (e.g. EURO-SYN-0W20D sitting on the shelf at a shop that only
+  // orders EURO-SYN-0W20C), and that quantity still belongs to the family.
+  // Restricting this to `base` (configured products only) silently dropped
+  // exactly that case. Keep-fill/VMI is excluded — its on-hand is already
+  // the tank monitor's own reading, not something another case type's
+  // on-hand should be blended into; `vmiKeys` covers this from the actual
+  // order configs since a bare usage row has no VMI flag of its own.
+  const vmiKeys = new Set(base.filter((b) => b.rule.vmi_keepfill_enabled).map((b) => ruleKey(b.location_id, b.product_id)))
   const familyMembers = new Map<string, { product_id: string; on_hand: number }[]>()
-  for (const b of base) {
-    if (b.rule.vmi_keepfill_enabled || b.on_hand == null) continue
-    const fam = `${b.location_id}|${pkey(baseProductId(b.product_id))}`
+  for (const u of usageMap.values()) {
+    if (u.on_hands == null || vmiKeys.has(ruleKey(u.location_id, u.product_id))) continue
+    const onHand = Number(u.on_hands) * quartsFromSourceUnit(u.product_id)
+    const fam = `${u.location_id}|${pkey(baseProductId(u.product_id))}`
     if (!familyMembers.has(fam)) familyMembers.set(fam, [])
-    familyMembers.get(fam)!.push({ product_id: b.product_id, on_hand: b.on_hand })
+    familyMembers.get(fam)!.push({ product_id: u.product_id, on_hand: onHand })
   }
 
   // Pass 3: combine each row's own on-hand with its family's other case
