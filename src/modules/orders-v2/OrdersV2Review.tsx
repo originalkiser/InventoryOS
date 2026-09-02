@@ -55,6 +55,10 @@ export function OrdersV2Review() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [filter, setFilter] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // Collapsed by default — "Shops With No Orders" (see shopsWithNoOrders
+  // below) is a review/audit list, not something that needs to be open on
+  // every visit to this page.
+  const [noOrdersOpen, setNoOrdersOpen] = useState(false)
   const [skipped, setSkipped] = useState<{ location_id: string; product_id: string; reason: string }[]>([])
   const [dayCounts, setDayCounts] = useState<number[]>([0, 0, 0, 0, 0, 0, 0])
   // Every candidate the engine considered for this run, not just the ones
@@ -62,6 +66,12 @@ export function OrdersV2Review() {
   // full config (including products it decided NOT to order) to show what
   // else could be pulled in, not just what already is.
   const [allInputs, setAllInputs] = useState<GenerationInput[]>([])
+  // Which locations the last run even considered for this order day — null
+  // means the vendor doesn't use order days at all (every location is
+  // "eligible" so the distinction is meaningless). Stored from the same
+  // run's own eligibleLocations() call so the "Shops With No Orders"
+  // section below doesn't need to recompute it separately.
+  const [eligibleLocationIds, setEligibleLocationIds] = useState<Set<string> | null>(null)
   const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
 
   const shopLabel = useCallback(
@@ -78,11 +88,13 @@ export function OrdersV2Review() {
       const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history } = await fetchInputs(draft.vendor_id, settings.flag_cumulative_days)
       const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap)
       setAllInputs(inputs)
+      const eligibleIds = eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
+      setEligibleLocationIds(eligibleIds)
       const result = generateOrder(inputs, {
         settings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
         orderDate: draft.order_date,
-        eligibleLocationIds: eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow),
+        eligibleLocationIds: eligibleIds,
         history,
         // Keep-fill/VMI lines are always generated now (for the runway
         // check below) — the Review page's "Show VMI / keepfill" toggle
@@ -235,6 +247,21 @@ export function OrdersV2Review() {
     }
     return m
   }, [allInputs])
+
+  // Shops on the selected order day (eligibleLocationIds, from the same
+  // run's own eligibleLocations() call) that ended up with no real order —
+  // "real" meaning at least one included line with qty > 0; a shop whose
+  // only lines are keep-fill/VMI (always generated for the runway check,
+  // excluded from the order total regardless) still counts as "no orders"
+  // here, since nothing on it is actually being ordered. null
+  // eligibleLocationIds (vendor doesn't use order days) means this
+  // distinction is meaningless, so the section doesn't show at all then.
+  const shopsWithNoOrders = useMemo(() => {
+    if (!eligibleLocationIds) return []
+    const withOrders = new Set(lines.filter((l) => l.included && Number(l.qty) > 0).map((l) => l.location_id))
+    return [...eligibleLocationIds].filter((id) => !withOrders.has(id))
+      .sort((a, b) => shopLabel(a).localeCompare(shopLabel(b), undefined, { numeric: true }))
+  }, [eligibleLocationIds, lines, shopLabel])
 
   // The specific (location, product) candidate behind a draft line — for
   // the "other case types on hand" sub-listing under the main On Hand
@@ -477,22 +504,11 @@ export function OrdersV2Review() {
                           <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-1">
                             Every product configured for {shopLabel(l.location_id)}
                           </p>
-                          <table className="w-full text-[11px] font-mono">
-                            <thead><tr className="text-inky/60 uppercase">
-                              <td className="py-1">Product</td><td>UOM</td>
-                              <td className="text-right">Capacity</td><td className="text-right">On Hand</td>
-                              <td className="text-right">Usage/Day</td><td className="text-right">DOS Now</td>
-                              <td className="text-right">Qty</td><td className="text-right">DOS After</td>
-                              <td className="text-right">$</td><td>Why</td>
-                            </tr></thead>
-                            <tbody>
-                              {shopRows(locId).map((r) => (
-                                <SmoothingRow key={r.line?.id ?? r.input?.product_id}
-                                  input={r.input} line={r.line}
-                                  onPatch={(id, qty) => patchLine(id, { qty })} onAdd={addConfiguredProduct} />
-                              ))}
-                            </tbody>
-                          </table>
+                          <ShopConfiguredProductsTable
+                            rows={shopRows(locId)}
+                            onPatch={(id, qty) => patchLine(id, { qty })}
+                            onAdd={addConfiguredProduct}
+                          />
                         </td>
                       </tr>
                     )}
@@ -502,6 +518,46 @@ export function OrdersV2Review() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {shopsWithNoOrders.length > 0 && (
+        <Card><CardBody className="flex flex-col gap-2">
+          <button onClick={() => setNoOrdersOpen((o) => !o)} className="flex items-center gap-1.5 text-left w-full hover:text-navy">
+            {noOrdersOpen ? <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 flex-shrink-0" />}
+            <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
+              Shops With No Orders ({shopsWithNoOrders.length})
+            </span>
+          </button>
+          {noOrdersOpen && (
+            <div className="flex flex-col gap-2">
+              <p className="text-[10px] font-mono text-inky/50">
+                On {DOW[orderDow]}'s order day, but nothing ended up included in this order — expand a shop to see everything configured for it and add items if something's missing.
+              </p>
+              {shopsWithNoOrders.map((locId) => {
+                const shopOpen = expanded.has(locId)
+                return (
+                  <div key={locId} className="border-t border-navy/10 pt-1.5">
+                    <button
+                      onClick={() => setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })}
+                      className="inline-flex items-center gap-1 text-xs font-mono text-navy hover:underline hover:text-sky">
+                      {shopOpen ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+                      {shopLabel(locId)}
+                    </button>
+                    {shopOpen && (
+                      <div className="mt-1">
+                        <ShopConfiguredProductsTable
+                          rows={shopRows(locId)}
+                          onPatch={(id, qty) => patchLine(id, { qty })}
+                          onAdd={addConfiguredProduct}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardBody></Card>
       )}
 
       {skipped.length > 0 && (
@@ -533,6 +589,34 @@ function Th({ children, onClick, active, dir, align }: {
 }
 function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }) {
   return <td className={`px-2 py-1 text-navy whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</td>
+}
+
+/** Every configured product for one shop — shared by the main table's
+ * shop-name expand row and the "Shops With No Orders" section, so both
+ * "why isn't this shop ordering more" and "why isn't this shop ordering
+ * anything" use the exact same product list, columns, and add-a-line
+ * behavior. */
+function ShopConfiguredProductsTable({ rows, onPatch, onAdd }: {
+  rows: { input?: GenerationInput; line?: DraftLineRow }[]
+  onPatch: (id: string, qty: number) => void
+  onAdd: (input: GenerationInput, qty: number) => void
+}) {
+  return (
+    <table className="w-full text-[11px] font-mono">
+      <thead><tr className="text-inky/60 uppercase">
+        <td className="py-1">Product</td><td>UOM</td>
+        <td className="text-right">Capacity</td><td className="text-right">On Hand</td>
+        <td className="text-right">Usage/Day</td><td className="text-right">DOS Now</td>
+        <td className="text-right">Qty</td><td className="text-right">DOS After</td>
+        <td className="text-right">$</td><td>Why</td>
+      </tr></thead>
+      <tbody>
+        {rows.map((r) => (
+          <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd} />
+        ))}
+      </tbody>
+    </table>
+  )
 }
 
 /** One row in a shop's product list — an existing line (editable in place)
