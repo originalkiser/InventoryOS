@@ -41,21 +41,24 @@
 @keyframes swipeRight { from { opacity: 0; transform: translateX(-14px) } to { opacity: 1; transform: translateX(0) } }
 @keyframes swipeLeft { from { opacity: 0; transform: translateX(14px) } to { opacity: 1; transform: translateX(0) } }
 
-/* LoadingProgress's rotating status line: slides in from the right across
-   the full bar width, settles at center for 4s, slides back out to the
+/* LoadingProgress's rotating status line: slides in from the LEFT across
+   the full bar width, settles at center for 4s, slides back OUT to the
    right, then holds off-screen for 4s before the next message repeats the
-   cycle. Per-keyframe animation-timing-function (valid CSS — a timing
-   function declared on a stop governs the segment FROM that stop to the
-   next) gives the entrance its own ease-out "slows down as it arrives" and
-   the exit its own ease-in "accelerates away", while the two flat holds in
-   between just sit still. See LoadingProgress.tsx for the JS that swaps the
-   message text once per full cycle, timed to happen while off-screen. */
+   cycle. Enter and exit sides deliberately differ (-100% in, +100% out) —
+   the loop wraps instantly and invisibly at 0%/100% (both opacity 0), so
+   there's no visible jump. Per-keyframe animation-timing-function (valid
+   CSS — a timing function declared on a stop governs the segment FROM that
+   stop to the next) gives the entrance its own ease-out "slows down as it
+   arrives" and the exit its own ease-in "accelerates away", while the two
+   flat holds in between just sit still. See LoadingProgress.tsx for the JS
+   that swaps the message text once per full cycle, timed to happen while
+   off-screen. */
 @keyframes loadingMessageCycle {
-  0%     { transform: translateX(100%); opacity: 0; animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
-  6.52%  { transform: translateX(0);    opacity: 1; animation-timing-function: linear; }
-  50%    { transform: translateX(0);    opacity: 1; animation-timing-function: cubic-bezier(0.7, 0, 0.84, 0); }
-  56.52% { transform: translateX(100%); opacity: 0; }
-  100%   { transform: translateX(100%); opacity: 0; }
+  0%     { transform: translateX(-100%); opacity: 0; animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
+  6.52%  { transform: translateX(0);     opacity: 1; animation-timing-function: linear; }
+  50%    { transform: translateX(0);     opacity: 1; animation-timing-function: cubic-bezier(0.7, 0, 0.84, 0); }
+  56.52% { transform: translateX(100%);  opacity: 0; }
+  100%   { transform: translateX(100%);  opacity: 0; }
 }
 
 @font-face {
