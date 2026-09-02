@@ -76,3 +76,71 @@ export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {
 
 /** Amber treatment marking a user override, used everywhere edits are shown. */
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'
+
+/**
+ * DOS After for a manually-edited qty — same math as the engine's own
+ * buildLine (on_hand + qty * quarts_per_unit, over daily_usage), so a hand
+ * edit on Review or Final Review shows the same number generation would
+ * have produced for that qty. DOS @ Delivery is NOT recomputed here — it's
+ * defined as existing on-hand only (see engine.ts's dosAfterDelivery),
+ * independent of the qty being ordered.
+ */
+export function dosAfterForQty(
+  line: { on_hand: number | null; daily_usage: number | null; quarts_per_unit: number | null },
+  qty: number,
+): number | null {
+  const u = Number(line.daily_usage ?? 0)
+  if (!(u > 0)) return null
+  const per = Number(line.quarts_per_unit ?? 1)
+  return (Number(line.on_hand ?? 0) + qty * per) / u
+}
+
+/** One column of a copyable/exportable table — `get` reads the plain-text cell value. */
+export interface TableCol<T> { label: string; get: (row: T) => string | number; align?: 'left' | 'right' }
+
+/**
+ * Copies a table to the clipboard as an HTML table (pastes as a real table
+ * into Excel/Outlook/Sheets) with a tab-separated plain-text fallback for
+ * anything that only accepts plain text — same approach as
+ * LocationLookupPage.tsx's copyTanks/copyOnHand.
+ */
+export async function copyTableToClipboard<T>(title: string, cols: TableCol<T>[], rows: T[]): Promise<boolean> {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const align = (c: TableCol<T>) => c.align ?? 'left'
+  const thStyle = (c: TableCol<T>) => `border:1px solid #002745;background:#B7E0DE;color:#002745;padding:4px 8px;text-align:${align(c)};font-weight:bold;`
+  const head = `<tr>${cols.map((c) => `<td style="${thStyle(c)}"><font color="#002745">${esc(c.label)}</font></td>`).join('')}</tr>`
+  const body = rows.map((r, i) => {
+    const bg = i % 2 ? '#F2F1E6' : '#FFFFFF'
+    return `<tr>${cols.map((c) => `<td style="border:1px solid #4F7489;padding:3px 8px;text-align:${align(c)};background:${bg};">${esc(String(c.get(r)))}</td>`).join('')}</tr>`
+  }).join('')
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#002745;">`
+    + `<div style="font-weight:bold;margin-bottom:4px;">${esc(title)}</div>`
+    + `<table style="border-collapse:collapse;font-size:12px;"><thead>${head}</thead><tbody>${body}</tbody></table></div>`
+  const plain = [title, cols.map((c) => c.label).join('\t'), ...rows.map((r) => cols.map((c) => c.get(r)).join('\t'))].join('\n')
+  try {
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([plain], { type: 'text/plain' }),
+      })])
+    } else {
+      await navigator.clipboard.writeText(plain)
+    }
+    return true
+  } catch { return false }
+}
+
+/** Downloads a table as a CSV file — quotes any cell containing a comma/quote/newline. */
+export function exportTableCsv<T>(filename: string, cols: TableCol<T>[], rows: T[]): void {
+  const cell = (v: string | number) => {
+    const s = String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const csv = [cols.map((c) => cell(c.label)).join(','), ...rows.map((r) => cols.map((c) => cell(c.get(r))).join(','))].join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}

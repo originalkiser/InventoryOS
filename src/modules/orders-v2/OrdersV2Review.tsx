@@ -16,7 +16,7 @@ import {
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
-import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num } from './shared'
+import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty } from './shared'
 import type { LineFlag, GenerationInput } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
@@ -55,6 +55,11 @@ export function OrdersV2Review() {
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 })
   const [showVmi, setShowVmi] = useState(false)
+  // Separate from showVmi above (which controls the main order-lines
+  // table) — this one controls every "configured products for this shop"
+  // list (the shop-expand row and Shops With No Orders below), which
+  // should default to just what's actually being ordered.
+  const [showConfigVmi, setShowConfigVmi] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('location')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [filter, setFilter] = useState('')
@@ -78,6 +83,7 @@ export function OrdersV2Review() {
   const [eligibleLocationIds, setEligibleLocationIds] = useState<Set<string> | null>(null)
   const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
+  const [movingToFinal, setMovingToFinal] = useState(false)
   // Per-order DOS target/trigger/max — seeded from the real company settings
   // once they load, then edited freely without ever writing back to them
   // ("does not automatically update the settings", per request). Only
@@ -106,6 +112,15 @@ export function OrdersV2Review() {
     (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
     [loc],
   )
+
+  // A hand-edited qty updates DOS After the same way generation would have
+  // computed it for that qty — was previously frozen at whatever
+  // generation produced, silently going stale the moment someone typed a
+  // different number. DOS @ Delivery is unaffected — it's existing on-hand
+  // only, independent of qty (see dosAfterForQty's own comment).
+  const patchQty = useCallback((l: DraftLineRow, qty: number) => {
+    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty) })
+  }, [patchLine])
 
   // DOS After coloring, against this order's own target/max (the card
   // above, not necessarily the saved company settings) — over max is
@@ -338,8 +353,11 @@ export function OrdersV2Review() {
     const ctx = { settings } as unknown as Parameters<typeof unitsToTarget>[1]
     const caps = capsFor(adjusted, ctx)
     const want = unitsToTarget(adjusted, ctx)
-    const newQty = roundQty(Math.min(want, caps.maxUnits), l.uom, settings.bulk_rounding_decimals, want > caps.maxUnits ? 'down' : 'nearest')
-    patchLine(l.id, { qty: newQty, flags: withPoDecision(l.flags, 'po_decision_combine'), included: newQty > 0 })
+    // 'up' when not capped, matching Pass 1's own target-seeking rounding
+    // (see engine.ts) — a coarse package size should bias toward meeting
+    // the target here too, not just on the initial generation.
+    const newQty = roundQty(Math.min(want, caps.maxUnits), l.uom, settings.bulk_rounding_decimals, want > caps.maxUnits ? 'down' : 'up')
+    patchLine(l.id, { qty: newQty, dos_after: dosAfterForQty(l, newQty), flags: withPoDecision(l.flags, 'po_decision_combine'), included: newQty > 0 })
   }
 
   async function addConfiguredProduct(input: GenerationInput, qty: number) {
@@ -396,7 +414,11 @@ export function OrdersV2Review() {
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
-          <Button size="sm" onClick={async () => { await setStatus('final_review'); navigate(`/orders-v2/draft/${draft.id}/final`) }}>
+          <Button size="sm" loading={movingToFinal} onClick={async () => {
+            setMovingToFinal(true)
+            await setStatus('final_review')
+            navigate(`/orders-v2/draft/${draft.id}/final`)
+          }}>
             Final Review →
           </Button>
         </div>
@@ -569,7 +591,7 @@ export function OrdersV2Review() {
                       <Td align="right">{dos(l.dos_before)}</Td>
                       <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
                         <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
-                          onChange={(e) => patchLine(l.id, { qty: Number(e.target.value) || 0 })}
+                          onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
                           className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
                         {l.quarts_per_unit != null && (
                           <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
@@ -603,8 +625,9 @@ export function OrdersV2Review() {
                           </p>
                           <ShopConfiguredProductsTable
                             rows={shopRows(locId)}
-                            onPatch={(id, qty) => patchLine(id, { qty })}
+                            onPatch={patchQty}
                             onAdd={addConfiguredProduct}
+                            showVmi={showConfigVmi}
                           />
                         </td>
                       </tr>
@@ -627,9 +650,15 @@ export function OrdersV2Review() {
           </button>
           {noOrdersOpen && (
             <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-mono text-inky/50">
-                On {DOW[orderDow]}'s order day, but nothing ended up included in this order — expand a shop to see everything configured for it and add items if something's missing.
-              </p>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="text-[10px] font-mono text-inky/50">
+                  On {DOW[orderDow]}'s order day, but nothing ended up included in this order — expand a shop to see everything configured for it and add items if something's missing.
+                </p>
+                <label className="flex items-center gap-1.5 text-[10px] font-mono text-inky/60 flex-shrink-0">
+                  <Toggle checked={showConfigVmi} onChange={setShowConfigVmi} size="sm" color="cyan" />
+                  Show VMI / keepfill suggestions
+                </label>
+              </div>
               {shopsWithNoOrders.map((locId) => {
                 const shopOpen = expanded.has(locId)
                 return (
@@ -644,8 +673,9 @@ export function OrdersV2Review() {
                       <div className="mt-1">
                         <ShopConfiguredProductsTable
                           rows={shopRows(locId)}
-                          onPatch={(id, qty) => patchLine(id, { qty })}
+                          onPatch={patchQty}
                           onAdd={addConfiguredProduct}
+                          showVmi={showConfigVmi}
                         />
                       </div>
                     )}
@@ -693,11 +723,19 @@ function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }
  * "why isn't this shop ordering more" and "why isn't this shop ordering
  * anything" use the exact same product list, columns, and add-a-line
  * behavior. */
-function ShopConfiguredProductsTable({ rows, onPatch, onAdd }: {
+function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi }: {
   rows: { input?: GenerationInput; line?: DraftLineRow }[]
-  onPatch: (id: string, qty: number) => void
+  onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
+  // VMI/keep-fill candidates are always in this list (the shop's full
+  // configured product set) but are noise for "what am I actually
+  // ordering" — hidden by default, shown on request. A row counts as VMI
+  // either via its own config (input) or, once ordered, the flag the
+  // engine already stamped onto its line.
+  showVmi: boolean
 }) {
+  const visible = showVmi ? rows : rows.filter((r) =>
+    !(r.input?.rule.vmi_keepfill_enabled || r.line?.flags?.includes('vmi_keepfill')))
   return (
     <table className="w-full text-[11px] font-mono">
       <thead><tr className="text-inky/60 uppercase">
@@ -708,7 +746,7 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd }: {
         <td className="text-right">$</td><td>Why</td>
       </tr></thead>
       <tbody>
-        {rows.map((r) => (
+        {visible.map((r) => (
           <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd} />
         ))}
       </tbody>
@@ -721,7 +759,7 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd }: {
  * by the smoothing panel and the shop-name expand row below the table. */
 function SmoothingRow({ input, line, onPatch, onAdd }: {
   input?: GenerationInput; line?: DraftLineRow
-  onPatch: (id: string, qty: number) => void
+  onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
 }) {
   const productId = line?.product_id ?? input?.product_id ?? ''
@@ -762,7 +800,7 @@ function SmoothingRow({ input, line, onPatch, onAdd }: {
       <td className="text-right">
         {line ? (
           <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
-            onChange={(e) => onPatch(line.id, Number(e.target.value) || 0)}
+            onChange={(e) => onPatch(line, Number(e.target.value) || 0)}
             className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
         ) : input ? (
           <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
