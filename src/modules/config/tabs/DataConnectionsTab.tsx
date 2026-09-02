@@ -105,7 +105,16 @@ export function DataConnectionsTab() {
   const [orderBackfillShops, setOrderBackfillShops] = useState<string[]>([])
   const [orderBackfillStart, setOrderBackfillStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().slice(0, 10) })
   const [orderBackfillEnd, setOrderBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
-  const [syncedLocationIds, setSyncedLocationIds] = useState<Set<string> | null>(null)
+  // Which eligible shops have at least one order WITHIN the currently
+  // selected backfill range (not "ever, at any date" — see the effect
+  // below for why that distinction turned out to matter). null = still
+  // loading OR the check failed; distinguished from a real failure by
+  // locationIdsInRangeError below, since gapShopLabels renders nothing for
+  // BOTH otherwise, and a failed check silently looking identical to
+  // "confirmed zero gap shops" is exactly as misleading as the original
+  // "everyone's a gap" bug, just in the opposite direction.
+  const [locationIdsInRange, setLocationIdsInRange] = useState<Set<string> | null>(null)
+  const [locationIdsInRangeError, setLocationIdsInRangeError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -135,46 +144,69 @@ export function DataConnectionsTab() {
     return () => { cancelled = true }
   }, [companyId])
 
-  // For the "Select Gap Shops" convenience below — reads
-  // droptop_orders_synced_locations, NOT droptop_order_sync_state. That
-  // table only ever gets a row from mode:'incremental', never mode:'sync'
-  // (what Historical Backfill itself uses) — a shop backfilled via that
-  // button would still show up as a "gap" forever if checked against it
-  // (confirmed live 2026-09-01: shops 145-175 got real orders from a
-  // backfill run but never got a sync_state row). This view instead
-  // pre-aggregates distinct (company_id, location_id) pairs straight from
-  // droptop_orders — the actual source of truth for "has this location ever
-  // had an order land, via any sync mode" — so it's safe to fetch
-  // unpaginated (one row per location, not per order, nowhere near
-  // PostgREST's 1000-row default cap).
+  // For the "Select Gap Shops" convenience below. Originally checked
+  // inventory.droptop_orders_synced_locations ("has this location EVER had
+  // an order land, at any date") — but that missed a real case found live
+  // (2026-09-02): shop 212 has exactly 2 orders, both from the last day of
+  // August, and shop 114 has 33 orders spanning only 3 days at month-end —
+  // both read as "already synced" even though their actual historical
+  // depth for a real backfill range is essentially nothing (their
+  // Historical Backfill likely never ran or never finished; only the
+  // routine daily incremental sync ever wrote anything for them). The
+  // question that actually matters for this button is "does this shop
+  // have ANY order within the range I'm about to backfill" — so this now
+  // re-checks against the CURRENTLY SELECTED start/end instead of all
+  // time, via a small RPC (public.get_droptop_order_location_ids_in_range)
+  // that does the DISTINCT server-side. Paginated the same defensive way
+  // as every other fetch in this codebase — a real company has ~250
+  // eligible shops, nowhere near the 1000-row API cap, but that "it's a
+  // small result, no pagination needed" reasoning was also wrong once
+  // already this session (the Heatmap's rollup RPC), so it isn't trusted
+  // here either.
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
+    setLocationIdsInRangeError(null)
     const sb = supabase as any
-    sb.schema('inventory').from('droptop_orders_synced_locations').select('location_id').eq('company_id', companyId)
-      .then(({ data, error }: any) => {
+    async function run() {
+      const PAGE = 1000
+      const all: string[] = []
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await sb.rpc('get_droptop_order_location_ids_in_range', {
+          p_start: orderBackfillStart, p_end: orderBackfillEnd,
+        }).range(from, from + PAGE - 1)
         if (cancelled) return
         if (error) {
-          // Leave syncedLocationIds at null (its "still loading" value) on
-          // a real query failure, NOT an empty Set — the old code did
-          // `new Set((data ?? []).map(...))` unconditionally, so a failed
-          // request (data === null) silently became an empty Set, which
-          // gapShopLabels below then read as "confirmed zero locations
-          // have ever synced" — every eligible shop showed up as a gap
-          // even though they'd all actually synced, purely because this
-          // one query errored and nobody could tell. Surfacing it instead.
-          console.error('Failed to load synced-locations for gap detection:', error.message)
-          toast.error(`Unable to check which shops have synced — gap detection unavailable (${error.message})`)
+          // Leave locationIdsInRange at null (its "still loading" value) on
+          // a real query failure, NOT an empty Set — a failed request
+          // silently becoming an empty Set would make gapShopLabels below
+          // read as "confirmed zero gap shops," exactly as misleading as
+          // the original "everyone's a gap" bug, just in the other
+          // direction. Surfaced persistently (locationIdsInRangeError
+          // below), not just a toast that disappears.
+          console.error('Failed to load in-range locations for gap detection:', error.message)
+          setLocationIdsInRangeError(error.message)
+          toast.error(`Unable to check which shops have orders in this range — gap detection unavailable (${error.message})`)
           return
         }
-        setSyncedLocationIds(new Set((data ?? []).map((r: any) => r.location_id)))
-      })
+        const batch = (data ?? []) as { location_id: string }[]
+        all.push(...batch.map((r) => r.location_id))
+        if (batch.length === 0) break
+      }
+      if (!cancelled) setLocationIdsInRange(new Set(all))
+    }
+    run().catch((e) => {
+      if (cancelled) return
+      const message = e instanceof Error ? e.message : 'Failed to check gap shops'
+      setLocationIdsInRangeError(message)
+      toast.error(`Unable to check which shops have orders in this range — gap detection unavailable (${message})`)
+    })
     return () => { cancelled = true }
-  }, [companyId])
+  }, [companyId, orderBackfillStart, orderBackfillEnd])
 
   const gapShopLabels = useMemo(
-    () => syncedLocationIds === null ? [] : backfillOptions.filter((o) => !syncedLocationIds.has(o.id)).map((o) => o.label),
-    [backfillOptions, syncedLocationIds],
+    () => locationIdsInRange === null ? [] : backfillOptions.filter((o) => !locationIdsInRange.has(o.id)).map((o) => o.label),
+    [backfillOptions, locationIdsInRange],
   )
 
   async function saveRow(row: DataConnectionSchedule, patch: Partial<DataConnectionSchedule>) {
@@ -827,11 +859,21 @@ export function DataConnectionsTab() {
               Run Backfill
             </Button>
           </div>
-          {gapShopLabels.length > 0 && (
+          {locationIdsInRangeError ? (
+            // Persistent, not just the toast that already fired — a failed
+            // check renders identically to "confirmed zero gaps" otherwise
+            // (gapShopLabels is [] either way), which is exactly as
+            // misleading as the original "everyone's a gap" bug, just in
+            // the other direction: it looks like everything's backfilled
+            // when really nobody knows.
+            <p className="text-[11px] font-mono text-[#C0392B]">
+              Unable to check for gap shops ({locationIdsInRangeError}) — some shops may still need backfill; this list can't confirm it right now.
+            </p>
+          ) : gapShopLabels.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap text-[11px] font-mono text-inky/60">
-              <span className="text-[#E67E22]">{gapShopLabels.length} shop(s) have never had a single order synced</span>
+              <span className="text-[#E67E22]">{gapShopLabels.length} shop(s) have no orders in this Start–End range</span>
               <Button size="sm" variant="secondary" onClick={() => setOrderBackfillShops(gapShopLabels)}
-                title="Selects every backfill-eligible shop with zero rows in inventory.droptop_orders">
+                title="Selects every backfill-eligible shop with zero orders in the Start-End range selected above">
                 Select Gap Shops
               </Button>
             </div>

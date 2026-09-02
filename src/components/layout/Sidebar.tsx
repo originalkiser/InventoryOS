@@ -543,6 +543,26 @@ function SortableSection({
     )
   }
 
+  // Data Connections is a single-item section by design — wrapping exactly
+  // one link in a full section header (chevron, collapse, drag handle) was
+  // pure indirection for what's really just a button. Rendered as a plain
+  // top-level link instead, same as a collapsed-sidebar item. If this
+  // section ever grows a second item, this check stops matching and it
+  // falls through to the normal section treatment below, unchanged.
+  if (sectionKey === 'data-connections' && items.length === 1) {
+    return (
+      <div ref={setNodeRef} style={style} className="py-0.5">
+        <NavItemLink
+          item={items[0]}
+          showLabel
+          isFavorite={favorites.includes(items[0].key)}
+          onToggleFavorite={onToggleFavorite}
+          onNavClick={onNavClick}
+        />
+      </div>
+    )
+  }
+
   return (
     <div ref={setNodeRef} style={style} className="py-0.5">
       {/* Section header */}
