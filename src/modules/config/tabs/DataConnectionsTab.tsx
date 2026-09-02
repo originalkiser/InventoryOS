@@ -567,10 +567,20 @@ export function DataConnectionsTab() {
         step++
         store.setProgress(DROPTOP_ORDERS_TASK_ID, step, totalSteps)
         const wLabel = `${new Date(w.startUnix * 1000).toISOString().slice(0, 10)} to ${new Date(w.endUnix * 1000).toISOString().slice(0, 10)}`
+        // Every warning pushed below is prefixed with which shop/window it
+        // came from — a real bug found live: an invocation that returned
+        // 200 OK but had one internal batch fail (e.g. "Order batch 0-131:
+        // canceling statement due to statement timeout" from a per-batch
+        // upsert inside droptop-sync-orders) pushed that message with NO
+        // shop/date context at all, only the catch-block path below (a
+        // whole invocation throwing) attached one — so a partial failure
+        // inside an otherwise-successful call was impossible to attribute
+        // to a specific shop or week from the summary alone.
+        const shopLabel = orderBackfillShops[i] ?? locationIds[i]
         try {
           const r = await runDroptopOrderSync(companyId, { startUnix: w.startUnix, endUnix: w.endUnix, locationId: locationIds[i] })
           ordersTotal += r.orders_upserted
-          if (r.warnings?.length) warnings.push(...r.warnings)
+          if (r.warnings?.length) warnings.push(...r.warnings.map((w2) => `${shopLabel} (${wLabel}): ${w2}`))
         } catch (err) {
           // One retry on the SAME narrow window before giving up — a
           // platform-level timeout kill is often a one-off (cold start,
@@ -580,9 +590,9 @@ export function DataConnectionsTab() {
           try {
             const r = await runDroptopOrderSync(companyId, { startUnix: w.startUnix, endUnix: w.endUnix, locationId: locationIds[i] })
             ordersTotal += r.orders_upserted
-            if (r.warnings?.length) warnings.push(...r.warnings)
+            if (r.warnings?.length) warnings.push(...r.warnings.map((w2) => `${shopLabel} (${wLabel}): ${w2}`))
           } catch (err2) {
-            warnings.push(`${orderBackfillShops[i] ?? locationIds[i]} (${wLabel}): ${err2 instanceof Error ? err2.message : String(err2)}`)
+            warnings.push(`${shopLabel} (${wLabel}): ${err2 instanceof Error ? err2.message : String(err2)}`)
           }
         }
       }

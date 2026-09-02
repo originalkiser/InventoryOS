@@ -375,18 +375,35 @@ Deno.serve(async (req) => {
     })
 
     const BATCH = 500
+    // A real 16-shop/8538-order backfill hit "canceling statement due to
+    // statement timeout" on this upsert too (not just the child-table
+    // inserts fixed earlier) — an UPSERT does more work per row than a
+    // plain INSERT (it has to check the unique constraint and decide
+    // insert-vs-update for every row), so the same BATCH=500 sized for
+    // this table apparently isn't always safe under load. Smaller batch +
+    // bounded retry, same proven mitigation as the child-table fix above —
+    // safe to retry since a canceled statement fully rolls back (upsert
+    // included), so re-running the identical batch can't double-write.
+    const ORDER_UPSERT_BATCH = 200
     // location_id|order_id -> saved row id, filled in as each upsert batch
     // returns — needed below to attach package/product line items to the
     // right order via its internal uuid, not Droptop's own order_id.
     const idByOrderKey = new Map<string, string>()
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const slice = rows.slice(i, i + BATCH)
-      const { data: saved, error: upsertErr } = await (admin as any)
-        .schema('inventory').from('droptop_orders')
-        .upsert(slice, { onConflict: 'company_id,location_id,order_id' })
-        .select('id, location_id, order_id')
-      if (upsertErr) { warnings.push(`Order batch ${i}-${i + slice.length}: ${upsertErr.message}`); continue }
-      for (const r of (saved ?? []) as { id: string; location_id: string; order_id: string }[]) {
+    for (let i = 0; i < rows.length; i += ORDER_UPSERT_BATCH) {
+      const slice = rows.slice(i, i + ORDER_UPSERT_BATCH)
+      let saved: { id: string; location_id: string; order_id: string }[] | null = null
+      let lastErr: string | null = null
+      for (let attempt = 0; attempt <= 2; attempt++) {
+        const { data, error: upsertErr } = await (admin as any)
+          .schema('inventory').from('droptop_orders')
+          .upsert(slice, { onConflict: 'company_id,location_id,order_id' })
+          .select('id, location_id, order_id')
+        if (!upsertErr) { saved = data; break }
+        lastErr = upsertErr.message
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+      }
+      if (saved === null) { warnings.push(`Order batch ${i}-${i + slice.length}: ${lastErr}`); continue }
+      for (const r of saved) {
         idByOrderKey.set(`${r.location_id}|${r.order_id}`, r.id)
       }
       ordersUpserted += slice.length

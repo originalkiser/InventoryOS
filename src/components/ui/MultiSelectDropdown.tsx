@@ -66,6 +66,23 @@ export function MultiSelectDropdown({ options, selected, onChange, placeholder =
         }`}
       >
         <span className="flex-1 text-left truncate">{label}</span>
+        {/* Clears the selection without opening the panel first (the "All"
+            checkbox inside still works too — this is just a faster path
+            for the common "never mind, reset this filter" case). */}
+        {selected.length > 0 && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); onChange([]) }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onChange([]) } }}
+            title="Clear selection"
+            className="shrink-0 text-inky/40 hover:text-navy dark:hover:text-[#F2F1E6] transition-colors"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </span>
+        )}
         <svg
           className={`w-3 h-3 shrink-0 text-inky/50 transition-transform ${open ? 'rotate-180' : ''}`}
           fill="none"
