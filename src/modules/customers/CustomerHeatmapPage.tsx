@@ -11,7 +11,7 @@
 //
 // Resolution is zip-centroid, not rooftop-exact — a density view of which
 // areas customers cluster in, not a pin-per-order map.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Marker, GeoJSON as GeoJSONLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -352,12 +352,17 @@ export function CustomerHeatmapPage() {
       // Progressive rendering: the map/stats/table update as pages arrive
       // instead of only once at the very end, so a large company-wide load
       // is interactive almost immediately rather than staring at a blank
-      // spinner for however long the full load takes. Throttled to roughly
-      // once a second (not once per 1000-row page) — a full month for
-      // every shop is dozens of pages, and re-clustering/re-rendering the
-      // map on every single one would be its own source of jank, exactly
-      // what this is meant to avoid.
-      const FLUSH_INTERVAL_MS = 800
+      // spinner for however long the full load takes. Throttled (not once
+      // per 1000-row page) — a full month for every shop is 100+ pages, and
+      // re-clustering/re-rendering on every single one would be its own
+      // source of jank, exactly what this is meant to avoid. 1200ms rather
+      // than a tighter interval because a real company-wide load (167k+
+      // orders, 7,000+ zips) made even a throttled ~800ms cadence feel
+      // laggy — this pairs with the map-layer fix above (one merged
+      // GeoJSON layer instead of one per zip) rather than replacing it;
+      // that fix is what makes each individual flush cheap, this just
+      // caps how often that cost is paid.
+      const FLUSH_INTERVAL_MS = 1200
       let lastFlush = 0
       let gotFirstPage = false
       for (;;) {
@@ -483,15 +488,23 @@ export function CustomerHeatmapPage() {
     return [39.5, -98.35] // continental US fallback
   }, [clusters.length > 0 ? clusters[0].zip : null]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Stable "which zips are on the map" key — separate from `clusters`
+  // itself, whose object identity (and every cluster's `count`) changes on
+  // EVERY progressive-load flush, not just when a zip is gained or lost.
+  // Effects/memos below that only care about the zip SET (which boundaries
+  // to fetch, which map features exist) key off this instead, so a
+  // company-wide load isn't re-fetching boundaries or rebuilding the whole
+  // map layer roughly once a second for the entire load — only when a
+  // genuinely new zip shows up.
+  const zipsKey = useMemo(() => [...new Set(clusters.map((c) => c.zip))].sort().join(','), [clusters])
+
   // Choropleth boundaries — fetched only in choropleth mode, only for the
   // zips actually on the map right now (never the whole 31k-zip table).
-  // Chunked .in() the same defensive way as everything else this session,
-  // though a realistic cluster count (hundreds, not tens of thousands)
-  // would never approach the platform's 1000-row response cap here.
+  // Chunked .in() the same defensive way as everything else this session.
   useEffect(() => {
-    if (mapViewMode !== 'choropleth' || !clusters.length) return
+    if (mapViewMode !== 'choropleth' || !zipsKey) return
     let cancelled = false
-    const zips = [...new Set(clusters.map((c) => c.zip))]
+    const zips = zipsKey.split(',')
     const sb = supabase as any
     const CHUNK = 200
     ;(async () => {
@@ -505,19 +518,102 @@ export function CustomerHeatmapPage() {
       if (!cancelled) setZipGeometries(m)
     })()
     return () => { cancelled = true }
-  }, [mapViewMode, clusters])
+  }, [mapViewMode, zipsKey])
 
-  // Stable per-zip Feature object references (react-leaflet's <GeoJSON>
-  // doesn't cleanly re-parse on every render the way a Path's pathOptions
-  // does — building a fresh { type: 'Feature', ... } wrapper inline in the
-  // render loop would hand it a new object identity every render even
-  // when the underlying geometry hasn't changed). Only recomputed when
-  // zipGeometries itself changes, i.e. when a new fetch actually completes.
-  const zipFeatures = useMemo(() => {
-    const m = new Map<string, GeoJSON.Feature>()
-    for (const [zip, geometry] of zipGeometries) m.set(zip, { type: 'Feature', properties: {}, geometry })
+  // Per-zip lat/lng snapshot, also keyed off zipsKey rather than `clusters`
+  // directly — used only as the fallback point position for a zip with no
+  // boundary in zipGeometries. A tiny lag behind the very latest
+  // weighted-average position (address mode) while more orders are still
+  // streaming in is an imperceptible tradeoff for not rebuilding the
+  // entire map layer on every incoming page.
+  const zipMeta = useMemo(() => {
+    const m = new Map<string, { lat: number; lng: number }>()
+    for (const c of clusters) if (!m.has(c.zip)) m.set(c.zip, { lat: c.lat, lng: c.lng })
     return m
-  }, [zipGeometries])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zipsKey])
+
+  // ONE merged GeoJSON layer for the whole map, instead of a React
+  // component PER zip. A company-wide month can put 5,000-7,000+ zips on
+  // the map at once — mounting that many individual <GeoJSON>/<CircleMarker>
+  // React components (each its own Leaflet Path, DOM/SVG node, and event
+  // bindings) is what actually made the page unresponsive, not the order
+  // volume itself. This single layer's `data` only changes when the zip SET
+  // changes (zipsKey/zipGeometries), not on every progressive-load flush;
+  // per-zip fill color updates imperatively via .setStyle() below instead
+  // of by rebuilding the layer. A zip with no boundary on file falls back
+  // to a Point feature, rendered as a circle via pointToLayer.
+  const choroplethFeatureCollection = useMemo((): GeoJSON.FeatureCollection => ({
+    type: 'FeatureCollection',
+    features: [...zipMeta.entries()].map(([zip, meta]) => ({
+      type: 'Feature',
+      properties: { zip },
+      geometry: zipGeometries.get(zip) ?? { type: 'Point', coordinates: [meta.lng, meta.lat] },
+    })),
+  }), [zipMeta, zipGeometries])
+
+  // Refs so the layer's style function / event handlers (bound once per
+  // feature, at layer-build time — see onEachChoroplethFeature/
+  // choroplethPointToLayer below) always read CURRENT data instead of
+  // whatever was current the one time they were attached.
+  const clustersByZipRef = useRef(new Map<string, ZipCluster>())
+  useEffect(() => { clustersByZipRef.current = new Map(clusters.map((c) => [c.zip, c])) }, [clusters])
+  const densityBpRef = useRef(densityBp)
+  useEffect(() => { densityBpRef.current = densityBp }, [densityBp])
+  const zoomRef = useRef(zoom)
+  useEffect(() => { zoomRef.current = zoom }, [zoom])
+  const ordersForZipRef = useRef<(zip: string) => OrderRow[]>(() => [])
+
+  const choroplethLayerRef = useRef<L.GeoJSON | null>(null)
+  // Repaints the merged layer's per-feature colors whenever counts/density/
+  // zoom change — a cheap in-place .setStyle() pass, not a rebuild. Also
+  // depends on mapViewMode/choroplethFeatureCollection so switching INTO
+  // choropleth mode (a fresh mount — the ref only exists while this mode is
+  // active) or a new zip appearing (react-leaflet rebuilds the underlying
+  // L.GeoJSON layer when `data` changes, which gets a fresh, unstyled
+  // instance) both get repainted immediately instead of showing the
+  // default gray/blue style until some unrelated change happens to fire
+  // this effect. (Doesn't touch the Point-fallback circles' radius —
+  // Leaflet's Path.setStyle() has no radius concept — so a zip with no
+  // boundary won't grow with zoom the way a normal circle does; an
+  // accepted, minor cosmetic gap given how few zips actually lack one.)
+  useEffect(() => {
+    const layer = choroplethLayerRef.current
+    if (!layer) return
+    layer.setStyle((feature?: GeoJSON.Feature) => {
+      const zip = feature?.properties?.zip as string | undefined
+      const c = zip ? clustersByZipRef.current.get(zip) : undefined
+      const s = c ? styleFor(c.count, densityBp, zoom) : { radius: 0, color: '#4F7489', fill: '#B7E0DE' }
+      return { color: s.color, fillColor: s.fill, fillOpacity: 0.55, weight: 1.5 }
+    })
+  }, [clusters, densityBp, zoom, mapViewMode, choroplethFeatureCollection])
+
+  const onEachChoroplethFeature = useCallback((feature: GeoJSON.Feature, layer: L.Layer) => {
+    const zip = feature.properties?.zip as string | undefined
+    if (!zip) return
+    layer.bindTooltip(() => {
+      const c = clustersByZipRef.current.get(zip)
+      const loc = c?.city ? ` — ${c.city}, ${c.region}` : ''
+      return `<span class="font-mono text-xs">${zip}${loc}<br/>${c?.count ?? 0} order${c?.count === 1 ? '' : 's'}</span>`
+    })
+    layer.on('click', (e: L.LeafletMouseEvent) => {
+      L.DomEvent.stopPropagation(e)
+      setSelectedZip((prev) => (prev === zip ? null : zip))
+    })
+    layer.on('dblclick', (e: L.LeafletMouseEvent) => {
+      L.DomEvent.stopPropagation(e)
+      const c = clustersByZipRef.current.get(zip)
+      setOrderModal({ title: `Orders — ${zip}${c?.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZipRef.current(zip) })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const choroplethPointToLayer = useCallback((feature: GeoJSON.Feature, latlng: L.LatLng): L.Layer => {
+    const zip = feature.properties?.zip as string | undefined
+    const c = zip ? clustersByZipRef.current.get(zip) : undefined
+    const s = c ? styleFor(c.count, densityBpRef.current, zoomRef.current) : { radius: 6, color: '#4F7489', fill: '#B7E0DE' }
+    return L.circleMarker(latlng, { radius: s.radius, color: s.color, fillColor: s.fill, fillOpacity: 0.55, weight: 1.5 })
+  }, [])
 
   // On-screen "By Shop" table — one row per (shop, zip), mirroring the
   // export's grouping (minus avg ticket/packages, which stay export-only).
@@ -562,6 +658,7 @@ export function CustomerHeatmapPage() {
   function ordersForZip(zip: string): OrderRow[] {
     return mappedRows.filter((r) => (r.zip ?? '—') === zip)
   }
+  useEffect(() => { ordersForZipRef.current = ordersForZip })
 
   function ordersForShopZip(locationId: string, zip: string): OrderRow[] {
     return mappedRows.filter((r) => r.location_id === locationId && (r.zip ?? '—') === zip)
@@ -918,7 +1015,7 @@ export function CustomerHeatmapPage() {
                   contains all of Leaflet's internal stacking inside this div
                   so it can never climb above app UI outside it. */}
               <div className="isolate rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
-                <MapContainer center={mapCenter} zoom={5} style={{ height: '100%', width: '100%' }}>
+                <MapContainer center={mapCenter} zoom={5} preferCanvas style={{ height: '100%', width: '100%' }}>
                   <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
                   <FocusZip target={focusTarget} />
                   <ZoomTracker onZoom={setZoom} />
@@ -931,9 +1028,30 @@ export function CustomerHeatmapPage() {
                       </Tooltip>
                     </Marker>
                   ))}
-                  {clusters.map((c) => {
+                  {/* Choropleth: ONE merged layer for every zip (see
+                      choroplethFeatureCollection's own comment for why —
+                      one React-managed Leaflet layer per zip stopped
+                      scaling once a company-wide load routinely put
+                      5,000-7,000+ zips on the map at once). Style/tooltip/
+                      click content stay current via refs and the
+                      .setStyle() effect above, not via re-rendering this
+                      layer. `key` is intentionally omitted — remounting on
+                      every render would defeat the entire point. */}
+                  {mapViewMode === 'choropleth' && (
+                    <GeoJSONLayer
+                      ref={choroplethLayerRef}
+                      data={choroplethFeatureCollection}
+                      style={{ color: '#4F7489', fillColor: '#B7E0DE', fillOpacity: 0.55, weight: 1.5 }}
+                      onEachFeature={onEachChoroplethFeature}
+                      pointToLayer={choroplethPointToLayer}
+                    />
+                  )}
+                  {/* Circles mode keeps one CircleMarker per zip — lighter
+                      per-shape than a GeoJSON polygon, and canvas-rendered
+                      (preferCanvas above) rather than SVG, which is the
+                      standard Leaflet scaling path for many simple shapes. */}
+                  {mapViewMode === 'circles' && clusters.map((c) => {
                     const style = styleFor(c.count, densityBp, zoom)
-                    const feature = mapViewMode === 'choropleth' ? zipFeatures.get(c.zip) : undefined
                     const eventHandlers = {
                       // stopPropagation so this doesn't also trigger
                       // DeselectOnMapClick's background-click handler —
@@ -946,29 +1064,6 @@ export function CustomerHeatmapPage() {
                         setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })
                       },
                     }
-                    const tooltip = (
-                      <Tooltip>
-                        <span className="font-mono text-xs">
-                          {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} order{c.count !== 1 ? 's' : ''}
-                        </span>
-                      </Tooltip>
-                    )
-                    // Choropleth with a real boundary on file — otherwise
-                    // (circles mode, or the small fraction of ZCTAs with no
-                    // boundary in the source data) fall back to the circle
-                    // rather than silently dropping the zip from the map.
-                    if (feature) {
-                      return (
-                        <GeoJSONLayer
-                          key={c.zip}
-                          data={feature}
-                          style={{ color: style.color, fillColor: style.fill, fillOpacity: 0.55, weight: 1.5 }}
-                          eventHandlers={eventHandlers}
-                        >
-                          {tooltip}
-                        </GeoJSONLayer>
-                      )
-                    }
                     return (
                       <CircleMarker
                         key={c.zip}
@@ -977,7 +1072,11 @@ export function CustomerHeatmapPage() {
                         pathOptions={{ color: style.color, fillColor: style.fill, fillOpacity: 0.55, weight: 1.5 }}
                         eventHandlers={eventHandlers}
                       >
-                        {tooltip}
+                        <Tooltip>
+                          <span className="font-mono text-xs">
+                            {c.zip} {c.city && `— ${c.city}, ${c.region}`}<br />{c.count} order{c.count !== 1 ? 's' : ''}
+                          </span>
+                        </Tooltip>
                       </CircleMarker>
                     )
                   })}
