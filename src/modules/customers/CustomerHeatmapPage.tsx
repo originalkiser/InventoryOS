@@ -126,6 +126,18 @@ function makeShopPinIcon(color: string, label: string | null): L.DivIcon {
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const dateShort = (v: string | null) => v ? new Date(v).toLocaleDateString() : '—'
 
+// Simplified Owner classification for the filter dropdown — every real
+// `owner` value that isn't literally "Corporate" (individual franchisee
+// names, holding companies, etc.) buckets as "Franchise". Matches
+// DEFAULT_OWNER_RULE's own Corporate-vs-everyone-else distinction
+// (useLocationExclusions.ts) rather than introducing a third classification
+// scheme. `owner` may live on the base column or (pre-promotion) metadata —
+// checked the same order fieldValue() falls back through.
+function ownerClassOf(l: { owner?: string | null; metadata?: unknown }): 'Corporate' | 'Franchise' {
+  const raw = l.owner ?? (l.metadata as any)?.owner ?? ''
+  return String(raw).trim() === 'Corporate' ? 'Corporate' : 'Franchise'
+}
+
 // normalizeCityCase/shopNumberCityLabel moved to src/lib/shopLabels.ts so
 // useLocations.ts (labelOf/options/includedOptions) can share the same fix
 // instead of carrying its own separate, and until 2026-09-02, un-fixed copy.
@@ -261,6 +273,12 @@ export function CustomerHeatmapPage() {
   useEffect(() => {
     try { localStorage.setItem('heatmap:show-pins', showPins ? '1' : '0') } catch { /* ignore */ }
   }, [showPins])
+  // Simplified to a hard Corporate/Franchise binary rather than every real
+  // `owner` value (individual franchisee names, etc.) — a location whose
+  // owner isn't literally "Corporate" is "Franchise" for filtering
+  // purposes, matching DEFAULT_OWNER_RULE's own Corporate-vs-everyone-else
+  // distinction elsewhere in this app.
+  const [filterOwners, setFilterOwners] = useState<string[]>([])
   const [filterRegions, setFilterRegions] = useState<string[]>([])
   const [filterMarkets, setFilterMarkets] = useState<string[]>([])
   const [filterAMs, setFilterAMs] = useState<string[]>([])
@@ -276,19 +294,20 @@ export function CustomerHeatmapPage() {
   // the visible checklist) — matches this page's existing "good enough,
   // not full cascade-pruning" precedent for the Region/Market/AM filters.
   const shopOptions = useMemo(() => {
-    if (!filterRegions.length && !filterMarkets.length && !filterAMs.length) {
+    if (!filterOwners.length && !filterRegions.length && !filterMarkets.length && !filterAMs.length) {
       return loc.includedOptions.map((o) => ({ value: o.label }))
     }
     return loc.includedOptions.filter((o) => {
       const l = loc.byId(o.value)
       if (!l) return false
+      if (filterOwners.length && !filterOwners.includes(ownerClassOf(l))) return false
       if (filterRegions.length && !filterRegions.includes(l.region ?? '')) return false
       if (filterMarkets.length && !filterMarkets.includes(loc.fieldValue(l.id, 'market'))) return false
       if (filterAMs.length && !filterAMs.includes(loc.fieldValue(l.id, 'area_manager'))) return false
       return true
     }).map((o) => ({ value: o.label }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loc.includedOptions, filterRegions, filterMarkets, filterAMs])
+  }, [loc.includedOptions, filterOwners, filterRegions, filterMarkets, filterAMs])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
   const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
 
@@ -301,9 +320,10 @@ export function CustomerHeatmapPage() {
   // scope its SERVER query by this too, not just client-side post-filter
   // whatever a full unscoped pull already returned.
   const allowedLocationIds = useMemo(() => {
-    if (!filterRegions.length && !filterMarkets.length && !filterAMs.length) return null
+    if (!filterOwners.length && !filterRegions.length && !filterMarkets.length && !filterAMs.length) return null
     const ids = new Set<string>()
     for (const l of loc.locations) {
+      if (filterOwners.length && !filterOwners.includes(ownerClassOf(l))) continue
       if (filterRegions.length && !filterRegions.includes(l.region ?? '')) continue
       if (filterMarkets.length && !filterMarkets.includes(loc.fieldValue(l.id, 'market'))) continue
       if (filterAMs.length && !filterAMs.includes(loc.fieldValue(l.id, 'area_manager'))) continue
@@ -311,7 +331,7 @@ export function CustomerHeatmapPage() {
     }
     return ids
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loc.locations, filterRegions, filterMarkets, filterAMs])
+  }, [loc.locations, filterOwners, filterRegions, filterMarkets, filterAMs])
 
   // What to actually send the server: the explicit Shop(s) picker narrows
   // to exactly those shops (intersected with Region/Market/AM if both are
@@ -348,23 +368,29 @@ export function CustomerHeatmapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loc.locations])
 
-  const regionOptions = useMemo(
-    () => [...new Set(loc.locations.map((l) => l.region ?? '').filter(Boolean))].sort().map((v) => ({ value: v })),
-    [loc.locations],
-  )
+  // Fixed two-value list — see ownerClassOf's own comment for why this
+  // isn't derived from every distinct raw `owner` value.
+  const ownerOptions = useMemo(() => [{ value: 'Corporate' }, { value: 'Franchise' }], [])
+  const regionOptions = useMemo(() => {
+    let r = loc.locations
+    if (filterOwners.length) r = r.filter((l) => filterOwners.includes(ownerClassOf(l)))
+    return [...new Set(r.map((l) => l.region ?? '').filter(Boolean))].sort().map((v) => ({ value: v }))
+  }, [loc.locations, filterOwners])
   const marketOptions = useMemo(() => {
     let r = loc.locations
+    if (filterOwners.length) r = r.filter((l) => filterOwners.includes(ownerClassOf(l)))
     if (filterRegions.length) r = r.filter((l) => filterRegions.includes(l.region ?? ''))
     return [...new Set(r.map((l) => loc.fieldValue(l.id, 'market')).filter(Boolean))].sort().map((v) => ({ value: v }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loc.locations, filterRegions])
+  }, [loc.locations, filterOwners, filterRegions])
   const amOptions = useMemo(() => {
     let r = loc.locations
+    if (filterOwners.length) r = r.filter((l) => filterOwners.includes(ownerClassOf(l)))
     if (filterRegions.length) r = r.filter((l) => filterRegions.includes(l.region ?? ''))
     if (filterMarkets.length) r = r.filter((l) => filterMarkets.includes(loc.fieldValue(l.id, 'market')))
     return [...new Set(r.map((l) => loc.fieldValue(l.id, 'area_manager')).filter(Boolean))].sort().map((v) => ({ value: v }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loc.locations, filterRegions, filterMarkets])
+  }, [loc.locations, filterOwners, filterRegions, filterMarkets])
 
   useEffect(() => {
     if (!companyId) return
@@ -1098,6 +1124,10 @@ export function CustomerHeatmapPage() {
           so changing these cancels the in-flight fetch for the old
           selection and starts a fresh, narrower one immediately. */}
       <div className="flex items-end gap-2 flex-wrap">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Owner</span>
+          <MultiSelectDropdown options={ownerOptions} selected={filterOwners} onChange={setFilterOwners} placeholder="Corporate + Franchise" countNoun="owners" />
+        </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
           <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />

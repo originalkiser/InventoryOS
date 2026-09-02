@@ -76,12 +76,14 @@ export const ICONS: Record<string, JSX.Element> = {
   'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
   'customer-heatmap': <MapPin className="w-4 h-4 flex-shrink-0" />,
   'droptop-orders': <FileText className="w-4 h-4 flex-shrink-0" />,
+  'data-connections': <Database className="w-4 h-4 flex-shrink-0" />,
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
 
 const SECTION_ICONS: Record<string, JSX.Element> = {
   inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
   droptop: <img src={droptopLogo} alt="" className="w-3.5 h-3.5 flex-shrink-0 object-contain" />,
+  'data-connections': <Database className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
   'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-[#F2F1E6]/70" />,
   operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-[#E67E22]" />,
   finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-[#2ECC71]" />,
@@ -98,6 +100,10 @@ const SECTION_ICONS: Record<string, JSX.Element> = {
 const SECTION_ACCENT: Record<string, string> = {
   inventory: 'bg-sky/15 border-l-2 border-sky',
   droptop: 'bg-inky/25 border-l-2 border-inky',
+  // Reuses Inventory's sky accent (this section was split out of Inventory
+  // Config, and every other brand color is already spoken for) rather than
+  // sitting inky-on-inky next to Droptop above it.
+  'data-connections': 'bg-sky/15 border-l-2 border-sky',
   'global-config': 'bg-[#F2F1E6]/[0.08] border-l-2 border-[#F2F1E6]/40',
   operations: 'bg-[#E67E22]/15 border-l-2 border-[#E67E22]',
   finance: 'bg-[#2ECC71]/15 border-l-2 border-[#2ECC71]',
@@ -135,6 +141,9 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'customer-heatmap', label: 'Customer Heatmap', to: '/customer-heatmap' },
     { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
   ],
+  'data-connections': [
+    { key: 'data-connections', label: 'Data Connections', to: '/data-connections' },
+  ],
   'global-config': [
     { key: 'global-config', label: 'Global Config', to: '/global-config' },
   ],
@@ -153,6 +162,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
 const SECTION_META: Record<string, { label: string }> = {
   inventory: { label: 'Inventory' },
   droptop: { label: 'Droptop' },
+  'data-connections': { label: 'Data Connections' },
   'global-config': { label: 'Configuration' },
   operations: { label: 'Operations' },
   finance: { label: 'Finance' },

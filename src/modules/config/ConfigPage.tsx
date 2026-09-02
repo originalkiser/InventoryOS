@@ -14,9 +14,13 @@ import { VendorPartsTab } from './tabs/VendorPartsTab'
 import { OrderConfigTab } from './tabs/OrderConfigTab'
 import { ProductMappingTab } from './tabs/ProductMappingTab'
 import { GlobalProductsTab } from './tabs/GlobalProductsTab'
-import { DataConnectionsTab } from './tabs/DataConnectionsTab'
 
-const CONFIG_TABS = ['uom-mappings', 'vendor-parts', 'order-config', 'product-mapping', 'global-products', 'product-usage', 'tank-monitor', 'data-connections', 'ending-balances', 'category-simplification', 'category-expectations', 'location-cpd', 'location-comms']
+// Data Connections moved out to its own top-level sidebar section/page
+// (DataConnectionsPage.tsx, route /data-connections) — was buried as a tab
+// on this page (literally named "Inventory Config"), which was confusing
+// given Data Connections' own franchise-shop backfill work has nothing to
+// do with inventory config specifically.
+const CONFIG_TABS = ['uom-mappings', 'vendor-parts', 'order-config', 'product-mapping', 'global-products', 'product-usage', 'tank-monitor', 'ending-balances', 'category-simplification', 'category-expectations', 'location-cpd', 'location-comms']
 const LAST_TAB_KEY = 'config:lastTab'
 
 export function ConfigPage() {
@@ -65,7 +69,6 @@ export function ConfigPage() {
           <TabsTrigger value="global-products">Global Products</TabsTrigger>
           <TabsTrigger value="product-usage">Product Usage</TabsTrigger>
           <TabsTrigger value="tank-monitor">Tank Monitor</TabsTrigger>
-          <TabsTrigger value="data-connections">Data Connections</TabsTrigger>
           <TabsTrigger value="ending-balances">Month End Ending Balance</TabsTrigger>
           <TabsTrigger value="category-simplification">Category Simplification</TabsTrigger>
           <TabsTrigger value="category-expectations">Expected On Hand</TabsTrigger>
@@ -80,7 +83,6 @@ export function ConfigPage() {
         <TabsContent value="global-products"><GlobalProductsTab /></TabsContent>
         <TabsContent value="product-usage"><ProductUsageTab /></TabsContent>
         <TabsContent value="tank-monitor"><TankMonitorTab /></TabsContent>
-        <TabsContent value="data-connections"><DataConnectionsTab /></TabsContent>
         <TabsContent value="ending-balances"><EndingBalancesTab /></TabsContent>
         <TabsContent value="category-simplification"><CategorySimplificationTab /></TabsContent>
         <TabsContent value="category-expectations"><CategoryExpectationsTab /></TabsContent>

@@ -17,6 +17,7 @@ import { SbLoader } from '@/components/ui'
 import { DashboardPage } from '@/pages/Dashboard'
 import { ConfigPage } from '@/modules/config/ConfigPage'
 import { GlobalConfigPage } from '@/modules/config/GlobalConfigPage'
+import { DataConnectionsPage } from '@/modules/config/DataConnectionsPage'
 import { LocationsPage } from '@/modules/locations/LocationsPage'
 import { LocationLookupPage } from '@/modules/locations/LocationLookupPage'
 import { AmRdLookupPage } from '@/modules/locations/AmRdLookupPage'
@@ -96,6 +97,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="dashboard" element={<DashboardPage />} />
     <Route path="config" element={<ConfigPage />} />
     <Route path="global-config" element={<GlobalConfigPage />} />
+    <Route path="data-connections" element={<DataConnectionsPage />} />
     <Route path="locations" element={<LocationsPage />} />
     <Route path="location-lookup" element={<LocationLookupPage />} />
     <Route path="am-rd-lookup" element={<AmRdLookupPage />} />
