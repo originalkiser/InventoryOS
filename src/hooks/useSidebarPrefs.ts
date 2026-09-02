@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 
-export const DEFAULT_SECTION_ORDER = ['inventory', 'droptop', 'global-config', 'operations', 'finance', 'accounting', 'marketing']
+export const DEFAULT_SECTION_ORDER = ['inventory', 'droptop', 'data-connections', 'global-config', 'operations', 'finance', 'accounting', 'marketing']
 export const DEFAULT_UTILITY_ORDER = ['calendar', 'issues', 'meetings', 'feature-requests', 'tasks']
 
 interface SidebarPrefs {

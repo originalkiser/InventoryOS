@@ -27,6 +27,18 @@ export const DEFAULT_OWNER_RULE: ExclusionRule = { field: 'meta:owner', values: 
 
 const isOwnerField = (field: string) => (field.startsWith('meta:') ? field.slice(5) : field) === 'owner'
 
+// Simplified Owner classification for exclusion-rule matching (and the
+// config UI's own checklist, see LocationExclusionsConfig.tsx) — a
+// location whose raw `owner` isn't literally "Corporate" (an individual
+// franchisee name, a holding company, etc.) buckets as "Franchise". This
+// is what makes "keep only Corporate" (the default) and a user's own
+// "keep only Corporate, Franchise" (= show everyone) both a two-value
+// decision instead of needing to enumerate every real owner name by hand.
+export function ownerBucket(raw: string): string {
+  const v = raw.trim()
+  return v ? (v === 'Corporate' ? 'Corporate' : 'Franchise') : ''
+}
+
 // 'inventory' (default — matches every existing call site unchanged) applies
 // DEFAULT_OWNER_RULE when the user hasn't set their own Owner rule. 'other'
 // skips that default entirely, so franchise shows unless the user has
@@ -124,7 +136,8 @@ export function useLocationExclusions(surface: 'inventory' | 'other' = 'inventor
   const isExcluded = useCallback((loc: Location): boolean => {
     for (const rule of effectiveRules(rules, surface)) {
       if (!rule.values?.length) continue
-      const v = locExclusionValue(loc, rule.field).trim().toLowerCase()
+      const raw = locExclusionValue(loc, rule.field)
+      const v = (isOwnerField(rule.field) ? ownerBucket(raw) : raw).trim().toLowerCase()
       const inList = rule.values.some((rv) => rv.trim().toLowerCase() === v)
       if (rule.mode === 'only') { if (!inList) return true }       // exclude all but these
       else if (v && inList) return true                            // exclude these

@@ -4,7 +4,10 @@ import {
   useLocationExclusions,
   EXCLUDABLE_COLUMNS,
   locExclusionValue,
+  ownerBucket,
 } from '@/hooks/useLocationExclusions'
+
+const isOwnerField = (field: string) => (field.startsWith('meta:') ? field.slice(5) : field) === 'owner'
 
 // Profile-panel section: choose a column, then multi-select or type values to
 // hide matching locations from the Locations page, Lookup panel, and dashboard.
@@ -25,11 +28,18 @@ export function LocationExclusionsConfig() {
 
   // All distinct values for the selected column (with a count of matching
   // locations), unioned with any already-excluded values so typed-in entries
-  // still appear as checked options.
+  // still appear as checked options. Owner is simplified to Corporate/
+  // Franchise (see ownerBucket) instead of every individual owner name —
+  // dozens of franchisee names made "keep only Corporate, Franchise" (i.e.
+  // "show everyone") impractical to set up by hand, and it's the whole
+  // reason removing a Corporate-only rule didn't visibly change anything:
+  // the DEFAULT_OWNER_RULE fallback (see useLocationExclusions.ts) just
+  // reapplies the same restriction the moment no owner rule exists at all.
   const options = useMemo(() => {
     const counts = new Map<string, number>()
     for (const l of locations) {
-      const v = locExclusionValue(l, field).trim()
+      const raw = locExclusionValue(l, field).trim()
+      const v = isOwnerField(field) ? ownerBucket(raw) : raw
       if (v) counts.set(v, (counts.get(v) ?? 0) + 1)
     }
     for (const v of currentValues) if (!counts.has(v)) counts.set(v, 0)

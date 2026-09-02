@@ -2,7 +2,7 @@ import { useMemo, useState, useRef, useEffect } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { useConfigTab } from '@/modules/config/useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
-import { useLocationExclusions, locExclusionValue } from '@/hooks/useLocationExclusions'
+import { useLocationExclusions, locExclusionValue, ownerBucket } from '@/hooks/useLocationExclusions'
 import { LOCATION_FIELDS, LOCATION_FIELD_KEYS, DEFAULT_VISIBLE_LOCATION_COLUMNS } from '@/lib/locationFields'
 import { ColumnManagerModal, type ColItem } from './ColumnManagerModal'
 import type { VisibilityState } from '@tanstack/react-table'
@@ -31,6 +31,16 @@ const LS_HIDDEN_DROPS = 'locations.page.hiddenDropdowns'
 // mirrors the Global Config locations list. See locExclusionValue.
 function locFieldValue(loc: Location, field: string): string {
   return locExclusionValue(loc, field)
+}
+
+// Used only for the Owner FILTER dropdown (options + matching) — the
+// actual "Owner" data COLUMN still shows the real name via locFieldValue
+// above, unchanged. Simplified to Corporate/Franchise here per explicit
+// request: dozens of individual franchisee names made the filter
+// impractical to use for "show me every franchise location."
+function filterFieldValue(loc: Location, field: string): string {
+  const raw = locFieldValue(loc, field)
+  return field === 'meta:owner' ? ownerBucket(raw) : raw
 }
 
 const PINNED: string[] = []
@@ -135,7 +145,7 @@ export function LocationsPage() {
     let r = data
     for (let i = 0; i < fi; i++) {
       const vals = dropFilters[LOC_FILTER_HIERARCHY[i].field] ?? []
-      if (vals.length) r = r.filter(loc => vals.includes(locFieldValue(loc, LOC_FILTER_HIERARCHY[i].field)))
+      if (vals.length) r = r.filter(loc => vals.includes(filterFieldValue(loc, LOC_FILTER_HIERARCHY[i].field)))
     }
     return r
   }
@@ -144,7 +154,7 @@ export function LocationsPage() {
     let r = filterLocations(data)
     for (const { field } of LOC_FILTER_HIERARCHY) {
       const vals = dropFilters[field] ?? []
-      if (vals.length) r = r.filter(loc => vals.includes(locFieldValue(loc, field)))
+      if (vals.length) r = r.filter(loc => vals.includes(filterFieldValue(loc, field)))
     }
     return r
   }, [data, dropFilters, filterLocations])
@@ -162,7 +172,7 @@ export function LocationsPage() {
 
   const visibleHierarchy = LOC_FILTER_HIERARCHY.filter(({ field }) => {
     if (hiddenDropdowns.has(field)) return false
-    const vals = new Set(data.map(loc => locFieldValue(loc, field)).filter(Boolean))
+    const vals = new Set(data.map(loc => filterFieldValue(loc, field)).filter(Boolean))
     return vals.size >= 2
   })
 
@@ -231,12 +241,12 @@ export function LocationsPage() {
             {visibleHierarchy.map(({ field, label }, fi) => {
               const hierarchyIdx = LOC_FILTER_HIERARCHY.findIndex(h => h.field === field)
               const above = rowsAbove(hierarchyIdx)
-              const opts = Array.from(new Set(above.map(loc => locFieldValue(loc, field)).filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+              const opts = Array.from(new Set(above.map(loc => filterFieldValue(loc, field)).filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
               return (
                 <div key={field} className="flex flex-col gap-0.5">
                   <span className="text-[10px] font-mono text-inky/70 uppercase tracking-wide">{label}</span>
                   <MultiSelectDropdown
-                    options={opts.map(v => ({ value: v, count: above.filter(loc => locFieldValue(loc, field) === v).length }))}
+                    options={opts.map(v => ({ value: v, count: above.filter(loc => filterFieldValue(loc, field) === v).length }))}
                     selected={dropFilters[field] ?? []}
                     onChange={vals => setDropFilter(field, vals, hierarchyIdx)}
                   />
