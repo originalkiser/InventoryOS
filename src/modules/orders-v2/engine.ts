@@ -57,19 +57,25 @@ export const resolvedOrderType = (rule: ProductRule): OrderType => rule.order_ty
 
 /**
  * Round a unit quantity for its UOM. Discrete UOMs must be whole; bulk may
- * carry decimals per settings. `dir` biases the rounding — we round down
- * when a cap is binding so a limit is never breached by rounding.
+ * carry decimals per settings. `dir` biases the rounding — 'down' when a cap
+ * is binding so a limit is never breached by rounding, 'up' when seeking a
+ * DOS target so a coarse package size never leaves a product short of it,
+ * 'nearest' everywhere else.
  */
-export function roundQty(qty: number, uom: string | null, bulkDecimals: number, dir: 'nearest' | 'down' = 'nearest'): number {
+export function roundQty(qty: number, uom: string | null, bulkDecimals: number, dir: 'nearest' | 'down' | 'up' = 'nearest'): number {
   // Caps are Infinity when nothing limits a product, and a missing figure can
   // produce NaN. Either would serialise to null over the wire and blow up a
   // NOT NULL column, so they're pinned to 0 here rather than at each caller.
   if (!Number.isFinite(qty) || qty <= 0) return 0
   if (isBulkUom(uom)) {
     const f = Math.pow(10, Math.max(0, bulkDecimals))
-    return dir === 'down' ? Math.floor(qty * f) / f : Math.round(qty * f) / f
+    if (dir === 'down') return Math.floor(qty * f) / f
+    if (dir === 'up') return Math.ceil(qty * f) / f
+    return Math.round(qty * f) / f
   }
-  return dir === 'down' ? Math.floor(qty) : Math.round(qty)
+  if (dir === 'down') return Math.floor(qty)
+  if (dir === 'up') return Math.ceil(qty)
+  return Math.round(qty)
 }
 
 /** Add n business days (Mon–Fri) to a YYYY-MM-DD date. */
@@ -183,16 +189,24 @@ export function daysBetween(a: string, b: string): number {
   return Math.round((t2 - t1) / 86400000)
 }
 
-/** DOS at delivery: today's on-hand plus the order, less usage until delivery. */
+/**
+ * DOS @ Delivery: existing on-hand only, run down by usage over the lead
+ * time — i.e. "will the shelf already be dry before the truck even gets
+ * here," ignoring this order's own gallons entirely (they aren't on the
+ * shelf until delivery day; DOS After already answers "if this arrived
+ * instantly"). Floored at 0 rather than going negative — a shop that's
+ * already stocked out with several days left before delivery reads as 0,
+ * not a deficit.
+ */
 export function dosAfterDelivery(
-  onHand: number | null, dailyUsage: number | null, orderedGallons: number,
+  onHand: number | null, dailyUsage: number | null,
   orderDate: string, deliveryDate: string | null,
 ): number | null {
   const u = n(dailyUsage)
   if (u <= 0) return null
   const lead = deliveryDate ? Math.max(0, daysBetween(orderDate, deliveryDate)) : 0
-  const atDelivery = n(onHand) - u * lead + orderedGallons
-  return atDelivery / u
+  const remaining = Math.max(0, n(onHand) - u * lead)
+  return remaining / u
 }
 
 // ── Caps ────────────────────────────────────────────────────────────────
@@ -470,8 +484,14 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
 
     const want = unitsToTarget(input, ctx)
     const units = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_decimals,
-      // Round down when a hard cap binds so the cap is never exceeded.
-      want > caps.maxUnits ? 'down' : 'nearest')
+      // Round down when a hard cap binds so the cap is never exceeded;
+      // otherwise round UP toward the target rather than to nearest — a
+      // coarse package size (e.g. a 12-quart case against 0.68 qt/day of
+      // usage) would otherwise round down to whichever whole unit happens
+      // to be numerically closest to the fractional ideal, chronically
+      // leaving a slow-moving product under its DOS target rather than at
+      // or slightly past it.
+      want > caps.maxUnits ? 'down' : 'up')
 
     if (units <= 0) {
       if (!eligibleSpare.has(groupKey)) eligibleSpare.set(groupKey, [])

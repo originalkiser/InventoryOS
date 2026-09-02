@@ -44,6 +44,10 @@ describe('numeric helpers', () => {
     expect(roundQty(2.64, 'bulk', 1)).toBe(2.6)
     // rounding down is used wherever a cap binds, so a cap can't be breached
     expect(roundQty(2.9, 'case', 0, 'down')).toBe(2)
+    // rounding up is used when seeking a DOS target, so a coarse package
+    // size never lands short of it
+    expect(roundQty(2.1, 'case', 0, 'up')).toBe(3)
+    expect(roundQty(2.14, 'bulk', 1, 'up')).toBe(2.2)
   })
 })
 
@@ -57,9 +61,16 @@ describe('delivery dating', () => {
     expect(nextDeliveryDate('2026-08-19', 3)).toBe('2026-08-26')
   })
 
-  it('subtracts usage over the lead time when projecting DOS at delivery', () => {
-    // 10 on hand, 5/day, +25 ordered, delivered in 1 day => (10-5+25)/5 = 6
-    expect(dosAfterDelivery(10, 5, 25, '2026-08-19', '2026-08-20')).toBe(6)
+  it('runs existing on-hand down by usage over the lead time — never the new order', () => {
+    // 10 on hand, 5/day, delivered in 1 day => (10-5)/5 = 1. The order's own
+    // gallons never factor in — they aren't on the shelf until delivery.
+    expect(dosAfterDelivery(10, 5, '2026-08-19', '2026-08-20')).toBe(1)
+  })
+
+  it('floors at 0 rather than going negative when the lead time outruns on-hand', () => {
+    // 10 on hand, 5/day, but delivery is 6 days out — would be -20/5=-4
+    // without the floor; a shop can't have negative days of supply on hand.
+    expect(dosAfterDelivery(10, 5, '2026-08-19', '2026-08-25')).toBe(0)
   })
 })
 
@@ -87,6 +98,18 @@ describe('pass 1 — fill to target', () => {
   it('honours the order-day restriction', () => {
     const res = generateOrder([input()], ctx({ eligibleLocationIds: new Set(['OTHER']) }))
     expect(res.skipped[0].reason).toBe('not_order_day')
+  })
+
+  it('rounds UP toward the target for a coarse package size, not to nearest', () => {
+    // 0 on hand, 0.68/day usage, 12-quart case, target 21 => want = (21*0.68)/12
+    // = 1.19 cases. "Nearest" would round down to 1 case (17.6 days) since
+    // 1.19 is closer to 1 than 2; per explicit direction this should round
+    // UP to 2 cases instead, so a coarse package size never chronically
+    // leaves a slow mover under its target.
+    const i = input({ on_hand: 0, daily_usage: 0.68, rule: { units_per_uom_gallons: 12, uom: 'case' } })
+    const res = generateOrder([i], ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } }))
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBe(2)
   })
 })
 
