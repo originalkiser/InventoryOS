@@ -24,7 +24,7 @@ import { useDarkMode } from '@/hooks/useDarkMode'
 import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
-import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal } from '@/components/ui'
 import { getMarketSolidColor } from '@/lib/marketColors'
 
 interface OrderRow {
@@ -198,11 +198,15 @@ export function CustomerHeatmapPage() {
   const [matchMode, setMatchMode] = useState<'all' | 'shared'>('all')
   const [rows, setRows] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
-  // Separate from `loading` — that now only gates the FIRST page arriving
-  // (so the map/stats/table appear and are interactive as soon as there's
-  // anything to show); this stays true while later pages keep streaming in
-  // behind it, so the page can say "still loading more" without blocking.
-  const [loadingMore, setLoadingMore] = useState(false)
+  // Real progress instead of a bare spinner — `total` comes from a cheap
+  // COUNT-only request up front, `loaded` ticks up per page. Reverted from
+  // an earlier progressive-render attempt (map/table updating as pages
+  // arrived): that made the page usable sooner but the browser stayed
+  // janky for the whole load (re-clustering/re-rendering thousands of zips
+  // repeatedly), which was worse overall than a longer blocking load with
+  // an accurate progress bar. `rows`/the map only update ONCE, when the
+  // full load finishes — this state exists purely to drive the bar.
+  const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
   const [error, setError] = useState<string | null>(null)
   const [selectedZip, setSelectedZip] = useState<string | null>(null)
   const [orderModal, setOrderModal] = useState<{ title: string; rows: OrderRow[] } | null>(null)
@@ -315,22 +319,36 @@ export function CustomerHeatmapPage() {
     if (!companyId) return
     let cancelled = false
     setLoading(true)
-    setLoadingMore(true)
+    setLoadProgress({ loaded: 0, total: null })
     setError(null)
     setSelectedZip(null)
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
     const endIso = `${range.end}T23:59:59.999Z`
 
+    function applyFilters(q: any) {
+      q = q.eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+      if (shopIds.length) q = q.in('location_id', shopIds)
+      return q
+    }
+
     async function run() {
+      // Real progress instead of an indeterminate spinner: a cheap
+      // COUNT-only request (head:true — no rows returned, the count is
+      // computed server-side) using the exact same filters as the real
+      // fetch below. Best-effort — if it fails for any reason the load
+      // still proceeds, just without a percentage (the bar falls back to
+      // "N loaded so far" with no denominator).
+      const { count } = await applyFilters(sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true }))
+      if (!cancelled) setLoadProgress({ loaded: 0, total: count ?? null })
+
       // Keyset pagination by (order_finalized_at, id), not plain id — a
       // cursor ordered by id while filtering on order_finalized_at can't use
       // an index to seek to the matching date range (see
       // 20260907_droptop_orders_date_index.sql), which is what made a narrow
       // custom range time out even though a wide one loaded fine. Loads
       // every order in range/shop scope, mapped or not — the "Not On Map"
-      // card/modal needs the unmapped ones too, so there's no separate
-      // count-only query anymore; everything comes from one load.
+      // card/modal needs the unmapped ones too.
       //
       // PAGE was briefly raised to 3000 to cut round trips, but this
       // Supabase project's API "Max Rows" setting silently caps EVERY
@@ -349,53 +367,48 @@ export function CustomerHeatmapPage() {
       const PAGE = 1000
       const all: OrderRow[] = []
       let cursor: { date: string; id: string } | null = null
-      // Progressive rendering: the map/stats/table update as pages arrive
-      // instead of only once at the very end, so a large company-wide load
-      // is interactive almost immediately rather than staring at a blank
-      // spinner for however long the full load takes. Throttled (not once
-      // per 1000-row page) — a full month for every shop is 100+ pages, and
-      // re-clustering/re-rendering on every single one would be its own
-      // source of jank, exactly what this is meant to avoid. 1200ms rather
-      // than a tighter interval because a real company-wide load (167k+
-      // orders, 7,000+ zips) made even a throttled ~800ms cadence feel
-      // laggy — this pairs with the map-layer fix above (one merged
-      // GeoJSON layer instead of one per zip) rather than replacing it;
-      // that fix is what makes each individual flush cheap, this just
-      // caps how often that cost is paid.
-      const FLUSH_INTERVAL_MS = 1200
-      let lastFlush = 0
-      let gotFirstPage = false
+      // A full company-wide month is 100+ sequential page requests — a
+      // single transient failure partway through (a dropped connection, a
+      // brief blip) used to torch the entire load with whatever generic
+      // error came back, discarding everything fetched so far even if it
+      // was 100+ pages in. One page is retried up to twice (with a short
+      // backoff) before actually giving up, same "don't let one bad
+      // request take down a long sequential run" reasoning as the
+      // Historical Backfill's per-window retry.
+      const MAX_PAGE_RETRIES = 2
       for (;;) {
-        let q = sb.schema('inventory').from('droptop_orders')
-          .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at')
-          .eq('company_id', companyId)
-          .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
-          .order('order_finalized_at', { ascending: true })
-          .order('id', { ascending: true }).limit(PAGE)
-        if (shopIds.length) q = q.in('location_id', shopIds)
-        if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
-        const { data, error: err } = await q
-        if (err) { if (!cancelled) { setError(err.message); setLoading(false) }; break }
-        const batch = (data ?? []) as OrderRow[]
-        if (batch.length > 0) {
-          all.push(...batch)
-          const now = Date.now()
-          if (!cancelled && (!gotFirstPage || now - lastFlush > FLUSH_INTERVAL_MS)) {
-            setRows([...all])
-            lastFlush = now
-            if (!gotFirstPage) { setLoading(false); gotFirstPage = true }
-          }
+        let data: OrderRow[] | null = null
+        let lastErr: string | null = null
+        for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+          if (cancelled) return
+          let q = applyFilters(sb.schema('inventory').from('droptop_orders')
+            .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at'))
+            .order('order_finalized_at', { ascending: true })
+            .order('id', { ascending: true }).limit(PAGE)
+          if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
+          const { data: pageData, error: err } = await q
+          if (!err) { data = (pageData ?? []) as OrderRow[]; break }
+          lastErr = err.message
+          if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
         }
-        if (batch.length === 0) break
-        const last = batch[batch.length - 1]
+        if (data === null) {
+          if (!cancelled) {
+            setError(`${lastErr ?? 'Failed to load orders'} — loaded ${all.length.toLocaleString()} order(s) before this happened`)
+            setLoading(false)
+          }
+          return
+        }
+        all.push(...data)
+        if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: all.length }))
+        if (data.length === 0) break
+        const last = data[data.length - 1]
         cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
       }
       if (cancelled) return
-      if (!gotFirstPage) { setRows([]); setLoading(false) } // genuinely zero orders for this range
-      else setRows([...all]) // final flush — guarantees the throttle never drops the tail end
-      setLoadingMore(false)
+      setRows(all)
+      setLoading(false)
     }
-    run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false); setLoadingMore(false) } })
+    run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
   }, [companyId, shopIds.join(','), range.start, range.end]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -565,18 +578,32 @@ export function CustomerHeatmapPage() {
   const ordersForZipRef = useRef<(zip: string) => OrderRow[]>(() => [])
 
   const choroplethLayerRef = useRef<L.GeoJSON | null>(null)
+  // react-leaflet's <GeoJSON> only reliably parses `data` at MOUNT time — an
+  // already-mounted layer does NOT re-parse when the `data` prop reference
+  // changes on its own. That was a real bug here: a zip whose real boundary
+  // loaded in AFTER the layer first built kept showing its Point-fallback
+  // circle indefinitely (since its geometry "changed" from Point to
+  // Polygon only in the `data` prop, which the live layer ignored) until
+  // the whole view was toggled off and back on to force a fresh mount.
+  // clearLayers()+addData() explicitly forces the live layer to redraw
+  // from the CURRENT feature set — both genuinely new zips and any zip
+  // whose geometry just resolved from a fallback point to a real boundary.
+  useEffect(() => {
+    const layer = choroplethLayerRef.current
+    if (!layer) return
+    layer.clearLayers()
+    layer.addData(choroplethFeatureCollection)
+  }, [choroplethFeatureCollection])
+
   // Repaints the merged layer's per-feature colors whenever counts/density/
-  // zoom change — a cheap in-place .setStyle() pass, not a rebuild. Also
-  // depends on mapViewMode/choroplethFeatureCollection so switching INTO
-  // choropleth mode (a fresh mount — the ref only exists while this mode is
-  // active) or a new zip appearing (react-leaflet rebuilds the underlying
-  // L.GeoJSON layer when `data` changes, which gets a fresh, unstyled
-  // instance) both get repainted immediately instead of showing the
-  // default gray/blue style until some unrelated change happens to fire
-  // this effect. (Doesn't touch the Point-fallback circles' radius —
-  // Leaflet's Path.setStyle() has no radius concept — so a zip with no
-  // boundary won't grow with zoom the way a normal circle does; an
-  // accepted, minor cosmetic gap given how few zips actually lack one.)
+  // zoom change — a cheap in-place .setStyle() pass, not a rebuild. Runs
+  // right after the addData() effect above (same deps trigger, declared
+  // after it) so newly (re)added layers get correctly colored immediately
+  // rather than sitting at addData()'s flat default style. (Doesn't touch
+  // the Point-fallback circles' radius — Leaflet's Path.setStyle() has no
+  // radius concept — so a zip with no boundary won't grow with zoom the
+  // way a normal circle does; an accepted, minor cosmetic gap given how
+  // few zips actually lack one.)
   useEffect(() => {
     const layer = choroplethLayerRef.current
     if (!layer) return
@@ -874,19 +901,26 @@ export function CustomerHeatmapPage() {
         <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{error}</p>
       )}
 
-      {/* Non-blocking — the map/stats/table below are already interactive
-          on partial data by the time this shows; it just says more is
-          still streaming in behind what's rendered so counts aren't
-          mistaken for final. */}
-      {!loading && loadingMore && (
-        <p className="flex items-center gap-2 text-[11px] font-mono text-sky border border-sky/30 bg-sky/5 rounded px-2 py-1.5">
-          <span className="inline-block w-2 h-2 rounded-full bg-sky animate-pulse" />
-          Loading more orders — the map and totals below will keep updating as they arrive.
-        </p>
-      )}
-
       {loading ? (
-        <div className="py-16"><SbLoader /></div>
+        <div className="py-16 flex flex-col items-center gap-3">
+          <div className="w-full max-w-md h-2 bg-navy/10 rounded-full overflow-hidden">
+            {loadProgress.total ? (
+              <div
+                className="h-full bg-sky transition-[width] duration-300 ease-out"
+                style={{ width: `${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%` }}
+              />
+            ) : (
+              <div className="h-full w-full bg-sky/40 animate-pulse" />
+            )}
+          </div>
+          <p className="text-[11px] font-mono text-inky/70">
+            {loadProgress.total
+              ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+              : loadProgress.loaded > 0
+                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                : 'Loading orders…'}
+          </p>
+        </div>
       ) : rows.length === 0 ? (
         <Card><CardBody>
           <p className="text-xs font-mono text-inky/60">
