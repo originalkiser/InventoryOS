@@ -149,7 +149,6 @@ export function OrdersV2Review() {
 
       // Days of supply at delivery uses the shop's configured delivery day.
       const deliveryDow = new Map(days.map((d) => [d.location_id, d.delivery_dow]))
-      const ruleByKey = new Map(inputs.map((i) => [`${i.location_id}|${i.product_id}`, i.rule]))
       // A configured per-shop schedule wins; otherwise fall back to the
       // RelaDyne weekday from the location list. Shared by the delivery
       // math below and the keep-fill runway check further down.
@@ -189,14 +188,15 @@ export function OrdersV2Review() {
       const openPoKeys = new Set(inputs.filter((i) => (i.pendingPoQty ?? 0) > 0).map((i) => `${i.location_id}|${i.product_id}`))
 
       const withDelivery = result.lines.map((l) => {
-        const rule = ruleByKey.get(`${l.location_id}|${l.product_id}`)
         const deliver = deliveryFor(l.location_id, draft.order_date)
-        const gallons = rule ? l.qty * gallonsPerUnit(rule) : 0
         const key = `${l.location_id}|${l.product_id}`
         let flags = l.flags
         if (runOutKeys.has(key) && !flags.includes('keepfill_will_run_out')) flags = [...flags, 'keepfill_will_run_out' as const]
         if (openPoKeys.has(key) && !flags.includes('covered_by_open_po')) flags = [...flags, 'covered_by_open_po' as const]
-        return { ...l, flags, dos_after_delivery: dosAfterDelivery(l.on_hand, l.daily_usage, gallons, draft.order_date, deliver) }
+        // DOS @ Delivery is the shop's EXISTING stock only, run down by usage
+        // over the lead time — never the new order's gallons, which aren't
+        // on the shelf until delivery day itself (see dosAfterDelivery).
+        return { ...l, flags, dos_after_delivery: dosAfterDelivery(l.on_hand, l.daily_usage, draft.order_date, deliver) }
       })
 
       await replaceLines(withDelivery)
