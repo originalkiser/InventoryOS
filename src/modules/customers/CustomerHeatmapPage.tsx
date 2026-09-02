@@ -25,7 +25,8 @@ import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
-import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal } from '@/components/ui'
+import { getCached, setCached } from '@/lib/idbCache'
+import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal, Toggle } from '@/components/ui'
 import { getMarketSolidColor } from '@/lib/marketColors'
 import { normalizeCityCase, shopNumberCityLabel } from '@/lib/shopLabels'
 
@@ -45,6 +46,12 @@ interface OrderRow {
   geocode_status: string | null
   final_price: number | null
   order_finalized_at: string | null
+  // Set when the order's a fleet/B2B account (see
+  // 20260916_droptop_order_expanded_fields) — fleet vehicles are commonly
+  // registered somewhere other than where they're actually driven, so they
+  // can read as noise on a customer-geography map. Null for an ordinary
+  // retail order.
+  fleet_company_id: string | null
 }
 
 // Address-level mode uses geocoded_lat/lng when a real Census match
@@ -305,6 +312,19 @@ export function CustomerHeatmapPage() {
     try { localStorage.setItem('heatmap:hide-no-boundary', hideNoBoundaryZips ? '1' : '0') } catch { /* ignore */ }
   }, [hideNoBoundaryZips])
 
+  // Fleet/B2B orders often read as geographic noise — the vehicle's
+  // registered address is frequently nowhere near where it's actually
+  // driven day to day. Off by default (nothing hidden unless asked for),
+  // persisted like the other view toggles. Forces full detail (see
+  // isRollupEligible below) since the nightly rollup table has no fleet
+  // awareness to filter by.
+  const [hideFleetOrders, setHideFleetOrders] = useState<boolean>(() => {
+    try { return localStorage.getItem('heatmap:hide-fleet') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:hide-fleet', hideFleetOrders ? '1' : '0') } catch { /* ignore */ }
+  }, [hideFleetOrders])
+
   // Address-level plotting (real geocoded lat/lng per order) vs the
   // default zip-centroid — an optional, more precise alternative, not a
   // replacement (see effectiveCoords()). Geocoding itself runs from Data
@@ -410,7 +430,7 @@ export function CustomerHeatmapPage() {
   // full-fetch behavior this page always used) and zip-centroid mode (the
   // rollup has no geocoded per-order coordinates for Address-Level mode).
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
-  const isRollupEligible = coordinateMode === 'zip' && range.end < todayStr
+  const isRollupEligible = coordinateMode === 'zip' && range.end < todayStr && !hideFleetOrders
   const showRollupPreview = isRollupEligible && !fullDetailRequested
   // Resets back to "try the rollup first" whenever the range/shop/filter
   // selection actually changes — a fresh selection deserves a fresh chance
@@ -473,10 +493,26 @@ export function CustomerHeatmapPage() {
     function applyFilters(q: any) {
       q = q.eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
       if (effectiveLocationIds) q = q.in('location_id', effectiveLocationIds)
+      if (hideFleetOrders) q = q.is('fleet_company_id', null)
       return q
     }
 
+    // Per-browser cache so leaving this page and coming back doesn't have
+    // to re-run the same 100+-page fetch — see idbCache.ts. 15 minutes is
+    // long enough to matter for a quick back-and-forth, short enough that
+    // new orders synced in the meantime show up again on the next real
+    // visit rather than reading as "the sync isn't working."
+    const CACHE_TTL_MS = 15 * 60 * 1000
+    const cacheKey = `heatmap-orders:${companyId}:${effectiveLocationKey}:${range.start}:${range.end}:${coordinateMode}:${hideFleetOrders ? 'nofleet' : 'all'}`
+
     async function run() {
+      const cached = await getCached<OrderRow[]>(cacheKey, CACHE_TTL_MS)
+      if (cached && !cancelled) {
+        setRows(cached)
+        setLoading(false)
+        return
+      }
+
       // Real progress instead of an indeterminate spinner: a cheap
       // COUNT-only request (head:true — no rows returned, the count is
       // computed server-side) using the exact same filters as the real
@@ -526,7 +562,7 @@ export function CustomerHeatmapPage() {
         for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
           if (cancelled) return
           let q = applyFilters(sb.schema('inventory').from('droptop_orders')
-            .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at'))
+            .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at, fleet_company_id'))
             .order('order_finalized_at', { ascending: true })
             .order('id', { ascending: true }).limit(PAGE)
           if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
@@ -551,6 +587,7 @@ export function CustomerHeatmapPage() {
       if (cancelled) return
       setRows(all)
       setLoading(false)
+      void setCached(cacheKey, all)
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
@@ -560,7 +597,12 @@ export function CustomerHeatmapPage() {
     // for the OLD selection stops writing to state as soon as this effect
     // re-runs for the new one, instead of finishing (or continuing to
     // burn through pages) before the new selection's own fetch can start.
-  }, [companyId, effectiveLocationKey, range.start, range.end, showRollupPreview]) // eslint-disable-line react-hooks/exhaustive-deps
+    // hideFleetOrders/coordinateMode are read inside (applyFilters/cache
+    // key) but wouldn't always change showRollupPreview's own value (e.g.
+    // toggling fleet while already in full-detail mode for an unrelated
+    // reason) — listed explicitly so a toggle always refetches instead of
+    // silently reusing the previous fetch's filter.
+  }, [companyId, effectiveLocationKey, range.start, range.end, showRollupPreview, hideFleetOrders, coordinateMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rollup fast path — one RPC call against the pre-aggregated table
   // instead of the 100+-page raw fetch above. `location_ids` per zip
@@ -1040,6 +1082,81 @@ export function CustomerHeatmapPage() {
     return byOrder
   }
 
+  // Copies a standalone snapshot image (a fresh Canvas render of the same
+  // cluster data/colors the live map shows — not a literal screenshot of
+  // the interactive Leaflet map, which would need a DOM-to-image library
+  // this project doesn't carry) plus a text summary (period, shop
+  // selection, and any Region/Market/AM/Owner filters in effect) to the
+  // clipboard as one clipboard item, so pasting into chat/email/a doc
+  // picks up whichever it supports.
+  async function copyHeatmap() {
+    const lines: string[] = [`Customer Heatmap — ${range.start} to ${range.end}`]
+    if (shopIds.length > 0 && shopIds.length <= 5) lines.push(`Shops: ${shopLabels.join(', ')}`)
+    else lines.push(shopIds.length ? `${shopIds.length} shops selected` : 'All shops')
+    if (filterOwners.length) lines.push(`Owner: ${filterOwners.join(', ')}`)
+    if (filterRegions.length) lines.push(`Region: ${filterRegions.join(', ')}`)
+    if (filterMarkets.length) lines.push(`Market: ${filterMarkets.join(', ')}`)
+    if (filterAMs.length) lines.push(`Area Manager: ${filterAMs.join(', ')}`)
+    if (hideFleetOrders) lines.push('Fleet orders hidden')
+
+    const W = 900, H = 620, PAD = 40
+    const canvas = document.createElement('canvas')
+    canvas.width = W; canvas.height = H
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { toast.error('Copy failed'); return }
+    ctx.fillStyle = '#F2F1E6' // cream
+    ctx.fillRect(0, 0, W, H)
+    ctx.fillStyle = '#002745' // navy
+    ctx.font = 'bold 20px Arial'
+    ctx.fillText(lines[0], PAD, 34)
+    ctx.font = '13px Arial'
+    ctx.fillStyle = '#4F7489' // inky
+    lines.slice(1).forEach((l, i) => ctx.fillText(l, PAD, 58 + i * 18))
+
+    const mapTop = 58 + Math.max(1, lines.length - 1) * 18 + 16
+    const mapBottom = H - 24
+    const mapH = mapBottom - mapTop
+    ctx.strokeStyle = 'rgba(0,39,69,0.15)'
+    ctx.strokeRect(PAD, mapTop, W - 2 * PAD, mapH)
+
+    if (clusters.length) {
+      const lats = clusters.map((c) => c.lat), lngs = clusters.map((c) => c.lng)
+      const minLat = Math.min(...lats), maxLat = Math.max(...lats)
+      const minLng = Math.min(...lngs), maxLng = Math.max(...lngs)
+      const latSpan = Math.max(0.05, maxLat - minLat), lngSpan = Math.max(0.05, maxLng - minLng)
+      const maxCount = Math.max(...clusters.map((c) => c.count))
+      // Largest first so a big zip's circle doesn't bury a small
+      // neighboring one entirely.
+      for (const c of [...clusters].sort((a, b) => b.count - a.count)) {
+        const x = PAD + ((c.lng - minLng) / lngSpan) * (W - 2 * PAD)
+        const y = mapTop + (1 - (c.lat - minLat) / latSpan) * mapH
+        const r = 3 + Math.sqrt(c.count / maxCount) * 20
+        ctx.globalAlpha = 0.75
+        ctx.fillStyle = gradientColor(percentileRank(c.count, densityBp.sorted))
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill()
+      }
+      ctx.globalAlpha = 1
+    } else {
+      ctx.fillStyle = '#4F7489'
+      ctx.font = '14px Arial'
+      ctx.fillText('No orders in this range', PAD + 12, mapTop + mapH / 2)
+    }
+
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+    const plain = lines.join('\n')
+    try {
+      if (blob && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'image/png': blob,
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+        })])
+      } else {
+        await navigator.clipboard.writeText(plain)
+      }
+      toast.success('Heatmap copied to clipboard')
+    } catch { toast.error('Copy failed') }
+  }
+
   async function exportVisits(format: 'csv' | 'xlsx') {
     if (!mappedRows.length) { toast.error('Nothing to export for this range'); return }
     setExporting(format)
@@ -1161,6 +1278,10 @@ export function CustomerHeatmapPage() {
           </p>
         </div>
         <div className="flex items-end gap-3 flex-wrap">
+          <Button size="sm" variant="secondary" onClick={() => void copyHeatmap()}
+            title="Copy a snapshot image + summary (period, shop/filter selection) to the clipboard">
+            Copy
+          </Button>
           <PeriodPicker period={period} onPeriodChange={setPeriod} customStart={customStart} customEnd={customEnd}
             onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
           {shopIds.length >= 2 && (
@@ -1210,6 +1331,13 @@ export function CustomerHeatmapPage() {
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
           <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
         </div>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Fleet Orders</span>
+          <span className="flex items-center gap-1.5 h-[30px]" title="Fleet/B2B orders often show up geographically wrong — the vehicle's registered address is frequently not where it's actually driven">
+            <Toggle checked={hideFleetOrders} onChange={setHideFleetOrders} size="sm" color="cyan" />
+            <span className="text-xs font-mono text-inky">{hideFleetOrders ? 'Hidden' : 'Shown'}</span>
+          </span>
+        </label>
       </div>
 
       {loading ? (
