@@ -15,6 +15,14 @@ import {
 
 const sb = () => supabase as any
 const PAGE = 1000
+const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+// Same convention as RecountLogicTab.tsx's "equivalent case types" on-hand
+// lookup: a trailing run of letters marks the case-type suffix (e.g. "D"
+// for drum, "BB" for bulk/tote) — stripping it gives the product family
+// both belong to, so 5W30D and 5W30BB both resolve to "5W30". Shared by
+// buildGenerationInputs (the actual combine) and fetchInputs (scoping the
+// product_usage query to just the families in play, below).
+const baseProductId = (id: string): string => id.replace(/[A-Z]+$/i, '') || id
 
 /** Page through a table so a big company isn't silently truncated at ~1000 rows. */
 async function fetchAll<T>(schema: string, table: string, select: string, companyId: string, extra?: (q: any) => any): Promise<T[]> {
@@ -397,18 +405,42 @@ export function useGenerationData() {
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const FETCH_STEPS = 14 // 13 fetchAll calls below + the trailing order-history-dates query
+    const FETCH_STEPS = 14 // configs + productMappings below, 10 more fetchAll calls, + the trailing order-history-dates query
     let stepsDone = 0
     const step = <T,>(p: Promise<T>): Promise<T> => p.then((r) => { onProgress?.(++stepsDone, FETCH_STEPS); return r })
 
-    const [configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, locRows, schedRows, calRows, history] = await Promise.all([
+    // configs + productMappings go first (both small — location_order_config
+    // is a few thousand rows company-wide, product_id_mappings a handful) so
+    // their product families can scope the product_usage fetch below, which
+    // is by FAR the largest table this reads: every product at every shop
+    // (hundreds of thousands of rows), not just the oil products Orders v2
+    // actually cares about, and pulling it in full was the real reason
+    // generation could take 15+ seconds. A family is a product id with its
+    // trailing case-type letters stripped (see baseProductId) — the same
+    // grouping buildGenerationInputs uses for the equivalent-case-types
+    // combine, so this filter can never exclude a row the combine would
+    // have used anyway. product_id_mappings' old ids are included too, since
+    // a usage row can still be keyed by a retired id whose own text doesn't
+    // share the current id's prefix.
+    const [configs, productMappings] = await Promise.all([
       step(fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
-      step(fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId)),
-      // By far the largest table this fetches (every product at every shop,
-      // not just oil) — usually the long pole in the whole generation run.
-      step(fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId)),
       step(fetchAll<any>('inventory', 'product_id_mappings', 'old_product_id, new_product_id', companyId)),
+    ])
+    const families = new Set<string>()
+    for (const c of configs) families.add(baseProductId(c.product_id))
+    for (const m of productMappings) if (m.old_product_id) families.add(baseProductId(m.old_product_id))
+    // ilike's own wildcard characters need escaping if a product id ever
+    // legitimately contains one (unlikely, but silently matching the wrong
+    // rows would be worse than the escaping itself) — a backslash needs
+    // escaping first so it doesn't double-escape the chars after it.
+    const escapeIlike = (s: string) => s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+    const familyList = [...families].filter(Boolean)
+
+    const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, locRows, schedRows, calRows, history] = await Promise.all([
+      step(fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId)),
+      step(fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId,
+        familyList.length ? (q: any) => q.or(familyList.map((f) => `product_id.ilike.${escapeIlike(f)}%`).join(',')) : undefined)),
       // Cost + package size come from here, not from ov2_product_rules (that
       // table has no editing UI and is empty in practice) — see
       // resolveVendorPart below.
@@ -508,12 +540,6 @@ export function buildGenerationInputs(
   // all. Resolve each usage row through product_id_mappings first and sum
   // anything landing on the same product — same treatment Location Lookup's
   // order-config table gets.
-  const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
-  // Same convention as RecountLogicTab.tsx's "equivalent case types" on-hand
-  // lookup: a trailing run of letters marks the case-type suffix (e.g. "D"
-  // for drum, "BB" for bulk/tote) — stripping it gives the product family
-  // both belong to, so 5W30D and 5W30BB both resolve to "5W30".
-  const baseProductId = (id: string): string => id.replace(/[A-Z]+$/i, '') || id
   const oldToNew = new Map<string, string>()
   for (const m of productMappings) {
     if (m.old_product_id && m.new_product_id) oldToNew.set(pkey(m.old_product_id), String(m.new_product_id))
