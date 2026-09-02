@@ -269,7 +269,10 @@ export function ProductUsageTab() {
       if (error) { failed = true; break }
       const batch = (rows ?? []) as ProductUsage[]
       for (const r of batch) all.push({ ...r, category: (String(r.category ?? '').trim() || null) })
-      if (batch.length < PAGE) break
+      // Exit only on a genuinely empty page — the project's API "Max Rows"
+      // setting silently caps every response at 1000 regardless of
+      // .limit(PAGE), so a full page here doesn't mean "last page."
+      if (batch.length === 0) break
       cursor = batch[batch.length - 1].id
     }
     if (failed) toast.error('Product usage load failed')
@@ -307,7 +310,8 @@ export function ProductUsageTab() {
         if (r.capacity == null) continue
         m.set(`${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}`, Number(r.capacity))
       }
-      if (batch.length < PAGE) break
+      // Exit only on a genuinely empty page — see loadRpc() above for why.
+      if (batch.length === 0) break
       from += PAGE
     }
     setCapacityMap(m)
@@ -335,7 +339,8 @@ export function ProductUsageTab() {
       if (error) { toast.error('Unable to load Vendor Parts for the vendor-part-number import — ' + error.message); break }
       const batch = (rows ?? []) as any[]
       all.push(...batch)
-      if (batch.length < PAGE) break
+      // Exit only on a genuinely empty page — see loadRpc() above for why.
+      if (batch.length === 0) break
       from += PAGE
     }
     setVendorParts(all)

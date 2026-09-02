@@ -313,7 +313,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         if (error) break
         const batch = data ?? []
         out.push(...batch)
-        if (batch.length < PAGE) break
+        // Exit only on a genuinely empty page, not "fewer than requested" —
+        // the project's API "Max Rows" setting silently caps every response
+        // at 1000 regardless of PAGE, so a full 1000-row page can still mean
+        // there's more to fetch. See CustomerHeatmapPage.tsx/DroptopOrdersPage.tsx
+        // for the incident this pattern caused elsewhere.
+        if (batch.length === 0) break
         from += PAGE
       }
       return out

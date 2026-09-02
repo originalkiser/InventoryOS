@@ -29,7 +29,10 @@ async function fetchAllRows(factory: (from: number, to: number) => any): Promise
     if (error) break
     const batch = data ?? []
     out.push(...batch)
-    if (batch.length < PAGE) break
+    // Exit only on a genuinely empty page — the project's API "Max Rows"
+    // setting silently caps every response at 1000 regardless of the
+    // requested range, so a full page here doesn't mean "last page."
+    if (batch.length === 0) break
     from += PAGE
   }
   return out

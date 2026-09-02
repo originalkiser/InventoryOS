@@ -97,7 +97,10 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       if (error) { toast.error(`Failed to load ${tableName}`); setLoading(false); return }
       const batch = (rows ?? []) as any[]
       all.push(...batch)
-      if (batch.length < PAGE) break
+      // Exit only on a genuinely empty page — the project's API "Max Rows"
+      // setting silently caps every response at 1000 regardless of
+      // .limit(PAGE), so a full page here doesn't mean "last page."
+      if (batch.length === 0) break
       const last = batch[batch.length - 1]
       // Fallback sentinel for a null created_at (shouldn't happen — every
       // config table carries it as an audit column — but a well-defined
