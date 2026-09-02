@@ -207,6 +207,20 @@ export function CustomerHeatmapPage() {
   // an accurate progress bar. `rows`/the map only update ONCE, when the
   // full load finishes — this state exists purely to drive the bar.
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
+  // Rollup fast-path — inventory.heatmap_zip_rollups is a nightly-refreshed
+  // pre-aggregation, so a range entirely in the past can skip the full
+  // raw-order scan/pagination above almost entirely: one small RPC call
+  // instead of 100+ paginated pages. Not used for a range touching today
+  // (the rollup can be up to ~24h stale) or Address-Level mode (the rollup
+  // has no geocoded coordinates, only zip centroids). `fullDetailRequested`
+  // is the escape hatch — order-level actions (a zip's actual orders,
+  // exports, the true "Not On Map" drill-down) all need real rows, so
+  // those trigger the exact same full fetch this page always used to run
+  // unconditionally, just deferred until actually asked for.
+  const [rollupClusters, setRollupClusters] = useState<ZipCluster[] | null>(null)
+  const [rollupLoading, setRollupLoading] = useState(false)
+  const [rollupTotals, setRollupTotals] = useState<{ mapped: number; unmapped: number | null } | null>(null)
+  const [fullDetailRequested, setFullDetailRequested] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedZip, setSelectedZip] = useState<string | null>(null)
   const [orderModal, setOrderModal] = useState<{ title: string; rows: OrderRow[] } | null>(null)
@@ -297,6 +311,52 @@ export function CustomerHeatmapPage() {
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
   const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
 
+  // Region/Market/AM pin filters now also scope the heatmap itself (zip
+  // clusters, stats cards, Visits by Zip), not just which pins draw — an
+  // order counts toward the heatmap only if its shop matches the active
+  // filters. null = no restriction (every loaded order counts), matching
+  // how shopPins itself used to filter before this was unified. Moved
+  // above the fetch effect (was declared after it) so the fetch itself can
+  // scope its SERVER query by this too, not just client-side post-filter
+  // whatever a full unscoped pull already returned.
+  const allowedLocationIds = useMemo(() => {
+    if (!filterRegions.length && !filterMarkets.length && !filterAMs.length) return null
+    const ids = new Set<string>()
+    for (const l of loc.locations) {
+      if (filterRegions.length && !filterRegions.includes(l.region ?? '')) continue
+      if (filterMarkets.length && !filterMarkets.includes(loc.fieldValue(l.id, 'market'))) continue
+      if (filterAMs.length && !filterAMs.includes(loc.fieldValue(l.id, 'area_manager'))) continue
+      ids.add(l.id)
+    }
+    return ids
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.locations, filterRegions, filterMarkets, filterAMs])
+
+  // What to actually send the server: the explicit Shop(s) picker narrows
+  // to exactly those shops (intersected with Region/Market/AM if both are
+  // set at once); otherwise Region/Market/AM alone narrows; otherwise no
+  // restriction. A stable, sorted, joined string (not the array/Set
+  // itself) so effects can depend on its VALUE without re-firing on every
+  // render just because a new array/Set object was allocated.
+  const effectiveLocationIds = useMemo(() => {
+    if (shopIds.length) return allowedLocationIds === null ? shopIds : shopIds.filter((id) => allowedLocationIds.has(id))
+    return allowedLocationIds === null ? null : [...allowedLocationIds]
+  }, [shopIds, allowedLocationIds])
+  const effectiveLocationKey = effectiveLocationIds === null ? '' : [...effectiveLocationIds].sort().join(',')
+
+  // Eligible for the rollup fast-path: entirely in the past (the rollup can
+  // be up to ~24h stale, so a range touching today falls back to the exact
+  // full-fetch behavior this page always used) and zip-centroid mode (the
+  // rollup has no geocoded per-order coordinates for Address-Level mode).
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const isRollupEligible = coordinateMode === 'zip' && range.end < todayStr
+  const showRollupPreview = isRollupEligible && !fullDetailRequested
+  // Resets back to "try the rollup first" whenever the range/shop/filter
+  // selection actually changes — a fresh selection deserves a fresh chance
+  // at the fast path, not to inherit "give me full detail" from whatever
+  // was previously selected.
+  useEffect(() => { setFullDetailRequested(false) }, [range.start, range.end, effectiveLocationKey, coordinateMode])
+
   // Company-wide market list (not just the currently-visible shops) so a
   // market's color-by-index stays the same regardless of what's filtered —
   // matching Map & Routes' own allMarkets, which is what makes the colors
@@ -327,6 +387,13 @@ export function CustomerHeatmapPage() {
 
   useEffect(() => {
     if (!companyId) return
+    // Rollup preview mode skips this fetch entirely — no reason to pull
+    // every raw order just to throw most of the work away when a small
+    // pre-aggregated table already has the answer for this range. `rows`
+    // stays empty (order-level features naturally read as "not loaded
+    // yet" until Load Full Detail is used) and the ordinary blocking
+    // spinner/progress-bar UI doesn't show either.
+    if (showRollupPreview) { setRows([]); setLoading(false); setError(null); return }
     let cancelled = false
     setLoading(true)
     setLoadProgress({ loaded: 0, total: null })
@@ -338,7 +405,7 @@ export function CustomerHeatmapPage() {
 
     function applyFilters(q: any) {
       q = q.eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
-      if (shopIds.length) q = q.in('location_id', shopIds)
+      if (effectiveLocationIds) q = q.in('location_id', effectiveLocationIds)
       return q
     }
 
@@ -420,25 +487,77 @@ export function CustomerHeatmapPage() {
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
-  }, [companyId, shopIds.join(','), range.start, range.end]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Restarts cleanly on ANY of these — including a Region/Market/AM/Shop
+    // change while a previous pull is still in flight, per explicit
+    // request: the cleanup above sets `cancelled`, so an in-progress fetch
+    // for the OLD selection stops writing to state as soon as this effect
+    // re-runs for the new one, instead of finishing (or continuing to
+    // burn through pages) before the new selection's own fetch can start.
+  }, [companyId, effectiveLocationKey, range.start, range.end, showRollupPreview]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Region/Market/AM pin filters now also scope the heatmap itself (zip
-  // clusters, stats cards, Visits by Zip), not just which pins draw — an
-  // order counts toward the heatmap only if its shop matches the active
-  // filters. null = no restriction (every loaded order counts), matching
-  // how shopPins itself used to filter before this was unified.
-  const allowedLocationIds = useMemo(() => {
-    if (!filterRegions.length && !filterMarkets.length && !filterAMs.length) return null
-    const ids = new Set<string>()
-    for (const l of loc.locations) {
-      if (filterRegions.length && !filterRegions.includes(l.region ?? '')) continue
-      if (filterMarkets.length && !filterMarkets.includes(loc.fieldValue(l.id, 'market'))) continue
-      if (filterAMs.length && !filterAMs.includes(loc.fieldValue(l.id, 'area_manager'))) continue
-      ids.add(l.id)
+  // Rollup fast path — one RPC call against the pre-aggregated table
+  // instead of the 100+-page raw fetch above. `location_ids` per zip
+  // (returned by the RPC) doubles as what "Shared Only" matching needs
+  // downstream (see the `clusters` useMemo), so this drops straight into
+  // the exact same ZipCluster pipeline the raw path already feeds.
+  useEffect(() => {
+    if (!companyId || !showRollupPreview) { setRollupClusters(null); setRollupTotals(null); return }
+    let cancelled = false
+    setRollupLoading(true)
+    setError(null)
+    setSelectedZip(null)
+    const sb = supabase as any
+    const locIds = effectiveLocationIds
+
+    async function run() {
+      const startIso = `${range.start}T00:00:00.000Z`
+      const endIso = `${range.end}T23:59:59.999Z`
+      let unmappedQ = sb.schema('inventory').from('droptop_orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+        .or('zip.is.null,zip.eq.')
+      if (locIds) unmappedQ = unmappedQ.in('location_id', locIds)
+
+      const [{ data: rpcData, error: rpcErr }, { count: unmappedCount, error: unmappedErr }] = await Promise.all([
+        sb.rpc('get_heatmap_zip_rollup_clusters', { p_start: range.start, p_end: range.end, p_location_ids: locIds }),
+        unmappedQ,
+      ])
+      if (cancelled) return
+      if (rpcErr) {
+        // Fast path failed (migration not applied yet, a transient error,
+        // whatever) — fall back to full detail automatically instead of a
+        // dead end. The raw-fetch effect above picks this up the moment
+        // fullDetailRequested flips.
+        setError(`Fast preview unavailable (${rpcErr.message}) — loading full detail instead`)
+        setFullDetailRequested(true)
+        setRollupLoading(false)
+        return
+      }
+      const built: ZipCluster[] = ((rpcData ?? []) as any[]).map((r) => ({
+        zip: r.zip,
+        city: normalizeCityCase(r.city ?? ''),
+        region: r.region ?? '',
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        count: Number(r.order_count),
+        locationIds: new Set((r.location_ids ?? []) as string[]),
+      }))
+      setRollupClusters(built)
+      setRollupTotals({
+        mapped: built.reduce((sum, c) => sum + c.count, 0),
+        unmapped: unmappedErr ? null : (unmappedCount ?? null),
+      })
+      setRollupLoading(false)
     }
-    return ids
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loc.locations, filterRegions, filterMarkets, filterAMs])
+    run().catch((e) => {
+      if (cancelled) return
+      setError(e instanceof Error ? e.message : 'Fast preview failed — loading full detail instead')
+      setFullDetailRequested(true)
+      setRollupLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [companyId, effectiveLocationKey, range.start, range.end, showRollupPreview]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredRows = useMemo(
     () => allowedLocationIds === null ? rows : rows.filter((r) => r.location_id && allowedLocationIds.has(r.location_id)),
@@ -466,6 +585,13 @@ export function CustomerHeatmapPage() {
   // shifts to reflect where within the zip customers actually are) without
   // needing a parallel selection model.
   const allClusters = useMemo<ZipCluster[]>(() => {
+    // Rollup fast path — feeds the exact same downstream pipeline
+    // (matchMode filtering, density buckets, map rendering, the on-screen
+    // table) that the raw path below builds, just sourced from the
+    // pre-aggregated table instead of individual orders. Falls through to
+    // the real computation the moment showRollupPreview turns off (Load
+    // Full Detail clicked, or the range/mode became ineligible).
+    if (showRollupPreview) return rollupClusters ?? []
     interface Accum { zip: string; city: string; region: string; count: number; locationIds: Set<string>; centroidLat: number; centroidLng: number; geoLatSum: number; geoLngSum: number; geoCount: number }
     const byZip = new Map<string, Accum>()
     for (const r of mappedRows) {
@@ -489,7 +615,7 @@ export function CustomerHeatmapPage() {
       lat: a.geoCount > 0 ? a.geoLatSum / a.geoCount : a.centroidLat,
       lng: a.geoCount > 0 ? a.geoLngSum / a.geoCount : a.centroidLng,
     }))
-  }, [mappedRows, coordinateMode])
+  }, [mappedRows, coordinateMode, showRollupPreview, rollupClusters])
 
   // "Shared" = only zips with a customer at EVERY selected shop.
   // "All" (default) = zips from ANY selected shop (plain union — already
@@ -597,6 +723,12 @@ export function CustomerHeatmapPage() {
   const zoomRef = useRef(zoom)
   useEffect(() => { zoomRef.current = zoom }, [zoom])
   const ordersForZipRef = useRef<(zip: string) => OrderRow[]>(() => [])
+  // Lets the choropleth's stable (bind-once) dblclick handler know whether
+  // a real order set even exists to show — in rollup preview there are no
+  // raw rows yet, so double-clicking a zip should offer Load Full Detail
+  // instead of opening an empty modal.
+  const showRollupPreviewRef = useRef(showRollupPreview)
+  useEffect(() => { showRollupPreviewRef.current = showRollupPreview }, [showRollupPreview])
 
   const choroplethLayerRef = useRef<L.GeoJSON | null>(null)
   // react-leaflet's <GeoJSON> only reliably parses `data` at MOUNT time — an
@@ -650,6 +782,7 @@ export function CustomerHeatmapPage() {
     })
     layer.on('dblclick', (e: L.LeafletMouseEvent) => {
       L.DomEvent.stopPropagation(e)
+      if (showRollupPreviewRef.current) { setFullDetailRequested(true); return }
       const c = clustersByZipRef.current.get(zip)
       setOrderModal({ title: `Orders — ${zip}${c?.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZipRef.current(zip) })
     })
@@ -949,6 +1082,33 @@ export function CustomerHeatmapPage() {
         <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{error}</p>
       )}
 
+      {/* Region/Market/AM/Shop(s) — deliberately OUTSIDE the loading/empty/
+          content branches below so they're usable WHILE a load (rollup or
+          full) is still in progress, not just after it finishes. Per
+          explicit request: narrowing the selection here restarts the pull
+          on the new selection instead of waiting out whatever was already
+          running — both fetch effects above depend on effectiveLocationKey,
+          so changing these cancels the in-flight fetch for the old
+          selection and starts a fresh, narrower one immediately. */}
+      <div className="flex items-end gap-2 flex-wrap">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
+          <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Market</span>
+          <MultiSelectDropdown options={marketOptions} selected={filterMarkets} onChange={setFilterMarkets} placeholder="All Markets" countNoun="markets" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
+          <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
+          <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
+        </div>
+      </div>
+
       {loading ? (
         <div className="py-16 flex flex-col items-center gap-3">
           <div className="w-full max-w-md h-2 bg-navy/10 rounded-full overflow-hidden">
@@ -969,7 +1129,12 @@ export function CustomerHeatmapPage() {
                 : 'Loading orders…'}
           </p>
         </div>
-      ) : rows.length === 0 ? (
+      ) : showRollupPreview && rollupClusters === null ? (
+        <div className="py-16 flex flex-col items-center gap-3">
+          <div className="h-2 w-full max-w-md rounded-full bg-sky/40 animate-pulse" />
+          <p className="text-[11px] font-mono text-inky/70">Loading fast preview from cached data…</p>
+        </div>
+      ) : !showRollupPreview && rows.length === 0 ? (
         <Card><CardBody>
           <p className="text-xs font-mono text-inky/60">
             No orders for this range{shopIds.length ? ' at these shop(s)' : ''} yet. Run the Droptop — Orders sync
@@ -978,29 +1143,10 @@ export function CustomerHeatmapPage() {
         </CardBody></Card>
       ) : (
         <>
-          {/* Region/Market/AM/Labels — now scope the heatmap itself, not
-              just the pins, so kept visible whenever there's raw data to
-              filter (even if the current combination zeroes out the
-              result) rather than nested inside the "has clusters" branch,
-              which would otherwise strand the user with no way to widen
-              a filter that produced zero matches. */}
+          {/* View toggles — Region/Market/AM/Shop(s) moved above (see the
+              comment there for why); these stay here since they're only
+              meaningful once there's actually a map to show. */}
           <div className="flex items-end gap-2 flex-wrap">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
-              <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Market</span>
-              <MultiSelectDropdown options={marketOptions} selected={filterMarkets} onChange={setFilterMarkets} placeholder="All Markets" countNoun="markets" searchable />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
-              <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
-              <MultiSelectDropdown options={shopOptions} selected={shopLabels} onChange={setShopLabels} placeholder="All Shops" countNoun="shops" searchable />
-            </div>
             <button onClick={() => setShowPins((v) => !v)}
               className={['px-2 py-1.5 rounded border text-[10px] font-mono uppercase tracking-wide transition-colors',
                 showPins ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:bg-navy/10'].join(' ')}
@@ -1046,7 +1192,20 @@ export function CustomerHeatmapPage() {
             )}
           </div>
 
-          {filteredRows.length === 0 ? (
+          {showRollupPreview && (
+            <p className="flex items-center gap-2 flex-wrap text-[11px] font-mono text-sky border border-sky/30 bg-sky/5 rounded px-2 py-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-sky" />
+              Fast preview from cached data (updated nightly — up to ~24h behind). Individual orders, export, and the
+              exact "Not On Map" list need full detail.
+              <Button size="sm" variant="secondary" loading={rollupLoading} onClick={() => setFullDetailRequested(true)}>
+                Load Full Detail
+              </Button>
+            </p>
+          )}
+
+          {(showRollupPreview
+            ? (rollupTotals?.mapped ?? 0) + (rollupTotals?.unmapped ?? 0) === 0
+            : filteredRows.length === 0) ? (
             <Card><CardBody>
               <p className="text-xs font-mono text-inky/60">
                 No orders match the selected Region/Market/AM filter for this range. Clear a filter above to widen it.
@@ -1056,10 +1215,12 @@ export function CustomerHeatmapPage() {
             <>
               <div className="flex gap-3 flex-wrap">
             <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
-              onClick={() => setOrderModal({ title: `Orders (${filteredRows.length})`, rows: filteredRows })}>
+              onClick={() => showRollupPreview ? setFullDetailRequested(true) : setOrderModal({ title: `Orders (${filteredRows.length})`, rows: filteredRows })}>
               <CardBody className="py-3">
                 <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Orders</p>
-                <p className="text-lg font-heading font-bold text-navy">{filteredRows.length.toLocaleString()}</p>
+                <p className="text-lg font-heading font-bold text-navy">
+                  {(showRollupPreview ? (rollupTotals?.mapped ?? 0) + (rollupTotals?.unmapped ?? 0) : filteredRows.length).toLocaleString()}
+                </p>
               </CardBody>
             </Card>
             <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
@@ -1077,13 +1238,15 @@ export function CustomerHeatmapPage() {
                 </CardBody>
               </Card>
             )}
-            {unmappedRows.length > 0 && (
+            {(showRollupPreview ? (rollupTotals?.unmapped ?? 0) > 0 : unmappedRows.length > 0) && (
               <Card className="flex-1 min-w-[140px] cursor-pointer hover:border-sky transition-colors"
-                onClick={() => setOrderModal({ title: `Not On Map (${unmappedRows.length})`, rows: unmappedRows })}>
+                onClick={() => showRollupPreview ? setFullDetailRequested(true) : setOrderModal({ title: `Not On Map (${unmappedRows.length})`, rows: unmappedRows })}>
                 <CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Not On Map</p>
-                  <p className="text-lg font-heading font-bold text-[#E67E22]">{unmappedRows.length.toLocaleString()}</p>
-                  <p className="text-[10px] font-mono text-inky/50">no zip match — click to see which</p>
+                  <p className="text-lg font-heading font-bold text-[#E67E22]">
+                    {showRollupPreview ? '~' : ''}{(showRollupPreview ? (rollupTotals?.unmapped ?? 0) : unmappedRows.length).toLocaleString()}
+                  </p>
+                  <p className="text-[10px] font-mono text-inky/50">{showRollupPreview ? 'approx. — load full detail to see which' : 'no zip match — click to see which'}</p>
                 </CardBody>
               </Card>
             )}
@@ -1151,6 +1314,7 @@ export function CustomerHeatmapPage() {
                       click: (e: L.LeafletMouseEvent) => { L.DomEvent.stopPropagation(e); setSelectedZip((prev) => (prev === c.zip ? null : c.zip)) },
                       dblclick: (e: L.LeafletMouseEvent) => {
                         L.DomEvent.stopPropagation(e)
+                        if (showRollupPreview) { setFullDetailRequested(true); return }
                         setOrderModal({ title: `Orders — ${c.zip}${c.city ? ` (${c.city}, ${c.region})` : ''}`, rows: ordersForZip(c.zip) })
                       },
                     }
@@ -1220,15 +1384,21 @@ export function CustomerHeatmapPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
                         {(['total', 'by-shop'] as const).map((m) => (
-                          <button key={m} onClick={() => setZipExportMode(m)}
+                          <button key={m} onClick={() => m === 'by-shop' && showRollupPreview ? setFullDetailRequested(true) : setZipExportMode(m)}
                             className={['px-2 py-1 uppercase tracking-wide transition-colors', zipExportMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
-                            title={m === 'total' ? 'One row per zip, totaled across shops' : 'One row per shop + zip combination'}>
+                            title={m === 'total' ? 'One row per zip, totaled across shops' : showRollupPreview ? 'Needs full detail — the fast preview only has zip totals, not the per-shop split' : 'One row per shop + zip combination'}>
                             {m === 'total' ? 'Total by Zip' : 'By Shop'}
                           </button>
                         ))}
                       </div>
-                      <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportVisits('csv')}>Export CSV</Button>
-                      <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportVisits('xlsx')}>Export Excel</Button>
+                      <Button size="sm" variant="secondary" loading={exporting === 'csv'}
+                        onClick={() => showRollupPreview ? setFullDetailRequested(true) : exportVisits('csv')}
+                        title={showRollupPreview ? 'Needs full detail — click to load it, then export' : undefined}>
+                        {showRollupPreview ? 'Load Full Detail to Export' : 'Export CSV'}
+                      </Button>
+                      {!showRollupPreview && (
+                        <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportVisits('xlsx')}>Export Excel</Button>
+                      )}
                     </div>
                   </div>
                   <Input value={zipSearch} onChange={(e) => setZipSearch(e.target.value)} placeholder="Search zip, city, or region…" className="max-w-xs" />

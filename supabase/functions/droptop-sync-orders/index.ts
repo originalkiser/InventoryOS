@@ -484,19 +484,45 @@ Deno.serve(async (req) => {
       // running them one after another, which matters now that every
       // location invocation is doing meaningfully more write work than
       // when this sync only wrote order headers.
+      //
+      // A real backfill hit "canceling statement due to statement timeout"
+      // on these three inserts at the header loop's BATCH=500 — this table
+      // set carries meaningfully more data per row than an order header
+      // (droptop_order_services alone stores a nested products[] JSONB
+      // array per row). Smaller batches reduce how much work one statement
+      // has to do; a bounded retry absorbs a transient timeout without
+      // losing that whole batch's rows forever. Retrying is safe here
+      // specifically because a canceled statement fully rolls back
+      // (nothing partially committed) — these tables have no unique
+      // constraint besides their own generated `id`, so re-running the
+      // exact same insert can never create duplicates, only fresh ids for
+      // rows that never actually landed the first time.
+      const CHILD_BATCH = 200
+      async function insertWithRetry(table: string, rowsToInsert: Record<string, unknown>[]): Promise<string | null> {
+        if (!rowsToInsert.length) return null
+        let lastErr: string | null = null
+        for (let attempt = 0; attempt <= 2; attempt++) {
+          const { error } = await (admin as any).schema('inventory').from(table).insert(rowsToInsert)
+          if (!error) return null
+          lastErr = error.message
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+        }
+        return lastErr
+      }
+
       const maxLen = Math.max(packageRows.length, productRows.length, serviceRows.length)
-      for (let i = 0; i < maxLen; i += BATCH) {
-        const pkgSlice = packageRows.slice(i, i + BATCH)
-        const prodSlice = productRows.slice(i, i + BATCH)
-        const svcSlice = serviceRows.slice(i, i + BATCH)
-        const [pkgRes, prodRes, svcRes] = await Promise.all([
-          pkgSlice.length ? (admin as any).schema('inventory').from('droptop_order_packages').insert(pkgSlice) : Promise.resolve({ error: null }),
-          prodSlice.length ? (admin as any).schema('inventory').from('droptop_order_products').insert(prodSlice) : Promise.resolve({ error: null }),
-          svcSlice.length ? (admin as any).schema('inventory').from('droptop_order_services').insert(svcSlice) : Promise.resolve({ error: null }),
+      for (let i = 0; i < maxLen; i += CHILD_BATCH) {
+        const pkgSlice = packageRows.slice(i, i + CHILD_BATCH)
+        const prodSlice = productRows.slice(i, i + CHILD_BATCH)
+        const svcSlice = serviceRows.slice(i, i + CHILD_BATCH)
+        const [pkgErr, prodErr, svcErr] = await Promise.all([
+          insertWithRetry('droptop_order_packages', pkgSlice),
+          insertWithRetry('droptop_order_products', prodSlice),
+          insertWithRetry('droptop_order_services', svcSlice),
         ])
-        if (pkgRes.error) warnings.push(`Package insert batch ${i}: ${pkgRes.error.message}`); else packagesWritten += pkgSlice.length
-        if (prodRes.error) warnings.push(`Product insert batch ${i}: ${prodRes.error.message}`); else productsWritten += prodSlice.length
-        if (svcRes.error) warnings.push(`Service insert batch ${i}: ${svcRes.error.message}`); else servicesWritten += svcSlice.length
+        if (pkgErr) warnings.push(`Package insert batch ${i}: ${pkgErr}`); else packagesWritten += pkgSlice.length
+        if (prodErr) warnings.push(`Product insert batch ${i}: ${prodErr}`); else productsWritten += prodSlice.length
+        if (svcErr) warnings.push(`Service insert batch ${i}: ${svcErr}`); else servicesWritten += svcSlice.length
       }
     }
 
