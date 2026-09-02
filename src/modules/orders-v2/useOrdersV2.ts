@@ -405,7 +405,7 @@ export function useGenerationData() {
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const FETCH_STEPS = 14 // configs + productMappings below, 10 more fetchAll calls, + the trailing order-history-dates query
+    const FETCH_STEPS = 15 // 3 fast lookups fetched first (configs, productMappings, openPurchaseOrders), 11 more fetchAll calls, + the trailing order-history-dates query
     let stepsDone = 0
     const step = <T,>(p: Promise<T>): Promise<T> => p.then((r) => { onProgress?.(++stepsDone, FETCH_STEPS); return r })
 
@@ -422,10 +422,19 @@ export function useGenerationData() {
     // have used anyway. product_id_mappings' old ids are included too, since
     // a usage row can still be keyed by a retired id whose own text doesn't
     // share the current id's prefix.
-    const [configs, productMappings] = await Promise.all([
+    const [configs, productMappings, openPurchaseOrders] = await Promise.all([
       step(fetchAll<OrderConfigRow>('inventory', 'location_order_config', 'location_id, product_id, vendor_id, capacity, order_limit, metadata', companyId,
         vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'product_id_mappings', 'old_product_id, new_product_id', companyId)),
+      // Still-open POs (not closed/cancelled) — filtered server-side since
+      // most POs in practice ARE closed and there's no reason to pull them
+      // just to discard them. Flags a line as covered_by_open_po rather than
+      // silently adjusting anything; see buildGenerationInputs. Fetched here,
+      // ahead of its own items below, for the same reason as configs/
+      // productMappings — small and fast, and its ids scope a much bigger
+      // fetch that would otherwise pull every item ever, open or not.
+      step(fetchAll<PurchaseOrderRow>('inventory', 'droptop_purchase_orders', 'id, location_id, po_status', companyId,
+        (q: any) => q.in('po_status', ['draft', 'sent', 'accepted']))),
     ])
     const families = new Set<string>()
     for (const c of configs) families.add(baseProductId(c.product_id))
@@ -436,8 +445,9 @@ export function useGenerationData() {
     // escaping first so it doesn't double-escape the chars after it.
     const escapeIlike = (s: string) => s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
     const familyList = [...families].filter(Boolean)
+    const openPoIds = openPurchaseOrders.map((po) => po.id)
 
-    const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, locRows, schedRows, calRows, history] = await Promise.all([
+    const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, poItems, locRows, schedRows, calRows, history] = await Promise.all([
       step(fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId)),
       step(fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId,
         familyList.length ? (q: any) => q.or(familyList.map((f) => `product_id.ilike.${escapeIlike(f)}%`).join(',')) : undefined)),
@@ -454,13 +464,16 @@ export function useGenerationData() {
       // Keep-fill/VMI products use the tank monitor's own on-hand reading
       // instead of Droptop's product_usage — see buildGenerationInputs.
       step(fetchAll<TankOnHandRow>('inventory', 'tank_monitors', 'location_id, product_id, on_hand', companyId)),
-      // Still-open POs (not closed/cancelled) — filtered server-side since
-      // most POs in practice ARE closed and there's no reason to pull them
-      // just to discard them. Flags a line as covered_by_open_po rather than
-      // silently adjusting anything; see buildGenerationInputs.
-      step(fetchAll<PurchaseOrderRow>('inventory', 'droptop_purchase_orders', 'id, location_id, po_status', companyId,
-        (q: any) => q.in('po_status', ['draft', 'sent', 'accepted']))),
-      step(fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId)),
+      // Scoped to items on a still-open PO — unfiltered this was every line
+      // item ever synced from Droptop regardless of PO status (6,189 rows for
+      // 31 open POs at last check), most of it for closed/cancelled orders
+      // that pendingPoMap in buildGenerationInputs was just going to discard
+      // anyway. An empty openPoIds means literally nothing is outstanding
+      // anywhere, so skip the query rather than send `.in('...', [])`.
+      openPoIds.length
+        ? step(fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId,
+            (q: any) => q.in('purchase_order_id', openPoIds)))
+        : step(Promise.resolve([] as PoItemRow[])),
       step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId)),
       step(fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
@@ -820,13 +833,19 @@ export function buildGenerationInputs(
       return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
     const fam = `${b.location_id}|${pkey(baseProductId(b.product_id))}`
-    const siblings = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== b.product_id)
+    // A sibling with zero on-hand contributes nothing to the total — showing
+    // it under "Combining On Hands" would just be noise implying a combine
+    // happened when it didn't. Filtered out entirely, not just zeroed.
+    const siblings = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== b.product_id && s.on_hand > 0)
     if (siblings.length === 0) {
       return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
     const equivalent_products = siblings.map((s) => ({ product_id: s.product_id, on_hand: s.on_hand }))
     const combinedOnHand = b.on_hand + siblings.reduce((sum, s) => sum + s.on_hand, 0)
-    const usageSiblings = siblings.filter((s) => s.daily_usage != null)
+    // Same treatment for usage — a sibling recording zero usage of its own
+    // adds nothing real, so it's excluded here too rather than folded in as
+    // a no-op.
+    const usageSiblings = siblings.filter((s) => s.daily_usage != null && s.daily_usage > 0)
     const combinedUsage = b.daily_usage != null
       ? Number(b.daily_usage) + usageSiblings.reduce((sum, s) => sum + Number(s.daily_usage), 0)
       : b.daily_usage

@@ -50,6 +50,28 @@ describe('buildGenerationInputs — equivalent case types', () => {
     expect(bb.daily_usage).toBe(20) // usage unchanged — sibling has none to add
   })
 
+  it('excludes a sibling entirely when it has zero on-hand — nothing to combine', () => {
+    const configs = [config('5W30BB'), config('5W30D')]
+    const usageRows = [usage('5W30BB', 100, 20), usage('5W30D', 0, 5)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+
+    const bb = inputs.find((i) => i.product_id === '5W30BB')!
+    expect(bb.on_hand).toBe(100) // unchanged — zero-on-hand sibling contributes nothing
+    expect(bb.daily_usage).toBe(20) // its usage isn't folded in either
+    expect(bb.own_on_hand).toBeUndefined() // no combine happened at all, not just a zero one
+    expect(bb.equivalent_products).toBeUndefined()
+  })
+
+  it('ignores a sibling\'s zero usage figure while still combining its on-hand', () => {
+    const configs = [config('5W30BB'), config('5W30D')]
+    const usageRows = [usage('5W30BB', 100, 20), usage('5W30D', 10, 0)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+
+    const bb = inputs.find((i) => i.product_id === '5W30BB')!
+    expect(bb.on_hand).toBe(110) // on-hand still combines, sibling has real stock
+    expect(bb.daily_usage).toBe(20) // its zero usage isn't added
+  })
+
   it('never combines case types for a VMI/keep-fill product', () => {
     const configs = [
       config('5W30BB', { metadata: { vmi: 'yes' } }),
