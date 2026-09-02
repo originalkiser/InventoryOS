@@ -500,22 +500,41 @@ export function CustomerHeatmapPage() {
         .or('zip.is.null,zip.eq.')
       if (locIds) unmappedQ = unmappedQ.in('location_id', locIds)
 
-      const [{ data: rpcData, error: rpcErr }, { count: unmappedCount, error: unmappedErr }] = await Promise.all([
-        sb.rpc('get_heatmap_zip_rollup_clusters', { p_start: range.start, p_end: range.end, p_location_ids: locIds }),
-        unmappedQ,
-      ])
-      if (cancelled) return
-      if (rpcErr) {
-        // Fast path failed (migration not applied yet, a transient error,
-        // whatever) — fall back to full detail automatically instead of a
-        // dead end. The raw-fetch effect above picks this up the moment
-        // fullDetailRequested flips.
-        setError(`Fast preview unavailable (${rpcErr.message}) — loading full detail instead`)
-        setFullDetailRequested(true)
-        setRollupLoading(false)
-        return
+      // RPC calls go through PostgREST exactly like a plain .from() query —
+      // the SAME project "Max Rows" cap that once silently truncated the
+      // raw orders fetch at 1,000 rows applies here too, and this call
+      // wasn't paginated at all when first shipped. A real company-wide
+      // month has 7,000-12,000+ zip rows, so it was silently cut off at
+      // 1,000. Paginated the identical way as every other fetch in this
+      // file: keep requesting pages until a genuinely empty one comes
+      // back, never assume a single call returns everything. The RPC's own
+      // ORDER BY zip (added alongside this fix) makes page boundaries
+      // stable.
+      const PAGE = 1000
+      const all: any[] = []
+      let unmappedResult: { count: number | null; error: unknown } | null = null
+      for (let from = 0; ; from += PAGE) {
+        const [pageRes, unmappedRes] = await Promise.all([
+          sb.rpc('get_heatmap_zip_rollup_clusters', { p_start: range.start, p_end: range.end, p_location_ids: locIds }).range(from, from + PAGE - 1),
+          from === 0 ? unmappedQ : Promise.resolve(unmappedResult),
+        ])
+        if (from === 0) unmappedResult = unmappedRes as any
+        if (cancelled) return
+        if (pageRes.error) {
+          // Fast path failed (migration not applied yet, a transient
+          // error, whatever) — fall back to full detail automatically
+          // instead of a dead end. The raw-fetch effect above picks this
+          // up the moment fullDetailRequested flips.
+          setError(`Fast preview unavailable (${pageRes.error.message}) — loading full detail instead`)
+          setFullDetailRequested(true)
+          setRollupLoading(false)
+          return
+        }
+        const batch = (pageRes.data ?? []) as any[]
+        all.push(...batch)
+        if (batch.length === 0) break
       }
-      const built: ZipCluster[] = ((rpcData ?? []) as any[]).map((r) => ({
+      const built: ZipCluster[] = all.map((r) => ({
         zip: r.zip,
         city: normalizeCityCase(r.city ?? ''),
         region: r.region ?? '',
@@ -527,7 +546,7 @@ export function CustomerHeatmapPage() {
       setRollupClusters(built)
       setRollupTotals({
         mapped: built.reduce((sum, c) => sum + c.count, 0),
-        unmapped: unmappedErr ? null : (unmappedCount ?? null),
+        unmapped: unmappedResult?.error ? null : (unmappedResult?.count ?? null),
       })
       setRollupLoading(false)
     }

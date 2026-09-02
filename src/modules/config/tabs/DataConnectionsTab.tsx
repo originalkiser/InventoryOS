@@ -152,8 +152,21 @@ export function DataConnectionsTab() {
     let cancelled = false
     const sb = supabase as any
     sb.schema('inventory').from('droptop_orders_synced_locations').select('location_id').eq('company_id', companyId)
-      .then(({ data }: any) => {
+      .then(({ data, error }: any) => {
         if (cancelled) return
+        if (error) {
+          // Leave syncedLocationIds at null (its "still loading" value) on
+          // a real query failure, NOT an empty Set — the old code did
+          // `new Set((data ?? []).map(...))` unconditionally, so a failed
+          // request (data === null) silently became an empty Set, which
+          // gapShopLabels below then read as "confirmed zero locations
+          // have ever synced" — every eligible shop showed up as a gap
+          // even though they'd all actually synced, purely because this
+          // one query errored and nobody could tell. Surfacing it instead.
+          console.error('Failed to load synced-locations for gap detection:', error.message)
+          toast.error(`Unable to check which shops have synced — gap detection unavailable (${error.message})`)
+          return
+        }
         setSyncedLocationIds(new Set((data ?? []).map((r: any) => r.location_id)))
       })
     return () => { cancelled = true }
