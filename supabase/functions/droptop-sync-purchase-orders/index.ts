@@ -74,7 +74,17 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// Retries on 429 exactly like droptop-sync-usage's callDroptop.
+// 502/503/504 are transient gateway/timeout errors from Droptop's own
+// infrastructure, not a signal the request itself is invalid (unlike a
+// 4xx) — droptop-sync-orders hit this for real (a busy shop's response
+// apparently takes long enough that Droptop's own gateway times out
+// before it finishes) and got retry-with-backoff for it; this function
+// only ever retried 429, so a run of pure 502s (every operation_id in the
+// same run failing identically, per the real report that surfaced this)
+// took down the whole sync immediately instead of recovering the way the
+// orders sync already does from the exact same upstream failure mode.
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+
 async function callDroptop(
   endpoint: string, params: Record<string, string>, publicKey: string, privateKey: string, maxRetries = 5,
 ): Promise<any> {
@@ -83,7 +93,7 @@ async function callDroptop(
     const qs = new URLSearchParams({ sig, ...params })
     const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
     const res = await fetch(url, { headers: { 'x-api-key': publicKey.trim() }, redirect: 'follow' })
-    if (res.status === 429 && attempt < maxRetries) {
+    if (RETRYABLE_STATUSES.has(res.status) && attempt < maxRetries) {
       const retryAfterHeader = Number(res.headers.get('retry-after'))
       const waitMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 ? retryAfterHeader * 1000 : 2000 * 2 ** attempt
       await res.text().catch(() => {})

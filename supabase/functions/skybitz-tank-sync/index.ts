@@ -253,6 +253,21 @@ Deno.serve(async (req) => {
     const updates: Record<string, unknown>[] = []
     const inserts: Record<string, unknown>[] = []
     const seenNewRtuids = new Set<string>() // dedupe brand-new rows within this one file
+    // reading_date is NOT NULL on tank_monitors — a brand-new RTUID whose
+    // "Inventory Time (UTC)" is blank or in a shape parseSkybitzTime
+    // doesn't recognize (both real, observed cases — a tank just added to
+    // SkyBitz can report Level/Battery before it has a computed inventory
+    // reading yet) used to write reading_date: null for that insert, which
+    // failed the whole batch with "violates not-null constraint" — this
+    // has apparently been happening every run since at least the previous
+    // day, taking down every brand-new-tank insert in the batch (existing
+    // tanks' updates run first and were unaffected, which is why on-hand
+    // data still refreshed even while this failed). Falls back to today
+    // (the day THIS sync ran) rather than fabricating a reading time —
+    // inventory_time itself still stays null when unparseable, so "we
+    // don't actually know this tank's own reading time" stays visible;
+    // only the NOT NULL date column gets a real value.
+    const todayStr = new Date().toISOString().slice(0, 10)
     // raw_capacity is written in a separate best-effort pass after the main
     // upsert below (see there for why) — collected here, keyed by the same
     // row id already being assigned to updates/inserts.
@@ -297,7 +312,7 @@ Deno.serve(async (req) => {
           level_inches: level,
           battery_pct: battery,
           inventory_time: isoTime,
-          reading_date: isoTime ? isoTime.slice(0, 10) : null,
+          reading_date: isoTime ? isoTime.slice(0, 10) : todayStr,
           last_change_source: 'skybitz',
           updated_at: new Date().toISOString(),
         })
@@ -326,7 +341,11 @@ Deno.serve(async (req) => {
         battery_pct: resolvedBattery,
         system_tank_id: systemTankId ?? existing.system_tank_id,
         inventory_time: resolvedTime,
-        reading_date: isoTime ? isoTime.slice(0, 10) : existing.reading_date,
+        // Defensive fallback to today on the update path too — existing
+        // rows should always already have a real reading_date, but a
+        // legacy row from before this column existed shouldn't be able to
+        // reintroduce the same NOT NULL failure.
+        reading_date: isoTime ? isoTime.slice(0, 10) : (existing.reading_date ?? todayStr),
         updated_at: new Date().toISOString(),
         last_change_source: 'skybitz',
       })
