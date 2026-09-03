@@ -96,7 +96,14 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
     return m
   }, [posMaps])
 
-  function resolveId(value: string | null | undefined): string | null {
+  // Wrapped in useCallback (stable identity as long as their real inputs —
+  // the memoized lookup maps / `locations` itself — don't change) so
+  // consumers that memoize on these functions (e.g. a report's useMemo
+  // depending on `loc.byId`/`loc.fieldValue` instead of the whole `loc`
+  // object) actually get the memoization benefit instead of recomputing on
+  // every render. See includedOptions/options below for the matching fix on
+  // the derived arrays.
+  const resolveId = useCallback((value: string | null | undefined): string | null => {
     const v = String(value ?? '').trim().toLowerCase()
     if (!v) return null
     const exact = byExactKey.get(v)
@@ -116,23 +123,23 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
       if (posByNum) return posByNum
     }
     return null
-  }
+  }, [byExactKey, posByExactKey, byCodeNumber, posByNumber])
 
   // Reverse lookup: the POS string mapped to a location (for showing POS in
   // other tables keyed by location).
-  function posStringFor(id: string | null): string {
+  const posStringFor = useCallback((id: string | null): string => {
     if (!id) return ''
     return posMaps.find((p) => p.location_id === id)?.pos_string ?? ''
-  }
+  }, [posMaps])
 
-  function byId(id: string | null): Location | undefined {
+  const byId = useCallback((id: string | null): Location | undefined => {
     return id ? locations.find((l) => l.id === id) : undefined
-  }
+  }, [locations])
 
-  function labelOf(id: string | null): string {
+  const labelOf = useCallback((id: string | null): string => {
     const l = byId(id)
     return l ? shopNumberCityLabel(l.name, l.shop_city) : '—'
-  }
+  }, [byId])
 
   // Resolve a (possibly linked) field value for a location: base columns first,
   // then custom metadata by key. Used by cross-section linked columns.
@@ -143,7 +150,7 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
   // is now stale/empty for any location touched since that promotion, so
   // every one of those fields silently read blank. Matches locVal() in
   // LocationLookupPage.tsx, which already got this right.
-  function fieldValue(id: string | null, key: string): string {
+  const fieldValue = useCallback((id: string | null, key: string): string => {
     const l = byId(id)
     if (!l) return ''
     if (key === 'name') return l.name
@@ -153,23 +160,31 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
     if (base != null && base !== '') return String(base)
     const v = (l.metadata as any)?.[key]
     return v == null ? '' : String(v)
-  }
+  }, [byId])
 
-  const options = locations.filter((l) => l.active)
+  // These used to be plain per-render `.filter()`/`.map()`/`.sort()` calls —
+  // cheap on their own, but every consumer that depends on `options`/
+  // `included`/`includedOptions` (or the whole `loc` object) then recomputed
+  // on every render of every page using this hook regardless of whether
+  // `locations` actually changed, since the arrays got a fresh identity each
+  // time. Wrapped in useMemo so downstream memoization actually holds — no
+  // behavior change, same filter/sort logic.
+  const options = useMemo(() => locations.filter((l) => l.active)
     .map((l) => ({ value: l.id, label: shopNumberCityLabel(l.name, l.shop_city) }))
-    .sort(byNaturalLabel)
+    .sort(byNaturalLabel), [locations])
 
   // Exclusion-aware variants for listing/lookup dropdowns (config/operational
   // flows keep using `locations`/`options`, which intentionally ignore these).
-  const included = locations.filter((l) => !isExcluded(l))
-  const includedOptions = included.filter((l) => l.active)
+  const included = useMemo(() => locations.filter((l) => !isExcluded(l)), [locations, isExcluded])
+  const includedOptions = useMemo(() => included.filter((l) => l.active)
     .map((l) => ({ value: l.id, label: shopNumberCityLabel(l.name, l.shop_city) }))
-    .sort(byNaturalLabel)
+    .sort(byNaturalLabel), [included])
 
   // Resolve to a location name (code) string (for tables that key on code).
-  function codeOf(id: string | null): string {
+  const codeOf = useCallback((id: string | null): string => {
     return byId(id)?.name ?? ''
-  }
+  }, [byId])
 
-  return { locations, posMaps, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload }
+  return useMemo(() => ({ locations, posMaps, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload }),
+    [locations, posMaps, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload])
 }

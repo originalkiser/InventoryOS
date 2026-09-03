@@ -595,6 +595,16 @@ export function DroptopOrdersPage() {
   const [reportAMs, setReportAMs] = useState<string[]>([])
   const [reportShops, setReportShops] = useState<string[]>([])
   const [reportExporting, setReportExporting] = useState<'csv' | 'xlsx' | null>(null)
+  // The modal's on-screen preview was rendering every matching order as a
+  // real DOM row with no cap at all (unlike the main Orders table, which
+  // has always paginated) — on a big pull that's thousands of <tr>s built
+  // synchronously the moment the modal opens, and torn down again the
+  // moment it closes. That's what the reported open/close lag actually
+  // was. Copy/Export still work against the FULL reportOrders/
+  // reportTotalsRows below, unaffected — only what's actually painted to
+  // the screen is capped.
+  const REPORT_PAGE_SIZE = 100
+  const [reportPage, setReportPage] = useState(0)
 
   const reportShopLabelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
   const reportOrders = useMemo(() => {
@@ -607,8 +617,10 @@ export function DroptopOrdersPage() {
       if (reportAMs.length && !reportAMs.includes(loc.fieldValue(o.location_id, 'area_manager'))) return false
       return true
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredOrders, reportRegions, reportMarkets, reportAMs, reportShops, reportShopLabelToId, loc])
+    // loc.byId/loc.fieldValue (not the whole `loc` object) — useLocations()
+    // now gives these stable identity via useCallback, so this only
+    // recomputes when locations data or the filters actually change.
+  }, [filteredOrders, reportRegions, reportMarkets, reportAMs, reportShops, reportShopLabelToId, loc.byId, loc.fieldValue])
 
   interface ShopTotalsRow { shopLabel: string; orders: number; subtotal: number; total: number; quarts: number; packages: number }
   const TOTALS_COLUMNS: { key: string; label: string; get: (r: ShopTotalsRow) => string; align?: 'right' }[] = [
@@ -634,6 +646,23 @@ export function DroptopOrdersPage() {
     return [...stats.values()].sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportOrders, packagesByOrder, idToLabel])
+
+  // Paged view for the modal's on-screen table only — see REPORT_PAGE_SIZE
+  // comment above. Copy/export read reportOrders/reportTotalsRows directly.
+  const reportPageCount = Math.max(1, Math.ceil((reportMode === 'detail' ? reportOrders.length : reportTotalsRows.length) / REPORT_PAGE_SIZE))
+  const pagedReportOrders = useMemo(
+    () => reportOrders.slice(reportPage * REPORT_PAGE_SIZE, (reportPage + 1) * REPORT_PAGE_SIZE),
+    [reportOrders, reportPage],
+  )
+  const pagedReportTotalsRows = useMemo(
+    () => reportTotalsRows.slice(reportPage * REPORT_PAGE_SIZE, (reportPage + 1) * REPORT_PAGE_SIZE),
+    [reportTotalsRows, reportPage],
+  )
+  // Reset to page 1 whenever the report's own filters/mode change the
+  // underlying result set, so the user doesn't land on a now-empty page.
+  useEffect(() => {
+    setReportPage(0)
+  }, [reportMode, reportRegions, reportMarkets, reportAMs, reportShops])
 
   const activeDetailCols = DETAIL_COLUMNS.filter((c) => reportColumnKeys.includes(c.key))
   const activeTotalsCols = TOTALS_COLUMNS.filter((c) => reportColumnKeys.includes(c.key))
@@ -1037,10 +1066,17 @@ export function DroptopOrdersPage() {
             <span className="text-xs font-mono text-navy">
               {reportMode === 'detail' ? `${reportOrders.length.toLocaleString()} orders` : `${reportTotalsRows.length.toLocaleString()} shops`}
             </span>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Button size="sm" variant="secondary" onClick={() => void copyReport()}>Copy</Button>
               <Button size="sm" variant="secondary" loading={reportExporting === 'csv'} onClick={() => exportReport('csv')}>Export CSV</Button>
               <Button size="sm" variant="secondary" loading={reportExporting === 'xlsx'} onClick={() => exportReport('xlsx')}>Export Excel</Button>
+              {(reportMode === 'detail' ? reportOrders.length : reportTotalsRows.length) > REPORT_PAGE_SIZE && (
+                <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
+                  <Button size="sm" variant="secondary" disabled={reportPage === 0} onClick={() => setReportPage((p) => Math.max(0, p - 1))}>Prev</Button>
+                  <span>Page {reportPage + 1} of {reportPageCount}</span>
+                  <Button size="sm" variant="secondary" disabled={reportPage >= reportPageCount - 1} onClick={() => setReportPage((p) => Math.min(reportPageCount - 1, p + 1))}>Next</Button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1053,14 +1089,14 @@ export function DroptopOrdersPage() {
               </tr></thead>
               <tbody>
                 {reportMode === 'detail'
-                  ? reportOrders.map((o) => (
+                  ? pagedReportOrders.map((o) => (
                     <tr key={o.id} className="border-b border-navy/10">
                       {activeDetailCols.map((c) => (
                         <td key={c.key} className={`px-3 py-1.5 text-navy whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`}>{c.get(o)}</td>
                       ))}
                     </tr>
                   ))
-                  : reportTotalsRows.map((r) => (
+                  : pagedReportTotalsRows.map((r) => (
                     <tr key={r.shopLabel} className="border-b border-navy/10">
                       {activeTotalsCols.map((c) => (
                         <td key={c.key} className={`px-3 py-1.5 text-navy whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`}>{c.get(r)}</td>
