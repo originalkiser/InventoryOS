@@ -109,6 +109,38 @@ interface MakeModelAgg {
 // One VIN's decoded Trim/Engine, from inventory.vin_decoded.
 interface VinDecoded { trim: string | null; engine: string | null }
 
+// Bounded-concurrency chunked read of inventory.vin_decoded for a list of
+// VINs — used both by the main load (hydrates every loaded vehicle's
+// Trim/Engine up front, as part of the same loading spinner, instead of a
+// separate pass that runs after the table's already visible) and by the
+// Decode button's own post-decode re-read. A plain sequential 500-at-a-time
+// loop here used to be the real cause of "Trim(s)/Engine(s) show — for a
+// long time after the page loads, and the Decode button's own count looks
+// like almost nothing is cached even when most of it already is" — a wide
+// date range's 100k+ VINs took well over a minute of purely sequential
+// round trips to read back. Same worker-pool shape as droptopChildFetch.ts.
+const VIN_DECODE_READ_CHUNK = 5000
+const VIN_DECODE_READ_CONCURRENCY = 5
+async function fetchVinDecodeMap(vins: string[]): Promise<Map<string, VinDecoded>> {
+  const found = new Map<string, VinDecoded>()
+  if (!vins.length) return found
+  const chunks: string[][] = []
+  for (let i = 0; i < vins.length; i += VIN_DECODE_READ_CHUNK) chunks.push(vins.slice(i, i + VIN_DECODE_READ_CHUNK))
+  const sb = supabase as any
+  let next = 0
+  async function worker() {
+    for (;;) {
+      const i = next++
+      if (i >= chunks.length) return
+      const { data, error } = await sb.schema('inventory').from('vin_decoded').select('vin, trim, engine').in('vin', chunks[i])
+      if (error) continue
+      for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(VIN_DECODE_READ_CONCURRENCY, chunks.length) }, worker))
+  return found
+}
+
 // Shows the top N values by count ("Sport (42), Limited (18), SE (9)"),
 // with a "+N more"/"show less" toggle for the rest — used for both Trim(s)
 // and Engine(s), which can span many distinct values per make/model. Own
@@ -179,12 +211,14 @@ export function DroptopVehiclesPage() {
   const [error, setError] = useState<string | null>(null)
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
-  // Trim/Engine, keyed by VIN — populated two ways: (1) a cheap read-only
-  // query below, whenever the vehicles in view change, picks up whatever's
-  // already cached in inventory.vin_decoded; (2) the "Decode Engine/Trim"
-  // button below fills in the rest via the vin-decode Edge Function. Never
-  // reset on filter changes — once a VIN is decoded there's no reason to
-  // forget it just because the Year/Make/Model filters moved.
+  // Trim/Engine, keyed by VIN — populated two ways: (1) as part of the main
+  // load below (every vehicle just loaded gets its cached Trim/Engine
+  // pulled in the same pass, before the loading spinner clears — not a
+  // separate slow catch-up the user has to wait out after the table
+  // already looks done); (2) the "Decode Engine/Trim" button fills in
+  // whatever's still missing via the vin-decode Edge Function. Untouched by
+  // Year/Make/Model filter changes — those don't reload data, so whatever
+  // this already has stays valid.
   const [vinDecodeMap, setVinDecodeMap] = useState<Map<string, VinDecoded>>(new Map())
   const [decoding, setDecoding] = useState(false)
   const [decodeProgress, setDecodeProgress] = useState<{ processed: number; total: number } | null>(null)
@@ -292,8 +326,16 @@ export function DroptopVehiclesPage() {
         for (const v of droptop_order_vehicles ?? []) vehRows.push({ order_id: o.id, ...v })
       }
 
+      // Hydrate every loaded vehicle's cached Trim/Engine as part of THIS
+      // load — see fetchVinDecodeMap's own comment for why a separate
+      // reactive pass was slow enough to be its own bug.
+      const distinctVins = [...new Set(vehRows.map((v) => v.vin).filter((v): v is string => !!v && VIN_RE.test(v)))]
+      const decodeMap = await fetchVinDecodeMap(distinctVins)
+      if (cancelled) return
+
       setOrders(allOrders)
       setVehicles(vehRows)
+      setVinDecodeMap(decodeMap)
       setLoading(false)
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
@@ -354,37 +396,13 @@ export function DroptopVehiclesPage() {
   }, [vehiclesInScope, ordersById, filterYears, filterMakes, filterModels, groupMode, idToLabel])
 
   // Distinct, structurally-valid VINs currently in view — the universe the
-  // "Decode Engine/Trim" button and its auto-cache-check below operate on.
-  // Non-VIN identities (the license_plate|vehicle_name fallback) can't be
-  // decoded at all and are silently excluded.
+  // "Decode Engine/Trim" button operates on. Non-VIN identities (the
+  // license_plate|vehicle_name fallback) can't be decoded at all and are
+  // silently excluded.
   const vinsInScope = useMemo(
     () => [...new Set(vehicleAggs.map((v) => v.vin).filter((v): v is string => !!v && VIN_RE.test(v)))],
     [vehicleAggs],
   )
-  // Read-only cache check — no Edge Function call, just picks up whatever
-  // Trim/Engine is already cached (decoded by anyone, any time) for VINs
-  // now in view. Chunked like the other by-id lookups in this app, in case
-  // a big filtered view has thousands of distinct VINs.
-  useEffect(() => {
-    const missing = vinsInScope.filter((v) => !vinDecodeMap.has(v))
-    if (!missing.length) return
-    let cancelled = false
-    const sb = supabase as any
-    const CHUNK = 500
-    async function run() {
-      const found = new Map<string, VinDecoded>()
-      for (let i = 0; i < missing.length; i += CHUNK) {
-        if (cancelled) return
-        const { data, error } = await sb.schema('inventory').from('vin_decoded').select('vin, trim, engine').in('vin', missing.slice(i, i + CHUNK))
-        if (error) continue
-        for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
-      }
-      if (!cancelled && found.size) setVinDecodeMap((prev) => new Map([...prev, ...found]))
-    }
-    run()
-    return () => { cancelled = true }
-  }, [vinsInScope, vinDecodeMap])
-
   async function decodeMissingVins() {
     const missing = vinsInScope.filter((v) => !vinDecodeMap.has(v))
     if (!missing.length) { toast.success('Everything in view is already decoded'); return }
@@ -394,15 +412,9 @@ export function DroptopVehiclesPage() {
       const summary = await runVinDecode(missing, setDecodeProgress)
       // Re-read the cache for exactly the VINs just requested — covers
       // decoded AND not_found/error outcomes (the Edge Function upserts a
-      // row either way), so a bad VIN doesn't get retried forever by the
-      // auto-cache-check effect above.
-      const sb = supabase as any
-      const found = new Map<string, VinDecoded>()
-      const CHUNK = 500
-      for (let i = 0; i < missing.length; i += CHUNK) {
-        const { data } = await sb.schema('inventory').from('vin_decoded').select('vin, trim, engine').in('vin', missing.slice(i, i + CHUNK))
-        for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
-      }
+      // row either way), so a bad VIN doesn't get retried forever the next
+      // time this page loads.
+      const found = await fetchVinDecodeMap(missing)
       // A VIN still missing here means its row genuinely never got
       // written (a hard failure already surfaced via the toast below) —
       // mark it empty so it isn't retried on every render either.
@@ -570,6 +582,7 @@ export function DroptopVehiclesPage() {
           messages={[
             'Pulling orders with vehicles attached…',
             'Matching vehicles to orders…',
+            'Loading cached Engine/Trim data…',
             'Rolling up by year/make/model…',
             'Sorting by visits…',
           ]}
