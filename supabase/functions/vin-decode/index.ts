@@ -15,17 +15,22 @@
 // genuinely bad VIN isn't retried on every future click, same "advance
 // past a definite outcome" rule geocode_status uses on droptop_orders.
 //
-// Unlike geocode-orders, this does NOT auto-discover work by scanning a
-// table — the Vehicles page already knows exactly which VINs are in view
-// (whatever the user has currently filtered to), so it sends that list
-// directly. Manual, on-demand ("Decode Engine/Trim" button), not a
-// background/cron job — see DroptopVehiclesPage.tsx.
-//
-// POST body: { vins: string[] } — VINs to ensure decoded (already-cached
-// ones are skipped, not re-decoded). Caller should chunk large lists
-// itself (see vinDecodeService.ts) — this processes the whole list it's
-// given in one invocation, so keep each call's cache-miss count reasonable
-// (a few hundred) to stay inside the Edge Function execution time limit.
+// Two ways to call it:
+//  - Manual, on-demand: POST body { vins: string[] } — the Droptop
+//    Vehicles page's "Decode Engine/Trim" button sends exactly the VINs
+//    currently in view. Caller should chunk large lists itself (see
+//    vinDecodeService.ts) — this processes the whole list it's given in
+//    one invocation.
+//  - Scheduled/automatic: POST body {} (no vins) — auto-discovers up to
+//    AUTO_MAX_VINS undecoded VINs via the get_undecoded_vins RPC (anything
+//    already synced into inventory.droptop_order_vehicles with no
+//    inventory.vin_decoded row yet) and decodes those instead. Wired into
+//    data-connection-dispatcher/index.ts under connection_key
+//    'vin_decode' — same dual-auth (shared secret) as every other
+//    scheduled sync. A single run doesn't try to drain the whole backlog
+//    (209,614 distinct VINs as of 2026-09-03) — it makes bounded progress
+//    each time it's due, same "steady incremental catch-up" precedent as
+//    droptop_orders' own incremental sync.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -49,6 +54,14 @@ const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i
 // chunk conservatively.
 const NHTSA_BATCH_SIZE = 50
 const NHTSA_CONCURRENCY = 3
+// Auto-discover mode's ceiling per invocation — bounds execution time (at
+// concurrency 3 / 50 per NHTSA request, 5000 VINs is ~100 sequential
+// rounds of requests, comfortably inside the platform's execution limit).
+// A backlog bigger than this just takes multiple scheduled runs to fully
+// catch up — same "steady incremental progress" precedent as this app's
+// other backlog-catch-up jobs (droptop_orders' incremental sync, etc.),
+// not something one invocation needs to fully drain.
+const AUTO_MAX_VINS = 5000
 
 async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0
@@ -156,9 +169,27 @@ Deno.serve(async (req) => {
     if (!authorized) return ok({ error: 'Not authorized' })
 
     const body = await req.json().catch(() => ({}))
-    const requestedVins: string[] = Array.isArray(body.vins) ? body.vins.filter((v: unknown) => typeof v === 'string') : []
+    let requestedVins: string[] = Array.isArray(body.vins) ? body.vins.filter((v: unknown) => typeof v === 'string') : []
+    // Auto-discover mode: no vins in the body (the scheduled dispatcher
+    // call, or a manual "Run Now") — find undecoded VINs ourselves via
+    // get_undecoded_vins rather than requiring the caller to know which
+    // VINs exist. Fetch one more than the cap to tell "exactly this many
+    // remained" apart from "there's more beyond this run" without a
+    // separate (expensive, full-table) count query.
+    let autoMode = false
+    let autoMoreRemaining = false
+    if (!requestedVins.length) {
+      autoMode = true
+      const { data: autoRows, error: autoErr } = await admin.rpc('get_undecoded_vins', { p_limit: AUTO_MAX_VINS + 1 })
+      if (autoErr) return ok({ error: autoErr.message })
+      const found = ((autoRows ?? []) as { vin: string }[]).map((r) => r.vin)
+      autoMoreRemaining = found.length > AUTO_MAX_VINS
+      requestedVins = found.slice(0, AUTO_MAX_VINS)
+    }
     const uniqueVins = [...new Set(requestedVins.map((v) => v.trim().toUpperCase()).filter((v) => VIN_RE.test(v)))]
-    if (!uniqueVins.length) return ok({ success: true, requested: requestedVins.length, cached_hits: 0, newly_decoded: 0, invalid: requestedVins.length })
+    if (!uniqueVins.length) {
+      return ok({ success: true, auto: autoMode, requested: requestedVins.length, cached_hits: 0, newly_decoded: 0, invalid: requestedVins.length })
+    }
 
     // Cache check — only genuinely new VINs cost an NHTSA call.
     const { data: cacheRows, error: cacheErr } = await (admin as any)
@@ -207,11 +238,13 @@ Deno.serve(async (req) => {
 
     return ok({
       success: true,
+      auto: autoMode,
       requested: requestedVins.length,
       invalid: requestedVins.length - uniqueVins.length,
       cached_hits: alreadyCached.size,
       newly_decoded: newlyDecoded,
       attempted: toDecode.length,
+      more_remaining: autoMode ? autoMoreRemaining : undefined,
       warnings: warnings.length ? warnings : undefined,
     })
   } catch (err: unknown) {

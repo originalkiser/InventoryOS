@@ -239,6 +239,22 @@ async function runAutomatedChecks(supabaseUrl: string, secret: string): Promise<
   return error ? { status: 'error', message: error } : { status: 'success', message: null }
 }
 
+// vin-decode already accepts DROPTOP_SYNC_SECRET (its own dual-auth check,
+// same as skybitz-tank-sync/droptop-sync-usage) so this reuses that rather
+// than minting a new secret. No company_id needed — vin-decode's
+// auto-discover mode (empty body) finds its own work via get_undecoded_vins,
+// which isn't company-scoped (a VIN's factory spec is global reference data).
+async function runVinDecode(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
+  const res = await fetchWithTimeout(`${supabaseUrl}/functions/v1/vin-decode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+    body: '{}',
+  })
+  const { data, error } = await parseSyncResponse(res)
+  if (error) return { status: 'error', message: error }
+  return { status: 'success', message: `${data?.newly_decoded ?? 0} decoded (${data?.cached_hits ?? 0} already cached)${data?.more_remaining ? ' — more remain for next run' : ''}` }
+}
+
 // Same reasoning as runAutomatedChecks above — reuses the dispatch secret,
 // no secret of its own. Recomputes Customer Heatmap's pre-aggregated zip
 // rollups for whatever droptop_orders rows changed since the last run.
@@ -359,6 +375,9 @@ Deno.serve(async (req) => {
         } else if (s.connection_key === 'heatmap_rollup_refresh') {
           outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
             : await runHeatmapRollupRefresh(supabaseUrl, dispatchSecret)
+        } else if (s.connection_key === 'vin_decode') {
+          if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
+          else outcome = await runVinDecode(supabaseUrl, droptopSecret)
         } else {
           outcome = { status: 'error', message: `Unknown connection_key: ${s.connection_key}` }
         }

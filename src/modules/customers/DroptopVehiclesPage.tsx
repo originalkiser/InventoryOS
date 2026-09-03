@@ -83,10 +83,11 @@ interface VehicleAgg {
   totalTicket: number
 }
 // One real vehicle's contribution to a single model-year, inside a
-// MakeModelAgg's year breakdown. trims/engines collect every DISTINCT
-// value seen for that year (a model-year can span more than one trim or
-// engine option) rather than forcing a single value.
-interface YearBreakdown { year: number | null; vehicleCount: number; totalMileage: number; mileageCount: number; trims: Set<string>; engines: Set<string> }
+// MakeModelAgg's year breakdown. trims/engines count ORDERS (not distinct
+// vehicles) per distinct value seen for that year (a model-year can span
+// more than one trim or engine option) — matches what the UI shows next to
+// each value ("Sport (42)" = 42 orders across vehicles with that trim).
+interface YearBreakdown { year: number | null; vehicleCount: number; totalMileage: number; mileageCount: number; trims: Map<string, number>; engines: Map<string, number> }
 // What's actually rendered — one row per (make, model[, shop]), averaging
 // mileage/ticket across every distinct vehicle of that make/model rather
 // than listing vehicles individually. Bounded by how many real make/model
@@ -101,12 +102,46 @@ interface MakeModelAgg {
   totalTicket: number
   totalMileage: number
   mileageCount: number // vehicles that actually had a mileage reading (denominator for the average — not all do)
-  trims: Set<string>
-  engines: Set<string>
+  trims: Map<string, number> // value -> visit count
+  engines: Map<string, number>
   byYear: Map<number | string, YearBreakdown>
 }
 // One VIN's decoded Trim/Engine, from inventory.vin_decoded.
 interface VinDecoded { trim: string | null; engine: string | null }
+
+// Shows the top N values by count ("Sport (42), Limited (18), SE (9)"),
+// with a "+N more"/"show less" toggle for the rest — used for both Trim(s)
+// and Engine(s), which can span many distinct values per make/model. Own
+// local expand state (not lifted to the table) so each cell/row is
+// independent; stopPropagation keeps the toggle from also triggering the
+// row's own onClick (opening the year drill-down modal).
+function TopValuesCell({ counts, topN = 3 }: { counts: Map<string, number>; topN?: number }) {
+  const [expanded, setExpanded] = useState(false)
+  const sorted = useMemo(
+    () => [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+    [counts],
+  )
+  if (!sorted.length) return <>—</>
+  const shown = expanded ? sorted : sorted.slice(0, topN)
+  const remaining = sorted.length - topN
+  return (
+    <>
+      {shown.map(([value, count]) => `${value} (${count})`).join(', ')}
+      {remaining > 0 && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+          className="ml-1 text-sky hover:underline whitespace-nowrap">
+          {expanded ? 'show less' : `+${remaining} more`}
+        </button>
+      )}
+    </>
+  )
+}
+
+// Every value, sorted by count desc — export isn't space-constrained the
+// way the on-screen top-3 cell is, so this shows the full breakdown.
+function formatCounts(counts: Map<string, number>): string {
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([v, n]) => `${v} (${n})`).join('; ')
+}
 
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -393,7 +428,7 @@ export function DroptopVehiclesPage() {
       const key = `${v.shopLabel ?? ''}|${v.make ?? '—'}|${v.model ?? '—'}`
       let a = byKey.get(key)
       if (!a) {
-        a = { key, shopLabel: v.shopLabel, make: v.make, model: v.model, vehicleCount: 0, visits: 0, totalTicket: 0, totalMileage: 0, mileageCount: 0, trims: new Set(), engines: new Set(), byYear: new Map() }
+        a = { key, shopLabel: v.shopLabel, make: v.make, model: v.model, vehicleCount: 0, visits: 0, totalTicket: 0, totalMileage: 0, mileageCount: 0, trims: new Map(), engines: new Map(), byYear: new Map() }
         byKey.set(key, a)
       }
       a.vehicleCount++
@@ -401,16 +436,16 @@ export function DroptopVehiclesPage() {
       a.totalTicket += v.totalTicket
       if (v.mileage != null) { a.totalMileage += v.mileage; a.mileageCount++ }
       const decoded = v.vin ? vinDecodeMap.get(v.vin) : undefined
-      if (decoded?.trim) a.trims.add(decoded.trim)
-      if (decoded?.engine) a.engines.add(decoded.engine)
+      if (decoded?.trim) a.trims.set(decoded.trim, (a.trims.get(decoded.trim) ?? 0) + v.visits)
+      if (decoded?.engine) a.engines.set(decoded.engine, (a.engines.get(decoded.engine) ?? 0) + v.visits)
 
       const yearKey = v.year ?? 'Unknown'
       let y = a.byYear.get(yearKey)
-      if (!y) { y = { year: v.year, vehicleCount: 0, totalMileage: 0, mileageCount: 0, trims: new Set(), engines: new Set() }; a.byYear.set(yearKey, y) }
+      if (!y) { y = { year: v.year, vehicleCount: 0, totalMileage: 0, mileageCount: 0, trims: new Map(), engines: new Map() }; a.byYear.set(yearKey, y) }
       y.vehicleCount++
       if (v.mileage != null) { y.totalMileage += v.mileage; y.mileageCount++ }
-      if (decoded?.trim) y.trims.add(decoded.trim)
-      if (decoded?.engine) y.engines.add(decoded.engine)
+      if (decoded?.trim) y.trims.set(decoded.trim, (y.trims.get(decoded.trim) ?? 0) + v.visits)
+      if (decoded?.engine) y.engines.set(decoded.engine, (y.engines.get(decoded.engine) ?? 0) + v.visits)
     }
     return [...byKey.values()].sort((a, b) => b.visits - a.visits)
   }, [vehicleAggs, vinDecodeMap])
@@ -433,7 +468,7 @@ export function DroptopVehiclesPage() {
         : ['Make', 'Model', 'Trim(s)', 'Engine(s)', 'Avg Mileage', 'Visits', 'Avg Ticket']
       const rows = makeModelAggs.map((a) => {
         const avgMileage = a.mileageCount > 0 ? Math.round(a.totalMileage / a.mileageCount) : null
-        const base = [a.make ?? '—', a.model ?? '—', [...a.trims].sort().join('; ') || '—', [...a.engines].sort().join('; ') || '—', avgMileage != null ? String(avgMileage) : '—', String(a.visits), (a.totalTicket / a.visits).toFixed(2)]
+        const base = [a.make ?? '—', a.model ?? '—', formatCounts(a.trims) || '—', formatCounts(a.engines) || '—', avgMileage != null ? String(avgMileage) : '—', String(a.visits), (a.totalTicket / a.visits).toFixed(2)]
         return groupMode === 'by-shop' ? [a.shopLabel ?? '—', ...base] : base
       })
       const fileBase = `droptop-vehicles-${range.start}-to-${range.end}`
@@ -610,8 +645,8 @@ export function DroptopVehiclesPage() {
                         {groupMode === 'by-shop' && <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.shopLabel}</td>}
                         <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.make ?? '—'}</td>
                         <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.model ?? '—'}</td>
-                        <td className="px-3 py-1.5 text-navy">{[...a.trims].sort().join(', ') || '—'}</td>
-                        <td className="px-3 py-1.5 text-navy">{[...a.engines].sort().join(', ') || '—'}</td>
+                        <td className="px-3 py-1.5 text-navy">{<TopValuesCell counts={a.trims} />}</td>
+                        <td className="px-3 py-1.5 text-navy">{<TopValuesCell counts={a.engines} />}</td>
                         <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{avgMileage != null ? avgMileage.toLocaleString() : '—'}</td>
                         <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{a.visits.toLocaleString()}</td>
                         <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(a.totalTicket / a.visits)}</td>
@@ -645,8 +680,8 @@ export function DroptopVehiclesPage() {
                   .map((y) => (
                     <tr key={y.year ?? 'unknown'} className="border-b border-navy/10">
                       <td className="px-3 py-1.5 text-navy whitespace-nowrap">{y.year ?? 'Unknown'}</td>
-                      <td className="px-3 py-1.5 text-navy">{[...y.trims].sort().join(', ') || '—'}</td>
-                      <td className="px-3 py-1.5 text-navy">{[...y.engines].sort().join(', ') || '—'}</td>
+                      <td className="px-3 py-1.5 text-navy">{<TopValuesCell counts={y.trims} />}</td>
+                      <td className="px-3 py-1.5 text-navy">{<TopValuesCell counts={y.engines} />}</td>
                       <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.vehicleCount.toLocaleString()}</td>
                       <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.mileageCount > 0 ? Math.round(y.totalMileage / y.mileageCount).toLocaleString() : '—'}</td>
                     </tr>

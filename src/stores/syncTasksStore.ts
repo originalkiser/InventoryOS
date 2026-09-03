@@ -52,6 +52,7 @@ export const SKYBITZ_TANKS_TASK_ID = 'skybitz-tanks'
 export const AUTOMATED_CHECKS_TASK_ID = 'automated-checks'
 export const GEOCODE_ORDERS_TASK_ID = 'geocode-orders'
 export const HEATMAP_ROLLUP_TASK_ID = 'heatmap-rollup-refresh'
+export const VIN_DECODE_TASK_ID = 'vin-decode'
 
 export const useSyncTasksStore = create<SyncTasksState>((set, get) => ({
   tasks: [],
