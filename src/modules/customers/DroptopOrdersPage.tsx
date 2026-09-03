@@ -26,7 +26,7 @@ import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
-import { Button, Card, CardBody, Input, MultiSelectDropdown } from '@/components/ui'
+import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
 
 interface OrderRow {
@@ -73,6 +73,9 @@ interface VehicleRow {
   vin_vehicle_model: string | null
   vin_vehicle_year: number | null
 }
+
+// One column of the Build Your Own Report's order-level detail mode.
+interface TableCol2 { key: string; label: string; get: (o: OrderRow) => string; align?: 'right' }
 
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
@@ -558,6 +561,131 @@ export function DroptopOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredOrders, productsByOrder, servicesByOrder, idToLabel])
 
+  // ---- Build Your Own Report ------------------------------------------
+  // Operates on whatever's already loaded (filteredOrders — respects the
+  // page's own date range, Shop(s), and search/package/product filters
+  // above) rather than firing an independent fetch: a genuinely separate
+  // report date range/shop scope would mean duplicating this page's whole
+  // load pipeline (header fetch + 4 child-table fetches, both now
+  // concurrent — see concurrentDateRangeFetch.ts) a second time. The
+  // report's own Region/Market/AM/Shop pickers below narrow further,
+  // client-side, within that already-loaded set — widen the Shop(s)/date
+  // range above first if a shop/date isn't showing up as an option here.
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportMode, setReportMode] = useState<'detail' | 'totals'>('detail')
+  const DETAIL_COLUMNS: TableCol2[] = [
+    { key: 'order_id', label: 'Order #', get: (o) => o.order_id },
+    { key: 'shop', label: 'Shop', get: (o) => (o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—') },
+    { key: 'region', label: 'Region', get: (o) => o.region || '—' },
+    { key: 'customer', label: 'Customer', get: (o) => [o.first_name, o.last_name].filter(Boolean).join(' ') || '—' },
+    { key: 'city', label: 'City', get: (o) => o.city || '—' },
+    { key: 'status', label: 'Status', get: (o) => o.status || '—' },
+    { key: 'packages', label: 'Packages', get: (o) => (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—' },
+    { key: 'products', label: 'Products', get: (o) => productIdsFor(o.id).join(', ') || '—' },
+    { key: 'quarts', label: 'Quarts', get: (o) => { const q = quartsFor(o.id); return q > 0 ? q.toFixed(2) : '—' }, align: 'right' },
+    { key: 'vehicle', label: 'Vehicle', get: (o) => vehicleLabelFor(o.id) },
+    { key: 'fleet', label: 'Fleet', get: (o) => o.fleet_company_name || '—' },
+    { key: 'subtotal', label: 'Subtotal', get: (o) => money(o.subtotal), align: 'right' },
+    { key: 'total', label: 'Total', get: (o) => money(o.final_price), align: 'right' },
+    { key: 'finalized', label: 'Finalized', get: (o) => (o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—') },
+  ]
+  const [reportColumnKeys, setReportColumnKeys] = useState<string[]>(['order_id', 'shop', 'customer', 'packages', 'quarts', 'total', 'finalized'])
+  const [reportRegions, setReportRegions] = useState<string[]>([])
+  const [reportMarkets, setReportMarkets] = useState<string[]>([])
+  const [reportAMs, setReportAMs] = useState<string[]>([])
+  const [reportShops, setReportShops] = useState<string[]>([])
+  const [reportExporting, setReportExporting] = useState<'csv' | 'xlsx' | null>(null)
+
+  const reportShopLabelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
+  const reportOrders = useMemo(() => {
+    const reportShopIds = new Set(reportShops.map((l) => reportShopLabelToId.get(l)).filter((v): v is string => !!v))
+    return filteredOrders.filter((o) => {
+      if (!o.location_id) return reportRegions.length === 0 && reportMarkets.length === 0 && reportAMs.length === 0 && reportShopIds.size === 0
+      if (reportShopIds.size && !reportShopIds.has(o.location_id)) return false
+      if (reportRegions.length && !reportRegions.includes(loc.byId(o.location_id)?.region ?? '')) return false
+      if (reportMarkets.length && !reportMarkets.includes(loc.fieldValue(o.location_id, 'market'))) return false
+      if (reportAMs.length && !reportAMs.includes(loc.fieldValue(o.location_id, 'area_manager'))) return false
+      return true
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredOrders, reportRegions, reportMarkets, reportAMs, reportShops, reportShopLabelToId, loc])
+
+  interface ShopTotalsRow { shopLabel: string; orders: number; subtotal: number; total: number; quarts: number; packages: number }
+  const TOTALS_COLUMNS: { key: string; label: string; get: (r: ShopTotalsRow) => string; align?: 'right' }[] = [
+    { key: 'shop', label: 'Shop', get: (r) => r.shopLabel },
+    { key: 'orders', label: 'Orders', get: (r) => String(r.orders), align: 'right' },
+    { key: 'packages', label: 'Packages', get: (r) => String(r.packages), align: 'right' },
+    { key: 'quarts', label: 'Quarts', get: (r) => (r.quarts > 0 ? r.quarts.toFixed(2) : '—'), align: 'right' },
+    { key: 'subtotal', label: 'Subtotal', get: (r) => money(r.subtotal), align: 'right' },
+    { key: 'total', label: 'Total', get: (r) => money(r.total), align: 'right' },
+  ]
+  const reportTotalsRows = useMemo((): ShopTotalsRow[] => {
+    const stats = new Map<string, ShopTotalsRow>()
+    for (const o of reportOrders) {
+      const shopLabel = o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'
+      const r = stats.get(shopLabel) ?? { shopLabel, orders: 0, subtotal: 0, total: 0, quarts: 0, packages: 0 }
+      r.orders++
+      r.subtotal += o.subtotal ?? 0
+      r.total += o.final_price ?? 0
+      r.quarts += quartsFor(o.id)
+      r.packages += (packagesByOrder.get(o.id) ?? []).length
+      stats.set(shopLabel, r)
+    }
+    return [...stats.values()].sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportOrders, packagesByOrder, idToLabel])
+
+  const activeDetailCols = DETAIL_COLUMNS.filter((c) => reportColumnKeys.includes(c.key))
+  const activeTotalsCols = TOTALS_COLUMNS.filter((c) => reportColumnKeys.includes(c.key))
+
+  function reportCsvRows(): { headers: string[]; rows: string[][] } {
+    if (reportMode === 'detail') {
+      return { headers: activeDetailCols.map((c) => c.label), rows: reportOrders.map((o) => activeDetailCols.map((c) => c.get(o))) }
+    }
+    return { headers: activeTotalsCols.map((c) => c.label), rows: reportTotalsRows.map((r) => activeTotalsCols.map((c) => c.get(r))) }
+  }
+  function exportReport(format: 'csv' | 'xlsx') {
+    const { headers, rows } = reportCsvRows()
+    if (!rows.length) { toast.error('Nothing to export for this report'); return }
+    setReportExporting(format)
+    try {
+      const fileBase = `droptop-report-${range.start}-to-${range.end}`
+      if (format === 'csv') {
+        const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+        const csv = [headers, ...rows].map((r) => r.map(esc).join(',')).join('\n')
+        triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileBase}.csv`)
+      } else {
+        const wb = XLSX.utils.book_new()
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+        XLSX.utils.book_append_sheet(wb, ws, 'Report')
+        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+        triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileBase}.xlsx`)
+      }
+      toast.success('Report downloaded')
+    } finally {
+      setReportExporting(null)
+    }
+  }
+  async function copyReport() {
+    const { headers, rows } = reportCsvRows()
+    if (!rows.length) { toast.error('Nothing to copy for this report'); return }
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const title = `Droptop Report — ${range.start} to ${range.end}`
+    const head = `<tr>${headers.map((h) => `<td style="border:1px solid #002745;background:#B7E0DE;color:#002745;padding:4px 8px;font-weight:bold;">${esc(h)}</td>`).join('')}</tr>`
+    const body = rows.map((r, i) => `<tr>${r.map((c) => `<td style="border:1px solid #4F7489;padding:3px 8px;background:${i % 2 ? '#F2F1E6' : '#FFFFFF'};">${esc(c)}</td>`).join('')}</tr>`).join('')
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#002745;"><div style="font-weight:bold;margin-bottom:4px;">${esc(title)}</div><table style="border-collapse:collapse;font-size:12px;"><thead>${head}</thead><tbody>${body}</tbody></table></div>`
+    const plain = [title, headers.join('\t'), ...rows.map((r) => r.join('\t'))].join('\n')
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([plain], { type: 'text/plain' }) })])
+      } else {
+        await navigator.clipboard.writeText(plain)
+      }
+      toast.success('Report copied to clipboard')
+    } catch { toast.error('Copy failed') }
+  }
+  // ---- end Build Your Own Report ---------------------------------------
+
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
 
   // Exports the full filtered set (every order matching the current
@@ -791,6 +919,7 @@ export function DroptopOrdersPage() {
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length.toLocaleString()})</span>
                 <div className="flex items-center gap-2 flex-wrap">
+                  <Button size="sm" variant="secondary" onClick={() => setReportOpen(true)}>Build Report</Button>
                   <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportOrders('csv')}>Export CSV</Button>
                   <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportOrders('xlsx')}>Export Excel</Button>
                   {filteredOrders.length > ORDERS_PAGE_SIZE && (
@@ -851,6 +980,103 @@ export function DroptopOrdersPage() {
           </Card>
         </>
       )}
+
+      <Modal open={reportOpen} onClose={() => setReportOpen(false)} title="Build Your Own Report" size="2xl">
+        <div className="flex flex-col gap-3">
+          <p className="text-[11px] font-mono text-inky/60">
+            Built from what&apos;s already loaded above ({range.start} to {range.end}) — the pickers below narrow that
+            further, they don&apos;t pull in shops or dates outside it. Widen the Shop(s)/date range above first if
+            something you need isn&apos;t showing up as an option here.
+          </p>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Mode</span>
+            <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
+              {(['detail', 'totals'] as const).map((m) => (
+                <button key={m} onClick={() => setReportMode(m)}
+                  className={['px-2 py-1.5 uppercase tracking-wide transition-colors', reportMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}>
+                  {m === 'detail' ? 'Order-Level Detail' : 'Totals by Shop'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-3 flex-wrap">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
+              <MultiSelectDropdown options={regionOptions} selected={reportRegions} onChange={setReportRegions} placeholder="All Regions" countNoun="regions" searchable />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Market</span>
+              <MultiSelectDropdown options={marketOptions} selected={reportMarkets} onChange={setReportMarkets} placeholder="All Markets" countNoun="markets" searchable />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
+              <MultiSelectDropdown options={amOptions} selected={reportAMs} onChange={setReportAMs} placeholder="All AMs" countNoun="AMs" searchable />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
+              <MultiSelectDropdown options={shopOptions} selected={reportShops} onChange={setReportShops} placeholder="All Shops" countNoun="shops" searchable />
+            </div>
+          </div>
+
+          <div>
+            <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide block mb-1">Columns</span>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {(reportMode === 'detail' ? DETAIL_COLUMNS : TOTALS_COLUMNS).map((c) => (
+                <label key={c.key} className="flex items-center gap-1.5 text-xs font-mono text-navy">
+                  <input type="checkbox" checked={reportColumnKeys.includes(c.key)}
+                    onChange={(e) => setReportColumnKeys((keys) => e.target.checked ? [...keys, c.key] : keys.filter((k) => k !== c.key))} />
+                  {c.label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-xs font-mono text-navy">
+              {reportMode === 'detail' ? `${reportOrders.length.toLocaleString()} orders` : `${reportTotalsRows.length.toLocaleString()} shops`}
+            </span>
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={() => void copyReport()}>Copy</Button>
+              <Button size="sm" variant="secondary" loading={reportExporting === 'csv'} onClick={() => exportReport('csv')}>Export CSV</Button>
+              <Button size="sm" variant="secondary" loading={reportExporting === 'xlsx'} onClick={() => exportReport('xlsx')}>Export Excel</Button>
+            </div>
+          </div>
+
+          <div className="overflow-auto rounded border border-navy/30 max-h-96">
+            <table className="w-full text-xs font-mono">
+              <thead className="sticky top-0 bg-cream"><tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                {(reportMode === 'detail' ? activeDetailCols : activeTotalsCols).map((c) => (
+                  <th key={c.key} className={`px-3 py-2 ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.label}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {reportMode === 'detail'
+                  ? reportOrders.map((o) => (
+                    <tr key={o.id} className="border-b border-navy/10">
+                      {activeDetailCols.map((c) => (
+                        <td key={c.key} className={`px-3 py-1.5 text-navy whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`}>{c.get(o)}</td>
+                      ))}
+                    </tr>
+                  ))
+                  : reportTotalsRows.map((r) => (
+                    <tr key={r.shopLabel} className="border-b border-navy/10">
+                      {activeTotalsCols.map((c) => (
+                        <td key={c.key} className={`px-3 py-1.5 text-navy whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`}>{c.get(r)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                {(reportMode === 'detail' ? reportOrders.length : reportTotalsRows.length) === 0 && (
+                  <tr><td className="px-3 py-4 text-inky/50" colSpan={(reportMode === 'detail' ? activeDetailCols : activeTotalsCols).length || 1}>
+                    Nothing matches this report's filters within what's currently loaded.
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
