@@ -3,13 +3,13 @@
 // got sold) and Customer Heatmap (where customers came from) with a third
 // lens: what's driving through the bay.
 //
-// Trim and Engine are NOT available — checked against real synced payloads
-// and against Droptop's own API spec: the `vehicles` array only ever
-// carries vin/license_plate/mileage/vin_vehicle_year/_make/_model (plus
-// nullable other_vehicle_* for a non-VIN entry like a trailer). Getting
-// Trim/Engine would mean a separate VIN-decode integration (e.g. NHTSA's
-// free vPIC API) against a new cache table — a real follow-up, not built
-// here.
+// Trim and Engine are NOT in Droptop's own data — checked against real
+// synced payloads and against Droptop's own API spec: the `vehicles` array
+// only ever carries vin/license_plate/mileage/vin_vehicle_year/_make/_model
+// (plus nullable other_vehicle_* for a non-VIN entry like a trailer).
+// Filled in separately via the vin-decode Edge Function (NHTSA's free vPIC
+// API), cached in inventory.vin_decoded — see the "Decode Engine/Trim"
+// button below and vinDecodeService.ts.
 import { useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import toast from 'react-hot-toast'
@@ -22,6 +22,7 @@ import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { Button, Card, CardBody, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
+import { runVinDecode } from '@/services/vinDecodeService'
 
 interface OrderHeaderRow {
   id: string
@@ -63,6 +64,8 @@ const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleSt
 function vehicleKeyOf(v: VehicleRow): string {
   return v.vin || `${v.license_plate ?? ''}|${v.vehicle_name ?? ''}`
 }
+// Standard VIN shape — matches the vin-decode Edge Function's own check.
+const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i
 
 // Per-DISTINCT-VEHICLE intermediate — never rendered directly (a real
 // company-month can have 100k+ distinct VINs, which is what crashed the
@@ -70,6 +73,7 @@ function vehicleKeyOf(v: VehicleRow): string {
 // before anything reaches the DOM.
 interface VehicleAgg {
   key: string
+  vin: string | null // separate from `key` — key falls back to plate|name when vin is null
   shopLabel: string | null // set only in by-shop grouping
   year: number | null
   make: string | null
@@ -79,8 +83,10 @@ interface VehicleAgg {
   totalTicket: number
 }
 // One real vehicle's contribution to a single model-year, inside a
-// MakeModelAgg's year breakdown.
-interface YearBreakdown { year: number | null; vehicleCount: number; totalMileage: number; mileageCount: number }
+// MakeModelAgg's year breakdown. trims/engines collect every DISTINCT
+// value seen for that year (a model-year can span more than one trim or
+// engine option) rather than forcing a single value.
+interface YearBreakdown { year: number | null; vehicleCount: number; totalMileage: number; mileageCount: number; trims: Set<string>; engines: Set<string> }
 // What's actually rendered — one row per (make, model[, shop]), averaging
 // mileage/ticket across every distinct vehicle of that make/model rather
 // than listing vehicles individually. Bounded by how many real make/model
@@ -95,8 +101,12 @@ interface MakeModelAgg {
   totalTicket: number
   totalMileage: number
   mileageCount: number // vehicles that actually had a mileage reading (denominator for the average — not all do)
+  trims: Set<string>
+  engines: Set<string>
   byYear: Map<number | string, YearBreakdown>
 }
+// One VIN's decoded Trim/Engine, from inventory.vin_decoded.
+interface VinDecoded { trim: string | null; engine: string | null }
 
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -134,6 +144,15 @@ export function DroptopVehiclesPage() {
   const [error, setError] = useState<string | null>(null)
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
+  // Trim/Engine, keyed by VIN — populated two ways: (1) a cheap read-only
+  // query below, whenever the vehicles in view change, picks up whatever's
+  // already cached in inventory.vin_decoded; (2) the "Decode Engine/Trim"
+  // button below fills in the rest via the vin-decode Edge Function. Never
+  // reset on filter changes — once a VIN is decoded there's no reason to
+  // forget it just because the Year/Make/Model filters moved.
+  const [vinDecodeMap, setVinDecodeMap] = useState<Map<string, VinDecoded>>(new Map())
+  const [decoding, setDecoding] = useState(false)
+  const [decodeProgress, setDecodeProgress] = useState<{ processed: number; total: number } | null>(null)
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
@@ -289,7 +308,7 @@ export function DroptopVehiclesPage() {
       const key = `${vehicleKeyOf(v)}|${shopLabel ?? ''}`
       let a = byKey.get(key)
       if (!a) {
-        a = { key, shopLabel, year: v.vin_vehicle_year, make: v.vin_vehicle_make, model: v.vin_vehicle_model, mileage: v.mileage, visits: 0, totalTicket: 0 }
+        a = { key, vin: v.vin, shopLabel, year: v.vin_vehicle_year, make: v.vin_vehicle_make, model: v.vin_vehicle_model, mileage: v.mileage, visits: 0, totalTicket: 0 }
         byKey.set(key, a)
       }
       a.visits++
@@ -298,6 +317,72 @@ export function DroptopVehiclesPage() {
     }
     return [...byKey.values()]
   }, [vehiclesInScope, ordersById, filterYears, filterMakes, filterModels, groupMode, idToLabel])
+
+  // Distinct, structurally-valid VINs currently in view — the universe the
+  // "Decode Engine/Trim" button and its auto-cache-check below operate on.
+  // Non-VIN identities (the license_plate|vehicle_name fallback) can't be
+  // decoded at all and are silently excluded.
+  const vinsInScope = useMemo(
+    () => [...new Set(vehicleAggs.map((v) => v.vin).filter((v): v is string => !!v && VIN_RE.test(v)))],
+    [vehicleAggs],
+  )
+  // Read-only cache check — no Edge Function call, just picks up whatever
+  // Trim/Engine is already cached (decoded by anyone, any time) for VINs
+  // now in view. Chunked like the other by-id lookups in this app, in case
+  // a big filtered view has thousands of distinct VINs.
+  useEffect(() => {
+    const missing = vinsInScope.filter((v) => !vinDecodeMap.has(v))
+    if (!missing.length) return
+    let cancelled = false
+    const sb = supabase as any
+    const CHUNK = 500
+    async function run() {
+      const found = new Map<string, VinDecoded>()
+      for (let i = 0; i < missing.length; i += CHUNK) {
+        if (cancelled) return
+        const { data, error } = await sb.schema('inventory').from('vin_decoded').select('vin, trim, engine').in('vin', missing.slice(i, i + CHUNK))
+        if (error) continue
+        for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
+      }
+      if (!cancelled && found.size) setVinDecodeMap((prev) => new Map([...prev, ...found]))
+    }
+    run()
+    return () => { cancelled = true }
+  }, [vinsInScope, vinDecodeMap])
+
+  async function decodeMissingVins() {
+    const missing = vinsInScope.filter((v) => !vinDecodeMap.has(v))
+    if (!missing.length) { toast.success('Everything in view is already decoded'); return }
+    setDecoding(true)
+    setDecodeProgress({ processed: 0, total: missing.length })
+    try {
+      const summary = await runVinDecode(missing, setDecodeProgress)
+      // Re-read the cache for exactly the VINs just requested — covers
+      // decoded AND not_found/error outcomes (the Edge Function upserts a
+      // row either way), so a bad VIN doesn't get retried forever by the
+      // auto-cache-check effect above.
+      const sb = supabase as any
+      const found = new Map<string, VinDecoded>()
+      const CHUNK = 500
+      for (let i = 0; i < missing.length; i += CHUNK) {
+        const { data } = await sb.schema('inventory').from('vin_decoded').select('vin, trim, engine').in('vin', missing.slice(i, i + CHUNK))
+        for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
+      }
+      // A VIN still missing here means its row genuinely never got
+      // written (a hard failure already surfaced via the toast below) —
+      // mark it empty so it isn't retried on every render either.
+      for (const vin of missing) if (!found.has(vin)) found.set(vin, { trim: null, engine: null })
+      setVinDecodeMap((prev) => new Map([...prev, ...found]))
+      if (summary.warnings.length) toast.error(`Decoded with ${summary.warnings.length} warning(s) — see console`)
+      else toast.success(`Decoded ${summary.newlyDecoded} of ${summary.requested} vehicle(s)`)
+      if (summary.warnings.length) console.warn('[VIN-DECODE]', summary.warnings)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Decode failed')
+    } finally {
+      setDecoding(false)
+      setDecodeProgress(null)
+    }
+  }
 
   // Pass 2 — roll distinct vehicles up to (make, model[, shop]), the only
   // thing actually rendered. Bounded by real make/model combinations, not
@@ -308,22 +393,27 @@ export function DroptopVehiclesPage() {
       const key = `${v.shopLabel ?? ''}|${v.make ?? '—'}|${v.model ?? '—'}`
       let a = byKey.get(key)
       if (!a) {
-        a = { key, shopLabel: v.shopLabel, make: v.make, model: v.model, vehicleCount: 0, visits: 0, totalTicket: 0, totalMileage: 0, mileageCount: 0, byYear: new Map() }
+        a = { key, shopLabel: v.shopLabel, make: v.make, model: v.model, vehicleCount: 0, visits: 0, totalTicket: 0, totalMileage: 0, mileageCount: 0, trims: new Set(), engines: new Set(), byYear: new Map() }
         byKey.set(key, a)
       }
       a.vehicleCount++
       a.visits += v.visits
       a.totalTicket += v.totalTicket
       if (v.mileage != null) { a.totalMileage += v.mileage; a.mileageCount++ }
+      const decoded = v.vin ? vinDecodeMap.get(v.vin) : undefined
+      if (decoded?.trim) a.trims.add(decoded.trim)
+      if (decoded?.engine) a.engines.add(decoded.engine)
 
       const yearKey = v.year ?? 'Unknown'
       let y = a.byYear.get(yearKey)
-      if (!y) { y = { year: v.year, vehicleCount: 0, totalMileage: 0, mileageCount: 0 }; a.byYear.set(yearKey, y) }
+      if (!y) { y = { year: v.year, vehicleCount: 0, totalMileage: 0, mileageCount: 0, trims: new Set(), engines: new Set() }; a.byYear.set(yearKey, y) }
       y.vehicleCount++
       if (v.mileage != null) { y.totalMileage += v.mileage; y.mileageCount++ }
+      if (decoded?.trim) y.trims.add(decoded.trim)
+      if (decoded?.engine) y.engines.add(decoded.engine)
     }
     return [...byKey.values()].sort((a, b) => b.visits - a.visits)
-  }, [vehicleAggs])
+  }, [vehicleAggs, vinDecodeMap])
 
   const PAGE_SIZE = 100
   const [page, setPage] = useState(0)
@@ -332,17 +422,18 @@ export function DroptopVehiclesPage() {
   const pagedRows = useMemo(() => makeModelAggs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [makeModelAggs, page])
 
   const [drilldown, setDrilldown] = useState<MakeModelAgg | null>(null)
+  const pendingDecodeCount = useMemo(() => vinsInScope.filter((v) => !vinDecodeMap.has(v)).length, [vinsInScope, vinDecodeMap])
 
   function exportRows(format: 'csv' | 'xlsx') {
     if (!makeModelAggs.length) { toast.error('Nothing to export for this selection'); return }
     setExporting(format)
     try {
       const headers = groupMode === 'by-shop'
-        ? ['Shop', 'Make', 'Model', 'Avg Mileage', 'Visits', 'Avg Ticket']
-        : ['Make', 'Model', 'Avg Mileage', 'Visits', 'Avg Ticket']
+        ? ['Shop', 'Make', 'Model', 'Trim(s)', 'Engine(s)', 'Avg Mileage', 'Visits', 'Avg Ticket']
+        : ['Make', 'Model', 'Trim(s)', 'Engine(s)', 'Avg Mileage', 'Visits', 'Avg Ticket']
       const rows = makeModelAggs.map((a) => {
         const avgMileage = a.mileageCount > 0 ? Math.round(a.totalMileage / a.mileageCount) : null
-        const base = [a.make ?? '—', a.model ?? '—', avgMileage != null ? String(avgMileage) : '—', String(a.visits), (a.totalTicket / a.visits).toFixed(2)]
+        const base = [a.make ?? '—', a.model ?? '—', [...a.trims].sort().join('; ') || '—', [...a.engines].sort().join('; ') || '—', avgMileage != null ? String(avgMileage) : '—', String(a.visits), (a.totalTicket / a.visits).toFixed(2)]
         return groupMode === 'by-shop' ? [a.shopLabel ?? '—', ...base] : base
       })
       const fileBase = `droptop-vehicles-${range.start}-to-${range.end}`
@@ -468,6 +559,18 @@ export function DroptopVehiclesPage() {
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className="text-[11px] font-mono text-inky/60">Click a row for its year-by-year breakdown.</p>
             <div className="flex items-center gap-2 flex-wrap">
+              {decoding ? (
+                <span className="text-[10px] font-mono text-inky/70">
+                  Decoding… {decodeProgress ? `${decodeProgress.processed.toLocaleString()} of ${decodeProgress.total.toLocaleString()}` : ''}
+                </span>
+              ) : pendingDecodeCount > 0 ? (
+                <Button size="sm" variant="secondary" onClick={decodeMissingVins}
+                  title="Look up Trim/Engine for VINs in view via NHTSA's free VIN-decode API — decoded VINs are cached forever, never re-decoded">
+                  Decode Engine/Trim ({pendingDecodeCount.toLocaleString()})
+                </Button>
+              ) : vinsInScope.length > 0 && (
+                <span className="text-[10px] font-mono text-inky/50">Engine/Trim decoded for all {vinsInScope.length.toLocaleString()} VIN(s) in view</span>
+              )}
               <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportRows('csv')}>Export CSV</Button>
               <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportRows('xlsx')}>Export XLSX</Button>
               {makeModelAggs.length > PAGE_SIZE && (
@@ -492,6 +595,8 @@ export function DroptopVehiclesPage() {
                     {groupMode === 'by-shop' && <th className="px-3 py-2 text-left">Shop</th>}
                     <th className="px-3 py-2 text-left">Make</th>
                     <th className="px-3 py-2 text-left">Model</th>
+                    <th className="px-3 py-2 text-left">Trim(s)</th>
+                    <th className="px-3 py-2 text-left">Engine(s)</th>
                     <th className="px-3 py-2 text-right">Avg Mileage</th>
                     <th className="px-3 py-2 text-right">Visits</th>
                     <th className="px-3 py-2 text-right">Avg Ticket</th>
@@ -505,6 +610,8 @@ export function DroptopVehiclesPage() {
                         {groupMode === 'by-shop' && <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.shopLabel}</td>}
                         <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.make ?? '—'}</td>
                         <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.model ?? '—'}</td>
+                        <td className="px-3 py-1.5 text-navy">{[...a.trims].sort().join(', ') || '—'}</td>
+                        <td className="px-3 py-1.5 text-navy">{[...a.engines].sort().join(', ') || '—'}</td>
                         <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{avgMileage != null ? avgMileage.toLocaleString() : '—'}</td>
                         <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{a.visits.toLocaleString()}</td>
                         <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(a.totalTicket / a.visits)}</td>
@@ -526,6 +633,8 @@ export function DroptopVehiclesPage() {
               <thead className="sticky top-0 bg-cream">
                 <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
                   <th className="px-3 py-2 text-left">Year</th>
+                  <th className="px-3 py-2 text-left">Trim(s)</th>
+                  <th className="px-3 py-2 text-left">Engine(s)</th>
                   <th className="px-3 py-2 text-right">Vehicles</th>
                   <th className="px-3 py-2 text-right">Avg Mileage</th>
                 </tr>
@@ -536,6 +645,8 @@ export function DroptopVehiclesPage() {
                   .map((y) => (
                     <tr key={y.year ?? 'unknown'} className="border-b border-navy/10">
                       <td className="px-3 py-1.5 text-navy whitespace-nowrap">{y.year ?? 'Unknown'}</td>
+                      <td className="px-3 py-1.5 text-navy">{[...y.trims].sort().join(', ') || '—'}</td>
+                      <td className="px-3 py-1.5 text-navy">{[...y.engines].sort().join(', ') || '—'}</td>
                       <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.vehicleCount.toLocaleString()}</td>
                       <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.mileageCount > 0 ? Math.round(y.totalMileage / y.mileageCount).toLocaleString() : '—'}</td>
                     </tr>
