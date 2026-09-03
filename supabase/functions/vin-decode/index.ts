@@ -53,15 +53,29 @@ const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i
 // keeps requests well under a few hundred VINs to stay fast/reliable —
 // chunk conservatively.
 const NHTSA_BATCH_SIZE = 50
-const NHTSA_CONCURRENCY = 3
-// Auto-discover mode's ceiling per invocation — bounds execution time (at
-// concurrency 3 / 50 per NHTSA request, 5000 VINs is ~100 sequential
-// rounds of requests, comfortably inside the platform's execution limit).
+// Raised from 3 (2026-09-03) — nothing NHTSA-side rate-limits this except
+// courtesy; the real ceiling is this function's own execution time.
+const NHTSA_CONCURRENCY = 5
+// Auto-discover mode's ceiling per invocation — bounds execution time.
+// Raised from 5000 (2026-09-03): at concurrency 5 / 50 per NHTSA request,
+// 10,000 VINs is 200 requests / 40 sequential rounds — an ESTIMATE (NHTSA's
+// real per-request latency was never actually benchmarked here), chosen to
+// stay comfortably under the dispatcher's own 150s downstream-call budget
+// (FETCH_TIMEOUT_MS in data-connection-dispatcher/index.ts) even if that
+// estimate is off by 2-3x. If this ever times out in practice, drop this
+// back down rather than raising concurrency further — this app has been
+// burned more than once by underestimating a third-party API's real
+// latency under load (see droptop-sync-orders' own 504-retry history).
 // A backlog bigger than this just takes multiple scheduled runs to fully
 // catch up — same "steady incremental progress" precedent as this app's
 // other backlog-catch-up jobs (droptop_orders' incremental sync, etc.),
-// not something one invocation needs to fully drain.
-const AUTO_MAX_VINS = 5000
+// not something one invocation needs to fully drain. For a MUCH faster
+// backlog catch-up without touching this number at all, switch this
+// connection's schedule from "Daily" to "Interval" in Data Connections
+// (e.g. every 60-120 min) — running more often multiplies daily throughput
+// far more than raising this cap does, with no added execution-time risk
+// per run.
+const AUTO_MAX_VINS = 10000
 
 async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0
