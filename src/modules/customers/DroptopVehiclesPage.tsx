@@ -121,7 +121,10 @@ interface VinDecoded { trim: string | null; engine: string | null }
 // round trips to read back. Same worker-pool shape as droptopChildFetch.ts.
 const VIN_DECODE_READ_CHUNK = 5000
 const VIN_DECODE_READ_CONCURRENCY = 5
-async function fetchVinDecodeMap(vins: string[]): Promise<Map<string, VinDecoded>> {
+// onChunk fires once per completed chunk (with that chunk's VIN count) so
+// a caller can fold this into its own overall progress bar instead of the
+// bar looking stuck at 100% while this runs silently underneath it.
+async function fetchVinDecodeMap(vins: string[], onChunk?: (n: number) => void): Promise<Map<string, VinDecoded>> {
   const found = new Map<string, VinDecoded>()
   if (!vins.length) return found
   const chunks: string[][] = []
@@ -133,8 +136,8 @@ async function fetchVinDecodeMap(vins: string[]): Promise<Map<string, VinDecoded
       const i = next++
       if (i >= chunks.length) return
       const { data, error } = await sb.schema('inventory').from('vin_decoded').select('vin, trim, engine').in('vin', chunks[i])
-      if (error) continue
-      for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
+      if (!error) for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
+      onChunk?.(chunks[i].length)
     }
   }
   await Promise.all(Array.from({ length: Math.min(VIN_DECODE_READ_CONCURRENCY, chunks.length) }, worker))
@@ -200,6 +203,11 @@ export function DroptopVehiclesPage() {
   const [filterYears, setFilterYears] = useState<string[]>([])
   const [filterMakes, setFilterMakes] = useState<string[]>([])
   const [filterModels, setFilterModels] = useState<string[]>([])
+  // Engine comes from vinDecodeMap (a decode result), not a raw
+  // VehicleRow field like Year/Make/Model — so this filter and its option
+  // list both need to look each vehicle's engine up by VIN rather than
+  // reading it directly off the row.
+  const [filterEngines, setFilterEngines] = useState<string[]>([])
   // 'company' groups purely by vehicle (a vehicle serviced at 2 shops is one
   // row); 'by-shop' adds shop as part of the grouping key, same naming
   // convention as the Heatmap's own zip-export company/by-shop toggle.
@@ -328,9 +336,17 @@ export function DroptopVehiclesPage() {
 
       // Hydrate every loaded vehicle's cached Trim/Engine as part of THIS
       // load — see fetchVinDecodeMap's own comment for why a separate
-      // reactive pass was slow enough to be its own bug.
+      // reactive pass was slow enough to be its own bug. Folded into the
+      // SAME loadProgress bar (extend the denominator, then advance as
+      // each chunk completes) rather than letting the bar sit at a
+      // stuck-looking 100% while this runs silently underneath it — a real
+      // report: this read can take ~20s on a wide range with 100k+ VINs
+      // even at this helper's own faster chunk/concurrency settings.
       const distinctVins = [...new Set(vehRows.map((v) => v.vin).filter((v): v is string => !!v && VIN_RE.test(v)))]
-      const decodeMap = await fetchVinDecodeMap(distinctVins)
+      if (!cancelled) setLoadProgress((p) => ({ loaded: p.loaded, total: (p.total ?? 0) + distinctVins.length }))
+      const decodeMap = await fetchVinDecodeMap(distinctVins, (n) => {
+        if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: p.loaded + n }))
+      })
       if (cancelled) return
 
       setOrders(allOrders)
@@ -370,6 +386,22 @@ export function DroptopVehiclesPage() {
     if (filterMakes.length) vs = vs.filter((v) => v.vin_vehicle_make != null && filterMakes.includes(v.vin_vehicle_make))
     return [...new Set(vs.map((v) => v.vin_vehicle_model).filter((m): m is string => !!m))].sort().map((v) => ({ value: v }))
   }, [vehiclesInScope, filterYears, filterMakes])
+  // Engine is a decode result (vinDecodeMap), not a raw field on the
+  // vehicle row — look each candidate vehicle's VIN up rather than reading
+  // an engine column directly. Only vehicles with a decoded engine
+  // contribute an option; an undecoded VIN just doesn't show up here yet.
+  const engineOptions = useMemo(() => {
+    let vs = vehiclesInScope
+    if (filterYears.length) vs = vs.filter((v) => v.vin_vehicle_year != null && filterYears.includes(String(v.vin_vehicle_year)))
+    if (filterMakes.length) vs = vs.filter((v) => v.vin_vehicle_make != null && filterMakes.includes(v.vin_vehicle_make))
+    if (filterModels.length) vs = vs.filter((v) => v.vin_vehicle_model != null && filterModels.includes(v.vin_vehicle_model))
+    const engines = new Set<string>()
+    for (const v of vs) {
+      const decoded = v.vin ? vinDecodeMap.get(v.vin) : undefined
+      if (decoded?.engine) engines.add(decoded.engine)
+    }
+    return [...engines].sort().map((v) => ({ value: v }))
+  }, [vehiclesInScope, filterYears, filterMakes, filterModels, vinDecodeMap])
 
   // Pass 1 — per distinct vehicle (can be 100k+ rows for a big company;
   // never rendered, just folded into makeModelAggs below).
@@ -379,6 +411,10 @@ export function DroptopVehiclesPage() {
       if (filterYears.length && !(v.vin_vehicle_year != null && filterYears.includes(String(v.vin_vehicle_year)))) continue
       if (filterMakes.length && !(v.vin_vehicle_make && filterMakes.includes(v.vin_vehicle_make))) continue
       if (filterModels.length && !(v.vin_vehicle_model && filterModels.includes(v.vin_vehicle_model))) continue
+      if (filterEngines.length) {
+        const decoded = v.vin ? vinDecodeMap.get(v.vin) : undefined
+        if (!decoded?.engine || !filterEngines.includes(decoded.engine)) continue
+      }
       const order = ordersById.get(v.order_id)
       if (!order) continue
       const shopLabel = groupMode === 'by-shop' ? (order.location_id ? (idToLabel.get(order.location_id) ?? order.location_id) : '—') : null
@@ -393,7 +429,7 @@ export function DroptopVehiclesPage() {
       if (v.mileage != null && (a.mileage == null || v.mileage > a.mileage)) a.mileage = v.mileage
     }
     return [...byKey.values()]
-  }, [vehiclesInScope, ordersById, filterYears, filterMakes, filterModels, groupMode, idToLabel])
+  }, [vehiclesInScope, ordersById, filterYears, filterMakes, filterModels, filterEngines, vinDecodeMap, groupMode, idToLabel])
 
   // Distinct, structurally-valid VINs currently in view — the universe the
   // "Decode Engine/Trim" button operates on. Non-VIN identities (the
@@ -464,7 +500,7 @@ export function DroptopVehiclesPage() {
 
   const PAGE_SIZE = 100
   const [page, setPage] = useState(0)
-  useEffect(() => { setPage(0) }, [filterYears, filterMakes, filterModels, groupMode, shopIds.join(','), filterRegions, filterMarkets, filterAMs])
+  useEffect(() => { setPage(0) }, [filterYears, filterMakes, filterModels, filterEngines, groupMode, shopIds.join(','), filterRegions, filterMarkets, filterAMs])
   const totalPages = Math.max(1, Math.ceil(makeModelAggs.length / PAGE_SIZE))
   const pagedRows = useMemo(() => makeModelAggs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [makeModelAggs, page])
 
@@ -545,6 +581,10 @@ export function DroptopVehiclesPage() {
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Model</span>
           <MultiSelectDropdown options={modelOptions} selected={filterModels} onChange={setFilterModels} placeholder="All Models" countNoun="models" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Engine</span>
+          <MultiSelectDropdown options={engineOptions} selected={filterEngines} onChange={setFilterEngines} placeholder="All Engines" countNoun="engines" searchable />
         </div>
         <label className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Detail</span>
@@ -636,7 +676,7 @@ export function DroptopVehiclesPage() {
               <p className="text-xs font-mono text-inky/60">No vehicle data for this selection — either no orders in range, or none of them have a matched vehicle yet.</p>
             </CardBody></Card>
           ) : (
-            <div className="overflow-x-auto rounded border border-navy/30 max-h-[32rem] overflow-y-auto">
+            <div className="overflow-x-auto rounded border border-navy/30 max-h-[64rem] overflow-y-auto">
               <table className="w-full text-xs font-mono">
                 <thead className="sticky top-0 bg-cream">
                   <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
@@ -673,7 +713,7 @@ export function DroptopVehiclesPage() {
         </>
       )}
 
-      <Modal open={drilldown != null} onClose={() => setDrilldown(null)}
+      <Modal open={drilldown != null} onClose={() => setDrilldown(null)} size="2xl"
         title={drilldown ? `${drilldown.make ?? '—'} ${drilldown.model ?? '—'}${drilldown.shopLabel ? ` — ${drilldown.shopLabel}` : ''}` : ''}>
         {drilldown && (
           <div className="overflow-x-auto rounded border border-navy/30 max-h-[60vh] overflow-y-auto">
@@ -693,8 +733,8 @@ export function DroptopVehiclesPage() {
                   .map((y) => (
                     <tr key={y.year ?? 'unknown'} className="border-b border-navy/10">
                       <td className="px-3 py-1.5 text-navy whitespace-nowrap">{y.year ?? 'Unknown'}</td>
-                      <td className="px-3 py-1.5 text-navy">{<TopValuesCell counts={y.trims} />}</td>
-                      <td className="px-3 py-1.5 text-navy">{<TopValuesCell counts={y.engines} />}</td>
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{<TopValuesCell counts={y.trims} />}</td>
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{<TopValuesCell counts={y.engines} />}</td>
                       <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.vehicleCount.toLocaleString()}</td>
                       <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.mileageCount > 0 ? Math.round(y.totalMileage / y.mileageCount).toLocaleString() : '—'}</td>
                     </tr>
