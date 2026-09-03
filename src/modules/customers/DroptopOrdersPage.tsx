@@ -27,6 +27,7 @@ import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { Button, Card, CardBody, Input, MultiSelectDropdown } from '@/components/ui'
+import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
 
 interface OrderRow {
   id: string
@@ -83,6 +84,15 @@ const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs fon
 // apart.
 const ORDER_ID_CHUNK = 200
 
+// How many order-id chunks to fetch at once, per table. Chunks are
+// independent of each other (each is its own `order_id IN (...)` scope,
+// unlike the pages WITHIN a chunk which depend on each other's cursor), so
+// running several concurrently is free correctness-wise — this stacks with
+// the 4 tables already running concurrently with each other via Promise.all
+// in the caller, so a big pull now has up to CHUNK_CONCURRENCY × 4 requests
+// in flight at once instead of 4.
+const CHUNK_CONCURRENCY = 4
+
 // Fetch rows for a batch of order ids, chunking the input AND paginating
 // each chunk's output. CHUNK alone isn't enough — this project's Supabase
 // "Max Rows" API setting silently caps every response at 1000 regardless
@@ -98,9 +108,9 @@ async function fetchByOrderIds<T>(table: string, orderIds: string[], select: str
   const CHUNK = ORDER_ID_CHUNK
   const PAGE = 1000
   const MAX_PAGE_RETRIES = 2
-  const out: T[] = []
-  for (let i = 0; i < orderIds.length; i += CHUNK) {
-    const slice = orderIds.slice(i, i + CHUNK)
+
+  async function fetchChunk(slice: string[]): Promise<T[]> {
+    const out: T[] = []
     let cursor: string | null = null
     for (;;) {
       let data: ({ id: string } & T)[] | null = null
@@ -123,8 +133,28 @@ async function fetchByOrderIds<T>(table: string, orderIds: string[], select: str
       cursor = data[data.length - 1].id
     }
     onChunk?.()
+    return out
   }
-  return out
+
+  const chunks: string[][] = []
+  for (let i = 0; i < orderIds.length; i += CHUNK) chunks.push(orderIds.slice(i, i + CHUNK))
+
+  // Bounded worker pool — CHUNK_CONCURRENCY chunks in flight at once,
+  // pulling the next one off the queue as each finishes, rather than firing
+  // every chunk at once (which would just recreate the original "n
+  // sequential" problem's opposite failure mode: hundreds of requests
+  // competing for the same connection pool at once on a very large pull).
+  const results: T[][] = new Array(chunks.length)
+  let nextIndex = 0
+  async function worker() {
+    for (;;) {
+      const i = nextIndex++
+      if (i >= chunks.length) return
+      results[i] = await fetchChunk(chunks[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker))
+  return results.flat()
 }
 
 export function DroptopOrdersPage() {
@@ -259,41 +289,44 @@ export function DroptopOrdersPage() {
       // actual ceiling instead of requesting more than will ever be
       // honored.
       const PAGE = 1000
-      const allOrders: OrderRow[] = []
-      let cursor: { date: string; id: string } | null = null
-      // A full company-wide range is 100+ sequential page requests — one
-      // page hitting "canceling statement due to statement timeout" (a
-      // real report — transient contention, not a structural problem,
-      // since this exact query pattern runs in ~280ms per page normally)
-      // used to throw immediately and discard everything fetched so far,
-      // even 100+ pages in. One page is now retried up to twice (with a
-      // short backoff) before actually giving up — same fix already
-      // applied to the Heatmap's identical fetch loop.
+      // A full company-wide range used to be 100+ SEQUENTIAL page requests
+      // — correct, but every page waited on the previous one's round trip
+      // even though the table can serve several requests at once.
+      // fetchDateRangeConcurrent (src/lib) keeps this exact keyset-
+      // pagination shape (still index-friendly on the date range, still
+      // safe to retry a single page) but runs it across several non-
+      // overlapping day-range slices in parallel instead of one loop
+      // covering the whole range — see that file's own comment for why
+      // slicing by date rather than plain OFFSET paging.
       const MAX_PAGE_RETRIES = 2
-      for (;;) {
-        let data: OrderRow[] | null = null
-        let lastErr: string | null = null
-        for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
-          if (cancelled) return
-          let q = applyFilters(sb.schema('inventory').from('droptop_orders')
-            .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at, fleet_company_name'))
-            .order('order_finalized_at', { ascending: true })
-            .order('id', { ascending: true }).limit(PAGE)
-          if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
-          const { data: pageData, error: err } = await q
-          if (!err) { data = (pageData ?? []) as OrderRow[]; break }
-          lastErr = err.message
-          if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
-        }
-        if (data === null) {
-          throw new Error(`${lastErr ?? 'Failed to load orders'} — loaded ${allOrders.length.toLocaleString()} order(s) before this happened`)
-        }
-        allOrders.push(...data)
-        if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: allOrders.length }))
-        if (data.length === 0) break
-        const last = data[data.length - 1]
-        cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
-      }
+      let loadedSoFarLocal = 0
+      const allOrders = await fetchDateRangeConcurrent<OrderRow>({
+        rangeStart: range.start,
+        rangeEnd: range.end,
+        totalCount: count ?? null,
+        cursorOf: (row) => ({ date: row.order_finalized_at ?? startIso, id: row.id }),
+        isCancelled: () => cancelled,
+        onProgress: (loadedSoFar) => { loadedSoFarLocal = loadedSoFar; if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: loadedSoFar })) },
+        fetchPage: async (subStart, subEnd, cursor) => {
+          const subStartIso = `${subStart}T00:00:00.000Z`
+          const subEndIso = `${subEnd}T23:59:59.999Z`
+          let lastErr: string | null = null
+          for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+            if (cancelled) return []
+            let q = applyFilters(sb.schema('inventory').from('droptop_orders')
+              .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at, fleet_company_name'))
+              .gte('order_finalized_at', subStartIso).lte('order_finalized_at', subEndIso)
+              .order('order_finalized_at', { ascending: true })
+              .order('id', { ascending: true }).limit(PAGE)
+            if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
+            const { data: pageData, error: err } = await q
+            if (!err) return (pageData ?? []) as OrderRow[]
+            lastErr = err.message
+            if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+          }
+          throw new Error(`${lastErr ?? 'Failed to load orders'} — loaded ${loadedSoFarLocal.toLocaleString()} order(s) before this happened`)
+        },
+      })
       if (cancelled) return
 
       const orderIds = allOrders.map((o) => o.id)

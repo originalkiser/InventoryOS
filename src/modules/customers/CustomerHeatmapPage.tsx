@@ -26,6 +26,7 @@ import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { getCached, setCached } from '@/lib/idbCache'
+import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
 import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal, Toggle } from '@/components/ui'
 import { getMarketSolidColor } from '@/lib/marketColors'
 import { normalizeCityCase, shopNumberCityLabel } from '@/lib/shopLabels'
@@ -366,6 +367,10 @@ export function CustomerHeatmapPage() {
   const [orderModalPackages, setOrderModalPackages] = useState<Map<string, string[]> | null>(null)
   const [orderModalExporting, setOrderModalExporting] = useState<'csv' | 'xlsx' | null>(null)
   const zipRowRefs = useRef(new Map<string, HTMLTableRowElement>())
+  // The actual Leaflet map container — captured by html2canvas for the
+  // Copy button's real screenshot (see copyHeatmap below). null whenever
+  // hideMap is on, since nothing's rendered to capture then.
+  const mapWrapperRef = useRef<HTMLDivElement | null>(null)
 
   // Dynamic based on Region/Market/AM — narrows which shops even show up
   // as pickable once one of those is set, rather than a full always-the-
@@ -498,11 +503,13 @@ export function CustomerHeatmapPage() {
     }
 
     // Per-browser cache so leaving this page and coming back doesn't have
-    // to re-run the same 100+-page fetch — see idbCache.ts. 15 minutes is
-    // long enough to matter for a quick back-and-forth, short enough that
-    // new orders synced in the meantime show up again on the next real
-    // visit rather than reading as "the sync isn't working."
-    const CACHE_TTL_MS = 15 * 60 * 1000
+    // to re-run the same 100+-page fetch — see idbCache.ts. Bumped from an
+    // initial 15 minutes (too short — a real ~20-minute step-away still
+    // missed it) to an hour, matching the rollup table's own ~24h
+    // staleness tolerance loosely but erring shorter since this covers
+    // live (not nightly-refreshed) data; refreshing the page still forces
+    // a real reload if a full hour has actually passed.
+    const CACHE_TTL_MS = 60 * 60 * 1000
     const cacheKey = `heatmap-orders:${companyId}:${effectiveLocationKey}:${range.start}:${range.end}:${coordinateMode}:${hideFleetOrders ? 'nofleet' : 'all'}`
 
     async function run() {
@@ -545,44 +552,51 @@ export function CustomerHeatmapPage() {
       // reverted PAGE to 1000 to match the actual ceiling instead of
       // requesting more than will ever be honored.
       const PAGE = 1000
-      const all: OrderRow[] = []
-      let cursor: { date: string; id: string } | null = null
-      // A full company-wide month is 100+ sequential page requests — a
-      // single transient failure partway through (a dropped connection, a
-      // brief blip) used to torch the entire load with whatever generic
-      // error came back, discarding everything fetched so far even if it
-      // was 100+ pages in. One page is retried up to twice (with a short
-      // backoff) before actually giving up, same "don't let one bad
-      // request take down a long sequential run" reasoning as the
-      // Historical Backfill's per-window retry.
+      // A full company-wide month used to be 100+ SEQUENTIAL page requests
+      // — correct, but every page waited on the previous one's round trip
+      // even though the table can easily serve several requests in
+      // parallel. fetchDateRangeConcurrent (src/lib) keeps this exact
+      // keyset-pagination shape (still index-friendly on the date range,
+      // still safe to retry a single page) but runs it across several
+      // non-overlapping day-range slices at once instead of one loop
+      // covering the whole range — see that file for why slicing by date
+      // rather than plain OFFSET paging.
       const MAX_PAGE_RETRIES = 2
-      for (;;) {
-        let data: OrderRow[] | null = null
-        let lastErr: string | null = null
-        for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
-          if (cancelled) return
-          let q = applyFilters(sb.schema('inventory').from('droptop_orders')
-            .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at, fleet_company_id'))
-            .order('order_finalized_at', { ascending: true })
-            .order('id', { ascending: true }).limit(PAGE)
-          if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
-          const { data: pageData, error: err } = await q
-          if (!err) { data = (pageData ?? []) as OrderRow[]; break }
-          lastErr = err.message
-          if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+      let all: OrderRow[]
+      try {
+        all = await fetchDateRangeConcurrent<OrderRow>({
+          rangeStart: range.start,
+          rangeEnd: range.end,
+          totalCount: count ?? null,
+          cursorOf: (row) => ({ date: row.order_finalized_at ?? startIso, id: row.id }),
+          isCancelled: () => cancelled,
+          onProgress: (loadedSoFar) => { if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: loadedSoFar })) },
+          fetchPage: async (subStart, subEnd, cursor) => {
+            const subStartIso = `${subStart}T00:00:00.000Z`
+            const subEndIso = `${subEnd}T23:59:59.999Z`
+            let lastErr: string | null = null
+            for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+              if (cancelled) return []
+              let q = applyFilters(sb.schema('inventory').from('droptop_orders')
+                .select('id, location_id, order_id, first_name, last_name, city, region, zip, lat, lng, geocoded_lat, geocoded_lng, geocode_status, final_price, order_finalized_at, fleet_company_id'))
+                .gte('order_finalized_at', subStartIso).lte('order_finalized_at', subEndIso)
+                .order('order_finalized_at', { ascending: true })
+                .order('id', { ascending: true }).limit(PAGE)
+              if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
+              const { data: pageData, error: err } = await q
+              if (!err) return (pageData ?? []) as OrderRow[]
+              lastErr = err.message
+              if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+            }
+            throw new Error(lastErr ?? 'Failed to load orders')
+          },
+        })
+      } catch (e) {
+        if (!cancelled) {
+          setError(`${e instanceof Error ? e.message : 'Failed to load orders'} — some pages may not have loaded`)
+          setLoading(false)
         }
-        if (data === null) {
-          if (!cancelled) {
-            setError(`${lastErr ?? 'Failed to load orders'} — loaded ${all.length.toLocaleString()} order(s) before this happened`)
-            setLoading(false)
-          }
-          return
-        }
-        all.push(...data)
-        if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: all.length }))
-        if (data.length === 0) break
-        const last = data[data.length - 1]
-        cursor = { date: last.order_finalized_at ?? startIso, id: last.id }
+        return
       }
       if (cancelled) return
       setRows(all)
@@ -1082,28 +1096,18 @@ export function CustomerHeatmapPage() {
     return byOrder
   }
 
-  // Copies a standalone snapshot image (a fresh Canvas render of the same
-  // cluster data/colors the live map shows — not a literal screenshot of
-  // the interactive Leaflet map, which would need a DOM-to-image library
-  // this project doesn't carry) plus a text summary (period, shop
-  // selection, and any Region/Market/AM/Owner filters in effect) to the
-  // clipboard as one clipboard item, so pasting into chat/email/a doc
-  // picks up whichever it supports.
-  async function copyHeatmap() {
-    const lines: string[] = [`Customer Heatmap — ${range.start} to ${range.end}`]
-    if (shopIds.length > 0 && shopIds.length <= 5) lines.push(`Shops: ${shopLabels.join(', ')}`)
-    else lines.push(shopIds.length ? `${shopIds.length} shops selected` : 'All shops')
-    if (filterOwners.length) lines.push(`Owner: ${filterOwners.join(', ')}`)
-    if (filterRegions.length) lines.push(`Region: ${filterRegions.join(', ')}`)
-    if (filterMarkets.length) lines.push(`Market: ${filterMarkets.join(', ')}`)
-    if (filterAMs.length) lines.push(`Area Manager: ${filterAMs.join(', ')}`)
-    if (hideFleetOrders) lines.push('Fleet orders hidden')
-
+  // Fallback snapshot — a fresh Canvas render of the same cluster data/
+  // colors the live map shows, used when there's no real map to shoot
+  // (Hide Map is on) or html2canvas itself fails for some reason (a tile
+  // host without CORS, a browser blocking canvas readback, etc). Never the
+  // primary path anymore now that html2canvas is available, but kept as a
+  // "never come back with nothing" safety net.
+  function renderClusterSnapshot(lines: string[]): Promise<Blob | null> {
     const W = 900, H = 620, PAD = 40
     const canvas = document.createElement('canvas')
     canvas.width = W; canvas.height = H
     const ctx = canvas.getContext('2d')
-    if (!ctx) { toast.error('Copy failed'); return }
+    if (!ctx) return Promise.resolve(null)
     ctx.fillStyle = '#F2F1E6' // cream
     ctx.fillRect(0, 0, W, H)
     ctx.fillStyle = '#002745' // navy
@@ -1141,8 +1145,43 @@ export function CustomerHeatmapPage() {
       ctx.font = '14px Arial'
       ctx.fillText('No orders in this range', PAD + 12, mapTop + mapH / 2)
     }
+    return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  }
 
-    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  // Copies a real screenshot of the live Leaflet map (tiles, pins, circles
+  // — whatever's actually on screen right now) via html2canvas, plus a
+  // text summary (period, shop selection, and any Region/Market/AM/Owner
+  // filters in effect), to the clipboard as one clipboard item, so pasting
+  // into chat/email/a doc picks up whichever it supports. Falls back to
+  // renderClusterSnapshot above when there's no map to shoot or the real
+  // capture fails.
+  async function copyHeatmap() {
+    const lines: string[] = [`Customer Heatmap — ${range.start} to ${range.end}`]
+    if (shopIds.length > 0 && shopIds.length <= 5) lines.push(`Shops: ${shopLabels.join(', ')}`)
+    else lines.push(shopIds.length ? `${shopIds.length} shops selected` : 'All shops')
+    if (filterOwners.length) lines.push(`Owner: ${filterOwners.join(', ')}`)
+    if (filterRegions.length) lines.push(`Region: ${filterRegions.join(', ')}`)
+    if (filterMarkets.length) lines.push(`Market: ${filterMarkets.join(', ')}`)
+    if (filterAMs.length) lines.push(`Area Manager: ${filterAMs.join(', ')}`)
+    if (hideFleetOrders) lines.push('Fleet orders hidden')
+
+    let blob: Blob | null = null
+    if (!hideMap && mapWrapperRef.current) {
+      try {
+        const html2canvas = (await import('html2canvas')).default
+        const canvas = await html2canvas(mapWrapperRef.current, {
+          useCORS: true, backgroundColor: '#F2F1E6', logging: false,
+        })
+        blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+      } catch {
+        // A tile host without CORS, a browser blocking canvas readback,
+        // etc — fall through to the stylized re-render rather than
+        // failing the whole copy.
+        blob = null
+      }
+    }
+    if (!blob) blob = await renderClusterSnapshot(lines)
+
     const plain = lines.join('\n')
     try {
       if (blob && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
@@ -1506,9 +1545,14 @@ export function CustomerHeatmapPage() {
                   contains all of Leaflet's internal stacking inside this div
                   so it can never climb above app UI outside it. */}
               {!hideMap && (
-              <div className="isolate rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
+              <div ref={mapWrapperRef} className="isolate rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
                 <MapContainer center={mapCenter} zoom={5} preferCanvas style={{ height: '100%', width: '100%' }}>
-                  <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} />
+                  {/* crossOrigin lets html2canvas (Copy button) actually read
+                      the tile images into a canvas instead of tainting it —
+                      OSM's tile server sends CORS headers precisely to
+                      support this. Passed straight through to the
+                      underlying Leaflet TileLayer as a layer option. */}
+                  <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} crossOrigin={true} />
                   <FocusZip target={focusTarget} />
                   <ZoomTracker onZoom={setZoom} />
                   <DeselectOnMapClick onDeselect={() => setSelectedZip(null)} />

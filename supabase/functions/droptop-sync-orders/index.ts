@@ -339,10 +339,15 @@ Deno.serve(async (req) => {
     }
 
     const nowIso = new Date().toISOString()
+    const numOrNull = (v: unknown): number | null => (v != null && Number.isFinite(Number(v)) ? Number(v) : null)
     const rows = allOrders.map(({ o, locationId: locId }) => {
       const c = o.customer ?? {}
       const zip = String(c.zip ?? '').trim() || null
       const coords = zip ? zipToLatLng.get(zip) : undefined
+      const owner = o.order_owner ?? {}
+      const ownerName = [owner.first_name, owner.last_name].filter(Boolean).join(' ') || null
+      const fleetLoc = o.fleet_location ?? {}
+      const fleetCo = fleetLoc.fleet_company ?? {}
       return {
         company_id: companyId,
         location_id: locId,
@@ -368,6 +373,22 @@ Deno.serve(async (req) => {
         raw_data: o,
         order_finalized_at: tsToIso(o.order_finalized),
         order_scheduled_at: tsToIso(o.order_scheduled_at),
+        // Workflow timing + bay — see 20260916_droptop_order_expanded_fields.
+        order_opened_at: tsToIso(o.order_opened),
+        order_sent_to_bay_at: tsToIso(o.order_sent_to_bay),
+        order_service_completed_at: tsToIso(o.order_service_completed),
+        order_last_updated_at: tsToIso(o.order_last_updated),
+        bay_id: o.bay_id ?? null,
+        bay_name: o.bay_name ?? null,
+        order_owner_id: owner.user_id ?? null,
+        order_owner_name: ownerName,
+        order_owner_email: owner.email ?? null,
+        pay_status: o.pay_status ?? null,
+        tax_exempt_total: numOrNull(o.tax_exempt_total),
+        fleet_location_id: fleetLoc.fleet_location_id ?? null,
+        fleet_location_name: fleetLoc.name ?? null,
+        fleet_company_id: fleetCo.fleet_company_id ?? null,
+        fleet_company_name: fleetCo.name ?? null,
         synced_at: nowIso,
         last_change_source: 'droptop',
         updated_at: nowIso,
@@ -409,28 +430,42 @@ Deno.serve(async (req) => {
       ordersUpserted += slice.length
     }
 
-    // Package/product/service line items — replaced wholesale per synced
-    // order (delete then insert), same pattern as
-    // droptop_purchase_order_items. services is captured separately from
-    // the top-level products array: it's the only place a product is
-    // linked to the package it was used to perform (package_id + its own
-    // nested products[]) — see droptop_order_services' own migration
-    // comment for why that distinction matters.
+    // Package/product/service/vehicle/servicing-position/payment/tax/
+    // declined-item child rows — all replaced wholesale per synced order
+    // (delete then insert), same pattern as droptop_purchase_order_items.
+    // services is captured separately from the top-level products array:
+    // it's the only place a product is linked to the package it was used
+    // to perform (package_id + its own nested products[]) — see
+    // droptop_order_services' own migration comment for why that
+    // distinction matters. The last 5 tables were added in
+    // 20260916_droptop_order_expanded_fields — see that migration's own
+    // comment for why they're broken out instead of left in raw_data only.
     const savedOrderIds = [...idByOrderKey.values()]
     let packagesWritten = 0
     let productsWritten = 0
     let servicesWritten = 0
+    let vehiclesWritten = 0
+    let servicingPositionsWritten = 0
+    let paymentsWritten = 0
+    let taxesWritten = 0
+    let declinedItemsWritten = 0
     if (savedOrderIds.length) {
       for (let i = 0; i < savedOrderIds.length; i += BATCH) {
         const slice = savedOrderIds.slice(i, i + BATCH)
-        const [{ error: pkgDelErr }, { error: prodDelErr }, { error: svcDelErr }] = await Promise.all([
+        const results = await Promise.all([
           (admin as any).schema('inventory').from('droptop_order_packages').delete().in('order_id', slice),
           (admin as any).schema('inventory').from('droptop_order_products').delete().in('order_id', slice),
           (admin as any).schema('inventory').from('droptop_order_services').delete().in('order_id', slice),
+          // Same wholesale-replace pattern, for the new tables added in
+          // 20260916_droptop_order_expanded_fields.
+          (admin as any).schema('inventory').from('droptop_order_vehicles').delete().in('order_id', slice),
+          (admin as any).schema('inventory').from('droptop_order_servicing_positions').delete().in('order_id', slice),
+          (admin as any).schema('inventory').from('droptop_order_payments').delete().in('order_id', slice),
+          (admin as any).schema('inventory').from('droptop_order_taxes').delete().in('order_id', slice),
+          (admin as any).schema('inventory').from('droptop_order_declined_items').delete().in('order_id', slice),
         ])
-        if (pkgDelErr) warnings.push(`Package delete batch ${i}: ${pkgDelErr.message}`)
-        if (prodDelErr) warnings.push(`Product delete batch ${i}: ${prodDelErr.message}`)
-        if (svcDelErr) warnings.push(`Service delete batch ${i}: ${svcDelErr.message}`)
+        const labels = ['Package', 'Product', 'Service', 'Vehicle', 'Servicing position', 'Payment', 'Tax', 'Declined item']
+        results.forEach(({ error }, idx) => { if (error) warnings.push(`${labels[idx]} delete batch ${i}: ${error.message}`) })
       }
 
       const packageRows = allOrders.flatMap(({ o, locationId: locId }) => {
@@ -494,17 +529,87 @@ Deno.serve(async (req) => {
           products: s.products ?? [],
         }))
       })
+      const vehicleRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        return (o.vehicles ?? []).map((v: any) => ({
+          order_id: orderUuid,
+          company_id: companyId,
+          vin: v.vin ?? null,
+          license_plate: v.license_plate ?? null,
+          vehicle_name: v.other_vehicle_name ?? null,
+          mileage: numOrNull(v.mileage),
+          vin_vehicle_make: v.vin_vehicle_make ?? null,
+          vin_vehicle_model: v.vin_vehicle_model ?? null,
+          vin_vehicle_year: v.vin_vehicle_year != null ? Math.trunc(Number(v.vin_vehicle_year)) || null : null,
+        }))
+      })
+      const servicingPositionRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        return (o.servicing_positions ?? []).map((p: any) => ({
+          order_id: orderUuid,
+          company_id: companyId,
+          user_id: p.user_id ?? null,
+          user_name: p.user_name ?? null,
+          position: p.position ?? null,
+          vin: p.vin ?? null,
+          license_plate: p.license_plate ?? null,
+          vehicle_name: p.vehicle_name ?? null,
+        }))
+      })
+      const paymentRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        return (o.payments ?? []).map((pay: any) => ({
+          order_id: orderUuid,
+          company_id: companyId,
+          payment_id: pay.payment_id ?? null,
+          payment_type: pay.payment_type ?? null,
+          sub_payment_type: pay.sub_payment_type ?? null,
+          status: pay.status ?? null,
+          final_amount: numOrNull(pay.final_amount),
+          currency: pay.currency ?? null,
+          payment_created_at: tsToIso(pay.created_timestamp),
+          payment_updated_at: tsToIso(pay.last_updated_timestamp),
+        }))
+      })
+      const taxRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        return (o.taxes ?? []).map((t: any) => ({
+          order_id: orderUuid,
+          company_id: companyId,
+          name: t.name ?? null,
+          amount: numOrNull(t.amount),
+          percentage: numOrNull(t.percentage),
+          taxed_subtotal: numOrNull(t.taxed_subtotal),
+        }))
+      })
+      // Every sample order inspected so far has an empty declined_items —
+      // stored whole rather than as structured columns since the real
+      // inner shape of a populated one has never actually been observed
+      // (see 20260916_droptop_order_expanded_fields' own comment).
+      const declinedItemRows = allOrders.flatMap(({ o, locationId: locId }) => {
+        const orderUuid = idByOrderKey.get(`${locId}|${o.order_id}`)
+        if (!orderUuid) return []
+        const decl = o.declined_items ?? {}
+        return [
+          ...(decl.packages ?? []).map((raw: any) => ({ order_id: orderUuid, company_id: companyId, item_type: 'package', raw_data: raw })),
+          ...(decl.services ?? []).map((raw: any) => ({ order_id: orderUuid, company_id: companyId, item_type: 'service', raw_data: raw })),
+        ]
+      })
 
-      // Insert the 3 child tables' batches in parallel per batch-index
+      // Insert every child table's batches in parallel per batch-index
       // (they're independent tables, no reason to wait on one before
-      // starting the next) — cuts this phase's wall time roughly 3x versus
-      // running them one after another, which matters now that every
+      // starting the next) — cuts this phase's wall time roughly N-fold
+      // versus running them one after another, which matters now that every
       // location invocation is doing meaningfully more write work than
       // when this sync only wrote order headers.
       //
       // A real backfill hit "canceling statement due to statement timeout"
-      // on these three inserts at the header loop's BATCH=500 — this table
-      // set carries meaningfully more data per row than an order header
+      // on these inserts at the header loop's BATCH=500 — this table set
+      // carries meaningfully more data per row than an order header
       // (droptop_order_services alone stores a nested products[] JSONB
       // array per row). Smaller batches reduce how much work one statement
       // has to do; a bounded retry absorbs a transient timeout without
@@ -527,20 +632,41 @@ Deno.serve(async (req) => {
         return lastErr
       }
 
-      const maxLen = Math.max(packageRows.length, productRows.length, serviceRows.length)
+      // 8 child tables now (the original 3 plus vehicles/servicing
+      // positions/payments/taxes/declined items) — looped generically
+      // rather than hand-duplicated per table, same batching/retry as
+      // before, still all 8 tables' batch i in parallel with each other.
+      const childSpecs: { label: string; table: string; rows: Record<string, unknown>[] }[] = [
+        { label: 'Package', table: 'droptop_order_packages', rows: packageRows },
+        { label: 'Product', table: 'droptop_order_products', rows: productRows },
+        { label: 'Service', table: 'droptop_order_services', rows: serviceRows },
+        { label: 'Vehicle', table: 'droptop_order_vehicles', rows: vehicleRows },
+        { label: 'Servicing position', table: 'droptop_order_servicing_positions', rows: servicingPositionRows },
+        { label: 'Payment', table: 'droptop_order_payments', rows: paymentRows },
+        { label: 'Tax', table: 'droptop_order_taxes', rows: taxRows },
+        { label: 'Declined item', table: 'droptop_order_declined_items', rows: declinedItemRows },
+      ]
+      const written: Record<string, number> = {}
+      const maxLen = Math.max(...childSpecs.map((s) => s.rows.length))
       for (let i = 0; i < maxLen; i += CHILD_BATCH) {
-        const pkgSlice = packageRows.slice(i, i + CHILD_BATCH)
-        const prodSlice = productRows.slice(i, i + CHILD_BATCH)
-        const svcSlice = serviceRows.slice(i, i + CHILD_BATCH)
-        const [pkgErr, prodErr, svcErr] = await Promise.all([
-          insertWithRetry('droptop_order_packages', pkgSlice),
-          insertWithRetry('droptop_order_products', prodSlice),
-          insertWithRetry('droptop_order_services', svcSlice),
-        ])
-        if (pkgErr) warnings.push(`Package insert batch ${i}: ${pkgErr}`); else packagesWritten += pkgSlice.length
-        if (prodErr) warnings.push(`Product insert batch ${i}: ${prodErr}`); else productsWritten += prodSlice.length
-        if (svcErr) warnings.push(`Service insert batch ${i}: ${svcErr}`); else servicesWritten += svcSlice.length
+        const results = await Promise.all(
+          childSpecs.map((s) => insertWithRetry(s.table, s.rows.slice(i, i + CHILD_BATCH))),
+        )
+        results.forEach((err, idx) => {
+          const spec = childSpecs[idx]
+          const sliceLen = spec.rows.slice(i, i + CHILD_BATCH).length
+          if (err) warnings.push(`${spec.label} insert batch ${i}: ${err}`)
+          else written[spec.table] = (written[spec.table] ?? 0) + sliceLen
+        })
       }
+      packagesWritten = written.droptop_order_packages ?? 0
+      productsWritten = written.droptop_order_products ?? 0
+      servicesWritten = written.droptop_order_services ?? 0
+      vehiclesWritten = written.droptop_order_vehicles ?? 0
+      servicingPositionsWritten = written.droptop_order_servicing_positions ?? 0
+      paymentsWritten = written.droptop_order_payments ?? 0
+      taxesWritten = written.droptop_order_taxes ?? 0
+      declinedItemsWritten = written.droptop_order_declined_items ?? 0
     }
 
     // Advance sync-state only for locations whose fetch actually succeeded
@@ -584,6 +710,11 @@ Deno.serve(async (req) => {
       packages_written: packagesWritten,
       products_written: productsWritten,
       services_written: servicesWritten,
+      vehicles_written: vehiclesWritten,
+      servicing_positions_written: servicingPositionsWritten,
+      payments_written: paymentsWritten,
+      taxes_written: taxesWritten,
+      declined_items_written: declinedItemsWritten,
       window: mode === 'incremental'
         ? (incrementalMaxEnd >= incrementalMinStart ? { startUnix: incrementalMinStart, endUnix: incrementalMaxEnd } : null)
         : { startUnix, endUnix },
