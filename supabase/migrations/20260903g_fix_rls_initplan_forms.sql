@@ -1,0 +1,16 @@
+-- Phase 2 (auth_rls_initplan): wrap unwrapped auth.uid()/auth.jwt()/auth.role()
+-- calls in forms schema policies as (select auth.*()) so Postgres evaluates
+-- them once per query (an init-plan) instead of once per row. Mechanical only —
+-- every USING/WITH CHECK expression is unchanged except for this wrapping, so
+-- access is identical to before.
+
+ALTER POLICY "assignments_read" ON forms.assignments USING (((assigned_to = (select auth.uid())) OR (form_id IN ( SELECT forms.id FROM forms.forms WHERE (forms.created_by = (select auth.uid())))) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
+ALTER POLICY "assignments_write" ON forms.assignments USING (((form_id IN ( SELECT forms.id FROM forms.forms WHERE (forms.created_by = (select auth.uid())))) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
+ALTER POLICY "field_conditions_write" ON forms.field_conditions USING (((form_id IN ( SELECT forms.id FROM forms.forms WHERE (forms.created_by = (select auth.uid())))) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
+ALTER POLICY "fields_write" ON forms.fields USING (((form_id IN ( SELECT forms.id FROM forms.forms WHERE (forms.created_by = (select auth.uid())))) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
+ALTER POLICY "Manage department shares" ON forms.form_department_shares USING (((form_id IN ( SELECT forms.id FROM forms.forms WHERE (forms.created_by = (select auth.uid())))) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
+ALTER POLICY "Read department shares" ON forms.form_department_shares USING (((select auth.role()) = 'authenticated'::text));
+ALTER POLICY "forms_read" ON forms.forms USING ((((select auth.role()) = 'authenticated'::text) OR (is_published = true)));
+ALTER POLICY "forms_write" ON forms.forms USING (((created_by = (select auth.uid())) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
+ALTER POLICY "score_streaks_write" ON forms.score_streaks USING (((form_id IN ( SELECT forms.id FROM forms.forms WHERE (forms.created_by = (select auth.uid())))) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
+ALTER POLICY "submissions_read" ON forms.submissions USING (((submitted_by = (select auth.uid())) OR (form_id IN ( SELECT forms.id FROM forms.forms WHERE (forms.created_by = (select auth.uid())))) OR (( SELECT user_profiles.role FROM platform.user_profiles WHERE (user_profiles.id = (select auth.uid()))) = ANY (ARRAY['administrator'::text, 'developer'::text]))));
