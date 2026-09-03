@@ -12,6 +12,7 @@ import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, Mu
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
 import { runGeocoding } from '@/services/geocodingService'
+import { runAutoVinDecode } from '@/services/vinDecodeService'
 import type { DataConnectionSchedule } from '@/types/integrations'
 import { formatInTz } from '@/lib/tzFormat'
 import {
@@ -726,6 +727,33 @@ export function DataConnectionsTab() {
       setOrderBackfillShops([])
     }
     setRunning(null)
+
+    // A big historical pull like this can easily bring in tens/hundreds of
+    // thousands of vehicles the scheduled vin_decode job (once/day by
+    // default) would take a long time to catch up on — see that
+    // connection's own header comment on why the daily schedule alone
+    // isn't sized for a backfill-scale burst. Kick off a catch-up decode
+    // pass automatically, deliberately NOT awaited here (this backfill's
+    // own "running" state and button already cleared above) — it runs as
+    // its own tracked task so the backfill UI doesn't stay blocked for
+    // however long the decode catch-up takes on top of the backfill itself.
+    // Best-effort: if this fails, the scheduled job / manual Vehicles-page
+    // button still cover it eventually, so it doesn't retry here.
+    if (ordersTotal > 0) {
+      const vinStore = useSyncTasksStore.getState()
+      // totalBatches left at its default 0 (indeterminate) — how many VINs
+      // this backfill introduced isn't known ahead of time, so this is a
+      // "N processed so far" counter, not a fraction. See SyncTask's own
+      // totalBatches comment for that convention.
+      vinStore.start(VIN_DECODE_TASK_ID, 'Engine/Trim Decode — catching up on vehicles from this backfill')
+      runAutoVinDecode((p) => vinStore.setProgress(VIN_DECODE_TASK_ID, p.processedSoFar))
+        .then((r) => {
+          vinStore.finish(VIN_DECODE_TASK_ID, 'success', `${r.newlyDecoded} decoded (${r.cachedHits} already cached)`)
+        })
+        .catch((err) => {
+          vinStore.finish(VIN_DECODE_TASK_ID, 'error', err instanceof Error ? err.message : 'Decode catch-up failed')
+        })
+    }
   }
 
   // Address-level geocoding for the Customer Heatmap — resolves each
