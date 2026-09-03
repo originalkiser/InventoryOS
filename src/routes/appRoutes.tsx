@@ -45,6 +45,7 @@ import { OnHandPage } from '@/pages/OnHandPage'
 import { MarketingPlannerPage } from '@/modules/marketing/MarketingPlannerPage'
 import { CustomerHeatmapPage } from '@/modules/customers/CustomerHeatmapPage'
 import { DroptopOrdersPage } from '@/modules/customers/DroptopOrdersPage'
+import { DroptopVehiclesPage } from '@/modules/customers/DroptopVehiclesPage'
 import { OrdersV2Landing } from '@/modules/orders-v2/OrdersV2Landing'
 import { OrdersV2Review } from '@/modules/orders-v2/OrdersV2Review'
 import { OrdersV2FinalReview } from '@/modules/orders-v2/OrdersV2FinalReview'
@@ -138,6 +139,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="marketing-planner" element={<MarketingPlannerPage />} />
     <Route path="customer-heatmap" element={<CustomerHeatmapPage />} />
     <Route path="droptop-orders" element={<DroptopOrdersPage />} />
+    <Route path="droptop-vehicles" element={<DroptopVehiclesPage />} />
     {/* Was previously an outer, top-level catch-all in App.tsx — moved here
         since AppShell's own route is now a "/*" splat and would otherwise
         render its chrome around a blank content area for an unmatched

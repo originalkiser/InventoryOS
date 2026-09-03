@@ -13,6 +13,7 @@
 // areas customers cluster in, not a pin-per-order map.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Marker, GeoJSON as GeoJSONLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
+import { Maximize2, Minimize2 } from 'lucide-react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import * as XLSX from 'xlsx'
@@ -27,6 +28,7 @@ import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { getCached, setCached } from '@/lib/idbCache'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
+import { fetchByOrderIds } from '@/lib/droptopChildFetch'
 import { Button, Card, CardBody, Input, MultiSelectDropdown, Modal, Toggle } from '@/components/ui'
 import { getMarketSolidColor } from '@/lib/marketColors'
 import { normalizeCityCase, shopNumberCityLabel } from '@/lib/shopLabels'
@@ -54,6 +56,13 @@ interface OrderRow {
   // retail order.
   fleet_company_id: string | null
 }
+interface PackageRow { order_id: string; name: string | null }
+interface ProductRow { order_id: string; product_id: string | null; uom: string | null }
+interface ServiceRow { order_id: string; products: { product_id?: string; uom?: string }[] | null }
+// Same "oil = QT unit-of-measure" convention DroptopOrdersPage.tsx already
+// established (Droptop doesn't populate product_type, so name/category text
+// isn't reliable) — kept identical here rather than inferred independently.
+const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
 
 // Address-level mode uses geocoded_lat/lng when a real Census match
 // exists; any order not yet geocoded (or one Census couldn't match) falls
@@ -207,6 +216,18 @@ function FocusZip({ target }: { target: ZipCluster | null }) {
   useEffect(() => {
     if (!target) return
     map.flyTo([target.lat, target.lng], Math.max(map.getZoom(), 9), { duration: 0.6 })
+    // When already zoomed to 9+, Math.max above keeps the destination zoom
+    // equal to the current one — a pan-only fly. Leaflet's Canvas renderer
+    // (preferCanvas, used for both circles and choropleth below) only does
+    // its full internal redraw on a genuine zoom-level change; a pan-only
+    // animated flyTo leaves per-feature setStyle() colors stale until
+    // something forces a real _resetView() — which is exactly what a manual
+    // zoom in/out does today (a known Leaflet Canvas limitation, see
+    // Leaflet/Leaflet#5170, #6050, #8164). Nudge the map with a silent,
+    // non-animated setView to its own current center/zoom once the fly
+    // finishes — forces that same internal reset without moving anything.
+    // .once avoids the nudge's own moveend re-triggering this.
+    map.once('moveend', () => { map.setView(map.getCenter(), map.getZoom(), { animate: false }) })
   }, [target, map])
   return null
 }
@@ -233,6 +254,22 @@ function DeselectOnMapClick({ onDeselect }: { onDeselect: () => void }) {
   return null
 }
 
+// Leaflet sizes its container once at mount and never re-measures it on its
+// own — a later CSS-driven resize (entering/leaving fullscreen, switching
+// height mode) leaves the map thinking it's still its original size until
+// something calls invalidateSize(). `resizeKey` is any value that changes
+// exactly when the wrapper's actual size changes; the small delay lets the
+// CSS transition/layout settle first so invalidateSize() measures the real
+// final size rather than a mid-transition one.
+function MapResizeHandler({ resizeKey }: { resizeKey: string }) {
+  const map = useMap()
+  useEffect(() => {
+    const t = setTimeout(() => map.invalidateSize(), 150)
+    return () => clearTimeout(t)
+  }, [resizeKey, map])
+  return null
+}
+
 export function CustomerHeatmapPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -246,6 +283,16 @@ export function CustomerHeatmapPage() {
   const [shopLabels, setShopLabels] = useState<string[]>([])
   const [matchMode, setMatchMode] = useState<'all' | 'shared'>('all')
   const [rows, setRows] = useState<OrderRow[]>([])
+  // Package/product/oil detail — only ever populated on the full-detail
+  // path (see loadChildren below); the nightly rollup has no such linkage,
+  // which is exactly why using one of these filters forces full detail
+  // (isRollupEligible, below).
+  const [packages, setPackages] = useState<PackageRow[]>([])
+  const [products, setProducts] = useState<ProductRow[]>([])
+  const [services, setServices] = useState<ServiceRow[]>([])
+  const [packageFilters, setPackageFilters] = useState<string[]>([])
+  const [productIdFilters, setProductIdFilters] = useState<string[]>([])
+  const [oilOnly, setOilOnly] = useState(false)
   const [loading, setLoading] = useState(true)
   // Real progress instead of a bare spinner — `total` comes from a cheap
   // COUNT-only request up front, `loaded` ticks up per page. Reverted from
@@ -313,14 +360,37 @@ export function CustomerHeatmapPage() {
     try { localStorage.setItem('heatmap:hide-no-boundary', hideNoBoundaryZips ? '1' : '0') } catch { /* ignore */ }
   }, [hideNoBoundaryZips])
 
+  // Map size controls — "Tall" grows the map card in place (filters/stats
+  // above stay visible); Fullscreen overlays it across the whole viewport.
+  // Height mode persists like the other view toggles; fullscreen always
+  // starts closed (not something you'd want to reopen into on a fresh load).
+  const [mapHeightMode, setMapHeightMode] = useState<'normal' | 'tall'>(() => {
+    try { return localStorage.getItem('heatmap:height-mode') === 'tall' ? 'tall' : 'normal' } catch { return 'normal' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('heatmap:height-mode', mapHeightMode) } catch { /* ignore */ }
+  }, [mapHeightMode])
+  const [isMapFullscreen, setIsMapFullscreen] = useState(false)
+  // Esc closes fullscreen, matching the platform convention for any
+  // full-viewport overlay.
+  useEffect(() => {
+    if (!isMapFullscreen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setIsMapFullscreen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isMapFullscreen])
+
   // Fleet/B2B orders often read as geographic noise — the vehicle's
   // registered address is frequently nowhere near where it's actually
   // driven day to day. Off by default (nothing hidden unless asked for),
   // persisted like the other view toggles. Forces full detail (see
   // isRollupEligible below) since the nightly rollup table has no fleet
   // awareness to filter by.
+  // Defaults to HIDDEN (2026-09-03 product decision) — fleet orders read as
+  // geographic noise more often than not, so an unset/missing key means
+  // hidden; only an explicit '0' (user turned the toggle off) shows them.
   const [hideFleetOrders, setHideFleetOrders] = useState<boolean>(() => {
-    try { return localStorage.getItem('heatmap:hide-fleet') === '1' } catch { return false }
+    try { return localStorage.getItem('heatmap:hide-fleet') !== '0' } catch { return true }
   })
   useEffect(() => {
     try { localStorage.setItem('heatmap:hide-fleet', hideFleetOrders ? '1' : '0') } catch { /* ignore */ }
@@ -435,7 +505,11 @@ export function CustomerHeatmapPage() {
   // full-fetch behavior this page always used) and zip-centroid mode (the
   // rollup has no geocoded per-order coordinates for Address-Level mode).
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  // Package/Product ID/Oil filters need the package/product child-table
+  // join (loadChildren below), which the nightly rollup doesn't carry —
+  // same precedent as hideFleetOrders forcing full detail.
   const isRollupEligible = coordinateMode === 'zip' && range.end < todayStr && !hideFleetOrders
+    && !packageFilters.length && !productIdFilters.length && !oilOnly
   const showRollupPreview = isRollupEligible && !fullDetailRequested
   // Resets back to "try the rollup first" whenever the range/shop/filter
   // selection actually changes — a fresh selection deserves a fresh chance
@@ -485,7 +559,7 @@ export function CustomerHeatmapPage() {
     // stays empty (order-level features naturally read as "not loaded
     // yet" until Load Full Detail is used) and the ordinary blocking
     // spinner/progress-bar UI doesn't show either.
-    if (showRollupPreview) { setRows([]); setLoading(false); setError(null); return }
+    if (showRollupPreview) { setRows([]); setPackages([]); setProducts([]); setServices([]); setLoading(false); setError(null); return }
     let cancelled = false
     setLoading(true)
     setLoadProgress({ loaded: 0, total: null })
@@ -512,11 +586,35 @@ export function CustomerHeatmapPage() {
     const CACHE_TTL_MS = 60 * 60 * 1000
     const cacheKey = `heatmap-orders:${companyId}:${effectiveLocationKey}:${range.start}:${range.end}:${coordinateMode}:${hideFleetOrders ? 'nofleet' : 'all'}`
 
+    // Package/product/service child rows for a set of already-loaded order
+    // ids — same tables/shape DroptopOrdersPage.tsx joins, via the shared
+    // fetchByOrderIds. Best-effort: a failure here shouldn't blow up a page
+    // that already has its order rows loaded and can render the map fine
+    // without package/product filtering.
+    async function loadChildren(orderIds: string[]) {
+      if (!orderIds.length) { if (!cancelled) { setPackages([]); setProducts([]); setServices([]) }; return }
+      try {
+        const [pkgRows, prodRows, svcRows] = await Promise.all([
+          fetchByOrderIds<PackageRow>('droptop_order_packages', orderIds, 'order_id, name'),
+          fetchByOrderIds<ProductRow>('droptop_order_products', orderIds, 'order_id, product_id, uom'),
+          fetchByOrderIds<ServiceRow>('droptop_order_services', orderIds, 'order_id, products'),
+        ])
+        if (cancelled) return
+        setPackages(pkgRows); setProducts(prodRows); setServices(svcRows)
+      } catch {
+        // Package/Product ID/Oil filters just won't have real options to
+        // pick from until this succeeds again on a later load — the map
+        // itself is unaffected.
+        if (!cancelled) { setPackages([]); setProducts([]); setServices([]) }
+      }
+    }
+
     async function run() {
       const cached = await getCached<OrderRow[]>(cacheKey, CACHE_TTL_MS)
       if (cached && !cancelled) {
         setRows(cached)
         setLoading(false)
+        void loadChildren(cached.map((r) => r.id))
         return
       }
 
@@ -602,6 +700,7 @@ export function CustomerHeatmapPage() {
       setRows(all)
       setLoading(false)
       void setCached(cacheKey, all)
+      void loadChildren(all.map((r) => r.id))
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
@@ -701,9 +800,73 @@ export function CustomerHeatmapPage() {
     return () => { cancelled = true }
   }, [companyId, effectiveLocationKey, range.start, range.end, showRollupPreview]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Package/product/oil detail — mirrors DroptopOrdersPage.tsx's own
+  // by-order maps and option-derivation shape exactly (see that file's
+  // header comment for why product ids need checking in both sources).
+  const packagesByOrder = useMemo(() => {
+    const m = new Map<string, PackageRow[]>()
+    for (const p of packages) { const a = m.get(p.order_id) ?? []; a.push(p); m.set(p.order_id, a) }
+    return m
+  }, [packages])
+  const productsByOrder = useMemo(() => {
+    const m = new Map<string, ProductRow[]>()
+    for (const p of products) { const a = m.get(p.order_id) ?? []; a.push(p); m.set(p.order_id, a) }
+    return m
+  }, [products])
+  const servicesByOrder = useMemo(() => {
+    const m = new Map<string, ServiceRow[]>()
+    for (const s of services) { const a = m.get(s.order_id) ?? []; a.push(s); m.set(s.order_id, a) }
+    return m
+  }, [services])
+  function quartsForOrder(orderId: string): number {
+    let total = 0
+    for (const p of productsByOrder.get(orderId) ?? []) if (isQuart(p.uom)) total += 1
+    for (const svc of servicesByOrder.get(orderId) ?? []) for (const pr of (svc.products ?? [])) if (isQuart(pr.uom)) total += 1
+    return total
+  }
+  const allPackageNames = useMemo(() => [...new Set(packages.map((p) => p.name).filter((n): n is string => !!n))].sort(), [packages])
+  const packageOptionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of packages) if (p.name) m.set(p.name, (m.get(p.name) ?? 0) + 1)
+    return m
+  }, [packages])
+  const packageOptions = useMemo(
+    () => allPackageNames.map((n) => ({ value: n, count: packageOptionCounts.get(n) ?? 0 })),
+    [allPackageNames, packageOptionCounts],
+  )
+  const allProductIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const p of products) if (p.product_id) s.add(p.product_id)
+    for (const svc of services) for (const pr of (svc.products ?? [])) if (pr.product_id) s.add(pr.product_id)
+    return [...s].sort()
+  }, [products, services])
+  const productIdOptionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of products) if (p.product_id) m.set(p.product_id, (m.get(p.product_id) ?? 0) + 1)
+    for (const svc of services) for (const pr of (svc.products ?? [])) if (pr.product_id) m.set(pr.product_id, (m.get(pr.product_id) ?? 0) + 1)
+    return m
+  }, [products, services])
+  const productIdOptions = useMemo(
+    () => allProductIds.map((id) => ({ value: id, count: productIdOptionCounts.get(id) ?? 0 })),
+    [allProductIds, productIdOptionCounts],
+  )
+
   const filteredRows = useMemo(
-    () => allowedLocationIds === null ? rows : rows.filter((r) => r.location_id && allowedLocationIds.has(r.location_id)),
-    [rows, allowedLocationIds],
+    () => rows.filter((r) => {
+      if (allowedLocationIds !== null && (!r.location_id || !allowedLocationIds.has(r.location_id))) return false
+      if (packageFilters.length && !(packagesByOrder.get(r.id) ?? []).some((p) => p.name && packageFilters.includes(p.name))) return false
+      if (productIdFilters.length) {
+        const inTopLevel = (productsByOrder.get(r.id) ?? []).some((p) => p.product_id && productIdFilters.includes(p.product_id))
+        const inServices = (servicesByOrder.get(r.id) ?? []).some((s) => (s.products ?? []).some((p) => p.product_id && productIdFilters.includes(p.product_id)))
+        if (!inTopLevel && !inServices) return false
+      }
+      if (oilOnly && quartsForOrder(r.id) === 0) return false
+      return true
+    }),
+    // quartsForOrder reads productsByOrder/servicesByOrder, both already
+    // deps below — same convention as DroptopOrdersPage's quartsFor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, allowedLocationIds, packagesByOrder, productsByOrder, servicesByOrder, packageFilters, productIdFilters, oilOnly],
   )
   const geocodedOrderCount = useMemo(() => filteredRows.filter((r) => r.geocode_status === 'matched').length, [filteredRows])
 
@@ -1377,6 +1540,21 @@ export function CustomerHeatmapPage() {
             <span className="text-xs font-mono text-inky">{hideFleetOrders ? 'Hidden' : 'Shown'}</span>
           </span>
         </label>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Package(s)</span>
+          <MultiSelectDropdown options={packageOptions} selected={packageFilters} onChange={setPackageFilters} placeholder="All Packages" countNoun="packages" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Product ID</span>
+          <MultiSelectDropdown options={productIdOptions} selected={productIdFilters} onChange={setProductIdFilters} placeholder="All Products" countNoun="products" searchable />
+        </div>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Oil Only</span>
+          <span className="flex items-center gap-1.5 h-[30px]" title="Only orders with at least one oil product (quart-uom) sold — forces full detail, same as Fleet Orders">
+            <Toggle checked={oilOnly} onChange={setOilOnly} size="sm" color="cyan" />
+            <span className="text-xs font-mono text-inky">{oilOnly ? 'On' : 'Off'}</span>
+          </span>
+        </label>
       </div>
 
       {loading ? (
@@ -1467,6 +1645,20 @@ export function CustomerHeatmapPage() {
                 {geocodedOrderCount.toLocaleString()} of {filteredRows.length.toLocaleString()} orders geocoded
               </span>
             )}
+            <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
+              {(['normal', 'tall'] as const).map((m) => (
+                <button key={m} onClick={() => setMapHeightMode(m)}
+                  className={['px-2 py-1.5 uppercase tracking-wide transition-colors', mapHeightMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
+                  title={m === 'tall' ? 'Grow the map card in place — filters and stats above stay visible' : 'Normal map height'}>
+                  {m === 'tall' ? 'Tall' : 'Normal'}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setIsMapFullscreen(true)}
+              className="p-1.5 rounded border border-navy/30 bg-cream text-inky hover:bg-navy/10 transition-colors"
+              title="Expand the map to fill the browser window">
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {showRollupPreview && (
@@ -1545,7 +1737,23 @@ export function CustomerHeatmapPage() {
                   contains all of Leaflet's internal stacking inside this div
                   so it can never climb above app UI outside it. */}
               {!hideMap && (
-              <div ref={mapWrapperRef} className="isolate rounded border border-navy/30 overflow-hidden" style={{ height: 640 }}>
+              // `contents` makes this outer div invisible to layout when not
+              // fullscreen (the inner mapWrapperRef div below sits exactly
+              // where it always did) — avoids duplicating the whole
+              // MapContainer tree for the two cases. Fullscreen swaps it to
+              // a fixed full-viewport overlay instead.
+              <div className={isMapFullscreen ? 'fixed inset-0 z-[1000] bg-cream p-4 flex flex-col' : 'contents'}>
+                {isMapFullscreen && (
+                  <div className="flex justify-end mb-2">
+                    <button onClick={() => setIsMapFullscreen(false)}
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded border border-navy/30 bg-cream text-navy hover:bg-navy/10 transition-colors text-[10px] font-mono uppercase tracking-wide">
+                      <Minimize2 className="w-3.5 h-3.5" /> Exit Fullscreen (Esc)
+                    </button>
+                  </div>
+                )}
+              <div ref={mapWrapperRef}
+                className={['isolate rounded border border-navy/30 overflow-hidden', isMapFullscreen ? 'flex-1' : ''].join(' ')}
+                style={isMapFullscreen ? undefined : { height: mapHeightMode === 'tall' ? 960 : 640 }}>
                 <MapContainer center={mapCenter} zoom={5} preferCanvas style={{ height: '100%', width: '100%' }}>
                   {/* crossOrigin lets html2canvas (Copy button) actually read
                       the tile images into a canvas instead of tainting it —
@@ -1555,6 +1763,7 @@ export function CustomerHeatmapPage() {
                   <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} crossOrigin={true} />
                   <FocusZip target={focusTarget} />
                   <ZoomTracker onZoom={setZoom} />
+                  <MapResizeHandler resizeKey={`${isMapFullscreen}-${mapHeightMode}`} />
                   <DeselectOnMapClick onDeselect={() => setSelectedZip(null)} />
                   {showPins && shopPins.map(({ loc: l, color }) => (
                     <Marker key={l.id} position={[l.latitude as number, l.longitude as number]}
@@ -1628,6 +1837,7 @@ export function CustomerHeatmapPage() {
                     />
                   )}
                 </MapContainer>
+              </div>
               </div>
               )}
 

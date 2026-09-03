@@ -26,8 +26,9 @@ import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
-import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown } from '@/components/ui'
+import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
+import { fetchByOrderIds, ORDER_ID_CHUNK } from '@/lib/droptopChildFetch'
 
 interface OrderRow {
   id: string
@@ -72,6 +73,7 @@ interface VehicleRow {
   vin_vehicle_make: string | null
   vin_vehicle_model: string | null
   vin_vehicle_year: number | null
+  mileage: number | null
 }
 
 // One column of the Build Your Own Report's order-level detail mode.
@@ -80,85 +82,6 @@ interface TableCol2 { key: string; label: string; get: (o: OrderRow) => string; 
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
-
-// Order-id chunk size for fetchByOrderIds below — module-level so the
-// caller's own progress tracking (how many chunks are left across the 3
-// parallel calls) can compute the same total without the two ever drifting
-// apart.
-const ORDER_ID_CHUNK = 200
-
-// How many order-id chunks to fetch at once, per table. Chunks are
-// independent of each other (each is its own `order_id IN (...)` scope,
-// unlike the pages WITHIN a chunk which depend on each other's cursor), so
-// running several concurrently is free correctness-wise — this stacks with
-// the 4 tables already running concurrently with each other via Promise.all
-// in the caller, so a big pull now has up to CHUNK_CONCURRENCY × 4 requests
-// in flight at once instead of 4.
-const CHUNK_CONCURRENCY = 4
-
-// Fetch rows for a batch of order ids, chunking the input AND paginating
-// each chunk's output. CHUNK alone isn't enough — this project's Supabase
-// "Max Rows" API setting silently caps every response at 1000 regardless
-// of .limit(), and a chunk of order ids can produce more result rows than
-// input ids (an order can have multiple packages/products/services), so
-// an unpaginated .in() could silently drop rows past 1000 with no error.
-// Same fix as the main orders loop: keep fetching by (id) cursor per
-// chunk until a genuinely empty page. `onChunk` fires once per outer
-// chunk (not per inner page) — enough resolution for a progress bar
-// without the caller needing to know about the inner pagination at all.
-async function fetchByOrderIds<T>(table: string, orderIds: string[], select: string, onChunk?: () => void): Promise<T[]> {
-  const sb = supabase as any
-  const CHUNK = ORDER_ID_CHUNK
-  const PAGE = 1000
-  const MAX_PAGE_RETRIES = 2
-
-  async function fetchChunk(slice: string[]): Promise<T[]> {
-    const out: T[] = []
-    let cursor: string | null = null
-    for (;;) {
-      let data: ({ id: string } & T)[] | null = null
-      let lastErr: string | null = null
-      for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
-        let q = sb.schema('inventory').from(table).select(`id, ${select}`)
-          .in('order_id', slice).order('id', { ascending: true }).limit(PAGE)
-        if (cursor) q = q.gt('id', cursor)
-        const { data: pageData, error } = await q
-        if (!error) { data = (pageData ?? []) as ({ id: string } & T)[]; break }
-        lastErr = error.message
-        if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
-      }
-      // Same "retry a page before giving up" fix as the main orders loop
-      // above — a single chunk/page timing out used to throw immediately
-      // and discard every package/product/service row fetched so far.
-      if (data === null) throw new Error(`${table}: ${lastErr ?? 'Failed to load'}`)
-      out.push(...data)
-      if (data.length === 0) break
-      cursor = data[data.length - 1].id
-    }
-    onChunk?.()
-    return out
-  }
-
-  const chunks: string[][] = []
-  for (let i = 0; i < orderIds.length; i += CHUNK) chunks.push(orderIds.slice(i, i + CHUNK))
-
-  // Bounded worker pool — CHUNK_CONCURRENCY chunks in flight at once,
-  // pulling the next one off the queue as each finishes, rather than firing
-  // every chunk at once (which would just recreate the original "n
-  // sequential" problem's opposite failure mode: hundreds of requests
-  // competing for the same connection pool at once on a very large pull).
-  const results: T[][] = new Array(chunks.length)
-  let nextIndex = 0
-  async function worker() {
-    for (;;) {
-      const i = nextIndex++
-      if (i >= chunks.length) return
-      results[i] = await fetchChunk(chunks[i])
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker))
-  return results.flat()
-}
 
 export function DroptopOrdersPage() {
   const { profile } = useAuthStore()
@@ -173,6 +96,9 @@ export function DroptopOrdersPage() {
   const [loadAllShops, setLoadAllShops] = useState(false)
   const [packageFilters, setPackageFilters] = useState<string[]>([])
   const [productIdFilters, setProductIdFilters] = useState<string[]>([])
+  const [vehicleFilters, setVehicleFilters] = useState<string[]>([])
+  const [fleetFilters, setFleetFilters] = useState<string[]>([])
+  const [oilOnly, setOilOnly] = useState(false)
   const [search, setSearch] = useState('')
   const [filterRegions, setFilterRegions] = useState<string[]>([])
   const [filterMarkets, setFilterMarkets] = useState<string[]>([])
@@ -342,7 +268,7 @@ export function DroptopOrdersPage() {
           fetchByOrderIds<PackageRow>('droptop_order_packages', orderIds, 'order_id, package_id, name, price_total, price_total_after_discount', onChunk),
           fetchByOrderIds<ProductRow>('droptop_order_products', orderIds, 'order_id, product_id, product_type, uom, quantity_total', onChunk),
           fetchByOrderIds<ServiceRow>('droptop_order_services', orderIds, 'order_id, package_id, products', onChunk),
-          fetchByOrderIds<VehicleRow>('droptop_order_vehicles', orderIds, 'order_id, vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year', onChunk),
+          fetchByOrderIds<VehicleRow>('droptop_order_vehicles', orderIds, 'order_id, vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year, mileage', onChunk),
         ])
       }
       if (cancelled) return
@@ -398,12 +324,20 @@ export function DroptopOrdersPage() {
   }
   // One line per vehicle, joined — an order occasionally carries more than
   // one (a multi-vehicle fleet drop-off).
+  // Year/Make/Model when Droptop's VIN decode succeeded, falling back
+  // through vehicle_name/license_plate/vin — shared by the report column,
+  // the Vehicle filter dropdown, and its option counts, so all three treat
+  // "the same vehicle" identically.
+  function vehicleBaseLabel(v: VehicleRow): string {
+    const yearMakeModel = [v.vin_vehicle_year, v.vin_vehicle_make, v.vin_vehicle_model].filter(Boolean).join(' ')
+    return yearMakeModel || v.vehicle_name || v.license_plate || v.vin || '—'
+  }
   function vehicleLabelFor(orderId: string): string {
     const vs = vehiclesByOrder.get(orderId) ?? []
     if (!vs.length) return '—'
     return vs.map((v) => {
-      const yearMakeModel = [v.vin_vehicle_year, v.vin_vehicle_make, v.vin_vehicle_model].filter(Boolean).join(' ')
-      return yearMakeModel || v.vehicle_name || v.license_plate || v.vin || '—'
+      const base = vehicleBaseLabel(v)
+      return v.mileage != null ? `${base} — ${Math.round(v.mileage).toLocaleString()} mi` : base
     }).join('; ')
   }
 
@@ -446,6 +380,48 @@ export function DroptopOrdersPage() {
     [allProductIds, productIdOptionCounts],
   )
 
+  // Fleet names actually present on a loaded order — same derivation shape
+  // as allPackageNames/allProductIds above.
+  const allFleetNames = useMemo(
+    () => [...new Set(orders.map((o) => o.fleet_company_name).filter((n): n is string => !!n))].sort(),
+    [orders],
+  )
+  const fleetOptionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const o of orders) if (o.fleet_company_name) m.set(o.fleet_company_name, (m.get(o.fleet_company_name) ?? 0) + 1)
+    return m
+  }, [orders])
+  const fleetOptions = useMemo(
+    () => allFleetNames.map((n) => ({ value: n, count: fleetOptionCounts.get(n) ?? 0 })),
+    [allFleetNames, fleetOptionCounts],
+  )
+
+  // One option per distinct vehicle label (year/make/model, or its
+  // fallback chain — see vehicleBaseLabel) across every order in scope —
+  // lets a user look up "this vehicle's" orders the same way the
+  // Package(s)/Product ID dropdowns look up an order set by what was sold.
+  // Two different vehicles that happen to share a label (e.g. two 2015
+  // Honda Accords) collapse into one option, same tradeoff Package(s)
+  // already makes by name rather than id.
+  const allVehicleLabels = useMemo(
+    () => [...new Set(vehicles.map(vehicleBaseLabel).filter((l) => l !== '—'))].sort(),
+    [vehicles],
+  )
+  const vehicleOptionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const v of vehicles) { const l = vehicleBaseLabel(v); if (l !== '—') m.set(l, (m.get(l) ?? 0) + 1) }
+    return m
+  }, [vehicles])
+  const vehicleOptions = useMemo(
+    () => allVehicleLabels.map((l) => ({ value: l, count: vehicleOptionCounts.get(l) ?? 0 })),
+    [allVehicleLabels, vehicleOptionCounts],
+  )
+  const vehicleLabelsByOrder = useMemo(() => {
+    const m = new Map<string, Set<string>>()
+    for (const v of vehicles) { const l = vehicleBaseLabel(v); const s = m.get(v.order_id) ?? new Set<string>(); s.add(l); m.set(v.order_id, s) }
+    return m
+  }, [vehicles])
+
   // Client-side filtering — package/product filters need the joined child
   // rows, and order volumes for a date-scoped, one-company query are light
   // enough that filtering after load (this app's usual convention for
@@ -460,13 +436,19 @@ export function DroptopOrdersPage() {
         const inServices = (servicesByOrder.get(o.id) ?? []).some((s) => (s.products ?? []).some((p) => p.product_id && productIdFilters.includes(p.product_id)))
         if (!inTopLevel && !inServices) return false
       }
+      if (vehicleFilters.length) {
+        const labels = vehicleLabelsByOrder.get(o.id)
+        if (!labels || !vehicleFilters.some((f) => labels.has(f))) return false
+      }
+      if (fleetFilters.length && !(o.fleet_company_name && fleetFilters.includes(o.fleet_company_name))) return false
+      if (oilOnly && quartsFor(o.id) === 0) return false
       if (q) {
         const hay = `${o.order_id} ${o.first_name ?? ''} ${o.last_name ?? ''} ${o.city ?? ''}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
     })
-  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, search, packageFilters, productIdFilters, allowedLocationIds])
+  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, vehicleLabelsByOrder, search, packageFilters, productIdFilters, vehicleFilters, fleetFilters, oilOnly, allowedLocationIds])
 
   const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
 
@@ -769,16 +751,15 @@ export function DroptopOrdersPage() {
         </p>
       </div>
 
-      {/* Filters */}
+      {/* Filters — Region/Market/AM/Shop(s) first (narrows top-down), then
+          what-was-sold (Package/Product/Oil), then who/what vehicle
+          (Vehicle/Fleet), then free-text Search last. The "Showing All
+          Shops" chip that used to sit here was removed — the Shop(s)
+          dropdown itself is enough of a "not scoped to one shop" signal,
+          and picking any shop already clears loadAllShops (below). */}
       <div className="flex items-end gap-2 flex-wrap">
         <PeriodPicker period={period} onPeriodChange={setPeriod} customStart={customStart} customEnd={customEnd}
           onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
-          <MultiSelectDropdown options={shopOptions} selected={shopLabels}
-            onChange={(labels) => { setShopLabels(labels); if (labels.length) setLoadAllShops(false) }}
-            placeholder="All Shops" countNoun="shops" searchable />
-        </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Region</span>
           <MultiSelectDropdown options={regionOptions} selected={filterRegions} onChange={setFilterRegions} placeholder="All Regions" countNoun="regions" searchable />
@@ -792,6 +773,12 @@ export function DroptopOrdersPage() {
           <MultiSelectDropdown options={amOptions} selected={filterAMs} onChange={setFilterAMs} placeholder="All AMs" countNoun="AMs" searchable />
         </div>
         <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
+          <MultiSelectDropdown options={shopOptions} selected={shopLabels}
+            onChange={(labels) => { setShopLabels(labels); if (labels.length) setLoadAllShops(false) }}
+            placeholder="All Shops" countNoun="shops" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Package(s)</span>
           <MultiSelectDropdown options={packageOptions} selected={packageFilters} onChange={setPackageFilters} placeholder="All Packages" countNoun="packages" searchable />
         </div>
@@ -799,13 +786,21 @@ export function DroptopOrdersPage() {
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Product ID</span>
           <MultiSelectDropdown options={productIdOptions} selected={productIdFilters} onChange={setProductIdFilters} placeholder="All Products" countNoun="products" searchable />
         </div>
-        {loadAllShops && (
-          <button onClick={() => setLoadAllShops(false)}
-            className="px-2 py-1.5 rounded border border-[#E67E22]/40 bg-[#E67E22]/10 text-[10px] font-mono uppercase tracking-wide text-[#E67E22] hover:bg-[#E67E22]/20 transition-colors"
-            title="Click to stop loading every shop and go back to requiring a shop selection">
-            Showing All Shops ✕
-          </button>
-        )}
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Vehicle</span>
+          <MultiSelectDropdown options={vehicleOptions} selected={vehicleFilters} onChange={setVehicleFilters} placeholder="All Vehicles" countNoun="vehicles" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Fleet</span>
+          <MultiSelectDropdown options={fleetOptions} selected={fleetFilters} onChange={setFleetFilters} placeholder="All (Retail + Fleet)" countNoun="fleets" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Oil Only</span>
+          <span className="flex items-center gap-1.5 h-[30px]" title="Only orders with at least one oil product (quart-uom) sold">
+            <Toggle checked={oilOnly} onChange={setOilOnly} size="sm" color="cyan" />
+            <span className="text-xs font-mono text-inky">{oilOnly ? 'On' : 'Off'}</span>
+          </span>
+        </div>
         <label className="flex flex-col gap-0.5 flex-1 min-w-[180px]">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Search</span>
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Order #, customer name, city…" />

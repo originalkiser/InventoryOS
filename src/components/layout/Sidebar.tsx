@@ -140,6 +140,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
   droptop: [
     { key: 'customer-heatmap', label: 'Customer Heatmap', to: '/customer-heatmap' },
     { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
+    { key: 'droptop-vehicles', label: 'Vehicles', to: '/droptop-vehicles' },
   ],
   'data-connections': [
     { key: 'data-connections', label: 'Data Connections', to: '/data-connections' },
