@@ -119,29 +119,59 @@ interface VinDecoded { trim: string | null; engine: string | null }
 // like almost nothing is cached even when most of it already is" — a wide
 // date range's 100k+ VINs took well over a minute of purely sequential
 // round trips to read back. Same worker-pool shape as droptopChildFetch.ts.
-const VIN_DECODE_READ_CHUNK = 5000
-const VIN_DECODE_READ_CONCURRENCY = 5
+//
+// Chunk size MUST stay small: this is a GET request, so `.in('vin', chunk)`
+// gets serialized into the URL's query string — a chunk of 5000 17-char
+// VINs (~100k characters) blows past Kong/nginx's request-line limit and
+// gets rejected with no visible error (the failure was being swallowed by
+// `if (!error)` below), silently dropping that whole chunk from the map.
+// That's what caused the real bug reported 2026-09-03: the page's own "all
+// decoded" banner was accurate (every VIN had *some* map entry) but most
+// Engine/Trim values were missing, because a prior manual "Decode" run's
+// post-decode re-read (see decodeMissingVins) hit this same failure and
+// then explicitly cached the unread VINs as `{trim:null, engine:null}` —
+// permanently masking real, already-decoded rows already sitting in the
+// table. 300 matches this file's own edge-function CHUNK_SIZE (a request
+// body, not a URL, but already proven safe) and droptopChildFetch.ts's
+// ORDER_ID_CHUNK precedent (200 36-char UUIDs) for the same GET-`.in()`
+// constraint. Concurrency can run higher than that file's since this is a
+// light indexed read, not an outbound NHTSA call.
+const VIN_DECODE_READ_CHUNK = 300
+const VIN_DECODE_READ_CONCURRENCY = 8
 // onChunk fires once per completed chunk (with that chunk's VIN count) so
 // a caller can fold this into its own overall progress bar instead of the
 // bar looking stuck at 100% while this runs silently underneath it.
-async function fetchVinDecodeMap(vins: string[], onChunk?: (n: number) => void): Promise<Map<string, VinDecoded>> {
+// `hadErrors` on the return tells a caller that some chunk failed (e.g. a
+// transient network error) — the map is a partial result, not "every VIN
+// checked and genuinely not found," and callers should not treat any VIN
+// missing from it as confirmed-undecoded when this is true.
+async function fetchVinDecodeMap(
+  vins: string[],
+  onChunk?: (n: number) => void,
+): Promise<{ map: Map<string, VinDecoded>; hadErrors: boolean }> {
   const found = new Map<string, VinDecoded>()
-  if (!vins.length) return found
+  if (!vins.length) return { map: found, hadErrors: false }
   const chunks: string[][] = []
   for (let i = 0; i < vins.length; i += VIN_DECODE_READ_CHUNK) chunks.push(vins.slice(i, i + VIN_DECODE_READ_CHUNK))
   const sb = supabase as any
   let next = 0
+  let hadErrors = false
   async function worker() {
     for (;;) {
       const i = next++
       if (i >= chunks.length) return
       const { data, error } = await sb.schema('inventory').from('vin_decoded').select('vin, trim, engine').in('vin', chunks[i])
-      if (!error) for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
+      if (error) {
+        hadErrors = true
+        console.warn('[VIN-DECODE] read chunk failed', error)
+      } else {
+        for (const r of (data ?? []) as { vin: string; trim: string | null; engine: string | null }[]) found.set(r.vin, { trim: r.trim, engine: r.engine })
+      }
       onChunk?.(chunks[i].length)
     }
   }
   await Promise.all(Array.from({ length: Math.min(VIN_DECODE_READ_CONCURRENCY, chunks.length) }, worker))
-  return found
+  return { map: found, hadErrors }
 }
 
 // Shows the top N values by count ("Sport (42), Limited (18), SE (9)"),
@@ -344,10 +374,11 @@ export function DroptopVehiclesPage() {
       // even at this helper's own faster chunk/concurrency settings.
       const distinctVins = [...new Set(vehRows.map((v) => v.vin).filter((v): v is string => !!v && VIN_RE.test(v)))]
       if (!cancelled) setLoadProgress((p) => ({ loaded: p.loaded, total: (p.total ?? 0) + distinctVins.length }))
-      const decodeMap = await fetchVinDecodeMap(distinctVins, (n) => {
+      const { map: decodeMap, hadErrors: decodeReadHadErrors } = await fetchVinDecodeMap(distinctVins, (n) => {
         if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: p.loaded + n }))
       })
       if (cancelled) return
+      if (decodeReadHadErrors) toast.error('Some cached Engine/Trim data failed to load — Trim(s)/Engine(s) may be incomplete for this view')
 
       setOrders(allOrders)
       setVehicles(vehRows)
@@ -450,11 +481,22 @@ export function DroptopVehiclesPage() {
       // decoded AND not_found/error outcomes (the Edge Function upserts a
       // row either way), so a bad VIN doesn't get retried forever the next
       // time this page loads.
-      const found = await fetchVinDecodeMap(missing)
+      const { map: found, hadErrors: reReadHadErrors } = await fetchVinDecodeMap(missing)
       // A VIN still missing here means its row genuinely never got
       // written (a hard failure already surfaced via the toast below) —
-      // mark it empty so it isn't retried on every render either.
-      for (const vin of missing) if (!found.has(vin)) found.set(vin, { trim: null, engine: null })
+      // mark it empty so it isn't retried on every render either. But only
+      // when the re-read itself actually succeeded end-to-end: if any
+      // chunk of it errored, "missing from `found`" no longer means
+      // "confirmed not written" — it can just mean that chunk's request
+      // failed — and poisoning those VINs to null would permanently hide
+      // real Engine/Trim data the Edge Function just upserted (this is
+      // exactly what caused the 2026-09-03 "decoded for all N VINs but
+      // barely any Engine values show" bug).
+      if (!reReadHadErrors) {
+        for (const vin of missing) if (!found.has(vin)) found.set(vin, { trim: null, engine: null })
+      } else {
+        toast.error('Some decoded results failed to read back — reload the page to pick up anything missed')
+      }
       setVinDecodeMap((prev) => new Map([...prev, ...found]))
       if (summary.warnings.length) toast.error(`Decoded with ${summary.warnings.length} warning(s) — see console`)
       else toast.success(`Decoded ${summary.newlyDecoded} of ${summary.requested} vehicle(s)`)
