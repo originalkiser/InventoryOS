@@ -649,7 +649,10 @@ export function CustomerHeatmapPage() {
       // correct regardless of whatever the real cap is now or later, and
       // reverted PAGE to 1000 to match the actual ceiling instead of
       // requesting more than will ever be honored.
-      const PAGE = 1000
+      // Raised to 5000 (2026-09-03) now that the project's Max Rows setting
+      // is 10,000 — the exit condition above only trusts a genuinely empty
+      // page, so this is safe regardless of what the real cap is.
+      const PAGE = 5000
       // A full company-wide month used to be 100+ SEQUENTIAL page requests
       // — correct, but every page waited on the previous one's round trip
       // even though the table can easily serve several requests in
@@ -751,7 +754,8 @@ export function CustomerHeatmapPage() {
       // back, never assume a single call returns everything. The RPC's own
       // ORDER BY zip (added alongside this fix) makes page boundaries
       // stable.
-      const PAGE = 1000
+      // Raised to 5000 alongside the raw-fetch PAGE above — same reasoning.
+      const PAGE = 5000
       const all: any[] = []
       let unmappedResult: { count: number | null; error: unknown } | null = null
       for (let from = 0; ; from += PAGE) {
@@ -1213,7 +1217,8 @@ export function CustomerHeatmapPage() {
     // rows past 1000 with no error. Same fix as the main orders loop:
     // keep fetching by (id) cursor until a genuinely empty page.
     const CHUNK = 200
-    const PAGE = 1000
+    // Raised to 5000 alongside every other PAGE constant in this file.
+    const PAGE = 5000
     // Chunks used to run one-at-a-time — fine when a full month's worth of
     // orders was a few hundred, but a real company-wide export (167k+
     // orders = 800+ chunks) at ~150-300ms each meant 2+ minutes of purely

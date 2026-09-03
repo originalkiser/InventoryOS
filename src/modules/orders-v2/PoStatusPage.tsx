@@ -123,7 +123,9 @@ export function PoStatusPage() {
     // root-caused once this session, in LocationLookupPage.tsx — same fix).
     const fetchAllRows = async <T,>(table: string, apply: (q: any) => any): Promise<T[]> => {
       const out: T[] = []
-      const PAGE = 1000
+      // Raised to 5000 (2026-09-03, Max Rows now 10,000) — the exit
+      // condition below only trusts a genuinely empty page.
+      const PAGE = 5000
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await apply(sb.schema('inventory').from(table).select('*')).range(from, from + PAGE - 1)
         if (error) throw error

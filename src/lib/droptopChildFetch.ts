@@ -31,7 +31,11 @@ export const CHUNK_CONCURRENCY = 4
 export async function fetchByOrderIds<T>(table: string, orderIds: string[], select: string, onChunk?: () => void): Promise<T[]> {
   const sb = supabase as any
   const CHUNK = ORDER_ID_CHUNK
-  const PAGE = 1000
+  // 5x the old 1000-row default now that the project's Data API "Max Rows"
+  // setting was raised to 10,000 — fewer round trips per chunk. The exit
+  // condition below only stops on a genuinely empty page regardless of
+  // this value, so raising it further later is safe too.
+  const PAGE = 5000
   const MAX_PAGE_RETRIES = 2
 
   async function fetchChunk(slice: string[]): Promise<T[]> {

@@ -305,7 +305,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     // pattern already used in droptop-sync-usage/skybitz-tank-sync for the
     // exact same failure mode.
     async function fetchAllRows(factory: (from: number, to: number) => any): Promise<any[]> {
-      const PAGE = 1000
+      // Raised to 5000 (2026-09-03, Max Rows now 10,000) — the exit
+      // condition below only trusts a genuinely empty page.
+      const PAGE = 5000
       const out: any[] = []
       let from = 0
       for (;;) {

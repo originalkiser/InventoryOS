@@ -28,7 +28,6 @@ import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
-import { fetchByOrderIds, ORDER_ID_CHUNK } from '@/lib/droptopChildFetch'
 
 interface OrderRow {
   id: string
@@ -75,6 +74,30 @@ interface VehicleRow {
   vin_vehicle_year: number | null
   mileage: number | null
 }
+// One page's worth of orders WITH their package/product/service/vehicle
+// child rows embedded via PostgREST's foreign-table select — a single
+// query per page instead of the header pull followed by a separate
+// per-order-id child-table pull. Every child table has a real `order_id
+// references droptop_orders(id)` FK (confirmed in their migrations), which
+// is what lets PostgREST embed them automatically; each embeds as an array
+// nested on its parent row, so this does NOT change the pagination math —
+// a page of 1,000 orders is still exactly 1,000 top-level rows regardless
+// of how many packages/products/vehicles they carry between them, unlike
+// a flat `.in('order_id', ids)` child-table query (see droptopChildFetch.ts
+// for why THAT needed its own separate pagination).
+interface OrderRowEmbedded extends OrderRow {
+  droptop_order_packages: Omit<PackageRow, 'order_id'>[]
+  droptop_order_products: Omit<ProductRow, 'order_id'>[]
+  droptop_order_services: Omit<ServiceRow, 'order_id'>[]
+  droptop_order_vehicles: Omit<VehicleRow, 'order_id'>[]
+}
+const ORDER_EMBED_SELECT = `
+  id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at, fleet_company_name,
+  droptop_order_packages(package_id, name, price_total, price_total_after_discount),
+  droptop_order_products(product_id, product_type, uom, quantity_total),
+  droptop_order_services(package_id, products),
+  droptop_order_vehicles(vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year, mileage)
+`
 
 // One column of the Build Your Own Report's order-level detail mode.
 interface TableCol2 { key: string; label: string; get: (o: OrderRow) => string; align?: 'right' }
@@ -115,14 +138,6 @@ export function DroptopOrdersPage() {
   // Heatmap's full-detail load: a cheap COUNT-only request up front gives
   // a denominator, `loaded` ticks up per page.
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
-  // Second phase — package/product/service child rows for every order
-  // header just loaded. loadProgress alone used to sit frozen at 100% while
-  // this ran (visible on a big pull — 47k+ orders' worth of child fetching
-  // is not instant), with nothing telling the user anything was still
-  // happening. total is chunks-to-fetch across all 3 tables combined
-  // (see ORDER_ID_CHUNK), not row counts — coarser than the header phase's
-  // per-order count, but real movement instead of a stall.
-  const [detailProgress, setDetailProgress] = useState<{ loaded: number; total: number } | null>(null)
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
@@ -178,7 +193,6 @@ export function DroptopOrdersPage() {
     setLoading(true)
     setError(null)
     setLoadProgress({ loaded: 0, total: null })
-    setDetailProgress(null)
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
     const endIso = `${range.end}T23:59:59.999Z`
@@ -217,7 +231,12 @@ export function DroptopOrdersPage() {
       // real cap is now or later, and reverted PAGE to 1000 to match the
       // actual ceiling instead of requesting more than will ever be
       // honored.
-      const PAGE = 1000
+      // Raised to 2000 (2026-09-03, Max Rows now 10,000) — kept more
+      // conservative than the plain header-only fetches elsewhere in this
+      // app since this query now embeds packages/products/services/
+      // vehicles per order (see ORDER_EMBED_SELECT above), so each page's
+      // payload is heavier per row than a flat header fetch.
+      const PAGE = 2000
       // A full company-wide range used to be 100+ SEQUENTIAL page requests
       // — correct, but every page waited on the previous one's round trip
       // even though the table can serve several requests at once.
@@ -229,7 +248,10 @@ export function DroptopOrdersPage() {
       // slicing by date rather than plain OFFSET paging.
       const MAX_PAGE_RETRIES = 2
       let loadedSoFarLocal = 0
-      const allOrders = await fetchDateRangeConcurrent<OrderRow>({
+      // Header + every child table in ONE query per page (ORDER_EMBED_SELECT)
+      // instead of a header pull followed by a separate per-order-id child
+      // pull — one network round trip per page does all the work now.
+      const embedded = await fetchDateRangeConcurrent<OrderRowEmbedded>({
         rangeStart: range.start,
         rangeEnd: range.end,
         totalCount: count ?? null,
@@ -243,13 +265,13 @@ export function DroptopOrdersPage() {
           for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
             if (cancelled) return []
             let q = applyFilters(sb.schema('inventory').from('droptop_orders')
-              .select('id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at, fleet_company_name'))
+              .select(ORDER_EMBED_SELECT))
               .gte('order_finalized_at', subStartIso).lte('order_finalized_at', subEndIso)
               .order('order_finalized_at', { ascending: true })
               .order('id', { ascending: true }).limit(PAGE)
             if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
             const { data: pageData, error: err } = await q
-            if (!err) return (pageData ?? []) as OrderRow[]
+            if (!err) return (pageData ?? []) as OrderRowEmbedded[]
             lastErr = err.message
             if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
           }
@@ -258,20 +280,23 @@ export function DroptopOrdersPage() {
       })
       if (cancelled) return
 
-      const orderIds = allOrders.map((o) => o.id)
-      let pkgRows: PackageRow[] = [], prodRows: ProductRow[] = [], svcRows: ServiceRow[] = [], vehRows: VehicleRow[] = []
-      if (orderIds.length) {
-        const chunksPerTable = Math.ceil(orderIds.length / ORDER_ID_CHUNK)
-        if (!cancelled) setDetailProgress({ loaded: 0, total: chunksPerTable * 4 })
-        const onChunk = () => { if (!cancelled) setDetailProgress((p) => (p ? { ...p, loaded: p.loaded + 1 } : p)) }
-        ;[pkgRows, prodRows, svcRows, vehRows] = await Promise.all([
-          fetchByOrderIds<PackageRow>('droptop_order_packages', orderIds, 'order_id, package_id, name, price_total, price_total_after_discount', onChunk),
-          fetchByOrderIds<ProductRow>('droptop_order_products', orderIds, 'order_id, product_id, product_type, uom, quantity_total', onChunk),
-          fetchByOrderIds<ServiceRow>('droptop_order_services', orderIds, 'order_id, package_id, products', onChunk),
-          fetchByOrderIds<VehicleRow>('droptop_order_vehicles', orderIds, 'order_id, vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year, mileage', onChunk),
-        ])
+      // Split the embedded response back into the flat header/child arrays
+      // the rest of this file already works with (packagesByOrder etc.
+      // below re-derive their own by-order Maps from these) — only the
+      // FETCH strategy changed, not the downstream data shape.
+      const allOrders: OrderRow[] = []
+      const pkgRows: PackageRow[] = []
+      const prodRows: ProductRow[] = []
+      const svcRows: ServiceRow[] = []
+      const vehRows: VehicleRow[] = []
+      for (const o of embedded) {
+        const { droptop_order_packages, droptop_order_products, droptop_order_services, droptop_order_vehicles, ...header } = o
+        allOrders.push(header)
+        for (const p of droptop_order_packages ?? []) pkgRows.push({ order_id: o.id, ...p })
+        for (const p of droptop_order_products ?? []) prodRows.push({ order_id: o.id, ...p })
+        for (const s of droptop_order_services ?? []) svcRows.push({ order_id: o.id, ...s })
+        for (const v of droptop_order_vehicles ?? []) vehRows.push({ order_id: o.id, ...v })
       }
-      if (cancelled) return
 
       setOrders(allOrders)
       setPackages(pkgRows)
@@ -823,21 +848,16 @@ export function DroptopOrdersPage() {
         </CardBody></Card>
       ) : loading ? (
         <LoadingProgress
-          fraction={
-            detailProgress ? detailProgress.loaded / detailProgress.total
-              : loadProgress.total ? loadProgress.loaded / loadProgress.total : null
-          }
+          fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
           countText={
-            detailProgress
-              ? `Loading package/product details — ${detailProgress.loaded.toLocaleString()} of ${detailProgress.total.toLocaleString()} batches (${Math.min(100, Math.round((detailProgress.loaded / detailProgress.total) * 100))}%)`
-              : loadProgress.total
-                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
-                : loadProgress.loaded > 0
-                  ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
-                  : 'Loading orders…'
+            loadProgress.total
+              ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+              : loadProgress.loaded > 0
+                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                : 'Loading orders…'
           }
           messages={[
-            'Pulling order headers…',
+            'Pulling orders with packages, products, and vehicles…',
             'Matching packages to services…',
             'Tallying up totals…',
             'Sorting by date…',

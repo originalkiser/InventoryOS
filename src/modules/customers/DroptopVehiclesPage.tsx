@@ -20,9 +20,8 @@ import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
-import { Button, Card, CardBody, MultiSelectDropdown, Toggle } from '@/components/ui'
+import { Button, Card, CardBody, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
-import { fetchByOrderIds } from '@/lib/droptopChildFetch'
 
 interface OrderHeaderRow {
   id: string
@@ -40,6 +39,20 @@ interface VehicleRow {
   vin_vehicle_year: number | null
   mileage: number | null
 }
+// Order header + its vehicles embedded via PostgREST's foreign-table select
+// (droptop_order_vehicles.order_id references droptop_orders(id)) — one
+// query per page instead of a header pull followed by a separate
+// per-order-id vehicle pull. Embedding doesn't change the pagination math:
+// a page is still exactly PAGE header rows regardless of how many vehicles
+// ride along on each. See DroptopOrdersPage.tsx's own ORDER_EMBED_SELECT
+// for the same pattern with more child tables.
+interface OrderRowEmbedded extends OrderHeaderRow {
+  droptop_order_vehicles: Omit<VehicleRow, 'order_id'>[]
+}
+const ORDER_EMBED_SELECT = `
+  id, location_id, order_finalized_at, final_price,
+  droptop_order_vehicles(vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year, mileage)
+`
 
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 
@@ -51,6 +64,10 @@ function vehicleKeyOf(v: VehicleRow): string {
   return v.vin || `${v.license_plate ?? ''}|${v.vehicle_name ?? ''}`
 }
 
+// Per-DISTINCT-VEHICLE intermediate — never rendered directly (a real
+// company-month can have 100k+ distinct VINs, which is what crashed the
+// page when this was the table). Rolled up further into MakeModelAgg below
+// before anything reaches the DOM.
 interface VehicleAgg {
   key: string
   shopLabel: string | null // set only in by-shop grouping
@@ -60,6 +77,25 @@ interface VehicleAgg {
   mileage: number | null // highest mileage reading seen, as a proxy for most-recent
   visits: number
   totalTicket: number
+}
+// One real vehicle's contribution to a single model-year, inside a
+// MakeModelAgg's year breakdown.
+interface YearBreakdown { year: number | null; vehicleCount: number; totalMileage: number; mileageCount: number }
+// What's actually rendered — one row per (make, model[, shop]), averaging
+// mileage/ticket across every distinct vehicle of that make/model rather
+// than listing vehicles individually. Bounded by how many real make/model
+// combinations exist (dozens to a few hundred), not by vehicle count.
+interface MakeModelAgg {
+  key: string
+  shopLabel: string | null
+  make: string | null
+  model: string | null
+  vehicleCount: number
+  visits: number
+  totalTicket: number
+  totalMileage: number
+  mileageCount: number // vehicles that actually had a mileage reading (denominator for the average — not all do)
+  byYear: Map<number | string, YearBreakdown>
 }
 
 function triggerDownload(blob: Blob, filename: string) {
@@ -97,7 +133,6 @@ export function DroptopVehiclesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
-  const [detailProgress, setDetailProgress] = useState<{ loaded: number; total: number } | null>(null)
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
@@ -146,7 +181,6 @@ export function DroptopVehiclesPage() {
     setLoading(true)
     setError(null)
     setLoadProgress({ loaded: 0, total: null })
-    setDetailProgress(null)
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
     const endIso = `${range.end}T23:59:59.999Z`
@@ -161,10 +195,13 @@ export function DroptopVehiclesPage() {
       const { count } = await applyFilters(sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true }))
       if (!cancelled) setLoadProgress({ loaded: 0, total: count ?? null })
 
-      const PAGE = 1000
+      // Kept more conservative than a flat header fetch (Max Rows is now
+      // 10,000) since this query embeds droptop_order_vehicles per order —
+      // see ORDER_EMBED_SELECT above.
+      const PAGE = 2000
       const MAX_PAGE_RETRIES = 2
       let loadedSoFarLocal = 0
-      const allOrders = await fetchDateRangeConcurrent<OrderHeaderRow>({
+      const embedded = await fetchDateRangeConcurrent<OrderRowEmbedded>({
         rangeStart: range.start,
         rangeEnd: range.end,
         totalCount: count ?? null,
@@ -178,13 +215,13 @@ export function DroptopVehiclesPage() {
           for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
             if (cancelled) return []
             let q = applyFilters(sb.schema('inventory').from('droptop_orders')
-              .select('id, location_id, order_finalized_at, final_price'))
+              .select(ORDER_EMBED_SELECT))
               .gte('order_finalized_at', subStartIso).lte('order_finalized_at', subEndIso)
               .order('order_finalized_at', { ascending: true })
               .order('id', { ascending: true }).limit(PAGE)
             if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
             const { data: pageData, error: err } = await q
-            if (!err) return (pageData ?? []) as OrderHeaderRow[]
+            if (!err) return (pageData ?? []) as OrderRowEmbedded[]
             lastErr = err.message
             if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
           }
@@ -193,16 +230,13 @@ export function DroptopVehiclesPage() {
       })
       if (cancelled) return
 
-      const orderIds = allOrders.map((o) => o.id)
-      let vehRows: VehicleRow[] = []
-      if (orderIds.length) {
-        const chunksPerTable = Math.ceil(orderIds.length / 200)
-        if (!cancelled) setDetailProgress({ loaded: 0, total: chunksPerTable })
-        vehRows = await fetchByOrderIds<VehicleRow>('droptop_order_vehicles', orderIds,
-          'order_id, vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year, mileage',
-          () => { if (!cancelled) setDetailProgress((p) => (p ? { ...p, loaded: p.loaded + 1 } : p)) })
+      const allOrders: OrderHeaderRow[] = []
+      const vehRows: VehicleRow[] = []
+      for (const o of embedded) {
+        const { droptop_order_vehicles, ...header } = o
+        allOrders.push(header)
+        for (const v of droptop_order_vehicles ?? []) vehRows.push({ order_id: o.id, ...v })
       }
-      if (cancelled) return
 
       setOrders(allOrders)
       setVehicles(vehRows)
@@ -241,7 +275,9 @@ export function DroptopVehiclesPage() {
     return [...new Set(vs.map((v) => v.vin_vehicle_model).filter((m): m is string => !!m))].sort().map((v) => ({ value: v }))
   }, [vehiclesInScope, filterYears, filterMakes])
 
-  const aggRows = useMemo((): VehicleAgg[] => {
+  // Pass 1 — per distinct vehicle (can be 100k+ rows for a big company;
+  // never rendered, just folded into makeModelAggs below).
+  const vehicleAggs = useMemo((): VehicleAgg[] => {
     const byKey = new Map<string, VehicleAgg>()
     for (const v of vehiclesInScope) {
       if (filterYears.length && !(v.vin_vehicle_year != null && filterYears.includes(String(v.vin_vehicle_year)))) continue
@@ -260,18 +296,53 @@ export function DroptopVehiclesPage() {
       a.totalTicket += order.final_price ?? 0
       if (v.mileage != null && (a.mileage == null || v.mileage > a.mileage)) a.mileage = v.mileage
     }
-    return [...byKey.values()].sort((a, b) => b.visits - a.visits)
+    return [...byKey.values()]
   }, [vehiclesInScope, ordersById, filterYears, filterMakes, filterModels, groupMode, idToLabel])
 
+  // Pass 2 — roll distinct vehicles up to (make, model[, shop]), the only
+  // thing actually rendered. Bounded by real make/model combinations, not
+  // by vehicle count, which is what makes this safe to put on screen.
+  const makeModelAggs = useMemo((): MakeModelAgg[] => {
+    const byKey = new Map<string, MakeModelAgg>()
+    for (const v of vehicleAggs) {
+      const key = `${v.shopLabel ?? ''}|${v.make ?? '—'}|${v.model ?? '—'}`
+      let a = byKey.get(key)
+      if (!a) {
+        a = { key, shopLabel: v.shopLabel, make: v.make, model: v.model, vehicleCount: 0, visits: 0, totalTicket: 0, totalMileage: 0, mileageCount: 0, byYear: new Map() }
+        byKey.set(key, a)
+      }
+      a.vehicleCount++
+      a.visits += v.visits
+      a.totalTicket += v.totalTicket
+      if (v.mileage != null) { a.totalMileage += v.mileage; a.mileageCount++ }
+
+      const yearKey = v.year ?? 'Unknown'
+      let y = a.byYear.get(yearKey)
+      if (!y) { y = { year: v.year, vehicleCount: 0, totalMileage: 0, mileageCount: 0 }; a.byYear.set(yearKey, y) }
+      y.vehicleCount++
+      if (v.mileage != null) { y.totalMileage += v.mileage; y.mileageCount++ }
+    }
+    return [...byKey.values()].sort((a, b) => b.visits - a.visits)
+  }, [vehicleAggs])
+
+  const PAGE_SIZE = 100
+  const [page, setPage] = useState(0)
+  useEffect(() => { setPage(0) }, [filterYears, filterMakes, filterModels, groupMode, shopIds.join(','), filterRegions, filterMarkets, filterAMs])
+  const totalPages = Math.max(1, Math.ceil(makeModelAggs.length / PAGE_SIZE))
+  const pagedRows = useMemo(() => makeModelAggs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [makeModelAggs, page])
+
+  const [drilldown, setDrilldown] = useState<MakeModelAgg | null>(null)
+
   function exportRows(format: 'csv' | 'xlsx') {
-    if (!aggRows.length) { toast.error('Nothing to export for this selection'); return }
+    if (!makeModelAggs.length) { toast.error('Nothing to export for this selection'); return }
     setExporting(format)
     try {
       const headers = groupMode === 'by-shop'
-        ? ['Shop', 'Year', 'Make', 'Model', 'Mileage', 'Visits', 'Avg Ticket']
-        : ['Year', 'Make', 'Model', 'Mileage', 'Visits', 'Avg Ticket']
-      const rows = aggRows.map((a) => {
-        const base = [String(a.year ?? '—'), a.make ?? '—', a.model ?? '—', a.mileage != null ? String(Math.round(a.mileage)) : '—', String(a.visits), (a.totalTicket / a.visits).toFixed(2)]
+        ? ['Shop', 'Make', 'Model', 'Avg Mileage', 'Visits', 'Avg Ticket']
+        : ['Make', 'Model', 'Avg Mileage', 'Visits', 'Avg Ticket']
+      const rows = makeModelAggs.map((a) => {
+        const avgMileage = a.mileageCount > 0 ? Math.round(a.totalMileage / a.mileageCount) : null
+        const base = [a.make ?? '—', a.model ?? '—', avgMileage != null ? String(avgMileage) : '—', String(a.visits), (a.totalTicket / a.visits).toFixed(2)]
         return groupMode === 'by-shop' ? [a.shopLabel ?? '—', ...base] : base
       })
       const fileBase = `droptop-vehicles-${range.start}-to-${range.end}`
@@ -362,21 +433,16 @@ export function DroptopVehiclesPage() {
         </CardBody></Card>
       ) : loading ? (
         <LoadingProgress
-          fraction={
-            detailProgress ? detailProgress.loaded / detailProgress.total
-              : loadProgress.total ? loadProgress.loaded / loadProgress.total : null
-          }
+          fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
           countText={
-            detailProgress
-              ? `Loading vehicle detail — ${detailProgress.loaded.toLocaleString()} of ${detailProgress.total.toLocaleString()} batches (${Math.min(100, Math.round((detailProgress.loaded / detailProgress.total) * 100))}%)`
-              : loadProgress.total
-                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
-                : loadProgress.loaded > 0
-                  ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
-                  : 'Loading orders…'
+            loadProgress.total
+              ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+              : loadProgress.loaded > 0
+                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                : 'Loading orders…'
           }
           messages={[
-            'Pulling order headers…',
+            'Pulling orders with vehicles attached…',
             'Matching vehicles to orders…',
             'Rolling up by year/make/model…',
             'Sorting by visits…',
@@ -387,55 +453,98 @@ export function DroptopVehiclesPage() {
           <div className="flex gap-3 flex-wrap">
             <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
               <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Distinct Vehicles</p>
-              <p className="text-lg font-heading font-bold text-navy">{aggRows.length.toLocaleString()}</p>
+              <p className="text-lg font-heading font-bold text-navy">{vehicleAggs.length.toLocaleString()}</p>
+            </CardBody></Card>
+            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Make/Model Combos</p>
+              <p className="text-lg font-heading font-bold text-navy">{makeModelAggs.length.toLocaleString()}</p>
             </CardBody></Card>
             <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
               <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Visits</p>
-              <p className="text-lg font-heading font-bold text-navy">{aggRows.reduce((s, a) => s + a.visits, 0).toLocaleString()}</p>
+              <p className="text-lg font-heading font-bold text-navy">{makeModelAggs.reduce((s, a) => s + a.visits, 0).toLocaleString()}</p>
             </CardBody></Card>
           </div>
 
-          <div className="flex justify-end gap-2">
-            <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportRows('csv')}>Export CSV</Button>
-            <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportRows('xlsx')}>Export XLSX</Button>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-[11px] font-mono text-inky/60">Click a row for its year-by-year breakdown.</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportRows('csv')}>Export CSV</Button>
+              <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportRows('xlsx')}>Export XLSX</Button>
+              {makeModelAggs.length > PAGE_SIZE && (
+                <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
+                  <Button size="sm" variant="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Prev</Button>
+                  <span>Page {page + 1} of {totalPages}</span>
+                  <Button size="sm" variant="secondary" disabled={page >= totalPages - 1} onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}>Next</Button>
+                </div>
+              )}
+            </div>
           </div>
 
-          {aggRows.length === 0 ? (
+          {makeModelAggs.length === 0 ? (
             <Card><CardBody>
               <p className="text-xs font-mono text-inky/60">No vehicle data for this selection — either no orders in range, or none of them have a matched vehicle yet.</p>
             </CardBody></Card>
           ) : (
-            <div className="overflow-x-auto rounded border border-navy/30 max-h-[70vh] overflow-y-auto">
+            <div className="overflow-x-auto rounded border border-navy/30 max-h-[32rem] overflow-y-auto">
               <table className="w-full text-xs font-mono">
-                <thead className="bg-navy text-cream sticky top-0">
-                  <tr>
-                    {groupMode === 'by-shop' && <th className="px-3 py-1.5 text-left">Shop</th>}
-                    <th className="px-3 py-1.5 text-left">Year</th>
-                    <th className="px-3 py-1.5 text-left">Make</th>
-                    <th className="px-3 py-1.5 text-left">Model</th>
-                    <th className="px-3 py-1.5 text-right">Mileage</th>
-                    <th className="px-3 py-1.5 text-right">Visits</th>
-                    <th className="px-3 py-1.5 text-right">Avg Ticket</th>
+                <thead className="sticky top-0 bg-cream">
+                  <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                    {groupMode === 'by-shop' && <th className="px-3 py-2 text-left">Shop</th>}
+                    <th className="px-3 py-2 text-left">Make</th>
+                    <th className="px-3 py-2 text-left">Model</th>
+                    <th className="px-3 py-2 text-right">Avg Mileage</th>
+                    <th className="px-3 py-2 text-right">Visits</th>
+                    <th className="px-3 py-2 text-right">Avg Ticket</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {aggRows.map((a) => (
-                    <tr key={a.key} className="odd:bg-cream even:bg-white border-t border-navy/10">
-                      {groupMode === 'by-shop' && <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.shopLabel}</td>}
-                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.year ?? '—'}</td>
-                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.make ?? '—'}</td>
-                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.model ?? '—'}</td>
-                      <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{a.mileage != null ? Math.round(a.mileage).toLocaleString() : '—'}</td>
-                      <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{a.visits.toLocaleString()}</td>
-                      <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(a.totalTicket / a.visits)}</td>
-                    </tr>
-                  ))}
+                  {pagedRows.map((a) => {
+                    const avgMileage = a.mileageCount > 0 ? Math.round(a.totalMileage / a.mileageCount) : null
+                    return (
+                      <tr key={a.key} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10 transition-colors" onClick={() => setDrilldown(a)}>
+                        {groupMode === 'by-shop' && <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.shopLabel}</td>}
+                        <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.make ?? '—'}</td>
+                        <td className="px-3 py-1.5 text-navy whitespace-nowrap">{a.model ?? '—'}</td>
+                        <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{avgMileage != null ? avgMileage.toLocaleString() : '—'}</td>
+                        <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{a.visits.toLocaleString()}</td>
+                        <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(a.totalTicket / a.visits)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </>
       )}
+
+      <Modal open={drilldown != null} onClose={() => setDrilldown(null)}
+        title={drilldown ? `${drilldown.make ?? '—'} ${drilldown.model ?? '—'}${drilldown.shopLabel ? ` — ${drilldown.shopLabel}` : ''}` : ''}>
+        {drilldown && (
+          <div className="overflow-x-auto rounded border border-navy/30 max-h-[60vh] overflow-y-auto">
+            <table className="w-full text-xs font-mono">
+              <thead className="sticky top-0 bg-cream">
+                <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                  <th className="px-3 py-2 text-left">Year</th>
+                  <th className="px-3 py-2 text-right">Vehicles</th>
+                  <th className="px-3 py-2 text-right">Avg Mileage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...drilldown.byYear.values()]
+                  .sort((a, b) => (b.year ?? -Infinity) - (a.year ?? -Infinity))
+                  .map((y) => (
+                    <tr key={y.year ?? 'unknown'} className="border-b border-navy/10">
+                      <td className="px-3 py-1.5 text-navy whitespace-nowrap">{y.year ?? 'Unknown'}</td>
+                      <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.vehicleCount.toLocaleString()}</td>
+                      <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{y.mileageCount > 0 ? Math.round(y.totalMileage / y.mileageCount).toLocaleString() : '—'}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

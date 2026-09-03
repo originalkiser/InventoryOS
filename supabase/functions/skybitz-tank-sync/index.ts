@@ -219,7 +219,15 @@ Deno.serve(async (req) => {
     // down this whole sync in production before the migration had run.
     const existingBySerial = new Map<string, ExistingTank>()
     {
-      const PAGE = 1000
+      // Raised to 5000 (2026-09-03, project Max Rows now 10,000). Exit
+      // condition changed from `batch.length < PAGE` to a genuinely EMPTY
+      // page — the former reads "server gave me fewer than I asked for" as
+      // "that's the last page," which silently drops data the instant PAGE
+      // is ever set above whatever the Max Rows cap happens to be (exactly
+      // the bug this exact codebase already hit multiple times elsewhere —
+      // see droptop-sync-usage's own ledger-read loop and this app's
+      // client-side fetch loops for the same fix).
+      const PAGE = 5000
       let from = 0
       for (;;) {
         const { data: rows, error } = await (admin as any)
@@ -239,7 +247,7 @@ Deno.serve(async (req) => {
             system_tank_id: r.system_tank_id, inventory_time: r.inventory_time, reading_date: r.reading_date,
           })
         }
-        if (batch.length < PAGE) break
+        if (batch.length === 0) break
         from += PAGE
       }
     }

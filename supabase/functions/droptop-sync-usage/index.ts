@@ -473,7 +473,13 @@ Deno.serve(async (req) => {
     const chunkLocationIds = locations.map((l: any) => l.id)
     const existingMap = new Map<string, any>()
     {
-      const PAGE = 1000
+      // Raised to 5000 (2026-09-03, project Max Rows now 10,000). Exit
+      // condition changed from `batch.length < PAGE` to a genuinely EMPTY
+      // page — the former silently drops data the instant PAGE is set
+      // above whatever the Max Rows cap happens to be (same fix already
+      // applied to the ledger-read loop below and this app's client-side
+      // fetch loops).
+      const PAGE = 5000
       let from = 0
       for (;;) {
         const { data: rows, error } = await (admin as any)
@@ -488,7 +494,7 @@ Deno.serve(async (req) => {
         for (const r of batch) {
           existingMap.set(`${r.location_id ?? ''}|${String(r.product_id).toLowerCase()}`, r)
         }
-        if (batch.length < PAGE) break
+        if (batch.length === 0) break
         from += PAGE
       }
     }
@@ -721,7 +727,10 @@ Deno.serve(async (req) => {
       // it explicitly rather than trusting an un-ranged select.
       const ledgerRows: { location_id: string; product_id: string; activity_date: string; sold_qty: number | null }[] = []
       {
-        const PAGE = 1000
+        // Raised to 5000 (2026-09-03, project Max Rows now 10,000) with the
+        // same genuinely-EMPTY-page exit condition fix as the existing-
+        // product_usage loop above.
+        const PAGE = 5000
         let from = 0
         for (;;) {
           const { data: page, error: ledgerErr } = await (admin as any)
@@ -732,8 +741,9 @@ Deno.serve(async (req) => {
             .gte('activity_date', rollingStartDate)
             .range(from, from + PAGE - 1)
           if (ledgerErr) { console.error('[USAGE-ROLLING] ledger read failed:', ledgerErr.message); break }
-          ledgerRows.push(...(page ?? []))
-          if (!page || page.length < PAGE) break
+          const batch = page ?? []
+          ledgerRows.push(...batch)
+          if (batch.length === 0) break
           from += PAGE
         }
       }

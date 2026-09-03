@@ -15,7 +15,10 @@ import {
 } from './types'
 
 const sb = () => supabase as any
-const PAGE = 1000
+// Raised to 5000 (2026-09-03, Max Rows now 10,000) — fetchAll's exit
+// condition only trusts a genuinely empty page, so this is safe regardless
+// of what the real cap is.
+const PAGE = 5000
 const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
 // Same convention as RecountLogicTab.tsx's "equivalent case types" on-hand
 // lookup: a trailing run of letters marks the case-type suffix (e.g. "D"
