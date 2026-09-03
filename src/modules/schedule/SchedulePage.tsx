@@ -160,7 +160,10 @@ export function SchedulePage() {
     ...(showHolidays
       ? companyHolidays.map((h): CalendarEvent => ({
           id: `holiday-${h.id}`,
-          title: h.name,
+          // Display-only suffix, not stored on the row — every company
+          // holiday configured here means the Support Center is closed,
+          // so the calendar should say so rather than just naming the day.
+          title: `${h.name} (Support Center Closed)`,
           start: new Date(h.date + 'T00:00:00'),
           end: new Date(h.date + 'T23:59:59'),
           allDay: true,

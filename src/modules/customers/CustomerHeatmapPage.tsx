@@ -213,6 +213,17 @@ function ownerClassOf(l: { owner?: string | null; metadata?: unknown }): 'Corpor
 // MapRoutesTab.tsx already does for its own pan/fit calls.
 function FocusZip({ target, onSettled }: { target: ZipCluster | null; onSettled?: () => void }) {
   const map = useMap()
+  // Real bug found live: `onSettled` was passed as an inline arrow function
+  // at the call site, and was ALSO in this effect's dependency array — a
+  // new function identity every parent render (which panning/zooming
+  // itself causes, via ZoomTracker's zoom state) re-ran this effect and
+  // called flyTo again to the SAME target, which is exactly why the map
+  // felt "locked" onto a selected zip and wouldn't let the user pan away.
+  // A ref keeps the callback always-current without making it a reactive
+  // dependency, so this effect now only re-fires when `target` itself
+  // actually changes (a genuinely new zip selection).
+  const onSettledRef = useRef(onSettled)
+  onSettledRef.current = onSettled
   useEffect(() => {
     if (!target) return
     map.flyTo([target.lat, target.lng], Math.max(map.getZoom(), 9), { duration: 0.6 })
@@ -229,8 +240,8 @@ function FocusZip({ target, onSettled }: { target: ZipCluster | null; onSettled?
     // re-run OUR OWN choropleth setStyle pass once the fly settles — see
     // repaintTick below, a direct fix that doesn't depend on any Leaflet
     // event assumption being right.
-    map.once('moveend', () => { onSettled?.() })
-  }, [target, map, onSettled])
+    map.once('moveend', () => { onSettledRef.current?.() })
+  }, [target, map])
   return null
 }
 
@@ -939,6 +950,9 @@ export function CustomerHeatmapPage() {
     }
     return [...list].sort((a, b) => b.count - a.count)
   }, [allClusters, matchMode, shopIds])
+  // Circles-mode draw order only — lowest count first, so the highest
+  // (red/hot) circles paint last/on top. See the render site's own comment.
+  const circlesDrawOrder = useMemo(() => [...clusters].sort((a, b) => a.count - b.count), [clusters])
 
   const densityBp = useMemo(() => densityBreakpoints(clusters.map((c) => c.count)), [clusters])
   const focusTarget = useMemo(() => clusters.find((c) => c.zip === selectedZip) ?? null, [clusters, selectedZip])
@@ -1040,6 +1054,21 @@ export function CustomerHeatmapPage() {
   useEffect(() => { zoomRef.current = zoom }, [zoom])
   const ordersForZipRef = useRef<(zip: string) => OrderRow[]>(() => [])
 
+  // Selected zip's own boundary, as a SEPARATE small layer drawn on top of
+  // the merged one below — dashed outline, no fill. All zips share one
+  // merged canvas layer, so giving the selected feature a heavier stroke
+  // IN that same layer meant whichever neighboring zip happened to draw
+  // after it could paint over part of the shared edge, which is why the
+  // outline sometimes didn't show all the way around. A dedicated
+  // top-most layer with just this one feature can never be overpainted by
+  // a neighbor, regardless of draw order. Skipped for a zip with no real
+  // boundary on file (Point fallback) — an outline doesn't apply to a dot.
+  const selectedZipFeature = useMemo(() => {
+    if (!selectedZip) return null
+    const f = choroplethFeatureCollection.features.find((f) => f.properties?.zip === selectedZip)
+    return f && f.geometry.type !== 'Point' ? f : null
+  }, [choroplethFeatureCollection, selectedZip])
+
   const choroplethLayerRef = useRef<L.GeoJSON | null>(null)
   // react-leaflet's <GeoJSON> only reliably parses `data` at MOUNT time — an
   // already-mounted layer does NOT re-parse when the `data` prop reference
@@ -1074,14 +1103,9 @@ export function CustomerHeatmapPage() {
       const zip = feature?.properties?.zip as string | undefined
       const c = zip ? clustersByZipRef.current.get(zip) : undefined
       const s = c ? styleFor(c.count, densityBp, zoom) : { radius: 0, color: '#4F7489', fill: '#B7E0DE' }
-      // Selected zip gets a heavier navy outline instead of the circles
-      // mode's separate ring marker — a badge floating on top of a polygon
-      // looked wrong; tracing the polygon's own boundary reads as "this
-      // shape is selected" the way a ring around a point does for circles.
-      const selected = !!zip && zip === selectedZip
-      return { color: selected ? '#002745' : s.color, fillColor: s.fill, fillOpacity: 0.55, weight: selected ? 4 : 1.5 }
+      return { color: s.color, fillColor: s.fill, fillOpacity: 0.55, weight: 1.5 }
     })
-  }, [clusters, densityBp, zoom, mapViewMode, choroplethFeatureCollection, selectedZip, repaintTick])
+  }, [clusters, densityBp, zoom, mapViewMode, choroplethFeatureCollection, repaintTick])
 
   const onEachChoroplethFeature = useCallback((feature: GeoJSON.Feature, layer: L.Layer) => {
     const zip = feature.properties?.zip as string | undefined
@@ -1707,20 +1731,6 @@ export function CustomerHeatmapPage() {
                 {geocodedOrderCount.toLocaleString()} of {filteredRows.length.toLocaleString()} orders geocoded
               </span>
             )}
-            <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono">
-              {(['normal', 'tall'] as const).map((m) => (
-                <button key={m} onClick={() => setMapHeightMode(m)}
-                  className={['px-2 py-1.5 uppercase tracking-wide transition-colors', mapHeightMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
-                  title={m === 'tall' ? 'Grow the map card in place — filters and stats above stay visible' : 'Normal map height'}>
-                  {m === 'tall' ? 'Tall' : 'Normal'}
-                </button>
-              ))}
-            </div>
-            <button onClick={() => setIsMapFullscreen(true)}
-              className="p-1.5 rounded border border-navy/30 bg-cream text-inky hover:bg-navy/10 transition-colors"
-              title="Expand the map to fill the browser window">
-              <Maximize2 className="w-3.5 h-3.5" />
-            </button>
           </div>
 
           {showRollupPreview && (
@@ -1814,8 +1824,33 @@ export function CustomerHeatmapPage() {
                   </div>
                 )}
               <div ref={mapWrapperRef}
-                className={['isolate rounded border border-navy/30 overflow-hidden', isMapFullscreen ? 'flex-1' : ''].join(' ')}
+                className={['isolate relative rounded border border-navy/30 overflow-hidden', isMapFullscreen ? 'flex-1' : ''].join(' ')}
                 style={isMapFullscreen ? undefined : { height: mapHeightMode === 'tall' ? 960 : 640 }}>
+                {/* Normal/Tall/Fullscreen controls, floating in the map's own
+                    top-right corner rather than the filter row above it —
+                    z-[1000] to sit above Leaflet's own panes (which top out
+                    well under that). Hidden while already fullscreen, which
+                    has its own "Exit Fullscreen" button above the map instead
+                    (Tall/Normal doesn't apply there — fullscreen fills the
+                    viewport regardless). */}
+                {!isMapFullscreen && (
+                  <div className="absolute top-2 right-2 z-[1000] flex items-center gap-2">
+                    <div className="inline-flex rounded border border-navy/30 overflow-hidden text-[10px] font-mono bg-cream shadow">
+                      {(['normal', 'tall'] as const).map((m) => (
+                        <button key={m} onClick={() => setMapHeightMode(m)}
+                          className={['px-2 py-1.5 uppercase tracking-wide transition-colors', mapHeightMode === m ? 'bg-navy text-cream' : 'bg-cream text-inky hover:bg-navy/10'].join(' ')}
+                          title={m === 'tall' ? 'Grow the map card in place — filters and stats above stay visible' : 'Normal map height'}>
+                          {m === 'tall' ? 'Tall' : 'Normal'}
+                        </button>
+                      ))}
+                    </div>
+                    <button onClick={() => setIsMapFullscreen(true)}
+                      className="p-1.5 rounded border border-navy/30 bg-cream text-inky hover:bg-navy/10 transition-colors shadow"
+                      title="Expand the map to fill the browser window">
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
                 <MapContainer center={mapCenter} zoom={5} preferCanvas style={{ height: '100%', width: '100%' }}>
                   {/* crossOrigin lets html2canvas (Copy button) actually read
                       the tile images into a canvas instead of tainting it —
@@ -1853,11 +1888,32 @@ export function CustomerHeatmapPage() {
                       pointToLayer={choroplethPointToLayer}
                     />
                   )}
+                  {/* Selected zip's outline — a separate layer drawn AFTER
+                      (on top of) the merged one above, see
+                      selectedZipFeature's own comment for why that's what
+                      actually fixes the "doesn't show all the way around"
+                      bug. `key` forces a clean remount on every new
+                      selection — fine for a single feature, unlike the
+                      merged layer above. */}
+                  {mapViewMode === 'choropleth' && selectedZipFeature && (
+                    <GeoJSONLayer
+                      key={selectedZip}
+                      data={selectedZipFeature}
+                      style={{ color: '#002745', weight: 3, dashArray: '4 3', fillOpacity: 0 }}
+                      interactive={false}
+                    />
+                  )}
                   {/* Circles mode keeps one CircleMarker per zip — lighter
                       per-shape than a GeoJSON polygon, and canvas-rendered
                       (preferCanvas above) rather than SVG, which is the
-                      standard Leaflet scaling path for many simple shapes. */}
-                  {mapViewMode === 'circles' && clusters.map((c) => {
+                      standard Leaflet scaling path for many simple shapes.
+                      Drawn LOWEST-count first so the highest (red/hot)
+                      circles land on top of the canvas stack instead of
+                      being buried under the far more numerous low-count
+                      (green) ones — `clusters` itself stays sorted
+                      highest-first for the Top Zip stat/table/legend, so
+                      this reverses just for the draw order, not the data. */}
+                  {mapViewMode === 'circles' && circlesDrawOrder.map((c) => {
                     const style = styleFor(c.count, densityBp, zoom)
                     const eventHandlers = {
                       // stopPropagation so this doesn't also trigger
