@@ -272,7 +272,18 @@ export async function runDroptopOrderSync(
   for (let i = 0; i < batches.length; i++) {
     onProgress?.({ batch: i + 1, totalBatches: batches.length })
     try {
-      const result = await invokeOrderSync({ ...rest, locationIds: batches[i] })
+      // BUG (found 2026-09-03): modeBody was only ever spread into the
+      // single-locationId branch above — every multi-location "Run Now"
+      // call (i.e. every real company-wide click of this button) silently
+      // fell back to invokeOrderSync's own `mode: 'sync'` default with no
+      // daysBack, which the edge function defaults to a flat 30-day pull
+      // FOR EVERY SHOP regardless of when it last synced. That's why a
+      // "pull just what's new" run took ~2 hours and touched ~170k rows
+      // for 236 shops (most re-touching orders already present from the
+      // historical backfill, not genuinely new) — it was never actually
+      // running incremental, and inventory.droptop_order_sync_state never
+      // got written since that only happens in the incremental branch.
+      const result = await invokeOrderSync({ ...rest, ...modeBody, locationIds: batches[i] })
       locationsSynced += result.locations_synced
       ordersUpserted += result.orders_upserted
       withCoords += result.orders_with_coordinates
