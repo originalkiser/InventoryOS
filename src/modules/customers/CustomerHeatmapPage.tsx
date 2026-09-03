@@ -211,7 +211,7 @@ function ownerClassOf(l: { owner?: string | null; metadata?: unknown }): 'Corpor
 // state change on <MapContainer center> only sets the *initial* view, not
 // a live one, so this needs react-leaflet's useMap() the same way
 // MapRoutesTab.tsx already does for its own pan/fit calls.
-function FocusZip({ target }: { target: ZipCluster | null }) {
+function FocusZip({ target, onSettled }: { target: ZipCluster | null; onSettled?: () => void }) {
   const map = useMap()
   useEffect(() => {
     if (!target) return
@@ -221,14 +221,16 @@ function FocusZip({ target }: { target: ZipCluster | null }) {
     // (preferCanvas, used for both circles and choropleth below) only does
     // its full internal redraw on a genuine zoom-level change; a pan-only
     // animated flyTo leaves per-feature setStyle() colors stale until
-    // something forces a real _resetView() — which is exactly what a manual
+    // something forces a real repaint — which is exactly what a manual
     // zoom in/out does today (a known Leaflet Canvas limitation, see
-    // Leaflet/Leaflet#5170, #6050, #8164). Nudge the map with a silent,
-    // non-animated setView to its own current center/zoom once the fly
-    // finishes — forces that same internal reset without moving anything.
-    // .once avoids the nudge's own moveend re-triggering this.
-    map.once('moveend', () => { map.setView(map.getCenter(), map.getZoom(), { animate: false }) })
-  }, [target, map])
+    // Leaflet/Leaflet#5170, #6050, #8164). A same-view setView() nudge was
+    // tried here first and didn't fix it in practice, so instead of
+    // fighting Leaflet's internal redraw wiring, just ask the parent to
+    // re-run OUR OWN choropleth setStyle pass once the fly settles — see
+    // repaintTick below, a direct fix that doesn't depend on any Leaflet
+    // event assumption being right.
+    map.once('moveend', () => { onSettled?.() })
+  }, [target, map, onSettled])
   return null
 }
 
@@ -940,6 +942,11 @@ export function CustomerHeatmapPage() {
 
   const densityBp = useMemo(() => densityBreakpoints(clusters.map((c) => c.count)), [clusters])
   const focusTarget = useMemo(() => clusters.find((c) => c.zip === selectedZip) ?? null, [clusters, selectedZip])
+  // Bumped once FocusZip's flyTo settles — see FocusZip's own comment for
+  // why this is needed at all. Included in the choropleth setStyle effect's
+  // deps below so clicking a zip always forces a real repaint, regardless
+  // of whether Leaflet's own moveend/zoomend machinery would have.
+  const [repaintTick, setRepaintTick] = useState(0)
 
   const mapCenter = useMemo((): [number, number] => {
     if (clusters.length > 0) return [clusters[0].lat, clusters[0].lng]
@@ -1067,9 +1074,14 @@ export function CustomerHeatmapPage() {
       const zip = feature?.properties?.zip as string | undefined
       const c = zip ? clustersByZipRef.current.get(zip) : undefined
       const s = c ? styleFor(c.count, densityBp, zoom) : { radius: 0, color: '#4F7489', fill: '#B7E0DE' }
-      return { color: s.color, fillColor: s.fill, fillOpacity: 0.55, weight: 1.5 }
+      // Selected zip gets a heavier navy outline instead of the circles
+      // mode's separate ring marker — a badge floating on top of a polygon
+      // looked wrong; tracing the polygon's own boundary reads as "this
+      // shape is selected" the way a ring around a point does for circles.
+      const selected = !!zip && zip === selectedZip
+      return { color: selected ? '#002745' : s.color, fillColor: s.fill, fillOpacity: 0.55, weight: selected ? 4 : 1.5 }
     })
-  }, [clusters, densityBp, zoom, mapViewMode, choroplethFeatureCollection])
+  }, [clusters, densityBp, zoom, mapViewMode, choroplethFeatureCollection, selectedZip, repaintTick])
 
   const onEachChoroplethFeature = useCallback((feature: GeoJSON.Feature, layer: L.Layer) => {
     const zip = feature.properties?.zip as string | undefined
@@ -1316,14 +1328,64 @@ export function CustomerHeatmapPage() {
     return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
   }
 
+  // Builds the actual image blob — html2canvas screenshot of the live map,
+  // falling back to the stylized cluster re-render when there's no map to
+  // shoot or the real capture fails. Split out of copyHeatmap() so it can
+  // be handed to ClipboardItem as a pending Promise (see that function's
+  // own comment for why that split matters).
+  async function buildHeatmapImageBlob(lines: string[]): Promise<Blob> {
+    if (!hideMap && mapWrapperRef.current) {
+      try {
+        const html2canvas = (await import('html2canvas')).default
+        const canvas = await html2canvas(mapWrapperRef.current, {
+          useCORS: true, backgroundColor: '#F2F1E6', logging: false,
+        })
+        // Belt-and-suspenders: this map uses preferCanvas, so the actual
+        // colored circles/choropleth polygons are drawn onto Leaflet's own
+        // <canvas> element(s), not individual DOM nodes html2canvas walks
+        // normally. html2canvas DOES clone same-origin canvas content on
+        // its own, but re-composite it explicitly here too in case that
+        // ever races a pending Leaflet redraw — same-origin content we
+        // drew ourselves, no CORS concern either way.
+        try {
+          const ctx = canvas.getContext('2d')
+          const wrapperRect = mapWrapperRef.current.getBoundingClientRect()
+          const scaleX = canvas.width / wrapperRect.width
+          const scaleY = canvas.height / wrapperRect.height
+          if (ctx && wrapperRect.width > 0 && wrapperRect.height > 0) {
+            for (const lc of Array.from(mapWrapperRef.current.querySelectorAll('canvas'))) {
+              const r = lc.getBoundingClientRect()
+              ctx.drawImage(lc, (r.left - wrapperRect.left) * scaleX, (r.top - wrapperRect.top) * scaleY, r.width * scaleX, r.height * scaleY)
+            }
+          }
+        } catch { /* composite is a bonus, not required — keep html2canvas's own output either way */ }
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+        if (blob) return blob
+      } catch {
+        // A tile host without CORS, a browser blocking canvas readback,
+        // etc — fall through to the stylized re-render rather than
+        // failing the whole copy.
+      }
+    }
+    return (await renderClusterSnapshot(lines)) ?? new Blob()
+  }
+
   // Copies a real screenshot of the live Leaflet map (tiles, pins, circles
-  // — whatever's actually on screen right now) via html2canvas, plus a
-  // text summary (period, shop selection, and any Region/Market/AM/Owner
-  // filters in effect), to the clipboard as one clipboard item, so pasting
-  // into chat/email/a doc picks up whichever it supports. Falls back to
-  // renderClusterSnapshot above when there's no map to shoot or the real
-  // capture fails.
-  async function copyHeatmap() {
+  // — whatever's actually on screen right now), plus a text summary
+  // (period, shop selection, and any Region/Market/AM/Owner filters in
+  // effect), to the clipboard as one clipboard item, so pasting into
+  // chat/email/a doc picks up whichever it supports.
+  //
+  // The image is built asynchronously (html2canvas + a dynamic import can
+  // easily take longer than the click's "user activation" window some
+  // browsers enforce for clipboard writes) — awaiting it BEFORE calling
+  // navigator.clipboard.write() let that window lapse, which made the
+  // write throw and silently fall back to writeText(plain), i.e. "the copy
+  // button only copies the header." Fixed per the Async Clipboard API's
+  // own documented pattern: pass ClipboardItem a PENDING Promise<Blob>
+  // instead of an already-resolved one, and call .write() synchronously
+  // (no await before it) so the call itself still lands inside the click.
+  function copyHeatmap() {
     const lines: string[] = [`Customer Heatmap — ${range.start} to ${range.end}`]
     if (shopIds.length > 0 && shopIds.length <= 5) lines.push(`Shops: ${shopLabels.join(', ')}`)
     else lines.push(shopIds.length ? `${shopIds.length} shops selected` : 'All shops')
@@ -1332,36 +1394,31 @@ export function CustomerHeatmapPage() {
     if (filterMarkets.length) lines.push(`Market: ${filterMarkets.join(', ')}`)
     if (filterAMs.length) lines.push(`Area Manager: ${filterAMs.join(', ')}`)
     if (hideFleetOrders) lines.push('Fleet orders hidden')
-
-    let blob: Blob | null = null
-    if (!hideMap && mapWrapperRef.current) {
-      try {
-        const html2canvas = (await import('html2canvas')).default
-        const canvas = await html2canvas(mapWrapperRef.current, {
-          useCORS: true, backgroundColor: '#F2F1E6', logging: false,
-        })
-        blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
-      } catch {
-        // A tile host without CORS, a browser blocking canvas readback,
-        // etc — fall through to the stylized re-render rather than
-        // failing the whole copy.
-        blob = null
-      }
-    }
-    if (!blob) blob = await renderClusterSnapshot(lines)
-
     const plain = lines.join('\n')
-    try {
-      if (blob && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-        await navigator.clipboard.write([new ClipboardItem({
-          'image/png': blob,
-          'text/plain': new Blob([plain], { type: 'text/plain' }),
-        })])
-      } else {
-        await navigator.clipboard.writeText(plain)
-      }
-      toast.success('Heatmap copied to clipboard')
-    } catch { toast.error('Copy failed') }
+
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+      // Older Safari etc — no image-clipboard support at all, don't even
+      // try; go straight to the one thing guaranteed to work.
+      navigator.clipboard.writeText(plain)
+        .then(() => toast.success('Copied summary (this browser doesn’t support image copy)'))
+        .catch(() => toast.error('Copy failed'))
+      return
+    }
+
+    navigator.clipboard.write([new ClipboardItem({
+      'image/png': buildHeatmapImageBlob(lines),
+      'text/plain': new Blob([plain], { type: 'text/plain' }),
+    })])
+      .then(() => toast.success('Heatmap copied to clipboard'))
+      .catch(async () => {
+        // The Promise-based write itself can still fail (an older browser
+        // that only accepts already-resolved Blobs, permissions, etc) —
+        // fall back to plain text so Copy never silently does nothing.
+        try {
+          await navigator.clipboard.writeText(plain)
+          toast.success('Copied summary (image copy unavailable)')
+        } catch { toast.error('Copy failed') }
+      })
   }
 
   async function exportVisits(format: 'csv' | 'xlsx') {
@@ -1766,7 +1823,7 @@ export function CustomerHeatmapPage() {
                       support this. Passed straight through to the
                       underlying Leaflet TileLayer as a layer option. */}
                   <TileLayer url={tileUrl} attribution={tileAttribution} className={dark ? 'map-tiles-dark' : undefined} crossOrigin={true} />
-                  <FocusZip target={focusTarget} />
+                  <FocusZip target={focusTarget} onSettled={() => setRepaintTick((t) => t + 1)} />
                   <ZoomTracker onZoom={setZoom} />
                   <MapResizeHandler resizeKey={`${isMapFullscreen}-${mapHeightMode}`} />
                   <DeselectOnMapClick onDeselect={() => setSelectedZip(null)} />
@@ -1830,10 +1887,12 @@ export function CustomerHeatmapPage() {
                       </CircleMarker>
                     )
                   })}
-                  {/* Selection ring — a circular indicator instead of the
-                      browser's default square focus outline (suppressed
-                      globally for Leaflet paths, see index.css). */}
-                  {focusTarget && (
+                  {/* Selection ring — circles mode only. Choropleth mode
+                      highlights the selected zip's own polygon boundary
+                      directly (see the setStyle effect above) instead of a
+                      circle badge floating on top of it — a ring reads fine
+                      over a plain point but looked wrong over a real shape. */}
+                  {mapViewMode === 'circles' && focusTarget && (
                     <CircleMarker
                       center={[focusTarget.lat, focusTarget.lng]}
                       radius={styleFor(focusTarget.count, densityBp, zoom).radius + 6}

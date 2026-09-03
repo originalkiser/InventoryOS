@@ -42,7 +42,7 @@ import {
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
   Database, Users, AlertTriangle, MessageSquare, Lightbulb,
   CheckCircle2, FileText, MapPin, GripVertical, ChevronRight,
-  ChevronsLeft, ChevronsRight, Pin,
+  ChevronsLeft, ChevronsRight, Pin, Car,
 } from 'lucide-react'
 
 // ── Icons ──────────────────────────────────────────────────────────────────
@@ -76,6 +76,7 @@ export const ICONS: Record<string, JSX.Element> = {
   'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
   'customer-heatmap': <MapPin className="w-4 h-4 flex-shrink-0" />,
   'droptop-orders': <FileText className="w-4 h-4 flex-shrink-0" />,
+  'droptop-vehicles': <Car className="w-4 h-4 flex-shrink-0" />,
   'data-connections': <Database className="w-4 h-4 flex-shrink-0" />,
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
