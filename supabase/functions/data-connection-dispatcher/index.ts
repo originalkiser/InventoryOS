@@ -37,6 +37,54 @@ const DROPTOP_CHUNK_SIZE = 20
 // now, not 1). See that constant's own comment for the full story.
 const DROPTOP_ORDER_CHUNK_SIZE = 3
 
+// Bounds every downstream sync call so one hung/slow invocation can't
+// consume the rest of this dispatcher run — see the header comment on the
+// main loop below for the incident this fixes (heatmap_rollup_refresh
+// hanging on a missing index silently starved skybitz_tanks and
+// droptop_orders of ever running, for most of a day, with no error
+// surfaced anywhere). Each due connection now runs
+// concurrently with the others (see the main loop below), so a slow chunk
+// only delays its OWN connection_key, not its siblings — room to be
+// generous here. Confirmed live 2026-09-03: droptop_orders' very first
+// scheduled attempt (it had never run on schedule before, only ever
+// manually) aborted at the old 90s on one chunk doing an unusually large
+// first-time catch-up; 150s comfortably covers that without meaningfully
+// delaying detection of an actually-hung call.
+const FETCH_TIMEOUT_MS = 150_000
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Wraps one chunk's call: fetch + parse + catch, all in one place, so a
+// single chunk throwing (a fetchWithTimeout abort, or any other
+// network-level exception) can't propagate out of the whole run* function
+// and abandon every remaining chunk — it used to, before this existed,
+// silently dropping chunks that would have succeeded. `label` (e.g.
+// "Chunk 4/29") prefixes every warning from this chunk so a partial
+// failure can be attributed to roughly where it happened.
+async function callChunk(
+  url: string, secret: string, body: Record<string, unknown>, label: string,
+): Promise<{ ok: boolean; warnings: string[] }> {
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+      body: JSON.stringify(body),
+    })
+    const { data, error } = await parseSyncResponse(res)
+    if (error) return { ok: false, warnings: [`${label}: ${error}`] }
+    return { ok: true, warnings: ((data?.warnings ?? []) as string[]).map((w) => `${label}: ${w}`) }
+  } catch (err) {
+    return { ok: false, warnings: [`${label}: ${err instanceof Error ? err.message : String(err)}`] }
+  }
+}
+
 // A non-2xx response (timeout, crash, killed invocation) or a body that
 // isn't valid JSON both used to fall through a bare `.catch(() => ({}))` as
 // an empty object at every call site below — no `.error` key, so it read as
@@ -44,7 +92,10 @@ const DROPTOP_ORDER_CHUNK_SIZE = 3
 // for a schedule row marked success with no matching sync_log entry: the
 // real failure got masked, so isDue() considered the day's run already
 // done and never retried. Centralized here so every call site gets the
-// real check instead of repeating (or missing) it.
+// real check instead of repeating (or missing) it. An aborted fetch (see
+// fetchWithTimeout above) throws rather than resolving, so it's caught
+// here too and turned into a real error message instead of an uncaught
+// rejection.
 async function parseSyncResponse(res: Response): Promise<{ data: any; error: string | null }> {
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -101,7 +152,7 @@ function isDue(s: Schedule, now: Date, tz: string): boolean {
 }
 
 async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/skybitz-tank-sync`, {
+  const res = await fetchWithTimeout(`${supabaseUrl}/functions/v1/skybitz-tank-sync`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
     body: '{}',
@@ -130,15 +181,13 @@ async function runDroptopPurchaseOrders(
 
   const warnings: string[] = []
   let anySucceeded = false
-  for (const locationIds of chunks) {
-    const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-      body: JSON.stringify({ mode: 'sync', daysBack: 180, locationIds }),
-    })
-    const { data, error } = await parseSyncResponse(res)
-    if (error) warnings.push(error)
-    else { anySucceeded = true; if (data?.warnings?.length) warnings.push(...data.warnings) }
+  for (let i = 0; i < chunks.length; i++) {
+    const r = await callChunk(
+      `${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, secret,
+      { mode: 'sync', daysBack: 180, locationIds: chunks[i] }, `Chunk ${i + 1}/${chunks.length}`,
+    )
+    if (r.ok) anySucceeded = true
+    warnings.push(...r.warnings)
   }
   if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
   return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
@@ -161,19 +210,17 @@ async function runDroptopOrders(
 
   const warnings: string[] = []
   let anySucceeded = false
-  for (const locationIds of chunks) {
+  for (let i = 0; i < chunks.length; i++) {
     // Steady-state: pull each location's orders since the last date it
     // successfully synced (tracked in inventory.droptop_order_sync_state),
     // capped at a 30-day catch-up window. See droptop-sync-orders' own
     // header comment for why this is Sunday-closure-safe.
-    const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-      body: JSON.stringify({ mode: 'incremental', locationIds }),
-    })
-    const { data, error } = await parseSyncResponse(res)
-    if (error) warnings.push(error)
-    else { anySucceeded = true; if (data?.warnings?.length) warnings.push(...data.warnings) }
+    const r = await callChunk(
+      `${supabaseUrl}/functions/v1/droptop-sync-orders`, secret,
+      { mode: 'incremental', locationIds: chunks[i] }, `Chunk ${i + 1}/${chunks.length}`,
+    )
+    if (r.ok) anySucceeded = true
+    warnings.push(...r.warnings)
   }
   if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
   return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
@@ -183,7 +230,7 @@ async function runDroptopOrders(
 // its own — it's only ever called by this dispatcher or an admin's own
 // interactive session, never unattended by anything else.
 async function runAutomatedChecks(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/run-automated-checks`, {
+  const res = await fetchWithTimeout(`${supabaseUrl}/functions/v1/run-automated-checks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
     body: '{}',
@@ -196,7 +243,7 @@ async function runAutomatedChecks(supabaseUrl: string, secret: string): Promise<
 // no secret of its own. Recomputes Customer Heatmap's pre-aggregated zip
 // rollups for whatever droptop_orders rows changed since the last run.
 async function runHeatmapRollupRefresh(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/heatmap-rollup-refresh`, {
+  const res = await fetchWithTimeout(`${supabaseUrl}/functions/v1/heatmap-rollup-refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
     body: '{}',
@@ -224,17 +271,12 @@ async function runDroptopChunked(
 
   const warnings: string[] = []
   let anySucceeded = false
-  for (const locationIds of chunks) {
-    const body: Record<string, unknown> = { mode, locationIds }
+  for (let i = 0; i < chunks.length; i++) {
+    const body: Record<string, unknown> = { mode, locationIds: chunks[i] }
     if (mode === 'usage') { body.daysBack = 1; body.logDailyActivity = true }
-    const res = await fetch(`${supabaseUrl}/functions/v1/droptop-sync-usage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-      body: JSON.stringify(body),
-    })
-    const { data, error } = await parseSyncResponse(res)
-    if (error) warnings.push(error)
-    else { anySucceeded = true; if (data?.warnings?.length) warnings.push(...data.warnings) }
+    const r = await callChunk(`${supabaseUrl}/functions/v1/droptop-sync-usage`, secret, body, `Chunk ${i + 1}/${chunks.length}`)
+    if (r.ok) anySucceeded = true
+    warnings.push(...r.warnings)
   }
   if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
   return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
@@ -271,38 +313,61 @@ Deno.serve(async (req) => {
       return tz
     }
 
-    for (const s of (schedules ?? []) as Schedule[]) {
+    // Due schedules used to be processed one at a time in a plain for-loop,
+    // each `await`ed in turn. That meant one slow or hanging connection
+    // (found live 2026-09-03: heatmap_rollup_refresh's Postgres statement
+    // silently exceeding statement_timeout on every attempt, once its
+    // underlying join had no supporting index at ~200k+ rows post-backfill)
+    // consumed the whole invocation's time budget on every single 5-minute
+    // tick, so the platform's own execution-time limit killed the
+    // invocation before the loop ever reached whatever came after it —
+    // skybitz_tanks and droptop_orders sat at "never run today" for hours
+    // with no error logged anywhere, since the invocation died before
+    // reaching their `.update()` calls at all. Each due schedule is now
+    // processed independently (its own try/catch, its own bounded fetch via
+    // fetchWithTimeout, its own `.update()` call made as soon as IT
+    // finishes) and they all run concurrently — one hanging schedule can no
+    // longer block, delay, or hide the others.
+    async function processSchedule(s: Schedule): Promise<Record<string, unknown> | null> {
       const tz = await timezoneFor(s.company_id)
-      if (!isDue(s, now, tz)) continue
+      if (!isDue(s, now, tz)) return null
 
       let outcome: { status: string; message: string | null }
-      if (s.connection_key === 'skybitz_tanks') {
-        if (!skybitzSecret) { outcome = { status: 'error', message: 'SKYBITZ_SYNC_SECRET not configured' } }
-        else outcome = await runSkybitzTanks(supabaseUrl, skybitzSecret)
-      } else if (s.connection_key === 'droptop_on_hand' || s.connection_key === 'droptop_usage') {
-        if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
-        else outcome = await runDroptopChunked(
-          supabaseUrl, serviceKey, droptopSecret, s.company_id,
-          s.connection_key === 'droptop_on_hand' ? 'inventory' : 'usage',
-        )
-      } else if (s.connection_key === 'droptop_purchase_orders') {
-        if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
-        else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
-      } else if (s.connection_key === 'droptop_orders') {
-        if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
-        else outcome = await runDroptopOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
-      } else if (s.connection_key === 'automated_checks') {
-        // Run after the Droptop pulls so the movement feed it reads is fresh —
-        // schedule its own interval later in the day than droptop_usage's if
-        // they're both daily-at-a-time schedules, since ordering between two
-        // "interval" schedules otherwise isn't guaranteed.
-        outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
-          : await runAutomatedChecks(supabaseUrl, dispatchSecret)
-      } else if (s.connection_key === 'heatmap_rollup_refresh') {
-        outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
-          : await runHeatmapRollupRefresh(supabaseUrl, dispatchSecret)
-      } else {
-        outcome = { status: 'error', message: `Unknown connection_key: ${s.connection_key}` }
+      try {
+        if (s.connection_key === 'skybitz_tanks') {
+          if (!skybitzSecret) { outcome = { status: 'error', message: 'SKYBITZ_SYNC_SECRET not configured' } }
+          else outcome = await runSkybitzTanks(supabaseUrl, skybitzSecret)
+        } else if (s.connection_key === 'droptop_on_hand' || s.connection_key === 'droptop_usage') {
+          if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
+          else outcome = await runDroptopChunked(
+            supabaseUrl, serviceKey, droptopSecret, s.company_id,
+            s.connection_key === 'droptop_on_hand' ? 'inventory' : 'usage',
+          )
+        } else if (s.connection_key === 'droptop_purchase_orders') {
+          if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
+          else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
+        } else if (s.connection_key === 'droptop_orders') {
+          if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
+          else outcome = await runDroptopOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
+        } else if (s.connection_key === 'automated_checks') {
+          // Run after the Droptop pulls so the movement feed it reads is fresh —
+          // schedule its own interval later in the day than droptop_usage's if
+          // they're both daily-at-a-time schedules, since ordering between two
+          // "interval" schedules otherwise isn't guaranteed.
+          outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
+            : await runAutomatedChecks(supabaseUrl, dispatchSecret)
+        } else if (s.connection_key === 'heatmap_rollup_refresh') {
+          outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
+            : await runHeatmapRollupRefresh(supabaseUrl, dispatchSecret)
+        } else {
+          outcome = { status: 'error', message: `Unknown connection_key: ${s.connection_key}` }
+        }
+      } catch (err) {
+        // A hung fetch aborted by fetchWithTimeout lands here (it throws
+        // rather than resolving), as would any other unexpected exception —
+        // caught per-schedule so it can't take the rest of the batch down
+        // with it the way an uncaught throw in the old sequential loop did.
+        outcome = { status: 'error', message: err instanceof Error ? err.message : String(err) }
       }
 
       const nextRunAt = s.schedule_mode === 'interval' && s.interval_minutes
@@ -312,8 +377,11 @@ Deno.serve(async (req) => {
         .update({ last_run_at: now.toISOString(), last_run_status: outcome.status, last_run_message: outcome.message, next_run_at: nextRunAt })
         .eq('id', s.id)
 
-      results.push({ connection_key: s.connection_key, ...outcome })
+      return { connection_key: s.connection_key, ...outcome }
     }
+
+    const settled = await Promise.all(((schedules ?? []) as Schedule[]).map(processSchedule))
+    for (const r of settled) if (r) results.push(r)
 
     return ok({ success: true, checked: (schedules ?? []).length, dispatched: results.length, results })
   } catch (err: unknown) {

@@ -89,6 +89,48 @@ function statusColor(status: string | null): 'green' | 'orange' | 'red' | 'gray'
   return 'gray'
 }
 
+// Error/partial messages here can run to dozens of lines (a chunked sync's
+// per-chunk failures all joined with " | ") — this was clogging the page
+// with 50-line-tall red blocks. Collapsed to 2 lines by default with a
+// Show more/less toggle, plus a dismiss (×) that persists to localStorage
+// keyed by the exact message text — reappears automatically the moment the
+// underlying message actually changes (a new failure, or clears on
+// success), so dismissing never hides a genuinely new problem.
+function DismissibleError({ storageKey, label, message }: { storageKey: string; label: string; message: string }) {
+  const [dismissed, setDismissed] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  useEffect(() => {
+    let stored: string | null = null
+    try { stored = localStorage.getItem(storageKey) } catch { /* ignore */ }
+    setDismissed(stored === message)
+    setExpanded(false)
+  }, [storageKey, message])
+
+  if (dismissed) return null
+  const isLong = message.length > 160 || message.includes(' | ')
+  return (
+    <p className="text-[11px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-2 py-1 flex items-start gap-2">
+      <span className="flex-1 min-w-0">
+        <span className="text-inky/50 uppercase">{label} — </span>
+        <span className={isLong && !expanded ? 'line-clamp-2 align-bottom' : ''}>{message}</span>
+        {isLong && (
+          <button type="button" onClick={() => setExpanded((v) => !v)} className="ml-1.5 text-sky hover:underline whitespace-nowrap">
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
+      </span>
+      <button
+        type="button"
+        onClick={() => { try { localStorage.setItem(storageKey, message) } catch { /* ignore */ } setDismissed(true) }}
+        className="text-inky/40 hover:text-red-400 leading-none shrink-0 text-sm"
+        title="Dismiss — reappears only if this changes to a new error"
+      >
+        ×
+      </button>
+    </p>
+  )
+}
+
 export function DataConnectionsTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -124,6 +166,11 @@ export function DataConnectionsTab() {
   // "everyone's a gap" bug, just in the opposite direction.
   const [locationIdsInRange, setLocationIdsInRange] = useState<Set<string> | null>(null)
   const [locationIdsInRangeError, setLocationIdsInRangeError] = useState<string | null>(null)
+  // Address Geocoding coverage — "how many of how many" the Run Geocoding
+  // button below has actually gotten through. null = still loading/failed;
+  // distinguished from "confirmed 0 eligible" the same way locationIdsInRange
+  // is above, so a failed count doesn't silently render as "nothing to do."
+  const [geocodeStats, setGeocodeStats] = useState<{ eligible: number; done: number; matched: number } | null>(null)
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -134,6 +181,30 @@ export function DataConnectionsTab() {
   }, [companyId])
 
   useEffect(() => { load() }, [load])
+
+  const loadGeocodeStats = useCallback(async () => {
+    if (!companyId) return
+    const sb = supabase as any
+    // Each query builder call mutates and returns the same underlying
+    // object rather than a fresh copy, so a shared "base" query reused
+    // across three .select() calls would compound filters instead of
+    // branching — hence three independently-built queries here.
+    const [eligibleRes, doneRes, matchedRes] = await Promise.all([
+      sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId).not('address', 'is', null),
+      sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId).not('address', 'is', null).not('geocode_status', 'is', null),
+      sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId).not('address', 'is', null).eq('geocode_status', 'matched'),
+    ])
+    if (eligibleRes.error || doneRes.error || matchedRes.error) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to load geocoding coverage:', eligibleRes.error ?? doneRes.error ?? matchedRes.error)
+      return
+    }
+    setGeocodeStats({ eligible: eligibleRes.count ?? 0, done: doneRes.count ?? 0, matched: matchedRes.count ?? 0 })
+  }, [companyId])
+  useEffect(() => { loadGeocodeStats() }, [loadGeocodeStats])
 
   // Locations eligible for the historical backfill — only shops already
   // mapped to a Droptop Operation ID, same scope as the routine usage sync.
@@ -674,6 +745,7 @@ export function DataConnectionsTab() {
       toast.error(message, { duration: 12000 })
     } finally {
       setRunning(null)
+      loadGeocodeStats()
     }
   }
 
@@ -821,14 +893,10 @@ export function DataConnectionsTab() {
                   </div>
                 </div>
                 {(row.last_run_status === 'error' || row.last_run_status === 'partial') && row.last_run_message && (
-                  <p className="text-[11px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-2 py-1">
-                    <span className="text-inky/50 uppercase">Scheduled — </span>{row.last_run_message}
-                  </p>
+                  <DismissibleError storageKey={`dc-dismissed-error:${row.id}:scheduled`} label="Scheduled" message={row.last_run_message} />
                 )}
                 {(row.last_manual_run_status === 'error' || row.last_manual_run_status === 'partial') && row.last_manual_run_message && (
-                  <p className="text-[11px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-2 py-1">
-                    <span className="text-inky/50 uppercase">Manual — </span>{row.last_manual_run_message}
-                  </p>
+                  <DismissibleError storageKey={`dc-dismissed-error:${row.id}:manual`} label="Manual" message={row.last_manual_run_message} />
                 )}
               </CardBody>
             </Card>
@@ -1006,6 +1074,25 @@ export function DataConnectionsTab() {
             order — results are cached by address. Runs in small batches automatically; click again anytime to pick
             up any new orders since the last run.
           </p>
+          {geocodeStats && (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-[11px] font-mono text-inky">
+                <span>
+                  {geocodeStats.done.toLocaleString()} / {geocodeStats.eligible.toLocaleString()} addresses geocoded
+                  {geocodeStats.done > 0 && <span className="text-inky/50"> ({geocodeStats.matched.toLocaleString()} matched, {(geocodeStats.done - geocodeStats.matched).toLocaleString()} no match)</span>}
+                </span>
+                <span className="text-inky/50">
+                  {geocodeStats.eligible > 0 ? Math.round((geocodeStats.done / geocodeStats.eligible) * 100) : 0}%
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-navy/10 overflow-hidden">
+                <div
+                  className="h-full bg-sky rounded-full transition-[width]"
+                  style={{ width: `${geocodeStats.eligible > 0 ? Math.min(100, (geocodeStats.done / geocodeStats.eligible) * 100) : 0}%` }}
+                />
+              </div>
+            </div>
+          )}
           <div>
             <Button size="sm" loading={running === 'geocoding'} onClick={runGeocodingJob}>
               Run Geocoding
