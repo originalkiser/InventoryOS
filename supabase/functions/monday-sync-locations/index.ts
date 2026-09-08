@@ -125,8 +125,14 @@ const FIELD_MAP: [string, string, FieldKind][] = [
   ['supply_fee', 'numeric_mm3t7551', 'numeric'],
   ['disposal_fee', 'numeric_mm3tzp17', 'numeric'],
   ['oil_inflation_surcharge', 'numeric_mm3t2m00', 'numeric'],
-  ['planned_2023', 'dropdown8', 'text'],
-  ['planned_2024', 'dropdown5', 'text'],
+  // Real bug found live 2026-09-08: these dropdowns aren't always numeric —
+  // some rows hold "Yes"/"No" instead of a year/dollar figure, and the DB
+  // columns are `numeric`. Writing that text as-is ("kind: text") threw
+  // "invalid input syntax for type numeric" on every affected row. 'numeric'
+  // already nulls out anything that doesn't parse as a number, so a "Yes"/
+  // "No" value here just comes through as null instead of crashing the sync.
+  ['planned_2023', 'dropdown8', 'numeric'],
+  ['planned_2024', 'dropdown5', 'numeric'],
   ['valvoline_account_num', 'text24', 'text'],
   ['ai_shop_id', 'ai_shop_id', 'text'],
   ['ai_username', 'text9__1', 'text'],
@@ -141,7 +147,7 @@ const FIELD_MAP: [string, string, FieldKind][] = [
   ['tmcw_ql', 'dropdown49__1', 'text'],
   ['am_data_map', 'dup__of_market_names__1', 'mirror'],
   ['rd_data_map', 'dup__of_region__1', 'mirror'],
-  ['droptop_num', 'numbers6__1', 'numeric'],
+  ['droptop_num', 'numbers6__1', 'text'], // DB column is text, not numeric, despite the Monday column type
   ['droptop_operation_id', 'text_mkm1gjx', 'text'],
   ['reladyne_delivery_day', 'dropdown_mkrz4f4d', 'text'],
   ['ai_call_center', 'color_mks8m9x1', 'text'],
@@ -151,8 +157,12 @@ const FIELD_MAP: [string, string, FieldKind][] = [
   ['inspection_station_id', 'text_mkwzmr60', 'text'],
   ['mighty_po_upload', 'dropdown_mm448gg6', 'bool'],
   ['hrbp', 'dropdown_mm0yb9j6', 'text'],
-  ['latitude', 'latitude', 'text'],
-  ['longitude', 'longitude', 'text'],
+  // Same class of bug as planned_2023/2024 above, caught defensively before
+  // it could bite: core.locations.latitude/longitude are `numeric`, not
+  // text, so a blank or non-numeric value here needs the same 'numeric'
+  // null-if-unparseable handling rather than passing raw text through.
+  ['latitude', 'latitude', 'numeric'],
+  ['longitude', 'longitude', 'numeric'],
 ]
 const STATUS_COLUMN_ID = 'status2'
 const ALL_COLUMN_IDS = [...new Set([...FIELD_MAP.map(([, id]) => id), STATUS_COLUMN_ID])]
