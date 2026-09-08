@@ -809,6 +809,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const addressStr = location ? [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') : ''
   const sidebar: { label: string; value: string; note?: string; mapQuery?: string }[] = location ? [
     { label: 'Location', value: locVal(location, 'shop_city') || shopLabel(shopId) },
+    { label: 'Market', value: locVal(location, 'market') },
     { label: 'Area Manager', value: locVal(location, 'area_manager') },
     { label: 'AM Cell', value: locVal(location, 'am_phone') },
     { label: 'RDO', value: locVal(location, 'director') },

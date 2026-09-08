@@ -24,6 +24,7 @@ const metaOf = (l: Location, key: string): string => {
 }
 const amOf = (l: Location) => metaOf(l, 'area_manager')
 const rdOf = (l: Location) => metaOf(l, 'regional_director') || metaOf(l, 'director')
+const marketOf = (l: Location) => metaOf(l, 'market')
 const shopText = (l: Location) => l.shop_city || l.name
 
 const isOpen = (n: string) => { const s = n.toLowerCase(); return s.includes('pending') || s.includes('open') }
@@ -106,6 +107,12 @@ export function AmRdLookupPage() {
     if (role !== 'am') return ''
     return [...new Set(shops.map((l) => rdOf(l)).filter(Boolean))].join(', ')
   }, [shops, role])
+  // Shown under the AM's name at the top — an AM's shops are usually all one
+  // market, but join distinct values just in case (same shape as rdForAm).
+  const marketForAm = useMemo(() => {
+    if (role !== 'am') return ''
+    return [...new Set(shops.map((l) => marketOf(l)).filter(Boolean))].join(', ')
+  }, [shops, role])
 
   const sortedShops = useMemo(() => {
     const arr = [...shops]
@@ -116,9 +123,15 @@ export function AmRdLookupPage() {
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
-  const th = 'px-3 py-2 text-left font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30'
+  // No text-align baked in — each header below picks left/right to match its
+  // own column's cell alignment (previously every header was hard-coded
+  // text-left while several columns' values render text-right, so the
+  // numbers never lined up under their own header).
+  const th = 'px-3 py-2 font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30'
   const td = 'px-3 py-1.5 border-b border-navy/15 whitespace-nowrap'
   const showAmCol = role === 'rd'
+  const showMarketCol = role === 'rd'
+  const colCount = 8 + (showAmCol ? 1 : 0) + (showMarketCol ? 1 : 0)
 
   return (
     <div className="flex flex-col gap-4">
@@ -152,35 +165,42 @@ export function AmRdLookupPage() {
         <p className="text-xs font-mono text-inky/60 py-8">Select a {role === 'am' ? 'area manager' : 'regional director'} above to begin.</p>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-3 text-xs font-body text-navy">
-            <span className="font-heading font-bold uppercase tracking-wide">{person}</span>
-            <Badge color="navy">{shops.length} shops</Badge>
-            {role === 'am' && rdForAm && <span className="text-inky">Regional Director: <span className="text-navy font-semibold">{rdForAm}</span></span>}
+          <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-3 text-xs font-body text-navy">
+              <span className="font-heading font-bold uppercase tracking-wide">{person}</span>
+              <Badge color="navy">{shops.length} shops</Badge>
+              {role === 'am' && rdForAm && <span className="text-inky">Regional Director: <span className="text-navy font-semibold">{rdForAm}</span></span>}
+            </div>
+            {role === 'am' && marketForAm && (
+              <div className="text-xs font-body text-inky">Market: <span className="text-navy font-semibold">{marketForAm}</span></div>
+            )}
           </div>
 
           <div className="overflow-x-auto rounded border border-navy/30">
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="bg-cream">
-                  <th className={th}>Shop</th>
-                  {showAmCol && <th className={th}>Area Manager</th>}
-                  <th className={th}>RD Products</th>
-                  <th className={th}>Valvoline Products</th>
-                  <th className={th}>Open Issues</th>
-                  <th className={th}>Closed Issues</th>
-                  <th className={th}>Comms</th>
-                  <th className={th}>Tanks (VMI / Non)</th>
-                  <th className={th}>Mighty PO Upload</th>
+                  <th className={`${th} text-left`}>Shop</th>
+                  {showMarketCol && <th className={`${th} text-left`}>Market</th>}
+                  {showAmCol && <th className={`${th} text-left`}>Area Manager</th>}
+                  <th className={`${th} text-right`}>RD Products</th>
+                  <th className={`${th} text-right`}>Valvoline Products</th>
+                  <th className={`${th} text-right`}>Open Issues</th>
+                  <th className={`${th} text-right`}>Closed Issues</th>
+                  <th className={`${th} text-right`}>Comms</th>
+                  <th className={`${th} text-right`}>Tanks (VMI / Non)</th>
+                  <th className={`${th} text-left`}>Mighty PO Upload</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={showAmCol ? 9 : 8} className="py-10 text-center"><SbLoader size={32} /></td></tr>
+                  <tr><td colSpan={colCount} className="py-10 text-center"><SbLoader size={32} /></td></tr>
                 ) : sortedShops.map((l, idx) => {
                   const a = agg[l.id] ?? EMPTY_AGG
                   return (
                     <tr key={l.id} className={idx % 2 ? 'bg-navy/[0.03]' : ''}>
                       <td className={`${td} text-navy font-semibold`}>{shopText(l)}</td>
+                      {showMarketCol && <td className={`${td} text-navy`}>{marketOf(l) || '—'}</td>}
                       {showAmCol && <td className={`${td} text-navy`}>{amOf(l) || '—'}</td>}
                       <td className={`${td} text-right text-navy`}>{a.rdProducts}</td>
                       <td className={`${td} text-right text-navy`}>{a.valvProducts}</td>
@@ -193,7 +213,7 @@ export function AmRdLookupPage() {
                   )
                 })}
                 {!loading && sortedShops.length === 0 && (
-                  <tr><td colSpan={showAmCol ? 9 : 8} className="py-8 text-center text-inky/50">No shops for this selection.</td></tr>
+                  <tr><td colSpan={colCount} className="py-8 text-center text-inky/50">No shops for this selection.</td></tr>
                 )}
               </tbody>
             </table>
