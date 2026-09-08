@@ -479,6 +479,19 @@ Deno.serve(async (req) => {
       // above whatever the Max Rows cap happens to be (same fix already
       // applied to the ledger-read loop below and this app's client-side
       // fetch loops).
+      //
+      // Sort key is (location_id, id), NOT plain id (fixed 2026-09-08 after
+      // a real "canceling statement due to statement timeout" in production
+      // — EXPLAIN ANALYZE showed `ORDER BY id LIMIT 5000` made the planner
+      // use product_usage_pkey and scan tens of thousands of unrelated rows
+      // in id order hoping to find 5000 matches for this chunk's ~20
+      // locations, instead of the company/location index that actually
+      // matches the WHERE clause. Ordering by (location_id, id) instead
+      // lets it use idx_product_usage_company_location_id (migration
+      // 20260908b_product_usage_company_location_id_idx.sql) directly —
+      // confirmed via EXPLAIN ANALYZE to drop this from 7.6s to ~30ms with
+      // zero rows filtered out, not just a cache-warming artifact. Still a
+      // stable total order (id is unique) so paging behaves the same.
       const PAGE = 5000
       let from = 0
       for (;;) {
@@ -487,6 +500,7 @@ Deno.serve(async (req) => {
           .select('id, location_id, product_id, category, daily_usage, on_hands')
           .eq('company_id', companyId)
           .in('location_id', chunkLocationIds)
+          .order('location_id', { ascending: true })
           .order('id', { ascending: true })
           .range(from, from + PAGE - 1)
         if (error) throw new Error(`Failed to load existing product_usage: ${error.message}`)

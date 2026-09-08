@@ -205,13 +205,29 @@ Deno.serve(async (req) => {
       return ok({ success: true, auto: autoMode, requested: requestedVins.length, cached_hits: 0, newly_decoded: 0, invalid: requestedVins.length })
     }
 
-    // Cache check — only genuinely new VINs cost an NHTSA call.
-    const { data: cacheRows, error: cacheErr } = await (admin as any)
-      .schema('inventory').from('vin_decoded')
-      .select('vin')
-      .in('vin', uniqueVins)
-    if (cacheErr) return ok({ error: cacheErr.message })
-    const alreadyCached = new Set((cacheRows ?? []).map((r: { vin: string }) => r.vin))
+    // Cache check — only genuinely new VINs cost an NHTSA call. Chunked at
+    // CACHE_READ_CHUNK: a plain .in() filter serializes into the request
+    // URL, and auto mode can hand this up to AUTO_MAX_VINS (10,000) VINs —
+    // one unchunked call here threw a hard "Invalid URL" (Deno's URL
+    // constructor rejecting a ~190,000-character query string) on every
+    // scheduled run once volume grew, which surfaced as a bare TypeError
+    // with no cached_hits/newly_decoded at all. Same chunk size as the
+    // client's own fetchVinDecodeMap fix for the identical constraint
+    // (DroptopVehiclesPage.tsx) — keep the two in sync if either changes.
+    const CACHE_READ_CHUNK = 300
+    const cacheChunks: string[][] = []
+    for (let i = 0; i < uniqueVins.length; i += CACHE_READ_CHUNK) cacheChunks.push(uniqueVins.slice(i, i + CACHE_READ_CHUNK))
+    const alreadyCached = new Set<string>()
+    let cacheReadErr: string | null = null
+    await mapWithConcurrency(cacheChunks, 8, async (chunk) => {
+      const { data, error } = await (admin as any)
+        .schema('inventory').from('vin_decoded')
+        .select('vin')
+        .in('vin', chunk)
+      if (error) { cacheReadErr = error.message; return }
+      for (const r of (data ?? []) as { vin: string }[]) alreadyCached.add(r.vin)
+    })
+    if (cacheReadErr) return ok({ error: cacheReadErr })
     const toDecode = uniqueVins.filter((v) => !alreadyCached.has(v))
 
     let newlyDecoded = 0
