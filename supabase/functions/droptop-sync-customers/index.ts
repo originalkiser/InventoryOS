@@ -83,6 +83,18 @@ async function buildSig(publicKey: string, method: string, privateKey: string): 
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// Deno/Supabase's own outbound-fetch platform limiter can reject a fetch()
+// call outright (thrown, not returned as a Response) with a message like
+// "Rate limit exceeded for trace <id>. Retry after 51786ms." — found for
+// real in droptop-sync-orders (same callDroptop shape, see that file's own
+// comment) and ported here for the identical exposure: fetch() had no
+// try/catch, so this skipped the 429 handling below entirely and killed
+// the whole run outright, with nothing logged anywhere to confirm it
+// (this file never called console.* at all before this fix). Extract the
+// platform's own requested wait so we honor it precisely instead of
+// guessing with exponential backoff.
+const PLATFORM_RETRY_AFTER_MS_RE = /retry after (\d+)\s*ms/i
+
 async function callDroptop(
   endpoint: string, params: Record<string, string>, publicKey: string, privateKey: string, maxRetries = 5,
 ): Promise<any> {
@@ -90,16 +102,36 @@ async function callDroptop(
     const sig = await buildSig(publicKey, 'GET', privateKey)
     const qs = new URLSearchParams({ sig, ...params })
     const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
-    const res = await fetch(url, { headers: { 'x-api-key': publicKey.trim() }, redirect: 'follow' })
+
+    let res: Response
+    try {
+      res = await fetch(url, { headers: { 'x-api-key': publicKey.trim() }, redirect: 'follow' })
+    } catch (fetchErr) {
+      const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+      if (attempt < maxRetries) {
+        const platformWaitMatch = message.match(PLATFORM_RETRY_AFTER_MS_RE)
+        const waitMs = platformWaitMatch ? Number(platformWaitMatch[1]) : 2000 * 2 ** attempt
+        console.warn(`[droptop-sync-customers] ${endpoint} fetch threw (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${waitMs}ms: ${message}`)
+        await sleep(waitMs)
+        continue
+      }
+      console.error(`[droptop-sync-customers] ${endpoint} fetch threw, retries exhausted: ${message}`)
+      throw fetchErr
+    }
+
     if (res.status === 429 && attempt < maxRetries) {
       const retryAfterHeader = Number(res.headers.get('retry-after'))
       const waitMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 ? retryAfterHeader * 1000 : 2000 * 2 ** attempt
-      await res.text().catch(() => {})
+      const body = await res.text().catch(() => '')
+      console.warn(`[droptop-sync-customers] ${endpoint} returned ${res.status} (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${waitMs}ms: ${body}`)
       await sleep(waitMs)
       continue
     }
     const text = await res.text()
-    if (!res.ok) throw new Error(`Droptop ${res.status}: ${text}`)
+    if (!res.ok) {
+      console.error(`[droptop-sync-customers] ${endpoint} failed with ${res.status}, retries exhausted or non-retryable: ${text}`)
+      throw new Error(`Droptop ${res.status}: ${text}`)
+    }
     return JSON.parse(text)
   }
 }

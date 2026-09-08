@@ -63,24 +63,79 @@ export async function buildSig(publicKey: string, method: string, privateKey: st
   return btoa(btoa(String.fromCharCode(...encrypted)))
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Same resilience/observability pattern as the droptop-sync-* functions
+// (see droptop-sync-orders' own comment for the full story): 429/502/503/
+// 504 are transient (Droptop's own rate limit or a busy-shop gateway
+// timeout), worth a backoff-retry rather than failing this proxy call
+// outright. Separately, Deno/Supabase's own outbound-fetch platform
+// limiter can reject fetch() itself (thrown, not returned as a Response)
+// with a message like "Rate limit exceeded for trace <id>. Retry after
+// 51786ms." -- this file had no try/catch around fetch() and no
+// console.* logging anywhere, so that failure mode was both unretried and
+// invisible in Supabase's Logs tab. Fixed the same way across every
+// Droptop edge function 2026-09-08 so a failure here is diagnosable
+// without having to chase it down interactively again.
+//
+// Unlike the droptop-sync-* functions (which always call Droptop with GET
+// for read-only syncs), this proxy forwards whatever method the caller
+// asks for — retries are gated to GET only, since retrying a non-GET call
+// after a transient failure risks a duplicate side effect if Droptop
+// actually processed the request but the response was lost. A non-GET
+// failure still gets logged, just not retried.
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+const PLATFORM_RETRY_AFTER_MS_RE = /retry after (\d+)\s*ms/i
+
 export async function callDroptop(
   endpoint: string,
   method: string,
   params: Record<string, string>,
   publicKey: string,
   privateKey: string,
+  maxRetries = 5,
 ): Promise<unknown> {
-  const sig = await buildSig(publicKey, method, privateKey)
-  const qs = new URLSearchParams({ sig, ...params })
-  const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
-  const res = await fetch(url, {
-    method,
-    headers: { 'x-api-key': publicKey, 'Content-Type': 'application/json' },
-    redirect: 'follow',
-  })
-  const text = await res.text()
-  if (!res.ok) throw new Error(`Droptop ${res.status}: ${text}`)
-  return JSON.parse(text)
+  const canRetry = method.toUpperCase() === 'GET'
+  for (let attempt = 0; ; attempt++) {
+    const sig = await buildSig(publicKey, method, privateKey)
+    const qs = new URLSearchParams({ sig, ...params })
+    const url = `https://main.api-droptop.com/api/v2/${endpoint}?${qs}`
+
+    let res: Response
+    try {
+      res = await fetch(url, {
+        method,
+        headers: { 'x-api-key': publicKey, 'Content-Type': 'application/json' },
+        redirect: 'follow',
+      })
+    } catch (fetchErr) {
+      const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+      if (canRetry && attempt < maxRetries) {
+        const platformWaitMatch = message.match(PLATFORM_RETRY_AFTER_MS_RE)
+        const waitMs = platformWaitMatch ? Number(platformWaitMatch[1]) : 2000 * 2 ** attempt
+        console.warn(`[droptop-proxy] ${endpoint} fetch threw (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${waitMs}ms: ${message}`)
+        await sleep(waitMs)
+        continue
+      }
+      console.error(`[droptop-proxy] ${method} ${endpoint} fetch threw${canRetry ? ', retries exhausted' : ' (non-GET, not retried)'}: ${message}`)
+      throw fetchErr
+    }
+
+    if (canRetry && RETRYABLE_STATUSES.has(res.status) && attempt < maxRetries) {
+      const retryAfterHeader = Number(res.headers.get('retry-after'))
+      const waitMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 ? retryAfterHeader * 1000 : 2000 * 2 ** attempt
+      const body = await res.text().catch(() => '')
+      console.warn(`[droptop-proxy] ${endpoint} returned ${res.status} (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${waitMs}ms: ${body}`)
+      await sleep(waitMs)
+      continue
+    }
+    const text = await res.text()
+    if (!res.ok) {
+      console.error(`[droptop-proxy] ${endpoint} failed with ${res.status}, retries exhausted or non-retryable: ${text}`)
+      throw new Error(`Droptop ${res.status}: ${text}`)
+    }
+    return JSON.parse(text)
+  }
 }
 
 Deno.serve(async (req) => {
