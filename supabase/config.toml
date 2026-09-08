@@ -58,3 +58,10 @@ verify_jwt = false
 # the dispatcher's existing schedule via a data_connection_schedules row.
 [functions.heatmap-rollup-refresh]
 verify_jwt = false
+
+# Same dual-auth pattern as heatmap-rollup-refresh (dispatcher's shared
+# secret, or a real logged-in user's JWT for Data Connections' own "Run
+# Now"). Replaces the old client-side mondayService.ts / Location Data
+# Sources UI entirely.
+[functions.monday-sync-locations]
+verify_jwt = false

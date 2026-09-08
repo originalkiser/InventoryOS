@@ -269,6 +269,28 @@ async function runHeatmapRollupRefresh(supabaseUrl: string, secret: string): Pro
   return { status: 'success', message: `${data?.dates_recomputed ?? 0} location-day(s) recomputed, ${data?.rows_upserted ?? 0} zip row(s) written` }
 }
 
+// Same reasoning as runHeatmapRollupRefresh — reuses the dispatch secret,
+// no secret of its own. Replaces the old ad-hoc "Location Data Sources"
+// config UI entirely; this is the only supported way locations sync from
+// Monday.com now. Not company-scoped in its own request body (the function
+// resolves the single-tenant company_id itself) — matches vin_decode's
+// reasoning for the same shape.
+async function runMondayLocations(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
+  const res = await fetchWithTimeout(`${supabaseUrl}/functions/v1/monday-sync-locations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+    body: '{}',
+  })
+  const { data, error } = await parseSyncResponse(res)
+  if (error) return { status: 'error', message: error }
+  const warnCount = (data?.warnings ?? []).length
+  return {
+    status: warnCount ? 'partial' : 'success',
+    message: `${data?.added ?? 0} added, ${data?.updated ?? 0} updated, ${data?.skipped ?? 0} skipped (of ${data?.total_board_items ?? 0} board items)`
+      + (warnCount ? ` — ${(data.warnings as string[]).join(' | ')}` : ''),
+  }
+}
+
 // Chunks locations the same way the interactive "Sync All" button does —
 // sequential batches, so one automated run can't run long enough to hit the
 // platform's per-invocation execution time limit.
@@ -378,6 +400,9 @@ Deno.serve(async (req) => {
         } else if (s.connection_key === 'vin_decode') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
           else outcome = await runVinDecode(supabaseUrl, droptopSecret)
+        } else if (s.connection_key === 'monday_locations') {
+          outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
+            : await runMondayLocations(supabaseUrl, dispatchSecret)
         } else {
           outcome = { status: 'error', message: `Unknown connection_key: ${s.connection_key}` }
         }

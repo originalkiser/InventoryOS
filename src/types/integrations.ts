@@ -33,36 +33,6 @@ export interface ImportDiffRow {
   previous?: OrderConfigRow
 }
 
-// Integration 2 — monday.com
-export interface MondayItem {
-  id: string
-  name: string
-  column_values: MondayColumnValue[]
-}
-
-export interface MondayColumnValue {
-  id: string
-  text: string
-  value: string
-}
-
-export interface SyncResult {
-  added: number
-  updated: number
-  deactivated: number
-  errors: string[]
-}
-
-export interface LocationSyncLog {
-  id: string
-  synced_at: string
-  records_updated: number
-  records_added: number
-  records_deactivated: number
-  status: 'success' | 'partial' | 'error'
-  error_message: string | null
-}
-
 // Integration 3 — Droptop usage/on-hands sync. Runs server-side via the
 // droptop-sync-usage Edge Function, authenticated with Supabase secrets
 // (DROPTOP_PUBLIC_KEY / DROPTOP_PRIVATE_KEY) — not a client-side API key.

@@ -1,6 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
-import { LocationDataSourceConfig } from '@/modules/locations/LocationDataSourceConfig'
 import { createColumnHelper, type SortingFn, type VisibilityState } from '@tanstack/react-table'
 import { useConfigTab, type ImportMode } from '../useConfigTab'
 import { useCustomFields } from '@/hooks/useCustomFields'
@@ -909,10 +908,6 @@ export function LocationsTab() {
           <ConfigUpload requiredFields={uploadFields} onImport={confirmImport} importing={importing} onAddColumn={(label) => addField({ label })} storageKey="locations" />
         </div>
         <DataSourceLinker configType="locations" />
-      </div>
-
-      <div className="border-t border-navy/10 pt-4">
-        <LocationDataSourceConfig />
       </div>
 
       {/* ── Add / Edit modal ─────────────────────────────────────────────── */}
