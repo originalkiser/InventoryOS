@@ -58,6 +58,11 @@ interface IssueRow {
 // Per-device view customization: ids hidden from each section.
 interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand' }
 
+// A tank monitor not reporting in > 2 days reads as offline (⚠ marker,
+// offline-email eligibility, and the On Hand view's per-product callout).
+const STALE_MS = 2 * 86400000
+const isStaleReading = (d: string | null | undefined) => !!d && Date.now() - new Date(d).getTime() > STALE_MS
+
 const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 }))
 const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy') } catch { return d } }
 const dateTime = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy · h:mm a') } catch { return d } }
@@ -257,7 +262,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [mentionedMeetings, setMentionedMeetings] = useState<MeetingNote[]>([])
   const [tankSort, setTankSort] = usePersistedSort('location-lookup:tank-sort')
   const [emailKind, setEmailKind] = useState<TankEmailKind | null>(null)
-  const [emailMonitorOverride, setEmailMonitorOverride] = useState<TankRow | null>(null)
+  // Array, not a single monitor — the On Hand view's rolled-up product rows
+  // can scope an email to several offline monitors at once (see
+  // renderOnHandUpdatedCell below); the Configuration view's single-monitor
+  // click just wraps its one TankRow in a 1-element array.
+  const [emailMonitorOverride, setEmailMonitorOverride] = useState<TankRow[] | null>(null)
   const [callout, setCallout] = useState<{ x: number; y: number; text: string } | null>(null)
   const [offlineTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_offline', TANK_EMAIL_DEFAULT.offline)
   const [lowvmiTpl] = useAppSetting<TankEmailTemplate>('tank_email_tpl_lowvmi', TANK_EMAIL_DEFAULT.lowvmi)
@@ -505,31 +514,44 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // Multiple physical tanks on the same product are combined into one row.
   interface OnHandRow {
     productId: string; tankOnHandQt: number; totalCapacityQt: number; lastUpdate: string | null; tankCount: number
+    onlineMonitors: TankRow[]; offlineMonitors: TankRow[]
     droptopOnHand: number | null; droptopUsage: number | null
     rawVariance: number | null; baseline: number | null; netVariance: number | null
     dosMonitor: number | null; dosDroptop: number | null
   }
   const onHandRows = useMemo<OnHandRow[]>(() => {
-    const groups = new Map<string, { productId: string; tankOnHandQt: number; totalCapacityQt: number; lastUpdate: string | null; tankCount: number }>()
+    const groups = new Map<string, { productId: string; tankOnHandQt: number; totalCapacityQt: number; monitors: TankRow[] }>()
     for (const t of tanks) {
       if (!t.keep_fill) continue
       const key = t.internal || t.product_id || ''
       if (!key) continue
       const qty = toQuarts(t.on_hand, t.unit) ?? 0
       const capQt = toQuarts(tankCapacity(t), t.unit) ?? 0
-      const tUpdated = t.inventory_time ?? t.reading_date
       const existing = groups.get(key)
-      if (!existing) groups.set(key, { productId: key, tankOnHandQt: qty, totalCapacityQt: capQt, lastUpdate: tUpdated, tankCount: 1 })
+      if (!existing) groups.set(key, { productId: key, tankOnHandQt: qty, totalCapacityQt: capQt, monitors: [t] })
       else {
         existing.tankOnHandQt += qty
         existing.totalCapacityQt += capQt
-        existing.tankCount += 1
-        if (tUpdated && (!existing.lastUpdate || tUpdated > existing.lastUpdate)) existing.lastUpdate = tUpdated
+        existing.monitors.push(t)
       }
     }
     return [...groups.values()]
       .sort((a, b) => a.productId.localeCompare(b.productId, undefined, { sensitivity: 'base' }))
       .map((g) => {
+        // Multiple physical tanks can share one product — split by whether
+        // each is currently reporting, since the displayed date/callout
+        // differs once even one of them goes stale (see
+        // renderOnHandUpdatedCell for the full read of this split).
+        const offlineMonitors = g.monitors.filter((t) => isStaleReading(t.inventory_time ?? t.reading_date))
+        const onlineMonitors = g.monitors.filter((t) => !isStaleReading(t.inventory_time ?? t.reading_date))
+        const newestOf = (rows: TankRow[]) => rows.reduce<string | null>((best, t) => {
+          const d = t.inventory_time ?? t.reading_date
+          return d && (!best || d > best) ? d : best
+        }, null)
+        // Surface the offline side's date once anything's offline — that's
+        // the actionable/stale reading, not whichever monitor happens to be
+        // freshest overall.
+        const lastUpdate = offlineMonitors.length > 0 ? newestOf(offlineMonitors) : newestOf(onlineMonitors)
         const usage = usageByProduct.get(resolvedProductKey(g.productId))
         const droptopOnHand = usage?.on_hands ?? null
         const droptopUsage = usage?.daily_usage ?? null
@@ -538,7 +560,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         const netVariance = rawVariance != null ? rawVariance - (baseline ?? 0) : null
         const dosMonitor = droptopUsage && droptopUsage > 0 ? g.tankOnHandQt / droptopUsage : null
         const dosDroptop = droptopUsage && droptopUsage > 0 && droptopOnHand != null ? droptopOnHand / droptopUsage : null
-        return { ...g, droptopOnHand, droptopUsage, rawVariance, baseline, netVariance, dosMonitor, dosDroptop }
+        return {
+          productId: g.productId, tankOnHandQt: g.tankOnHandQt, totalCapacityQt: g.totalCapacityQt,
+          tankCount: g.monitors.length, lastUpdate, onlineMonitors, offlineMonitors,
+          droptopOnHand, droptopUsage, rawVariance, baseline, netVariance, dosMonitor, dosDroptop,
+        }
       })
   }, [tanks, usageByProduct, baselineByProduct, oldToNewMap])
 
@@ -571,10 +597,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   }, [tanks])
 
   // Monitors not reporting in > 2 days read as offline (matches the ⚠ marker).
-  const offlineTanks = useMemo(() => {
-    const now = Date.now()
-    return tanks.filter((t) => { const d = t.inventory_time ?? t.reading_date; return d ? now - new Date(d).getTime() > 2 * 86400000 : false })
-  }, [tanks])
+  const offlineTanks = useMemo(() => tanks.filter((t) => isStaleReading(t.inventory_time ?? t.reading_date)), [tanks])
   // Low VMI coverage: fewer than 4 monitors on keepfill (matches Tank Monitors page).
   const keepfillTanks = useMemo(() => tanks.filter((t) => t.keep_fill), [tanks])
   const lowVmiFlag = keepfillTanks.length < 4
@@ -613,32 +636,108 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     return backfillPendingBlanket(base, offlineCommRows, serials)
   }, [offlineCommRows, shopId, offlineTanks])
 
+  // Per-monitor offline-email status — shared by the Configuration view's
+  // single-monitor cell (renderUpdatedCell) and the On Hand view's rolled-up
+  // per-product cell (renderOnHandUpdatedCell) below, so both surfaces agree
+  // on what "emailed" / "pending" / "not yet emailed" mean for a given tank.
+  type MonitorEmailStatus =
+    | { kind: 'emailed'; date: string }
+    | { kind: 'pending' }
+    | { kind: 'not_vmi' }
+    | { kind: 'none' }
+  function monitorEmailStatus(t: TankRow): MonitorEmailStatus {
+    const serial = t.serial_rtu_id || t.system_tank_id || ''
+    const last = serial ? offlineLog.get(serial) : undefined
+    if (last) return { kind: 'emailed', date: last }
+    if (serial && offlinePendingSerials.has(serial)) return { kind: 'pending' }
+    if (offlineTpl.vmiOnly !== false && !t.keep_fill) return { kind: 'not_vmi' }
+    return { kind: 'none' }
+  }
+  function formatEmailStatus(s: MonitorEmailStatus): string {
+    switch (s.kind) {
+      case 'emailed': return `Last emailed ${format(new Date(s.date), 'MMM d, yyyy')}`
+      case 'pending': return 'Pending — shop/AM hasn\'t responded yet (see Location Comms)'
+      case 'not_vmi': return 'Not emailed — not on VMI/keepfill'
+      case 'none': return 'Not yet emailed'
+    }
+  }
+  // "Emailed together" is treated as the same calendar day, not necessarily
+  // the exact same comm row — matches this file's own day-level granularity
+  // everywhere else a "last emailed" date is shown.
+  function sameEmailStatus(a: MonitorEmailStatus, b: MonitorEmailStatus): boolean {
+    if (a.kind !== b.kind) return false
+    if (a.kind === 'emailed' && b.kind === 'emailed') {
+      return format(new Date(a.date), 'yyyy-MM-dd') === format(new Date(b.date), 'yyyy-MM-dd')
+    }
+    return true
+  }
+  // Combined callout text for a set of offline monitors on one rolled-up
+  // product row: one shared status if they all agree, else a per-monitor
+  // breakdown (ordinal "Monitor N" labels — serials aren't legible enough
+  // to show directly in a tooltip) so a mixed "one emailed, one not" state
+  // is never papered over with a single, misleading status line.
+  function combinedOfflineStatus(monitors: TankRow[]): string {
+    if (monitors.length <= 1) return monitors[0] ? formatEmailStatus(monitorEmailStatus(monitors[0])) : ''
+    const sorted = [...monitors].sort((a, b) => (a.serial_rtu_id || a.system_tank_id || a.id).localeCompare(b.serial_rtu_id || b.system_tank_id || b.id))
+    const statuses = sorted.map(monitorEmailStatus)
+    const allSame = statuses.every((s) => sameEmailStatus(s, statuses[0]))
+    if (allSame) return formatEmailStatus(statuses[0])
+    return sorted.map((t, i) => `Monitor ${i + 1}: ${formatEmailStatus(monitorEmailStatus(t))}`).join(' · ')
+  }
+
   // Stale/offline "Last Update" cell — same red/orange flag as the plain
   // render below. Hovering shows a fast, custom callout (not the native
   // browser tooltip) with whether/when we emailed about it; clicking an
   // offline reading opens the email draft scoped to just that monitor.
   function renderUpdatedCell(t: TankRow) {
     const d = t.inventory_time ?? t.reading_date
-    const stale = !!d && Date.now() - new Date(d).getTime() > 2 * 86400000
+    const stale = isStaleReading(d)
     const cls = stale ? (t.keep_fill ? 'text-[#C0392B] font-bold' : 'text-[#E67E22] font-bold') : ''
-    let title: string | undefined
-    if (stale) {
-      const serial = t.serial_rtu_id || t.system_tank_id || ''
-      const last = serial ? offlineLog.get(serial) : undefined
-      if (last) title = `Last emailed ${format(new Date(last), 'MMM d, yyyy')}`
-      else if (serial && offlinePendingSerials.has(serial)) title = 'Pending — shop/AM hasn\'t responded yet (see Location Comms)'
-      else if (offlineTpl.vmiOnly !== false && !t.keep_fill) title = 'Not emailed — not on VMI/keepfill'
-      else title = 'Not yet emailed'
-    }
+    const title = stale ? formatEmailStatus(monitorEmailStatus(t)) : undefined
     return (
       <span
         className={`${cls} ${stale ? 'cursor-pointer hover:underline decoration-dotted' : ''}`}
         onMouseEnter={(e) => title && setCallout({ x: e.clientX, y: e.clientY, text: title })}
         onMouseMove={(e) => title && setCallout({ x: e.clientX, y: e.clientY, text: title })}
         onMouseLeave={() => setCallout(null)}
-        onClick={() => { if (stale) { setEmailMonitorOverride(t); setEmailKind('offline') } }}
+        onClick={() => { if (stale) { setEmailMonitorOverride([t]); setEmailKind('offline') } }}
       >
         {dateTime(d)}{stale ? ' ⚠' : ''}
+      </span>
+    )
+  }
+
+  // On Hand view's rolled-up "Last Update" cell — a product row can combine
+  // several physical monitors. All rows here are keep-fill/VMI (onHandRows
+  // only includes keep_fill tanks), so any offline monitor colors red, same
+  // as the Configuration view's keep-fill branch.
+  //   - all online: plain date (newest reading), no callout — unchanged
+  //     from before this feature.
+  //   - some online, some offline: shows the OFFLINE side's date (not the
+  //     newer online one — the point is to surface the stale reading), with
+  //     a "N online, M offline (<status>)" callout.
+  //   - all offline: shows the newest of the offline dates, with just the
+  //     status callout (no "N online" framing when there's nothing online
+  //     to contrast against) — reduces to the exact single-monitor wording
+  //     when the product only has one monitor at all.
+  // Clicking scopes the email draft to every offline monitor on the row.
+  function renderOnHandUpdatedCell(r: OnHandRow) {
+    const { onlineMonitors, offlineMonitors } = r
+    if (offlineMonitors.length === 0) return <span>{dateTime(r.lastUpdate)}</span>
+
+    const title = onlineMonitors.length > 0
+      ? `${onlineMonitors.length} monitor${onlineMonitors.length === 1 ? '' : 's'} online, ${offlineMonitors.length} monitor${offlineMonitors.length === 1 ? '' : 's'} offline (${combinedOfflineStatus(offlineMonitors)})`
+      : combinedOfflineStatus(offlineMonitors)
+
+    return (
+      <span
+        className="text-[#C0392B] font-bold cursor-pointer hover:underline decoration-dotted"
+        onMouseEnter={(e) => setCallout({ x: e.clientX, y: e.clientY, text: title })}
+        onMouseMove={(e) => setCallout({ x: e.clientX, y: e.clientY, text: title })}
+        onMouseLeave={() => setCallout(null)}
+        onClick={() => { setEmailMonitorOverride(offlineMonitors); setEmailKind('offline') }}
+      >
+        {dateTime(r.lastUpdate)} ⚠
       </span>
     )
   }
@@ -1019,7 +1118,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.droptopUsage == null ? '—' : num(r.droptopUsage)}</td>
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.dosMonitor == null ? '—' : num(r.dosMonitor)}</td>
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.dosDroptop == null ? '—' : num(r.dosDroptop)}</td>
-                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-left">{dateTime(r.lastUpdate)}</td>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap text-left">{renderOnHandUpdatedCell(r)}</td>
                               </tr>
                             )
                           })}
@@ -1114,7 +1213,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           onClose={() => { setEmailKind(null); setEmailMonitorOverride(null) }}
           kind={emailKind}
           template={emailKind === 'offline' ? offlineTpl : lowvmiTpl}
-          targets={[{ locationId: shopId, monitors: (emailMonitorOverride ? [emailMonitorOverride] : emailKind === 'offline' ? offlineTanks : keepfillTanks) as unknown as TankMonitor[] }]}
+          targets={[{ locationId: shopId, monitors: (emailMonitorOverride ?? (emailKind === 'offline' ? offlineTanks : keepfillTanks)) as unknown as TankMonitor[] }]}
           internalOf={(pid) => pid ?? ''}
           onLogged={load}
         />
