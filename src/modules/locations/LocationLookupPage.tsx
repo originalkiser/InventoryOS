@@ -11,6 +11,7 @@ import type { ExceptionReport } from '@/modules/exceptions/exceptions'
 import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
+import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { orderDayFromDelivery } from '@/lib/orderDay'
@@ -49,6 +50,9 @@ interface ConfigRow {
   // Joined from inventory.product_usage by product_id — on hand / daily usage
   // for the On Hand / Daily Usage / Days of Supply columns.
   usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null } | null
+  // Joined from inventory.ov2_product_exceptions by product_id — Orders v2's
+  // shop+product floor/ceiling override, if one's been set for this row.
+  exception?: { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null } | null
 }
 interface IssueRow {
   id: string; title: string | null; status_id: string | null; issue_notes: string | null
@@ -147,7 +151,7 @@ function locVal(loc: Location | undefined, key: string): string {
   return meta == null ? '' : String(meta)
 }
 
-interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null; tint?: boolean }
+interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null; tint?: boolean; width?: string }
 
 type SortState = { id: string; dir: 'asc' | 'desc' } | null
 function applySort<T>(rows: T[], cols: Col<T>[], sort: SortState): T[] {
@@ -205,10 +209,35 @@ const TANK_COLS: Col<TankRow>[] = [
   },
 ]
 
+// Orders v2's ceiling_unit values, abbreviated for this dense cell —
+// "cases" here means whatever the product's own configured unit actually
+// is (Case/Drum/Bay Box/Bulk), not literally the word "cases".
+const CEILING_UNIT_ABBR: Record<string, string> = { cases: 'cases', gallons: 'gal', quarts: 'qts' }
+function exceptionCellLines(exc: ConfigRow['exception']): string[] {
+  if (!exc) return []
+  const lines: string[] = []
+  if (exc.floor_qty != null) lines.push(`Floor=${num(exc.floor_qty)}qts`)
+  if (exc.ceiling_qty != null) lines.push(`Ceiling=${num(exc.ceiling_qty)}${CEILING_UNIT_ABBR[exc.ceiling_unit ?? ''] ?? exc.ceiling_unit ?? ''}`)
+  return lines
+}
+
 const CONFIG_FIXED: Col<ConfigRow>[] = [
-  { id: 'part', label: 'Part', align: 'left', render: (r) => r.product_id ?? '—', sort: (r) => r.product_id },
-  { id: 'uom', label: 'UOM', align: 'left', render: (r) => String((r.metadata as any)?.uom ?? '—'), sort: (r) => String((r.metadata as any)?.uom ?? '') },
+  // Narrowed from the auto-sized default (Tailwind's table-auto stretches a
+  // short-content column to fill leftover width) so Exception below fits
+  // without widening the card — the actual part ids/UOM words here are
+  // short enough that neither needs much room.
+  { id: 'part', label: 'Part', align: 'left', width: 'w-24', render: (r) => r.product_id ?? '—', sort: (r) => r.product_id },
+  { id: 'uom', label: 'UOM', align: 'left', width: 'w-16', render: (r) => String((r.metadata as any)?.uom ?? '—'), sort: (r) => String((r.metadata as any)?.uom ?? '') },
   { id: 'capacity', label: 'Capacity', align: 'right', render: (r) => num(r.capacity), sort: (r) => r.capacity },
+  {
+    id: 'exception', label: 'Exception', align: 'left', width: 'w-28',
+    render: (r) => {
+      const lines = exceptionCellLines(r.exception)
+      if (lines.length === 0) return <span className="text-inky/30">+ Add</span>
+      return <div className="flex flex-col leading-tight">{lines.map((l) => <span key={l}>{l}</span>)}</div>
+    },
+    sort: (r) => exceptionCellLines(r.exception).join(' ') || null,
+  },
   { id: 'max', label: 'Max', align: 'right', render: (r) => num(r.order_limit), sort: (r) => r.order_limit },
   { id: 'vmi', label: 'VMI', align: 'center', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? 1 : 0) },
 ]
@@ -298,6 +327,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [idMappings, setIdMappings] = useState<{ old_product_id: string | null; new_product_id: string | null }[]>([])
   const [varianceBaselines, setVarianceBaselines] = useState<{ product_id: string; baseline_qty: number }[]>([])
   const [varianceModal, setVarianceModal] = useState<{ productId: string; rawVariance: number } | null>(null)
+  // Which order-config row's Exception cell was clicked — add/edit that
+  // row's floor/ceiling right here instead of needing Orders v2's own page.
+  const [exceptionModalRow, setExceptionModalRow] = useState<ConfigRow | null>(null)
   const [savingBaseline, setSavingBaseline] = useState(false)
   const [variancePct] = useAppSetting<number>('tank_variance_cushion_pct', 14)
 
@@ -335,7 +367,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       return out
     }
     try {
-      const [tankRes, cfgRes, usageRes, mapRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes] = await Promise.all([
+      const [tankRes, cfgRes, usageRes, mapRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes] = await Promise.all([
         sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
         fetchAllRows((from, to) =>
@@ -364,6 +396,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         sb.schema('inventory').from('meeting_notes').select('id, title, meeting_date').eq('company_id', companyId).contains('location_ids', [shopId]).order('meeting_date', { ascending: false, nullsFirst: false }).then((r: any) => r).catch(() => ({ data: [] })),
         // Best-effort: brand-new table, may not be migrated in production yet.
         sb.schema('inventory').from('tank_variance_baselines').select('product_id, baseline_qty').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
+        // Orders v2's shop+product floor/ceiling overrides — see the
+        // Exception column below. Best-effort: newer table.
+        sb.schema('inventory').from('ov2_product_exceptions').select('product_id, floor_qty, ceiling_qty, ceiling_unit').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       // Collapse to the newest reading per tank (serial, then system id, then
       // row id) so leftover duplicate readings don't stack or inflate counts.
@@ -406,7 +441,16 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // id missed every product a mapping actually applies to, even when the
       // config and usage rows agreed on the same literal id pre-mapping.
       const resolvedKey = (pid: string) => pkey(oldToNew.get(pkey(pid)) ?? pid)
-      setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({ ...r, usage: r.product_id ? usageByProduct.get(resolvedKey(r.product_id)) ?? null : null })))
+      const exceptionByProduct = new Map<string, { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null }>()
+      for (const e of ((prodExcRes?.data ?? []) as any[])) {
+        if (!e.product_id) continue
+        exceptionByProduct.set(resolvedKey(e.product_id), { floor_qty: e.floor_qty, ceiling_qty: e.ceiling_qty, ceiling_unit: e.ceiling_unit })
+      }
+      setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({
+        ...r,
+        usage: r.product_id ? usageByProduct.get(resolvedKey(r.product_id)) ?? null : null,
+        exception: r.product_id ? exceptionByProduct.get(resolvedKey(r.product_id)) ?? null : null,
+      })))
       // Also exposed at component scope (not just baked into `configs`) —
       // the Tank Monitors "On Hand" view matches keep-fill tanks against
       // this same Droptop usage/on-hand data by their resolved product id.
@@ -1136,7 +1180,10 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             ) : (
               <div className="flex flex-col gap-4">
                 {configsByVendor.map(([vendor, rows]) => (
-                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} hidden={prefs.config} onOpenConfig={() => navigate('/config?tab=order-config')} />
+                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} hidden={prefs.config}
+                    onOpenConfig={() => navigate('/config?tab=order-config')}
+                    onExceptionClick={setExceptionModalRow}
+                  />
                 ))}
               </div>
             )}
@@ -1235,6 +1282,19 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           saving={savingBaseline}
           onClose={() => setVarianceModal(null)}
           onSave={(v) => saveVarianceBaseline(varianceModal.productId, v)}
+        />
+      )}
+
+      {exceptionModalRow && shopId && (
+        <ExceptionEditModal
+          open={!!exceptionModalRow}
+          onClose={() => setExceptionModalRow(null)}
+          locationId={shopId}
+          productId={exceptionModalRow.product_id ?? ''}
+          shopLabel={loc.fieldValue(shopId, 'shop_city') || loc.codeOf(shopId)}
+          productLabel={exceptionModalRow.product_id ?? undefined}
+          caseUnitLabel={String((exceptionModalRow.metadata as any)?.uom ?? '')}
+          onSaved={load}
         />
       )}
     </div>
@@ -1405,7 +1465,7 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
   )
 }
 
-function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: string; rows: ConfigRow[]; hidden: string[]; onOpenConfig: () => void }) {
+function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick }: { vendor: string; rows: ConfigRow[]; hidden: string[]; onOpenConfig: () => void; onExceptionClick: (row: ConfigRow) => void }) {
   const navigate = useNavigate()
   const [sort, setSort] = usePersistedSort(`location-lookup:config-sort:${vendor}`)
   const columns = useMemo(() => {
@@ -1450,7 +1510,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                   {columns.map((c) => (
-                    <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>
+                    <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>
                       <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
                         {c.label}{sortArrow(sort, c.id)}
                       </button>
@@ -1461,7 +1521,17 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig }: { vendor: stri
               <tbody>
                 {sortedRows.map((r) => (
                   <tr key={r.id} className="border-b border-navy/20">
-                    {columns.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>{c.render(r)}</td>)}
+                    {columns.map((c) => c.id === 'exception' ? (
+                      <td key={c.id}
+                        className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.width ?? ''} cursor-pointer hover:bg-sky/10 transition-colors`}
+                        title="Click to add or edit a floor/ceiling exception for this product"
+                        onClick={() => onExceptionClick(r)}
+                      >
+                        {c.render(r)}
+                      </td>
+                    ) : (
+                      <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>{c.render(r)}</td>
+                    ))}
                   </tr>
                 ))}
               </tbody>

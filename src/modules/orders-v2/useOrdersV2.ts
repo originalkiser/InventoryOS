@@ -386,6 +386,11 @@ export interface VendorPartRow {
   description?: string | null; part_number?: string | null
 }
 export interface GlobalProductRow { product_id: string; unit_of_measure: string | null; min_on_hand_qty?: number | null }
+// 'cases' = the product's own configured orderable unit (Case/Drum/Bay
+// Box/Bulk, whatever it actually is) — converted via units_per_uom_gallons.
+// 'quarts'/'gallons' are real volume units, converted directly (quarts is
+// this module's own internal unit, so that direction is a no-op).
+export type CeilingUnit = 'cases' | 'gallons' | 'quarts'
 // Shop+product override (Config -> Orders v2 -> Product Exceptions).
 // floor_qty: on-hand at/below this is unusable at this shop for this
 // product — subtracted from on_hand before anything else sees it.
@@ -394,7 +399,7 @@ export interface GlobalProductRow { product_id: string; unit_of_measure: string 
 // just this one product when set.
 export interface ExceptionRow {
   location_id: string; product_id: string
-  floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: 'cases' | 'gallons' | null
+  floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: CeilingUnit | null
 }
 export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }
 // Derived from core.locations.reladyne_delivery_day rather than a table of
@@ -603,7 +608,7 @@ export function buildGenerationInputs(
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
   const floorMap = new Map<string, number>()
-  const ceilingMap = new Map<string, { qty: number; unit: 'cases' | 'gallons' }>()
+  const ceilingMap = new Map<string, { qty: number; unit: CeilingUnit }>()
   for (const e of exceptions) {
     const k = ruleKey(e.location_id, e.product_id)
     if (e.floor_qty != null && Number(e.floor_qty) > 0) floorMap.set(k, Number(e.floor_qty))
@@ -848,12 +853,15 @@ export function buildGenerationInputs(
     // A shop+product ceiling exception always wins when set — overrides
     // ov2_product_rules and location_order_config's own capacity alike,
     // not just filling in whatever they left unset (see ExceptionRow).
-    // Entered in either this product's own orderable unit ("cases") or
-    // gallons; "cases" needs units_per_uom_gallons, resolved just above.
+    // Entered in the product's own orderable unit ("cases" — needs
+    // units_per_uom_gallons, resolved just above), quarts (this module's
+    // own internal unit — no conversion), or gallons.
     const ceiling = ceilingMap.get(k)
     if (ceiling) {
       const per = rule.units_per_uom_gallons && rule.units_per_uom_gallons > 0 ? rule.units_per_uom_gallons : 1
-      rule.max_capacity_gallons = ceiling.unit === 'gallons' ? ceiling.qty * 4 : ceiling.qty * per
+      rule.max_capacity_gallons = ceiling.unit === 'gallons' ? ceiling.qty * 4
+        : ceiling.unit === 'quarts' ? ceiling.qty
+        : ceiling.qty * per
     } else if (rule.max_capacity_gallons == null && c.capacity != null) {
       rule.max_capacity_gallons = Number(c.capacity) * 4
     }

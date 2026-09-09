@@ -1,14 +1,10 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Trash2 } from 'lucide-react'
 import { Button, Card, CardBody, Combobox, Input, Select, SbLoader } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
-import { useProductExceptions, useConfiguredProducts, type ProductExceptionRow } from './useProductExceptions'
-
-const CEILING_UNIT_OPTIONS = [
-  { value: 'cases', label: 'Cases (this product\'s own unit)' },
-  { value: 'gallons', label: 'Gallons' },
-]
+import { useProductExceptions, useConfiguredProducts, caseTypeLabel, type ProductExceptionRow } from './useProductExceptions'
+import { ExceptionEditModal } from './ExceptionEditModal'
+import type { CeilingUnit } from './useOrdersV2'
 
 /**
  * Per-shop, per-product overrides on top of the regular order config:
@@ -17,23 +13,30 @@ const CEILING_UNIT_OPTIONS = [
  *             on-hand for every calculation is reduced by it — a 200qt
  *             reading with a 50qt floor is treated as 150qt throughout.
  *   Ceiling — a hard cap on how far this shop can be ordered up for this
- *             product, in either cases or gallons. Overrides the shop's
- *             regular capacity for just this one product.
+ *             product, in the product's own unit, quarts, or gallons.
+ *             Overrides the shop's regular capacity for just this one
+ *             product.
  * Either can be set alone, or both together.
+ *
+ * Editing an existing row happens ONLY via its own "Edit" button, in a
+ * modal — clicking anywhere else in the row (e.g. to select/copy its
+ * Notes text) used to silently load that row into this form and overwrite
+ * whatever new exception was mid-typed. Add and Edit are now fully
+ * separate: this form only ever adds, and never gets seeded from a row.
  */
 export function OrdersV2Exceptions() {
   const navigate = useNavigate()
   const loc = useLocations()
   const { rows, loading, save, remove } = useProductExceptions()
 
-  const [editId, setEditId] = useState<string | null>(null)
   const [locationId, setLocationId] = useState('')
   const [productId, setProductId] = useState('')
   const [floorQty, setFloorQty] = useState('')
   const [ceilingQty, setCeilingQty] = useState('')
-  const [ceilingUnit, setCeilingUnit] = useState<'cases' | 'gallons'>('cases')
+  const [ceilingUnit, setCeilingUnit] = useState<CeilingUnit>('cases')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  const [editRow, setEditRow] = useState<ProductExceptionRow | null>(null)
 
   const { products, loading: productsLoading } = useConfiguredProducts(locationId || null)
 
@@ -41,21 +44,17 @@ export function OrdersV2Exceptions() {
     () => loc.locations.map((l) => ({ value: l.id, label: l.shop_city || l.name })),
     [loc.locations],
   )
-  const productOptions = useMemo(() => products.map((p) => ({ value: p, label: p })), [products])
+  const productOptions = useMemo(() => products.map((p) => ({ value: p.product_id, label: p.product_id })), [products])
   const shopLabel = (id: string) => loc.locations.find((l) => l.id === id)?.shop_city || loc.locations.find((l) => l.id === id)?.name || id
+  const selectedProductCaseLabel = caseTypeLabel(products.find((p) => p.product_id === productId)?.uom)
+  const ceilingUnitOptions = [
+    { value: 'cases', label: `${selectedProductCaseLabel} (this product's own unit)` },
+    { value: 'quarts', label: 'Quarts' },
+    { value: 'gallons', label: 'Gallons' },
+  ]
 
   function resetForm() {
-    setEditId(null); setLocationId(''); setProductId(''); setFloorQty(''); setCeilingQty(''); setCeilingUnit('cases'); setNotes('')
-  }
-
-  function openEdit(r: ProductExceptionRow) {
-    setEditId(r.id)
-    setLocationId(r.location_id)
-    setProductId(r.product_id)
-    setFloorQty(r.floor_qty?.toString() ?? '')
-    setCeilingQty(r.ceiling_qty?.toString() ?? '')
-    setCeilingUnit(r.ceiling_unit ?? 'cases')
-    setNotes(r.notes ?? '')
+    setLocationId(''); setProductId(''); setFloorQty(''); setCeilingQty(''); setCeilingUnit('cases'); setNotes('')
   }
 
   async function onSubmit() {
@@ -65,7 +64,6 @@ export function OrdersV2Exceptions() {
     const ceiling = num(ceilingQty)
     setSaving(true)
     const ok = await save({
-      id: editId ?? undefined,
       location_id: locationId, product_id: productId,
       floor_qty: floor, ceiling_qty: ceiling, ceiling_unit: ceiling != null ? ceilingUnit : null,
       notes: notes.trim() || null,
@@ -77,7 +75,6 @@ export function OrdersV2Exceptions() {
   async function onDelete(id: string) {
     if (!confirm('Delete this exception?')) return
     await remove(id)
-    if (editId === id) resetForm()
   }
 
   return (
@@ -88,14 +85,12 @@ export function OrdersV2Exceptions() {
         <p className="text-xs text-inky mt-0.5">
           Shop+product overrides on top of the regular order config. A floor removes on-hand that's there but not
           usable; a ceiling hard-caps how far this one shop/product can be ordered up, overriding its regular
-          capacity.
+          capacity. Also editable from a shop's own Order Config on Location Lookup — click the Exception cell there.
         </p>
       </div>
 
       <Card><CardBody className="flex flex-col gap-3">
-        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">
-          {editId ? 'Edit Exception' : 'Add Exception'}
-        </h3>
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Add Exception</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Combobox label="Shop" options={shopOptions} value={locationId}
             onChange={(v) => { setLocationId(v); setProductId('') }} placeholder="Select shop…" />
@@ -113,14 +108,11 @@ export function OrdersV2Exceptions() {
             <span className="text-[10px] font-mono text-inky/50">On-hand at/below this is treated as unusable</span>
           </div>
           <Input label="Ceiling" type="number" step={1} value={ceilingQty} onChange={(e) => setCeilingQty(e.target.value)} />
-          <Select label="Ceiling unit" value={ceilingUnit} onChange={(e) => setCeilingUnit(e.target.value as 'cases' | 'gallons')} options={CEILING_UNIT_OPTIONS} />
+          <Select label="Ceiling unit" value={ceilingUnit} onChange={(e) => setCeilingUnit(e.target.value as CeilingUnit)} options={ceilingUnitOptions} />
         </div>
         <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional — why this exception exists" />
         <div className="flex justify-end gap-2 pt-1">
-          {editId && <Button variant="secondary" size="sm" onClick={resetForm}>Cancel Edit</Button>}
-          <Button size="sm" loading={saving} disabled={!locationId || !productId} onClick={onSubmit}>
-            {editId ? 'Save Changes' : 'Add Exception'}
-          </Button>
+          <Button size="sm" loading={saving} disabled={!locationId || !productId} onClick={onSubmit}>Add Exception</Button>
         </div>
       </CardBody></Card>
 
@@ -141,15 +133,15 @@ export function OrdersV2Exceptions() {
                 </tr></thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.id} className="border-b border-navy/15 hover:bg-sky/10 cursor-pointer" onClick={() => openEdit(r)}>
+                    <tr key={r.id} className="border-b border-navy/15">
                       <td className="px-3 py-1.5 text-navy">{shopLabel(r.location_id)}</td>
                       <td className="px-3 py-1.5 text-navy">{r.product_id}</td>
                       <td className="px-3 py-1.5 text-right text-navy">{r.floor_qty != null ? `${r.floor_qty} qt` : '—'}</td>
                       <td className="px-3 py-1.5 text-right text-navy">{r.ceiling_qty != null ? `${r.ceiling_qty} ${r.ceiling_unit}` : '—'}</td>
-                      <td className="px-3 py-1.5 text-inky/70">{r.notes || '—'}</td>
-                      <td className="px-3 py-1.5">
-                        <button title="Delete" onClick={(e) => { e.stopPropagation(); onDelete(r.id) }}
-                          className="text-inky/40 hover:text-[#C0392B]"><Trash2 className="w-3.5 h-3.5" /></button>
+                      <td className="px-3 py-1.5 text-inky/70 select-text">{r.notes || '—'}</td>
+                      <td className="px-3 py-1.5 whitespace-nowrap">
+                        <button onClick={() => setEditRow(r)} className="text-xs font-mono text-inky hover:underline mr-2">Edit</button>
+                        <button onClick={() => onDelete(r.id)} title="Delete" className="text-inky/40 hover:text-[#C0392B] align-middle">×</button>
                       </td>
                     </tr>
                   ))}
@@ -158,6 +150,16 @@ export function OrdersV2Exceptions() {
             </div>
           )}
       </CardBody></Card>
+
+      {editRow && (
+        <ExceptionEditModal
+          open={!!editRow}
+          onClose={() => setEditRow(null)}
+          locationId={editRow.location_id}
+          productId={editRow.product_id}
+          shopLabel={shopLabel(editRow.location_id)}
+        />
+      )}
     </div>
   )
 }
