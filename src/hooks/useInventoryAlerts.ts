@@ -46,7 +46,11 @@ async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; l
   const allLocs = (locs ?? []) as Location[]
   const locById: Record<string, Location> = {}
   for (const l of allLocs) locById[l.id] = l
-  const locations = allLocs.filter((l) => l.active)
+  // car_wash-classified locations never belong in an inventory alert —
+  // they're not oil-change shops (see migration 20260909d / useLocations.ts's
+  // isOperationalLocation, the same rule applied here directly since this
+  // hook queries core.locations itself rather than through that hook).
+  const locations = allLocs.filter((l) => l.active && l.location_type !== 'car_wash')
   const vendorName: Record<string, string> = {}
   for (const v of (vends ?? []) as any[]) vendorName[v.id] = v.name ?? ''
 

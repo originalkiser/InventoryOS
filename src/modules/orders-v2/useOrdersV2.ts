@@ -459,14 +459,20 @@ export function useGenerationData() {
       // "no non-corporate locations anywhere in the inventory section" rule
       // as every other inventory-surface page (see useLocationExclusions.ts)
       // rather than the exemption that page documents for order generation.
-      step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day, owner, metadata', companyId)),
+      step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day, owner, metadata, location_type', companyId)),
     ])
     // Same Corporate/Franchise bucketing as useLocationExclusions.ts's
     // DEFAULT_OWNER_RULE (mode 'only', values ['Corporate']) — a location
     // with no owner set at all buckets to '' and is excluded too, matching
-    // that rule's behavior everywhere else it's enforced.
+    // that rule's behavior everywhere else it's enforced. A car_wash-
+    // classified location is excluded here too (migration 20260909d) — same
+    // rule as useLocations.ts's isOperationalLocation, applied directly
+    // since this fetch bypasses that hook.
     const corporateIds = new Set(
-      locRows.filter((l: any) => ownerBucket(String(l.owner ?? l.metadata?.owner ?? '')) === 'Corporate').map((l: any) => l.id),
+      locRows
+        .filter((l: any) => l.location_type !== 'car_wash')
+        .filter((l: any) => ownerBucket(String(l.owner ?? l.metadata?.owner ?? '')) === 'Corporate')
+        .map((l: any) => l.id),
     )
     const configs = configsRaw.filter((c) => corporateIds.has(c.location_id))
 

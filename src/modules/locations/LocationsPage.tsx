@@ -9,11 +9,19 @@ import type { VisibilityState } from '@tanstack/react-table'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { DataTable } from '@/components/shared/DataTable'
 import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
+import { Button, Card, CardBody } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
 import type { Location } from '@/types'
 import { format, parseISO } from 'date-fns'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs'
 import { MapRoutesTab } from './MapRoutesTab'
+import toast from 'react-hot-toast'
+
+// A location created within this window with no location_type set yet
+// shows on the "Need Classification" prompt instead of silently joining
+// the main list as an assumed oil-change shop. 72h per explicit request —
+// wide enough to cover a location added just before a weekend/holiday.
+const CLASSIFY_WINDOW_HOURS = 72
 
 const col = createColumnHelper<Location>()
 
@@ -46,10 +54,13 @@ function filterFieldValue(loc: Location, field: string): string {
 const PINNED: string[] = []
 
 export function LocationsPage() {
-  const { data, loading } = useConfigTab<Location>('locations', 'core')
+  const { data, loading, update } = useConfigTab<Location>('locations', 'core')
   const { filterLocations } = useLocationExclusions()
   const { active: customFields } = useCustomFields('locations')
   const [colsOpen, setColsOpen] = useState(false)
+  const [carWashOpen, setCarWashOpen] = useState(false)
+  const [closedOpen, setClosedOpen] = useState(false)
+  const [classifying, setClassifying] = useState<string | null>(null)
 
   // Contextual dropdown filter state
   const [dropFilters, setDropFilters] = useState<Record<string, string[]>>(() => {
@@ -159,6 +170,44 @@ export function LocationsPage() {
     return r
   }, [data, dropFilters, filterLocations])
 
+  // New, unclassified locations get their own action list instead of
+  // silently joining the main table as an assumed oil-change shop — see
+  // CLASSIFY_WINDOW_HOURS above. Read from `data` (not filteredData) so a
+  // new location still shows up here even if the current dropdown filters
+  // would otherwise hide it — classifying it isn't optional just because a
+  // filter's active.
+  const needsClassification = useMemo(() => {
+    const cutoff = Date.now() - CLASSIFY_WINDOW_HOURS * 3600_000
+    return data
+      .filter((l) => !l.location_type && new Date(l.created_at).getTime() >= cutoff)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+  }, [data])
+  const needsClassificationIds = useMemo(() => new Set(needsClassification.map((l) => l.id)), [needsClassification])
+
+  // Three buckets, mutually exclusive: a pending-classification location is
+  // held out of all three (it has its own list above) until resolved;
+  // Closed takes priority over Car Wash if somehow both apply, since
+  // "closed" is the more operationally important state to separate out.
+  const closedLocations = useMemo(
+    () => filteredData.filter((l) => !l.active && !needsClassificationIds.has(l.id)),
+    [filteredData, needsClassificationIds],
+  )
+  const carWashLocations = useMemo(
+    () => filteredData.filter((l) => l.active && l.location_type === 'car_wash' && !needsClassificationIds.has(l.id)),
+    [filteredData, needsClassificationIds],
+  )
+  const mainTableData = useMemo(
+    () => filteredData.filter((l) => l.active && l.location_type !== 'car_wash' && !needsClassificationIds.has(l.id)),
+    [filteredData, needsClassificationIds],
+  )
+
+  async function classify(id: string, type: 'oil_change' | 'car_wash') {
+    setClassifying(id)
+    const ok = await update(id, { location_type: type } as Partial<Location>)
+    setClassifying(null)
+    if (ok) toast.success(`Marked ${type === 'car_wash' ? 'Car Wash' : 'Oil Change'}`)
+  }
+
   function setDropFilter(field: string, vals: string[], fi: number) {
     setDropFilters(prev => {
       const next: Record<string, string[]> = {}
@@ -176,7 +225,7 @@ export function LocationsPage() {
     return vals.size >= 2
   })
 
-  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(filteredData, baseColumns, { initialVisibility })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(mainTableData, baseColumns, { initialVisibility })
   // v2 key: the column set expanded to the full Global Config schema, so old
   // saved prefs (which predate those columns) are intentionally not reused.
   useColumnPrefs('core.locations.v2', table, columnVisibility, columnOrder, setColumnOrder)
@@ -235,6 +284,38 @@ export function LocationsPage() {
 
         <TabsContent value="list">
       <div className="flex flex-col gap-2">
+        {needsClassification.length > 0 && (
+          <Card>
+            <CardBody className="flex flex-col gap-2">
+              <div>
+                <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">
+                  New Locations — Need Classification ({needsClassification.length})
+                </h3>
+                <p className="text-[11px] font-mono text-inky/60 mt-0.5">
+                  Added in the last {CLASSIFY_WINDOW_HOURS} hours. Mark each as Oil Change or Car Wash — Car Wash
+                  locations are excluded from lookup lists, inventory alerts, and order runs, and move to their own
+                  group below.
+                </p>
+              </div>
+              <div className="flex flex-col divide-y divide-navy/10">
+                {needsClassification.map((l) => (
+                  <div key={l.id} className="flex items-center justify-between gap-3 py-1.5">
+                    <span className="text-xs font-mono text-navy">{l.shop_city || l.name}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button size="sm" variant="secondary" loading={classifying === l.id} onClick={() => classify(l.id, 'oil_change')}>
+                        Oil Change
+                      </Button>
+                      <Button size="sm" variant="secondary" loading={classifying === l.id} onClick={() => classify(l.id, 'car_wash')}>
+                        Car Wash
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardBody>
+          </Card>
+        )}
+
         {/* Contextual filter dropdowns */}
         {!loading && visibleHierarchy.length > 0 && (
           <div className="flex items-end gap-3 flex-wrap">
@@ -317,6 +398,13 @@ export function LocationsPage() {
             </button>
           }
         />
+
+        <CollapsibleLocationGroup
+          title="Car Wash" locations={carWashLocations} open={carWashOpen} onToggle={() => setCarWashOpen((o) => !o)}
+        />
+        <CollapsibleLocationGroup
+          title="Closed" locations={closedLocations} open={closedOpen} onToggle={() => setClosedOpen((o) => !o)}
+        />
       </div>
         </TabsContent>
       </Tabs>
@@ -329,6 +417,42 @@ export function LocationsPage() {
         onChange={applyShown}
         onReset={resetToDefault}
       />
+    </div>
+  )
+}
+
+// Collapsed by default (matches the module's existing collapsed-section
+// convention, e.g. Data Connections' Historical Backfill Plan card) — these
+// locations don't need to be in anyone's way, just reachable. A lightweight
+// list rather than a full DataTable: this is a "here's what's set aside and
+// why" view, not something anyone needs to sort/filter/export the same way
+// as the main table.
+function CollapsibleLocationGroup({ title, locations, open, onToggle }: {
+  title: string
+  locations: Location[]
+  open: boolean
+  onToggle: () => void
+}) {
+  if (locations.length === 0) return null
+  return (
+    <div className="rounded border border-navy/20">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-mono uppercase tracking-wide text-navy hover:bg-sky/10 transition-colors"
+      >
+        <span>{title} ({locations.length})</span>
+        <span className="text-inky/50">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-navy/10 divide-y divide-navy/10">
+          {locations.map((l) => (
+            <div key={l.id} className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs font-mono">
+              <span className="text-navy">{l.shop_city || l.name}</span>
+              <span className="text-inky/50">{l.region || '—'}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -318,6 +318,11 @@ export interface Location {
   status: string | null
   // active kept for migration compat — prefer status
   active: boolean
+  // Manual classification (Locations page's "Need Classification" prompt) —
+  // NULL means unclassified/predates this feature and is treated as a
+  // normal operational location everywhere; 'car_wash' is the only value
+  // that actually excludes it (see useLocations.ts's isOperationalLocation).
+  location_type: 'oil_change' | 'car_wash' | null
   metadata: Json | null
   // Promoted from metadata
   owner: string | null

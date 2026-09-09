@@ -16,6 +16,19 @@ export function isRealShopLocation(l: Pick<Location, 'name'>): boolean {
   return /\d/.test(l.name ?? '')
 }
 
+// A location manually classified 'car_wash' (Locations page's "Need
+// Classification" prompt — see migration 20260909d) is a real shop with a
+// real numeric name, unlike the header rows isRealShopLocation filters
+// above, but should behave the same way everywhere in this app: it exists
+// in core.locations and shows in the Locations page's own dedicated
+// "Car Wash" group, but never in a lookup list, dashboard, alert, or order
+// run. Exported for the same reason as isRealShopLocation — a call site
+// that queries core.locations directly (not through this hook) applies the
+// same rule without duplicating it.
+export function isOperationalLocation(l: Pick<Location, 'name' | 'location_type'>): boolean {
+  return isRealShopLocation(l) && l.location_type !== 'car_wash'
+}
+
 // Loads the company's locations and provides id <-> code/name resolution,
 // plus access to each location's custom metadata for cross-section linking.
 // Also consults the POS location map so uploads whose location value is a POS
@@ -40,10 +53,13 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
       (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
       (supabase as any).schema('core').from('pos_location_map').select('*').eq('company_id', companyId),
     ])
-    // Filtered here (not at the query) so Config -> Locations, which reads
-    // core.locations directly and not through this hook, still shows header
-    // rows so they can be cleaned up or deleted at the source.
-    setLocations(((loc.data ?? []) as Location[]).filter(isRealShopLocation))
+    // Filtered here (not at the query) so Config -> Locations and the
+    // Locations page's own Car Wash/Closed groups, which read core.locations
+    // directly and not through this hook, still see header rows and
+    // car-wash locations — this hook feeds the operational surfaces
+    // (Location Lookup, AM/RD Lookup, most dropdowns) that should never see
+    // either.
+    setLocations(((loc.data ?? []) as Location[]).filter(isOperationalLocation))
     setPosMaps((pos.data ?? []) as PosLocationMap[])
   }, [companyId])
 
