@@ -161,6 +161,12 @@ export function DataConnectionsTab() {
     id: string; year_month: string; status: 'pending' | 'in_progress' | 'done'; orders_synced: number | null; notes: string | null
   }[]>([])
   const [backfillPlanLoading, setBackfillPlanLoading] = useState(true)
+  // Real, computed-from-the-database order/shop counts per tracked month —
+  // replaces trusting a manually-typed "orders synced" number with actual
+  // ground truth. null = still loading; a month simply missing from the map
+  // once loaded means zero orders landed for it yet.
+  const [monthStats, setMonthStats] = useState<Record<string, { orders: number; shops: number }> | null>(null)
+  const [monthStatsError, setMonthStatsError] = useState<string | null>(null)
   // Which eligible shops have at least one order WITHIN the currently
   // selected backfill range (not "ever, at any date" — see the effect
   // below for why that distinction turned out to matter). null = still
@@ -257,6 +263,33 @@ export function DataConnectionsTab() {
   }, [companyId])
   useEffect(() => { loadBackfillPlan() }, [loadBackfillPlan])
 
+  // One grouped query covering every tracked month at once
+  // (get_droptop_order_month_stats, migration 20260918) rather than one
+  // request per row — 15 months today and growing by one every month, and
+  // a per-month loop here would be exactly the kind of unbatched request
+  // pattern that made the gap-detection check above slow enough to time
+  // out. Confirmed via EXPLAIN ANALYZE at ~4s for the full 15-month range.
+  useEffect(() => {
+    if (!companyId || !backfillPlan.length) return
+    let cancelled = false
+    const months = backfillPlan.map((r) => r.year_month).sort()
+    const start = `${months[0]}-01`
+    const [endY, endM] = months[months.length - 1].split('-').map(Number)
+    const end = new Date(endY, endM, 0).toISOString().slice(0, 10) // last day of that month
+    const sb = supabase as any
+    sb.rpc('get_droptop_order_month_stats', { p_start: start, p_end: end }).then(({ data, error }: any) => {
+      if (cancelled) return
+      if (error) { setMonthStatsError(error.message); return }
+      const map: Record<string, { orders: number; shops: number }> = {}
+      for (const row of (data ?? []) as { year_month: string; orders: number | string; shops: number | string }[]) {
+        map[row.year_month] = { orders: Number(row.orders), shops: Number(row.shops) }
+      }
+      setMonthStatsError(null)
+      setMonthStats(map)
+    })
+    return () => { cancelled = true }
+  }, [companyId, backfillPlan])
+
   async function updateBackfillPlanRow(id: string, patch: Partial<{ status: 'pending' | 'in_progress' | 'done'; orders_synced: number | null; notes: string | null }>) {
     const sb = supabase as any
     const extra: Record<string, unknown> = {}
@@ -293,46 +326,63 @@ export function DataConnectionsTab() {
     let cancelled = false
     setLocationIdsInRangeError(null)
     const sb = supabase as any
-    async function run() {
+    async function fetchChunk(startStr: string, endStr: string): Promise<string[]> {
       const PAGE = 1000
-      const all: string[] = []
+      const ids: string[] = []
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await sb.rpc('get_droptop_order_location_ids_in_range', {
-          p_start: orderBackfillStart, p_end: orderBackfillEnd,
+          p_start: startStr, p_end: endStr,
         }).range(from, from + PAGE - 1)
-        if (cancelled) return
-        if (error) {
-          // Leave locationIdsInRange at null (its "still loading" value) on
-          // a real query failure, NOT an empty Set — a failed request
-          // silently becoming an empty Set would make gapShopLabels below
-          // read as "confirmed zero gap shops," exactly as misleading as
-          // the original "everyone's a gap" bug, just in the other
-          // direction. Surfaced persistently (locationIdsInRangeError
-          // below), not just a toast that disappears.
-          console.error('Failed to load in-range locations for gap detection:', error.message)
-          setLocationIdsInRangeError(error.message)
-          // No toast here — this check runs unprompted on every page load
-          // (default Start/End is "last 6 months"), and a 6-month scan of
-          // inventory.droptop_orders can be slow enough to hit Supabase's
-          // statement timeout on its own, with nothing actually wrong.
-          // gapShopLabels' persistent inline banner (below, next to the
-          // Historical Orders Backfill controls it actually affects) already
-          // surfaces this — a page-load toast for a "Select Gap Shops"
-          // convenience feature was more alarming than useful.
-          return
-        }
+        if (error) throw new Error(error.message)
         const batch = (data ?? []) as { location_id: string }[]
-        all.push(...batch.map((r) => r.location_id))
+        ids.push(...batch.map((r) => r.location_id))
         // < PAGE (not === 0) — the common case is well under 1000 distinct
         // locations, so waiting for an explicit empty page was running this
-        // same expensive range scan a second, unnecessary time on every load.
+        // same range scan a second, unnecessary time on every load.
         if (batch.length < PAGE) break
+      }
+      return ids
+    }
+    async function run() {
+      // One request per ~month-wide slice of the selected range instead of
+      // one request covering the whole thing — a single 6-month-or-wider
+      // scan of inventory.droptop_orders was slow enough to hit the
+      // 'authenticated' role's 30s statement_timeout
+      // (20260909_bump_authenticated_statement_timeout.sql) on its own, with
+      // nothing actually broken. A ~1-month slice finishes in well under a
+      // second (confirmed via EXPLAIN ANALYZE), and one retry per slice
+      // absorbs a rare transient failure without giving up on the whole
+      // check the way one giant request's failure used to.
+      const CHUNK_DAYS = 31
+      const all: string[] = []
+      const rangeStart = new Date(`${orderBackfillStart}T00:00:00.000Z`)
+      const rangeEnd = new Date(`${orderBackfillEnd}T00:00:00.000Z`)
+      for (let chunkStart = rangeStart; chunkStart <= rangeEnd; ) {
+        const chunkEndMs = Math.min(chunkStart.getTime() + CHUNK_DAYS * 86400_000 - 1, rangeEnd.getTime())
+        const startStr = chunkStart.toISOString().slice(0, 10)
+        const endStr = new Date(chunkEndMs).toISOString().slice(0, 10)
+        try {
+          all.push(...await fetchChunk(startStr, endStr))
+        } catch {
+          all.push(...await fetchChunk(startStr, endStr)) // one retry before giving up on the whole check
+        }
+        if (cancelled) return
+        chunkStart = new Date(chunkEndMs + 1)
       }
       if (!cancelled) setLocationIdsInRange(new Set(all))
     }
     run().catch((e) => {
       if (cancelled) return
+      // Leave locationIdsInRange at null (its "still loading" value) on a
+      // real query failure, NOT an empty Set — a failed request silently
+      // becoming an empty Set would make gapShopLabels below read as
+      // "confirmed zero gap shops," exactly as misleading as the original
+      // "everyone's a gap" bug, just in the other direction. Surfaced
+      // persistently (locationIdsInRangeError below) — no toast: this check
+      // runs unprompted on every page load, so a failure here shouldn't be
+      // alarming.
       const message = e instanceof Error ? e.message : 'Failed to check gap shops'
+      console.error('Failed to load in-range locations for gap detection:', message)
       setLocationIdsInRangeError(message)
     })
     return () => { cancelled = true }
@@ -1081,14 +1131,18 @@ export function DataConnectionsTab() {
             <p className="text-[11px] font-mono text-inky/60">
               Tracked checklist only — working backwards month by month is still done manually with the Historical
               Orders Backfill controls above. "Use This Month" just fills in that range; Run Backfill still has to be
-              clicked there yourself.
+              clicked there yourself. Orders/Shops are real counts read straight from the synced data, not typed in.
             </p>
+            {monthStatsError && (
+              <p className="text-[11px] font-mono text-[#C0392B]">Couldn't load real order/shop counts ({monthStatsError}).</p>
+            )}
             <div className="overflow-x-auto rounded border border-navy/20">
               <table className="w-full text-[11px] font-mono">
                 <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
                   <th className="text-left px-2 py-1">Month</th>
                   <th className="text-left px-2 py-1">Status</th>
-                  <th className="text-right px-2 py-1">Orders Synced</th>
+                  <th className="text-right px-2 py-1">Orders</th>
+                  <th className="text-right px-2 py-1">Shops w/ Orders</th>
                   <th className="text-left px-2 py-1">Notes</th>
                   <th className="text-left px-2 py-1"></th>
                 </tr></thead>
@@ -1098,6 +1152,7 @@ export function DataConnectionsTab() {
                     const monthStart = `${r.year_month}-01`
                     const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10) // day 0 of next month = last day of this one
                     const monthLabel = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+                    const stats = monthStats?.[r.year_month]
                     return (
                       <tr key={r.id} className="border-b border-navy/10">
                         <td className="px-2 py-1 text-navy whitespace-nowrap">{monthLabel}</td>
@@ -1105,13 +1160,11 @@ export function DataConnectionsTab() {
                           <Select value={r.status} onChange={(e) => updateBackfillPlanRow(r.id, { status: e.target.value as 'pending' | 'in_progress' | 'done' })}
                             options={[{ value: 'pending', label: 'Pending' }, { value: 'in_progress', label: 'In Progress' }, { value: 'done', label: 'Done' }]} />
                         </td>
-                        <td className="px-2 py-1 text-right">
-                          <input type="number" min={0} defaultValue={r.orders_synced ?? ''} placeholder="—"
-                            onBlur={(e) => {
-                              const v = e.target.value === '' ? null : Number(e.target.value)
-                              if (v !== r.orders_synced) updateBackfillPlanRow(r.id, { orders_synced: v })
-                            }}
-                            className={`${fieldCls} w-24 text-right`} />
+                        <td className="px-2 py-1 text-right text-navy tabular-nums">
+                          {monthStats === null ? '…' : (stats?.orders ?? 0).toLocaleString()}
+                        </td>
+                        <td className="px-2 py-1 text-right text-inky tabular-nums">
+                          {monthStats === null ? '…' : (stats?.shops ?? 0).toLocaleString()}
                         </td>
                         <td className="px-2 py-1">
                           <input type="text" defaultValue={r.notes ?? ''} placeholder="—"
