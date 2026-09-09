@@ -161,7 +161,7 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
           ref={boardRef}
           onPointerMove={onMove}
           onPointerUp={endDrag}
-          className="relative w-full rounded-lg border-2 border-navy bg-navy text-cream overflow-hidden select-none"
+          className="relative w-full rounded-lg border-2 border-sb-navy bg-sb-navy text-sb-cream overflow-hidden select-none"
           style={{ aspectRatio: '9 / 16', maxWidth: 480, margin: '0 auto' }}
         >
           <div className="absolute top-3 left-0 right-0 text-center">
@@ -175,29 +175,29 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
               <div key={p.id}>
                 <div
                   onPointerDown={(e) => startDrag(e, p, 'price')}
-                  className={`absolute flex flex-col items-center ${editMode ? 'cursor-move ring-1 ring-sky/60 rounded px-1' : ''}`}
+                  className={`absolute flex flex-col items-center ${editMode ? 'cursor-move ring-1 ring-sb-sky/60 rounded px-1' : ''}`}
                   style={{ left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)' }}
                 >
-                  <span className="font-heading uppercase tracking-wide text-[11px] text-sky">{p.display_name}</span>
-                  {p.qualifier && <span className="text-[9px] text-cream/70 uppercase">{p.qualifier}</span>}
-                  <span className="font-heading font-bold" style={{ fontSize: p.price_font_size }}>
+                  <span className="font-heading uppercase tracking-wide text-[11px] text-sb-sky">{p.display_name}</span>
+                  {p.qualifier && <span className="text-[9px] text-sb-cream/70 uppercase">{p.qualifier}</span>}
+                  <span className="font-heading font-bold text-sb-cream" style={{ fontSize: p.price_font_size }}>
                     {price == null ? '—' : `$${fmtPrice(price)}`}
                   </span>
-                  <span className="text-[9px] text-cream/60 uppercase">Plus Tax</span>
+                  <span className="text-[9px] text-sb-cream/60 uppercase">Plus Tax</span>
                 </div>
                 <div
                   onPointerDown={(e) => startDrag(e, p, 'quart')}
-                  className={`absolute text-center whitespace-nowrap ${editMode ? 'cursor-move ring-1 ring-sky/60 rounded px-1' : ''}`}
+                  className={`absolute text-center whitespace-nowrap text-sb-cream ${editMode ? 'cursor-move ring-1 ring-sb-sky/60 rounded px-1' : ''}`}
                   style={{ left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)', fontSize: p.quart_font_size }}
                 >
                   {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
-                  {quart.isCustom && <span className="ml-1 text-[#E67E22]">*</span>}
+                  {quart.isCustom && <span className="ml-1 text-sb-orange">*</span>}
                 </div>
               </div>
             )
           })}
           <div className="absolute bottom-2 left-0 right-0 text-center px-3">
-            <span className="text-[10px] font-mono text-cream/70">{address || (location ? '' : 'Select a shop above')}</span>
+            <span className="text-[10px] font-mono text-sb-cream/70">{address || (location ? '' : 'Select a shop above')}</span>
           </div>
         </div>
         {editMode && (
