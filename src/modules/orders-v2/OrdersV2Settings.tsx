@@ -95,7 +95,8 @@ export function OrdersV2SettingsBody() {
 
       <Card><CardBody className="flex flex-col gap-3">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Rounding</h3>
-        {numField('bulk_rounding_decimals', 'Bulk decimal places', 'Cases, drums and bay boxes always order in whole units')}
+        {numField('bulk_rounding_increment', 'Bulk rounding increment (gallons)',
+          'Bulk order quantities round to the nearest multiple of this — e.g. 5 rounds 47.3 gallons up to 50. Cases, drums and bay boxes always order in whole units regardless.')}
       </CardBody></Card>
 
       <div className="flex justify-end gap-2">
@@ -130,6 +131,14 @@ function MinimumEditor({ label, type, dollars, qty, onChange }: {
       {type === 'dollars' ? (
         <Input label="Dollars" type="number" step={5} value={String(dollars ?? '')}
           onChange={(e) => onChange(type, Number(e.target.value) || 0, qty)} />
+      ) : type === 'units_per_order' ? (
+        <>
+          <Input label="Units/cases for the whole order" type="number" step={1} value={qty == null ? '' : String(qty)}
+            onChange={(e) => onChange(type, dollars, e.target.value === '' ? null : Number(e.target.value))} />
+          <span className="text-[10px] font-mono text-inky/50">
+            Same as a dollar minimum — tops up the order until it's met — just counted in units/cases instead.
+          </span>
+        </>
       ) : (
         <>
           <Input label={type === 'gallons_per_product' ? 'Gallons per product' : 'Units per product'}

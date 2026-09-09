@@ -56,22 +56,25 @@ export const gallonsPerUnit = (rule: ProductRule): number => {
 export const resolvedOrderType = (rule: ProductRule): OrderType => rule.order_type_override ?? orderTypeOf(rule.uom)
 
 /**
- * Round a unit quantity for its UOM. Discrete UOMs must be whole; bulk may
- * carry decimals per settings. `dir` biases the rounding — 'down' when a cap
- * is binding so a limit is never breached by rounding, 'up' when seeking a
- * DOS target so a coarse package size never leaves a product short of it,
- * 'nearest' everywhere else.
+ * Round a unit quantity for its UOM. Discrete UOMs must be whole; bulk rounds
+ * to the nearest multiple of `bulkIncrement` gallons (1 = whole gallons; a
+ * vendor that only ships in round figures — e.g. 5-gallon steps — sets this
+ * higher so an order never lands on an arbitrary fractional gallon count).
+ * `dir` biases the rounding — 'down' when a cap is binding so a limit is
+ * never breached by rounding, 'up' when seeking a DOS target/minimum so a
+ * coarse increment never leaves a product short of it, 'nearest' everywhere
+ * else.
  */
-export function roundQty(qty: number, uom: string | null, bulkDecimals: number, dir: 'nearest' | 'down' | 'up' = 'nearest'): number {
+export function roundQty(qty: number, uom: string | null, bulkIncrement: number, dir: 'nearest' | 'down' | 'up' = 'nearest'): number {
   // Caps are Infinity when nothing limits a product, and a missing figure can
   // produce NaN. Either would serialise to null over the wire and blow up a
   // NOT NULL column, so they're pinned to 0 here rather than at each caller.
   if (!Number.isFinite(qty) || qty <= 0) return 0
   if (isBulkUom(uom)) {
-    const f = Math.pow(10, Math.max(0, bulkDecimals))
-    if (dir === 'down') return Math.floor(qty * f) / f
-    if (dir === 'up') return Math.ceil(qty * f) / f
-    return Math.round(qty * f) / f
+    const step = bulkIncrement > 0 ? bulkIncrement : 1
+    if (dir === 'down') return Math.floor(qty / step) * step
+    if (dir === 'up') return Math.ceil(qty / step) * step
+    return Math.round(qty / step) * step
   }
   if (dir === 'down') return Math.floor(qty)
   if (dir === 'up') return Math.ceil(qty)
@@ -362,9 +365,16 @@ function applyPerProductMinimum(
     const floorUnits = min.type === 'gallons_per_product' ? (floor * QUARTS_PER_GALLON) / per : floor
     if (l.qty >= floorUnits) continue
     // Physical capacity still wins — never order more than the shop can hold.
+    // Rounding direction has to follow which one is actually binding: when
+    // capacity has room, round UP so the floor itself is never rounded away
+    // to just under it (e.g. a 55-gallon floor with a 4.5-gal/unit product —
+    // floorUnits=12.2, rounding down landed at 12 units = 54 real gallons,
+    // one gallon under the configured minimum); round DOWN only when
+    // capacity is the binding constraint, so that cap is never exceeded.
     const hard = capsFor(inp, ctx, { respectDosMax: false })
-    const target = Math.min(floorUnits, hard.maxUnits)
-    const rounded = roundQty(target, l.uom, ctx.settings.bulk_rounding_decimals, 'down')
+    const capacityBinds = hard.maxUnits < floorUnits
+    const target = capacityBinds ? hard.maxUnits : floorUnits
+    const rounded = roundQty(target, l.uom, ctx.settings.bulk_rounding_increment, capacityBinds ? 'down' : 'up')
     if (rounded > l.qty) {
       l.qty = rounded
       l.system_qty = rounded
@@ -416,6 +426,104 @@ function applyCaseTypeMinimums(
       total += 1
     }
   }
+}
+
+/**
+ * "units_per_order" minimum — a floor on the order's total unit/case count,
+ * same shape as the dollar minimum's smoothing (top up existing lines, then
+ * pull in eligible spares) but counted in units instead of dollars — for a
+ * vendor whose real floor is "N cases," not a dollar figure or a per-line
+ * gallon/unit floor (see applyPerProductMinimum for that instead).
+ */
+function applyOrderUnitMinimum(
+  lines: GeneratedLine[], minimum: number, ctx: GenerationContext,
+  inputs: Map<string, GenerationInput>, ruleOf: (l: GeneratedLine) => ProductRule | undefined,
+  spares: GenerationInput[],
+): { met: boolean; smoothingApplied: boolean } {
+  const groupUnits = () => lines.reduce((sum, l) => {
+    const rule = ruleOf(l)
+    if (rule && !rule.include_in_total_shop_order) return sum
+    return sum + n(l.qty)
+  }, 0)
+  let total = groupUnits()
+  if (minimum <= 0 || total >= minimum) return { met: true, smoothingApplied: false }
+
+  // Same "ordered alone, don't inflate" escape hatch as the dollar minimum.
+  const soleLine = lines.length === 1 ? lines[0] : null
+  const soleRule = soleLine ? ruleOf(soleLine) : undefined
+  if (soleLine && soleRule?.can_ignore_minimum && soleRule.ignore_minimum_if_ordered_alone) {
+    const inp = inputs.get(`${soleLine.location_id}|${soleLine.product_id}`)!
+    const caps = capsFor(inp, ctx, { respectDosMax: false })
+    const alone = roundQty(Math.min(n(soleRule.default_order_amount_if_alone), caps.maxUnits),
+      soleRule.uom, ctx.settings.bulk_rounding_increment, 'down')
+    if (alone > 0) {
+      soleLine.system_qty = alone
+      soleLine.qty = alone
+      soleLine.dos_after = daysOfSupply(n(soleLine.on_hand) + alone * gallonsPerUnit(soleRule), soleLine.daily_usage)
+      if (!soleLine.flags.includes('alone_default_qty')) soleLine.flags.push('alone_default_qty')
+    }
+    return { met: true, smoothingApplied: false }
+  }
+
+  for (const l of lines) l.triggered_smoothing = true
+
+  // (a) top up existing lines, preferring whichever adds the least excess
+  // DOS per unit — no dollar cost involved here, so "most efficient" just
+  // means "least overstocking," unlike bestTopUpIndex's dollars-per-DOS score.
+  const headroom = lines.map((l) => {
+    const inp = inputs.get(`${l.location_id}|${l.product_id}`)
+    if (!inp) return 0
+    return Math.max(0, capsFor(inp, ctx, { respectDosMax: false }).maxUnits - l.qty)
+  })
+  let guard = 0
+  while (total < minimum && guard++ < 10000) {
+    let best = -1, bestDosPerUnit = Infinity
+    for (let i = 0; i < lines.length; i++) {
+      if (headroom[i] <= 0) continue
+      const inp = inputs.get(`${lines[i].location_id}|${lines[i].product_id}`)
+      if (!inp) continue
+      const per = gallonsPerUnit(inp.rule)
+      const u = n(lines[i].daily_usage)
+      const dosPerUnit = u > 0 ? per / u : Infinity   // no usage data — least preferred, not free
+      if (dosPerUnit < bestDosPerUnit) { bestDosPerUnit = dosPerUnit; best = i }
+    }
+    if (best < 0) break
+    const inp = inputs.get(`${lines[best].location_id}|${lines[best].product_id}`)!
+    const step = isBulkUom(lines[best].uom) ? Math.max(ctx.settings.bulk_rounding_increment, 0.0001) : 1
+    const take = Math.min(step, headroom[best])
+    if (take <= 0) { headroom[best] = 0; continue }
+    lines[best].qty = roundQty(lines[best].qty + take, lines[best].uom, ctx.settings.bulk_rounding_increment)
+    lines[best].system_qty = lines[best].qty
+    if (!lines[best].flags.includes('smoothing_topped_up')) lines[best].flags.push('smoothing_topped_up')
+    headroom[best] -= take
+    lines[best].dos_after = daysOfSupply(n(lines[best].on_hand) + lines[best].qty * gallonsPerUnit(inp.rule), lines[best].daily_usage)
+    markOverDosMax(lines[best], ctx)
+    total = groupUnits()
+  }
+
+  // (b) still short — pull in other eligible products from the shop's config.
+  if (total < minimum) {
+    const eligible = spares.filter((sp) => {
+      const d = daysOfSupply(sp.on_hand, sp.daily_usage)
+      return d == null || d <= ctx.settings.skip_order_if_dos_over
+    })
+    for (const sp of eligible) {
+      if (total >= minimum) break
+      const caps = capsFor(sp, ctx, { respectDosMax: false })
+      if (caps.maxUnits <= 0) continue
+      const need = minimum - total
+      const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_increment, 'up')
+      if (units <= 0) continue
+      const line = buildLine(sp, ctx, units, caps)
+      line.added_by_smoothing = true
+      line.flags.push('added_for_smoothing')
+      markOverDosMax(line, ctx)
+      lines.push(line)
+      total = groupUnits()
+    }
+  }
+
+  return { met: total >= minimum, smoothingApplied: true }
 }
 
 /** Note when a line has been pushed past the soft DOS ceiling. */
@@ -520,7 +628,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       caps = capsFor(input, ctx, { respectDosMax: false })
     }
 
-    const units = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_decimals,
+    const units = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_increment,
       // Round down when a hard cap binds so the cap is never exceeded;
       // otherwise round UP toward the target rather than to nearest — a
       // coarse package size (e.g. a 12-quart case against 0.68 qt/day of
@@ -590,7 +698,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       const caps = capsFor(inp, ctx, { respectDosMax: false })
       const alone = roundQty(
         Math.min(n(soleRule.default_order_amount_if_alone), caps.maxUnits),
-        soleRule.uom, ctx.settings.bulk_rounding_decimals, 'down',
+        soleRule.uom, ctx.settings.bulk_rounding_increment, 'down',
       )
       if (alone > 0) {
         soleLine.system_qty = alone
@@ -624,10 +732,10 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
         const i = bestTopUpIndex(lines, headroom, inputByKey)
         if (i < 0) break
         const inp = inputByKey.get(`${lines[i].location_id}|${lines[i].product_id}`)!
-        const step = isBulkUom(lines[i].uom) ? Math.pow(10, -Math.max(0, ctx.settings.bulk_rounding_decimals)) : 1
+        const step = isBulkUom(lines[i].uom) ? Math.max(ctx.settings.bulk_rounding_increment, 0.0001) : 1
         const take = Math.min(step, headroom[i])
         if (take <= 0) { headroom[i] = 0; continue }
-        lines[i].qty = roundQty(lines[i].qty + take, lines[i].uom, ctx.settings.bulk_rounding_decimals)
+        lines[i].qty = roundQty(lines[i].qty + take, lines[i].uom, ctx.settings.bulk_rounding_increment)
         lines[i].system_qty = lines[i].qty
         if (!lines[i].flags.includes('smoothing_topped_up')) lines[i].flags.push('smoothing_topped_up')
         headroom[i] -= take
@@ -656,7 +764,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
           // a dollar gap — adding it would just inflate the order for nothing.
           if (unitCost <= 0) continue
           const need = (minimum - dollars) / unitCost
-          const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_decimals)
+          const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_increment)
           if (units <= 0) continue
           const line = buildLine(sp, ctx, units, caps)
           line.added_by_smoothing = true

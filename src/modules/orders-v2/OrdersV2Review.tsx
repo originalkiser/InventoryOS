@@ -356,7 +356,7 @@ export function OrdersV2Review() {
     // 'up' when not capped, matching Pass 1's own target-seeking rounding
     // (see engine.ts) — a coarse package size should bias toward meeting
     // the target here too, not just on the initial generation.
-    const newQty = roundQty(Math.min(want, caps.maxUnits), l.uom, settings.bulk_rounding_decimals, want > caps.maxUnits ? 'down' : 'up')
+    const newQty = roundQty(Math.min(want, caps.maxUnits), l.uom, settings.bulk_rounding_increment, want > caps.maxUnits ? 'down' : 'up')
     patchLine(l.id, { qty: newQty, dos_after: dosAfterForQty(l, newQty), flags: withPoDecision(l.flags, 'po_decision_combine'), included: newQty > 0 })
   }
 

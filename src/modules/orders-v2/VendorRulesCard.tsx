@@ -12,6 +12,7 @@ function describeMin(row: MinRow | undefined): string {
   if (!row) return 'company default'
   const t = row.minimum_type ?? 'dollars'
   if (t === 'dollars') return `$${Number(row.minimum_dollars ?? 0).toLocaleString()} per order`
+  if (t === 'units_per_order') return `${row.minimum_qty ?? 0} units/cases per order`
   const unit = t === 'gallons_per_product' ? 'gallons' : 'units'
   return `${row.minimum_qty ?? 0} ${unit} per product`
 }
@@ -145,6 +146,8 @@ function VendorMinimumEditor({ vendorId, orderType, row, onSave }: {
         options={(Object.keys(MINIMUM_TYPE_LABELS) as MinimumType[]).map((t) => ({ value: t, label: MINIMUM_TYPE_LABELS[t] }))} />
       {type === 'dollars' ? (
         <Input label="Dollars" type="number" step={5} value={dollars} onChange={(e) => setDollars(e.target.value)} />
+      ) : type === 'units_per_order' ? (
+        <Input label="Units/cases for the whole order" type="number" value={qty} onChange={(e) => setQty(e.target.value)} />
       ) : (
         <Input label={type === 'gallons_per_product' ? 'Gallons per product' : 'Units per product'}
           type="number" value={qty} onChange={(e) => setQty(e.target.value)} />

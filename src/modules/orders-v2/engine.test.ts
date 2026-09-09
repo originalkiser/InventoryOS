@@ -38,16 +38,19 @@ describe('numeric helpers', () => {
     expect(daysOfSupply(100, 5)).toBe(20)
   })
 
-  it('keeps discrete UOMs whole and lets bulk carry configured decimals', () => {
-    expect(roundQty(2.6, 'case', 0)).toBe(3)
-    expect(roundQty(2.6, 'bulk', 0)).toBe(3)
-    expect(roundQty(2.64, 'bulk', 1)).toBe(2.6)
+  it('keeps discrete UOMs whole and rounds bulk to the configured increment', () => {
+    expect(roundQty(2.6, 'case', 1)).toBe(3)
+    // increment 1 = whole gallons, same as the old "0 decimals" default
+    expect(roundQty(2.6, 'bulk', 1)).toBe(3)
+    // a vendor that only ships in round figures (e.g. 5-gallon steps)
+    expect(roundQty(47.3, 'bulk', 5)).toBe(45)
     // rounding down is used wherever a cap binds, so a cap can't be breached
-    expect(roundQty(2.9, 'case', 0, 'down')).toBe(2)
-    // rounding up is used when seeking a DOS target, so a coarse package
-    // size never lands short of it
-    expect(roundQty(2.1, 'case', 0, 'up')).toBe(3)
-    expect(roundQty(2.14, 'bulk', 1, 'up')).toBe(2.2)
+    expect(roundQty(2.9, 'case', 1, 'down')).toBe(2)
+    expect(roundQty(47.3, 'bulk', 5, 'down')).toBe(45)
+    // rounding up is used when seeking a DOS target/minimum, so a coarse
+    // increment never lands short of it
+    expect(roundQty(2.1, 'case', 1, 'up')).toBe(3)
+    expect(roundQty(47.3, 'bulk', 5, 'up')).toBe(50)
   })
 })
 

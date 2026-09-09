@@ -15,12 +15,15 @@ export const UOM_LABELS: Record<string, string> = {
 export const isBulkUom = (uom: string | null | undefined) => (uom ?? '').toLowerCase() === 'bulk'
 export const orderTypeOf = (uom: string | null | undefined): OrderType => (isBulkUom(uom) ? 'bulk' : 'package')
 
-// How an order minimum is expressed. 'dollars' is a floor on the whole
-// shop/order-type total; the per-product variants are floors on each line
-// (e.g. bulk must be at least N gallons of each product ordered).
-export type MinimumType = 'dollars' | 'units_per_product' | 'gallons_per_product'
+// How an order minimum is expressed. 'dollars' and 'units_per_order' are
+// both floors on the whole shop/order-type total (smoothed the same way,
+// just counted in different currency — dollars vs. cases/units); the
+// per-product variants are floors on each line instead (e.g. bulk must be
+// at least N gallons of each product ordered).
+export type MinimumType = 'dollars' | 'units_per_order' | 'units_per_product' | 'gallons_per_product'
 export const MINIMUM_TYPE_LABELS: Record<MinimumType, string> = {
   dollars: '$ total for the order',
+  units_per_order: 'units/cases total for the order',
   units_per_product: 'units per product',
   gallons_per_product: 'gallons per product',
 }
@@ -52,7 +55,13 @@ export interface OrderSettings {
   // large order is not what we're looking for.
   flag_cumulative_days: number
   flag_cumulative_dos_over: number
-  bulk_rounding_decimals: number
+  // Bulk order quantities round to the nearest multiple of this many
+  // gallons (up when seeking a target/minimum, down when a hard cap binds —
+  // same 'dir' convention as everywhere else). Replaces the old
+  // decimal-places approach, which could land a bulk order on an arbitrary
+  // fractional gallon figure no vendor actually ships in. 1 = whole
+  // gallons. Cases/drums/bay boxes always order in whole units regardless.
+  bulk_rounding_increment: number
 }
 
 export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
@@ -69,7 +78,7 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   skip_order_if_dos_over: 45,
   flag_cumulative_days: 30,
   flag_cumulative_dos_over: 45,
-  bulk_rounding_decimals: 0,
+  bulk_rounding_increment: 1,
 }
 
 // Per shop x product ordering rules. Named fields say "gallons" for
