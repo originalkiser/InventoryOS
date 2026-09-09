@@ -61,14 +61,14 @@ function ok(body: unknown) {
 // Verified 2026-09-08 against the live board's own columns { id title type }
 // (not hand-guessed): every title here matched a real column, and no id or
 // db column is reused across two rows.
-type FieldKind = 'text' | 'mirror' | 'relation' | 'bool' | 'int' | 'numeric' | 'date'
+type FieldKind = 'text' | 'mirror' | 'relation' | 'bool' | 'int' | 'numeric' | 'date' | 'phone'
 const FIELD_MAP: [string, string, FieldKind][] = [
   ['owner', 'owner9', 'text'],
   ['market', 'mirror6__1', 'mirror'],
   ['region', 'dup__of_rd_2_email__1', 'mirror'],
   ['area_manager', 'connect_boards7__1', 'relation'],
   ['director', 'connect_boards0__1', 'relation'],
-  ['am_phone', 'dup__of_dup__of_market__1', 'mirror'],
+  ['am_phone', 'dup__of_dup__of_market__1', 'phone'],
   ['am_email', 'dup__of_market__1', 'mirror'],
   ['rd_email', 'mirror5__1', 'mirror'],
   ['address', 'address1', 'text'],
@@ -76,7 +76,7 @@ const FIELD_MAP: [string, string, FieldKind][] = [
   ['state', 'state', 'text'],
   ['county', 'text1', 'text'],
   ['zip', 'zip', 'text'],
-  ['store_phone', 'phone3', 'text'],
+  ['store_phone', 'phone3', 'phone'],
   ['store_email', 'store_email', 'text'],
   ['num_bays', 'text98', 'int'],
   ['pit_type', 'dropdown7__1', 'text'],
@@ -151,7 +151,7 @@ const FIELD_MAP: [string, string, FieldKind][] = [
   ['droptop_operation_id', 'text_mkm1gjx', 'text'],
   ['reladyne_delivery_day', 'dropdown_mkrz4f4d', 'text'],
   ['ai_call_center', 'color_mks8m9x1', 'text'],
-  ['ai_call_center_phone', 'phone_mm319xx8', 'text'],
+  ['ai_call_center_phone', 'phone_mm319xx8', 'phone'],
   ['mighty_fz', 'dropdown_mkv0cyvj', 'text'],
   ['camera_system', 'dropdown_mkv5ny0e', 'text'],
   ['inspection_station_id', 'text_mkwzmr60', 'text'],
@@ -272,11 +272,27 @@ function colVal(item: MondayItem, id: string): string | null {
   return trimmed ? String(trimmed) : null
 }
 
+// Real production data confirmed 2026-09-09: Monday's phone columns arrive
+// as free-text in a genuine mix of shapes — plain 10-digit ("6785551234"),
+// 11-digit with a leading US country code ("16785551234"), and already-
+// punctuated variants. Strips everything but digits, drops a leading "1"
+// when there are 11 (this dataset has no international shops), and only
+// reformats when exactly 10 digits remain — a partial number, an
+// extension, or garbage input is passed through unchanged rather than
+// mangled into a fake-looking format.
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
+  const ten = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits
+  if (ten.length !== 10) return raw
+  return `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`
+}
+
 function valueFor(item: MondayItem, mondayId: string, kind: FieldKind): unknown {
   const text = colVal(item, mondayId)
   if (text == null) return null
   switch (kind) {
     case 'text': case 'mirror': case 'relation': case 'date': return text
+    case 'phone': return normalizePhone(text)
     case 'bool': return text === 'Yes' ? true : text === 'No' ? false : null
     case 'int': { const n = parseInt(text, 10); return Number.isFinite(n) ? n : null }
     case 'numeric': { const n = Number(text); return Number.isFinite(n) ? n : null }

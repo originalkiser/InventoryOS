@@ -240,8 +240,10 @@ Deno.serve(async (req) => {
     // yesterday, or for several days running, simply never advanced its
     // tracked date — so the very next run's start date is still "the day
     // after whatever last succeeded", naturally widening to cover the gap
-    // with no separate catch-up code path needed. Capped at
-    // MAX_CATCHUP_DAYS so a location stuck for a long time catches up over
+    // with no separate catch-up code path needed. Bounded two ways: never
+    // further back than MAX_CATCHUP_DAYS, and never more than
+    // MAX_SINGLE_PULL_DAYS in ONE invocation (see that constant's own
+    // comment) — so a location stuck for a long time catches up over
     // several runs instead of one huge, timeout-prone pull.
     //
     // This also already does the right thing for the real cohort of
@@ -251,6 +253,23 @@ Deno.serve(async (req) => {
     // other successfully-checked day, so it's never mistaken for a gap
     // that needs re-catching-up.
     const MAX_CATCHUP_DAYS = 30
+    // Real production incident 2026-09-09: every location that never
+    // completed even its FIRST incremental sync (no droptop_order_sync_state
+    // row at all — mostly the batch of new locations the Monday.com sync
+    // just added) was attempting the full up-to-30-day MAX_CATCHUP_DAYS
+    // window in ONE call, every single scheduled tick, and consistently
+    // timing out ("The signal has been aborted") — the header comment above
+    // claims a big gap "catches up over several runs," but that was never
+    // actually true: locEndUnix always jumped straight to yesterday
+    // regardless of how far back locStartUnix started, so a location with a
+    // real 30-day gap retried that same all-or-nothing 30-day pull forever
+    // instead of making partial progress. Bounding how much ONE invocation
+    // attempts — regardless of whether this is a routine 1-day increment or
+    // a first-time/multi-day catch-up — makes that comment actually true:
+    // the tracked date now advances by however much really succeeded, and
+    // the next tick's start date continues from there, the same way a
+    // missed day already widens the window.
+    const MAX_SINGLE_PULL_DAYS = 7
     const todayUtc = new Date(); todayUtc.setUTCHours(0, 0, 0, 0)
     const yesterdayUtc = new Date(todayUtc); yesterdayUtc.setUTCDate(yesterdayUtc.getUTCDate() - 1)
     const yesterdayEndUnix = Math.floor(yesterdayUtc.getTime() / 1000) + 86399 // 23:59:59 UTC
@@ -344,8 +363,13 @@ Deno.serve(async (req) => {
           if (lastDate) start.setUTCDate(start.getUTCDate() + 1) // day AFTER last synced, not that day again
           if (start < earliestAllowed) start = earliestAllowed
           locStartUnix = Math.floor(start.getTime() / 1000)
-          locEndUnix = yesterdayEndUnix
-          if (locStartUnix > locEndUnix) continue // already caught up (e.g. run more than once today)
+          if (locStartUnix > yesterdayEndUnix) continue // already caught up (e.g. run more than once today)
+          // Cap this invocation's window to MAX_SINGLE_PULL_DAYS — see
+          // MAX_SINGLE_PULL_DAYS' own comment above. succeededThrough below
+          // only advances to whatever end this actually is, not straight to
+          // yesterday, so a location with more left keeps making progress
+          // tick by tick instead of retrying one giant window forever.
+          locEndUnix = Math.min(yesterdayEndUnix, locStartUnix + MAX_SINGLE_PULL_DAYS * 86400 - 1)
         } else {
           locStartUnix = startUnix
           locEndUnix = endUnix
