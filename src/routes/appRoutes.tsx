@@ -43,6 +43,7 @@ import { FormResultsPage } from '@/modules/forms/FormResultsPage'
 import { FormAssignmentsPage } from '@/modules/forms/FormAssignmentsPage'
 import { OnHandPage } from '@/pages/OnHandPage'
 import { MarketingPlannerPage } from '@/modules/marketing/MarketingPlannerPage'
+import { MenuBoardPage } from '@/modules/marketing/menuboard/MenuBoardPage'
 import { CustomerHeatmapPage } from '@/modules/customers/CustomerHeatmapPage'
 import { DroptopOrdersPage } from '@/modules/customers/DroptopOrdersPage'
 import { DroptopVehiclesPage } from '@/modules/customers/DroptopVehiclesPage'
@@ -139,6 +140,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="forms/:formId/results" element={<FormResultsPage />} />
     <Route path="forms/:formId/assignments" element={<FormAssignmentsPage />} />
     <Route path="marketing-planner" element={<MarketingPlannerPage />} />
+    <Route path="menu-board" element={<MenuBoardPage />} />
     <Route path="customer-heatmap" element={<CustomerHeatmapPage />} />
     <Route path="droptop-orders" element={<DroptopOrdersPage />} />
     <Route path="droptop-vehicles" element={<DroptopVehiclesPage />} />

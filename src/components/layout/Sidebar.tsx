@@ -158,6 +158,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
   accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
   marketing: [
     { key: 'marketing-planner', label: 'Marketing Planner', to: '/marketing-planner' },
+    { key: 'menu-board', label: 'Menu Board', to: '/menu-board' },
   ],
 }
 
