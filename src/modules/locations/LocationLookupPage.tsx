@@ -222,13 +222,15 @@ function exceptionCellLines(exc: ConfigRow['exception']): string[] {
 }
 
 const CONFIG_FIXED: Col<ConfigRow>[] = [
-  // Narrowed from the auto-sized default (Tailwind's table-auto stretches a
-  // short-content column to fill leftover width) so Exception below fits
-  // without widening the card — the actual part ids/UOM words here are
-  // short enough that neither needs much room.
-  { id: 'part', label: 'Part', align: 'left', width: 'w-24', render: (r) => r.product_id ?? '—', sort: (r) => r.product_id },
-  { id: 'uom', label: 'UOM', align: 'left', width: 'w-16', render: (r) => String((r.metadata as any)?.uom ?? '—'), sort: (r) => String((r.metadata as any)?.uom ?? '') },
-  { id: 'capacity', label: 'Capacity', align: 'right', render: (r) => num(r.capacity), sort: (r) => r.capacity },
+  // Part/UOM are deliberately left unconstrained (no width, plus the shared
+  // whitespace-nowrap in OrderConfigBlock's <td>/<th> below) — a real part
+  // id or UOM word is what it is and shouldn't wrap to a second line. The
+  // short numeric/status columns are narrowed instead (Capacity/Max/VMI/
+  // Exception, and On Hand/Daily Usage/Days of Supply below), which is
+  // where table-auto's leftover-width stretch was actually going to waste.
+  { id: 'part', label: 'Part', align: 'left', render: (r) => r.product_id ?? '—', sort: (r) => r.product_id },
+  { id: 'uom', label: 'UOM', align: 'left', render: (r) => String((r.metadata as any)?.uom ?? '—'), sort: (r) => String((r.metadata as any)?.uom ?? '') },
+  { id: 'capacity', label: 'Capacity', align: 'right', width: 'w-20', render: (r) => num(r.capacity), sort: (r) => r.capacity },
   {
     id: 'exception', label: 'Exception', align: 'left', width: 'w-28',
     render: (r) => {
@@ -238,8 +240,8 @@ const CONFIG_FIXED: Col<ConfigRow>[] = [
     },
     sort: (r) => exceptionCellLines(r.exception).join(' ') || null,
   },
-  { id: 'max', label: 'Max', align: 'right', render: (r) => num(r.order_limit), sort: (r) => r.order_limit },
-  { id: 'vmi', label: 'VMI', align: 'center', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? 1 : 0) },
+  { id: 'max', label: 'Max', align: 'right', width: 'w-16', render: (r) => num(r.order_limit), sort: (r) => r.order_limit },
+  { id: 'vmi', label: 'VMI', align: 'center', width: 'w-14', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? 1 : 0) },
 ]
 // Metadata keys that are plumbing, not config attributes — never shown as columns.
 const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', 'vendor_name', 'location_label'])
@@ -250,10 +252,10 @@ const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', '
 // computed here (on hand ÷ daily usage), not read from the table's own
 // days_of_supply column, so it stays consistent with what's displayed.
 const USAGE_COLS: Col<ConfigRow>[] = [
-  { id: 'on_hand', label: 'On Hand', align: 'right', tint: true, render: (r) => (r.usage?.on_hands != null ? num(r.usage.on_hands) : '—'), sort: (r) => r.usage?.on_hands ?? null },
-  { id: 'daily_usage', label: 'Daily Usage', align: 'right', tint: true, render: (r) => (r.usage?.daily_usage != null ? num(r.usage.daily_usage) : '—'), sort: (r) => r.usage?.daily_usage ?? null },
+  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? num(r.usage.on_hands) : '—'), sort: (r) => r.usage?.on_hands ?? null },
+  { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? num(r.usage.daily_usage) : '—'), sort: (r) => r.usage?.daily_usage ?? null },
   {
-    id: 'days_of_supply', label: 'Days of Supply', align: 'right', tint: true,
+    id: 'days_of_supply', label: 'Days of Supply', align: 'right', width: 'w-24', tint: true,
     render: (r) => {
       const oh = r.usage?.on_hands, du = r.usage?.daily_usage
       return oh != null && du != null && du > 0 ? (oh / du).toFixed(1) : '—'
@@ -1510,7 +1512,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                   {columns.map((c) => (
-                    <th key={c.id} className={`px-3 py-2 ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>
+                    <th key={c.id} className={`px-3 py-2 whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>
                       <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
                         {c.label}{sortArrow(sort, c.id)}
                       </button>
@@ -1523,14 +1525,14 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick
                   <tr key={r.id} className="border-b border-navy/20">
                     {columns.map((c) => c.id === 'exception' ? (
                       <td key={c.id}
-                        className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.width ?? ''} cursor-pointer hover:bg-sky/10 transition-colors`}
+                        className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)} ${c.width ?? ''} cursor-pointer hover:bg-sky/10 transition-colors`}
                         title="Click to add or edit a floor/ceiling exception for this product"
                         onClick={() => onExceptionClick(r)}
                       >
                         {c.render(r)}
                       </td>
                     ) : (
-                      <td key={c.id} className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>{c.render(r)}</td>
+                      <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>{c.render(r)}</td>
                     ))}
                   </tr>
                 ))}
