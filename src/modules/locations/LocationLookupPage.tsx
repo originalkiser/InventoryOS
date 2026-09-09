@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MapPin, Settings } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -270,6 +270,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const navigate = useNavigate()
   const loc = useLocations()
   const companyId = profile?.company_id ?? null
+  // Unique per mounted instance, not just per shop — the full-page route
+  // (kept mounted in the background by KeepAlivePages) and the "Shop Detail"
+  // block in the floating quick-access panel can both be showing the same
+  // shop at once (they share LAST_SHOP_KEY), and a Realtime channel topic
+  // string has to be unique per subscription or the second .subscribe()
+  // collides with the first — this was crashing the whole app (outside any
+  // error boundary) when both were open on the same shop simultaneously.
+  const instanceId = useRef(Math.random().toString(36).slice(2)).current
 
   const [searchParams] = useSearchParams()
   const [shopId, setShopId] = useState<string>(() => { try { return localStorage.getItem(LAST_SHOP_KEY) ?? '' } catch { return '' } })
@@ -491,7 +499,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     let debounce: ReturnType<typeof setTimeout>
     const reload = () => { clearTimeout(debounce); debounce = setTimeout(load, 400) }
     const channel = supabase
-      .channel(`location-lookup-${shopId}`)
+      .channel(`location-lookup-${shopId}-${instanceId}`)
       .on('postgres_changes', { event: '*', schema: 'platform', table: 'issues', filter: `location_id=eq.${shopId}` }, reload)
       .on('postgres_changes', { event: '*', schema: 'inventory', table: 'exception_reports', filter: `location_id=eq.${shopId}` }, reload)
       .on('postgres_changes', { event: '*', schema: 'inventory', table: 'location_comms', filter: `location_id=eq.${shopId}` }, reload)

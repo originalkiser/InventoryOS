@@ -12,6 +12,7 @@ import type { PanelMode } from '@/components/shared/FloatingPanel'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { useRecentPagesStore } from '@/stores/recentPagesStore'
 import { KeepAlivePages } from './KeepAlivePages'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 
 const LOOKUP_MODE_KEY = 'locationLookup.mode'
 const LOOKUP_WIDTH_KEY = 'locationLookup.width'
@@ -215,18 +216,30 @@ export function AppShell() {
         </div>
       )}
 
-      <LocationLookupOverlay
-        mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
-        onModeChange={setLookupModeP} onToggle={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')} onWidthChange={setLookupWidthP}
-      />
-      <InventoryOverlay
-        mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
-        onModeChange={setInvModeP} onToggle={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')} onWidthChange={setInvWidthP}
-      />
-      <MeetingOverlay
-        mode={meetingMode} width={meetingWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
-        onModeChange={setMeetingModeP} onWidthChange={setMeetingWidthP}
-      />
+      {/* Each floating quick-access panel gets its own boundary — these render
+          as AppShell siblings, outside KeepAlivePages' per-route boundary, so
+          without one a crash inside any panel (e.g. a bad saved block config)
+          takes down the entire app to a blank screen instead of just that
+          panel. See https://github.com/originalkiser/InventoryOS commit
+          history for the incident this guards against. */}
+      <ErrorBoundary>
+        <LocationLookupOverlay
+          mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
+          onModeChange={setLookupModeP} onToggle={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')} onWidthChange={setLookupWidthP}
+        />
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <InventoryOverlay
+          mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
+          onModeChange={setInvModeP} onToggle={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')} onWidthChange={setInvWidthP}
+        />
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <MeetingOverlay
+          mode={meetingMode} width={meetingWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
+          onModeChange={setMeetingModeP} onWidthChange={setMeetingWidthP}
+        />
+      </ErrorBoundary>
     </div>
   )
 }
