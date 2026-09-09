@@ -9,7 +9,7 @@ const rule = (over: Partial<ProductRule> = {}): ProductRule => ({
   location_id: 'L1', product_id: 'P1', uom: 'case', units_per_uom_gallons: 5, unit_cost: 100,
   max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false,
   ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2,
-  include_in_total_shop_order: true, order_type_override: null, ...over,
+  include_in_total_shop_order: true, order_type_override: null, min_on_hand_qty: null, ...over,
 })
 
 const input = (over: Omit<Partial<GenerationInput>, 'rule'> & { rule?: Partial<ProductRule> } = {}): GenerationInput => {
@@ -110,6 +110,43 @@ describe('pass 1 — fill to target', () => {
     const res = generateOrder([i], ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } }))
     expect(res.lines).toHaveLength(1)
     expect(res.lines[0].qty).toBe(2)
+  })
+})
+
+describe('critical minimum (min_on_hand_qty)', () => {
+  it('orders at least 1 unit when on-hand is at/below the critical floor, even though usage is too low to trigger the normal DOS check', () => {
+    // daily_usage 0.01 => DOS ~500, way above the 14-day trigger — would
+    // never order on its own — but on_hand (5) is at the configured
+    // critical floor (5).
+    const i = input({ on_hand: 5, daily_usage: 0.01, rule: { min_on_hand_qty: 5, units_per_uom_gallons: 1 } })
+    const res = generateOrder([i], ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } }))
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBe(1)
+    expect(res.lines[0].flags).toContain('critical_minimum')
+  })
+
+  it('does not trigger when on-hand is above the critical floor', () => {
+    const i = input({ on_hand: 6, daily_usage: 0.01, rule: { min_on_hand_qty: 5, units_per_uom_gallons: 1 } })
+    const res = generateOrder([i], ctx())
+    expect(res.lines).toHaveLength(0)
+    expect(res.skipped[0].reason).toBe('above_min_trigger')
+  })
+
+  it('still sizes by the normal usage/DOS math when usage genuinely triggers an order too, just adds the flag', () => {
+    // DOS 1, well below trigger — this would order via the normal path
+    // regardless of the critical floor; the floor shouldn't shrink it to 1.
+    const i = input({ on_hand: 5, daily_usage: 5, rule: { min_on_hand_qty: 5, units_per_uom_gallons: 1 } })
+    const res = generateOrder([i], ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false } }))
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBeGreaterThan(1) // normal DOS-target sizing, not forced down to 1
+    expect(res.lines[0].flags).toContain('critical_minimum')
+  })
+
+  it('physical capacity still wins — never forces an order past max_capacity_gallons', () => {
+    const i = input({ on_hand: 5, daily_usage: 0.01, rule: { min_on_hand_qty: 5, units_per_uom_gallons: 1, max_capacity_gallons: 5 } })
+    const res = generateOrder([i], ctx())
+    expect(res.lines).toHaveLength(0)
+    expect(res.skipped[0].reason).toBe('no_room_or_zero_qty')
   })
 })
 

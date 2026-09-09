@@ -141,11 +141,11 @@ export function OrdersV2Review() {
     setGenerating(true)
     setGenProgress({ loaded: 0, total: 0 })
     try {
-      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, days, schedules, calendar, history } = await fetchInputs(
+      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, exceptions, days, schedules, calendar, history } = await fetchInputs(
         draft.vendor_id, settings.flag_cumulative_days,
         (loaded, total) => setGenProgress({ loaded, total }),
       )
-      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap)
+      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
       setAllInputs(inputs)
       const eligibleIds = eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
       setEligibleLocationIds(eligibleIds)

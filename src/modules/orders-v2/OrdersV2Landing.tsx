@@ -95,6 +95,7 @@ export function OrdersV2Landing() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/exceptions')}>Product Exceptions</Button>
           <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
           <Button size="sm" onClick={() => setStartOpen(true)}><Plus className="w-3.5 h-3.5 mr-1" /> Start New Order</Button>
         </div>

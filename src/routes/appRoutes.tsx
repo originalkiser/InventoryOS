@@ -51,6 +51,7 @@ import { OrdersV2Review } from '@/modules/orders-v2/OrdersV2Review'
 import { OrdersV2FinalReview } from '@/modules/orders-v2/OrdersV2FinalReview'
 import { OrdersV2Export } from '@/modules/orders-v2/OrdersV2Export'
 import { OrdersV2Settings } from '@/modules/orders-v2/OrdersV2Settings'
+import { OrdersV2Exceptions } from '@/modules/orders-v2/OrdersV2Exceptions'
 import { OrdersV2History } from '@/modules/orders-v2/OrdersV2History'
 import { PoStatusPage } from '@/modules/orders-v2/PoStatusPage'
 import { UsersPage } from '@/modules/admin/UsersPage'
@@ -113,6 +114,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="orders" element={<OrdersPage />} />
     <Route path="orders-v2" element={<OrdersV2Landing />} />
     <Route path="orders-v2/settings" element={<OrdersV2Settings />} />
+    <Route path="orders-v2/exceptions" element={<OrdersV2Exceptions />} />
     <Route path="orders-v2/draft/:draftId" element={<OrdersV2Review />} />
     <Route path="orders-v2/draft/:draftId/final" element={<OrdersV2FinalReview />} />
     <Route path="orders-v2/draft/:draftId/export" element={<OrdersV2Export />} />

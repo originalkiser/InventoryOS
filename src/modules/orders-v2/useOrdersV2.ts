@@ -381,7 +381,17 @@ export interface VendorPartRow {
   // already does for its own "internal id" column.
   description?: string | null; part_number?: string | null
 }
-export interface GlobalProductRow { product_id: string; unit_of_measure: string | null }
+export interface GlobalProductRow { product_id: string; unit_of_measure: string | null; min_on_hand_qty?: number | null }
+// Shop+product override (Config -> Orders v2 -> Product Exceptions).
+// floor_qty: on-hand at/below this is unusable at this shop for this
+// product — subtracted from on_hand before anything else sees it.
+// ceiling_qty/ceiling_unit: hard cap on how far this shop can be ordered up
+// for this product, overriding location_order_config's own capacity for
+// just this one product when set.
+export interface ExceptionRow {
+  location_id: string; product_id: string
+  floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: 'cases' | 'gallons' | null
+}
 export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }
 // Derived from core.locations.reladyne_delivery_day rather than a table of
 // its own — the location list is already the source of truth for it.
@@ -405,11 +415,11 @@ export function useGenerationData() {
     // what's usually the slowest step in generating an order.
     onProgress?: (loaded: number, total: number) => void,
   ) => {
-    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], tankOnHand: [], openPurchaseOrders: [], poItems: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
+    if (!companyId) return { configs: [], rules: [], usage: [], productMappings: [], vendorParts: [], uomMappings: [], globalProducts: [], tankOnHand: [], openPurchaseOrders: [], poItems: [], exceptions: [], days: [], schedules: new Map(), calendar: new Map(), history: [] as any[] }
     const since = new Date(); since.setDate(since.getDate() - Math.max(1, lookbackDays))
     const sinceStr = since.toISOString().slice(0, 10)
 
-    const FETCH_STEPS = 15 // 4 fast lookups fetched first (configs, productMappings, openPurchaseOrders, locations), 10 more fetchAll calls, + the trailing order-history-dates query
+    const FETCH_STEPS = 16 // 4 fast lookups fetched first (configs, productMappings, openPurchaseOrders, locations), 11 more fetchAll calls, + the trailing order-history-dates query
     let stepsDone = 0
     const step = <T,>(p: Promise<T>): Promise<T> => p.then((r) => { onProgress?.(++stepsDone, FETCH_STEPS); return r })
 
@@ -467,7 +477,7 @@ export function useGenerationData() {
     const familyList = [...families].filter(Boolean)
     const openPoIds = openPurchaseOrders.map((po) => po.id)
 
-    const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, poItems, schedRows, calRows, history] = await Promise.all([
+    const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, poItems, exceptions, schedRows, calRows, history] = await Promise.all([
       step(fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId)),
       step(fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId,
         familyList.length ? (q: any) => q.or(familyList.map((f) => `product_id.ilike.${escapeIlike(f)}%`).join(',')) : undefined)),
@@ -479,8 +489,9 @@ export function useGenerationData() {
       // Most products report on-hand/usage in quarts already; a product
       // whose global_products.unit_of_measure says otherwise (e.g. HM0806
       // in ounces) gets converted before it reaches the engine — see
-      // quartsFromSourceUnit below.
-      step(fetchAll<GlobalProductRow>('inventory', 'global_products', 'product_id, unit_of_measure', companyId)),
+      // quartsFromSourceUnit below. min_on_hand_qty is this product's
+      // company-wide critical minimum (see buildGenerationInputs).
+      step(fetchAll<GlobalProductRow>('inventory', 'global_products', 'product_id, unit_of_measure, min_on_hand_qty', companyId)),
       // Keep-fill/VMI products use the tank monitor's own on-hand reading
       // instead of Droptop's product_usage — see buildGenerationInputs.
       step(fetchAll<TankOnHandRow>('inventory', 'tank_monitors', 'location_id, product_id, on_hand', companyId)),
@@ -494,6 +505,7 @@ export function useGenerationData() {
         ? step(fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId,
             (q: any) => q.in('purchase_order_id', openPoIds)))
         : step(Promise.resolve([] as PoItemRow[])),
+      step(fetchAll<ExceptionRow>('inventory', 'ov2_product_exceptions', 'location_id, product_id, floor_qty, ceiling_qty, ceiling_unit', companyId)),
       step(fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, order_id', companyId)),
@@ -543,7 +555,7 @@ export function useGenerationData() {
       (calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']),
     )
 
-    return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, days, schedules, calendar, history: historyFacts }
+    return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, exceptions, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
   return { fetchInputs }
@@ -567,9 +579,34 @@ export function buildGenerationInputs(
   // not the shop's canonical "SYN-0W20"), so every VMI product with a real
   // tank installed still showed "no data" here.
   tankProductMap: Record<string, string> = {},
+  // Shop+product exceptions (Config -> Orders v2 -> Product Exceptions) —
+  // see ExceptionRow's own comment. Applied below: floor_qty reduces usable
+  // on_hand at the point it's first read; ceiling_qty/ceiling_unit
+  // overrides max_capacity_gallons outright when set.
+  exceptions: ExceptionRow[] = [],
 ) {
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
+  const floorMap = new Map<string, number>()
+  const ceilingMap = new Map<string, { qty: number; unit: 'cases' | 'gallons' }>()
+  for (const e of exceptions) {
+    const k = ruleKey(e.location_id, e.product_id)
+    if (e.floor_qty != null && Number(e.floor_qty) > 0) floorMap.set(k, Number(e.floor_qty))
+    if (e.ceiling_qty != null && Number(e.ceiling_qty) > 0 && e.ceiling_unit) {
+      ceilingMap.set(k, { qty: Number(e.ceiling_qty), unit: e.ceiling_unit })
+    }
+  }
+  // Subtracts a shop+product floor exception from raw on-hand — the amount
+  // below the floor is physically there but not usable, so it's removed
+  // before anything downstream (DOS math, the critical-minimum check,
+  // combining with sibling case types) ever sees it. Clamped at 0, not
+  // negative; null passes through unchanged (nothing to adjust when there's
+  // no reading at all).
+  const applyFloor = (locationId: string, productId: string, onHand: number | null): number | null => {
+    if (onHand == null) return onHand
+    const floor = floorMap.get(ruleKey(locationId, productId))
+    return floor ? Math.max(0, onHand - floor) : onHand
+  }
 
   // Product Usage is often still keyed by retired product ids while the order
   // config already uses the new ones, so a straight join finds no on-hand at
@@ -739,6 +776,15 @@ export function buildGenerationInputs(
     const unit = sourceUnitMap.get(pkey(productId))
     return unit ? quartsPerSourceUnit(unit) : 1
   }
+  // Critical minimum (Config -> Global Products) — same value at every shop
+  // that carries this product, in quarts. Resolved the same way as
+  // sourceUnitMap above.
+  const minOnHandMap = new Map<string, number>()
+  for (const g of globalProducts) {
+    if (g.min_on_hand_qty == null) continue
+    const resolved = oldToNew.get(pkey(g.product_id)) ?? g.product_id
+    minOnHandMap.set(pkey(resolved), Number(g.min_on_hand_qty))
+  }
 
   // "Order Limit" of exactly 0 is the config screen's own documented
   // convention for "inactive — don't order this product at this shop"
@@ -765,7 +811,7 @@ export function buildGenerationInputs(
       vmi_keepfill_enabled: String(meta.vmi ?? '').trim().toLowerCase() === 'yes',
       can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true,
       default_order_amount_if_alone: 2, include_in_total_shop_order: true,
-      order_type_override: null,
+      order_type_override: null, min_on_hand_qty: null,
     }
 
     // Fill in whatever an explicit ov2_product_rules override (if any)
@@ -783,8 +829,20 @@ export function buildGenerationInputs(
       const perGal = Number((vp.metadata as any)?.price_per_gallon)
       rule.unit_cost = galQty > 0 && perGal > 0 ? galQty * perGal : null
     }
-    if (rule.max_capacity_gallons == null && c.capacity != null) {
+    // A shop+product ceiling exception always wins when set — overrides
+    // ov2_product_rules and location_order_config's own capacity alike,
+    // not just filling in whatever they left unset (see ExceptionRow).
+    // Entered in either this product's own orderable unit ("cases") or
+    // gallons; "cases" needs units_per_uom_gallons, resolved just above.
+    const ceiling = ceilingMap.get(k)
+    if (ceiling) {
+      const per = rule.units_per_uom_gallons && rule.units_per_uom_gallons > 0 ? rule.units_per_uom_gallons : 1
+      rule.max_capacity_gallons = ceiling.unit === 'gallons' ? ceiling.qty * 4 : ceiling.qty * per
+    } else if (rule.max_capacity_gallons == null && c.capacity != null) {
       rule.max_capacity_gallons = Number(c.capacity) * 4
+    }
+    if (rule.min_on_hand_qty == null) {
+      rule.min_on_hand_qty = minOnHandMap.get(pkey(c.product_id)) ?? null
     }
     if (rule.order_type_override == null && vp) {
       rule.order_type_override = orderTypeForUom(vp.vendor_id ?? c.vendor_id, vp.unit_of_measure)
@@ -800,12 +858,13 @@ export function buildGenerationInputs(
     // check), so a shop that was never fitted with a monitor can't
     // silently generate a bogus catch-up order.
     const tankSum = tankOnHandMap.get(k)
-    const on_hand = rule.vmi_keepfill_enabled
+    const rawOnHand = rule.vmi_keepfill_enabled
       ? (tankSum != null ? tankSum * 4 : null)
       : (u?.on_hands != null ? u.on_hands * srcFactor : null)
     return {
       location_id: c.location_id, product_id: c.product_id, rule,
-      on_hand, daily_usage: u?.daily_usage != null ? u.daily_usage * srcFactor : null,
+      on_hand: applyFloor(c.location_id, c.product_id, rawOnHand),
+      daily_usage: u?.daily_usage != null ? u.daily_usage * srcFactor : null,
     }
   })
 
@@ -826,7 +885,11 @@ export function buildGenerationInputs(
   for (const u of usageMap.values()) {
     if (u.on_hands == null || vmiKeys.has(ruleKey(u.location_id, u.product_id))) continue
     const factor = quartsFromSourceUnit(u.product_id)
-    const onHand = Number(u.on_hands) * factor
+    // A sibling case type can carry its own floor exception too (same
+    // (location, product) key) — applied here rather than via applyFloor
+    // since this on_hand is never null at this point.
+    const floor = floorMap.get(ruleKey(u.location_id, u.product_id)) ?? 0
+    const onHand = Math.max(0, Number(u.on_hands) * factor - floor)
     const dailyUsage = u.daily_usage != null ? Number(u.daily_usage) * factor : null
     const fam = `${u.location_id}|${pkey(baseProductId(u.product_id))}`
     if (!familyMembers.has(fam)) familyMembers.set(fam, [])

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGenerationInputs, type OrderConfigRow, type UsageRow, type PurchaseOrderRow, type PoItemRow, type TankOnHandRow, type VendorPartRow } from './useOrdersV2'
+import { buildGenerationInputs, type OrderConfigRow, type UsageRow, type PurchaseOrderRow, type PoItemRow, type TankOnHandRow, type VendorPartRow, type GlobalProductRow, type ExceptionRow } from './useOrdersV2'
 
 // buildGenerationInputs' "equivalent case types" combine — 5W30D and
 // 5W30BB both resolve to the family "5W30" (a trailing run of letters is
@@ -218,5 +218,101 @@ describe('buildGenerationInputs — tank monitor product-name resolution', () =>
     const inputs = buildGenerationInputs(configs, [], [], [], [], [], [], tankOnHand)
 
     expect(inputs.find((i) => i.product_id === 'SYN-0W20')!.on_hand).toBeNull()
+  })
+})
+
+// Global Products' min_on_hand_qty flows straight onto ProductRule — no
+// transformation, just resolved through product_id_mappings like every
+// other global_products-sourced field.
+describe('buildGenerationInputs — critical minimum (min_on_hand_qty)', () => {
+  function gp(product_id: string, min_on_hand_qty: number): GlobalProductRow {
+    return { product_id, unit_of_measure: null, min_on_hand_qty }
+  }
+
+  it('populates rule.min_on_hand_qty from global_products', () => {
+    const configs = [config('DIESEL-15W40')]
+    const usageRows = [usage('DIESEL-15W40', 40, 2)]
+    const globalProducts = [gp('DIESEL-15W40', 12)]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], globalProducts)
+
+    expect(inputs.find((i) => i.product_id === 'DIESEL-15W40')!.rule.min_on_hand_qty).toBe(12)
+  })
+
+  it('leaves rule.min_on_hand_qty null for a product with none configured', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 40, 2)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.rule.min_on_hand_qty).toBeNull()
+  })
+})
+
+// Shop+product exceptions (Config -> Orders v2 -> Product Exceptions).
+describe('buildGenerationInputs — shop/product exceptions (floor & ceiling)', () => {
+  function exc(overrides: Partial<ExceptionRow> = {}): ExceptionRow {
+    return { location_id: 'L1', product_id: 'HM0806', floor_qty: null, ceiling_qty: null, ceiling_unit: null, ...overrides }
+  }
+
+  it('subtracts the floor from raw on-hand, clamped at 0', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 200, 10)]
+    const exceptions = [exc({ floor_qty: 50 })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.on_hand).toBe(150)
+  })
+
+  it('clamps a floor larger than the reading itself to 0, not negative', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 30, 10)]
+    const exceptions = [exc({ floor_qty: 50 })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.on_hand).toBe(0)
+  })
+
+  it('leaves on-hand unchanged for a shop/product with no exception row', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 200, 10)]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, [exc({ product_id: 'OTHER', floor_qty: 50 })])
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.on_hand).toBe(200)
+  })
+
+  it('a ceiling in gallons overrides max_capacity_gallons, converting to quarts (×4)', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 40, 2)]
+    const exceptions = [exc({ ceiling_qty: 25, ceiling_unit: 'gallons' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.rule.max_capacity_gallons).toBe(100) // 25 gal * 4
+  })
+
+  it('a ceiling in cases overrides max_capacity_gallons using the product\'s own units-per-package', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 40, 2)]
+    const vendorParts = [{ vendor_id: 'V1', our_part_number: 'HM0806', unit_of_measure: null, metadata: { package_qty_gallons: 5 } } as VendorPartRow]
+    const exceptions = [exc({ ceiling_qty: 3, ceiling_unit: 'cases' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], vendorParts, [], [], [], [], [], {}, exceptions)
+
+    // units_per_uom_gallons resolves to 5*4=20 quarts/case; 3 cases * 20 = 60.
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.rule.max_capacity_gallons).toBe(60)
+  })
+
+  it('a ceiling exception overrides the shop\'s regular location_order_config capacity, not just fills a gap', () => {
+    const configs = [config('HM0806', { capacity: 500 })] // would otherwise become 2000 quarts
+    const usageRows = [usage('HM0806', 40, 2)]
+    const exceptions = [exc({ ceiling_qty: 10, ceiling_unit: 'gallons' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.rule.max_capacity_gallons).toBe(40) // 10 gal * 4, not 2000
+  })
+
+  it('falls back to location_order_config capacity when no ceiling exception is set', () => {
+    const configs = [config('HM0806', { capacity: 500 })]
+    const usageRows = [usage('HM0806', 40, 2)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.rule.max_capacity_gallons).toBe(2000) // 500 * 4
   })
 })

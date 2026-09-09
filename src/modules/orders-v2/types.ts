@@ -98,6 +98,14 @@ export interface ProductRule {
   // Default classification only recognizes a uom that literally says
   // "bulk" — this lets a differently-worded bulk UOM be marked correctly.
   order_type_override: OrderType | null
+  // "Critical minimum" — company-wide per PRODUCT (global_products.min_on_hand_qty,
+  // same value at every shop that carries it, in quarts), not per shop.
+  // Distinct from max_capacity_gallons/the dollar-or-per-product order
+  // minimums above: this doesn't set a floor on the ORDER quantity, it
+  // gates whether a product with very low usage still gets ordered at all
+  // when on-hand has dropped to "not even enough for one oil change" — see
+  // generateOrder's belowCriticalFloor in engine.ts.
+  min_on_hand_qty: number | null
 }
 
 // One candidate line the engine reasons about.
@@ -172,6 +180,7 @@ export type LineFlag =
   | 'repeat_ordering'        // lots of supply already sent in the window and still reading low
   | 'over_dos_max'           // pushed past the soft DOS ceiling to reach a minimum
   | 'stocked_out'            // on hand is zero/effectively zero
+  | 'critical_minimum'       // ordered because on-hand hit this product's critical minimum, not the usual DOS trigger
   | 'alone_default_qty'      // sole line, used default_order_amount_if_alone
   | 'vmi_keepfill'           // vendor-managed inventory — excluded from the order total by default
   | 'keepfill_will_run_out'  // tank on-hand + usage won't last to this shop's delivery after next

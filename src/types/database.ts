@@ -485,6 +485,10 @@ export interface GlobalProduct {
   package_type: string | null
   bulk_minimum: number | null
   individual_minimum: number | null
+  // Orders v2's critical minimum, in quarts — see engine.ts's
+  // belowCriticalFloor. Distinct from bulk_minimum/individual_minimum
+  // above, which are Orders v1 order-quantity floors, not on-hand gates.
+  min_on_hand_qty: number | null
   created_at: string
   updated_at: string
 }

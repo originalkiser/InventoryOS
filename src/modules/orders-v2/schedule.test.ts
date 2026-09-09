@@ -105,7 +105,7 @@ const rule = (over: Partial<ProductRule> = {}): ProductRule => ({
   location_id: 'L1', product_id: 'P1', uom: 'case', units_per_uom_gallons: 5, unit_cost: 100,
   max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false,
   ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2,
-  include_in_total_shop_order: true, order_type_override: null, ...over,
+  include_in_total_shop_order: true, order_type_override: null, min_on_hand_qty: null, ...over,
 })
 const input = (): GenerationInput => ({
   location_id: 'L1', product_id: 'P1', rule: rule(), on_hand: 10, daily_usage: 5,
@@ -300,7 +300,7 @@ describe('package size / cost resolution', () => {
   })
 
   it('an explicit ov2_product_rules value wins over anything derived', () => {
-    const rule = { location_id: 'L1', product_id: '5W20', uom: 'drum', units_per_uom_gallons: 40, unit_cost: 200, max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2, include_in_total_shop_order: true, order_type_override: null }
+    const rule = { location_id: 'L1', product_id: '5W20', uom: 'drum', units_per_uom_gallons: 40, unit_cost: 200, max_capacity_gallons: null, vmi_keepfill_enabled: false, can_ignore_minimum: false, ignore_minimum_if_ordered_alone: true, default_order_amount_if_alone: 2, include_in_total_shop_order: true, order_type_override: null, min_on_hand_qty: null }
     const [i] = buildGenerationInputs(
       [cfg('5W20')], [rule], [], [], [vp({ metadata: { package_qty_gallons: 55, price_per_gallon: 3 } })], [])
     expect(i.rule.units_per_uom_gallons).toBe(40)

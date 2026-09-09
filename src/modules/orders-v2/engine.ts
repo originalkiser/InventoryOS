@@ -485,8 +485,19 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     }
 
     const dos = daysOfSupply(input.on_hand, input.daily_usage)
-    const caps = capsFor(input, ctx)
-    const belowTrigger = dos != null && dos < ctx.settings.days_of_supply_min_trigger
+    let caps = capsFor(input, ctx)
+    const belowDosTrigger = dos != null && dos < ctx.settings.days_of_supply_min_trigger
+    // Even when usage is so low the DOS math above would never trigger an
+    // order (a slow-moving product can carry a huge DOS on very little
+    // on-hand), dropping to/below this product's critical minimum — set
+    // per product on Global Products, e.g. "enough for one oil change:
+    // 12qt diesel, 8qt Euro, 5qt others" — should still trigger ordering.
+    // Sized by the normal usage/DOS math below like anything else; this
+    // only affects whether the product is eligible at all and, if the
+    // usual sizing would still land at 0, ensures at least 1 unit.
+    const belowCriticalFloor = rule.min_on_hand_qty != null && rule.min_on_hand_qty > 0
+      && n(input.on_hand) <= rule.min_on_hand_qty
+    const belowTrigger = belowDosTrigger || belowCriticalFloor
 
     if (!belowTrigger) {
       // Not due yet, but still a candidate for smoothing to reach a minimum.
@@ -496,7 +507,19 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       continue
     }
 
-    const want = unitsToTarget(input, ctx)
+    let want = unitsToTarget(input, ctx)
+    if (belowCriticalFloor && want <= 0) {
+      want = 1
+      // The soft DOS-max cap would otherwise collapse to 0 headroom here —
+      // a product with very low/near-zero usage can have its on-hand
+      // already "exceed" whatever a tiny usage rate would justify under
+      // days_of_supply_max, which is exactly backwards for a floor whose
+      // whole point is overriding usage-based sizing. Recompute with only
+      // the HARD physical-capacity cap, same as every other minimum-driven
+      // quantity in this file (applyPerProductMinimum, bestTopUpIndex).
+      caps = capsFor(input, ctx, { respectDosMax: false })
+    }
+
     const units = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_decimals,
       // Round down when a hard cap binds so the cap is never exceeded;
       // otherwise round UP toward the target rather than to nearest — a
@@ -508,12 +531,18 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       want > caps.maxUnits ? 'down' : 'up')
 
     if (units <= 0) {
+      // Physical capacity still wins — a product already at/over its hard
+      // cap can't be forced to order even when it's under its critical
+      // floor (shouldn't happen together in practice, but caps.maxUnits is
+      // never overridden here regardless).
       if (!eligibleSpare.has(groupKey)) eligibleSpare.set(groupKey, [])
       eligibleSpare.get(groupKey)!.push(input)
       skipped.push({ ...idOf(input), reason: 'no_room_or_zero_qty' })
       continue
     }
-    pass1.push(buildLine(input, ctx, units, caps))
+    const line = buildLine(input, ctx, units, caps)
+    if (belowCriticalFloor && !line.flags.includes('critical_minimum')) line.flags.push('critical_minimum')
+    pass1.push(line)
   }
 
   // ---- group + Pass 2 ------------------------------------------------------
