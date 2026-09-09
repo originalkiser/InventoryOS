@@ -375,6 +375,10 @@ export interface PoItemRow {
 }
 export interface VendorPartRow {
   vendor_id: string | null; our_part_number: string | null; unit_of_measure: string | null; metadata: Record<string, unknown> | null
+  // Orders v2's critical minimum, in quarts — primary source (see
+  // buildGenerationInputs' min_on_hand_qty resolution). Optional: existing
+  // callers/tests that build a VendorPartRow without it still compile.
+  min_on_hand_qty?: number | null
   // description/part_number added for the tank-monitor product-name match
   // below (buildGenerationInputs' tankOnHandMap) — same automatic
   // description/part_number -> our_part_number match LocationLookupPage.tsx
@@ -483,8 +487,13 @@ export function useGenerationData() {
         familyList.length ? (q: any) => q.or(familyList.map((f) => `product_id.ilike.${escapeIlike(f)}%`).join(',')) : undefined)),
       // Cost + package size come from here, not from ov2_product_rules (that
       // table has no editing UI and is empty in practice) — see
-      // resolveVendorPart below.
-      step(fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata, description, part_number', companyId)),
+      // resolveVendorPart below. min_on_hand_qty is the Orders v2 critical
+      // minimum's primary source (see buildGenerationInputs) — moved here
+      // from global_products per explicit user direction: vendor_parts
+      // already lists every product in practice (populated via the
+      // per-vendor file upload), so entering it there doesn't require
+      // first creating a global_products row for every product.
+      step(fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata, description, part_number, min_on_hand_qty', companyId)),
       step(fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor, order_type', companyId)),
       // Most products report on-hand/usage in quarts already; a product
       // whose global_products.unit_of_measure says otherwise (e.g. HM0806
@@ -776,9 +785,10 @@ export function buildGenerationInputs(
     const unit = sourceUnitMap.get(pkey(productId))
     return unit ? quartsPerSourceUnit(unit) : 1
   }
-  // Critical minimum (Config -> Global Products) — same value at every shop
-  // that carries this product, in quarts. Resolved the same way as
-  // sourceUnitMap above.
+  // Critical minimum FALLBACK tier (Config -> Global Products) — only used
+  // when a product has no vendor_parts row (the primary source, see `vp`
+  // below) with its own value set. Same value at every shop that carries
+  // this product, in quarts. Resolved the same way as sourceUnitMap above.
   const minOnHandMap = new Map<string, number>()
   for (const g of globalProducts) {
     if (g.min_on_hand_qty == null) continue
@@ -841,8 +851,13 @@ export function buildGenerationInputs(
     } else if (rule.max_capacity_gallons == null && c.capacity != null) {
       rule.max_capacity_gallons = Number(c.capacity) * 4
     }
+    // vendor_parts is the primary source (fast to fill in — it already
+    // lists every product); global_products is a fallback for a product
+    // with no vendor_parts row at all. Same `vp?.x ?? gp?.x ?? null` shape
+    // Orders v1's orderEngine.ts already uses for bulk_minimum/
+    // individual_minimum on this same table pair.
     if (rule.min_on_hand_qty == null) {
-      rule.min_on_hand_qty = minOnHandMap.get(pkey(c.product_id)) ?? null
+      rule.min_on_hand_qty = vp?.min_on_hand_qty ?? minOnHandMap.get(pkey(c.product_id)) ?? null
     }
     if (rule.order_type_override == null && vp) {
       rule.order_type_override = orderTypeForUom(vp.vendor_id ?? c.vendor_id, vp.unit_of_measure)

@@ -224,12 +224,29 @@ describe('buildGenerationInputs — tank monitor product-name resolution', () =>
 // Global Products' min_on_hand_qty flows straight onto ProductRule — no
 // transformation, just resolved through product_id_mappings like every
 // other global_products-sourced field.
+// vendor_parts is the PRIMARY source (populated via the per-vendor file
+// upload — already lists every product in practice, so entering the
+// critical minimum there doesn't require first creating a global_products
+// row for every product). global_products is a fallback tier only, for a
+// product with no vendor_parts row.
 describe('buildGenerationInputs — critical minimum (min_on_hand_qty)', () => {
   function gp(product_id: string, min_on_hand_qty: number): GlobalProductRow {
     return { product_id, unit_of_measure: null, min_on_hand_qty }
   }
+  function vendorPartWithMin(our_part_number: string, min_on_hand_qty: number): VendorPartRow {
+    return { vendor_id: 'V1', our_part_number, unit_of_measure: null, metadata: null, min_on_hand_qty }
+  }
 
-  it('populates rule.min_on_hand_qty from global_products', () => {
+  it('populates rule.min_on_hand_qty from vendor_parts (primary source)', () => {
+    const configs = [config('DIESEL-15W40')]
+    const usageRows = [usage('DIESEL-15W40', 40, 2)]
+    const vendorParts = [vendorPartWithMin('DIESEL-15W40', 12)]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], vendorParts)
+
+    expect(inputs.find((i) => i.product_id === 'DIESEL-15W40')!.rule.min_on_hand_qty).toBe(12)
+  })
+
+  it('falls back to global_products when vendor_parts has no matching row', () => {
     const configs = [config('DIESEL-15W40')]
     const usageRows = [usage('DIESEL-15W40', 40, 2)]
     const globalProducts = [gp('DIESEL-15W40', 12)]
@@ -238,7 +255,17 @@ describe('buildGenerationInputs — critical minimum (min_on_hand_qty)', () => {
     expect(inputs.find((i) => i.product_id === 'DIESEL-15W40')!.rule.min_on_hand_qty).toBe(12)
   })
 
-  it('leaves rule.min_on_hand_qty null for a product with none configured', () => {
+  it('prefers vendor_parts over global_products when both are set', () => {
+    const configs = [config('DIESEL-15W40')]
+    const usageRows = [usage('DIESEL-15W40', 40, 2)]
+    const vendorParts = [vendorPartWithMin('DIESEL-15W40', 12)]
+    const globalProducts = [gp('DIESEL-15W40', 99)]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], vendorParts, [], globalProducts)
+
+    expect(inputs.find((i) => i.product_id === 'DIESEL-15W40')!.rule.min_on_hand_qty).toBe(12)
+  })
+
+  it('leaves rule.min_on_hand_qty null for a product with none configured anywhere', () => {
     const configs = [config('HM0806')]
     const usageRows = [usage('HM0806', 40, 2)]
     const inputs = buildGenerationInputs(configs, [], usageRows)

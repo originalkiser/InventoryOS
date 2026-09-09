@@ -13,7 +13,7 @@ import type { GlobalProduct, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
 
 function num(v: string): number | null { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
-const EMPTY = { product_id: '', unit_of_measure: '', order_uom: '', package_type: '', bulk_minimum: '', individual_minimum: '', min_on_hand_qty: '' }
+const EMPTY = { product_id: '', unit_of_measure: '', order_uom: '', package_type: '', bulk_minimum: '', individual_minimum: '' }
 
 // Fixed set — must match the spellings Orders v2's on-hand conversion
 // actually recognizes (useOrdersV2.ts's quartsPerSourceUnit), so a typo
@@ -34,9 +34,8 @@ const REQUIRED_FIELDS = [
   { name: 'package_type', label: 'Package Type' },
   { name: 'bulk_minimum', label: 'Bulk Minimum' },
   { name: 'individual_minimum', label: 'Individual Minimum' },
-  { name: 'min_on_hand_qty', label: 'Orders v2 Critical Min (qty)' },
 ]
-const NUM = ['bulk_minimum', 'individual_minimum', 'min_on_hand_qty']
+const NUM = ['bulk_minimum', 'individual_minimum']
 
 const col = createColumnHelper<GlobalProduct>()
 
@@ -69,7 +68,6 @@ export function GlobalProductsTab() {
     col.accessor('package_type', { header: 'Pkg', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
-    col.accessor('min_on_hand_qty', { header: 'Critical Min (qty)', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as GlobalProduct)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
@@ -78,7 +76,7 @@ export function GlobalProductsTab() {
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: GlobalProduct) {
     setEditId(r.id)
-    setForm({ product_id: r.product_id ?? '', unit_of_measure: r.unit_of_measure ?? '', order_uom: r.order_uom ?? '', package_type: r.package_type ?? '', bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '', min_on_hand_qty: r.min_on_hand_qty?.toString() ?? '' })
+    setForm({ product_id: r.product_id ?? '', unit_of_measure: r.unit_of_measure ?? '', order_uom: r.order_uom ?? '', package_type: r.package_type ?? '', bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '' })
     setAddOpen(true)
   }
 
@@ -102,7 +100,6 @@ export function GlobalProductsTab() {
       product_id: form.product_id.trim(), unit_of_measure: form.unit_of_measure.trim() || null,
       order_uom: form.order_uom.trim() || null,
       package_type: form.package_type.trim() || null, bulk_minimum: num(form.bulk_minimum), individual_minimum: num(form.individual_minimum),
-      min_on_hand_qty: num(form.min_on_hand_qty),
     } as Partial<GlobalProduct>
     if (editId) await update(editId, payload)
     else await insert(payload)
@@ -141,12 +138,6 @@ export function GlobalProductsTab() {
               placeholder="Select or type…" allowCreate onCreateOption={createFreeText} />
             <Input label="Bulk Minimum" value={form.bulk_minimum} onChange={(e) => setForm({ ...form, bulk_minimum: e.target.value })} />
             <Input label="Individual Minimum" value={form.individual_minimum} onChange={(e) => setForm({ ...form, individual_minimum: e.target.value })} />
-            <div className="flex flex-col gap-0.5">
-              <Input label="Orders v2 Critical Min (qty)" value={form.min_on_hand_qty} onChange={(e) => setForm({ ...form, min_on_hand_qty: e.target.value })} />
-              <span className="text-[10px] font-mono text-inky/50">
-                Enough on-hand for one oil change (quarts) — below this, Orders v2 orders at least 1 unit even if usage alone wouldn&apos;t trigger it.
-              </span>
-            </div>
           </div>
           <div className="flex justify-between gap-2 pt-2">
             <div>{editId && <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>}</div>

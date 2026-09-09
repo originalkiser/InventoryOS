@@ -1,0 +1,15 @@
+-- Orders v2's critical minimum (shipped 2026-09-09 on global_products) moved
+-- to vendor_parts instead, per explicit user direction: vendor_parts already
+-- lists every product in practice (populated via the per-vendor file
+-- upload), while global_products is comparatively sparse — entering the
+-- critical minimum there would have meant creating a global_products row
+-- for every product first, just to have somewhere to put the number.
+--
+-- global_products.min_on_hand_qty (added in 20260909b) is LEFT IN PLACE as
+-- a fallback tier, not dropped — buildGenerationInputs now prefers the
+-- vendor_parts value (matched vendor + our_part_number, same resolution
+-- already used for units_per_uom_gallons/unit_cost) and only falls back to
+-- global_products when vendor_parts has none, mirroring the exact
+-- `vp?.bulk_minimum ?? gp?.bulk_minimum ?? null` precedent Orders v1's own
+-- orderEngine.ts already established for that table pair.
+ALTER TABLE inventory.vendor_parts ADD COLUMN IF NOT EXISTS min_on_hand_qty numeric;

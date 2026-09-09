@@ -450,6 +450,10 @@ export interface VendorPart {
   package_type: string | null
   bulk_minimum: number | null
   individual_minimum: number | null
+  // Orders v2's critical minimum, in quarts — see engine.ts's
+  // belowCriticalFloor. Primary source (falls back to
+  // global_products.min_on_hand_qty when unset — see buildGenerationInputs).
+  min_on_hand_qty: number | null
   metadata: Json | null
   created_at: string
   updated_at: string

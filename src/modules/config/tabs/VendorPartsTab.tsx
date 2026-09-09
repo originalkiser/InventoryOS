@@ -17,7 +17,7 @@ import type { VendorPart, Vendor, VendorPartPriceHistory, ColumnMapping } from '
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
-const NUM_FIELDS = ['bulk_minimum', 'individual_minimum']
+const NUM_FIELDS = ['bulk_minimum', 'individual_minimum', 'min_on_hand_qty']
 
 // New fields stored in the vendor_parts.metadata jsonb (no schema change).
 const NEW_META = [
@@ -61,7 +61,7 @@ export function VendorPartsTab() {
   const [importing, setImporting] = useState(false)
   const [historyFor, setHistoryFor] = useState<VendorPart | null>(null)
 
-  const [form, setForm] = useState({ vendorId: '', part_number: '', our_part_number: '', description: '', item_category: '', unit_of_measure: '', package_type: '', package_qty_gallons: '', price_per_gallon: '', base_item: '', bulk_minimum: '', individual_minimum: '' })
+  const [form, setForm] = useState({ vendorId: '', part_number: '', our_part_number: '', description: '', item_category: '', unit_of_measure: '', package_type: '', package_qty_gallons: '', price_per_gallon: '', base_item: '', bulk_minimum: '', individual_minimum: '', min_on_hand_qty: '' })
   const [customVals, setCustomVals] = useState<Record<string, string>>({})
 
   const loadVendors = useCallback(async () => {
@@ -109,6 +109,7 @@ export function VendorPartsTab() {
       { id: 'base_item', header: 'Base Item', accessorFn: (r: VendorPart) => (r.metadata as any)?.base_item ?? '', cell: (i: any) => i.getValue() || '—' },
       col.accessor('bulk_minimum', { header: 'Bulk Min', cell: (i) => i.getValue() ?? '—' }),
       col.accessor('individual_minimum', { header: 'Ind Min', cell: (i) => i.getValue() ?? '—' }),
+      col.accessor('min_on_hand_qty', { header: 'Critical Min (qty)', cell: (i) => i.getValue() ?? '—' }),
     ]
     for (const f of customFields) cols.push({ id: `cf_${f.field_key}`, header: f.label, accessorFn: (r: VendorPart) => (r.metadata as any)?.[f.field_key] ?? '', cell: (i: any) => i.getValue() || '—' })
     cols.push(col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }))
@@ -131,6 +132,7 @@ export function VendorPartsTab() {
     { name: 'base_item', label: 'Base Item' },
     { name: 'bulk_minimum', label: 'Bulk Minimum' },
     { name: 'individual_minimum', label: 'Individual Minimum' },
+    { name: 'min_on_hand_qty', label: 'Orders v2 Critical Min (qty)' },
     ...customFields.map((f) => ({ name: f.field_key, label: f.label })),
   ]
 
@@ -180,7 +182,7 @@ export function VendorPartsTab() {
   }
 
   function resetForm() {
-    setForm({ vendorId: '', part_number: '', our_part_number: '', description: '', item_category: '', unit_of_measure: '', package_type: '', package_qty_gallons: '', price_per_gallon: '', base_item: '', bulk_minimum: '', individual_minimum: '' })
+    setForm({ vendorId: '', part_number: '', our_part_number: '', description: '', item_category: '', unit_of_measure: '', package_type: '', package_qty_gallons: '', price_per_gallon: '', base_item: '', bulk_minimum: '', individual_minimum: '', min_on_hand_qty: '' })
     setCustomVals({})
   }
   function openAdd() { setEditId(null); resetForm(); setAddOpen(true) }
@@ -193,6 +195,7 @@ export function VendorPartsTab() {
       description: r.description ?? '', item_category: ms('item_category'), unit_of_measure: r.unit_of_measure ?? '', package_type: r.package_type ?? '',
       package_qty_gallons: ms('package_qty_gallons'), price_per_gallon: ms('price_per_gallon'), base_item: ms('base_item'),
       bulk_minimum: r.bulk_minimum?.toString() ?? '', individual_minimum: r.individual_minimum?.toString() ?? '',
+      min_on_hand_qty: r.min_on_hand_qty?.toString() ?? '',
     })
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     setCustomVals(Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, v == null ? '' : String(v)])))
@@ -216,6 +219,7 @@ export function VendorPartsTab() {
       package_type: form.package_type.trim() || null,
       bulk_minimum: num(form.bulk_minimum),
       individual_minimum: num(form.individual_minimum),
+      min_on_hand_qty: num(form.min_on_hand_qty),
       metadata: meta,
     } as Partial<VendorPart>
     if (editId) {
@@ -281,6 +285,12 @@ export function VendorPartsTab() {
             <Input label="Base Item" value={form.base_item} onChange={(e) => setForm({ ...form, base_item: e.target.value })} />
             <Input label="Bulk Minimum" value={form.bulk_minimum} onChange={(e) => setForm({ ...form, bulk_minimum: e.target.value })} />
             <Input label="Individual Minimum" value={form.individual_minimum} onChange={(e) => setForm({ ...form, individual_minimum: e.target.value })} />
+            <div className="flex flex-col gap-0.5">
+              <Input label="Orders v2 Critical Min (qty)" value={form.min_on_hand_qty} onChange={(e) => setForm({ ...form, min_on_hand_qty: e.target.value })} />
+              <span className="text-[10px] font-mono text-inky/50">
+                Enough on-hand for one oil change (quarts) — below this, Orders v2 orders at least 1 unit even if usage alone wouldn&apos;t trigger it.
+              </span>
+            </div>
             {customFields.map((f) => (
               <Input key={f.id} label={f.label} value={customVals[f.field_key] ?? ''} onChange={(e) => setCustomVals({ ...customVals, [f.field_key]: e.target.value })} />
             ))}
