@@ -187,6 +187,18 @@ export function DataConnectionsTab() {
 
   useEffect(() => { load() }, [load])
 
+  // Scheduled runs happen server-side (pg_cron -> data-connection-dispatcher)
+  // with no client involved at all, so there's no event this tab can react
+  // to when one finishes — poll while the tab is open instead, same pattern
+  // TopBar.tsx already uses for its own 60s EOD-prompt check. 30s keeps the
+  // "Scheduled: ..." timestamp/status feeling live without a manual refresh,
+  // for a single cheap company-scoped select.
+  useEffect(() => {
+    if (!companyId) return
+    const id = setInterval(() => { load() }, 30000)
+    return () => clearInterval(id)
+  }, [companyId, load])
+
   const loadGeocodeStats = useCallback(async () => {
     if (!companyId) return
     const sb = supabase as any
@@ -299,12 +311,22 @@ export function DataConnectionsTab() {
           // below), not just a toast that disappears.
           console.error('Failed to load in-range locations for gap detection:', error.message)
           setLocationIdsInRangeError(error.message)
-          toast.error(`Unable to check which shops have orders in this range — gap detection unavailable (${error.message})`)
+          // No toast here — this check runs unprompted on every page load
+          // (default Start/End is "last 6 months"), and a 6-month scan of
+          // inventory.droptop_orders can be slow enough to hit Supabase's
+          // statement timeout on its own, with nothing actually wrong.
+          // gapShopLabels' persistent inline banner (below, next to the
+          // Historical Orders Backfill controls it actually affects) already
+          // surfaces this — a page-load toast for a "Select Gap Shops"
+          // convenience feature was more alarming than useful.
           return
         }
         const batch = (data ?? []) as { location_id: string }[]
         all.push(...batch.map((r) => r.location_id))
-        if (batch.length === 0) break
+        // < PAGE (not === 0) — the common case is well under 1000 distinct
+        // locations, so waiting for an explicit empty page was running this
+        // same expensive range scan a second, unnecessary time on every load.
+        if (batch.length < PAGE) break
       }
       if (!cancelled) setLocationIdsInRange(new Set(all))
     }
@@ -312,7 +334,6 @@ export function DataConnectionsTab() {
       if (cancelled) return
       const message = e instanceof Error ? e.message : 'Failed to check gap shops'
       setLocationIdsInRangeError(message)
-      toast.error(`Unable to check which shops have orders in this range — gap detection unavailable (${message})`)
     })
     return () => { cancelled = true }
   }, [companyId, orderBackfillStart, orderBackfillEnd])
@@ -420,16 +441,22 @@ export function DataConnectionsTab() {
       // automated run no matter how many times someone ran it by hand.
       const row = rows?.find((r) => r.connection_key === key)
       if (row) {
-        const sb = supabase as any
-        sb.schema('inventory').from('data_connection_schedules')
-          .update({
-            last_manual_run_at: new Date().toISOString(),
-            last_manual_run_status: manualStatus,
-            last_manual_run_message: manualMessage,
-            last_manual_run_by: profile?.id ?? null,
-          })
-          .eq('id', row.id)
-          .then(() => {})
+        // Awaited (not fire-and-forget) so the load() below is guaranteed to
+        // see this run's own status/timestamp — previously this write and
+        // load() fired concurrently, so load() usually won the race and
+        // reloaded the PREVIOUS run's data, making the card look stale until
+        // a manual page refresh gave the write time to land.
+        try {
+          const sb = supabase as any
+          await sb.schema('inventory').from('data_connection_schedules')
+            .update({
+              last_manual_run_at: new Date().toISOString(),
+              last_manual_run_status: manualStatus,
+              last_manual_run_message: manualMessage,
+              last_manual_run_by: profile?.id ?? null,
+            })
+            .eq('id', row.id)
+        } catch { /* best-effort — column set may not exist yet in production */ }
       }
       setRunning(null)
       load()

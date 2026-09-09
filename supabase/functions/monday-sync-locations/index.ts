@@ -167,6 +167,45 @@ const FIELD_MAP: [string, string, FieldKind][] = [
 const STATUS_COLUMN_ID = 'status2'
 const ALL_COLUMN_IDS = [...new Set([...FIELD_MAP.map(([, id]) => id), STATUS_COLUMN_ID])]
 
+// Fields something else in the app actually reads — Location Lookup's
+// sidebar, AM/RD Lookup, Tank Monitor email routing (am_email/rd_email),
+// Month-End's AM rollup, Droptop's own location matching
+// (droptop_operation_id), and the Customer Heatmap/Map Routes (lat/lng) —
+// verified by grepping each consuming file, not guessed. The other ~70
+// FIELD_MAP columns are Global-Config-editable reference data (royalty
+// rate, brand fund, opening hours, etc.) with no other reader in the app.
+// See buildLocationFields()/the update-with-fallback logic below for why
+// this distinction matters: a bad value in any ONE of the ~90 mapped
+// columns fails Postgres' whole per-shop UPDATE/INSERT statement, and this
+// is the line between "surface it, something real broke" and "retry
+// without it, an obscure reference field just didn't like this run".
+const CORE_FIELDS = new Set([
+  'shop_city', 'status', 'active', 'region', 'owner', 'market', 'area_manager',
+  'am_phone', 'am_email', 'director', 'rd_email', 'address', 'city', 'state',
+  'county', 'zip', 'store_phone', 'store_email', 'droptop_operation_id',
+  'latitude', 'longitude', 'monday_item_id', 'raw_monday_data', 'last_synced_at', 'last_change_source',
+])
+
+// A blank Monday cell must never overwrite an existing, manually-maintained
+// value with null (CLAUDE.md's own integration rule) — strips any field the
+// board simply doesn't have data for out of an UPDATE payload entirely,
+// rather than sending it as an explicit null. Real bug this fixes: most of
+// the ~90 mapped columns are blank for plenty of shops (they're optional
+// reference fields), and shop_city specifically is NOT NULL on
+// core.locations — a shop with no City value on the board was failing its
+// ENTIRE update (all 90-odd columns, atomically) with a not-null violation
+// every single run, not just leaving that one field untouched.
+function stripNulls(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(fields)) if (v !== null) out[k] = v
+  return out
+}
+function coreOnly(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(fields)) if (CORE_FIELDS.has(k)) out[k] = v
+  return out
+}
+
 interface MondayColumnValue { id: string; text: string | null; display_value?: string }
 interface MondayItem { id: string; name: string; column_values: MondayColumnValue[] }
 
@@ -347,21 +386,51 @@ Deno.serve(async (req) => {
       if (existingId) {
         toUpdate.push({ id: existingId, fields })
       } else {
-        toInsert.push({ company_id: companyId, name: storeNumber, ...fields })
+        // shop_city is NOT NULL — a brand-new board item with no City value
+        // yet falls back to just the store number rather than failing the
+        // whole insert (existing shops never hit this: stripNulls above
+        // leaves their real shop_city alone on update instead).
+        const shopCity = fields.shop_city ?? storeNumber
+        toInsert.push({ company_id: companyId, name: storeNumber, ...fields, shop_city: shopCity })
       }
     }
 
     await mapWithConcurrency(toUpdate, UPDATE_CONCURRENCY, async ({ id, fields }) => {
-      const { error } = await admin.schema('core').from('locations').update(fields).eq('id', id)
-      if (error) warnings.push(`update ${id}: ${error.message}`)
-      else updated++
+      const patch = stripNulls(fields)
+      const { error } = await admin.schema('core').from('locations').update(patch).eq('id', id)
+      if (!error) { updated++; return }
+      // Postgres UPDATE is all-or-nothing — one bad value anywhere in the
+      // ~90 mapped columns (even a purely reference-only one nobody else
+      // reads) fails the entire statement. Retry with just the fields the
+      // rest of the app actually depends on (CORE_FIELDS) so that doesn't
+      // also block — or falsely alarm about — the columns that matter; only
+      // surface a warning if the narrower, known-important write ALSO fails.
+      const corePatch = coreOnly(patch)
+      if (Object.keys(corePatch).length === 0) { warnings.push(`update ${id}: ${error.message}`); return }
+      const { error: coreErr } = await admin.schema('core').from('locations').update(corePatch).eq('id', id)
+      if (coreErr) { warnings.push(`update ${id}: ${coreErr.message}`); return }
+      updated++
+      // eslint-disable-next-line no-console
+      console.warn(`[monday-sync-locations] ${id}: full update failed (${error.message}) — core fields written, some reference-only columns were skipped this run`)
     })
 
-    if (toInsert.length) {
-      const { error } = await admin.schema('core').from('locations').insert(toInsert)
-      if (error) warnings.push(`insert batch: ${error.message}`)
-      else added += toInsert.length
-    }
+    await mapWithConcurrency(toInsert, UPDATE_CONCURRENCY, async (row) => {
+      const { error } = await admin.schema('core').from('locations').insert(row)
+      if (!error) { added++; return }
+      // Same all-or-nothing reasoning as the update retry above, scoped to
+      // one new-location row at a time (rather than the old single batch
+      // insert) so one bad optional field can't block every other new
+      // location in the same run, and so a real failure is attributable to
+      // one shop instead of an opaque "insert batch" message covering all of them.
+      const core: Record<string, unknown> = { company_id: row.company_id, name: row.name }
+      for (const [k, v] of Object.entries(row)) if (CORE_FIELDS.has(k)) core[k] = v
+      if (core.shop_city == null) core.shop_city = row.name
+      const { error: coreErr } = await admin.schema('core').from('locations').insert(core)
+      if (coreErr) { warnings.push(`insert ${row.name}: ${coreErr.message}`); return }
+      added++
+      // eslint-disable-next-line no-console
+      console.warn(`[monday-sync-locations] insert ${row.name}: full insert failed (${error.message}) — core fields written, some reference-only columns were skipped this run`)
+    })
 
     await admin.schema('core').from('location_sync_log').insert({
       synced_at: new Date().toISOString(),
