@@ -1489,7 +1489,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick
   const usageUpdated = useMemo(() => lastUpdated(rows.map((r) => r.usage).filter(Boolean) as any[], ['updated_at']), [rows])
 
   return (
-    <Card>
+    <Card className="w-fit max-w-full">
       <CardBody className="flex flex-col gap-2">
         <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
           {vendor} Order Config ({rows.length})
@@ -1507,8 +1507,8 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick
         {columns.length === 0 ? (
           <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
         ) : (
-          <div className="overflow-auto rounded border border-navy/30">
-            <table className="w-full text-xs font-mono">
+          <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+            <table className="text-xs font-mono">
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                   {columns.map((c) => (
@@ -1525,7 +1525,7 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick
                   <tr key={r.id} className="border-b border-navy/20">
                     {columns.map((c) => c.id === 'exception' ? (
                       <td key={c.id}
-                        className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)} ${c.width ?? ''} cursor-pointer hover:bg-sky/10 transition-colors`}
+                        className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.width ?? ''} cursor-pointer hover:bg-sky/10 transition-colors`}
                         title="Click to add or edit a floor/ceiling exception for this product"
                         onClick={() => onExceptionClick(r)}
                       >
