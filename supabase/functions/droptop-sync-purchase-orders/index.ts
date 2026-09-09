@@ -175,6 +175,30 @@ function tsToIso(unix: unknown): string | null {
   return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toISOString() : null
 }
 
+// data-connection-dispatcher now runs several location-chunks of THIS
+// function concurrently (runChunksConcurrently, added 2026-09-09) instead
+// of strictly one at a time — confirmed live the same day: concurrent
+// chunks' item delete/insert batches against inventory
+// .droptop_purchase_order_items started hitting real Postgres deadlocks
+// ("deadlock detected", SQLSTATE 40P01), something that couldn't happen
+// back when only one chunk's writes were ever in flight at once. A
+// deadlock is Postgres deliberately rolling back ONE of two conflicting
+// transactions — by the time this retries, the other one has already
+// committed and released its locks, so blindly retrying is safe and
+// expected, same shape as droptop-sync-orders' own insertWithRetry.
+async function withRetry<T>(
+  fn: () => Promise<{ data: T; error: { message: string } | null }>,
+): Promise<{ data: T | null; error: string | null }> {
+  let lastErr: string | null = null
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    const { data, error } = await fn()
+    if (!error) return { data, error: null }
+    lastErr = error.message
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+  }
+  return { data: null, error: lastErr }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const startedAt = Date.now()
@@ -304,11 +328,12 @@ Deno.serve(async (req) => {
     const idByPoId = new Map<string, string>()
     for (let i = 0; i < headers.length; i += BATCH) {
       const slice = headers.slice(i, i + BATCH)
-      const { data: saved, error: upsertErr } = await (admin as any)
-        .schema('inventory').from('droptop_purchase_orders')
-        .upsert(slice, { onConflict: 'company_id,po_id' })
-        .select('id, po_id')
-      if (upsertErr) { warnings.push(`PO batch ${i}-${i + slice.length}: ${upsertErr.message}`); continue }
+      const { data: saved, error: upsertErr } = await withRetry(() =>
+        (admin as any).schema('inventory').from('droptop_purchase_orders')
+          .upsert(slice, { onConflict: 'company_id,po_id' })
+          .select('id, po_id'),
+      )
+      if (upsertErr) { warnings.push(`PO batch ${i}-${i + slice.length}: ${upsertErr}`); continue }
       for (const row of (saved ?? []) as { id: string; po_id: string }[]) idByPoId.set(row.po_id, row.id)
       posUpserted += saved?.length ?? 0
     }
@@ -318,10 +343,11 @@ Deno.serve(async (req) => {
       // Replace items wholesale for every synced PO — one bulk delete
       // instead of one per PO — then bulk-insert everything fresh.
       for (let i = 0; i < savedPoIds.length; i += BATCH) {
-        const { error: delErr } = await (admin as any)
-          .schema('inventory').from('droptop_purchase_order_items')
-          .delete().in('purchase_order_id', savedPoIds.slice(i, i + BATCH))
-        if (delErr) warnings.push(`Item delete batch ${i}: ${delErr.message}`)
+        const { error: delErr } = await withRetry(() =>
+          (admin as any).schema('inventory').from('droptop_purchase_order_items')
+            .delete().in('purchase_order_id', savedPoIds.slice(i, i + BATCH)),
+        )
+        if (delErr) warnings.push(`Item delete batch ${i}: ${delErr}`)
       }
 
       const allItems = allPos.flatMap(({ po }) => {
@@ -347,8 +373,10 @@ Deno.serve(async (req) => {
       })
       for (let i = 0; i < allItems.length; i += BATCH) {
         const slice = allItems.slice(i, i + BATCH)
-        const { error: itemsErr } = await (admin as any).schema('inventory').from('droptop_purchase_order_items').insert(slice)
-        if (itemsErr) warnings.push(`Item insert batch ${i}: ${itemsErr.message}`)
+        const { error: itemsErr } = await withRetry(() =>
+          (admin as any).schema('inventory').from('droptop_purchase_order_items').insert(slice),
+        )
+        if (itemsErr) warnings.push(`Item insert batch ${i}: ${itemsErr}`)
         else itemsWritten += slice.length
       }
     }
