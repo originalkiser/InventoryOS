@@ -20,6 +20,7 @@ import { GlobalConfigPage } from '@/modules/config/GlobalConfigPage'
 import { DataConnectionsPage } from '@/modules/config/DataConnectionsPage'
 import { LocationsPage } from '@/modules/locations/LocationsPage'
 import { LocationLookupPage } from '@/modules/locations/LocationLookupPage'
+import { CustomShopConfigPage } from '@/modules/locations/CustomShopConfigPage'
 import { AmRdLookupPage } from '@/modules/locations/AmRdLookupPage'
 import { TankMonitorsPage } from '@/modules/locations/TankMonitorsPage'
 import { InventoryAlertsPage } from '@/modules/inventory/InventoryAlertsPage'
@@ -103,6 +104,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="data-connections" element={<DataConnectionsPage />} />
     <Route path="locations" element={<LocationsPage />} />
     <Route path="location-lookup" element={<LocationLookupPage />} />
+    <Route path="custom-shop-config" element={<CustomShopConfigPage />} />
     <Route path="am-rd-lookup" element={<AmRdLookupPage />} />
     <Route path="tank-monitors" element={<TankMonitorsPage />} />
     <Route path="inventory-alerts" element={<InventoryAlertsPage />} />

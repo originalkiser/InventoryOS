@@ -14,6 +14,8 @@ import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
+import { useCustomShopConfig, useMenuBoardPackageOptions, formatFieldValue } from './useCustomShopConfig'
+import { CustomShopConfigModal } from './CustomShopConfigModal'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location, MeetingNote, Project, TankMonitor } from '@/types'
 import { format, differenceInCalendarDays, differenceInMonths } from 'date-fns'
@@ -1069,6 +1071,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
             <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />
             <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />
+            <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} />
             <MentionedBox projects={mentionedProjects} meetings={mentionedMeetings}
               onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
           </div>
@@ -1424,6 +1427,48 @@ function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () =
         </button>
       ))}
       <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Communication</button>
+    </div>
+  )
+}
+
+function CustomConfigBox({ locationId, locationLabel }: { locationId: string; locationLabel: string }) {
+  const cfg = useCustomShopConfig()
+  const packageOptions = useMenuBoardPackageOptions()
+  const [editing, setEditing] = useState(false)
+  const vals = cfg.valuesFor(locationId)
+  const pkgs = cfg.packagesFor(locationId)
+  const hasAny = vals.length > 0 || pkgs.length > 0
+  const packageLabel = (key: string) => packageOptions.find((p) => p.package_key === key)?.display_name ?? key
+
+  return (
+    <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', hasAny ? 'border-sky/50 bg-sky/5' : 'border-navy/20 bg-cream'].join(' ')}>
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Custom Config</span>
+        {hasAny && <Badge color="sky">Custom</Badge>}
+      </div>
+      {!hasAny ? (
+        <span className="text-xs font-body text-inky/50">None</span>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {vals.map((v) => {
+            const f = cfg.fields.find((x) => x.id === v.field_id)
+            if (!f) return null
+            return (
+              <div key={v.id} className="text-xs font-body text-navy flex items-center justify-between gap-2">
+                <span>{f.name}</span>
+                <span className="font-mono">{formatFieldValue(v.value, f.value_kind)}</span>
+              </div>
+            )
+          })}
+          {pkgs.length > 0 && (
+            <div className="text-[10px] font-mono text-inky/60 mt-0.5">Applies to: {pkgs.map((p) => packageLabel(p.package_key)).join(', ')}</div>
+          )}
+        </div>
+      )}
+      <button onClick={() => setEditing(true)} className="text-[10px] font-mono text-sky text-left hover:underline">
+        {hasAny ? 'Edit Custom Config' : '+ Add Custom Config'}
+      </button>
+      {editing && <CustomShopConfigModal cfg={cfg} packageOptions={packageOptions} locationId={locationId} locationLabel={locationLabel} onClose={() => setEditing(false)} />}
     </div>
   )
 }

@@ -42,7 +42,7 @@ import {
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
   Database, Users, AlertTriangle, MessageSquare, Lightbulb,
   CheckCircle2, FileText, MapPin, GripVertical, ChevronRight,
-  ChevronsLeft, ChevronsRight, Pin, Car,
+  ChevronsLeft, ChevronsRight, Pin, Car, SlidersHorizontal,
 } from 'lucide-react'
 
 // ── Icons ──────────────────────────────────────────────────────────────────
@@ -68,6 +68,7 @@ export const ICONS: Record<string, JSX.Element> = {
   users: <Users className="w-4 h-4 flex-shrink-0" />,
   locations: <MapPin className="w-4 h-4 flex-shrink-0" />,
   'location-lookup': <MapPin className="w-4 h-4 flex-shrink-0" />,
+  'custom-shop-config': <SlidersHorizontal className="w-4 h-4 flex-shrink-0" />,
   'am-rd-lookup': <Users className="w-4 h-4 flex-shrink-0" />,
   'tank-monitors': <Database className="w-4 h-4 flex-shrink-0" />,
   'inventory-alerts': <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
@@ -132,6 +133,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'projects', label: 'Projects', to: '/projects' },
     { key: 'config', label: 'Inventory Config', to: '/config' },
     { key: 'location-lookup', label: 'Location Lookup', to: '/location-lookup' },
+    { key: 'custom-shop-config', label: 'Custom Shop Config', to: '/custom-shop-config' },
     { key: 'am-rd-lookup', label: 'AM/RD Lookup', to: '/am-rd-lookup' },
     { key: 'tank-monitors', label: 'Tank Monitors', to: '/tank-monitors' },
     { key: 'inventory-alerts', label: 'Inventory Alerts', to: '/inventory-alerts' },
