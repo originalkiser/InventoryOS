@@ -84,6 +84,27 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
+// A whole batch invocation failing with "Edge Function returned a non-2xx
+// status code" means the PLATFORM itself killed it (execution-time or
+// memory limit) before the function's own error handling ever ran — every
+// one of these functions' internal failure paths already returns a 200
+// with a warnings array (see each edge function's own outer try/catch), so
+// this specific error can only come from outside the function's control.
+// Real production run 2026-09-08: 4 of 91 Orders batches failed this way,
+// scattered/non-adjacent — consistent with a one-off (a slow moment on
+// Droptop's end, a cold start), not a batch that's structurally too big to
+// ever finish. One retry before giving up on the whole batch resolves a
+// real share of these. Safe to retry blindly: every write downstream is an
+// upsert (or a delete-then-insert scoped to specific already-known order
+// ids), so re-running an identical batch can never double-write.
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch {
+    return await fn()
+  }
+}
+
 // Syncs a single location directly (small, no chunking needed), or every
 // location in the company with a Droptop Operation ID set, chunked into
 // CHUNK_SIZE-location batches run one after another.
@@ -113,7 +134,7 @@ export async function runDroptopSync(
   for (let i = 0; i < batches.length; i++) {
     onProgress?.({ batch: i + 1, totalBatches: batches.length })
     try {
-      const result = await invokeSync({ mode, daysBack, categories, locationIds: batches[i], writeToCountProducts, countMonth, logDailyActivity })
+      const result = await withRetry(() => invokeSync({ mode, daysBack, categories, locationIds: batches[i], writeToCountProducts, countMonth, logDailyActivity }))
       operationsSynced += result.operations_synced
       productsUpserted += result.products_upserted
       rollingUsageApplied += result.rolling_usage_applied ?? 0
@@ -186,7 +207,7 @@ export async function runDroptopPurchaseOrderSync(
   for (let i = 0; i < batches.length; i++) {
     onProgress?.({ batch: i + 1, totalBatches: batches.length })
     try {
-      const result = await invokePOSync({ ...rest, locationIds: batches[i] })
+      const result = await withRetry(() => invokePOSync({ ...rest, locationIds: batches[i] }))
       locationsSynced += result.locations_synced
       posUpserted += result.pos_upserted
       itemsWritten += result.items_written
@@ -283,7 +304,7 @@ export async function runDroptopOrderSync(
       // historical backfill, not genuinely new) — it was never actually
       // running incremental, and inventory.droptop_order_sync_state never
       // got written since that only happens in the incremental branch.
-      const result = await invokeOrderSync({ ...rest, ...modeBody, locationIds: batches[i] })
+      const result = await withRetry(() => invokeOrderSync({ ...rest, ...modeBody, locationIds: batches[i] }))
       locationsSynced += result.locations_synced
       ordersUpserted += result.orders_upserted
       withCoords += result.orders_with_coordinates

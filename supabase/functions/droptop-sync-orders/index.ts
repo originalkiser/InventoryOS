@@ -97,8 +97,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 // response that Droptop's own infrastructure gateway-times-out before it
 // finishes). Worth retrying with backoff the same way 429 already is,
 // rather than failing the whole location on what's often a one-off slow
-// response.
-const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+// response. 500 added 2026-09-08 after a real production run showed two
+// locations failing outright on "Droptop 500: {"message": "Internal server
+// error"}" with zero retry — a generic internal-server-error is exactly as
+// likely to be a one-off blip on Droptop's end as a 502/503/504 is, so
+// there's no reason to treat it differently.
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504])
 
 // Deno/Supabase's own outbound-fetch platform limiter can reject a fetch()
 // call outright (thrown, not returned as a Response) with a message like
