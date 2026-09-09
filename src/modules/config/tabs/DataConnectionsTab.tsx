@@ -726,17 +726,21 @@ export function DataConnectionsTab() {
   // One-time historical pull for building up real order/pricing history —
   // the routine sync only pulls a rolling 30-day window (light on Droptop's
   // API and this app's database), so anything older than that never gets
-  // captured unless something explicitly asks for it. Runs one shop at a
-  // time, sequentially (not chunked into groups) — a wide date range on
-  // even a single shop can already mean many sequential 31-day sub-window
-  // calls internally (get-orders' own per-request cap), so this keeps the
-  // one variable that's actually unbounded (the date range you choose) from
-  // compounding with concurrent shops in the same invocation. If a single
-  // shop's range is too wide to finish in one invocation, narrow the dates
-  // and run it again in smaller pieces — every write here is an upsert, so
-  // that's always safe to do.
+  // captured unless something explicitly asks for it. Every (shop, week)
+  // pair below is an independent upsert-only call, so they run through a
+  // bounded worker pool (CONCURRENCY, below) instead of strictly one at a
+  // time — same pattern droptopChildFetch.ts/useConfigTab.ts already use
+  // elsewhere in this app. Kept modest rather than wide open: this hits
+  // Droptop's real API, which this session already confirmed throws its
+  // own platform-level rate-limit errors under load (see
+  // droptop-sync-orders' fetch-throw retry fix) — too much concurrency here
+  // just turns into more 429s to retry rather than actually finishing
+  // faster. If a single shop's range is too wide to finish even at this
+  // concurrency, narrow the dates and run it again in smaller pieces —
+  // every write here is an upsert, so that's always safe to do.
   async function runOrderBackfill() {
     if (!companyId || !orderBackfillShops.length) return
+    const cid = companyId // narrowed once here — TS loses the guard's narrowing once companyId is read from inside the worker() closure below
     setRunning('order-backfill')
     const store = useSyncTasksStore.getState()
     const labelToId = new Map(backfillOptions.map((o) => [o.label, o.id]))
@@ -762,15 +766,27 @@ export function DataConnectionsTab() {
       winStart = new Date(winEndMs + 1)
     }
 
-    const totalSteps = locationIds.length * windows.length
+    // Flatten (shop, window) into one task list the worker pool below pulls
+    // from — every call is an independent upsert, so processing order
+    // doesn't matter once this is no longer strictly sequential.
+    const tasks: { locationId: string; shopLabel: string; window: { startUnix: number; endUnix: number } }[] = []
+    for (let i = 0; i < locationIds.length; i++) {
+      for (const w of windows) tasks.push({ locationId: locationIds[i], shopLabel: orderBackfillShops[i] ?? locationIds[i], window: w })
+    }
+
+    const totalSteps = tasks.length
     store.start(DROPTOP_ORDERS_TASK_ID, `Droptop Orders — historical backfill (${orderBackfillStart} to ${orderBackfillEnd})`, totalSteps)
     let ordersTotal = 0
-    const warnings: string[] = []
     let step = 0
-    for (let i = 0; i < locationIds.length; i++) {
-      for (const w of windows) {
-        step++
-        store.setProgress(DROPTOP_ORDERS_TASK_ID, step, totalSteps)
+    const warnings: string[] = []
+
+    const CONCURRENCY = 4
+    let nextIndex = 0
+    async function worker() {
+      for (;;) {
+        const i = nextIndex++
+        if (i >= tasks.length) return
+        const { locationId, shopLabel, window: w } = tasks[i]
         const wLabel = `${new Date(w.startUnix * 1000).toISOString().slice(0, 10)} to ${new Date(w.endUnix * 1000).toISOString().slice(0, 10)}`
         // Every warning pushed below is prefixed with which shop/window it
         // came from — a real bug found live: an invocation that returned
@@ -781,9 +797,8 @@ export function DataConnectionsTab() {
         // whole invocation throwing) attached one — so a partial failure
         // inside an otherwise-successful call was impossible to attribute
         // to a specific shop or week from the summary alone.
-        const shopLabel = orderBackfillShops[i] ?? locationIds[i]
         try {
-          const r = await runDroptopOrderSync(companyId, { startUnix: w.startUnix, endUnix: w.endUnix, locationId: locationIds[i] })
+          const r = await runDroptopOrderSync(cid, { startUnix: w.startUnix, endUnix: w.endUnix, locationId })
           ordersTotal += r.orders_upserted
           if (r.warnings?.length) warnings.push(...r.warnings.map((w2) => `${shopLabel} (${wLabel}): ${w2}`))
         } catch (err) {
@@ -793,15 +808,19 @@ export function DataConnectionsTab() {
           // resolves a meaningful share of failures without needing an
           // even narrower re-split.
           try {
-            const r = await runDroptopOrderSync(companyId, { startUnix: w.startUnix, endUnix: w.endUnix, locationId: locationIds[i] })
+            const r = await runDroptopOrderSync(cid, { startUnix: w.startUnix, endUnix: w.endUnix, locationId })
             ordersTotal += r.orders_upserted
             if (r.warnings?.length) warnings.push(...r.warnings.map((w2) => `${shopLabel} (${wLabel}): ${w2}`))
           } catch (err2) {
             warnings.push(`${shopLabel} (${wLabel}): ${err2 instanceof Error ? err2.message : String(err2)}`)
           }
         }
+        step++
+        store.setProgress(DROPTOP_ORDERS_TASK_ID, step, totalSteps)
       }
     }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker))
+
     const summary = `Backfill: ${ordersTotal} orders across ${locationIds.length} shop(s), ${orderBackfillStart} to ${orderBackfillEnd}`
     if (warnings.length) {
       store.finish(DROPTOP_ORDERS_TASK_ID, 'partial', `${summary} — ${warnings.join(' | ')}`)
