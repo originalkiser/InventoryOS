@@ -4,10 +4,36 @@ import { Button, Card, CardBody, Combobox, Input, Select, Tabs, TabsList, TabsTr
 import { useLocations } from '@/hooks/useLocations'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
 import type { Location } from '@/types'
+import menuBoardArt from '@/assets/Menu-Board-Page-1.png'
 
 const LAST_LOCATION_KEY = 'menu-board:last-location'
 const money = (v: number | null | undefined) => (v == null ? null : Number(v))
 const fmtPrice = (v: number | null) => (v == null ? '—' : v.toFixed(2))
+
+// The real board art (src/assets/Menu-Board-Page-1.png) is the actual
+// printed sign — everything on it (logos, package names, qualifiers,
+// "PRICES INCLUDE UP TO 5 QUARTS", additional services, disclaimers) is the
+// genuine artwork. The only thing that's ever dynamic is each package's
+// price and per-extra-quart line, so those two spots per package get a
+// small solid patch (matching that box's own real background color, sampled
+// from the image) painted behind the live text — everything else is the
+// image, untouched. Native image size is 734×1210 — the board's own aspect
+// ratio is locked to that so positions below (measured directly off the
+// image's pixels) line up without distortion.
+const ART_W = 734
+const ART_H = 1210
+// One (rp/"Valvoline Restore & Protect") box is styled cream-bg/navy-text
+// ("ULTIMATE" highlight tier) — every other box on the real board is
+// navy-bg/cream-text. Position/size are % of the image, measured from the
+// actual artwork; admins can still nudge them via "Edit layout" if a future
+// re-export shifts things slightly.
+const BOARD_SLOTS: Record<string, { cream: boolean; price: { x: number; y: number }; quart: { x: number; y: number } }> = {
+  valvoline_restore_protect:   { cream: true,  price: { x: 72.3, y: 14.0 }, quart: { x: 72.8, y: 19.3 } },
+  premium_full_synthetic_hm:   { cream: false, price: { x: 72.5, y: 27.1 }, quart: { x: 72.8, y: 32.6 } },
+  premium_full_synthetic:      { cream: false, price: { x: 73.0, y: 40.3 }, quart: { x: 72.8, y: 45.8 } },
+  premium_hm:                  { cream: false, price: { x: 72.0, y: 51.7 }, quart: { x: 72.7, y: 55.8 } },
+  economy:                     { cream: false, price: { x: 71.8, y: 61.7 }, quart: { x: 72.7, y: 65.7 } },
+}
 
 /**
  * Menu Board — an on-screen recreation of the printed lobby/bay board,
@@ -157,38 +183,47 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
   return (
     <Card>
       <CardBody>
+        <div style={{ maxWidth: 480, margin: '0 auto' }}>
         <div
           ref={boardRef}
           onPointerMove={onMove}
           onPointerUp={endDrag}
-          className="relative w-full rounded-lg border-2 border-sb-navy bg-sb-navy text-sb-cream overflow-hidden select-none"
-          style={{ aspectRatio: '9 / 16', maxWidth: 480, margin: '0 auto' }}
+          className="relative w-full rounded-t-lg overflow-hidden select-none bg-sb-navy"
+          style={{ aspectRatio: `${ART_W} / ${ART_H}`, backgroundImage: `url(${menuBoardArt})`, backgroundSize: '100% 100%' }}
         >
-          <div className="absolute top-3 left-0 right-0 text-center">
-            <span className="font-heading text-xl tracking-widest uppercase">Strickland Brothers</span>
-          </div>
           {packages.map((p) => {
+            const slot = BOARD_SLOTS[p.package_key]
+            if (!slot) return null // no known spot on the real art yet (e.g. Dexos, once mapped this needs its own slot above)
             const priceCol = p.price_column
             const price = priceCol ? money((location as any)?.[priceCol]) : null
             const quart = resolveQuart(location?.id ?? '', p.package_key)
+            const patchBg = slot.cream ? 'bg-sb-cream' : 'bg-sb-navy'
+            const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
             return (
               <div key={p.id}>
+                {/* Patch sized off the package's own font size (not the real
+                    price string) so a shorter price than the art's own
+                    sample ("$49.99") still fully covers the printed digits
+                    behind it. */}
                 <div
                   onPointerDown={(e) => startDrag(e, p, 'price')}
-                  className={`absolute flex flex-col items-center ${editMode ? 'cursor-move ring-1 ring-sb-sky/60 rounded px-1' : ''}`}
-                  style={{ left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)' }}
+                  className={`absolute flex items-center justify-center font-heading font-bold ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                  style={{
+                    left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
+                    fontSize: p.price_font_size, minWidth: p.price_font_size * 3.6, height: p.price_font_size * 1.35,
+                    padding: '0 4px',
+                  }}
                 >
-                  <span className="font-heading uppercase tracking-wide text-[11px] text-sb-sky">{p.display_name}</span>
-                  {p.qualifier && <span className="text-[9px] text-sb-cream/70 uppercase">{p.qualifier}</span>}
-                  <span className="font-heading font-bold text-sb-cream" style={{ fontSize: p.price_font_size }}>
-                    {price == null ? '—' : `$${fmtPrice(price)}`}
-                  </span>
-                  <span className="text-[9px] text-sb-cream/60 uppercase">Plus Tax</span>
+                  {price == null ? '—' : `$${fmtPrice(price)}`}
                 </div>
                 <div
                   onPointerDown={(e) => startDrag(e, p, 'quart')}
-                  className={`absolute text-center whitespace-nowrap text-sb-cream ${editMode ? 'cursor-move ring-1 ring-sb-sky/60 rounded px-1' : ''}`}
-                  style={{ left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)', fontSize: p.quart_font_size }}
+                  className={`absolute flex items-center justify-center whitespace-nowrap font-mono ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                  style={{
+                    left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)',
+                    fontSize: p.quart_font_size, minWidth: p.quart_font_size * 12, height: p.quart_font_size * 1.6,
+                    padding: '0 4px',
+                  }}
                 >
                   {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
                   {quart.isCustom && <span className="ml-1 text-sb-orange">*</span>}
@@ -196,13 +231,17 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
               </div>
             )
           })}
-          <div className="absolute bottom-2 left-0 right-0 text-center px-3">
-            <span className="text-[10px] font-mono text-sb-cream/70">{address || (location ? '' : 'Select a shop above')}</span>
-          </div>
+        </div>
+        {/* The real art is a generic template with no shop-specific address
+            printed on it — shown as its own bar below the board instead of
+            guessed onto the image. */}
+        <div className="rounded-b-lg bg-sb-navy text-sb-cream/80 text-center px-3 py-1.5">
+          <span className="text-[10px] font-mono">{address || (location ? '' : 'Select a shop above')}</span>
+        </div>
         </div>
         {editMode && (
           <p className="text-[11px] font-mono text-inky/60 mt-2 text-center">
-            Drag a price or per-quart label to reposition it. Use Package Mapping to adjust font size.
+            Drag a price or per-quart patch to reposition it. Use Package Mapping to adjust font size.
           </p>
         )}
       </CardBody>
