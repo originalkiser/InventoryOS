@@ -1,0 +1,34 @@
+-- Customer Heatmap's nightly zip-rollup refresh (heatmap-rollup-refresh /
+-- refresh_heatmap_zip_rollups) discovers newly-touched orders via:
+--   SELECT ... FROM inventory.droptop_orders
+--   WHERE updated_at > p_since AND order_finalized_at IS NOT NULL
+--   ORDER BY updated_at LIMIT p_max_rows
+--
+-- The only supporting index was idx_droptop_orders_updated_at
+-- (company_id, updated_at) — composite, led by company_id. Without a
+-- company_id filter in this query (it's intentionally not scoped, matching
+-- every other single-tenant assumption in this app), Postgres can't trust
+-- that index to already be globally ordered by updated_at, so it has no
+-- choice but to pull in EVERY row matching `updated_at > p_since` (45,000+
+-- once the watermark had been stuck for a day) before it can sort and cut
+-- to p_max_rows — confirmed live via EXPLAIN ANALYZE at ~4.8s for just this
+-- one CTE, comfortably enough on its own to blow the ~8s statement_timeout
+-- every PostgREST-routed call runs under (see heatmap-rollup-refresh's own
+-- header comment), which is exactly why every attempt failed on "batch 1"
+-- and the watermark could never advance.
+--
+-- A plain, non-company-scoped partial index matching this exact
+-- WHERE + ORDER BY lets Postgres do a genuine ordered index scan with the
+-- LIMIT pushed down (stop as soon as it has p_max_rows matches, not after
+-- scanning everything past the watermark) — confirmed live: same query
+-- dropped from ~4.8s to ~25ms after adding this index, with the Sort node
+-- gone entirely from the plan.
+--
+-- Applied live via CREATE INDEX CONCURRENTLY (execute_sql, not
+-- apply_migration — CONCURRENTLY cannot run inside a transaction block)
+-- before this file was committed; kept here so the repo reflects what's
+-- actually in production. If a second company is ever onboarded, revisit
+-- whether this needs to become company-scoped too.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_droptop_orders_updated_at_finalized
+  ON inventory.droptop_orders (updated_at)
+  WHERE order_finalized_at IS NOT NULL;

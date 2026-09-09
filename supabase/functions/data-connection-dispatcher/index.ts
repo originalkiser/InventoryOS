@@ -85,6 +85,61 @@ async function callChunk(
   }
 }
 
+// droptop_orders' real production overnight run (2026-09-09) never updated
+// its schedule row at all — not even to 'error' — which is what a schedule
+// whose OWN total work is too big for one invocation looks like: the
+// 2026-09-03 fix below (each schedule gets its own independent .update(),
+// run concurrently with the others) stops one connection's slowness from
+// blocking its SIBLINGS, but did nothing for a single connection whose own
+// sequential chunk loop (91 chunks that night, one company_id's full
+// location list ÷ DROPTOP_ORDER_CHUNK_SIZE) can outrun the platform's own
+// execution-time ceiling for ONE invocation before ever reaching its own
+// `.update()` call — so it just silently never got to run today, and (since
+// isDue() still sees "last ran yesterday") retried the exact same losing
+// race on every single dispatcher tick all night.
+//
+// Two-part fix, same shape used elsewhere in this session for an identical
+// symptom: run CONCURRENCY chunks in flight at once instead of strictly one
+// at a time (cuts total wall time roughly CONCURRENCY-fold in the common
+// case), AND stop starting new chunks once TIME_BUDGET_MS has elapsed so a
+// genuinely-too-big run still gets to WRITE something (a real 'partial'
+// status covering however many chunks it got through) before the platform
+// can kill the invocation out from under it — leaving a status the UI can
+// actually show, instead of a schedule that looks like it never ran.
+// Whatever chunks don't get processed today are picked up by the SAME
+// incremental catch-up logic droptop-sync-orders already has for a missed
+// day (see that function's own header comment) — no data is lost, just
+// delayed by however many chunks were left over.
+const CHUNK_CONCURRENCY = 4
+const CHUNK_TIME_BUDGET_MS = 100_000
+
+async function runChunksConcurrently(
+  url: string, secret: string, chunks: string[][], bodyFor: (ids: string[]) => Record<string, unknown>,
+): Promise<{ status: string; message: string | null }> {
+  const warnings: string[] = []
+  let anySucceeded = false
+  let processed = 0
+  const startedAt = Date.now()
+  let nextIndex = 0
+  async function worker() {
+    for (;;) {
+      if (Date.now() - startedAt > CHUNK_TIME_BUDGET_MS) return
+      const i = nextIndex++
+      if (i >= chunks.length) return
+      const r = await callChunk(url, secret, bodyFor(chunks[i]), `Chunk ${i + 1}/${chunks.length}`)
+      if (r.ok) anySucceeded = true
+      warnings.push(...r.warnings)
+      processed++
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker))
+  if (processed < chunks.length) {
+    warnings.push(`Stopped after ${processed}/${chunks.length} chunks (time budget) — remaining continue on the next scheduled run`)
+  }
+  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
+  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
+}
+
 // A non-2xx response (timeout, crash, killed invocation) or a body that
 // isn't valid JSON both used to fall through a bare `.catch(() => ({}))` as
 // an empty object at every call site below — no `.error` key, so it read as
@@ -179,22 +234,45 @@ async function runDroptopPurchaseOrders(
   const chunks: string[][] = []
   for (let i = 0; i < ids.length; i += DROPTOP_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CHUNK_SIZE))
 
-  const warnings: string[] = []
-  let anySucceeded = false
-  for (let i = 0; i < chunks.length; i++) {
-    const r = await callChunk(
-      `${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, secret,
-      { mode: 'sync', daysBack: 180, locationIds: chunks[i] }, `Chunk ${i + 1}/${chunks.length}`,
-    )
-    if (r.ok) anySucceeded = true
-    warnings.push(...r.warnings)
-  }
-  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
-  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
+  return runChunksConcurrently(
+    `${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, secret, chunks,
+    (locationIds) => ({ mode: 'sync', daysBack: 180, locationIds }),
+  )
 }
 
 // Replaces the earlier runDroptopCustomers (droptop-sync-customers is
 // superseded — see droptop-sync-orders' own header comment).
+//
+// Real production evidence 2026-09-09: even with runChunksConcurrently's
+// bounded concurrency + time budget (above), droptop_orders STILL never
+// completed a single invocation all morning (confirmed live via
+// query_logs — many droptop-sync-orders calls firing every 5-minute tick,
+// yet data_connection_schedules.last_run_at never advanced past the PRIOR
+// day). Root cause: 91 chunks is simply too much real work — real network
+// round trips to Droptop's API, some hitting Droptop's own rate limits —
+// to reliably finish inside ONE invocation's platform execution-time
+// ceiling, no matter how many run concurrently within it.
+//
+// Real fix: don't try to process every location every invocation at all.
+// inventory.droptop_order_sync_state already tracks each location's own
+// last_synced_date — a location whose date already reaches "yesterday"
+// (the incremental mode's own target end date, see droptop-sync-orders'
+// header comment) is fully caught up and doesn't need touching again until
+// tomorrow's date rolls over. Filtering to just the REMAINING locations
+// each tick, capped at MAX_LOCATIONS_PER_TICK, means: a normal day's first
+// pass (whichever tick — manual or scheduled — happens to run first)
+// catches up the vast majority in one go, and every tick after that does
+// almost nothing (a fast couple of read-only queries, no Droptop calls at
+// all once nothing remains) rather than always attempting all 278
+// locations from scratch. Confirmed live the morning of this fix: 261/278
+// already caught up, only 17 stragglers actually needed work.
+//
+// This is why the schedule row was switched from 'daily' (fires once, has
+// to succeed with everyone caught up in that ONE attempt or wait until
+// tomorrow) to 'interval'/15-minutes (see the migration this shipped
+// with) — repeated small attempts throughout the day naturally mop up
+// whatever a given tick didn't get to, at negligible cost once caught up.
+const MAX_LOCATIONS_PER_TICK = 60
 async function runDroptopOrders(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
 ): Promise<{ status: string; message: string | null }> {
@@ -202,28 +280,40 @@ async function runDroptopOrders(
   const { data: locs, error: locErr } = await (admin as any)
     .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
   if (locErr) return { status: 'error', message: locErr.message }
-  const ids = (locs ?? []).map((l: { id: string }) => l.id)
-  if (!ids.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
+  const allIds = (locs ?? []).map((l: { id: string }) => l.id)
+  if (!allIds.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
 
+  // Incremental mode always advances through YESTERDAY (never today — see
+  // droptop-sync-orders' own header comment), so "caught up" for today's
+  // cycle means last_synced_date already reaches yesterday's date, not
+  // today's.
+  const yesterdayUtc = new Date(); yesterdayUtc.setUTCHours(0, 0, 0, 0); yesterdayUtc.setUTCDate(yesterdayUtc.getUTCDate() - 1)
+  const targetDateStr = yesterdayUtc.toISOString().slice(0, 10)
+  const { data: stateRows, error: stateErr } = await (admin as any)
+    .schema('inventory').from('droptop_order_sync_state')
+    .select('location_id, last_synced_date').eq('company_id', companyId).in('location_id', allIds)
+  if (stateErr) return { status: 'error', message: `sync-state read: ${stateErr.message}` }
+  const caughtUp = new Set(
+    (stateRows ?? [])
+      .filter((r: { last_synced_date: string }) => r.last_synced_date >= targetDateStr)
+      .map((r: { location_id: string }) => r.location_id),
+  )
+  const remaining = allIds.filter((id: string) => !caughtUp.has(id))
+  if (!remaining.length) return { status: 'success', message: null }
+
+  const thisTick = remaining.slice(0, MAX_LOCATIONS_PER_TICK)
   const chunks: string[][] = []
-  for (let i = 0; i < ids.length; i += DROPTOP_ORDER_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_ORDER_CHUNK_SIZE))
+  for (let i = 0; i < thisTick.length; i += DROPTOP_ORDER_CHUNK_SIZE) chunks.push(thisTick.slice(i, i + DROPTOP_ORDER_CHUNK_SIZE))
 
-  const warnings: string[] = []
-  let anySucceeded = false
-  for (let i = 0; i < chunks.length; i++) {
-    // Steady-state: pull each location's orders since the last date it
-    // successfully synced (tracked in inventory.droptop_order_sync_state),
-    // capped at a 30-day catch-up window. See droptop-sync-orders' own
-    // header comment for why this is Sunday-closure-safe.
-    const r = await callChunk(
-      `${supabaseUrl}/functions/v1/droptop-sync-orders`, secret,
-      { mode: 'incremental', locationIds: chunks[i] }, `Chunk ${i + 1}/${chunks.length}`,
-    )
-    if (r.ok) anySucceeded = true
-    warnings.push(...r.warnings)
+  const result = await runChunksConcurrently(
+    `${supabaseUrl}/functions/v1/droptop-sync-orders`, secret, chunks,
+    (locationIds) => ({ mode: 'incremental', locationIds }),
+  )
+  if (remaining.length > thisTick.length) {
+    const note = `${remaining.length - thisTick.length} more location(s) still catching up — continues on the next tick`
+    return { status: result.status === 'error' ? 'partial' : result.status, message: result.message ? `${result.message} | ${note}` : note }
   }
-  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
-  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
+  return result
 }
 
 // run-automated-checks reuses this same dispatch secret rather than minting
@@ -307,17 +397,10 @@ async function runDroptopChunked(
   const chunks: string[][] = []
   for (let i = 0; i < ids.length; i += DROPTOP_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CHUNK_SIZE))
 
-  const warnings: string[] = []
-  let anySucceeded = false
-  for (let i = 0; i < chunks.length; i++) {
-    const body: Record<string, unknown> = { mode, locationIds: chunks[i] }
-    if (mode === 'usage') { body.daysBack = 1; body.logDailyActivity = true }
-    const r = await callChunk(`${supabaseUrl}/functions/v1/droptop-sync-usage`, secret, body, `Chunk ${i + 1}/${chunks.length}`)
-    if (r.ok) anySucceeded = true
-    warnings.push(...r.warnings)
-  }
-  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
-  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
+  return runChunksConcurrently(
+    `${supabaseUrl}/functions/v1/droptop-sync-usage`, secret, chunks,
+    (locationIds) => (mode === 'usage' ? { mode, locationIds, daysBack: 1, logDailyActivity: true } : { mode, locationIds }),
+  )
 }
 
 Deno.serve(async (req) => {
