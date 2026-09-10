@@ -177,6 +177,19 @@ const SECTION_META: Record<string, { label: string }> = {
   marketing: { label: 'Marketing' },
 }
 
+/**
+ * Every top-level sidebar section that can be granted to a user through the
+ * admin panel — i.e. all of them except `global-config`, which stays
+ * admin/developer only. Derived from SECTION_ITEMS so a newly-added section
+ * automatically becomes assignable (see UsersPage's ManageUserModal, which
+ * also auto-creates the matching platform.departments row on save). The
+ * `key` doubles as the department slug and the sidebar section key.
+ */
+export const ASSIGNABLE_SECTIONS: { key: string; label: string }[] =
+  Object.keys(SECTION_ITEMS)
+    .filter((k) => k !== 'global-config')
+    .map((k) => ({ key: k, label: SECTION_META[k]?.label ?? k.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }))
+
 const UTILITY_ITEMS: NavItem[] = [
   { key: 'calendar', label: 'Calendar', to: '/schedule' },
   { key: 'tasks', label: 'Tasks', to: '/tasks' },

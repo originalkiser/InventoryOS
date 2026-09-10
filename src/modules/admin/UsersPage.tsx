@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { Button, Modal, Input, SbLoader } from '@/components/ui'
 import { InviteUserModal } from './InviteUserModal'
 import { ROLES, ROLE_OPTIONS, getRoleLabel, isDeveloper, isAdminOrDeveloper } from '@/lib/roles'
+import { ASSIGNABLE_SECTIONS } from '@/components/layout/Sidebar'
 import type { Profile } from '@/types'
 import { format, differenceInDays } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -20,13 +21,16 @@ const ROLE_BADGE_COLOR: Record<string, string> = {
   user: 'bg-navy/10 text-inky dark:bg-[#F2F1E6]/10 dark:text-[#F2F1E6]/70',
 }
 
+// One checkbox per grantable sidebar section (Inventory, Droptop, Data
+// Connections, Operations, Marketing, …) — derived from the sidebar itself
+// so new sections show up here automatically. `slug` == the sidebar section
+// key == the platform.departments slug useDeptAccess() reads. Plus the
+// standalone Project Management department, which isn't its own sidebar
+// section but is an existing department other flows still use.
+const SECTION_DEPT_OPTIONS = ASSIGNABLE_SECTIONS.map((s) => ({ key: `dept:${s.key}`, label: s.label, slug: s.key }))
 const DEPT_OPTIONS = [
-  { key: 'dept:inventory',           label: 'Inventory',           slug: 'inventory' },
-  { key: 'dept:operations',          label: 'Operations',          slug: 'operations' },
-  { key: 'dept:finance',             label: 'Finance',             slug: 'finance' },
-  { key: 'dept:accounting',          label: 'Accounting',          slug: 'accounting' },
-  { key: 'dept:marketing',           label: 'Marketing',           slug: 'marketing' },
-  { key: 'dept:project_management',  label: 'Project Management',  slug: 'project_management' },
+  ...SECTION_DEPT_OPTIONS,
+  { key: 'dept:project_management', label: 'Project Management', slug: 'project_management' },
 ]
 
 const MODULE_OPTIONS = [
@@ -132,6 +136,19 @@ function ManageUserModal({
     if (myProfile.company_id) {
       const enabledSlugs = DEPT_OPTIONS.filter((d) => editAccess.has(d.key)).map((d) => d.slug)
       const allSlugs = DEPT_OPTIONS.map((d) => d.slug)
+
+      // Make sure a department row exists for every grantable sidebar section
+      // — a section added to the sidebar becomes assignable with no migration.
+      const { data: existingDepts } = await sb.schema('platform').from('departments')
+        .select('slug').eq('company_id', myProfile.company_id)
+      const haveSlugs = new Set((existingDepts ?? []).map((d: any) => d.slug as string))
+      const missing = SECTION_DEPT_OPTIONS.filter((o) => !haveSlugs.has(o.slug))
+      if (missing.length) {
+        await sb.schema('platform').from('departments').insert(
+          missing.map((o, i) => ({ company_id: myProfile.company_id, name: o.label, slug: o.slug, sort_order: 50 + i })),
+        )
+      }
+
       const { data: depts } = await sb.schema('platform').from('departments')
         .select('id, slug').eq('company_id', myProfile.company_id).in('slug', allSlugs)
       if (depts) {
@@ -253,10 +270,12 @@ function ManageUserModal({
           )}
         </div>
 
-        {/* Department / module access — always shown, independent of role */}
+        {/* Sidebar-section access — always shown, independent of role. One
+            box per grantable sidebar section; ticking it lets the user see
+            that section (only enforced for the department_user role). */}
         {effectiveRole && (
           <div className="flex flex-col gap-3 border-t border-navy/10 dark:border-[#F2F1E6]/10 pt-4">
-            <div className="text-[10px] font-heading text-inky/70 dark:text-[#F2F1E6]/60 uppercase tracking-wide">Department Access</div>
+            <div className="text-[10px] font-heading text-inky/70 dark:text-[#F2F1E6]/60 uppercase tracking-wide">Section Access</div>
             <div className="grid grid-cols-2 gap-2">
               {DEPT_OPTIONS.map((d) => (
                 <label key={d.key} className="flex items-center gap-2 cursor-pointer">
