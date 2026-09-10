@@ -44,22 +44,17 @@ const PRICE_COLUMN_OPTIONS: { value: string; label: string }[] = [
 // staff reference sheet on page 2) is the genuine artwork. The only thing
 // that's ever dynamic is each package's price and per-extra-quart line, so
 // those two spots per package get a small solid patch (matching that box's
-// own real background color, sampled from the image) painted behind the
-// live text — everything else is the image, untouched. Page 1's native
-// size is 734×1210; positions below were measured directly off its pixels
-// as percentages, so they hold at any rendered width.
-// One (rp/"Valvoline Restore & Protect") box is styled cream-bg/navy-text
-// ("ULTIMATE" highlight tier) — every other box on the real board is
-// navy-bg/cream-text. Position/size are % of the image, measured from the
-// actual artwork; admins can still nudge them via "Edit layout" if a future
-// re-export shifts things slightly.
-const BOARD_SLOTS: Record<string, { cream: boolean; price: { x: number; y: number }; quart: { x: number; y: number } }> = {
-  valvoline_restore_protect:   { cream: true,  price: { x: 72.3, y: 14.0 }, quart: { x: 72.8, y: 19.3 } },
-  premium_full_synthetic_hm:   { cream: false, price: { x: 72.5, y: 27.1 }, quart: { x: 72.8, y: 32.6 } },
-  premium_full_synthetic:      { cream: false, price: { x: 73.0, y: 40.3 }, quart: { x: 72.8, y: 45.8 } },
-  premium_hm:                  { cream: false, price: { x: 72.0, y: 51.7 }, quart: { x: 72.7, y: 55.8 } },
-  economy:                     { cream: false, price: { x: 71.8, y: 61.7 }, quart: { x: 72.7, y: 65.7 } },
-}
+// own real background color) painted behind the live text — everything else
+// is the image, untouched. Page 1's native size is 704×1221; the DB's
+// price_pos_x/y / quart_pos_x/y (percentages, measured off the image, and
+// draggable via "Edit layout") hold at any rendered width.
+// Only the rp/"Valvoline Restore & Protect" box is cream-bg/navy-text (the
+// "ULTIMATE" highlight tier); every other box is navy-bg/cream-text. Any
+// package_key not listed here has no known spot on the art and is skipped.
+const CREAM_BOX_KEYS = new Set(['valvoline_restore_protect'])
+const BOARD_SLOT_KEYS = new Set([
+  'valvoline_restore_protect', 'premium_full_synthetic_hm', 'premium_full_synthetic', 'premium_hm', 'economy',
+])
 
 /**
  * Menu Board — an on-screen recreation of the printed lobby/bay board,
@@ -236,29 +231,35 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
           >
             <img src={menuBoardArt} alt="Menu board" className="block w-full" draggable={false} />
             {packages.map((p) => {
-              const slot = BOARD_SLOTS[p.package_key]
-              if (!slot) return null // no known spot on the real art yet (e.g. Dexos, once mapped this needs its own slot above)
+              if (!BOARD_SLOT_KEYS.has(p.package_key)) return null // no known spot on the art (e.g. Dexos)
               const priceCol = p.price_column
               const price = priceCol ? money((location as any)?.[priceCol]) : null
               const quart = resolveQuart(location?.id ?? '', p.package_key)
-              const patchBg = slot.cream ? 'bg-sb-cream' : 'bg-sb-navy'
-              const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
+              const cream = CREAM_BOX_KEYS.has(p.package_key)
+              const patchBg = cream ? 'bg-sb-cream' : 'bg-sb-navy'
+              const patchText = cream ? 'text-sb-navy' : 'text-sb-cream'
+              const fs = p.price_font_size * scale
               return (
                 <div key={p.id}>
-                  {/* Patch sized off the package's own font size (not the real
-                      price string) so a shorter price than the art's own
-                      sample ("$49.99") still fully covers the printed digits
-                      behind it. */}
+                  {/* Price — the composite the printed board uses: small "$",
+                      big whole-dollars, superscript cents, "PLUS TAX" tucked
+                      under the cents. The solid patch behind it (min-width
+                      off the font size, not the real string) still fully
+                      covers whatever price was printed on the art. */}
                   <div
                     onPointerDown={(e) => startDrag(e, p, 'price')}
-                    className={`absolute flex items-center justify-center font-heading font-bold leading-none ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                    className={`absolute flex items-center justify-center font-heading font-bold ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
                     style={{
                       left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
-                      fontSize: p.price_font_size * scale, minWidth: p.price_font_size * 3.6 * scale, height: p.price_font_size * 1.3 * scale,
-                      padding: `0 ${4 * scale}px`,
+                      minWidth: p.price_font_size * 3.9 * scale, height: p.price_font_size * 1.28 * scale,
+                      padding: `0 ${5 * scale}px`,
                     }}
                   >
-                    {price == null ? '—' : `$${fmtPrice(price)}`}
+                    {price == null ? (
+                      <span style={{ fontSize: fs, lineHeight: 1 }}>—</span>
+                    ) : (
+                      <PriceComposite price={price} fs={fs} />
+                    )}
                   </div>
                   {/* Quart line — a tight rectangle sized to the printed
                       "$X.XX per extra quart" text only, so it doesn't reach up
@@ -298,6 +299,28 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
         )}
       </CardBody>
     </Card>
+  )
+}
+
+/**
+ * The printed-board price treatment: small "$", big whole dollars, a
+ * superscript cents pair, and "PLUS TAX" tucked directly under the cents.
+ * `fs` is the big-digit size in px (already width-scaled); everything else
+ * is a fraction of it. Tops are aligned so the "$" and cents sit up at the
+ * top of the big number, exactly like the artwork.
+ */
+function PriceComposite({ price, fs }: { price: number; fs: number }) {
+  const whole = Math.floor(price)
+  const cents = Math.round((price - whole) * 100).toString().padStart(2, '0')
+  return (
+    <span className="inline-flex items-start" style={{ lineHeight: 1 }}>
+      <span style={{ fontSize: fs * 0.5, marginTop: fs * 0.05 }}>$</span>
+      <span style={{ fontSize: fs }}>{whole}</span>
+      <span className="inline-flex flex-col items-start" style={{ marginLeft: fs * 0.05, marginTop: fs * 0.02 }}>
+        <span style={{ fontSize: fs * 0.42, lineHeight: 1 }}>{cents}</span>
+        <span style={{ fontSize: fs * 0.17, letterSpacing: '0.06em', marginTop: fs * 0.05, lineHeight: 1 }}>PLUS TAX</span>
+      </span>
+    </span>
   )
 }
 
