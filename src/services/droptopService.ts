@@ -326,6 +326,78 @@ export async function runDroptopOrderSync(
   }
 }
 
+// Packages — the configured package menu per shop (get-packages, one call
+// per operation, not paginated). Low per-shop volume, so it chunks the
+// same way the PO sync does but a bigger chunk size is fine. Writes
+// inventory.droptop_packages / droptop_package_casual_items.
+export interface DroptopPackageSyncResult {
+  locations_synced: number
+  packages_upserted: number
+  casual_items_written: number
+  warnings?: string[]
+}
+
+async function invokePackageSync(body: Record<string, unknown>): Promise<DroptopPackageSyncResult> {
+  const { data, error } = await supabase.functions.invoke('droptop-sync-packages', { body: { mode: 'sync', ...body } })
+  if (error) throw new Error(error.message)
+  if (data?.error) {
+    throw new Error(
+      data.error === 'credentials_not_configured'
+        ? 'Droptop API keys not configured — add DROPTOP_PUBLIC_KEY and DROPTOP_PRIVATE_KEY to Supabase secrets.'
+        : data.error,
+    )
+  }
+  return data as DroptopPackageSyncResult
+}
+
+/** Read-only peek at Droptop's raw get-packages response for one shop — writes nothing. */
+export async function probeDroptopPackages(): Promise<any> {
+  const { data, error } = await supabase.functions.invoke('droptop-sync-packages', { body: { mode: 'probe' } })
+  if (error) throw new Error(error.message)
+  if (data?.error) throw new Error(data.error)
+  return data
+}
+
+export async function runDroptopPackageSync(
+  companyId: string,
+  opts: { locationId?: string } = {},
+  onProgress?: (p: DroptopSyncProgress) => void,
+): Promise<DroptopPackageSyncResult> {
+  if (opts.locationId) return invokePackageSync({ locationId: opts.locationId })
+
+  const ids = await fetchDroptopLocationIds(companyId)
+  if (!ids.length) {
+    throw new Error('No locations have a Droptop Operation ID set. Add them under Config → Locations → Integrations tab.')
+  }
+  const batches = chunk(ids, CHUNK_SIZE)
+
+  let locationsSynced = 0
+  let packagesUpserted = 0
+  let casualItemsWritten = 0
+  const warnings: string[] = []
+
+  for (let i = 0; i < batches.length; i++) {
+    onProgress?.({ batch: i + 1, totalBatches: batches.length })
+    try {
+      const result = await withRetry(() => invokePackageSync({ locationIds: batches[i] }))
+      locationsSynced += result.locations_synced
+      packagesUpserted += result.packages_upserted
+      casualItemsWritten += result.casual_items_written
+      if (result.warnings?.length) warnings.push(...result.warnings)
+    } catch (err) {
+      warnings.push(`Batch ${i + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  if (locationsSynced === 0 && warnings.length > 0) throw new Error(warnings.join(' | '))
+  return {
+    locations_synced: locationsSynced,
+    packages_upserted: packagesUpserted,
+    casual_items_written: casualItemsWritten,
+    ...(warnings.length ? { warnings } : {}),
+  }
+}
+
 export async function getLastDroptopSyncLog(companyId: string): Promise<DroptopSyncLog | null> {
   const { data } = await (supabase as any)
     .schema('inventory').from('droptop_sync_log')

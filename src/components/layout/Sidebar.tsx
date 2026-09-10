@@ -78,6 +78,7 @@ export const ICONS: Record<string, JSX.Element> = {
   'customer-heatmap': <MapPin className="w-4 h-4 flex-shrink-0" />,
   'droptop-orders': <FileText className="w-4 h-4 flex-shrink-0" />,
   'droptop-vehicles': <Car className="w-4 h-4 flex-shrink-0" />,
+  'droptop-packages': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
   'data-connections': <Database className="w-4 h-4 flex-shrink-0" />,
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
@@ -144,6 +145,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'customer-heatmap', label: 'Customer Heatmap', to: '/customer-heatmap' },
     { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
     { key: 'droptop-vehicles', label: 'Vehicles', to: '/droptop-vehicles' },
+    { key: 'droptop-packages', label: 'Packages', to: '/droptop-packages' },
   ],
   'data-connections': [
     { key: 'data-connections', label: 'Data Connections', to: '/data-connections' },
