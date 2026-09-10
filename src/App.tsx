@@ -82,7 +82,9 @@ export default function App() {
         {/* Public form — no auth required */}
         <Route path="/f/:shareToken" element={<PublicFormPage />} />
 
-        {/* Public menu board — no auth required (share link) */}
+        {/* Public menu board — no auth required (share link). Pretty URL
+            /menu-board/<shop>-<hash>, plus the legacy /m/<uuid>. */}
+        <Route path="/menu-board/:slug" element={<PublicMenuBoardPage />} />
         <Route path="/m/:token" element={<PublicMenuBoardPage />} />
 
         {/* Unreachable in practice — "/*" above already matches anything

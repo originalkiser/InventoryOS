@@ -38,7 +38,13 @@ function normalizePackage(raw: any): MenuBoardPackage {
 }
 
 export function PublicMenuBoardPage() {
-  const { token } = useParams<{ token: string }>()
+  // Two URL shapes: the pretty /menu-board/<slug> and the legacy /m/<uuid>.
+  const params = useParams<{ token?: string; slug?: string }>()
+  const bySlug = !!params.slug
+  const key = params.slug ?? params.token ?? ''
+  const shareArgs = bySlug ? { p_slug: key } : { p_token: key }
+  const shareFn = bySlug ? 'get_menu_board_share_by_slug' : 'get_menu_board_share'
+  const shopFn = bySlug ? 'get_menu_board_shop_by_slug' : 'get_menu_board_shop'
   const [status, setStatus] = useState<'loading' | 'ok' | 'notfound'>('loading')
   const [mode, setMode] = useState<'locked' | 'open'>('locked')
   const [packages, setPackages] = useState<MenuBoardPackage[]>([])
@@ -52,8 +58,8 @@ export function PublicMenuBoardPage() {
 
   // Share config
   useEffect(() => {
-    if (!token) { setStatus('notfound'); return }
-    sb().rpc('get_menu_board_share', { p_token: token }).then(({ data, error }: any) => {
+    if (!key) { setStatus('notfound'); return }
+    sb().rpc(shareFn, shareArgs).then(({ data, error }: any) => {
       if (error || !data || data.error) { setStatus('notfound'); return }
       setMode(data.mode)
       setPackages(((data.packages ?? []) as any[]).map(normalizePackage))
@@ -62,7 +68,8 @@ export function PublicMenuBoardPage() {
       if (data.mode === 'locked' && data.locked_location_id) setShopId(data.locked_location_id)
       setStatus('ok')
     })
-  }, [token])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, bySlug])
 
   const shopOptions = useMemo(() => shops.map((l) => {
     const addr = [l.address, l.city, l.state].filter(Boolean).join(', ')
@@ -71,16 +78,17 @@ export function PublicMenuBoardPage() {
 
   // Selected shop's prices
   const loadShop = useCallback(async (id: string) => {
-    if (!token || !id) { setShop(null); return }
+    if (!key || !id) { setShop(null); return }
     setShopLoading(true)
-    const { data, error } = await sb().rpc('get_menu_board_shop', { p_token: token, p_location_id: id })
+    const { data, error } = await sb().rpc(shopFn, { ...shareArgs, p_location_id: id })
     setShopLoading(false)
     if (error || !data || data.error) { setShop(null); return }
     const prices: Record<string, number | null> = {}
-    for (const [k, v] of Object.entries(data.prices ?? {})) prices[k] = v == null ? null : Number(v)
+    for (const [pk, v] of Object.entries(data.prices ?? {})) prices[pk] = v == null ? null : Number(v)
     setShop({ id: data.id, prices, address: [data.address, data.city, data.state, data.zip].filter(Boolean).join(', ') })
     setQuartOverrides((data.quart_overrides ?? []) as QuartRow[])
-  }, [token])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, bySlug])
   useEffect(() => { if (shopId) loadShop(shopId) }, [shopId, loadShop])
 
   const resolveQuart = useCallback((_locationId: string, packageKey: string) => {

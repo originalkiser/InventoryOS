@@ -176,6 +176,7 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
         <ShareMenuBoardModal
           currentLocationId={locationId}
           currentLabel={shopOptions.find((o) => o.value === locationId)?.label ?? ''}
+          currentShopNumber={location?.name ?? ''}
           onClose={() => setShareOpen(false)}
         />
       )}
@@ -632,18 +633,24 @@ function PriceComposite({ price, fs }: { price: number; fs: number }) {
 
 // ── Share link ─────────────────────────────────────────────────────────
 
-interface ShareRow { token: string; location_id: string | null; label: string | null; created_at: string }
+interface ShareRow { token: string; slug: string | null; location_id: string | null; label: string | null; created_at: string }
 const sb = () => supabase as any
-const shareUrlFor = (token: string) => `${window.location.origin}${import.meta.env.BASE_URL}m/${token}`
+const APP_URL = `${window.location.origin}${import.meta.env.BASE_URL}`
+// A locked link gets the pretty /menu-board/<slug> URL; anything without a
+// slug (older links, "any shop" links) keeps the /m/<token> URL.
+const shareUrlFor = (r: Pick<ShareRow, 'token' | 'slug'>) =>
+  r.slug ? `${APP_URL}menu-board/${r.slug}` : `${APP_URL}m/${r.token}`
+const slugSuffix = () => Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 4).padEnd(4, '0')
 
 /**
  * Create / revoke public menu-board links. A link is either locked to one
  * shop (viewer sees just that board) or open (viewer picks the shop from a
  * dropdown). Either way the recipient gets only the board — no SB Net.
  */
-function ShareMenuBoardModal({ currentLocationId, currentLabel, onClose }: {
+function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumber, onClose }: {
   currentLocationId: string
   currentLabel: string
+  currentShopNumber: string
   onClose: () => void
 }) {
   const { profile } = useAuthStore()
@@ -656,7 +663,7 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, onClose }: {
   const load = useCallback(async () => {
     if (!companyId) { setLoading(false); return }
     const { data } = await sb().schema('marketing').from('menu_board_shares')
-      .select('token, location_id, label, created_at').eq('company_id', companyId).eq('active', true)
+      .select('token, slug, location_id, label, created_at').eq('company_id', companyId).eq('active', true)
       .order('created_at', { ascending: false })
     setRows((data ?? []) as ShareRow[])
     setLoading(false)
@@ -666,18 +673,33 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, onClose }: {
   async function create() {
     if (!companyId) return
     setCreating(true)
-    const row = {
-      company_id: companyId,
-      location_id: mode === 'locked' ? currentLocationId : null,
-      label: mode === 'locked' ? currentLabel : 'Any shop (viewer picks)',
-      created_by: profile?.id ?? null,
+    // Locked links get /menu-board/<shop>-<hash>. Retry once on the (rare)
+    // slug collision with a fresh hash.
+    const baseSlug = mode === 'locked' && currentShopNumber
+      ? String(currentShopNumber).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      : ''
+    let lastErr: string | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = {
+        company_id: companyId,
+        location_id: mode === 'locked' ? currentLocationId : null,
+        label: mode === 'locked' ? currentLabel : 'Any shop (viewer picks)',
+        slug: baseSlug ? `${baseSlug}-${slugSuffix()}` : null,
+        created_by: profile?.id ?? null,
+      }
+      const { data, error } = await sb().schema('marketing').from('menu_board_shares').insert(row).select('token, slug').single()
+      if (!error) {
+        setCreating(false)
+        await navigator.clipboard.writeText(shareUrlFor(data)).catch(() => {})
+        toast.success('Link created and copied')
+        load()
+        return
+      }
+      lastErr = error.message
+      if (!/duplicate key|unique/i.test(error.message)) break
     }
-    const { data, error } = await sb().schema('marketing').from('menu_board_shares').insert(row).select('token').single()
     setCreating(false)
-    if (error) { toast.error(error.message); return }
-    await navigator.clipboard.writeText(shareUrlFor(data.token)).catch(() => {})
-    toast.success('Link created and copied')
-    load()
+    toast.error(lastErr ?? 'Could not create link')
   }
 
   async function revoke(token: string) {
@@ -721,9 +743,9 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, onClose }: {
             <div key={r.token} className="flex items-center gap-2 rounded border border-navy/15 px-2 py-1.5">
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] font-mono text-navy truncate">{r.label || (r.location_id ? 'Locked shop' : 'Any shop')}</div>
-                <div className="text-[10px] font-mono text-inky/50 truncate">{shareUrlFor(r.token)}</div>
+                <div className="text-[10px] font-mono text-inky/50 truncate">{shareUrlFor(r)}</div>
               </div>
-              <button onClick={() => { navigator.clipboard.writeText(shareUrlFor(r.token)); toast.success('Copied') }}
+              <button onClick={() => { navigator.clipboard.writeText(shareUrlFor(r)); toast.success('Copied') }}
                 className="text-[10px] font-mono text-sky hover:underline shrink-0">copy</button>
               <button onClick={() => revoke(r.token)} className="text-[10px] font-mono text-[#C0392B] hover:underline shrink-0">revoke</button>
             </div>
