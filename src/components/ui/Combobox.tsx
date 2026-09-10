@@ -147,7 +147,7 @@ export function Combobox({
         onClick={() => setOpen((v) => !v)}
         onKeyDown={handleTriggerKeyDown}
       >
-        <span className={value ? 'text-navy' : 'text-inky/70'}>
+        <span className={`min-w-0 truncate ${value ? 'text-navy' : 'text-inky/70'}`}>
           {value ? selectedLabel : placeholder}
         </span>
         <svg className="w-4 h-4 text-inky" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -156,7 +156,7 @@ export function Combobox({
       </div>
 
       {open && (
-        <div ref={listRef} role="listbox" className="absolute top-full left-0 right-0 z-30 mt-1 bg-cream border border-navy/30 rounded shadow-xl max-h-60 overflow-auto">
+        <div ref={listRef} role="listbox" className="absolute top-full left-0 z-30 mt-1 min-w-full w-max max-w-[min(88vw,640px)] bg-cream border border-navy/30 rounded shadow-xl max-h-60 overflow-auto">
           <div className="px-3 py-2 border-b border-navy/30">
             <input
               autoFocus
@@ -174,7 +174,7 @@ export function Combobox({
               onClick={() => selectOption(opt)}
               onMouseEnter={() => setHighlightedIndex(idx)}
               className={[
-                'px-3 py-2 text-sm font-mono cursor-pointer',
+                'px-3 py-2 text-sm font-mono cursor-pointer whitespace-nowrap',
                 idx === highlightedIndex
                   ? 'bg-[#00e5ff]/10 text-inky'
                   : opt.value === value

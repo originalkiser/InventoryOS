@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, CardBody, Combobox, Input, Select, SbLoader } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
+import { byNaturalLabel, naturalCompare } from '@/lib/naturalSort'
 import {
   useCustomShopConfig, useMenuBoardPackageOptions, formatFieldValue, VALUE_KIND_LABELS,
   type FieldValueKind,
@@ -24,10 +25,10 @@ export function CustomShopConfigPage() {
   const shopOptions = useMemo(() => loc.locations.map((l) => {
     const addr = [l.address, l.city, l.state].filter(Boolean).join(', ')
     return { value: l.id, label: addr ? `${l.shop_city || l.name} — ${addr}` : (l.shop_city || l.name) }
-  }), [loc.locations])
+  }).sort(byNaturalLabel), [loc.locations])
 
   const activeFields = cfg.fields.filter((f) => f.active)
-  const customIds = useMemo(() => [...cfg.customLocationIds].sort((a, b) => loc.labelOf(a).localeCompare(loc.labelOf(b))), [cfg.customLocationIds, loc])
+  const customIds = useMemo(() => [...cfg.customLocationIds].sort((a, b) => naturalCompare(loc.labelOf(a), loc.labelOf(b))), [cfg.customLocationIds, loc])
   const packageLabel = (key: string) => packageOptions.find((p) => p.package_key === key)?.display_name ?? key
 
   return (

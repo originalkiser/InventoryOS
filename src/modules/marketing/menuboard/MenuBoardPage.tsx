@@ -3,12 +3,21 @@ import toast from 'react-hot-toast'
 import { Button, Card, CardBody, Combobox, Input, Select, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
+import { byNaturalLabel } from '@/lib/naturalSort'
 import type { Location } from '@/types'
 import menuBoardArt from '@/assets/Menu-Board-Page-1.png'
+import menuBoardArt2 from '@/assets/Menu-Board-Page-2.png'
 
 const LAST_LOCATION_KEY = 'menu-board:last-location'
 const money = (v: number | null | undefined) => (v == null ? null : Number(v))
 const fmtPrice = (v: number | null) => (v == null ? '—' : v.toFixed(2))
+
+// The stored price_font_size / quart_font_size and the patch dimensions
+// derived from them were all sized against a 480px-wide board. The board's
+// actual rendered width is measured (ResizeObserver) and everything scaled
+// by width/480 so a phone-width board shrinks the patches proportionally
+// instead of a fixed-px patch overflowing the printed card's border.
+const BOARD_REF_WIDTH = 480
 
 // The numeric price columns on core.locations a package can be fed from —
 // the Package Mapping "Source Column" dropdown. Kept as an explicit list
@@ -29,18 +38,16 @@ const PRICE_COLUMN_OPTIONS: { value: string; label: string }[] = [
   { value: 'oil_inflation_surcharge', label: 'oil_inflation_surcharge' },
 ]
 
-// The real board art (src/assets/Menu-Board-Page-1.png) is the actual
-// printed sign — everything on it (logos, package names, qualifiers,
-// "PRICES INCLUDE UP TO 5 QUARTS", additional services, disclaimers) is the
-// genuine artwork. The only thing that's ever dynamic is each package's
-// price and per-extra-quart line, so those two spots per package get a
-// small solid patch (matching that box's own real background color, sampled
-// from the image) painted behind the live text — everything else is the
-// image, untouched. Native image size is 734×1210 — the board's own aspect
-// ratio is locked to that so positions below (measured directly off the
-// image's pixels) line up without distortion.
-const ART_W = 734
-const ART_H = 1210
+// The real board art (src/assets/Menu-Board-Page-1.png + -2.png) is the
+// actual printed sign — everything on it (logos, package names, qualifiers,
+// "PRICES INCLUDE UP TO 5 QUARTS", additional services, disclaimers, the
+// staff reference sheet on page 2) is the genuine artwork. The only thing
+// that's ever dynamic is each package's price and per-extra-quart line, so
+// those two spots per package get a small solid patch (matching that box's
+// own real background color, sampled from the image) painted behind the
+// live text — everything else is the image, untouched. Page 1's native
+// size is 734×1210; positions below were measured directly off its pixels
+// as percentages, so they hold at any rendered width.
 // One (rp/"Valvoline Restore & Protect") box is styled cream-bg/navy-text
 // ("ULTIMATE" highlight tier) — every other box on the real board is
 // navy-bg/cream-text. Position/size are % of the image, measured from the
@@ -80,7 +87,7 @@ export function MenuBoardPage() {
   const shopOptions = useMemo(() => loc.locations.map((l) => {
     const addr = [l.address, l.city, l.state].filter(Boolean).join(', ')
     return { value: l.id, label: addr ? `${l.shop_city || l.name} — ${addr}` : (l.shop_city || l.name) }
-  }), [loc.locations])
+  }).sort(byNaturalLabel), [loc.locations])
   const location = loc.byId(locationId || null)
 
   return (
@@ -141,7 +148,7 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
   return (
     <div className="flex flex-col gap-3">
       <Card><CardBody className="flex items-end gap-3 flex-wrap">
-        <div className="w-72">
+        <div className="w-full sm:w-[460px]">
           <Combobox label="Shop" options={shopOptions} value={locationId} onChange={onLocationChange}
             placeholder="Search by name, address, or city…" />
         </div>
@@ -180,6 +187,19 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
 }) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<{ id: string; field: 'price' | 'quart' } | null>(null)
+  // Measured board width — every patch dimension is scaled by boardW/480
+  // (the width the stored px sizes were designed against) so a phone-width
+  // board shrinks the patches to match instead of overflowing the card.
+  const [boardW, setBoardW] = useState(BOARD_REF_WIDTH)
+  useEffect(() => {
+    const el = boardRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setBoardW(el.clientWidth || BOARD_REF_WIDTH))
+    ro.observe(el)
+    setBoardW(el.clientWidth || BOARD_REF_WIDTH)
+    return () => ro.disconnect()
+  }, [])
+  const scale = boardW / BOARD_REF_WIDTH
 
   function startDrag(e: React.PointerEvent, pkg: MenuBoardPackage, field: 'price' | 'quart') {
     if (!editMode) return
@@ -202,61 +222,74 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
   return (
     <Card>
       <CardBody>
-        <div style={{ maxWidth: 480, margin: '0 auto' }}>
-        <div
-          ref={boardRef}
-          onPointerMove={onMove}
-          onPointerUp={endDrag}
-          className="relative w-full rounded-t-lg overflow-hidden select-none bg-sb-navy"
-          style={{ aspectRatio: `${ART_W} / ${ART_H}`, backgroundImage: `url(${menuBoardArt})`, backgroundSize: '100% 100%' }}
-        >
-          {packages.map((p) => {
-            const slot = BOARD_SLOTS[p.package_key]
-            if (!slot) return null // no known spot on the real art yet (e.g. Dexos, once mapped this needs its own slot above)
-            const priceCol = p.price_column
-            const price = priceCol ? money((location as any)?.[priceCol]) : null
-            const quart = resolveQuart(location?.id ?? '', p.package_key)
-            const patchBg = slot.cream ? 'bg-sb-cream' : 'bg-sb-navy'
-            const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
-            return (
-              <div key={p.id}>
-                {/* Patch sized off the package's own font size (not the real
-                    price string) so a shorter price than the art's own
-                    sample ("$49.99") still fully covers the printed digits
-                    behind it. */}
-                <div
-                  onPointerDown={(e) => startDrag(e, p, 'price')}
-                  className={`absolute flex items-center justify-center font-heading font-bold ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
-                  style={{
-                    left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
-                    fontSize: p.price_font_size, minWidth: p.price_font_size * 3.6, height: p.price_font_size * 1.35,
-                    padding: '0 4px',
-                  }}
-                >
-                  {price == null ? '—' : `$${fmtPrice(price)}`}
+        <div className="rounded-lg overflow-hidden bg-sb-navy" style={{ maxWidth: BOARD_REF_WIDTH, margin: '0 auto' }}>
+          {/* Page 1 — the priced board. Rendered as an <img> (not a fixed
+              aspect-ratio background) so nothing at the bottom is ever
+              clipped. Overlay patch dimensions are scaled by `scale`
+              (measured width ÷ 480) so they track the printed card's border
+              at any board width. */}
+          <div
+            ref={boardRef}
+            onPointerMove={onMove}
+            onPointerUp={endDrag}
+            className="relative w-full select-none"
+          >
+            <img src={menuBoardArt} alt="Menu board" className="block w-full" draggable={false} />
+            {packages.map((p) => {
+              const slot = BOARD_SLOTS[p.package_key]
+              if (!slot) return null // no known spot on the real art yet (e.g. Dexos, once mapped this needs its own slot above)
+              const priceCol = p.price_column
+              const price = priceCol ? money((location as any)?.[priceCol]) : null
+              const quart = resolveQuart(location?.id ?? '', p.package_key)
+              const patchBg = slot.cream ? 'bg-sb-cream' : 'bg-sb-navy'
+              const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
+              return (
+                <div key={p.id}>
+                  {/* Patch sized off the package's own font size (not the real
+                      price string) so a shorter price than the art's own
+                      sample ("$49.99") still fully covers the printed digits
+                      behind it. */}
+                  <div
+                    onPointerDown={(e) => startDrag(e, p, 'price')}
+                    className={`absolute flex items-center justify-center font-heading font-bold leading-none ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                    style={{
+                      left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
+                      fontSize: p.price_font_size * scale, minWidth: p.price_font_size * 3.6 * scale, height: p.price_font_size * 1.3 * scale,
+                      padding: `0 ${4 * scale}px`,
+                    }}
+                  >
+                    {price == null ? '—' : `$${fmtPrice(price)}`}
+                  </div>
+                  {/* Quart line — a tight rectangle sized to the printed
+                      "$X.XX per extra quart" text only, so it doesn't reach up
+                      into the dotted separator above it. */}
+                  <div
+                    onPointerDown={(e) => startDrag(e, p, 'quart')}
+                    className={`absolute flex items-center justify-center whitespace-nowrap font-mono leading-none ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                    style={{
+                      left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)',
+                      fontSize: p.quart_font_size * scale, minWidth: p.quart_font_size * 12 * scale, height: p.quart_font_size * 1.15 * scale,
+                      padding: `0 ${3 * scale}px`,
+                    }}
+                  >
+                    {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
+                    {quart.isCustom && <span className="ml-1 text-sb-orange">*</span>}
+                  </div>
                 </div>
-                <div
-                  onPointerDown={(e) => startDrag(e, p, 'quart')}
-                  className={`absolute flex items-center justify-center whitespace-nowrap font-mono ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
-                  style={{
-                    left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)',
-                    fontSize: p.quart_font_size, minWidth: p.quart_font_size * 12, height: p.quart_font_size * 1.6,
-                    padding: '0 4px',
-                  }}
-                >
-                  {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
-                  {quart.isCustom && <span className="ml-1 text-sb-orange">*</span>}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        {/* The real art is a generic template with no shop-specific address
-            printed on it — shown as its own bar below the board instead of
-            guessed onto the image. */}
-        <div className="rounded-b-lg bg-sb-navy text-sb-cream/80 text-center px-3 py-1.5">
-          <span className="text-[10px] font-mono">{address || (location ? '' : 'Select a shop above')}</span>
-        </div>
+              )
+            })}
+          </div>
+
+          {/* Page 2 — the staff reference sheet (recommendations, top-off
+              policy, the SB Experience checklist). Static, no overlays. */}
+          <img src={menuBoardArt2} alt="Menu board — recommendations & procedures" className="block w-full" draggable={false} />
+
+          {/* The real art is a generic template with no shop-specific address
+              printed on it — shown as its own bar below the board instead of
+              guessed onto the image. */}
+          <div className="bg-sb-navy text-sb-cream/80 text-center px-3 py-1.5">
+            <span className="text-[10px] font-mono">{address || (location ? '' : 'Select a shop above')}</span>
+          </div>
         </div>
         {editMode && (
           <p className="text-[11px] font-mono text-inky/60 mt-2 text-center">
