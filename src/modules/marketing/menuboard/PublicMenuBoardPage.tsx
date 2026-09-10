@@ -95,6 +95,8 @@ export function PublicMenuBoardPage() {
     [packages],
   )
   const boardLocation = shop ? ({ id: shop.id, ...shop.prices } as any) : undefined
+  const selectedShop = shops.find((s) => s.id === shopId)
+  const shopName = selectedShop?.shop_city || selectedShop?.name || ''
 
   if (status === 'loading') {
     return <div className="min-h-screen flex items-center justify-center bg-sb-navy"><SbLoader size={44} /></div>
@@ -128,6 +130,7 @@ export function PublicMenuBoardPage() {
             packages={activePackages}
             resolveQuart={resolveQuart}
             address={shop?.address ?? ''}
+            shopName={shopName}
           />
         )}
       </div>

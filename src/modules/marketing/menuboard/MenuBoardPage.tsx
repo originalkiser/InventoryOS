@@ -186,6 +186,7 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
           <BoardViewer
             location={location} packages={activePackages} editMode={editMode} updatePackage={updatePackage}
             resolveQuart={resolveQuart} address={address}
+            shopName={(location as any)?.shop_city || location?.name || ''}
           />
         </CardBody></Card>
       )}
@@ -334,13 +335,26 @@ export function Board({ location, packages, editMode = false, updatePackage, res
 }
 
 /**
+ * Download filename, e.g. `1-Thomasville_SB-Menu-Board_09.10.2026.pdf`.
+ * Shop name is slugified (spaces/punctuation → single dashes); the date is
+ * today's, MM.DD.YYYY. Falls back to `SB-Menu-Board_<date>.pdf` with no
+ * shop when one isn't known.
+ */
+function menuBoardPdfName(shopName?: string): string {
+  const d = new Date()
+  const date = `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}.${d.getFullYear()}`
+  const slug = (shopName ?? '').trim().replace(/[^\w.-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+  return `${slug ? `${slug}_` : ''}SB-Menu-Board_${date}.pdf`
+}
+
+/**
  * Board + a PDF-reader-style toolbar: zoom out / zoom % / zoom in / reset,
  * and a "Download PDF" button (html2canvas snapshot of each board page →
  * a 2-page PDF, page 1 = the board through Additional Services, page 2 =
  * the reference sheet). Used by the admin Board tab and the public share
  * page so both get the same viewing controls.
  */
-export function BoardViewer(props: React.ComponentProps<typeof Board>) {
+export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof Board> & { shopName?: string }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const captureRef = useRef<HTMLDivElement>(null)
   const [fitW, setFitW] = useState(BOARD_REF_WIDTH)
@@ -376,7 +390,7 @@ export function BoardViewer(props: React.ComponentProps<typeof Board>) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'strickland-brothers-menu-board.pdf'
+      a.download = menuBoardPdfName(shopName)
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -442,7 +456,7 @@ function PriceComposite({ price, fs }: { price: number; fs: number }) {
         }}
       >
         <span style={{ fontSize: SMALL, display: 'block', lineHeight: 1 }}>{cents}</span>
-        <span style={{ fontSize: fs * 0.14, display: 'block', lineHeight: 1, marginTop: fs * 0.03, letterSpacing: '0.01em' }}>PLUS TAX</span>
+        <span style={{ fontSize: fs * 0.115, display: 'block', lineHeight: 1, marginTop: fs * 0.008, letterSpacing: '-0.01em' }}>PLUS TAX</span>
       </span>
     </span>
   )
