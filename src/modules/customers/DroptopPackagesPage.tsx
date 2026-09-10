@@ -73,6 +73,7 @@ export function DroptopPackagesPage() {
         .select('package_row_id, location_id, name, amount, quantity, hidden_on_order')
         .eq('company_id', companyId),
     ])
+    if (p.error || c.error) toast.error(`Packages didn't load: ${(p.error || c.error)!.message}`)
     setPackages((p.data ?? []) as PkgRow[])
     setCasual((c.data ?? []) as CasualRow[])
     setLoading(false)

@@ -38,7 +38,8 @@ export function useMenuBoardPackages() {
     setLoading(true)
     const { data, error } = await sb().schema('marketing').from('menu_board_packages')
       .select('*').eq('company_id', companyId).order('sort_order')
-    if (!error) setPackages((data ?? []) as MenuBoardPackage[])
+    if (error) toast.error(`Menu board packages didn't load: ${error.message}`)
+    else setPackages((data ?? []) as MenuBoardPackage[])
     setLoading(false)
   }, [companyId])
   useEffect(() => { load() }, [load])
@@ -84,8 +85,10 @@ export function useMenuBoardQuartPricing() {
       sb().schema('marketing').from('menu_board_quart_defaults').select('*').eq('company_id', companyId),
       sb().schema('marketing').from('menu_board_quart_overrides').select('*').eq('company_id', companyId).order('updated_at', { ascending: false }),
     ])
-    if (!d.error) setDefaults((d.data ?? []) as QuartPricingRow[])
-    if (!o.error) setOverrides((o.data ?? []) as QuartOverrideRow[])
+    if (d.error) toast.error(`Quart pricing didn't load: ${d.error.message}`)
+    else setDefaults((d.data ?? []) as QuartPricingRow[])
+    if (o.error) toast.error(`Custom quart pricing didn't load: ${o.error.message}`)
+    else setOverrides((o.data ?? []) as QuartOverrideRow[])
     setLoading(false)
   }, [companyId])
   useEffect(() => { load() }, [load])

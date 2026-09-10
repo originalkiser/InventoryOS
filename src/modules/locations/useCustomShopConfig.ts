@@ -64,6 +64,8 @@ export function useCustomShopConfig() {
       sb().schema('inventory').from('custom_shop_config_values').select('*').eq('company_id', companyId),
       sb().schema('inventory').from('custom_shop_config_packages').select('*').eq('company_id', companyId),
     ])
+    const err = f.error || v.error || p.error
+    if (err) toast.error(`Custom shop config didn't load: ${err.message}`)
     if (!f.error) setFields((f.data ?? []) as CustomShopConfigField[])
     if (!v.error) setValues((v.data ?? []) as CustomShopConfigValue[])
     if (!p.error) setPackages((p.data ?? []) as CustomShopConfigPackage[])

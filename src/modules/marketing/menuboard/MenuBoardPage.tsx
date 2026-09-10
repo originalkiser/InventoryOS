@@ -10,6 +10,25 @@ const LAST_LOCATION_KEY = 'menu-board:last-location'
 const money = (v: number | null | undefined) => (v == null ? null : Number(v))
 const fmtPrice = (v: number | null) => (v == null ? '—' : v.toFixed(2))
 
+// The numeric price columns on core.locations a package can be fed from —
+// the Package Mapping "Source Column" dropdown. Kept as an explicit list
+// (not derived from a location row's keys) so a null-valued column on the
+// sample row can't drop out of the options, and so non-price numeric
+// columns (royalty_rate, planned_2024, …) never appear.
+const PRICE_COLUMN_OPTIONS: { value: string; label: string }[] = [
+  { value: 'economy', label: 'economy' },
+  { value: 'premium_hm', label: 'premium_hm' },
+  { value: 'premium_full_synthetic', label: 'premium_full_synthetic' },
+  { value: 'premium_full_synthetic_hm', label: 'premium_full_synthetic_hm' },
+  { value: 'rp', label: 'rp (Restore & Protect)' },
+  { value: 'diesel_syn_blend', label: 'diesel_syn_blend' },
+  { value: 'diesel_full_syn', label: 'diesel_full_syn' },
+  { value: 'european', label: 'european' },
+  { value: 'supply_fee', label: 'supply_fee' },
+  { value: 'disposal_fee', label: 'disposal_fee' },
+  { value: 'oil_inflation_surcharge', label: 'oil_inflation_surcharge' },
+]
+
 // The real board art (src/assets/Menu-Board-Page-1.png) is the actual
 // printed sign — everything on it (logos, package names, qualifiers,
 // "PRICES INCLUDE UP TO 5 QUARTS", additional services, disclaimers) is the
@@ -277,9 +296,16 @@ function PackageMappingTab({ packages, loading, updatePackage }: {
               <tr key={p.id} className="border-b border-navy/15">
                 <td className="px-3 py-1.5 text-navy">{p.display_name}</td>
                 <td className="px-3 py-1.5">
-                  <input defaultValue={p.price_column ?? ''} placeholder="e.g. rp"
-                    onBlur={(e) => { const v = e.target.value.trim() || null; if (v !== p.price_column) updatePackage(p.id, { price_column: v }) }}
-                    className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy w-40" />
+                  <select value={p.price_column ?? ''}
+                    onChange={(e) => { const v = e.target.value || null; if (v !== p.price_column) updatePackage(p.id, { price_column: v }) }}
+                    className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy w-56">
+                    <option value="">— not mapped —</option>
+                    {PRICE_COLUMN_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    {/* Preserve an already-saved column that isn't in the list (e.g. added later). */}
+                    {p.price_column && !PRICE_COLUMN_OPTIONS.some((o) => o.value === p.price_column) && (
+                      <option value={p.price_column}>{p.price_column}</option>
+                    )}
+                  </select>
                 </td>
                 <td className="px-3 py-1.5 text-right">
                   <input type="number" defaultValue={p.price_font_size}
