@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
 import { byNaturalLabel } from '@/lib/naturalSort'
+import { imagesToPdf } from '@/lib/imagesToPdf'
 import type { Location } from '@/types'
 import menuBoardArt from '@/assets/Menu-Board-Page-1.png'
 import menuBoardArt2 from '@/assets/Menu-Board-Page-2.png'
@@ -20,6 +21,15 @@ const fmtPrice = (v: number | null) => (v == null ? '—' : v.toFixed(2))
 // by width/480 so a phone-width board shrinks the patches proportionally
 // instead of a fixed-px patch overflowing the printed card's border.
 const BOARD_REF_WIDTH = 480
+
+// The viewer (BoardViewer) lets the board grow well past the 480px design
+// width on a wide screen and adds PDF-reader-style zoom. Everything inside
+// Board is %-positioned and font sizes are re-scaled off the measured
+// width, so any display width just works.
+const MAX_BOARD_WIDTH = 900
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 3
+const ZOOM_STEP = 0.25
 
 // The numeric price columns on core.locations a package can be fed from —
 // the Package Mapping "Source Column" dropdown. Kept as an explicit list
@@ -172,10 +182,12 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
       ) : packagesLoading ? (
         <div className="py-16 flex justify-center"><SbLoader size={36} /></div>
       ) : (
-        <Board
-          location={location} packages={activePackages} editMode={editMode} updatePackage={updatePackage}
-          resolveQuart={resolveQuart} address={address}
-        />
+        <Card><CardBody>
+          <BoardViewer
+            location={location} packages={activePackages} editMode={editMode} updatePackage={updatePackage}
+            resolveQuart={resolveQuart} address={address}
+          />
+        </CardBody></Card>
       )}
     </div>
   )
@@ -188,13 +200,16 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
  * updates position live, committed to the DB on release. Reused read-only
  * by the public share page (no editMode, no updatePackage).
  */
-export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address }: {
+export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width }: {
   location: Location | undefined
   packages: MenuBoardPackage[]
   editMode?: boolean
   updatePackage?: (id: string, patch: Partial<MenuBoardPackage>) => Promise<boolean> | void
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
   address: string
+  /** Explicit display width in px (from BoardViewer's zoom). Falls back to
+   *  100% capped at the 480px design width when omitted. */
+  width?: number
 }) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<{ id: string; field: 'price' | 'quart' } | null>(null)
@@ -231,14 +246,17 @@ export function Board({ location, packages, editMode = false, updatePackage, res
   function endDrag() { setDragging(null) }
 
   return (
-    <Card>
-      <CardBody>
-        <div className="rounded-lg overflow-hidden bg-sb-navy" style={{ maxWidth: BOARD_REF_WIDTH, margin: '0 auto' }}>
-          {/* Page 1 — the priced board. Rendered as an <img> (not a fixed
-              aspect-ratio background) so nothing at the bottom is ever
-              clipped. Overlay patch dimensions are scaled by `scale`
-              (measured width ÷ 480) so they track the printed card's border
-              at any board width. */}
+    <>
+      <div
+        className="rounded-lg overflow-hidden bg-sb-navy"
+        style={{ width: width ?? '100%', maxWidth: width ?? BOARD_REF_WIDTH, margin: '0 auto' }}
+      >
+        {/* Page 1 of the PDF — the priced board through Additional Services.
+            Rendered as an <img> (not a fixed aspect-ratio background) so
+            nothing at the bottom is ever clipped. Overlay text is scaled by
+            `scale` (measured width ÷ 480) so it tracks the printed card at
+            any board width. */}
+        <div data-mb-page="1">
           <div
             ref={boardRef}
             onPointerMove={onMove}
@@ -292,47 +310,139 @@ export function Board({ location, packages, editMode = false, updatePackage, res
             })}
           </div>
 
-          {/* Page 2 — the staff reference sheet (recommendations, top-off
-              policy, the SB Experience checklist). Static, no overlays. */}
-          <img src={menuBoardArt2} alt="Menu board — recommendations & procedures" className="block w-full" draggable={false} />
-
           {/* The real art is a generic template with no shop-specific address
-              printed on it — shown as its own bar below the board instead of
-              guessed onto the image. */}
+              printed on it — shown as its own bar below the board (still on
+              PDF page 1) instead of guessed onto the image. */}
           <div className="bg-sb-navy text-sb-cream/80 text-center px-3 py-1.5">
             <span className="text-[10px] font-mono">{address || (location ? '' : 'Select a shop above')}</span>
           </div>
         </div>
-        {editMode && (
-          <p className="text-[11px] font-mono text-inky/60 mt-2 text-center">
-            Drag a price or per-quart patch to reposition it. Use Package Mapping to adjust font size.
-          </p>
-        )}
-      </CardBody>
-    </Card>
+
+        {/* Page 2 of the PDF — the staff reference sheet (recommendations,
+            top-off policy, the SB Experience checklist). Static, no overlays. */}
+        <div data-mb-page="2">
+          <img src={menuBoardArt2} alt="Menu board — recommendations & procedures" className="block w-full" draggable={false} />
+        </div>
+      </div>
+      {editMode && (
+        <p className="text-[11px] font-mono text-inky/60 mt-2 text-center">
+          Drag a price or per-quart patch to reposition it. Use Package Mapping to adjust font size.
+        </p>
+      )}
+    </>
   )
 }
 
 /**
- * The printed-board price treatment: small "$", big whole dollars, a
- * superscript cents pair, and "PLUS TAX" tucked directly under the cents.
- * `fs` is the big-digit size in px (already width-scaled); everything else
- * is a fraction of it. Tops are aligned so the "$" and cents sit up at the
- * top of the big number, exactly like the artwork.
+ * Board + a PDF-reader-style toolbar: zoom out / zoom % / zoom in / reset,
+ * and a "Download PDF" button (html2canvas snapshot of each board page →
+ * a 2-page PDF, page 1 = the board through Additional Services, page 2 =
+ * the reference sheet). Used by the admin Board tab and the public share
+ * page so both get the same viewing controls.
+ */
+export function BoardViewer(props: React.ComponentProps<typeof Board>) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const captureRef = useRef<HTMLDivElement>(null)
+  const [fitW, setFitW] = useState(BOARD_REF_WIDTH)
+  const [zoom, setZoom] = useState(1)
+  const [pdfBusy, setPdfBusy] = useState(false)
+
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setFitW(el.clientWidth || BOARD_REF_WIDTH))
+    ro.observe(el)
+    setFitW(el.clientWidth || BOARD_REF_WIDTH)
+    return () => ro.disconnect()
+  }, [])
+
+  const baseW = Math.min(fitW, MAX_BOARD_WIDTH)
+  const displayW = Math.round(baseW * zoom)
+  const setZoomClamped = (z: number) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100)))
+
+  async function downloadPdf() {
+    const root = captureRef.current
+    if (!root) return
+    setPdfBusy(true)
+    try {
+      const html2canvas = (await import('html2canvas')).default
+      const pages = Array.from(root.querySelectorAll('[data-mb-page]')) as HTMLElement[]
+      const shots: { jpegDataUrl: string }[] = []
+      for (const el of pages) {
+        const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#002745', useCORS: true, logging: false })
+        shots.push({ jpegDataUrl: canvas.toDataURL('image/jpeg', 0.92) })
+      }
+      const blob = imagesToPdf(shots)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'strickland-brothers-menu-board.pdf'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 4000)
+    } catch {
+      toast.error('Could not build the PDF')
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
+  const zBtn = 'w-7 h-7 grid place-items-center rounded bg-sb-cream/10 hover:bg-sb-cream/20 disabled:opacity-30 disabled:hover:bg-sb-cream/10 text-sb-cream font-mono text-base leading-none'
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* Fixed sb-* tokens (not the theme-flipping ones) so the toolbar
+          reads the same on the cream admin card and the navy public page. */}
+      <div className="flex items-center gap-1 rounded-md bg-sb-navy px-2 py-1.5">
+        <button type="button" className={zBtn} onClick={() => setZoomClamped(zoom - ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">−</button>
+        <span className="w-12 text-center text-[11px] font-mono tabular-nums text-sb-cream">{Math.round(zoom * 100)}%</span>
+        <button type="button" className={zBtn} onClick={() => setZoomClamped(zoom + ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in">+</button>
+        <button type="button" className="ml-1 px-2 h-7 rounded bg-sb-cream/10 hover:bg-sb-cream/20 disabled:opacity-30 text-sb-cream font-mono text-[11px]" onClick={() => setZoom(1)} disabled={zoom === 1}>Reset</button>
+        <button type="button" onClick={downloadPdf} disabled={pdfBusy}
+          className="ml-auto px-3 h-7 rounded bg-sb-sky hover:brightness-95 disabled:opacity-50 text-sb-navy font-mono font-bold text-[11px] uppercase tracking-wide">
+          {pdfBusy ? 'Building…' : 'Download PDF'}
+        </button>
+      </div>
+      <div ref={wrapRef} className="overflow-auto">
+        <div ref={captureRef} style={{ width: displayW, marginLeft: 'auto', marginRight: 'auto' }}>
+          <Board {...props} width={displayW} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The printed-board price treatment: a smaller "$", big whole dollars, a
+ * cents pair, and "PLUS TAX" tucked directly under the cents. `fs` is the
+ * big-digit size in px (already width-scaled); everything else is a
+ * fraction of it.
+ *
+ * The "$" and the cents/PLUS-TAX column are raised with `vertical-align:
+ * text-top` (plus a small px nudge) so their tops line up with the top of
+ * the big digits rather than floating above them. `vertical-align` +
+ * `inline-block` is what html2canvas (the Download-PDF path) reproduces
+ * faithfully — flex margins and CSS transforms it does not.
  */
 function PriceComposite({ price, fs }: { price: number; fs: number }) {
   const whole = Math.floor(price)
   const cents = Math.round((price - whole) * 100).toString().padStart(2, '0')
+  const SMALL = fs * 0.46
   return (
-    <span className="inline-flex items-start" style={{ lineHeight: 1 }}>
-      <span style={{ fontSize: fs * 0.46, marginTop: fs * 0.02 }}>$</span>
-      <span style={{ fontSize: fs }}>{whole}</span>
-      {/* cents + PLUS TAX stacked and centred on the cents; the small
-          negative top margin pulls the cents' cap up level with the big
-          digits (the bigger digit's line box has more leading above it). */}
-      <span className="inline-flex flex-col items-center" style={{ marginLeft: fs * 0.03, marginTop: fs * -0.015 }}>
-        <span style={{ fontSize: fs * 0.45, lineHeight: 1 }}>{cents}</span>
-        <span style={{ fontSize: fs * 0.108, marginTop: fs * 0.015, lineHeight: 1, whiteSpace: 'nowrap' }}>PLUS TAX</span>
+    <span className="font-heading font-bold" style={{ fontSize: fs, lineHeight: 1, whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: SMALL, verticalAlign: `${fs * 0.38}px` }}>$</span>
+      <span>{whole}</span>
+      {/* cents over "PLUS TAX" — centred as one column, its top level with
+          the big digits' top, PLUS TAX tucked just under and no wider. */}
+      <span
+        style={{
+          display: 'inline-block', textAlign: 'center', verticalAlign: `${fs * 0.13}px`,
+          marginLeft: fs * 0.04,
+        }}
+      >
+        <span style={{ fontSize: SMALL, display: 'block', lineHeight: 1 }}>{cents}</span>
+        <span style={{ fontSize: fs * 0.14, display: 'block', lineHeight: 1, marginTop: fs * 0.03, letterSpacing: '0.01em' }}>PLUS TAX</span>
       </span>
     </span>
   )

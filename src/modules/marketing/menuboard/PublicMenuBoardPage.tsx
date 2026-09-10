@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase'
 import { Combobox, SbLoader } from '@/components/ui'
 import { byNaturalLabel } from '@/lib/naturalSort'
 import type { MenuBoardPackage } from './useMenuBoard'
-import { Board } from './MenuBoardPage'
+import { BoardViewer } from './MenuBoardPage'
 
 const sb = () => supabase as any
 
@@ -109,19 +109,21 @@ export function PublicMenuBoardPage() {
 
   return (
     <div className="min-h-screen bg-sb-navy py-6 px-3">
-      <div className="max-w-[480px] mx-auto flex flex-col gap-3">
+      <div className="max-w-[960px] mx-auto flex flex-col gap-3">
         {mode === 'open' && (
-          <Combobox
-            options={shopOptions} value={shopId} onChange={setShopId}
-            placeholder="Choose a shop to see its prices…"
-          />
+          <div className="max-w-[480px]">
+            <Combobox
+              options={shopOptions} value={shopId} onChange={setShopId}
+              placeholder="Choose a shop to see its prices…"
+            />
+          </div>
         )}
         {!shopId ? (
           <p className="text-xs font-mono text-sb-cream/60 py-10 text-center">Pick a shop above.</p>
         ) : shopLoading && !shop ? (
           <div className="py-16 flex justify-center"><SbLoader size={36} /></div>
         ) : (
-          <Board
+          <BoardViewer
             location={boardLocation}
             packages={activePackages}
             resolveQuart={resolveQuart}
