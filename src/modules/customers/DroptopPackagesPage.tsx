@@ -1,21 +1,26 @@
 // Droptop Packages — the configured package menu per shop, synced from
-// get-packages. The point (vs. the order-line-item data the heatmap/orders
-// pages already show) is the *configured* setup: which shops carry a given
-// package, its per-shop price, and the casual_items (shop supply fee,
-// credit-card fee, discount, oil inflation surcharge, …) that ride along
-// with it. See supabase/functions/droptop-sync-packages for the sync.
+// get-packages. A matrix: one row per shop, one column per package, the
+// per-shop price in each cell. Click a price to see everything that
+// package includes for that shop (services + casual-item fees/surcharges).
+// Column order + which columns show is a company-wide setting so "the most
+// relevant packages first" sticks for everyone. See
+// supabase/functions/droptop-sync-packages for the sync.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ChevronUp, ChevronDown, Eye, EyeOff } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
-import { Button, Card, CardBody, Select, SbLoader } from '@/components/ui'
+import { useAppSetting } from '@/hooks/useAppSetting'
+import { naturalCompare } from '@/lib/naturalSort'
+import { Button, Card, CardBody, Modal, SbLoader } from '@/components/ui'
 import { runDroptopPackageSync, probeDroptopPackages } from '@/services/droptopService'
 import { useSyncTasksStore, DROPTOP_PACKAGES_TASK_ID } from '@/stores/syncTasksStore'
 
 const sb = () => supabase as any
+const COLS_SETTING_KEY = 'droptop_package_columns'
 
 interface PkgRow {
   id: string
@@ -23,6 +28,7 @@ interface PkgRow {
   operation_id: string
   name: string | null
   internal_name: string | null
+  description: string | null
   price: number | null
   package_tax_exempt: boolean | null
   services: any[]
@@ -34,20 +40,29 @@ interface CasualRow {
   name: string | null
   amount: number | null
   quantity: number | null
+  tax_exempt: boolean | null
   hidden_on_order: boolean | null
 }
+interface ColsConfig { order: string[]; hidden: string[] }
 
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
+  a.href = url; a.download = filename
+  document.body.appendChild(a); a.click(); a.remove()
   URL.revokeObjectURL(url)
 }
 const fmt$ = (v: number | null | undefined) => (v == null ? '' : `$${Number(v).toFixed(2)}`)
+const isMenuVariant = (p: PkgRow) => /^\s*\[m\]/i.test(p.internal_name ?? '')
+
+function pricingSummary(pc: any): string {
+  const badge = pc?.badge ?? ''
+  let cfg = ''
+  if (typeof pc?.config === 'string') cfg = pc.config
+  else if (pc?.config && typeof pc.config === 'object') cfg = Object.entries(pc.config).map(([k, v]) => `${k} ${v}`).join(', ')
+  const tag = pc?.tag_name ? ` · ${pc.tag_name}` : ''
+  return `${badge}${cfg ? ` (${cfg})` : ''}${tag}`.trim()
+}
 
 export function DroptopPackagesPage() {
   const { profile } = useAuthStore()
@@ -58,19 +73,21 @@ export function DroptopPackagesPage() {
   const [packages, setPackages] = useState<PkgRow[]>([])
   const [casual, setCasual] = useState<CasualRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [pkgFilter, setPkgFilter] = useState('')
   const [probeOut, setProbeOut] = useState<string | null>(null)
   const [probing, setProbing] = useState(false)
+  const [colsOpen, setColsOpen] = useState(false)
+  const [detail, setDetail] = useState<{ shopLabel: string; pkgName: string; variants: PkgRow[] } | null>(null)
+  const [cols, saveCols] = useAppSetting<ColsConfig>(COLS_SETTING_KEY, { order: [], hidden: [] })
 
   const load = useCallback(async () => {
     if (!companyId) { setLoading(false); return }
     setLoading(true)
     const [p, c] = await Promise.all([
       sb().schema('inventory').from('droptop_packages')
-        .select('id, location_id, operation_id, name, internal_name, price, package_tax_exempt, services, last_synced_at')
+        .select('id, location_id, operation_id, name, internal_name, description, price, package_tax_exempt, services, last_synced_at')
         .eq('company_id', companyId).order('name'),
       sb().schema('inventory').from('droptop_package_casual_items')
-        .select('package_row_id, location_id, name, amount, quantity, hidden_on_order')
+        .select('package_row_id, location_id, name, amount, quantity, tax_exempt, hidden_on_order')
         .eq('company_id', companyId),
     ])
     if (p.error || c.error) toast.error(`Packages didn't load: ${(p.error || c.error)!.message}`)
@@ -79,14 +96,6 @@ export function DroptopPackagesPage() {
     setLoading(false)
   }, [companyId])
   useEffect(() => { load() }, [load])
-
-  const packageNames = useMemo(
-    () => [...new Set(packages.map((p) => p.name).filter(Boolean) as string[])].sort(),
-    [packages],
-  )
-  useEffect(() => {
-    if (!pkgFilter && packageNames.length) setPkgFilter(packageNames[0])
-  }, [packageNames, pkgFilter])
 
   const casualByPkg = useMemo(() => {
     const m = new Map<string, CasualRow[]>()
@@ -97,23 +106,63 @@ export function DroptopPackagesPage() {
     return m
   }, [casual])
 
-  // Rows for the selected package name — one per shop that carries it.
-  const rows = useMemo(() => packages
-    .filter((p) => p.name === pkgFilter)
-    .map((p) => ({
-      pkg: p,
-      shop: loc.labelOf(p.location_id) === '—' ? `(op ${p.operation_id})` : loc.labelOf(p.location_id),
-      casual: casualByPkg.get(p.id) ?? [],
-    }))
-    .sort((a, b) => a.shop.localeCompare(b.shop, undefined, { numeric: true })),
-  [packages, pkgFilter, casualByPkg, loc])
+  // Shop id (or a synthetic key for an unmapped operation) → label + its packages.
+  const shops = useMemo(() => {
+    const m = new Map<string, { key: string; label: string; sortKey: string; pkgs: PkgRow[] }>()
+    for (const p of packages) {
+      const key = p.location_id ?? `op:${p.operation_id}`
+      const label = p.location_id && loc.labelOf(p.location_id) !== '—' ? loc.labelOf(p.location_id) : `(op ${p.operation_id})`
+      if (!m.has(key)) m.set(key, { key, label, sortKey: label, pkgs: [] })
+      m.get(key)!.pkgs.push(p)
+    }
+    return [...m.values()].sort((a, b) => naturalCompare(a.sortKey, b.sortKey))
+  }, [packages, loc])
 
-  // Distinct casual-item names across the selected package = the pivot columns.
-  const casualCols = useMemo(() => {
-    const names = new Set<string>()
-    for (const r of rows) for (const ci of r.casual) if (ci.name) names.add(ci.name)
-    return [...names].sort()
-  }, [rows])
+  // Every distinct package name, with the max price seen anywhere (drives the default column order).
+  const allPackageNames = useMemo(() => {
+    const maxPrice = new Map<string, number>()
+    for (const p of packages) {
+      if (!p.name) continue
+      maxPrice.set(p.name, Math.max(maxPrice.get(p.name) ?? 0, Number(p.price) || 0))
+    }
+    return [...maxPrice.entries()]
+      .sort((a, b) => b[1] - a[1] || naturalCompare(a[0], b[0]))
+      .map(([name]) => name)
+  }, [packages])
+
+  // Visible columns, in the saved order, with any brand-new package names appended.
+  const visibleCols = useMemo(() => {
+    const hidden = new Set(cols.hidden)
+    const ordered = cols.order.filter((n) => allPackageNames.includes(n))
+    const missing = allPackageNames.filter((n) => !cols.order.includes(n))
+    return [...ordered, ...missing].filter((n) => !hidden.has(n))
+  }, [cols, allPackageNames])
+
+  // (shopKey, packageName) → the "primary" package row (the [M] menu-board
+  // variant if there is one, else the priciest) plus every variant.
+  const cellFor = useCallback((shopPkgs: PkgRow[], pkgName: string): { primary: PkgRow | null; variants: PkgRow[] } => {
+    const variants = shopPkgs.filter((p) => p.name === pkgName)
+    if (!variants.length) return { primary: null, variants: [] }
+    const menu = variants.find(isMenuVariant)
+    const primary = menu ?? [...variants].sort((a, b) => (Number(b.price) || 0) - (Number(a.price) || 0))[0]
+    return { primary, variants }
+  }, [])
+
+  function move(name: string, dir: -1 | 1) {
+    const order = visibleCols.slice()
+    const i = order.indexOf(name)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= order.length) return
+    ;[order[i], order[j]] = [order[j], order[i]]
+    // Persist the full order (visible + hidden), hidden kept where they were.
+    const hiddenInPlace = allPackageNames.filter((n) => cols.hidden.includes(n))
+    saveCols({ order: [...order, ...hiddenInPlace], hidden: cols.hidden })
+  }
+  function toggleHidden(name: string) {
+    const hidden = cols.hidden.includes(name) ? cols.hidden.filter((n) => n !== name) : [...cols.hidden, name]
+    const order = cols.order.length ? cols.order : allPackageNames
+    saveCols({ order, hidden })
+  }
 
   async function syncNow() {
     if (syncing || !companyId) return
@@ -137,34 +186,28 @@ export function DroptopPackagesPage() {
     setProbing(true)
     setProbeOut(null)
     try {
-      const data = await probeDroptopPackages()
-      setProbeOut(JSON.stringify(data, null, 2))
+      setProbeOut(JSON.stringify(await probeDroptopPackages(), null, 2))
     } catch (e) {
       setProbeOut(`Error: ${e instanceof Error ? e.message : String(e)}`)
     }
     setProbing(false)
   }
 
-  function exportRows(kind: 'csv' | 'xlsx') {
-    const header = ['Shop', 'Operation', 'Price', 'Tax Exempt', ...casualCols, 'Services']
-    const body = rows.map((r) => [
-      r.shop, r.pkg.operation_id, r.pkg.price ?? '', r.pkg.package_tax_exempt ? 'yes' : '',
-      ...casualCols.map((cn) => {
-        const ci = r.casual.find((x) => x.name === cn)
-        return ci?.amount ?? ''
-      }),
-      (r.pkg.services ?? []).map((s: any) => s.service_name).filter(Boolean).join('; '),
+  function exportMatrix(kind: 'csv' | 'xlsx') {
+    const header = ['Shop', 'Operation', ...visibleCols]
+    const body = shops.map((s) => [
+      s.label,
+      s.pkgs[0]?.operation_id ?? '',
+      ...visibleCols.map((n) => cellFor(s.pkgs, n).primary?.price ?? ''),
     ])
-    const fileBase = `droptop-packages-${(pkgFilter || 'all').replace(/\W+/g, '-').toLowerCase()}`
     if (kind === 'csv') {
       const csv = [header, ...body].map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-      triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileBase}.csv`)
+      triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), 'droptop-packages.csv')
     } else {
       const ws = XLSX.utils.aoa_to_sheet([header, ...body])
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Packages')
-      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-      triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileBase}.xlsx`)
+      triggerDownload(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'droptop-packages.xlsx')
     }
   }
 
@@ -175,8 +218,8 @@ export function DroptopPackagesPage() {
       <div>
         <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Droptop Packages</h1>
         <p className="text-xs text-inky mt-0.5">
-          The configured package menu per shop — which shops carry a package, its per-shop price, and the casual
-          items (fees, surcharges, discounts) attached to it.
+          One row per shop, one column per package, the per-shop price in each cell. Click a price to see the
+          services and fees that package includes for that shop.
         </p>
       </div>
 
@@ -202,45 +245,68 @@ export function DroptopPackagesPage() {
         <Card><CardBody><p className="text-xs font-mono text-inky/60 py-6 text-center">No packages synced yet — hit Sync Packages.</p></CardBody></Card>
       ) : (
         <Card><CardBody className="flex flex-col gap-3">
-          <div className="flex items-end gap-3 flex-wrap">
-            <div className="w-64">
-              <Select label="Package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)}
-                options={packageNames.map((n) => ({ value: n, label: n }))} />
-            </div>
-            <span className="text-[11px] font-mono text-inky/60">{rows.length} shop{rows.length !== 1 ? 's' : ''} carry this package</span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs font-mono text-navy uppercase tracking-wide">{shops.length} shops · {visibleCols.length}/{allPackageNames.length} package columns</span>
+            <Button size="sm" variant="secondary" onClick={() => setColsOpen((o) => !o)}>{colsOpen ? 'Done' : 'Columns'}</Button>
             <div className="ml-auto flex gap-2">
-              <Button size="sm" variant="secondary" onClick={() => exportRows('csv')}>CSV</Button>
-              <Button size="sm" variant="secondary" onClick={() => exportRows('xlsx')}>XLSX</Button>
+              <Button size="sm" variant="secondary" onClick={() => exportMatrix('csv')}>CSV</Button>
+              <Button size="sm" variant="secondary" onClick={() => exportMatrix('xlsx')}>XLSX</Button>
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded border border-navy/30">
-            <table className="text-xs font-mono">
+          {colsOpen && (
+            <div className="rounded border border-navy/20 p-3 flex flex-col gap-1 max-h-72 overflow-auto">
+              <p className="text-[11px] font-mono text-inky/60 mb-1">Order (top = leftmost column) and show/hide. Saved for everyone.</p>
+              {[...visibleCols, ...allPackageNames.filter((n) => cols.hidden.includes(n))].map((name) => {
+                const hidden = cols.hidden.includes(name)
+                return (
+                  <div key={name} className={`flex items-center gap-2 text-xs font-mono ${hidden ? 'text-inky/40' : 'text-navy'}`}>
+                    <button onClick={() => move(name, -1)} disabled={hidden} className="disabled:opacity-20 hover:text-sky"><ChevronUp className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => move(name, 1)} disabled={hidden} className="disabled:opacity-20 hover:text-sky"><ChevronDown className="w-3.5 h-3.5" /></button>
+                    <span className="flex-1">{name}</span>
+                    <button onClick={() => toggleHidden(name)} className="hover:text-sky" title={hidden ? 'Show' : 'Hide'}>
+                      {hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <div className="overflow-auto rounded border border-navy/30 max-h-[70vh]">
+            <table className="text-xs font-mono border-separate border-spacing-0">
               <thead>
-                <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                  <th className="px-3 py-2 text-left whitespace-nowrap">Shop</th>
-                  <th className="px-3 py-2 text-right whitespace-nowrap">Price</th>
-                  {casualCols.map((cn) => <th key={cn} className="px-3 py-2 text-right whitespace-nowrap">{cn}</th>)}
-                  <th className="px-3 py-2 text-left whitespace-nowrap">Services</th>
+                <tr className="bg-cream text-inky uppercase tracking-wide">
+                  <th className="sticky left-0 top-0 z-20 bg-cream px-3 py-2 text-left whitespace-nowrap border-b border-r border-navy/30">Shop</th>
+                  {visibleCols.map((n) => (
+                    <th key={n} className="sticky top-0 z-10 bg-cream px-3 py-2 text-right whitespace-nowrap border-b border-navy/30" title={n}>
+                      {n.length > 22 ? n.slice(0, 21) + '…' : n}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.pkg.id} className="border-b border-navy/20">
-                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{r.shop}</td>
-                    <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{fmt$(r.pkg.price)}</td>
-                    {casualCols.map((cn) => {
-                      const ci = r.casual.find((x) => x.name === cn)
+                {shops.map((s) => (
+                  <tr key={s.key} className="hover:bg-sky/5">
+                    <td className="sticky left-0 z-10 bg-cream px-3 py-1.5 text-navy whitespace-nowrap border-b border-r border-navy/20">{s.label}</td>
+                    {visibleCols.map((n) => {
+                      const { primary, variants } = cellFor(s.pkgs, n)
                       return (
-                        <td key={cn} className="px-3 py-1.5 text-navy text-right whitespace-nowrap">
-                          {ci ? fmt$(ci.amount) : <span className="text-inky/25">—</span>}
-                          {ci?.hidden_on_order && <span className="ml-1 text-inky/40" title="Hidden on order">·h</span>}
+                        <td key={n} className="px-3 py-1.5 text-right whitespace-nowrap border-b border-navy/10">
+                          {primary == null ? (
+                            <span className="text-inky/20">—</span>
+                          ) : (
+                            <button
+                              onClick={() => setDetail({ shopLabel: s.label, pkgName: n, variants })}
+                              className="text-navy hover:text-sky hover:underline"
+                            >
+                              {fmt$(primary.price)}
+                              {variants.length > 1 && <span className="ml-1 text-inky/40">▸{variants.length}</span>}
+                            </button>
+                          )}
                         </td>
                       )
                     })}
-                    <td className="px-3 py-1.5 text-navy/70 max-w-[320px] truncate" title={(r.pkg.services ?? []).map((s: any) => s.service_name).filter(Boolean).join(', ')}>
-                      {(r.pkg.services ?? []).map((s: any) => s.service_name).filter(Boolean).join(', ') || '—'}
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -248,6 +314,78 @@ export function DroptopPackagesPage() {
           </div>
         </CardBody></Card>
       )}
+
+      {detail && (
+        <PackageDetailModal
+          shopLabel={detail.shopLabel} pkgName={detail.pkgName} variants={detail.variants}
+          casualByPkg={casualByPkg} onClose={() => setDetail(null)}
+        />
+      )}
     </div>
+  )
+}
+
+function PackageDetailModal({ shopLabel, pkgName, variants, casualByPkg, onClose }: {
+  shopLabel: string
+  pkgName: string
+  variants: PkgRow[]
+  casualByPkg: Map<string, CasualRow[]>
+  onClose: () => void
+}) {
+  return (
+    <Modal open onClose={onClose} title={`${pkgName} — ${shopLabel}`} size="lg">
+      <div className="flex flex-col gap-4">
+        {variants.map((p) => {
+          const casual = casualByPkg.get(p.id) ?? []
+          return (
+            <div key={p.id} className="rounded border border-navy/20 p-3 flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm font-mono font-bold text-navy">
+                  {fmt$(p.price) || '$0.00'}
+                  {isMenuVariant(p) && <span className="ml-2 text-[10px] font-mono text-sky uppercase">menu board</span>}
+                </span>
+                <span className="text-[10px] font-mono text-inky/60">
+                  {p.internal_name || '—'}{p.package_tax_exempt ? ' · tax exempt' : ''}
+                </span>
+              </div>
+              {p.description && <p className="text-[11px] font-mono text-inky/70">{p.description}</p>}
+
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Services</span>
+                <ul className="mt-1 flex flex-col gap-0.5">
+                  {(p.services ?? []).map((sv: any, i: number) => (
+                    <li key={i} className="text-[11px] font-mono text-navy">
+                      {sv.service_name}
+                      {(sv.pricing_configs ?? []).length > 0 && (
+                        <span className="text-inky/60"> — {sv.pricing_configs.map(pricingSummary).filter(Boolean).join(' · ')}</span>
+                      )}
+                    </li>
+                  ))}
+                  {(p.services ?? []).length === 0 && <li className="text-[11px] font-mono text-inky/40 italic">none</li>}
+                </ul>
+              </div>
+
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Casual items (fees / surcharges / discounts)</span>
+                <ul className="mt-1 flex flex-col gap-0.5">
+                  {casual.map((ci, i) => (
+                    <li key={i} className="text-[11px] font-mono text-navy flex justify-between gap-3">
+                      <span>
+                        {ci.name}
+                        {ci.quantity != null && Number(ci.quantity) !== 1 ? ` ×${ci.quantity}` : ''}
+                        {ci.tax_exempt ? ' · tax exempt' : ''}
+                        {ci.hidden_on_order ? ' · hidden on order' : ''}
+                      </span>
+                      <span className={Number(ci.amount) < 0 ? 'text-[#C0392B]' : ''}>{fmt$(ci.amount)}</span>
+                    </li>
+                  ))}
+                  {casual.length === 0 && <li className="text-[11px] font-mono text-inky/40 italic">none</li>}
+                </ul>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Modal>
   )
 }
