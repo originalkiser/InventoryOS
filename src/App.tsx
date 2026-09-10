@@ -11,6 +11,7 @@ import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { SetupPage } from '@/pages/Setup'
 import { PublicFormPage } from '@/pages/PublicFormPage'
+import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, profile, initialized } = useAuthStore()
@@ -80,6 +81,9 @@ export default function App() {
 
         {/* Public form — no auth required */}
         <Route path="/f/:shareToken" element={<PublicFormPage />} />
+
+        {/* Public menu board — no auth required (share link) */}
+        <Route path="/m/:token" element={<PublicMenuBoardPage />} />
 
         {/* Unreachable in practice — "/*" above already matches anything
             that isn't one of the explicit paths higher up (which rank

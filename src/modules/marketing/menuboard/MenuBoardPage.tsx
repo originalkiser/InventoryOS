@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Button, Card, CardBody, Combobox, Input, Select, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, Combobox, Input, Modal, Select, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
 import { byNaturalLabel } from '@/lib/naturalSort'
@@ -48,13 +50,22 @@ const PRICE_COLUMN_OPTIONS: { value: string; label: string }[] = [
 // is the image, untouched. Page 1's native size is 704×1221; the DB's
 // price_pos_x/y / quart_pos_x/y (percentages, measured off the image, and
 // draggable via "Edit layout") hold at any rendered width.
-// Only the rp/"Valvoline Restore & Protect" box is cream-bg/navy-text (the
-// "ULTIMATE" highlight tier); every other box is navy-bg/cream-text. Any
-// package_key not listed here has no known spot on the art and is skipped.
-const CREAM_BOX_KEYS = new Set(['valvoline_restore_protect'])
-const BOARD_SLOT_KEYS = new Set([
-  'valvoline_restore_protect', 'premium_full_synthetic_hm', 'premium_full_synthetic', 'premium_hm', 'economy',
-])
+// Per-package board facts that aren't in the DB: whether the box is the
+// cream "ULTIMATE" tier (rp only), and the price patch's height as a % of
+// the board's own height — sized to the box interior between its top edge
+// and the dotted separator, so the (invisible, bg-matched) patch fully
+// hides the printed price while never covering the dotted line. Any
+// package_key not here has no spot on the art and is skipped.
+const BOARD_SLOTS: Record<string, { cream: boolean; patchHPct: number }> = {
+  valvoline_restore_protect: { cream: true,  patchHPct: 8.4 },
+  premium_full_synthetic_hm: { cream: false, patchHPct: 7.4 },
+  premium_full_synthetic:    { cream: false, patchHPct: 7.4 },
+  premium_hm:                { cream: false, patchHPct: 5.6 },
+  economy:                   { cream: false, patchHPct: 5.6 },
+}
+// Native page-1 art ratio — used to turn the measured board width into a
+// board height for the % patch sizing above.
+const ART_RATIO = 1221 / 704
 
 /**
  * Menu Board — an on-screen recreation of the printed lobby/bay board,
@@ -137,6 +148,7 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
 }) {
   const [editMode, setEditMode] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
   const address = location ? [location.address, location.city, location.state, location.zip].filter(Boolean).join(', ') : ''
   const activePackages = useMemo(() => packages.filter((p) => p.active).sort((a, b) => a.sort_order - b.sort_order), [packages])
 
@@ -147,10 +159,19 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
           <Combobox label="Shop" options={shopOptions} value={locationId} onChange={onLocationChange}
             placeholder="Search by name, address, or city…" />
         </div>
+        <Button size="sm" variant="secondary" onClick={() => setShareOpen(true)}>Share link</Button>
         <div className="ml-auto">
           <Toggle checked={editMode} onChange={setEditMode} color="cyan" size="sm" label="Edit layout" />
         </div>
       </CardBody></Card>
+
+      {shareOpen && (
+        <ShareMenuBoardModal
+          currentLocationId={locationId}
+          currentLabel={shopOptions.find((o) => o.value === locationId)?.label ?? ''}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
 
       {!locationId ? (
         <Card><CardBody><p className="text-xs font-mono text-inky/60 py-8 text-center">Search for a shop above to show its board.</p></CardBody></Card>
@@ -167,16 +188,17 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
 }
 
 /**
- * The board itself — a fixed-aspect card with each package's price/quart
- * text absolutely positioned by percentage (so it's independent of the
- * rendered size). Draggable in edit mode: pointer-drag updates position
- * live, committed to the database on release.
+ * The board itself — each package's price/quart text absolutely positioned
+ * by percentage over the page-1 art, then the page-2 reference sheet and a
+ * shop-address bar. Draggable in edit mode (admin only): pointer-drag
+ * updates position live, committed to the DB on release. Reused read-only
+ * by the public share page (no editMode, no updatePackage).
  */
-function Board({ location, packages, editMode, updatePackage, resolveQuart, address }: {
+export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address }: {
   location: Location | undefined
   packages: MenuBoardPackage[]
-  editMode: boolean
-  updatePackage: (id: string, patch: Partial<MenuBoardPackage>) => Promise<boolean>
+  editMode?: boolean
+  updatePackage?: (id: string, patch: Partial<MenuBoardPackage>) => Promise<boolean> | void
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
   address: string
 }) {
@@ -209,7 +231,7 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
     const x = Math.min(100, Math.max(0, ((e.clientX - rect.left) / rect.width) * 100))
     const y = Math.min(100, Math.max(0, ((e.clientY - rect.top) / rect.height) * 100))
     const key = dragging.field === 'price' ? { price_pos_x: x, price_pos_y: y } : { quart_pos_x: x, quart_pos_y: y }
-    updatePackage(dragging.id, key)
+    updatePackage?.(dragging.id, key)
   }
 
   function endDrag() { setDragging(null) }
@@ -231,27 +253,30 @@ function Board({ location, packages, editMode, updatePackage, resolveQuart, addr
           >
             <img src={menuBoardArt} alt="Menu board" className="block w-full" draggable={false} />
             {packages.map((p) => {
-              if (!BOARD_SLOT_KEYS.has(p.package_key)) return null // no known spot on the art (e.g. Dexos)
+              const slot = BOARD_SLOTS[p.package_key]
+              if (!slot) return null // no known spot on the art (e.g. Dexos)
               const priceCol = p.price_column
               const price = priceCol ? money((location as any)?.[priceCol]) : null
               const quart = resolveQuart(location?.id ?? '', p.package_key)
-              const cream = CREAM_BOX_KEYS.has(p.package_key)
-              const patchBg = cream ? 'bg-sb-cream' : 'bg-sb-navy'
-              const patchText = cream ? 'text-sb-navy' : 'text-sb-cream'
+              const patchBg = slot.cream ? 'bg-sb-cream' : 'bg-sb-navy'
+              const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
               const fs = p.price_font_size * scale
+              // Board height (px) from the measured width and the art's ratio.
+              const boardH = boardW * ART_RATIO
               return (
                 <div key={p.id}>
                   {/* Price — the composite the printed board uses: small "$",
                       big whole-dollars, superscript cents, "PLUS TAX" tucked
-                      under the cents. The solid patch behind it (min-width
-                      off the font size, not the real string) still fully
-                      covers whatever price was printed on the art. */}
+                      under the cents. The patch is sized to the box interior
+                      (bg-matched, so invisible) so it hides the printed price
+                      no matter how many digits the live one has, while its
+                      bottom stays clear of the dotted separator. */}
                   <div
                     onPointerDown={(e) => startDrag(e, p, 'price')}
                     className={`absolute flex items-center justify-center font-heading font-bold ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
                     style={{
                       left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
-                      minWidth: p.price_font_size * 3.9 * scale, height: p.price_font_size * 1.28 * scale,
+                      minWidth: boardW * (slot.cream ? 0.37 : 0.34), height: (slot.patchHPct / 100) * boardH,
                       padding: `0 ${5 * scale}px`,
                     }}
                   >
@@ -314,13 +339,120 @@ function PriceComposite({ price, fs }: { price: number; fs: number }) {
   const cents = Math.round((price - whole) * 100).toString().padStart(2, '0')
   return (
     <span className="inline-flex items-start" style={{ lineHeight: 1 }}>
-      <span style={{ fontSize: fs * 0.5, marginTop: fs * 0.05 }}>$</span>
+      <span style={{ fontSize: fs * 0.46, marginTop: fs * 0.02 }}>$</span>
       <span style={{ fontSize: fs }}>{whole}</span>
-      <span className="inline-flex flex-col items-start" style={{ marginLeft: fs * 0.05, marginTop: fs * 0.02 }}>
-        <span style={{ fontSize: fs * 0.42, lineHeight: 1 }}>{cents}</span>
-        <span style={{ fontSize: fs * 0.17, letterSpacing: '0.06em', marginTop: fs * 0.05, lineHeight: 1 }}>PLUS TAX</span>
+      {/* cents + PLUS TAX stacked and centred on the cents; the small
+          negative top margin pulls the cents' cap up level with the big
+          digits (the bigger digit's line box has more leading above it). */}
+      <span className="inline-flex flex-col items-center" style={{ marginLeft: fs * 0.03, marginTop: fs * -0.015 }}>
+        <span style={{ fontSize: fs * 0.45, lineHeight: 1 }}>{cents}</span>
+        <span style={{ fontSize: fs * 0.108, marginTop: fs * 0.015, lineHeight: 1, whiteSpace: 'nowrap' }}>PLUS TAX</span>
       </span>
     </span>
+  )
+}
+
+// ── Share link ─────────────────────────────────────────────────────────
+
+interface ShareRow { token: string; location_id: string | null; label: string | null; created_at: string }
+const sb = () => supabase as any
+const shareUrlFor = (token: string) => `${window.location.origin}${import.meta.env.BASE_URL}m/${token}`
+
+/**
+ * Create / revoke public menu-board links. A link is either locked to one
+ * shop (viewer sees just that board) or open (viewer picks the shop from a
+ * dropdown). Either way the recipient gets only the board — no SB Net.
+ */
+function ShareMenuBoardModal({ currentLocationId, currentLabel, onClose }: {
+  currentLocationId: string
+  currentLabel: string
+  onClose: () => void
+}) {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const [mode, setMode] = useState<'locked' | 'open'>(currentLocationId ? 'locked' : 'open')
+  const [rows, setRows] = useState<ShareRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!companyId) { setLoading(false); return }
+    const { data } = await sb().schema('marketing').from('menu_board_shares')
+      .select('token, location_id, label, created_at').eq('company_id', companyId).eq('active', true)
+      .order('created_at', { ascending: false })
+    setRows((data ?? []) as ShareRow[])
+    setLoading(false)
+  }, [companyId])
+  useEffect(() => { load() }, [load])
+
+  async function create() {
+    if (!companyId) return
+    setCreating(true)
+    const row = {
+      company_id: companyId,
+      location_id: mode === 'locked' ? currentLocationId : null,
+      label: mode === 'locked' ? currentLabel : 'Any shop (viewer picks)',
+      created_by: profile?.id ?? null,
+    }
+    const { data, error } = await sb().schema('marketing').from('menu_board_shares').insert(row).select('token').single()
+    setCreating(false)
+    if (error) { toast.error(error.message); return }
+    await navigator.clipboard.writeText(shareUrlFor(data.token)).catch(() => {})
+    toast.success('Link created and copied')
+    load()
+  }
+
+  async function revoke(token: string) {
+    const { error } = await sb().schema('marketing').from('menu_board_shares').update({ active: false }).eq('token', token)
+    if (error) { toast.error(error.message); return }
+    setRows((r) => r.filter((x) => x.token !== token))
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Share menu board" size="md">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">New link</span>
+          <label className={`flex items-start gap-2 text-xs font-mono rounded border p-2 cursor-pointer ${mode === 'locked' ? 'border-sky bg-sky/5' : 'border-navy/20'} ${!currentLocationId ? 'opacity-40' : ''}`}>
+            <input type="radio" checked={mode === 'locked'} disabled={!currentLocationId}
+              onChange={() => setMode('locked')} className="mt-0.5 accent-sky" />
+            <span>
+              <span className="text-navy font-bold">Lock to {currentLabel || 'the selected shop'}</span>
+              <span className="block text-inky/60">Viewer sees only this shop's board — no shop picker.</span>
+            </span>
+          </label>
+          <label className={`flex items-start gap-2 text-xs font-mono rounded border p-2 cursor-pointer ${mode === 'open' ? 'border-sky bg-sky/5' : 'border-navy/20'}`}>
+            <input type="radio" checked={mode === 'open'} onChange={() => setMode('open')} className="mt-0.5 accent-sky" />
+            <span>
+              <span className="text-navy font-bold">Let the viewer choose the shop</span>
+              <span className="block text-inky/60">Viewer gets a shop dropdown above the board.</span>
+            </span>
+          </label>
+          <Button size="sm" onClick={create} disabled={creating || (mode === 'locked' && !currentLocationId)}>
+            {creating ? 'Creating…' : 'Create link'}
+          </Button>
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-navy/10 pt-3">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Active links</span>
+          {loading ? (
+            <div className="py-3 flex justify-center"><SbLoader size={22} /></div>
+          ) : rows.length === 0 ? (
+            <span className="text-xs font-mono text-inky/40 italic">None yet.</span>
+          ) : rows.map((r) => (
+            <div key={r.token} className="flex items-center gap-2 rounded border border-navy/15 px-2 py-1.5">
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-mono text-navy truncate">{r.label || (r.location_id ? 'Locked shop' : 'Any shop')}</div>
+                <div className="text-[10px] font-mono text-inky/50 truncate">{shareUrlFor(r.token)}</div>
+              </div>
+              <button onClick={() => { navigator.clipboard.writeText(shareUrlFor(r.token)); toast.success('Copied') }}
+                className="text-[10px] font-mono text-sky hover:underline shrink-0">copy</button>
+              <button onClick={() => revoke(r.token)} className="text-[10px] font-mono text-[#C0392B] hover:underline shrink-0">revoke</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Modal>
   )
 }
 
