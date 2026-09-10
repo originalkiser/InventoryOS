@@ -1,11 +1,11 @@
 // Minimal, dependency-free PDF writer for image-only documents.
 //
-// Each entry becomes one page (US Letter, portrait) with the JPEG scaled to
-// fit inside a margin and centred. Used by the Menu Board "Download PDF"
-// button: html2canvas snapshots each board page to a JPEG, this stitches
-// them into a real .pdf the browser can download. Kept tiny on purpose —
-// we only ever embed pre-rasterised JPEGs (DCTDecode), so there's no font
-// or vector handling to get wrong.
+// Default: each entry becomes one US-Letter page with the JPEG scaled to
+// fit inside a margin and centred. With `fit: 'image'` each page is sized
+// to its own image's aspect ratio and the image fills it edge-to-edge —
+// no white border, "just the menu". Used by the Menu Board "Download PDF"
+// button. Kept tiny on purpose — we only ever embed pre-rasterised JPEGs
+// (DCTDecode), so there's no font or vector handling to get wrong.
 
 interface PdfImage {
   /** `data:image/jpeg;base64,...` — must be JPEG, not PNG. */
@@ -14,6 +14,9 @@ interface PdfImage {
 
 const PAGE_W = 612 // 8.5in @ 72pt
 const PAGE_H = 792 // 11in  @ 72pt
+// In `fit: 'image'` mode, the page's longest side is scaled to this many
+// points (keeps the PDF a sane physical size regardless of image px).
+const TIGHT_MAX_PT = 900
 
 function base64ToBytes(dataUrl: string): Uint8Array {
   const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
@@ -40,8 +43,9 @@ function jpegDimensions(bytes: Uint8Array): { w: number; h: number } {
   return { w: PAGE_W, h: PAGE_H }
 }
 
-export function imagesToPdf(images: PdfImage[], opts?: { marginPt?: number }): Blob {
+export function imagesToPdf(images: PdfImage[], opts?: { marginPt?: number; fit?: 'page' | 'image' }): Blob {
   const margin = opts?.marginPt ?? 18
+  const tight = opts?.fit === 'image'
   const enc = new TextEncoder()
   const parts: Uint8Array[] = []
   let length = 0
@@ -76,13 +80,26 @@ export function imagesToPdf(images: PdfImage[], opts?: { marginPt?: number }): B
   images.forEach((img, k) => {
     const bytes = base64ToBytes(img.jpegDataUrl)
     const { w: iw, h: ih } = jpegDimensions(bytes)
-    const availW = PAGE_W - margin * 2
-    const availH = PAGE_H - margin * 2
-    const s = Math.min(availW / iw, availH / ih)
-    const dw = iw * s
-    const dh = ih * s
-    const dx = (PAGE_W - dw) / 2
-    const dy = (PAGE_H - dh) / 2
+
+    let pageW: number, pageH: number, dw: number, dh: number, dx: number, dy: number
+    if (tight) {
+      // Page = image shape, image fills it. No margin, no white.
+      const s = TIGHT_MAX_PT / Math.max(iw, ih)
+      pageW = iw * s
+      pageH = ih * s
+      dw = pageW
+      dh = pageH
+      dx = 0
+      dy = 0
+    } else {
+      pageW = PAGE_W
+      pageH = PAGE_H
+      const s = Math.min((PAGE_W - margin * 2) / iw, (PAGE_H - margin * 2) / ih)
+      dw = iw * s
+      dh = ih * s
+      dx = (PAGE_W - dw) / 2
+      dy = (PAGE_H - dh) / 2
+    }
 
     const pageNum = 3 + 3 * k
     const contentNum = 4 + 3 * k
@@ -90,7 +107,7 @@ export function imagesToPdf(images: PdfImage[], opts?: { marginPt?: number }): B
 
     startObj(pageNum)
     push(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] ` +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)}] ` +
       `/Resources << /XObject << /Im0 ${imgNum} 0 R >> >> /Contents ${contentNum} 0 R >>\n`,
     )
     endObj()

@@ -8,8 +8,8 @@ import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage }
 import { byNaturalLabel } from '@/lib/naturalSort'
 import { imagesToPdf } from '@/lib/imagesToPdf'
 import type { Location } from '@/types'
-import menuBoardArt from '@/assets/Menu-Board-Page-1.png'
-import menuBoardArt2 from '@/assets/Menu-Board-Page-2.png'
+import menuBoardArt from '@/assets/MenuBoard-01.png'
+import menuBoardArt2 from '@/assets/MenuBoard-02.png'
 
 const LAST_LOCATION_KEY = 'menu-board:last-location'
 const money = (v: number | null | undefined) => (v == null ? null : Number(v))
@@ -26,10 +26,13 @@ const BOARD_REF_WIDTH = 480
 // width on a wide screen and adds PDF-reader-style zoom. Everything inside
 // Board is %-positioned and font sizes are re-scaled off the measured
 // width, so any display width just works.
-const MAX_BOARD_WIDTH = 900
+const MAX_BOARD_WIDTH = 1100
 const ZOOM_MIN = 0.5
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.25
+
+type BoardLayout = 'single' | 'stacked' | 'side-by-side'
+const LAYOUT_KEY = 'menu-board:layout'
 
 // The numeric price columns on core.locations a package can be fed from —
 // the Package Mapping "Source Column" dropdown. Kept as an explicit list
@@ -50,15 +53,15 @@ const PRICE_COLUMN_OPTIONS: { value: string; label: string }[] = [
   { value: 'oil_inflation_surcharge', label: 'oil_inflation_surcharge' },
 ]
 
-// The real board art (src/assets/Menu-Board-Page-1.png + -2.png) is the
-// actual printed sign — everything on it (logos, package names, qualifiers,
+// The real board art (src/assets/MenuBoard-01.png + -02.png) is the actual
+// printed sign — everything on it (logos, package names, qualifiers,
 // "PRICES INCLUDE UP TO 5 QUARTS", additional services, disclaimers, the
 // staff reference sheet on page 2) is the genuine artwork. Page 1 is the
 // BLANK-slate export: the shop's price and per-extra-quart line have been
 // removed from each box, so we just draw the live text into the empty box
-// (no background patch to hide anything). Native size is 705×1218; the DB's
-// price_pos_x/y / quart_pos_x/y (percentages, measured off the image, and
-// draggable via "Edit layout") hold at any rendered width.
+// (no background patch to hide anything). Native size is 2850×4950; the
+// DB's price_pos_x/y / quart_pos_x/y (percentages, measured off the image,
+// and draggable via "Edit layout") hold at any rendered width.
 // The only per-package board fact not in the DB: whether the box is the
 // cream "ULTIMATE" tier (rp only) — drives the live text colour (navy on
 // cream, cream on navy). Any package_key not here has no spot on the art
@@ -201,16 +204,20 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
  * updates position live, committed to the DB on release. Reused read-only
  * by the public share page (no editMode, no updatePackage).
  */
-export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width }: {
+export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1 }: {
   location: Location | undefined
   packages: MenuBoardPackage[]
   editMode?: boolean
   updatePackage?: (id: string, patch: Partial<MenuBoardPackage>) => Promise<boolean> | void
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
   address: string
-  /** Explicit display width in px (from BoardViewer's zoom). Falls back to
+  /** Per-page display width in px (from BoardViewer's zoom). Falls back to
    *  100% capped at the 480px design width when omitted. */
   width?: number
+  /** 'single' shows one page at a time (see `page`); 'stacked' = page 1
+   *  above page 2; 'side-by-side' = page 1 left, page 2 right. */
+  layout?: BoardLayout
+  page?: 1 | 2
 }) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<{ id: string; field: 'price' | 'quart' } | null>(null)
@@ -246,80 +253,92 @@ export function Board({ location, packages, editMode = false, updatePackage, res
 
   function endDrag() { setDragging(null) }
 
+  const showP1 = layout !== 'single' || page === 1
+  const showP2 = layout !== 'single' || page === 2
+  const boxStyle = { width: width ?? '100%', maxWidth: width ?? BOARD_REF_WIDTH } as const
+
+  const page1 = (
+    <div key="p1" className="rounded-lg overflow-hidden bg-sb-navy" style={boxStyle}>
+      {/* The priced board through Additional Services. Rendered as an <img>
+          (not a fixed aspect-ratio background) so nothing at the bottom is
+          ever clipped. Overlay text is scaled by `scale` (measured width ÷
+          480) so it tracks the printed card at any board width. */}
+      <div data-mb-page="1">
+        <div
+          ref={boardRef}
+          onPointerMove={onMove}
+          onPointerUp={endDrag}
+          className="relative w-full select-none"
+        >
+          <img src={menuBoardArt} alt="Menu board" className="block w-full" draggable={false} />
+          {packages.map((p) => {
+            const slot = BOARD_SLOTS[p.package_key]
+            if (!slot) return null // no known spot on the art (e.g. Dexos)
+            const priceCol = p.price_column
+            const price = priceCol ? money((location as any)?.[priceCol]) : null
+            const quart = resolveQuart(location?.id ?? '', p.package_key)
+            const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
+            const fs = p.price_font_size * scale
+            return (
+              <div key={p.id}>
+                {/* Price + per-quart line, each centred on its DB point. */}
+                <div
+                  onPointerDown={(e) => startDrag(e, p, 'price')}
+                  className={`absolute flex items-center justify-center font-heading font-bold leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                  style={{
+                    left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
+                  }}
+                >
+                  {price == null ? (
+                    <span style={{ fontSize: fs, lineHeight: 1 }}>—</span>
+                  ) : (
+                    <PriceComposite price={price} fs={fs} />
+                  )}
+                </div>
+                <div
+                  onPointerDown={(e) => startDrag(e, p, 'quart')}
+                  className={`absolute flex items-center justify-center whitespace-nowrap font-mono leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                  style={{
+                    left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)',
+                    fontSize: p.quart_font_size * scale,
+                  }}
+                >
+                  {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* The real art is a generic template with no shop-specific address
+            printed on it — shown as its own bar below the board instead of
+            guessed onto the image. */}
+        <div className="bg-sb-navy text-sb-cream/80 text-center px-3 py-1.5">
+          <span className="text-[10px] font-mono">{address || (location ? '' : 'Select a shop above')}</span>
+        </div>
+      </div>
+    </div>
+  )
+
+  const page2 = (
+    <div key="p2" className="rounded-lg overflow-hidden bg-sb-navy" style={boxStyle}>
+      {/* The staff reference sheet (recommendations, top-off policy, the SB
+          Experience checklist). Static, no overlays. */}
+      <div data-mb-page="2">
+        <img src={menuBoardArt2} alt="Menu board — recommendations & procedures" className="block w-full" draggable={false} />
+      </div>
+    </div>
+  )
+
   return (
     <>
-      <div
-        className="rounded-lg overflow-hidden bg-sb-navy"
-        style={{ width: width ?? '100%', maxWidth: width ?? BOARD_REF_WIDTH, margin: '0 auto' }}
-      >
-        {/* Page 1 of the PDF — the priced board through Additional Services.
-            Rendered as an <img> (not a fixed aspect-ratio background) so
-            nothing at the bottom is ever clipped. Overlay text is scaled by
-            `scale` (measured width ÷ 480) so it tracks the printed card at
-            any board width. */}
-        <div data-mb-page="1">
-          <div
-            ref={boardRef}
-            onPointerMove={onMove}
-            onPointerUp={endDrag}
-            className="relative w-full select-none"
-          >
-            <img src={menuBoardArt} alt="Menu board" className="block w-full" draggable={false} />
-            {packages.map((p) => {
-              const slot = BOARD_SLOTS[p.package_key]
-              if (!slot) return null // no known spot on the art (e.g. Dexos)
-              const priceCol = p.price_column
-              const price = priceCol ? money((location as any)?.[priceCol]) : null
-              const quart = resolveQuart(location?.id ?? '', p.package_key)
-              const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
-              const fs = p.price_font_size * scale
-              return (
-                <div key={p.id}>
-                  {/* Price + per-quart line, each centred on its DB point.
-                      (The Download-PDF path redraws these on a canvas, so it
-                      doesn't matter that html2canvas can't read the transform.) */}
-                  <div
-                    onPointerDown={(e) => startDrag(e, p, 'price')}
-                    className={`absolute flex items-center justify-center font-heading font-bold leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
-                    style={{
-                      left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
-                    }}
-                  >
-                    {price == null ? (
-                      <span style={{ fontSize: fs, lineHeight: 1 }}>—</span>
-                    ) : (
-                      <PriceComposite price={price} fs={fs} />
-                    )}
-                  </div>
-                  <div
-                    onPointerDown={(e) => startDrag(e, p, 'quart')}
-                    className={`absolute flex items-center justify-center whitespace-nowrap font-mono leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
-                    style={{
-                      left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)',
-                      fontSize: p.quart_font_size * scale,
-                    }}
-                  >
-                    {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
-                    {quart.isCustom && <span className="ml-1 text-sb-orange">*</span>}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* The real art is a generic template with no shop-specific address
-              printed on it — shown as its own bar below the board (still on
-              PDF page 1) instead of guessed onto the image. */}
-          <div className="bg-sb-navy text-sb-cream/80 text-center px-3 py-1.5">
-            <span className="text-[10px] font-mono">{address || (location ? '' : 'Select a shop above')}</span>
-          </div>
-        </div>
-
-        {/* Page 2 of the PDF — the staff reference sheet (recommendations,
-            top-off policy, the SB Experience checklist). Static, no overlays. */}
-        <div data-mb-page="2">
-          <img src={menuBoardArt2} alt="Menu board — recommendations & procedures" className="block w-full" draggable={false} />
-        </div>
+      {/* w-max + min-w-full: the row/column is exactly as wide as its content
+          but never narrower than the viewport — so a zoomed-in board scrolls
+          from its left edge inside BoardViewer's overflow-auto instead of
+          being centre-clipped on both sides. */}
+      <div className={`w-max min-w-full mx-auto ${layout === 'side-by-side' ? 'flex flex-row items-start justify-center gap-3' : 'flex flex-col items-center gap-3'}`}>
+        {showP1 && page1}
+        {showP2 && page2}
       </div>
       {editMode && (
         <p className="text-[11px] font-mono text-inky/60 mt-2 text-center">
@@ -472,10 +491,12 @@ async function buildMenuBoardPdf({ packages, location, resolveQuart, address }: 
   c2.height = h2
   c2.getContext('2d')!.drawImage(art2, 0, 0, PDF_W, h2)
 
+  // fit: 'image' → each PDF page is the menu's own shape, image edge-to-edge,
+  // no white margin.
   return imagesToPdf([
     { jpegDataUrl: c1.toDataURL('image/jpeg', 0.92) },
     { jpegDataUrl: c2.toDataURL('image/jpeg', 0.92) },
-  ])
+  ], { fit: 'image' })
 }
 
 /**
@@ -490,6 +511,11 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
   const [fitW, setFitW] = useState(BOARD_REF_WIDTH)
   const [zoom, setZoom] = useState(1)
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [layout, setLayout] = useState<BoardLayout>(() => {
+    try { return (localStorage.getItem(LAYOUT_KEY) as BoardLayout) || 'single' } catch { return 'single' }
+  })
+  const [page, setPage] = useState<1 | 2>(1)
+  useEffect(() => { try { localStorage.setItem(LAYOUT_KEY, layout) } catch { /* ignore */ } }, [layout])
 
   useEffect(() => {
     const el = wrapRef.current
@@ -500,8 +526,11 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
     return () => ro.disconnect()
   }, [])
 
-  const baseW = Math.min(fitW, MAX_BOARD_WIDTH)
-  const displayW = Math.round(baseW * zoom)
+  // Per-page width. Side-by-side fits two pages in the viewport at zoom 1;
+  // zooming past that just scrolls (PDF-reader style).
+  const fitPerPage = layout === 'side-by-side' ? (fitW - 12) / 2 : fitW
+  const baseW = Math.min(fitPerPage, MAX_BOARD_WIDTH)
+  const displayW = Math.max(240, Math.round(baseW * zoom))
   const setZoomClamped = (z: number) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100)))
 
   async function downloadPdf() {
@@ -529,23 +558,40 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
   }
 
   const zBtn = 'w-7 h-7 grid place-items-center rounded bg-sb-cream/10 hover:bg-sb-cream/20 disabled:opacity-30 disabled:hover:bg-sb-cream/10 text-sb-cream font-mono text-base leading-none'
+  const segBtn = (on: boolean) =>
+    `px-2 h-7 rounded font-mono text-[11px] ${on ? 'bg-sb-sky text-sb-navy font-bold' : 'bg-sb-cream/10 text-sb-cream hover:bg-sb-cream/20'}`
 
   return (
     <div className="flex flex-col gap-2">
       {/* Fixed sb-* tokens (not the theme-flipping ones) so the toolbar
           reads the same on the cream admin card and the navy public page. */}
-      <div className="flex items-center gap-1 rounded-md bg-sb-navy px-2 py-1.5">
+      <div className="flex items-center gap-1 rounded-md bg-sb-navy px-2 py-1.5 flex-wrap">
         <button type="button" className={zBtn} onClick={() => setZoomClamped(zoom - ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">−</button>
         <span className="w-12 text-center text-[11px] font-mono tabular-nums text-sb-cream">{Math.round(zoom * 100)}%</span>
         <button type="button" className={zBtn} onClick={() => setZoomClamped(zoom + ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in">+</button>
         <button type="button" className="ml-1 px-2 h-7 rounded bg-sb-cream/10 hover:bg-sb-cream/20 disabled:opacity-30 text-sb-cream font-mono text-[11px]" onClick={() => setZoom(1)} disabled={zoom === 1}>Reset</button>
+
+        <span className="w-px h-5 bg-sb-cream/20 mx-1" />
+        {/* Layout: one page at a time / stacked / side-by-side */}
+        <button type="button" className={segBtn(layout === 'single')} onClick={() => setLayout('single')}>Single</button>
+        <button type="button" className={segBtn(layout === 'stacked')} onClick={() => setLayout('stacked')}>Stacked</button>
+        <button type="button" className={segBtn(layout === 'side-by-side')} onClick={() => setLayout('side-by-side')}>Side&nbsp;by&nbsp;side</button>
+
+        {layout === 'single' && (
+          <>
+            <span className="w-px h-5 bg-sb-cream/20 mx-1" />
+            <button type="button" className={segBtn(page === 1)} onClick={() => setPage(1)}>Page&nbsp;1</button>
+            <button type="button" className={segBtn(page === 2)} onClick={() => setPage(2)}>Page&nbsp;2</button>
+          </>
+        )}
+
         <button type="button" onClick={downloadPdf} disabled={pdfBusy}
           className="ml-auto px-3 h-7 rounded bg-sb-sky hover:brightness-95 disabled:opacity-50 text-sb-navy font-mono font-bold text-[11px] uppercase tracking-wide">
           {pdfBusy ? 'Building…' : 'Download PDF'}
         </button>
       </div>
-      <div ref={wrapRef} className="overflow-auto">
-        <Board {...props} width={displayW} />
+      <div ref={wrapRef} className="overflow-auto pb-1">
+        <Board {...props} width={displayW} layout={layout} page={page} />
       </div>
     </div>
   )

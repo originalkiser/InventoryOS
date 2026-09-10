@@ -111,7 +111,7 @@ export function PublicMenuBoardPage() {
 
   return (
     <div className="min-h-screen bg-sb-navy py-6 px-3">
-      <div className="max-w-[960px] mx-auto flex flex-col gap-3">
+      <div className="max-w-[1600px] mx-auto flex flex-col gap-3">
         {mode === 'open' && (
           <div className="max-w-[480px]">
             <Combobox
