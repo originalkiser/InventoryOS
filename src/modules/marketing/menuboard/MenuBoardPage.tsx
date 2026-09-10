@@ -275,11 +275,9 @@ export function Board({ location, packages, editMode = false, updatePackage, res
               const fs = p.price_font_size * scale
               return (
                 <div key={p.id}>
-                  {/* Price — the composite the printed board uses: small "$",
-                      big whole-dollars, superscript cents, "PLUS TAX" tucked
-                      under the cents. The box on the art is blank, so this is
-                      just the text, centred on the DB point — no background,
-                      nothing to clip past the box border. */}
+                  {/* Price + per-quart line, each centred on its DB point.
+                      (The Download-PDF path redraws these on a canvas, so it
+                      doesn't matter that html2canvas can't read the transform.) */}
                   <div
                     onPointerDown={(e) => startDrag(e, p, 'price')}
                     className={`absolute flex items-center justify-center font-heading font-bold leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
@@ -293,8 +291,6 @@ export function Board({ location, packages, editMode = false, updatePackage, res
                       <PriceComposite price={price} fs={fs} />
                     )}
                   </div>
-                  {/* Per-extra-quart line — also blank on the art, drawn as
-                      plain text centred on its own DB point. */}
                   <div
                     onPointerDown={(e) => startDrag(e, p, 'quart')}
                     className={`absolute flex items-center justify-center whitespace-nowrap font-mono leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
@@ -347,16 +343,150 @@ function menuBoardPdfName(shopName?: string): string {
   return `${slug ? `${slug}_` : ''}SB-Menu-Board_${date}.pdf`
 }
 
+// ── PDF export ─────────────────────────────────────────────────────────
+//
+// The PDF is drawn straight onto a <canvas> (art image + fillText for every
+// price / quart line) rather than screenshotting the live DOM — html2canvas
+// 1.4.1 can't reproduce the price composite's fine layout (vertical-align,
+// the PLUS-TAX stack, the centred overlays) and always misaligned it. Here
+// every glyph position is under our control, so the PDF matches the board.
+
+const PDF_W = 1600 // page-1/2 canvas width in px (height follows each art's ratio)
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const im = new Image()
+    im.crossOrigin = 'anonymous'
+    im.onload = () => resolve(im)
+    im.onerror = reject
+    im.src = src
+  })
+}
+
+/** Draw one "$·big·⁹⁹ / PLUS TAX" composite centred on (cx, cy). */
+function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: number, fs: number, price: number, color: string) {
+  const whole = String(Math.floor(price))
+  const cents = Math.round((price - Math.floor(price)) * 100).toString().padStart(2, '0')
+  const smallFs = fs * 0.46
+  const ptFs = fs * 0.115
+  const bigFont = `700 ${fs}px "Chakra Petch", sans-serif`
+  const smallFont = `700 ${smallFs}px "Chakra Petch", sans-serif`
+  const ptFont = `700 ${ptFs}px "Chakra Petch", sans-serif`
+
+  ctx.fillStyle = color
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+
+  ctx.font = bigFont
+  const mBig = ctx.measureText(whole)
+  const bigCap = mBig.actualBoundingBoxAscent || fs * 0.72
+  const wWhole = mBig.width
+  ctx.font = smallFont
+  const wDollar = ctx.measureText('$').width
+  const wCents = ctx.measureText(cents).width
+  const smallCap = ctx.measureText(cents).actualBoundingBoxAscent || smallFs * 0.72
+  ctx.font = ptFont
+  const wPT = ctx.measureText('PLUS TAX').width
+
+  const gap = fs * 0.04
+  const colW = Math.max(wCents, wPT)
+  const totalW = wDollar + wWhole + gap + colW
+
+  // Big digits' baseline so their cap is centred a touch above cy (PLUS TAX
+  // hangs below, so nudge the block up slightly to keep it visually centred).
+  const bigBaseline = cy + bigCap / 2 - fs * 0.09
+  const capTop = bigBaseline - bigCap
+  // "$" and cents sit with their tops just below the big cap top (matching
+  // the on-screen composite, where they're not quite flush with the very top).
+  const smallBaseline = capTop + smallCap + fs * 0.04
+
+  let x = cx - totalW / 2
+  ctx.font = smallFont
+  ctx.fillText('$', x, smallBaseline)
+  x += wDollar
+  ctx.font = bigFont
+  ctx.fillText(whole, x, bigBaseline)
+  x += wWhole + gap
+  ctx.font = smallFont
+  ctx.fillText(cents, x + (colW - wCents) / 2, smallBaseline)
+  ctx.font = ptFont
+  ctx.fillText('PLUS TAX', x + (colW - wPT) / 2, smallBaseline + ptFs + fs * 0.02)
+}
+
+async function buildMenuBoardPdf({ packages, location, resolveQuart, address }: {
+  packages: MenuBoardPackage[]
+  location: Location | undefined
+  resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
+  address: string
+}): Promise<Blob> {
+  await Promise.all([
+    document.fonts.load('700 100px "Chakra Petch"'),
+    document.fonts.load('16px "DM Mono"'),
+  ]).catch(() => {})
+
+  const [art1, art2] = await Promise.all([loadImage(menuBoardArt), loadImage(menuBoardArt2)])
+  const scale = PDF_W / BOARD_REF_WIDTH
+
+  // ── Page 1: board + priced overlays + address bar ───────────────────
+  const h1Art = Math.round(PDF_W * (art1.naturalHeight / art1.naturalWidth))
+  const addrH = Math.round(PDF_W * 0.032)
+  const c1 = document.createElement('canvas')
+  c1.width = PDF_W
+  c1.height = h1Art + addrH
+  const ctx1 = c1.getContext('2d')!
+  ctx1.drawImage(art1, 0, 0, PDF_W, h1Art)
+
+  const active = packages.filter((p) => p.active).sort((a, b) => a.sort_order - b.sort_order)
+  for (const p of active) {
+    const slot = BOARD_SLOTS[p.package_key]
+    if (!slot) continue
+    const color = slot.cream ? '#002745' : '#F2F1E6'
+    const price = p.price_column ? Number((location as any)?.[p.price_column]) : NaN
+    if (Number.isFinite(price)) {
+      drawPriceComposite(ctx1, (p.price_pos_x / 100) * PDF_W, (p.price_pos_y / 100) * h1Art, p.price_font_size * scale, price, color)
+    }
+    const q = resolveQuart(location?.id ?? '', p.package_key)
+    if (q.pricePerQuart != null) {
+      ctx1.fillStyle = color
+      ctx1.font = `${p.quart_font_size * scale}px "DM Mono", monospace`
+      ctx1.textAlign = 'center'
+      ctx1.textBaseline = 'middle'
+      ctx1.fillText(`$${q.pricePerQuart.toFixed(2)} per extra quart`, (p.quart_pos_x / 100) * PDF_W, (p.quart_pos_y / 100) * h1Art)
+    }
+  }
+
+  ctx1.fillStyle = '#002745'
+  ctx1.fillRect(0, h1Art, PDF_W, addrH)
+  if (address) {
+    ctx1.fillStyle = 'rgba(242,241,230,0.8)'
+    ctx1.font = `${addrH * 0.4}px "DM Mono", monospace`
+    ctx1.textAlign = 'center'
+    ctx1.textBaseline = 'middle'
+    ctx1.fillText(address, PDF_W / 2, h1Art + addrH / 2)
+  }
+
+  // ── Page 2: the static reference sheet ─────────────────────────────
+  const h2 = Math.round(PDF_W * (art2.naturalHeight / art2.naturalWidth))
+  const c2 = document.createElement('canvas')
+  c2.width = PDF_W
+  c2.height = h2
+  c2.getContext('2d')!.drawImage(art2, 0, 0, PDF_W, h2)
+
+  return imagesToPdf([
+    { jpegDataUrl: c1.toDataURL('image/jpeg', 0.92) },
+    { jpegDataUrl: c2.toDataURL('image/jpeg', 0.92) },
+  ])
+}
+
 /**
  * Board + a PDF-reader-style toolbar: zoom out / zoom % / zoom in / reset,
- * and a "Download PDF" button (html2canvas snapshot of each board page →
- * a 2-page PDF, page 1 = the board through Additional Services, page 2 =
- * the reference sheet). Used by the admin Board tab and the public share
- * page so both get the same viewing controls.
+ * and a "Download PDF" button (each board page drawn onto a canvas →
+ * a 2-page PDF, page 1 = the board through Additional Services + address,
+ * page 2 = the reference sheet). Used by the admin Board tab and the
+ * public share page so both get the same viewing controls.
  */
 export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof Board> & { shopName?: string }) {
   const wrapRef = useRef<HTMLDivElement>(null)
-  const captureRef = useRef<HTMLDivElement>(null)
   const [fitW, setFitW] = useState(BOARD_REF_WIDTH)
   const [zoom, setZoom] = useState(1)
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -375,18 +505,14 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
   const setZoomClamped = (z: number) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100)))
 
   async function downloadPdf() {
-    const root = captureRef.current
-    if (!root) return
     setPdfBusy(true)
     try {
-      const html2canvas = (await import('html2canvas')).default
-      const pages = Array.from(root.querySelectorAll('[data-mb-page]')) as HTMLElement[]
-      const shots: { jpegDataUrl: string }[] = []
-      for (const el of pages) {
-        const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#002745', useCORS: true, logging: false })
-        shots.push({ jpegDataUrl: canvas.toDataURL('image/jpeg', 0.92) })
-      }
-      const blob = imagesToPdf(shots)
+      const blob = await buildMenuBoardPdf({
+        packages: props.packages,
+        location: props.location,
+        resolveQuart: props.resolveQuart,
+        address: props.address,
+      })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -419,9 +545,7 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
         </button>
       </div>
       <div ref={wrapRef} className="overflow-auto">
-        <div ref={captureRef} style={{ width: displayW, marginLeft: 'auto', marginRight: 'auto' }}>
-          <Board {...props} width={displayW} />
-        </div>
+        <Board {...props} width={displayW} />
       </div>
     </div>
   )
@@ -431,13 +555,11 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
  * The printed-board price treatment: a smaller "$", big whole dollars, a
  * cents pair, and "PLUS TAX" tucked directly under the cents. `fs` is the
  * big-digit size in px (already width-scaled); everything else is a
- * fraction of it.
- *
- * The "$" and the cents/PLUS-TAX column are raised with `vertical-align:
- * text-top` (plus a small px nudge) so their tops line up with the top of
- * the big digits rather than floating above them. `vertical-align` +
- * `inline-block` is what html2canvas (the Download-PDF path) reproduces
- * faithfully — flex margins and CSS transforms it does not.
+ * fraction of it. The "$" and the cents/PLUS-TAX column are raised with
+ * `vertical-align` (a px length) so their tops line up with the top of the
+ * big digits. The Download-PDF path does NOT screenshot this — it redraws
+ * the same composite onto a canvas (`drawPriceComposite`) — so the two
+ * must be kept visually in sync.
  */
 function PriceComposite({ price, fs }: { price: number; fs: number }) {
   const whole = Math.floor(price)
