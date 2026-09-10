@@ -43,29 +43,23 @@ const PRICE_COLUMN_OPTIONS: { value: string; label: string }[] = [
 // The real board art (src/assets/Menu-Board-Page-1.png + -2.png) is the
 // actual printed sign — everything on it (logos, package names, qualifiers,
 // "PRICES INCLUDE UP TO 5 QUARTS", additional services, disclaimers, the
-// staff reference sheet on page 2) is the genuine artwork. The only thing
-// that's ever dynamic is each package's price and per-extra-quart line, so
-// those two spots per package get a small solid patch (matching that box's
-// own real background color) painted behind the live text — everything else
-// is the image, untouched. Page 1's native size is 704×1221; the DB's
+// staff reference sheet on page 2) is the genuine artwork. Page 1 is the
+// BLANK-slate export: the shop's price and per-extra-quart line have been
+// removed from each box, so we just draw the live text into the empty box
+// (no background patch to hide anything). Native size is 705×1218; the DB's
 // price_pos_x/y / quart_pos_x/y (percentages, measured off the image, and
 // draggable via "Edit layout") hold at any rendered width.
-// Per-package board facts that aren't in the DB: whether the box is the
-// cream "ULTIMATE" tier (rp only), and the price patch's height as a % of
-// the board's own height — sized to the box interior between its top edge
-// and the dotted separator, so the (invisible, bg-matched) patch fully
-// hides the printed price while never covering the dotted line. Any
-// package_key not here has no spot on the art and is skipped.
-const BOARD_SLOTS: Record<string, { cream: boolean; patchHPct: number }> = {
-  valvoline_restore_protect: { cream: true,  patchHPct: 8.4 },
-  premium_full_synthetic_hm: { cream: false, patchHPct: 7.4 },
-  premium_full_synthetic:    { cream: false, patchHPct: 7.4 },
-  premium_hm:                { cream: false, patchHPct: 5.6 },
-  economy:                   { cream: false, patchHPct: 5.6 },
+// The only per-package board fact not in the DB: whether the box is the
+// cream "ULTIMATE" tier (rp only) — drives the live text colour (navy on
+// cream, cream on navy). Any package_key not here has no spot on the art
+// and is skipped.
+const BOARD_SLOTS: Record<string, { cream: boolean }> = {
+  valvoline_restore_protect: { cream: true },
+  premium_full_synthetic_hm: { cream: false },
+  premium_full_synthetic:    { cream: false },
+  premium_hm:                { cream: false },
+  economy:                   { cream: false },
 }
-// Native page-1 art ratio — used to turn the measured board width into a
-// board height for the % patch sizing above.
-const ART_RATIO = 1221 / 704
 
 /**
  * Menu Board — an on-screen recreation of the printed lobby/bay board,
@@ -258,26 +252,20 @@ export function Board({ location, packages, editMode = false, updatePackage, res
               const priceCol = p.price_column
               const price = priceCol ? money((location as any)?.[priceCol]) : null
               const quart = resolveQuart(location?.id ?? '', p.package_key)
-              const patchBg = slot.cream ? 'bg-sb-cream' : 'bg-sb-navy'
               const patchText = slot.cream ? 'text-sb-navy' : 'text-sb-cream'
               const fs = p.price_font_size * scale
-              // Board height (px) from the measured width and the art's ratio.
-              const boardH = boardW * ART_RATIO
               return (
                 <div key={p.id}>
                   {/* Price — the composite the printed board uses: small "$",
                       big whole-dollars, superscript cents, "PLUS TAX" tucked
-                      under the cents. The patch is sized to the box interior
-                      (bg-matched, so invisible) so it hides the printed price
-                      no matter how many digits the live one has, while its
-                      bottom stays clear of the dotted separator. */}
+                      under the cents. The box on the art is blank, so this is
+                      just the text, centred on the DB point — no background,
+                      nothing to clip past the box border. */}
                   <div
                     onPointerDown={(e) => startDrag(e, p, 'price')}
-                    className={`absolute flex items-center justify-center font-heading font-bold ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                    className={`absolute flex items-center justify-center font-heading font-bold leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
                     style={{
                       left: `${p.price_pos_x}%`, top: `${p.price_pos_y}%`, transform: 'translate(-50%, -50%)',
-                      minWidth: boardW * (slot.cream ? 0.37 : 0.34), height: (slot.patchHPct / 100) * boardH,
-                      padding: `0 ${5 * scale}px`,
                     }}
                   >
                     {price == null ? (
@@ -286,16 +274,14 @@ export function Board({ location, packages, editMode = false, updatePackage, res
                       <PriceComposite price={price} fs={fs} />
                     )}
                   </div>
-                  {/* Quart line — a tight rectangle sized to the printed
-                      "$X.XX per extra quart" text only, so it doesn't reach up
-                      into the dotted separator above it. */}
+                  {/* Per-extra-quart line — also blank on the art, drawn as
+                      plain text centred on its own DB point. */}
                   <div
                     onPointerDown={(e) => startDrag(e, p, 'quart')}
-                    className={`absolute flex items-center justify-center whitespace-nowrap font-mono leading-none ${patchBg} ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
+                    className={`absolute flex items-center justify-center whitespace-nowrap font-mono leading-none ${patchText} ${editMode ? 'cursor-move ring-1 ring-sb-sky/60' : ''}`}
                     style={{
                       left: `${p.quart_pos_x}%`, top: `${p.quart_pos_y}%`, transform: 'translate(-50%, -50%)',
-                      fontSize: p.quart_font_size * scale, minWidth: p.quart_font_size * 12 * scale, height: p.quart_font_size * 1.15 * scale,
-                      padding: `0 ${3 * scale}px`,
+                      fontSize: p.quart_font_size * scale,
                     }}
                   >
                     {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
