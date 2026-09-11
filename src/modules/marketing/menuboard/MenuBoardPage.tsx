@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import QRCode from 'qrcode'
 import { createColumnHelper, type VisibilityState } from '@tanstack/react-table'
-import { Button, Card, CardBody, Combobox, Input, Modal, Select, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, Combobox, Input, Modal, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
@@ -194,7 +194,7 @@ export function MenuBoardPage() {
         </TabsContent>
 
         <TabsContent value="custom">
-          <CustomPricingTab packages={packages} quartPricing={quartPricing} loc={loc} />
+          <CustomPricingTab quartPricing={quartPricing} loc={loc} />
         </TabsContent>
 
         <TabsContent value="links">
@@ -1344,8 +1344,11 @@ function QuartDefaultsTab({ packages, quartPricing }: {
 
 // ── Custom Pricing (per-location overrides) ─────────────────────────────
 
-function CustomPricingTab({ packages, quartPricing, loc }: {
-  packages: MenuBoardPackage[]
+// One override row per shop — a shop's own price per extra quart, applied
+// across every package. Included quarts is never shop-customizable (stays a
+// company-wide constant per package on the Quart Pricing tab), which is why
+// there's no Package or Included Quarts column here anymore.
+function CustomPricingTab({ quartPricing, loc }: {
   quartPricing: ReturnType<typeof useMenuBoardQuartPricing>
   loc: ReturnType<typeof useLocations>
 }) {
@@ -1355,83 +1358,64 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
   const [addOpen, setAddOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [locationId, setLocationId] = useState('')
-  const [packageKey, setPackageKey] = useState('')
   const [price, setPrice] = useState('')
-  const [quarts, setQuarts] = useState('')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
 
   const shopOptions = useMemo(() => loc.locations.map((l) => ({ value: l.id, label: l.shop_city || l.name })), [loc.locations])
-  const packageOptions = useMemo(() => packages.filter((p) => p.active).map((p) => ({ value: p.package_key, label: p.display_name })), [packages])
   const shopLabel = (id: string) => loc.locations.find((l) => l.id === id)?.shop_city || loc.locations.find((l) => l.id === id)?.name || id
-  const packageLabel = (key: string) => packages.find((p) => p.package_key === key)?.display_name ?? key
 
   async function onAdd() {
-    if (!locationId || !packageKey) return
+    if (!locationId) return
     setSaving(true)
     const num = (v: string) => (v.trim() === '' ? null : Number(v))
-    const ok = await saveOverride({ location_id: locationId, package_key: packageKey, price_per_quart: num(price), included_quarts: num(quarts), notes: notes.trim() || null })
+    const ok = await saveOverride({ location_id: locationId, price_per_quart: num(price), notes: notes.trim() || null })
     setSaving(false)
-    if (ok) { setAddOpen(false); setLocationId(''); setPackageKey(''); setPrice(''); setQuarts(''); setNotes('') }
-  }
-
-  // Package Name → package_key: match the active packages' display name
-  // first (what a human would actually type/paste), falling back to the
-  // raw key for a file exported from this same table.
-  function resolvePackageKey(raw: string): string | null {
-    const t = raw.trim().toLowerCase()
-    if (!t) return null
-    const active = packages.filter((p) => p.active)
-    return (active.find((p) => p.display_name.trim().toLowerCase() === t)
-      ?? active.find((p) => p.package_key.toLowerCase() === t))?.package_key ?? null
+    if (ok) { setAddOpen(false); setLocationId(''); setPrice(''); setNotes('') }
   }
 
   const uploadFields = [
     { name: 'shop', label: 'Shop Number', required: true },
-    { name: 'package', label: 'Package Name', required: true },
     { name: 'price_per_quart', label: 'Price / Extra Quart', required: true },
-    { name: 'included_quarts', label: 'Included Quarts' },
     { name: 'notes', label: 'Notes' },
   ]
 
   // Same review-before-write flow as Order Config's upload: parse → diff
-  // against what's already on this page (by shop + package, matching the
-  // table's own unique constraint) → confirm via the shared Review Import
-  // modal → single batched upsert. Matched rows update in place instead of
+  // against what's already on this page (by shop, matching the table's own
+  // unique constraint) → confirm via the shared Review Import modal →
+  // single batched upsert. Matched rows update in place instead of
   // duplicating.
   async function handleImport(rowsIn: Record<string, string>[], maps: ColumnMapping[], _mode: ImportMode) {
     const numVal = (v: string) => { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
     let unresolved = 0
     const parsed = rowsIn.map((row) => {
-      const out = { location_id: null as string | null, package_key: null as string | null, price_per_quart: null as number | null, included_quarts: null as number | null, notes: null as string | null }
+      const out = { location_id: null as string | null, price_per_quart: null as number | null, notes: null as string | null }
       for (const m of maps) {
         const raw = mappedValue(row, m, maps)
         if (m.fieldName === 'shop') out.location_id = loc.resolveId(raw)
-        else if (m.fieldName === 'package') out.package_key = resolvePackageKey(raw)
         else if (m.fieldName === 'price_per_quart') out.price_per_quart = numVal(raw)
-        else if (m.fieldName === 'included_quarts') out.included_quarts = numVal(raw)
         else if (m.fieldName === 'notes') out.notes = raw.trim() || null
       }
       return out
     }).filter((r) => {
-      const ok = !!(r.location_id && r.package_key)
+      const ok = !!r.location_id
       if (!ok) unresolved++
       return ok
-    }) as { location_id: string; package_key: string; price_per_quart: number | null; included_quarts: number | null; notes: string | null }[]
+    }) as { location_id: string; price_per_quart: number | null; notes: string | null }[]
 
-    if (unresolved > 0) toast.error(`${unresolved} row${unresolved !== 1 ? 's' : ''} skipped — shop or package not recognized`)
+    if (unresolved > 0) toast.error(`${unresolved} row${unresolved !== 1 ? 's' : ''} skipped — shop not recognized`)
     if (parsed.length === 0) return
 
     // "Parse out what's already on the page" — dedupe against the same
-    // (location, package) key the table's unique constraint uses, so a
-    // re-upload updates existing custom pricing instead of erroring/duplicating.
-    const existingByKey = new Set(overrides.map((o) => `${o.location_id}|${o.package_key}`))
+    // shop key the table's own unique constraint uses, so a re-upload
+    // updates existing custom pricing instead of erroring/duplicating.
+    const existingByKey = new Set(overrides.map((o) => o.location_id))
     let matched = 0
     const newLabels: string[] = []
     for (const r of parsed) {
-      if (existingByKey.has(`${r.location_id}|${r.package_key}`)) matched++
-      else newLabels.push(`${shopLabel(r.location_id)} — ${packageLabel(r.package_key)}`)
+      if (existingByKey.has(r.location_id)) matched++
+      else newLabels.push(shopLabel(r.location_id))
     }
 
     const proceed = await requestImportConfirm({
@@ -1443,7 +1427,7 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
     setImporting(true)
     const { error } = await sb().schema('marketing').from('menu_board_quart_overrides').upsert(
       parsed.map((r) => ({ ...r, company_id: companyId, updated_by: profile?.id ?? null, updated_at: new Date().toISOString() })),
-      { onConflict: 'company_id,location_id,package_key' },
+      { onConflict: 'company_id,location_id' },
     )
     setImporting(false)
     if (error) { toast.error(error.message); return }
@@ -1456,7 +1440,7 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
     <Card><CardBody className="flex flex-col gap-2">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-[11px] font-mono text-inky/60">
-          Shops set to a different price-per-extra-quart (or included-quarts count) than the company default.
+          Shops set to a different price-per-extra-quart than the company default — applies across every package for that shop.
         </p>
         <div className="flex gap-2">
           <Button size="sm" variant="secondary" onClick={() => setUploadOpen((o) => !o)}>{uploadOpen ? 'Cancel' : 'Upload File'}</Button>
@@ -1471,15 +1455,12 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
       )}
 
       {addOpen && (
-        <div className="rounded border border-navy/20 p-3 grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
+        <div className="rounded border border-navy/20 p-3 grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
           <Combobox label="Shop" options={shopOptions} value={locationId} onChange={setLocationId} placeholder="Select shop…" />
-          <Select label="Package" value={packageKey} onChange={(e) => setPackageKey(e.target.value)}
-            options={[{ value: '', label: 'Select…' }, ...packageOptions]} />
           <Input label="Price / Extra Quart" type="number" step={0.01} value={price} onChange={(e) => setPrice(e.target.value)} />
-          <Input label="Included Quarts" type="number" value={quarts} onChange={(e) => setQuarts(e.target.value)} />
           <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-          <div className="md:col-span-5 flex justify-end">
-            <Button size="sm" loading={saving} disabled={!locationId || !packageKey} onClick={onAdd}>Save</Button>
+          <div className="md:col-span-3 flex justify-end">
+            <Button size="sm" loading={saving} disabled={!locationId} onClick={onAdd}>Save</Button>
           </div>
         </div>
       )}
@@ -1491,9 +1472,7 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
             <table className="w-full text-xs font-mono">
               <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
                 <th className="px-3 py-2 text-left">Shop</th>
-                <th className="px-3 py-2 text-left">Package</th>
                 <th className="px-3 py-2 text-right">Price / Extra Quart</th>
-                <th className="px-3 py-2 text-right">Included Quarts</th>
                 <th className="px-3 py-2 text-left">Notes</th>
                 <th className="px-3 py-2" />
               </tr></thead>
@@ -1501,9 +1480,7 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
                 {overrides.map((r) => (
                   <tr key={r.id} className="border-b border-navy/15">
                     <td className="px-3 py-1.5 text-navy">{shopLabel(r.location_id)}</td>
-                    <td className="px-3 py-1.5 text-navy">{packageLabel(r.package_key)}</td>
                     <td className="px-3 py-1.5 text-right text-navy">{r.price_per_quart != null ? `$${fmtPrice(r.price_per_quart)}` : '—'}</td>
-                    <td className="px-3 py-1.5 text-right text-navy">{r.included_quarts ?? '—'}</td>
                     <td className="px-3 py-1.5 text-inky/70">{r.notes || '—'}</td>
                     <td className="px-3 py-1.5">
                       <button onClick={() => removeOverride(r.id)} className="text-inky/40 hover:text-[#C0392B]" title="Remove custom pricing">×</button>

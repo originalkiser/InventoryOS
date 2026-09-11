@@ -65,8 +65,13 @@ export interface QuartPricingRow {
   price_per_quart: number | null
   included_quarts: number | null
 }
-export interface QuartOverrideRow extends QuartPricingRow {
+// One row per shop (not per package) — a shop's own price per extra quart
+// across every package. Included quarts stays a company-wide constant per
+// package (QuartPricingRow above), never shop-customizable.
+export interface QuartOverrideRow {
+  id: string
   location_id: string
+  price_per_quart: number | null
   notes: string | null
   updated_at: string
 }
@@ -104,11 +109,11 @@ export function useMenuBoardQuartPricing() {
   }, [companyId, profile?.id, load])
 
   const saveOverride = useCallback(async (
-    row: { id?: string; location_id: string; package_key: string; price_per_quart: number | null; included_quarts: number | null; notes: string | null },
+    row: { id?: string; location_id: string; price_per_quart: number | null; notes: string | null },
   ) => {
     if (!companyId) return false
     const { error } = await sb().schema('marketing').from('menu_board_quart_overrides')
-      .upsert({ ...row, company_id: companyId, updated_by: profile?.id ?? null, updated_at: new Date().toISOString() }, { onConflict: 'company_id,location_id,package_key' })
+      .upsert({ ...row, company_id: companyId, updated_by: profile?.id ?? null, updated_at: new Date().toISOString() }, { onConflict: 'company_id,location_id' })
     if (error) { toast.error(`Couldn't save override: ${error.message}`); return false }
     toast.success('Custom pricing saved')
     await load()
@@ -122,13 +127,15 @@ export function useMenuBoardQuartPricing() {
   }, [])
 
   // What a specific location actually charges per extra quart for a
-  // package — its own override if one's been set, otherwise the company
-  // default. Falls back to nulls (rendered as "—") rather than 0, since an
-  // unset price is "not configured," not "free."
+  // package — the shop's own override price if it has one (applies across
+  // every package), otherwise the company default for that package.
+  // Included quarts always comes from the package's company default, since
+  // it's never shop-customizable. Falls back to nulls (rendered as "—")
+  // rather than 0, since an unset price is "not configured," not "free."
   const resolve = useCallback((locationId: string, packageKey: string): { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean } => {
-    const o = overrides.find((r) => r.location_id === locationId && r.package_key === packageKey)
-    if (o) return { pricePerQuart: o.price_per_quart, includedQuarts: o.included_quarts, isCustom: true }
     const d = defaults.find((r) => r.package_key === packageKey)
+    const o = overrides.find((r) => r.location_id === locationId)
+    if (o) return { pricePerQuart: o.price_per_quart, includedQuarts: d?.included_quarts ?? null, isCustom: true }
     return { pricePerQuart: d?.price_per_quart ?? null, includedQuarts: d?.included_quarts ?? null, isCustom: false }
   }, [defaults, overrides])
 

@@ -54,7 +54,9 @@ export function PublicMenuBoardPage() {
   const [shopId, setShopId] = useState('')
 
   const [shop, setShop] = useState<{ id: string; prices: Record<string, number | null>; address: string } | null>(null)
-  const [quartOverrides, setQuartOverrides] = useState<QuartRow[]>([])
+  // One custom price per shop (applies across every package) — null means
+  // this shop just uses the company defaults.
+  const [customPricePerQuart, setCustomPricePerQuart] = useState<number | null>(null)
   const [shopLoading, setShopLoading] = useState(false)
 
   // Share config
@@ -88,17 +90,16 @@ export function PublicMenuBoardPage() {
     const prices: Record<string, number | null> = {}
     for (const [pk, v] of Object.entries(data.prices ?? {})) prices[pk] = v == null ? null : Number(v)
     setShop({ id: data.id, prices, address: [data.address, data.city, data.state, data.zip].filter(Boolean).join(', ') })
-    setQuartOverrides((data.quart_overrides ?? []) as QuartRow[])
+    setCustomPricePerQuart(data.custom_price_per_quart == null ? null : Number(data.custom_price_per_quart))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, bySlug])
   useEffect(() => { if (shopId) loadShop(shopId) }, [shopId, loadShop])
 
   const resolveQuart = useCallback((_locationId: string, packageKey: string) => {
-    const o = quartOverrides.find((r) => r.package_key === packageKey)
-    if (o) return { pricePerQuart: o.price_per_quart, includedQuarts: o.included_quarts, isCustom: true }
     const d = quartDefaults.find((r) => r.package_key === packageKey)
+    if (customPricePerQuart != null) return { pricePerQuart: customPricePerQuart, includedQuarts: d?.included_quarts ?? null, isCustom: true }
     return { pricePerQuart: d?.price_per_quart ?? null, includedQuarts: d?.included_quarts ?? null, isCustom: false }
-  }, [quartOverrides, quartDefaults])
+  }, [customPricePerQuart, quartDefaults])
 
   const activePackages = useMemo(
     () => packages.filter((p) => p.active).sort((a, b) => a.sort_order - b.sort_order),
