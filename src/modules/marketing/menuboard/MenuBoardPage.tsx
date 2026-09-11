@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
+import { createColumnHelper } from '@tanstack/react-table'
 import { Button, Card, CardBody, Combobox, Input, Modal, Select, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
+import { DataTable } from '@/components/shared/DataTable'
+import { useTable } from '@/hooks/useTable'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { ownerBucket } from '@/hooks/useLocationExclusions'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
 import { byNaturalLabel, naturalCompare } from '@/lib/naturalSort'
 import { imagesToPdf } from '@/lib/imagesToPdf'
@@ -772,24 +776,81 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
 // ── Shop Links (every shop's locked link + direct PDF download) ─────────
 
 interface ShopShareInfo { token: string; slug: string | null }
+interface ShopLinkRow {
+  id: string
+  name: string
+  owner: string
+  regionalDirector: string
+  market: string
+  areaManager: string
+  storeEmail: string | null
+  amEmail: string | null
+  link: string | null
+  pdfLink: string | null
+}
+
+const shopLinkCol = createColumnHelper<ShopLinkRow>()
+const shopLinkColumns = [
+  shopLinkCol.accessor('name', { header: 'Shop', cell: (i) => <span className="whitespace-nowrap">{i.getValue()}</span> }),
+  shopLinkCol.accessor('owner', { header: 'Owner', cell: (i) => i.getValue() || '—' }),
+  shopLinkCol.accessor('regionalDirector', { header: 'Regional Director', cell: (i) => i.getValue() || '—' }),
+  shopLinkCol.accessor('market', { header: 'Market', cell: (i) => i.getValue() || '—' }),
+  shopLinkCol.accessor('areaManager', { header: 'Area Manager', cell: (i) => i.getValue() || '—' }),
+  shopLinkCol.accessor('storeEmail', { header: 'Shop Email', cell: (i) => i.getValue() || '—' }),
+  shopLinkCol.accessor('amEmail', { header: 'Area Manager Email', cell: (i) => i.getValue() || '—' }),
+  shopLinkCol.accessor('link', {
+    header: 'Menu Board Link',
+    cell: (i) => {
+      const link = i.getValue()
+      if (!link) return '—'
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <a href={link} target="_blank" rel="noreferrer" className="text-sky hover:underline truncate max-w-[240px] inline-block align-middle">
+            {link.replace(/^https?:\/\//, '')}
+          </a>
+          <button onClick={() => { navigator.clipboard.writeText(link).catch(() => {}); toast.success('Copied') }}
+            className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
+        </span>
+      )
+    },
+  }),
+  shopLinkCol.accessor('pdfLink', {
+    header: 'Download PDF',
+    cell: (i) => {
+      const link = i.getValue()
+      if (!link) return '—'
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <a href={link} target="_blank" rel="noreferrer" className="text-sky hover:underline whitespace-nowrap">Download PDF</a>
+          <button onClick={() => { navigator.clipboard.writeText(link).catch(() => {}); toast.success('Copied') }}
+            className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
+        </span>
+      )
+    },
+  }),
+]
 
 /**
  * Ensures every active shop has its own locked share link (creating any
- * that are missing, once), then lists shop / shop email / AM email / the
- * live board link / a direct PDF-download link. Both links stay "live":
- * the board link always reads the shop's current core.locations prices
- * (see get_menu_board_share_by_slug), and the PDF link (MenuBoardPdfPage,
- * route /menu-board/<slug>/pdf) rebuilds the PDF from scratch on every
- * visit — nothing is ever a stale cached file, so a price change in the
- * OSL shows up the next time either link is opened, with no "regenerate"
- * step for anyone to remember.
+ * that are missing, and backfilling a slug onto any older share that
+ * predates pretty-URL support — that's what was leaving some rows with a
+ * board link but no PDF link, since the PDF route only understands slugs),
+ * then lists shop / owner / regional director / market / area manager /
+ * emails / the live board link / a direct PDF-download link. Both links
+ * stay "live": the board link always reads the shop's current
+ * core.locations prices (see get_menu_board_share_by_slug), and the PDF
+ * link (MenuBoardPdfPage, route /menu-board/<slug>/pdf) rebuilds the PDF
+ * from scratch on every visit — nothing is ever a stale cached file, so a
+ * price change in the OSL shows up the next time either link is opened,
+ * with no "regenerate" step for anyone to remember. Table is the standard
+ * useTable/DataTable combo, which gives every column sort + an Excel-style
+ * multi-select filter and the whole thing a CSV/XLSX export for free.
  */
 function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const [shareByLocation, setShareByLocation] = useState<Record<string, ShopShareInfo>>({})
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [search, setSearch] = useState('')
   const ranRef = useRef(false)
 
   const activeLocations = useMemo(() => loc.locations.filter((l) => l.active), [loc.locations])
@@ -800,15 +861,19 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
     let cancelled = false
 
     const fetchShares = async () => {
+      // Ordered newest-first so a shop with more than one active share (rare —
+      // e.g. someone made a second one by hand) resolves to its most recent.
       const { data } = await sb().schema('marketing').from('menu_board_shares')
         .select('token, slug, location_id').eq('company_id', companyId).eq('active', true).not('location_id', 'is', null)
+        .order('created_at', { ascending: false })
       const map: Record<string, ShopShareInfo> = {}
-      for (const r of (data ?? []) as any[]) if (r.location_id) map[r.location_id] = { token: r.token, slug: r.slug }
+      for (const r of (data ?? []) as any[]) if (r.location_id && !map[r.location_id]) map[r.location_id] = { token: r.token, slug: r.slug }
       return map
     }
 
     async function run() {
       let map = await fetchShares()
+
       const missing = activeLocations.filter((l) => !map[l.id])
       const CHUNK = 100
       for (let i = 0; i < missing.length; i += CHUNK) {
@@ -828,7 +893,25 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
           }
         }
       }
-      if (missing.length) map = await fetchShares()
+
+      // Self-heal: a share created before pretty-URL support (e.g. via the
+      // one-off Share modal before this app version) has slug = null — its
+      // board link still works (falls back to /m/<token>) but it has no
+      // /pdf route, since that only understands slugs. Back-fill one now.
+      const needsSlug = activeLocations.filter((l) => map[l.id] && !map[l.id].slug)
+      await Promise.all(needsSlug.map(async (l) => {
+        const info = map[l.id]
+        const slug = makeLockedShareSlug(l.name)
+        if (!slug) return
+        const { error } = await sb().schema('marketing').from('menu_board_shares').update({ slug }).eq('token', info.token)
+        if (!error) { map[l.id] = { ...info, slug }; return }
+        // Unlikely collision — one retry with a fresh hash.
+        const slug2 = makeLockedShareSlug(l.name)
+        const { error: err2 } = await sb().schema('marketing').from('menu_board_shares').update({ slug: slug2 }).eq('token', info.token)
+        if (!err2) map[l.id] = { ...info, slug: slug2 }
+      }))
+
+      if (missing.length) map = { ...map, ...(await fetchShares()) }
       if (!cancelled) { setShareByLocation(map); setStatus('ready') }
     }
 
@@ -837,11 +920,15 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, activeLocations.length])
 
-  const rows = useMemo(() => activeLocations.map((l) => {
+  const rows = useMemo<ShopLinkRow[]>(() => activeLocations.map((l) => {
     const share = shareByLocation[l.id]
     return {
       id: l.id,
       name: l.shop_city || l.name,
+      owner: ownerBucket(l.owner ?? ''),
+      regionalDirector: l.director ?? '',
+      market: l.market ?? '',
+      areaManager: l.area_manager ?? '',
       storeEmail: l.store_email,
       amEmail: l.am_email,
       link: share ? shareUrlFor(share) : null,
@@ -849,74 +936,27 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
     }
   }).sort((a, b) => naturalCompare(a.name, b.name)), [activeLocations, shareByLocation])
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter((r) =>
-      r.name.toLowerCase().includes(q) || (r.storeEmail ?? '').toLowerCase().includes(q) || (r.amEmail ?? '').toLowerCase().includes(q))
-  }, [rows, search])
-
-  function copy(text: string) {
-    navigator.clipboard.writeText(text).catch(() => {})
-    toast.success('Copied')
-  }
+  const { table, globalFilter, setGlobalFilter } = useTable(rows, shopLinkColumns, { persistKey: 'menu-board:shop-links' })
 
   return (
     <Card><CardBody className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-[11px] font-mono text-inky/60 max-w-xl">
-          One locked link per shop, generated automatically. Both the board link and the PDF link always reflect that
-          shop's current prices — nothing to regenerate when the OSL changes.
-        </p>
-        <input
-          value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search shop or email…"
-          className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy w-56"
-        />
-      </div>
+      <p className="text-[11px] font-mono text-inky/60 max-w-2xl">
+        One locked link per shop, generated automatically. Both the board link and the PDF link always reflect that
+        shop's current prices — nothing to regenerate when the OSL changes. Click a column header's filter icon to
+        narrow by owner, regional director, market, or area manager.
+      </p>
 
       {status === 'loading' ? (
         <div className="py-12 flex justify-center"><SbLoader size={32} /></div>
       ) : status === 'error' ? (
         <p className="text-xs font-mono text-[#C0392B] py-4">Could not load shop links — try reloading the page.</p>
       ) : (
-        <div className="overflow-auto rounded border border-navy/30 max-h-[70vh]">
-          <table className="w-full text-xs font-mono">
-            <thead className="sticky top-0"><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-              <th className="px-3 py-2 text-left">Shop</th>
-              <th className="px-3 py-2 text-left">Shop Email</th>
-              <th className="px-3 py-2 text-left">Area Manager Email</th>
-              <th className="px-3 py-2 text-left">Menu Board Link</th>
-              <th className="px-3 py-2 text-left">Download PDF</th>
-            </tr></thead>
-            <tbody>
-              {filtered.map((r) => (
-                <tr key={r.id} className="border-b border-navy/15">
-                  <td className="px-3 py-1.5 text-navy whitespace-nowrap">{r.name}</td>
-                  <td className="px-3 py-1.5 text-inky/80">{r.storeEmail || '—'}</td>
-                  <td className="px-3 py-1.5 text-inky/80">{r.amEmail || '—'}</td>
-                  <td className="px-3 py-1.5">
-                    {r.link ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <a href={r.link} target="_blank" rel="noreferrer" className="text-sky hover:underline truncate max-w-[240px] inline-block align-middle">
-                          {r.link.replace(/^https?:\/\//, '')}
-                        </a>
-                        <button onClick={() => copy(r.link!)} className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
-                      </span>
-                    ) : '—'}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    {r.pdfLink ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <a href={r.pdfLink} target="_blank" rel="noreferrer" className="text-sky hover:underline">Download PDF</a>
-                        <button onClick={() => copy(r.pdfLink!)} className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
-                      </span>
-                    ) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          table={table}
+          globalFilter={globalFilter}
+          onGlobalFilterChange={setGlobalFilter}
+          exportFilename="Menu Board Shop Links"
+        />
       )}
     </CardBody></Card>
   )
