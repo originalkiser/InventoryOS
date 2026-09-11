@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 
 const POLL_MS = 5 * 60 * 1000
 
@@ -32,11 +33,24 @@ async function forceUpdate() {
   window.location.replace(url.toString())
 }
 
+// Public, no-auth share routes (see App.tsx) — "Update Now" reloads to the
+// SB Net root, which would bounce an anonymous viewer (a customer scanning
+// a menu board QR code, someone filling out a shared form) straight into
+// the login screen. The update check itself stays fully live for the real
+// app; it just never runs (or shows) on these.
+function isPublicShareRoute(pathname: string): boolean {
+  return pathname.startsWith('/f/') || pathname.startsWith('/menu-board/') || pathname.startsWith('/m/')
+}
+
 export function UpdateBanner() {
+  const { pathname } = useLocation()
+  const isPublicShare = isPublicShareRoute(pathname)
   const [available, setAvailable] = useState(false)
   const runningId = useRef(__APP_BUILD_ID__).current
 
   useEffect(() => {
+    if (isPublicShare) return
+
     let cancelled = false
 
     async function check() {
@@ -56,9 +70,9 @@ export function UpdateBanner() {
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [runningId])
+  }, [runningId, isPublicShare])
 
-  if (!available) return null
+  if (isPublicShare || !available) return null
 
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[100] max-w-[92vw]">
