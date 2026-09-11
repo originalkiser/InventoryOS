@@ -1,241 +1,111 @@
-# InventoryOS — Claude Code Handoff
+# InventoryOS — Session Handoff
 
-**Project:** InventoryOS  
-**Repo:** https://github.com/originalkiser/InventoryOS  
-**Branch:** `main`  
-**Supabase project:** `fbrguyigmqrzsowfusoi` (fbrguyigmqrzsowfusoi.supabase.co)  
-**User:** mkiser97@gmail.com  
-**Stack:** React + TypeScript + Vite + TailwindCSS + Supabase (multi-schema)
+**Project:** InventoryOS (Strickland Brothers internal ops platform)
+**Repo:** https://github.com/originalkiser/InventoryOS
+**Branch:** `main`
+**Supabase project:** `fbrguyigmqrzsowfusoi` (fbrguyigmqrzsowfusoi.supabase.co)
+**User:** mkiser97@gmail.com
+**Stack:** React 18 + TypeScript 5 + Vite 5 + TailwindCSS 3 + Supabase JS v2 (multi-schema)
+**Live at:** https://originalkiser.github.io/InventoryOS/ (GitHub Pages — see In Progress below)
 
----
-
-## Brand System
-
-All UI uses the **Strickland Brothers** palette — tokens live in `tailwind.config.ts`.
-
-| Token | Hex | Use |
-|-------|-----|-----|
-| `navy` | #002745 | Primary bg, nav, table headers |
-| `inky` | #4F7489 | Secondary, inactive text, buttons |
-| `sky` | #B7E0DE | Highlight, hover, focus ring, active accent |
-| `cream` | #F2F1E6 | Page bg, card surfaces |
-| `onyx` | #000000 | Use sparingly |
-
-**Allowed off-palette exceptions only:**
-- `#C0392B` — danger/critical red
-- `#2ECC71` — inventory flag green
-- `#E67E22` — inventory flag orange
-
-**Fonts:** `font-heading` = Chakra Petch, `font-body` = DM Mono. Files in `src/assets/fonts/`.
-
-**Rule:** Never add new hex values. Always use Tailwind tokens.
+> Architecture rules, the schema reference, and coding patterns live in **`CLAUDE.md`** and are
+> kept current there — that's the file to read for "how does this app work." This file is a
+> point-in-time snapshot of **what's actually in progress and what just shipped**, for picking
+> up work without re-deriving recent history from git log.
 
 ---
 
-## Supabase Architecture
+## In progress
 
-The app uses **multiple Postgres schemas** accessed via `(supabase as any).schema('x')`. Never use the default `supabase.from()` for cross-schema tables.
+### Cloudflare Pages migration (started 2026-09-10, not cut over)
 
-| Schema | Contains |
-|--------|----------|
-| `inventory` | Locations, counts, thresholds, orders, meeting_notes, projects, tasks |
-| `core` | user_sidebar_prefs, shared config |
-| `platform` | user_profiles (auth users) |
-| `outlier` | Outlier report system (reports, report_entries, weeks, departments) |
+Moving off GitHub Pages, mainly to get real apex-domain support for a newly purchased domain
+(GitHub Pages apex domains need 4 hardcoded `A` records with no reliable CNAME; a subdomain is
+one CNAME either way). See `CLAUDE.md`'s **Deployment** section for the full technical detail.
 
-### `platform.user_profiles` — critical gotchas
-- Column is `email` (NOT `work_email`)
-- Soft-delete via `deleted_at` — filter active users with `.is('deleted_at', null)` (NOT `.eq('is_active', true)`)
-- `user_profiles.id` IS `auth.uid()` — no separate `user_id` join needed
-
----
-
-## Pending Migrations (NOT yet applied to production)
-
-These migration files exist locally but may not be in the production DB. The code is written defensively to handle their absence, but features won't fully work until they're applied.
-
-### Apply via Supabase SQL editor:
-
-**1. `20260625002000` — Outlier report_entries missing cols**
-```sql
-ALTER TABLE outlier.report_entries
-  ADD COLUMN IF NOT EXISTS am_comment            text,
-  ADD COLUMN IF NOT EXISTS am_comment_updated_at timestamptz,
-  ADD COLUMN IF NOT EXISTS am_comment_updated_by uuid,
-  ADD COLUMN IF NOT EXISTS location_id           uuid,
-  ADD COLUMN IF NOT EXISTS area_manager_name     text,
-  ADD COLUMN IF NOT EXISTS rdo_name              text;
-```
-
-**2. `20260625003000` — AM/RDO user assignment**
-```sql
-ALTER TABLE outlier.report_entries
-  ADD COLUMN IF NOT EXISTS am_assigned_user_id  uuid,
-  ADD COLUMN IF NOT EXISTS rdo_assigned_user_id uuid;
-```
-*(Enables "Assigned to Me" section in AM Dashboard)*
-
-**3. `20260623130003` — Meeting notes links**
-```sql
-ALTER TABLE inventory.meeting_notes
-  ADD COLUMN IF NOT EXISTS links jsonb DEFAULT '[]';
-```
-*(Enables link saving in meeting notes)*
+Status:
+1. ✅ `public/_redirects` (`/*  /index.html  200`) pushed to `main` — additive, GitHub Pages
+   ignores it, ready for whenever a Cloudflare Pages project builds this repo.
+2. ⬜ **Blocked / needs redo:** the first Cloudflare project was created as a **Worker**
+   (`wrangler deploy`) instead of classic **Pages**, because Cloudflare's unified dashboard
+   defaulted the "connect a repo" flow into Workers. That failed — Workers' static-asset path
+   auto-configures a Vite plugin that requires Vite ≥6, and this repo is on Vite 5. **Do not
+   upgrade Vite to fix this** — recreate the project under the Pages product instead, or
+   override its deploy command to `npx wrangler pages deploy dist --project-name=<name>`.
+3. ⬜ Point a domain at the Pages project (subdomain recommended over apex — see CLAUDE.md)
+4. ⬜ Update Supabase Auth → Site URL / Redirect URLs to the new domain (only the
+   password-reset email flow needs this; nothing else uses an auth redirect)
+5. ⬜ Once traffic has moved: retire the GitHub Pages workflow, `public/404.html`, the
+   `index.html` decode script, and the `vite.config.ts` `GITHUB_ACTIONS` base-path conditional
 
 ---
 
-## Decoupled Save Pattern
+## Recently shipped (2026-09-10 session)
 
-Wherever a new DB column might not exist in production, saves are split:
+### Menu Board module — built end to end
+New module: `src/modules/marketing/menuboard/` + `marketing.menu_board_packages` /
+`menu_board_quart_defaults` / `menu_board_quart_overrides` / `menu_board_shares`. Full
+architecture is documented in `CLAUDE.md`'s Menu Board module-notes entry. Highlights:
+- Live per-shop pricing board recreating the printed lobby sign, sourced from `core.locations`'
+  existing price columns — no separate price-entry system
+- Draggable layout editor; printed-board price typography (small `$`, big dollars, superscript
+  cents, "PLUS TAX")
+- PDF-reader-style viewer: zoom, Single/Stacked/Side-by-side page layout
+- Shareable public links (no auth) — locked to one shop or open (viewer picks); pretty URLs
+  (`/menu-board/<shop>-<hash>`), legacy token URLs (`/m/<uuid>`) still supported
+- Direct PDF download per shop, rebuilt fresh from live data on every visit (canvas-drawn, not
+  a DOM screenshot — html2canvas couldn't reproduce the price layout)
+- "Shop Links" tab: one board link + one PDF-download link per active shop, in a
+  sortable/filterable/exportable table (Owner, Regional Director, Market, Area Manager, emails)
 
-```typescript
-// 1. Core save — always fires, shows error toast on failure
-const { error } = await sb.schema('x').from('table')
-  .update({ core_column: value, updated_at: new Date().toISOString() })
-  .eq('id', id)
-if (error) { toast.error('...'); return }
+### Sidebar section access — every section now grantable
+`Droptop` and `Data Connections` sidebar sections had no `platform.departments` row, so a
+`department_user` could never be granted access to them. Fixed, and made self-extending: the
+admin Manage User modal's checkboxes are now derived from the sidebar itself (`Sidebar.tsx`'s
+`ASSIGNABLE_SECTIONS`), and granting a section auto-creates its department row on first use —
+no migration needed for sections added after this.
 
-// 2. Best-effort save — fire-and-forget, silent on failure
-sb.schema('x').from('table')
-  .update({ new_column: value })
-  .eq('id', id)
-  .then(() => {})
-```
-
-This pattern is used in:
-- `ReportViewPage.tsx` — `handleCommentChange`, `handleAMNameChange`, `handleRDONameChange`
-- `AMDashboard.tsx` — `saveComment`
-- `MeetingNotesPage.tsx` — `onSave` (links)
-
----
-
-## Outlier Reporting Module
-
-**Path:** `src/modules/operations/outlier/`
-
-### Key files
-| File | Purpose |
-|------|---------|
-| `pages/ReportViewPage.tsx` | Full report table — paste data, comment, AM/RDO assignment |
-| `components/tables/ReportTable.tsx` | Table renderer with `AMUserInput` component |
-| `components/dashboards/AMDashboard.tsx` | Area Manager view — assigned items, comment/complete |
-| `components/dashboards/LeadershipDashboard.tsx` | Leadership overview |
-| `types.ts` | `Report`, `ReportEntry`, `Week`, `UserProfile`, `AMLocation` |
-
-### AM/RDO user picker (`AMUserInput` in ReportTable.tsx)
-Every AM and RDO cell renders a text input + optional person-icon dropdown. When `appUsers` is passed as a prop, a picker shows all platform users. Selecting a user:
-1. Fills the text field with `user.full_name`
-2. Saves `area_manager_name` / `rdo_name` (core columns — always succeeds)
-3. Best-effort saves `am_assigned_user_id` / `rdo_assigned_user_id` (new columns)
-
-Users assigned via the picker appear in **"Assigned to Me"** section of their AM Dashboard.
-
-### `appUsers` query pattern (ReportViewPage.tsx)
-```typescript
-(sb as any).schema('platform').from('user_profiles')
-  .select('id, full_name, email')
-  .eq('company_id', profile.company_id)
-  .is('deleted_at', null)
-  .order('full_name')
-```
+### Hotfix: `platform.user_profiles` RLS infinite recursion
+The `UPDATE` policy sub-selected `user_profiles` from inside its own policy — Postgres 17
+treats that as infinite recursion the moment an admin edits *another* user (editing your own
+profile short-circuits around it, which is why this sat unnoticed since the `2026-09-03` RLS
+refactor that introduced it). This had been silently blocking the entire admin "edit another
+user" flow. Fixed by swapping in the existing `is_admin()` SECURITY DEFINER helper.
 
 ---
 
-## Locations Module
+## Known gotchas worth re-reading in `CLAUDE.md` before touching these areas
 
-**Quick access page:** `src/modules/locations/LocationsPage.tsx`  
-**Config tab:** `src/modules/config/tabs/LocationsTab.tsx`  
-**Lookup overlay:** `src/modules/locations/LocationLookupOverlay.tsx`
-
-### Contextual filter dropdowns
-Both LocationsPage and LocationsTab have cascading filter dropdowns:
-```typescript
-const LOC_FILTER_HIERARCHY = [
-  { field: 'meta:owner', label: 'Owner' },
-  { field: 'region', label: 'Region' },
-  { field: 'meta:market', label: 'Market' },
-  { field: 'meta:area_manager', label: 'Area Manager' },
-  { field: 'meta:regional_director', label: 'Regional Director' },
-]
-```
-
-`rowsAbove(fi)` computes rows passing all filters above index `fi` for accurate option counts. Filters are applied to raw data **before** `useTable()` so all TanStack features work on the filtered subset.
-
-**localStorage keys:**
-- `locations.page.dropFilters` / `locations.page.hiddenDropdowns`
-- `locations.tab.dropFilters` / `locations.tab.hiddenDropdowns`
-- `lookup.block.{block.id}.state` (sort, dropFilters, pageSize, page)
-
-### `locFieldValue(loc, field)` helper
-Reads base fields directly or `meta:X` fields from `loc.metadata[X]`. LocationsPage variant also handles `meta:regional_director` falling back to `meta:director`.
+- **RLS self-reference** — never sub-`SELECT` a table from inside its own policy (Supabase
+  architecture section).
+- **Schema location drift** — `tasks`, `issues`, `vendors`/`vendor_parts`, `uom_mappings`,
+  `global_products` have all moved schemas at least once; verify against
+  `information_schema.tables` if a query returns suspiciously empty results instead of trusting
+  this doc or a migration comment.
+- **Menu Board art positions** are pixel-tied to the current `MenuBoard-01/02.png` — re-measure
+  (or drag-adjust via "Edit layout") if that art is ever re-exported.
 
 ---
 
-## Forms / LocationSeeder
+## Common code patterns
 
-**Path:** `src/modules/forms/FormBuilderPage.tsx`
-
-`LocationSeeder` component lets users multi-select location groups (Owner, Region+director, Market+AM, Type) via checkboxes and seed them into a form field. Supports undo of last seed. Groups are built from location metadata via `useMemo`.
-
----
-
-## AM Dashboard Header
-
-`src/modules/operations/outlier/components/dashboards/AMDashboard.tsx`
-
-Header subtitle shows:
-- **"N assigned items"** — count of non-total `report_entries` for this AM's locations
-- **"· N needs attention"** (orange) — entries without a comment and not complete
-
-The large **UNCOMMENTED** counter on the right shows the same needs-attention count.
-
----
-
-## Meeting Notes
-
-**Path:** `src/modules/meetings/MeetingNotesPage.tsx`
-
-Meetings save core fields first; `links` (array of `{ label, url }`) saves as best-effort afterward. If the `links` column doesn't exist yet, meetings still create/save — only links are silently dropped until the migration is applied.
-
----
-
-## Common Patterns
-
-### Schema access
-```typescript
+```ts
+// Schema access
 const sb = supabase as any
-sb.schema('outlier').from('report_entries').select('*')...
-```
+sb.schema('marketing').from('menu_board_shares').select('*')
 
-### Toast
-```typescript
+// Toast
 import toast from 'react-hot-toast'
-toast.success('...')
-toast.error('...')
-```
+toast.success('Saved')
 
-### Table hook
-```typescript
-const { table, globalFilter, setGlobalFilter } = useTable(filteredData, columns)
-```
-Always pass **pre-filtered data** to `useTable` when using dropdown filters.
+// Table hook — sort + Excel-style per-column filter + CSV/XLSX export come free
+const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+<DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter} exportFilename="My Export" />
 
-### Role check
-```typescript
+// Role check
 import { isAdminOrDeveloper } from '@/lib/roles'
 isAdminOrDeveloper(profile?.role)
 ```
 
----
-
-## Recent Commits (latest first)
-
-```
-e9dc407 Fix meeting save failing due to missing links column
-cf1afeb Fix comment save failures and update AM dashboard header
-9949bf8 Fix AM/RDO name save: decouple name update from assignment column
-83d31cb Fix appUsers query: filter by deleted_at IS NULL not is_active
-16e5498 Fix outlier AM/RDO cell: combined text input + user picker in every row
-a25fb2b Add contextual filter dropdowns to quick access Locations page
-6a66cc1 Add Owner column, contextual dropdowns, location lookup persistence, form seeder upgrade, outlier AM/RDO user assignment
-```
+See `CLAUDE.md` for the full architecture reference, schema map, brand rules, and Claude Code
+operating rules.

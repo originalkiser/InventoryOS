@@ -89,7 +89,8 @@ inventoryos/
     │   ├── inventory/             # InventoryOverlay, InventoryView, InventoryNavBar, InventoryShortcuts
     │   └── upload/                # FileUploadZone, ColumnMapper, DataSourceLinker
     ├── hooks/                     # useAuth, useTable, useDarkMode, useSidebarPrefs, useFeatureAccess, etc.
-    ├── lib/                       # supabase.ts, roles.ts, orderEngine.ts, recountEngine.ts, transforms.ts, etc.
+    ├── lib/                       # supabase.ts, roles.ts, orderEngine.ts, recountEngine.ts, transforms.ts,
+    │                              #   imagesToPdf.ts (dependency-free JPEG-only PDF writer), etc.
     ├── modules/
     │   ├── admin/                 # UsersPage (users, departments, feature access), InviteUserModal
     │   ├── comms/                 # LocationCommsPage, LocationCommsModal, useCommsConfig
@@ -107,7 +108,9 @@ inventoryos/
     │   ├── locations/             # LocationsPage, LocationLookupPage/Overlay, AmRdLookupPage,
     │   │                          #   TankMonitorsPage, TankEmailModal, TankProductMapping,
     │   │                          #   LocationDataSourceConfig, MapRoutesTab
-    │   ├── marketing/             # MarketingPlannerPage, modals/, tabs/ (campaign planning)
+    │   ├── marketing/             # MarketingPlannerPage, modals/, tabs/ (campaign planning);
+    │   │                          #   menuboard/ (Menu Board — MenuBoardPage, PublicMenuBoardPage,
+    │   │                          #   MenuBoardPdfPage, useMenuBoard)
     │   ├── meetings/              # MeetingNotesPage
     │   ├── monthend/              # MonthEndPage, CountsTab, RecountsTab, RecountLogicTab, etc.
     │   ├── operations/
@@ -151,7 +154,7 @@ sb.schema('marketing').from('table_name')
 | `platform` | user_profiles, **issues** (moved out of `inventory`, now department-scoped), departments, user_department_memberships, schedule_events, event_checklist_items, app_settings, custom_columns/custom_values, attachments |
 | `outlier` | report system: reports, report_entries, weeks, departments |
 | `forms` | form builder + submissions: forms, fields, field_conditions, condition_rules, submissions, responses, assignments, score_streaks, form_department_shares |
-| `marketing` | campaign planning: campaign_templates, campaign_template_tasks, monthly_plans, campaign_assignments, campaign_tasks |
+| `marketing` | campaign planning: campaign_templates, campaign_template_tasks, monthly_plans, campaign_assignments, campaign_tasks; Menu Board: menu_board_packages, menu_board_quart_defaults, menu_board_quart_overrides, menu_board_shares |
 | `archive` | `deleted_rows` — every deleted row (as jsonb) from tables whose ids other records reference. Written only by an `AFTER DELETE` trigger; see below. |
 
 **Deleted-row archive (`archive.deleted_rows`, migration `20260819_archive_deleted_rows.sql`):**
@@ -165,6 +168,8 @@ Cross-table references in this app are plain `uuid` columns with **no foreign ke
 - `uom_mappings` moved from `core` to **`inventory`** (migration `20260821_orders_v2_uom_cost.sql`) — the *same* bug as the `vendor_parts` move above, on a different table: it was created in the original pre-schema-split `core` batch and never actually moved when `vendors`/`vendor_parts` did, despite the 20260818d migration's own comment claiming it was already in `inventory`. Nobody had verified it because the table was always empty, so the silent-zero-rows failure never surfaced. If a table's real schema location matters and it's unverified, query `information_schema.tables` rather than trusting this doc or a prior migration's comment.
 - `global_products` moved from `core` to **`inventory`** (migration `20260824_move_global_products_to_inventory.sql`) — the *third* instance of this exact bug. The 20260818d migration's comment (quoted in the entry above) even lists `global_products` as one of the tables already correctly in `inventory` that `vendors`/`vendor_parts` needed to match — that claim was never true either. Every app reference (`GlobalProductsTab.tsx`, `NewOrderTab.tsx`, `useOrdersV2.ts`'s on-hand-unit conversion) already queried `inventory.global_products` and got silent empty results for it. Given this has now happened three times from the same original `core` batch, treat any *other* table this doc or a migration comment claims moved out of that batch as unverified until checked against `information_schema.tables`.
 
+**RLS self-reference gotcha (hit `2026-09-10`, fixed by migration `20260922c`):** a policy's `USING`/`WITH CHECK` must never sub-`SELECT` the same table the policy is attached to — e.g. `(SELECT role FROM platform.user_profiles WHERE id = auth.uid())` inside a policy ON `platform.user_profiles`. Postgres 17 raises `42P17 infinite recursion detected in policy` the instant that branch actually executes. This can sit unnoticed for a long time: a row matching `id = auth.uid()` (editing your own row) short-circuits before that branch ever runs, so it only fires once someone acts on a *different* row — in this case it silently broke the entire admin "edit another user" flow from the `20260903e` RLS-initplan refactor onward. Use the existing `is_admin()` / `get_my_company_id()` `SECURITY DEFINER` helper functions instead, which read `user_profiles` without going back through its own RLS. If you're writing or auditing any policy and see an inline `SELECT ... FROM <the same table the policy is on>`, replace it with one of those helpers.
+
 ---
 
 ## Roles & department access
@@ -172,7 +177,8 @@ Cross-table references in this app are plain `uuid` columns with **no foreign ke
 Roles (`src/lib/roles.ts`): `developer`, `administrator`, `area_manager`, `director`, `department_user` (legacy `admin`/`user` still handled for display).
 
 - `isAdminOrDeveloper(role)` — developer/administrator/admin only.
-- `department_user` role is scoped to specific departments via `platform.departments` + `platform.user_department_memberships`. `useDeptAccess()` (`src/hooks/useDeptAccess.ts`) returns the set of allowed sidebar section slugs (`inventory`, `operations`, `marketing`, `finance`, `accounting`, `project_management`) for the current user, or `null` if unrestricted. `App.tsx`'s `SmartRedirect`/`DEPT_FIRST_ROUTE` sends department users to their first allowed section.
+- `department_user` role is scoped to specific departments via `platform.departments` + `platform.user_department_memberships`. `useDeptAccess()` (`src/hooks/useDeptAccess.ts`) returns the set of allowed sidebar section slugs for the current user, or `null` if unrestricted. A department's `slug` **is** the sidebar section key it gates — as of `2026-09-10` that's every top-level `Sidebar.tsx` section except the admin-only `global-config` (`inventory`, `droptop`, `data-connections`, `operations`, `marketing`, `finance`, `accounting`), plus a standalone `project_management` department that isn't its own sidebar section. `App.tsx`'s `SmartRedirect`/`DEPT_FIRST_ROUTE` sends department users to their first allowed section.
+- The assignable list in the admin UI is **derived, not hardcoded**: `Sidebar.tsx` exports `ASSIGNABLE_SECTIONS` (built from `SECTION_ITEMS`), and `UsersPage.tsx`'s Manage User modal builds its "Section Access" checkboxes from that list — so a newly-added top-level sidebar section shows up there automatically. The first time an admin actually checks a section for someone, the save handler creates that section's `platform.departments` row on the fly (if it doesn't exist yet) before syncing the membership — no migration needed for sections added after `2026-09-10`.
 - Manage departments/memberships in `src/modules/admin/UsersPage.tsx`.
 
 ---
@@ -287,13 +293,16 @@ Palette from `tailwind.config.ts` — CSS-variable-backed for dark mode:
 Base tracked columns: `value, unit, product_id, keep_fill, on_hand, inventory_time, reading_date`. Extended (migration `20260815_tank_monitor_fields.sql`): `volume_alarm_status, key_note, battery_pct, serial_rtu_id, system_tank_id, level_inches, low_set_point_pct, height, source_location, available_capacity` and a generated `total_capacity` (`on_hand + available_capacity`, stored). `source_location` holds the raw uploaded shop string for monitors not yet matched to a `core.locations` row.
 
 ### `platform.departments` / `platform.user_department_memberships`
-`departments`: `id, company_id, name, slug, sort_order, created_at, created_by` — seeded with `inventory`, `operations`, `marketing`, `finance`, `accounting`, `project_management` per company. `user_department_memberships`: `id, user_id, department_id, company_id, created_at, created_by`. Drive `department_user` role scoping — see Roles & department access above.
+`departments`: `id, company_id, name, slug, sort_order, created_at, created_by` — originally seeded with `inventory`, `operations`, `marketing`, `finance`, `accounting`, `project_management` per company; `droptop` and `data-connections` were added `2026-09-10` (migration `20260922b_departments_sidebar_sections.sql`) once section access became sidebar-driven — see Roles & department access above. Any section added after that gets its row created on demand (client-side, on first grant) rather than via migration. `user_department_memberships`: `id, user_id, department_id, company_id, created_at, created_by`. Drive `department_user` role scoping.
 
 ### `platform.issues`
 Moved from `inventory.issues`; adds `department_id` (references `platform.departments`). `inventory.issue_statuses`, `inventory.issue_categories`, `inventory.issue_tracker_columns`, `inventory.issue_custom_values` remain in `inventory` and still join by issue id.
 
 ### `marketing.*` (campaign planning)
 `campaign_templates` (company_id, name, category, description, is_active, sort_order) → `campaign_template_tasks` (per-template checklist) → `monthly_plans` (company_id, location_id, plan_month, plan_year, unique per location/month/year) → `campaign_assignments` (plan + template, snapshots name/category at assignment time) → `campaign_tasks` (assignment + template task, snapshots name/description, status: not_started/in_progress/complete/blocked/not_applicable). Assignments/tasks **snapshot** the template text at creation time so later template edits don't retroactively change existing plans.
+
+### `marketing.menu_board_packages` / `menu_board_quart_defaults` / `menu_board_quart_overrides` / `menu_board_shares`
+Menu Board module (see Module notes below). `menu_board_packages`: package_key, display_name, qualifier, price_column (the `core.locations` numeric column this package is priced from), sort_order, active, price_pos_x/y, price_font_size, quart_pos_x/y, quart_font_size (board-layout fields, all `%` of the board image, draggable via the Board tab's "Edit layout" toggle). `menu_board_quart_defaults`: company-wide package_key → price_per_quart/included_quarts. `menu_board_quart_overrides`: same shape, per-location. `menu_board_shares` (migrations `20260921_menu_board_shares.sql` + `20260922_menu_board_share_slug.sql`): token (PK, uuid), company_id, location_id (nullable — null = viewer picks a shop), label, slug (nullable, company-unique, `<shop number>-<4-char hash>` shape), active, created_by, created_at — backs the public no-auth share-link system (routes `/menu-board/:slug`, `/menu-board/:slug/pdf`, legacy `/m/:token`) via SECURITY DEFINER RPCs `get_menu_board_share[_by_slug]` / `get_menu_board_shop[_by_slug]`.
 
 ---
 
@@ -381,6 +390,16 @@ Log of shop/AM contacts. Two branches in `LocationCommsModal.tsx`: **Product Req
 
 Campaign planning module, own `marketing` schema (see Database schema reference). `MarketingPlannerPage.tsx` with tabs (`MonthlyPlansTab`, `ExecutionTab`, `CampaignTemplatesTab`, `ReportingTab`) and modals (`NewPlanModal`, `PlanDetailModal`, `ExecutionDetailModal`, `ImportPlansModal`). Route `/marketing-planner`; first-landing route for `department_user`s scoped to the `marketing` department. Assignments/tasks snapshot template text at creation — editing a template does not retroactively change plans already assigned from it.
 
+### Menu Board — `src/modules/marketing/menuboard/`
+
+An on-screen (and printable/shareable) recreation of the printed lobby/bay pricing board, priced live per shop straight from `core.locations`' existing price columns (`economy`, `premium_hm`, `premium_full_synthetic`, `premium_full_synthetic_hm`, `rp`) — no separate price-entry system. Route `/menu-board` (Marketing sidebar section); tabs: Board / Package Mapping / Quart Pricing / Custom Pricing / Shop Links.
+
+- **`MenuBoardPage.tsx`** — `Board` (the board itself: page-1 art `src/assets/MenuBoard-01.png` with live price/quart text absolutely positioned by DB `%`, plus page-2 `MenuBoard-02.png` staff reference sheet) and `BoardViewer` (zoom + Single/Stacked/Side-by-side layout toggle + Download PDF button) are both exported and reused by the public share page — one implementation, two entry points. `PriceComposite` renders the printed-board price treatment (small `$`, big dollars, cents whose top aligns with the dollars' top, "PLUS TAX" tucked underneath).
+- **PDF export does not screenshot the DOM.** html2canvas couldn't reproduce the price composite's layout (dropped the overlay `transform`, mangled the superscript stack — every price came out misaligned), so `buildMenuBoardPdf` (exported) draws the board straight onto a `<canvas>` — the art image plus `fillText` for every price/quart line via its own `drawPriceComposite` — then `src/lib/imagesToPdf.ts` (a tiny dependency-free JPEG-only PDF writer; `fit: 'image'` mode sizes each page to the image's own shape with no white margin) turns that into a real 2-page `.pdf`. `PriceComposite` (DOM) and `drawPriceComposite` (canvas) render the same thing two different ways and have to be kept visually in sync by hand — there's no shared renderer between them.
+- **Public share links** — `ShareMenuBoardModal` mints a `marketing.menu_board_shares` row, either locked to one shop (`location_id` set — board-only, no picker) or open (viewer picks from a dropdown). A locked share gets a pretty `slug` (`makeLockedShareSlug()`, `<shop number>-<4-char hash>`) so its URL reads `/menu-board/4-a3f9`; `/m/:token` still works for links minted before slugs existed. `PublicMenuBoardPage.tsx` renders the board with zero SB Net chrome for either URL shape. `MenuBoardPdfPage.tsx` (route `/menu-board/:slug/pdf`, slug-only — locked shares only) rebuilds and auto-downloads that shop's PDF fresh on every visit; nothing is ever a cached file, so an OSL price change shows up immediately through both the board link and the PDF link.
+- **`ShopLinksTab`** ("Shop Links" tab) bulk-ensures every active shop has its own locked share (chunked insert with a same-chunk slug-collision retry), and **self-heals** any older share that predates slug support by backfilling one onto it — that's the fix for a shop whose board link works but whose PDF link is missing (the PDF route only understands slugs). Built on the standard `useTable`/`DataTable` combo, so every column (incl. Owner via the existing `ownerBucket()` helper, Regional Director, Market, Area Manager) gets sort + an Excel-style multi-select filter and the whole table gets CSV/XLSX export for free via `DataTable`'s `exportFilename` prop — no bespoke filter/export code needed.
+- All board layout numbers (`price_pos_x/y`, `price_font_size`, etc.) are tied to the *current* art's exact pixel layout (`MenuBoard-01.png`/`-02.png`, 2850×4950) — re-measure (or drag-adjust via "Edit layout") if that art is ever re-exported.
+
 ### Departments & role-based access — `src/modules/admin/UsersPage.tsx`
 
 Admins manage per-user `role`, department memberships (`platform.user_department_memberships`), and per-feature access (`core.user_feature_access`, checked via `useFeatureAccess`). See Roles & department access above for how `department_user` scoping works end-to-end.
@@ -453,6 +472,16 @@ Uses `src/lib/orderEngine.ts`. Key tabs: `NewOrderTab`, `OrderHistoryTab`, `MinR
 - Maps locations via `core.locations.droptop_operation_id`
 - Reads/writes `inventory.count_snapshots`, `inventory.pull_log`
 - Logs sync results to `inventory.droptop_sync_log` (mirrors the Monday.com `location_sync_log` pattern)
+
+---
+
+## Deployment
+
+- **Live today: GitHub Pages**, via `.github/workflows/deploy.yml` (push to `main` → `npm run build` → `actions/upload-pages-artifact` → `actions/deploy-pages`), served at `originalkiser.github.io/InventoryOS/`. `vite.config.ts`'s `base` is `'/InventoryOS/'` when `GITHUB_ACTIONS` is set and `'/'` otherwise, so a Cloudflare or local build automatically gets the right base with no manual toggle. The workflow's `concurrency: {group: pages, cancel-in-progress: true}` means a deploy cancelled mid-flight by a fast-follow push can leave the Pages backend stuck ("due to in progress deployment") for up to ~90 min — it clears on its own, or can be cancelled manually in the Actions/Environments UI.
+- GitHub Pages has no server-side routing, so `public/404.html` + a decode `<script>` in `index.html` implement the standard SPA deep-link redirect trick (`/InventoryOS/tasks` → `/InventoryOS/?/tasks` → restored via `history.replaceState`).
+- **Migration to Cloudflare Pages started `2026-09-10`, not yet cut over.** `public/_redirects` (`/*  /index.html  200`) is already in the repo — purely additive, GitHub Pages ignores it — ready for whenever a Cloudflare Pages project builds this repo. Watch out creating that project: Cloudflare's unified dashboard can default a "connect a repo" flow into their **Workers** product (`wrangler deploy`) instead of classic **Pages**, and Workers' static-asset path requires Vite ≥6 to auto-configure. This repo is on Vite 5 — **do not upgrade Vite to satisfy that gate**; use the Pages product instead, or override the project's deploy command to `npx wrangler pages deploy dist --project-name=<name>`.
+- Only 4 `VITE_*` env vars are actually read by the app: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SETUP_ALLOWED_DOMAINS`, `VITE_SETUP_ALLOWED_EMAILS`. `.env.example` also lists some legacy/unused OneDrive/Droptop vars that nothing currently reads.
+- **Public, no-auth routes** bypass `RequireAuth` entirely in `App.tsx` and must never expose anything beyond what their own SECURITY DEFINER RPC returns: `/f/:shareToken` (forms), `/menu-board/:slug` + legacy `/m/:token` (menu board share), `/menu-board/:slug/pdf` (menu board PDF download). React Router matches the most specific path regardless of declaration order, so these coexist fine alongside the authenticated `/*` AppShell splat.
 
 ---
 
