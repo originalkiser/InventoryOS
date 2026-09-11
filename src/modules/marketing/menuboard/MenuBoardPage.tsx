@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import { createColumnHelper } from '@tanstack/react-table'
+import { createColumnHelper, type VisibilityState } from '@tanstack/react-table'
 import { Button, Card, CardBody, Combobox, Input, Modal, Select, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { ownerBucket } from '@/hooks/useLocationExclusions'
+import { ColumnManagerModal, type ColItem } from '../../locations/ColumnManagerModal'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
 import { byNaturalLabel, naturalCompare } from '@/lib/naturalSort'
 import { imagesToPdf } from '@/lib/imagesToPdf'
@@ -936,14 +938,50 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
     }
   }).sort((a, b) => naturalCompare(a.name, b.name)), [activeLocations, shareByLocation])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(rows, shopLinkColumns, { persistKey: 'menu-board:shop-links' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } =
+    useTable(rows, shopLinkColumns, { persistKey: 'menu-board:shop-links' })
+  useColumnPrefs('marketing.menu_board_shop_links', table, columnVisibility, columnOrder, setColumnOrder)
+
+  // Modal-based column manager (drag to reorder, click to hide/show) — the
+  // hover dropdown DataTable normally renders for this closes as soon as the
+  // pointer leaves the button on the way to its own checkbox list, so it
+  // can't be scrolled. Same pattern as LocationsPage.tsx's Manage Columns.
+  const [colsOpen, setColsOpen] = useState(false)
+  const colLabel = (c: ReturnType<typeof table.getAllLeafColumns>[number]) =>
+    typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id
+
+  const allColItems = useMemo<ColItem[]>(
+    () => table.getAllLeafColumns().map((c) => ({ id: c.id, label: colLabel(c) })),
+    [table, columnVisibility], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  const shownOrder = useMemo(() => {
+    const visible = table.getAllLeafColumns().filter((c) => c.getIsVisible()).map((c) => c.id)
+    if (!columnOrder.length) return visible
+    const rank = (id: string) => { const i = columnOrder.indexOf(id); return i === -1 ? Number.MAX_SAFE_INTEGER : i }
+    return [...visible].sort((a, b) => rank(a) - rank(b))
+  }, [table, columnOrder, columnVisibility]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function applyShownColumns(shown: string[]) {
+    const shownSet = new Set(shown)
+    const hidden = allColItems.map((c) => c.id).filter((id) => !shownSet.has(id))
+    setColumnOrder([...shown, ...hidden])
+    const vis: VisibilityState = {}
+    for (const c of allColItems) vis[c.id] = shownSet.has(c.id)
+    table.setColumnVisibility(vis)
+  }
+
+  function resetColumnsToDefault() {
+    setColumnOrder([])
+    table.setColumnVisibility({})
+  }
 
   return (
     <Card><CardBody className="flex flex-col gap-3">
       <p className="text-[11px] font-mono text-inky/60 max-w-2xl">
         One locked link per shop, generated automatically. Both the board link and the PDF link always reflect that
         shop's current prices — nothing to regenerate when the OSL changes. Click a column header's filter icon to
-        narrow by owner, regional director, market, or area manager.
+        narrow by owner, regional director, market, or area manager, or use Manage Columns to hide/reorder columns.
       </p>
 
       {status === 'loading' ? (
@@ -956,8 +994,29 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
           globalFilter={globalFilter}
           onGlobalFilterChange={setGlobalFilter}
           exportFilename="Menu Board Shop Links"
+          hideColumnControl
+          actions={
+            <button
+              onClick={() => setColsOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+              </svg>
+              Columns
+            </button>
+          }
         />
       )}
+
+      <ColumnManagerModal
+        open={colsOpen}
+        onClose={() => setColsOpen(false)}
+        all={allColItems}
+        shown={shownOrder}
+        onChange={applyShownColumns}
+        onReset={resetColumnsToDefault}
+      />
     </CardBody></Card>
   )
 }
