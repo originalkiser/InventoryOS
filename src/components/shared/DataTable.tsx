@@ -302,7 +302,7 @@ export function DataTable<T>({
         {!hideColumnControl && (
           <div className="relative group">
             <Button variant="secondary" size="sm">Columns</Button>
-            <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-cream border border-navy/40 rounded shadow-xl z-20 min-w-[160px] py-1">
+            <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-cream border border-navy/40 rounded shadow-xl z-30 min-w-[160px] py-1">
               {table.getAllLeafColumns().filter((c) => c.id !== 'select').map((col) => (
                 <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-navy/5">
                   <input
