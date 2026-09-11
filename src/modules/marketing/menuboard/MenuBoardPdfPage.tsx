@@ -84,8 +84,10 @@ export function MenuBoardPdfPage() {
       if (cancelled) return
       setShopName(name)
 
+      const shareUrl = `${window.location.origin}${import.meta.env.BASE_URL}menu-board/${slug}`
+
       try {
-        const blob = await buildMenuBoardPdf({ packages, location, resolveQuart, address })
+        const blob = await buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2: !!share.hide_page2 })
         if (cancelled) return
         const url = URL.createObjectURL(blob)
         blobUrlRef.current = url

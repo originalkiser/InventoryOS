@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
+import QRCode from 'qrcode'
 import { createColumnHelper, type VisibilityState } from '@tanstack/react-table'
 import { Button, Card, CardBody, Combobox, Input, Modal, Select, Tabs, TabsList, TabsTrigger, TabsContent, Toggle, SbLoader } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
@@ -10,10 +11,14 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { ownerBucket } from '@/hooks/useLocationExclusions'
 import { ColumnManagerModal, type ColItem } from '../../locations/ColumnManagerModal'
+import { ConfigUpload } from '@/components/config/ConfigUpload'
+import { requestImportConfirm } from '@/components/config/ImportPreviewHost'
+import type { ImportMode } from '@/modules/config/useConfigTab'
+import { mappedValue } from '@/lib/columnTransform'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
 import { byNaturalLabel, naturalCompare } from '@/lib/naturalSort'
 import { imagesToPdf } from '@/lib/imagesToPdf'
-import type { Location } from '@/types'
+import type { Location, ColumnMapping } from '@/types'
 import menuBoardArt from '@/assets/MenuBoard-01.png'
 import menuBoardArt2 from '@/assets/MenuBoard-02.png'
 
@@ -78,6 +83,35 @@ const BOARD_SLOTS: Record<string, { cream: boolean }> = {
   premium_full_synthetic:    { cream: false },
   premium_hm:                { cream: false },
   economy:                   { cream: false },
+}
+
+// ── QR codes ─────────────────────────────────────────────────────────────
+// One tiny helper reused everywhere a board link needs a scannable code: the
+// board's own page-1 (web + PDF), and the Shop Links table. `qrcode` renders
+// to a data URL for <img> use and straight onto a <canvas> for the PDF path
+// (avoids loading a cross-origin image into the PDF canvas, which would
+// taint it and break `toDataURL()`).
+async function qrDataUrl(text: string, pixelSize: number): Promise<string> {
+  return QRCode.toDataURL(text, { margin: 0, width: pixelSize, color: { dark: '#002745', light: '#F2F1E6' } })
+}
+
+/**
+ * Small QR `<img>` for a share URL — renders nothing while empty/unset.
+ * Generates at ~2x the display `size` (crisp without being wasteful) — the
+ * Shop Links table renders up to one of these per shop, so a fixed high-res
+ * bitmap regardless of display size would add up fast on a 300+-shop table.
+ */
+function QrImage({ url, size = 56, className = '' }: { url: string; size?: number; className?: string }) {
+  const [src, setSrc] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!url) { setSrc(null); return }
+    qrDataUrl(url, Math.max(96, size * 2)).then((d) => { if (!cancelled) setSrc(d) }).catch(() => { if (!cancelled) setSrc(null) })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, size])
+  if (!src) return null
+  return <img src={src} alt="QR code to this menu board" width={size} height={size} className={className} />
 }
 
 /**
@@ -216,7 +250,7 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
  * updates position live, committed to the DB on release. Reused read-only
  * by the public share page (no editMode, no updatePackage).
  */
-export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1 }: {
+export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1, shareUrl, hidePage2 }: {
   location: Location | undefined
   packages: MenuBoardPackage[]
   editMode?: boolean
@@ -230,6 +264,10 @@ export function Board({ location, packages, editMode = false, updatePackage, res
    *  above page 2; 'side-by-side' = page 1 left, page 2 right. */
   layout?: BoardLayout
   page?: 1 | 2
+  /** When set, a QR code linking here is drawn under page 1's address bar. */
+  shareUrl?: string
+  /** Share-level toggle to omit the page-2 staff reference sheet entirely. */
+  hidePage2?: boolean
 }) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<{ id: string; field: 'price' | 'quart' } | null>(null)
@@ -266,7 +304,7 @@ export function Board({ location, packages, editMode = false, updatePackage, res
   function endDrag() { setDragging(null) }
 
   const showP1 = layout !== 'single' || page === 1
-  const showP2 = layout !== 'single' || page === 2
+  const showP2 = !hidePage2 && (layout !== 'single' || page === 2)
   const boxStyle = { width: width ?? '100%', maxWidth: width ?? BOARD_REF_WIDTH } as const
 
   const page1 = (
@@ -328,6 +366,13 @@ export function Board({ location, packages, editMode = false, updatePackage, res
         <div className="bg-sb-navy text-sb-cream/80 text-center px-3 py-1.5">
           <span className="text-[10px] font-mono">{address || (location ? '' : 'Select a shop above')}</span>
         </div>
+
+        {shareUrl && (
+          <div className="bg-sb-navy flex flex-col items-center gap-1 px-3 pb-3 pt-1">
+            <QrImage url={shareUrl} size={Math.round(72 * scale)} />
+            <span className="text-[9px] font-mono text-sb-cream/50 text-center">Scan for the live board</span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -444,26 +489,34 @@ function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
   ctx.fillText('PLUS TAX', x + (colW - wPT) / 2, smallBaseline + ptFs + fs * 0.02)
 }
 
-export async function buildMenuBoardPdf({ packages, location, resolveQuart, address }: {
+export async function buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2 }: {
   packages: MenuBoardPackage[]
   location: Location | undefined
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
   address: string
+  /** When set, a QR code linking here is drawn under page 1's address bar. */
+  shareUrl?: string
+  /** Omit the page-2 staff reference sheet — a single-page PDF. */
+  hidePage2?: boolean
 }): Promise<Blob> {
   await Promise.all([
     document.fonts.load('700 100px "Chakra Petch"'),
     document.fonts.load('16px "DM Mono"'),
   ]).catch(() => {})
 
-  const [art1, art2] = await Promise.all([loadImage(menuBoardArt), loadImage(menuBoardArt2)])
+  const art1 = await loadImage(menuBoardArt)
   const scale = PDF_W / BOARD_REF_WIDTH
 
-  // ── Page 1: board + priced overlays + address bar ───────────────────
+  // ── Page 1: board + priced overlays + address bar (+ QR, if shared) ─
   const h1Art = Math.round(PDF_W * (art1.naturalHeight / art1.naturalWidth))
   const addrH = Math.round(PDF_W * 0.032)
+  const qrSize = Math.round(PDF_W * 0.11)
+  const qrPad = Math.round(PDF_W * 0.02)
+  const qrCaptionH = Math.round(PDF_W * 0.022)
+  const qrBlockH = shareUrl ? qrPad * 2 + qrSize + qrCaptionH : 0
   const c1 = document.createElement('canvas')
   c1.width = PDF_W
-  c1.height = h1Art + addrH
+  c1.height = h1Art + addrH + qrBlockH
   const ctx1 = c1.getContext('2d')!
   ctx1.drawImage(art1, 0, 0, PDF_W, h1Art)
 
@@ -487,7 +540,7 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
   }
 
   ctx1.fillStyle = '#002745'
-  ctx1.fillRect(0, h1Art, PDF_W, addrH)
+  ctx1.fillRect(0, h1Art, PDF_W, addrH + qrBlockH)
   if (address) {
     ctx1.fillStyle = 'rgba(242,241,230,0.8)'
     ctx1.font = `${addrH * 0.4}px "DM Mono", monospace`
@@ -496,38 +549,64 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
     ctx1.fillText(address, PDF_W / 2, h1Art + addrH / 2)
   }
 
-  // ── Page 2: the static reference sheet ─────────────────────────────
-  const h2 = Math.round(PDF_W * (art2.naturalHeight / art2.naturalWidth))
-  const c2 = document.createElement('canvas')
-  c2.width = PDF_W
-  c2.height = h2
-  c2.getContext('2d')!.drawImage(art2, 0, 0, PDF_W, h2)
+  if (shareUrl) {
+    const qrCanvas = document.createElement('canvas')
+    await QRCode.toCanvas(qrCanvas, shareUrl, { margin: 0, width: qrSize, color: { dark: '#002745', light: '#F2F1E6' } })
+    const qrX = (PDF_W - qrSize) / 2
+    const qrY = h1Art + addrH + qrPad
+    ctx1.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize)
+    ctx1.fillStyle = 'rgba(242,241,230,0.5)'
+    ctx1.font = `${qrCaptionH * 0.8}px "DM Mono", monospace`
+    ctx1.textAlign = 'center'
+    ctx1.textBaseline = 'middle'
+    ctx1.fillText('Scan for the live board', PDF_W / 2, qrY + qrSize + qrCaptionH / 2)
+  }
+
+  const pages = [{ jpegDataUrl: c1.toDataURL('image/jpeg', 0.92) }]
+
+  // ── Page 2: the static reference sheet (skipped when hidePage2) ────
+  if (!hidePage2) {
+    const art2 = await loadImage(menuBoardArt2)
+    const h2 = Math.round(PDF_W * (art2.naturalHeight / art2.naturalWidth))
+    const c2 = document.createElement('canvas')
+    c2.width = PDF_W
+    c2.height = h2
+    c2.getContext('2d')!.drawImage(art2, 0, 0, PDF_W, h2)
+    pages.push({ jpegDataUrl: c2.toDataURL('image/jpeg', 0.92) })
+  }
 
   // fit: 'image' → each PDF page is the menu's own shape, image edge-to-edge,
   // no white margin.
-  return imagesToPdf([
-    { jpegDataUrl: c1.toDataURL('image/jpeg', 0.92) },
-    { jpegDataUrl: c2.toDataURL('image/jpeg', 0.92) },
-  ], { fit: 'image' })
+  return imagesToPdf(pages, { fit: 'image' })
 }
 
 /**
- * Board + a PDF-reader-style toolbar: zoom out / zoom % / zoom in / reset,
- * and a "Download PDF" button (each board page drawn onto a canvas →
- * a 2-page PDF, page 1 = the board through Additional Services + address,
- * page 2 = the reference sheet). Used by the admin Board tab and the
- * public share page so both get the same viewing controls.
+ * Board + a PDF-reader-style toolbar: zoom out / zoom % / zoom in / reset /
+ * fit-to-screen, layout, and a "Download PDF" button. The toolbar sits
+ * BELOW the board (not above it) so the initial view is as much board as
+ * possible — most people zoom with their own browser/device rather than
+ * this control, which stays reachable by scrolling past the board rather
+ * than competing with it for the top of the viewport. Used by the admin
+ * Board tab and the public share page so both get the same viewing controls.
  */
-export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof Board> & { shopName?: string }) {
+export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.ComponentProps<typeof Board> & { shopName?: string }) {
   const wrapRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [fitW, setFitW] = useState(BOARD_REF_WIDTH)
   const [zoom, setZoom] = useState(1)
   const [pdfBusy, setPdfBusy] = useState(false)
-  const [layout, setLayout] = useState<BoardLayout>(() => {
+  const [layoutPref, setLayoutPref] = useState<BoardLayout>(() => {
     try { return (localStorage.getItem(LAYOUT_KEY) as BoardLayout) || 'single' } catch { return 'single' }
   })
-  const [page, setPage] = useState<1 | 2>(1)
-  useEffect(() => { try { localStorage.setItem(LAYOUT_KEY, layout) } catch { /* ignore */ } }, [layout])
+  const [pagePref, setPagePref] = useState<1 | 2>(1)
+  useEffect(() => { try { localStorage.setItem(LAYOUT_KEY, layoutPref) } catch { /* ignore */ } }, [layoutPref])
+
+  // A share with page 2 hidden has nothing to stack/side-by-side/page
+  // through — force single-page-1 for rendering without touching the user's
+  // stored layout preference (it should still apply normally on a share
+  // that DOES have page 2).
+  const layout: BoardLayout = hidePage2 ? 'single' : layoutPref
+  const page: 1 | 2 = hidePage2 ? 1 : pagePref
 
   useEffect(() => {
     const el = wrapRef.current
@@ -545,6 +624,23 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
   const displayW = Math.max(240, Math.round(baseW * zoom))
   const setZoomClamped = (z: number) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100)))
 
+  // Sizes the board so its rendered content spans from here down to the
+  // bottom of the viewport — i.e. "top and bottom of the page align with
+  // the screen." Measures the actually-rendered content rather than
+  // recomputing art aspect ratios by hand, so it works the same for
+  // single/stacked/side-by-side and with or without the address/QR block.
+  function fitToScreen() {
+    const wrap = wrapRef.current
+    const content = contentRef.current
+    if (!wrap || !content) return
+    const top = wrap.getBoundingClientRect().top
+    const available = window.innerHeight - top - 16
+    const renderedH = content.getBoundingClientRect().height
+    if (renderedH <= 0 || available <= 0) return
+    const naturalH = renderedH / zoom
+    setZoomClamped(available / naturalH)
+  }
+
   async function downloadPdf() {
     setPdfBusy(true)
     try {
@@ -553,6 +649,8 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
         location: props.location,
         resolveQuart: props.resolveQuart,
         address: props.address,
+        shareUrl,
+        hidePage2,
       })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -575,6 +673,12 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
 
   return (
     <div className="flex flex-col gap-2">
+      <div ref={wrapRef} className="overflow-auto pb-1">
+        <div ref={contentRef}>
+          <Board {...props} width={displayW} layout={layout} page={page} shareUrl={shareUrl} hidePage2={hidePage2} />
+        </div>
+      </div>
+
       {/* Fixed sb-* tokens (not the theme-flipping ones) so the toolbar
           reads the same on the cream admin card and the navy public page. */}
       <div className="flex items-center gap-1 rounded-md bg-sb-navy px-2 py-1.5 flex-wrap">
@@ -582,18 +686,23 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
         <span className="w-12 text-center text-[11px] font-mono tabular-nums text-sb-cream">{Math.round(zoom * 100)}%</span>
         <button type="button" className={zBtn} onClick={() => setZoomClamped(zoom + ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in">+</button>
         <button type="button" className="ml-1 px-2 h-7 rounded bg-sb-cream/10 hover:bg-sb-cream/20 disabled:opacity-30 text-sb-cream font-mono text-[11px]" onClick={() => setZoom(1)} disabled={zoom === 1}>Reset</button>
+        <button type="button" className="px-2 h-7 rounded bg-sb-cream/10 hover:bg-sb-cream/20 text-sb-cream font-mono text-[11px]" onClick={fitToScreen}>Fit&nbsp;to&nbsp;screen</button>
 
-        <span className="w-px h-5 bg-sb-cream/20 mx-1" />
-        {/* Layout: one page at a time / stacked / side-by-side */}
-        <button type="button" className={segBtn(layout === 'single')} onClick={() => setLayout('single')}>Single</button>
-        <button type="button" className={segBtn(layout === 'stacked')} onClick={() => setLayout('stacked')}>Stacked</button>
-        <button type="button" className={segBtn(layout === 'side-by-side')} onClick={() => setLayout('side-by-side')}>Side&nbsp;by&nbsp;side</button>
-
-        {layout === 'single' && (
+        {!hidePage2 && (
           <>
             <span className="w-px h-5 bg-sb-cream/20 mx-1" />
-            <button type="button" className={segBtn(page === 1)} onClick={() => setPage(1)}>Page&nbsp;1</button>
-            <button type="button" className={segBtn(page === 2)} onClick={() => setPage(2)}>Page&nbsp;2</button>
+            {/* Layout: one page at a time / stacked / side-by-side */}
+            <button type="button" className={segBtn(layout === 'single')} onClick={() => setLayoutPref('single')}>Single</button>
+            <button type="button" className={segBtn(layout === 'stacked')} onClick={() => setLayoutPref('stacked')}>Stacked</button>
+            <button type="button" className={segBtn(layout === 'side-by-side')} onClick={() => setLayoutPref('side-by-side')}>Side&nbsp;by&nbsp;side</button>
+
+            {layout === 'single' && (
+              <>
+                <span className="w-px h-5 bg-sb-cream/20 mx-1" />
+                <button type="button" className={segBtn(page === 1)} onClick={() => setPagePref(1)}>Page&nbsp;1</button>
+                <button type="button" className={segBtn(page === 2)} onClick={() => setPagePref(2)}>Page&nbsp;2</button>
+              </>
+            )}
           </>
         )}
 
@@ -601,9 +710,6 @@ export function BoardViewer({ shopName, ...props }: React.ComponentProps<typeof 
           className="ml-auto px-3 h-7 rounded bg-sb-sky hover:brightness-95 disabled:opacity-50 text-sb-navy font-mono font-bold text-[11px] uppercase tracking-wide">
           {pdfBusy ? 'Building…' : 'Download PDF'}
         </button>
-      </div>
-      <div ref={wrapRef} className="overflow-auto pb-1">
-        <Board {...props} width={displayW} layout={layout} page={page} />
       </div>
     </div>
   )
@@ -644,7 +750,7 @@ function PriceComposite({ price, fs }: { price: number; fs: number }) {
 
 // ── Share link ─────────────────────────────────────────────────────────
 
-interface ShareRow { token: string; slug: string | null; location_id: string | null; label: string | null; created_at: string }
+interface ShareRow { token: string; slug: string | null; location_id: string | null; label: string | null; hide_page2: boolean; created_at: string }
 const sb = () => supabase as any
 const APP_URL = `${window.location.origin}${import.meta.env.BASE_URL}`
 // A locked link gets the pretty /menu-board/<slug> URL; anything without a
@@ -678,6 +784,7 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const [mode, setMode] = useState<'locked' | 'open'>(currentLocationId ? 'locked' : 'open')
+  const [hidePage2, setHidePage2] = useState(false)
   const [rows, setRows] = useState<ShareRow[]>([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -685,7 +792,7 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
   const load = useCallback(async () => {
     if (!companyId) { setLoading(false); return }
     const { data } = await sb().schema('marketing').from('menu_board_shares')
-      .select('token, slug, location_id, label, created_at').eq('company_id', companyId).eq('active', true)
+      .select('token, slug, location_id, label, hide_page2, created_at').eq('company_id', companyId).eq('active', true)
       .order('created_at', { ascending: false })
     setRows((data ?? []) as ShareRow[])
     setLoading(false)
@@ -704,6 +811,7 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
         location_id: mode === 'locked' ? currentLocationId : null,
         label: mode === 'locked' ? currentLabel : 'Any shop (viewer picks)',
         slug: mode === 'locked' ? makeLockedShareSlug(currentShopNumber) || null : null,
+        hide_page2: hidePage2,
         created_by: profile?.id ?? null,
       }
       const { data, error } = await sb().schema('marketing').from('menu_board_shares').insert(row).select('token, slug').single()
@@ -747,6 +855,10 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
               <span className="block text-inky/60">Viewer gets a shop dropdown above the board.</span>
             </span>
           </label>
+          <label className="flex items-center gap-2 text-xs font-mono text-inky cursor-pointer">
+            <Toggle checked={hidePage2} onChange={setHidePage2} size="sm" />
+            Hide page 2 (staff reference sheet)
+          </label>
           <Button size="sm" onClick={create} disabled={creating || (mode === 'locked' && !currentLocationId)}>
             {creating ? 'Creating…' : 'Create link'}
           </Button>
@@ -761,7 +873,10 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
           ) : rows.map((r) => (
             <div key={r.token} className="flex items-center gap-2 rounded border border-navy/15 px-2 py-1.5">
               <div className="flex-1 min-w-0">
-                <div className="text-[11px] font-mono text-navy truncate">{r.label || (r.location_id ? 'Locked shop' : 'Any shop')}</div>
+                <div className="text-[11px] font-mono text-navy truncate">
+                  {r.label || (r.location_id ? 'Locked shop' : 'Any shop')}
+                  {r.hide_page2 && <span className="ml-1.5 text-inky/40">(page 2 hidden)</span>}
+                </div>
                 <div className="text-[10px] font-mono text-inky/50 truncate">{shareUrlFor(r)}</div>
               </div>
               <button onClick={() => { navigator.clipboard.writeText(shareUrlFor(r)); toast.success('Copied') }}
@@ -777,7 +892,7 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
 
 // ── Shop Links (every shop's locked link + direct PDF download) ─────────
 
-interface ShopShareInfo { token: string; slug: string | null }
+interface ShopShareInfo { token: string; slug: string | null; hidePage2: boolean }
 interface ShopLinkRow {
   id: string
   name: string
@@ -789,48 +904,11 @@ interface ShopLinkRow {
   amEmail: string | null
   link: string | null
   pdfLink: string | null
+  token: string | null
+  hidePage2: boolean
 }
 
 const shopLinkCol = createColumnHelper<ShopLinkRow>()
-const shopLinkColumns = [
-  shopLinkCol.accessor('name', { header: 'Shop', cell: (i) => <span className="whitespace-nowrap">{i.getValue()}</span> }),
-  shopLinkCol.accessor('owner', { header: 'Owner', cell: (i) => i.getValue() || '—' }),
-  shopLinkCol.accessor('regionalDirector', { header: 'Regional Director', cell: (i) => i.getValue() || '—' }),
-  shopLinkCol.accessor('market', { header: 'Market', cell: (i) => i.getValue() || '—' }),
-  shopLinkCol.accessor('areaManager', { header: 'Area Manager', cell: (i) => i.getValue() || '—' }),
-  shopLinkCol.accessor('storeEmail', { header: 'Shop Email', cell: (i) => i.getValue() || '—' }),
-  shopLinkCol.accessor('amEmail', { header: 'Area Manager Email', cell: (i) => i.getValue() || '—' }),
-  shopLinkCol.accessor('link', {
-    header: 'Menu Board Link',
-    cell: (i) => {
-      const link = i.getValue()
-      if (!link) return '—'
-      return (
-        <span className="inline-flex items-center gap-1.5">
-          <a href={link} target="_blank" rel="noreferrer" className="text-sky hover:underline truncate max-w-[240px] inline-block align-middle">
-            {link.replace(/^https?:\/\//, '')}
-          </a>
-          <button onClick={() => { navigator.clipboard.writeText(link).catch(() => {}); toast.success('Copied') }}
-            className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
-        </span>
-      )
-    },
-  }),
-  shopLinkCol.accessor('pdfLink', {
-    header: 'Download PDF',
-    cell: (i) => {
-      const link = i.getValue()
-      if (!link) return '—'
-      return (
-        <span className="inline-flex items-center gap-1.5">
-          <a href={link} target="_blank" rel="noreferrer" className="text-sky hover:underline whitespace-nowrap">Download PDF</a>
-          <button onClick={() => { navigator.clipboard.writeText(link).catch(() => {}); toast.success('Copied') }}
-            className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
-        </span>
-      )
-    },
-  }),
-]
 
 /**
  * Ensures every active shop has its own locked share link (creating any
@@ -866,10 +944,10 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
       // Ordered newest-first so a shop with more than one active share (rare —
       // e.g. someone made a second one by hand) resolves to its most recent.
       const { data } = await sb().schema('marketing').from('menu_board_shares')
-        .select('token, slug, location_id').eq('company_id', companyId).eq('active', true).not('location_id', 'is', null)
+        .select('token, slug, location_id, hide_page2').eq('company_id', companyId).eq('active', true).not('location_id', 'is', null)
         .order('created_at', { ascending: false })
       const map: Record<string, ShopShareInfo> = {}
-      for (const r of (data ?? []) as any[]) if (r.location_id && !map[r.location_id]) map[r.location_id] = { token: r.token, slug: r.slug }
+      for (const r of (data ?? []) as any[]) if (r.location_id && !map[r.location_id]) map[r.location_id] = { token: r.token, slug: r.slug, hidePage2: !!r.hide_page2 }
       return map
     }
 
@@ -935,8 +1013,78 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
       amEmail: l.am_email,
       link: share ? shareUrlFor(share) : null,
       pdfLink: share?.slug ? `${APP_URL}menu-board/${share.slug}/pdf` : null,
+      token: share?.token ?? null,
+      hidePage2: share?.hidePage2 ?? false,
     }
   }).sort((a, b) => naturalCompare(a.name, b.name)), [activeLocations, shareByLocation])
+
+  // Optimistic toggle, reverted on a failed save — same shape as
+  // useMenuBoardPackages().update's optimistic pattern above.
+  async function toggleHidePage2(locationId: string, token: string | null, next: boolean) {
+    if (!token) return
+    setShareByLocation((prev) => (prev[locationId] ? { ...prev, [locationId]: { ...prev[locationId], hidePage2: next } } : prev))
+    const { error } = await sb().schema('marketing').from('menu_board_shares').update({ hide_page2: next }).eq('token', token)
+    if (error) {
+      toast.error(`Couldn't save: ${error.message}`)
+      setShareByLocation((prev) => (prev[locationId] ? { ...prev, [locationId]: { ...prev[locationId], hidePage2: !next } } : prev))
+    }
+  }
+
+  const shopLinkColumns = useMemo(() => [
+    shopLinkCol.accessor('name', { header: 'Shop', cell: (i) => <span className="whitespace-nowrap">{i.getValue()}</span> }),
+    shopLinkCol.accessor('owner', { header: 'Owner', cell: (i) => i.getValue() || '—' }),
+    shopLinkCol.accessor('regionalDirector', { header: 'Regional Director', cell: (i) => i.getValue() || '—' }),
+    shopLinkCol.accessor('market', { header: 'Market', cell: (i) => i.getValue() || '—' }),
+    shopLinkCol.accessor('areaManager', { header: 'Area Manager', cell: (i) => i.getValue() || '—' }),
+    shopLinkCol.accessor('storeEmail', { header: 'Shop Email', cell: (i) => i.getValue() || '—' }),
+    shopLinkCol.accessor('amEmail', { header: 'Area Manager Email', cell: (i) => i.getValue() || '—' }),
+    shopLinkCol.accessor('link', {
+      header: 'Menu Board Link',
+      cell: (i) => {
+        const link = i.getValue()
+        if (!link) return '—'
+        return (
+          <span className="inline-flex items-center gap-1.5">
+            <a href={link} target="_blank" rel="noreferrer" className="text-sky hover:underline truncate max-w-[240px] inline-block align-middle">
+              {link.replace(/^https?:\/\//, '')}
+            </a>
+            <button onClick={() => { navigator.clipboard.writeText(link).catch(() => {}); toast.success('Copied') }}
+              className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
+          </span>
+        )
+      },
+    }),
+    {
+      id: 'qr', header: 'QR Code', enableSorting: false, enableColumnFilter: false,
+      cell: (i: any) => {
+        const link = i.row.original.link as string | null
+        return link ? <QrImage url={link} size={40} /> : '—'
+      },
+    },
+    shopLinkCol.accessor('pdfLink', {
+      header: 'Download PDF',
+      cell: (i) => {
+        const link = i.getValue()
+        if (!link) return '—'
+        return (
+          <span className="inline-flex items-center gap-1.5">
+            <a href={link} target="_blank" rel="noreferrer" className="text-sky hover:underline whitespace-nowrap">Download PDF</a>
+            <button onClick={() => { navigator.clipboard.writeText(link).catch(() => {}); toast.success('Copied') }}
+              className="text-inky/40 hover:text-navy shrink-0" title="Copy link">⧉</button>
+          </span>
+        )
+      },
+    }),
+    shopLinkCol.accessor('hidePage2', {
+      header: 'Hide Page 2',
+      enableColumnFilter: false,
+      cell: (i) => {
+        const r = i.row.original
+        return r.token ? <Toggle checked={r.hidePage2} onChange={(v) => toggleHidePage2(r.id, r.token, v)} size="sm" /> : '—'
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [])
 
   const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } =
     useTable(rows, shopLinkColumns, { persistKey: 'menu-board:shop-links' })
@@ -1161,14 +1309,18 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
   quartPricing: ReturnType<typeof useMenuBoardQuartPricing>
   loc: ReturnType<typeof useLocations>
 }) {
-  const { overrides, loading, saveOverride, removeOverride } = quartPricing
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const { overrides, loading, saveOverride, removeOverride, reload } = quartPricing
   const [addOpen, setAddOpen] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [locationId, setLocationId] = useState('')
   const [packageKey, setPackageKey] = useState('')
   const [price, setPrice] = useState('')
   const [quarts, setQuarts] = useState('')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   const shopOptions = useMemo(() => loc.locations.map((l) => ({ value: l.id, label: l.shop_city || l.name })), [loc.locations])
   const packageOptions = useMemo(() => packages.filter((p) => p.active).map((p) => ({ value: p.package_key, label: p.display_name })), [packages])
@@ -1184,14 +1336,99 @@ function CustomPricingTab({ packages, quartPricing, loc }: {
     if (ok) { setAddOpen(false); setLocationId(''); setPackageKey(''); setPrice(''); setQuarts(''); setNotes('') }
   }
 
+  // Package Name → package_key: match the active packages' display name
+  // first (what a human would actually type/paste), falling back to the
+  // raw key for a file exported from this same table.
+  function resolvePackageKey(raw: string): string | null {
+    const t = raw.trim().toLowerCase()
+    if (!t) return null
+    const active = packages.filter((p) => p.active)
+    return (active.find((p) => p.display_name.trim().toLowerCase() === t)
+      ?? active.find((p) => p.package_key.toLowerCase() === t))?.package_key ?? null
+  }
+
+  const uploadFields = [
+    { name: 'shop', label: 'Shop Number', required: true },
+    { name: 'package', label: 'Package Name', required: true },
+    { name: 'price_per_quart', label: 'Price / Extra Quart', required: true },
+    { name: 'included_quarts', label: 'Included Quarts' },
+    { name: 'notes', label: 'Notes' },
+  ]
+
+  // Same review-before-write flow as Order Config's upload: parse → diff
+  // against what's already on this page (by shop + package, matching the
+  // table's own unique constraint) → confirm via the shared Review Import
+  // modal → single batched upsert. Matched rows update in place instead of
+  // duplicating.
+  async function handleImport(rowsIn: Record<string, string>[], maps: ColumnMapping[], _mode: ImportMode) {
+    const numVal = (v: string) => { const t = v.trim(); if (!t) return null; const n = Number(t.replace(/[$,]/g, '')); return isNaN(n) ? null : n }
+    let unresolved = 0
+    const parsed = rowsIn.map((row) => {
+      const out = { location_id: null as string | null, package_key: null as string | null, price_per_quart: null as number | null, included_quarts: null as number | null, notes: null as string | null }
+      for (const m of maps) {
+        const raw = mappedValue(row, m, maps)
+        if (m.fieldName === 'shop') out.location_id = loc.resolveId(raw)
+        else if (m.fieldName === 'package') out.package_key = resolvePackageKey(raw)
+        else if (m.fieldName === 'price_per_quart') out.price_per_quart = numVal(raw)
+        else if (m.fieldName === 'included_quarts') out.included_quarts = numVal(raw)
+        else if (m.fieldName === 'notes') out.notes = raw.trim() || null
+      }
+      return out
+    }).filter((r) => {
+      const ok = !!(r.location_id && r.package_key)
+      if (!ok) unresolved++
+      return ok
+    }) as { location_id: string; package_key: string; price_per_quart: number | null; included_quarts: number | null; notes: string | null }[]
+
+    if (unresolved > 0) toast.error(`${unresolved} row${unresolved !== 1 ? 's' : ''} skipped — shop or package not recognized`)
+    if (parsed.length === 0) return
+
+    // "Parse out what's already on the page" — dedupe against the same
+    // (location, package) key the table's unique constraint uses, so a
+    // re-upload updates existing custom pricing instead of erroring/duplicating.
+    const existingByKey = new Set(overrides.map((o) => `${o.location_id}|${o.package_key}`))
+    let matched = 0
+    const newLabels: string[] = []
+    for (const r of parsed) {
+      if (existingByKey.has(`${r.location_id}|${r.package_key}`)) matched++
+      else newLabels.push(`${shopLabel(r.location_id)} — ${packageLabel(r.package_key)}`)
+    }
+
+    const proceed = await requestImportConfirm({
+      mode: 'merge', total: parsed.length, updates: matched, creates: parsed.length - matched, deletes: 0, newRows: newLabels,
+    })
+    if (!proceed) return
+
+    if (!companyId) { toast.error('No workspace linked yet — try refreshing the page'); return }
+    setImporting(true)
+    const { error } = await sb().schema('marketing').from('menu_board_quart_overrides').upsert(
+      parsed.map((r) => ({ ...r, company_id: companyId, updated_by: profile?.id ?? null, updated_at: new Date().toISOString() })),
+      { onConflict: 'company_id,location_id,package_key' },
+    )
+    setImporting(false)
+    if (error) { toast.error(error.message); return }
+    toast.success(`Imported — ${matched} updated, ${parsed.length - matched} added`)
+    setUploadOpen(false)
+    reload()
+  }
+
   return (
     <Card><CardBody className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-[11px] font-mono text-inky/60">
           Shops set to a different price-per-extra-quart (or included-quarts count) than the company default.
         </p>
-        <Button size="sm" onClick={() => setAddOpen((o) => !o)}>{addOpen ? 'Cancel' : '+ Add Custom Pricing'}</Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={() => setUploadOpen((o) => !o)}>{uploadOpen ? 'Cancel' : 'Upload File'}</Button>
+          <Button size="sm" onClick={() => setAddOpen((o) => !o)}>{addOpen ? 'Cancel' : '+ Add Custom Pricing'}</Button>
+        </div>
       </div>
+
+      {uploadOpen && (
+        <div className="rounded border border-navy/20 p-3">
+          <ConfigUpload requiredFields={uploadFields} onImport={handleImport} importing={importing} allowReplace={false} />
+        </div>
+      )}
 
       {addOpen && (
         <div className="rounded border border-navy/20 p-3 grid grid-cols-1 md:grid-cols-5 gap-2 items-end">

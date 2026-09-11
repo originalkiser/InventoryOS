@@ -47,6 +47,7 @@ export function PublicMenuBoardPage() {
   const shopFn = bySlug ? 'get_menu_board_shop_by_slug' : 'get_menu_board_shop'
   const [status, setStatus] = useState<'loading' | 'ok' | 'notfound'>('loading')
   const [mode, setMode] = useState<'locked' | 'open'>('locked')
+  const [hidePage2, setHidePage2] = useState(false)
   const [packages, setPackages] = useState<MenuBoardPackage[]>([])
   const [quartDefaults, setQuartDefaults] = useState<QuartRow[]>([])
   const [shops, setShops] = useState<ShareShop[]>([])
@@ -62,6 +63,7 @@ export function PublicMenuBoardPage() {
     sb().rpc(shareFn, shareArgs).then(({ data, error }: any) => {
       if (error || !data || data.error) { setStatus('notfound'); return }
       setMode(data.mode)
+      setHidePage2(!!data.hide_page2)
       setPackages(((data.packages ?? []) as any[]).map(normalizePackage))
       setQuartDefaults((data.quart_defaults ?? []) as QuartRow[])
       setShops((data.shops ?? []) as ShareShop[])
@@ -139,6 +141,8 @@ export function PublicMenuBoardPage() {
             resolveQuart={resolveQuart}
             address={shop?.address ?? ''}
             shopName={shopName}
+            shareUrl={window.location.href}
+            hidePage2={hidePage2}
           />
         )}
       </div>
