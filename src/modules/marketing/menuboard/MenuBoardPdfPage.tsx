@@ -67,12 +67,14 @@ export function MenuBoardPdfPage() {
         .filter((p) => p.active)
         .sort((a, b) => a.sort_order - b.sort_order)
       const quartDefaults = (share.quart_defaults ?? []) as { package_key: string; price_per_quart: number | null; included_quarts: number | null }[]
-      // One custom price per shop (applies across every package) — null
-      // means this shop just uses the company defaults.
-      const customPricePerQuart = shopData.custom_price_per_quart == null ? null : Number(shopData.custom_price_per_quart)
+      // This shop's custom per-package prices — a package absent here just
+      // uses the company default.
+      const customPrices: Record<string, number> = {}
+      for (const [pk, v] of Object.entries(shopData.custom_prices ?? {})) if (v != null) customPrices[pk] = Number(v)
       const resolveQuart = (_locationId: string, packageKey: string) => {
         const d = quartDefaults.find((r) => r.package_key === packageKey)
-        if (customPricePerQuart != null) return { pricePerQuart: customPricePerQuart, includedQuarts: d?.included_quarts ?? null, isCustom: true }
+        const customPrice = customPrices[packageKey]
+        if (customPrice != null) return { pricePerQuart: customPrice, includedQuarts: d?.included_quarts ?? null, isCustom: true }
         return { pricePerQuart: d?.price_per_quart ?? null, includedQuarts: d?.included_quarts ?? null, isCustom: false }
       }
 

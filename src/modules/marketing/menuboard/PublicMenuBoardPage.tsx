@@ -14,6 +14,14 @@ import { BoardViewer } from './MenuBoardPage'
 
 const sb = () => supabase as any
 
+// This page (a lobby/bay TV display, or just a browser tab someone leaves
+// open) fetches once on load and otherwise has no reason to ever refetch on
+// its own — unlike the admin app there's no navigation back to it to catch
+// a price update. Re-check on this interval, and whenever the tab regains
+// focus/visibility, so a price edited elsewhere shows up here without
+// anyone needing to manually reload a screen nobody's actively watching.
+const PRICE_REFRESH_MS = 5 * 60 * 1000
+
 interface ShareShop { id: string; name: string | null; shop_city: string | null; address: string | null; city: string | null; state: string | null; zip: string | null }
 interface QuartRow { package_key: string; price_per_quart: number | null; included_quarts: number | null }
 
@@ -54,9 +62,9 @@ export function PublicMenuBoardPage() {
   const [shopId, setShopId] = useState('')
 
   const [shop, setShop] = useState<{ id: string; prices: Record<string, number | null>; address: string } | null>(null)
-  // One custom price per shop (applies across every package) — null means
-  // this shop just uses the company defaults.
-  const [customPricePerQuart, setCustomPricePerQuart] = useState<number | null>(null)
+  // This shop's custom per-package prices (package_key -> price) — a
+  // package absent here just uses the company default.
+  const [customPrices, setCustomPrices] = useState<Record<string, number>>({})
   const [shopLoading, setShopLoading] = useState(false)
 
   // Share config
@@ -80,26 +88,47 @@ export function PublicMenuBoardPage() {
     return { value: l.id, label: addr ? `${l.shop_city || l.name} — ${addr}` : (l.shop_city || l.name || l.id) }
   }).sort(byNaturalLabel), [shops])
 
-  // Selected shop's prices
-  const loadShop = useCallback(async (id: string) => {
+  // Selected shop's prices. `silent` skips the loading spinner for a
+  // background re-check (see PRICE_REFRESH_MS below) — a kiosk display
+  // shouldn't flash a spinner every few minutes, only on the real first load.
+  const loadShop = useCallback(async (id: string, silent = false) => {
     if (!key || !id) { setShop(null); return }
-    setShopLoading(true)
+    if (!silent) setShopLoading(true)
     const { data, error } = await sb().rpc(shopFn, { ...shareArgs, p_location_id: id })
-    setShopLoading(false)
-    if (error || !data || data.error) { setShop(null); return }
+    if (!silent) setShopLoading(false)
+    if (error || !data || data.error) { if (!silent) setShop(null); return }
     const prices: Record<string, number | null> = {}
     for (const [pk, v] of Object.entries(data.prices ?? {})) prices[pk] = v == null ? null : Number(v)
     setShop({ id: data.id, prices, address: [data.address, data.city, data.state, data.zip].filter(Boolean).join(', ') })
-    setCustomPricePerQuart(data.custom_price_per_quart == null ? null : Number(data.custom_price_per_quart))
+    const custom: Record<string, number> = {}
+    for (const [pk, v] of Object.entries(data.custom_prices ?? {})) if (v != null) custom[pk] = Number(v)
+    setCustomPrices(custom)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, bySlug])
   useEffect(() => { if (shopId) loadShop(shopId) }, [shopId, loadShop])
 
+  // Keep a long-lived tab (or a display that never loses focus) from ever
+  // going stale: re-check on an interval, and immediately on refocus rather
+  // than waiting out the rest of the interval.
+  useEffect(() => {
+    if (!shopId) return
+    const interval = window.setInterval(() => loadShop(shopId, true), PRICE_REFRESH_MS)
+    const onVisible = () => { if (document.visibilityState === 'visible') loadShop(shopId, true) }
+    window.addEventListener('focus', onVisible)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', onVisible)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [shopId, loadShop])
+
   const resolveQuart = useCallback((_locationId: string, packageKey: string) => {
     const d = quartDefaults.find((r) => r.package_key === packageKey)
-    if (customPricePerQuart != null) return { pricePerQuart: customPricePerQuart, includedQuarts: d?.included_quarts ?? null, isCustom: true }
+    const customPrice = customPrices[packageKey]
+    if (customPrice != null) return { pricePerQuart: customPrice, includedQuarts: d?.included_quarts ?? null, isCustom: true }
     return { pricePerQuart: d?.price_per_quart ?? null, includedQuarts: d?.included_quarts ?? null, isCustom: false }
-  }, [customPricePerQuart, quartDefaults])
+  }, [customPrices, quartDefaults])
 
   const activePackages = useMemo(
     () => packages.filter((p) => p.active).sort((a, b) => a.sort_order - b.sort_order),
