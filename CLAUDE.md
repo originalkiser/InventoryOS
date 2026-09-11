@@ -68,6 +68,7 @@ inventoryos/
 ├── tsconfig.json
 ├── vite.config.ts
 ├── HANDOFF.md                     # session handoff notes
+├── TABLE_TEMPLATES.md             # the 5 table templates — consult before building any new table
 ├── OrderGen-PORT-NOTES.md         # order generation porting notes
 ├── .env                           # Supabase URL + anon key (never commit secrets)
 ├── public/
@@ -225,6 +226,7 @@ Palette from `tailwind.config.ts` — CSS-variable-backed for dark mode:
 - Use Tailwind tokens (`text-navy`, `bg-cream`, `border-sky/30`, etc.)
 - Fonts: `font-heading` = Chakra Petch, `font-body` / `font-mono` = DM Mono
 - Reuse `src/components/ui/` primitives (Button, Modal, Tabs, Input, Badge, Toggle)
+- **Building a new table? Read `TABLE_TEMPLATES.md` first** — it defines the 5 table shapes this app standardizes on (Data Table / Inline-Editable Data Table / Read Table + Edit Modal / Import-Paste Preview / Matrix-Pinned-Column Grid) and which one a given behavior maps to. Existing tables are mid-migration onto these; a new table should be built as one of the 5 from the start, not as a 6th one-off `<table>`.
 - Operational tables should be **dense and readable** — avoid excessive padding
 - Always include loading and error states in data-fetching components
 - Toast notifications: `import toast from 'react-hot-toast'` → `toast.success()` / `toast.error()`
