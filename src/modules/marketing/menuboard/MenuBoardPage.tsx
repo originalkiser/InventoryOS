@@ -45,6 +45,17 @@ const ZOOM_STEP = 0.25
 type BoardLayout = 'single' | 'stacked' | 'side-by-side'
 const LAYOUT_KEY = 'menu-board:layout'
 
+// The disclaimer line's asterisks ("* * * * * ALL OIL CHANGES ARE SUBJECT TO
+// A SHOP SUPPLY AND/OR DISPOSAL FEE. * * * * *") sit at x ≈ 4.88%–94.84% of
+// the native 2850px-wide art (pixel-scanned off MenuBoard-01.png) — in
+// effect the board's real left/right content bounds, since the few percent
+// outside them on both sides is just blank navy bezel, not printed content.
+// "Fit to screen" sizes against this span rather than the raw image edges
+// so it doesn't waste viewport width on that bezel or force horizontal
+// scrolling to see it.
+const BOARD_CONTENT_LEFT_PCT = 4.88
+const BOARD_CONTENT_RIGHT_PCT = 94.84
+
 // The numeric price columns on core.locations a package can be fed from —
 // the Package Mapping "Source Column" dropdown. Kept as an explicit list
 // (not derived from a location row's keys) so a null-valued column on the
@@ -91,8 +102,15 @@ const BOARD_SLOTS: Record<string, { cream: boolean }> = {
 // to a data URL for <img> use and straight onto a <canvas> for the PDF path
 // (avoids loading a cross-origin image into the PDF canvas, which would
 // taint it and break `toDataURL()`).
+//
+// margin is in QR "modules," not px — it's the required blank quiet zone a
+// scanner uses to find the code's edges. Never drop this to 0: without it
+// codes still look fine and scan eventually, but noticeably slower/flakier
+// on real phone cameras, since the scanner has to work harder to locate the
+// code's boundary against whatever's printed right up against it.
+const QR_MARGIN = 2
 async function qrDataUrl(text: string, pixelSize: number): Promise<string> {
-  return QRCode.toDataURL(text, { margin: 0, width: pixelSize, color: { dark: '#002745', light: '#F2F1E6' } })
+  return QRCode.toDataURL(text, { margin: QR_MARGIN, width: pixelSize, color: { dark: '#002745', light: '#F2F1E6' } })
 }
 
 /**
@@ -551,7 +569,7 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
 
   if (shareUrl) {
     const qrCanvas = document.createElement('canvas')
-    await QRCode.toCanvas(qrCanvas, shareUrl, { margin: 0, width: qrSize, color: { dark: '#002745', light: '#F2F1E6' } })
+    await QRCode.toCanvas(qrCanvas, shareUrl, { margin: QR_MARGIN, width: qrSize, color: { dark: '#002745', light: '#F2F1E6' } })
     const qrX = (PDF_W - qrSize) / 2
     const qrY = h1Art + addrH + qrPad
     ctx1.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize)
@@ -600,6 +618,11 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.C
   })
   const [pagePref, setPagePref] = useState<1 | 2>(1)
   useEffect(() => { try { localStorage.setItem(LAYOUT_KEY, layoutPref) } catch { /* ignore */ } }, [layoutPref])
+  // True right after "Fit to screen" — centers the board and clips (instead
+  // of scrolling) the ~5% bezel the width-fit intentionally lets run past
+  // the viewport edge (see fitToScreen below). Any manual zoom/layout/page
+  // change clears it, going back to normal left-anchored scrolling.
+  const [fitMode, setFitMode] = useState(false)
 
   // A share with page 2 hidden has nothing to stack/side-by-side/page
   // through — force single-page-1 for rendering without touching the user's
@@ -623,22 +646,36 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.C
   const baseW = Math.min(fitPerPage, MAX_BOARD_WIDTH)
   const displayW = Math.max(240, Math.round(baseW * zoom))
   const setZoomClamped = (z: number) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100)))
+  // Manual zoom/layout/page controls drop back to normal scrolling —
+  // fitMode's centered-and-clipped width fit only applies right after
+  // "Fit to screen" itself.
+  function manualZoom(z: number) { setFitMode(false); setZoomClamped(z) }
+  function chooseLayout(l: BoardLayout) { setFitMode(false); setLayoutPref(l) }
+  function choosePage(p: 1 | 2) { setFitMode(false); setPagePref(p) }
 
-  // Sizes the board so its rendered content spans from here down to the
-  // bottom of the viewport — i.e. "top and bottom of the page align with
-  // the screen." Measures the actually-rendered content rather than
-  // recomputing art aspect ratios by hand, so it works the same for
-  // single/stacked/side-by-side and with or without the address/QR block.
+  // Picks whichever zoom is more restrictive — height (top-to-bottom of the
+  // page(s) aligns with the viewport) or width (the board's real content,
+  // per BOARD_CONTENT_LEFT/RIGHT_PCT, spans the viewport) — so neither
+  // dimension ever overflows. When width is the binding constraint the full
+  // board (content + bezel) ends up very slightly wider than the viewport;
+  // fitMode centers and clips that sliver instead of leaving it scrollable,
+  // since it's just blank background, not printed content.
   function fitToScreen() {
     const wrap = wrapRef.current
     const content = contentRef.current
     if (!wrap || !content) return
     const top = wrap.getBoundingClientRect().top
-    const available = window.innerHeight - top - 16
-    const renderedH = content.getBoundingClientRect().height
-    if (renderedH <= 0 || available <= 0) return
-    const naturalH = renderedH / zoom
-    setZoomClamped(available / naturalH)
+    const availableH = window.innerHeight - top - 16
+    const availableW = wrap.clientWidth
+    const rect = content.getBoundingClientRect()
+    if (rect.height <= 0 || rect.width <= 0 || availableW <= 0) return
+    const naturalH = rect.height / zoom
+    const naturalW = rect.width / zoom
+    const contentFrac = (BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT) / 100
+    const widthZoom = availableW / (naturalW * contentFrac)
+    const heightZoom = availableH / naturalH
+    setFitMode(true)
+    setZoomClamped(Math.min(widthZoom, heightZoom))
   }
 
   async function downloadPdf() {
@@ -673,7 +710,10 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.C
 
   return (
     <div className="flex flex-col gap-2">
-      <div ref={wrapRef} className="overflow-auto pb-1">
+      <div
+        ref={wrapRef}
+        className={`pb-1 overflow-y-auto ${fitMode ? 'overflow-x-hidden flex justify-center' : 'overflow-x-auto'}`}
+      >
         <div ref={contentRef}>
           <Board {...props} width={displayW} layout={layout} page={page} shareUrl={shareUrl} hidePage2={hidePage2} />
         </div>
@@ -682,25 +722,25 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.C
       {/* Fixed sb-* tokens (not the theme-flipping ones) so the toolbar
           reads the same on the cream admin card and the navy public page. */}
       <div className="flex items-center gap-1 rounded-md bg-sb-navy px-2 py-1.5 flex-wrap">
-        <button type="button" className={zBtn} onClick={() => setZoomClamped(zoom - ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">−</button>
+        <button type="button" className={zBtn} onClick={() => manualZoom(zoom - ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">−</button>
         <span className="w-12 text-center text-[11px] font-mono tabular-nums text-sb-cream">{Math.round(zoom * 100)}%</span>
-        <button type="button" className={zBtn} onClick={() => setZoomClamped(zoom + ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in">+</button>
-        <button type="button" className="ml-1 px-2 h-7 rounded bg-sb-cream/10 hover:bg-sb-cream/20 disabled:opacity-30 text-sb-cream font-mono text-[11px]" onClick={() => setZoom(1)} disabled={zoom === 1}>Reset</button>
-        <button type="button" className="px-2 h-7 rounded bg-sb-cream/10 hover:bg-sb-cream/20 text-sb-cream font-mono text-[11px]" onClick={fitToScreen}>Fit&nbsp;to&nbsp;screen</button>
+        <button type="button" className={zBtn} onClick={() => manualZoom(zoom + ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in">+</button>
+        <button type="button" className="ml-1 px-2 h-7 rounded bg-sb-cream/10 hover:bg-sb-cream/20 disabled:opacity-30 text-sb-cream font-mono text-[11px]" onClick={() => manualZoom(1)} disabled={zoom === 1 && !fitMode}>Reset</button>
+        <button type="button" className={segBtn(fitMode)} onClick={fitToScreen}>Fit&nbsp;to&nbsp;screen</button>
 
         {!hidePage2 && (
           <>
             <span className="w-px h-5 bg-sb-cream/20 mx-1" />
             {/* Layout: one page at a time / stacked / side-by-side */}
-            <button type="button" className={segBtn(layout === 'single')} onClick={() => setLayoutPref('single')}>Single</button>
-            <button type="button" className={segBtn(layout === 'stacked')} onClick={() => setLayoutPref('stacked')}>Stacked</button>
-            <button type="button" className={segBtn(layout === 'side-by-side')} onClick={() => setLayoutPref('side-by-side')}>Side&nbsp;by&nbsp;side</button>
+            <button type="button" className={segBtn(layout === 'single')} onClick={() => chooseLayout('single')}>Single</button>
+            <button type="button" className={segBtn(layout === 'stacked')} onClick={() => chooseLayout('stacked')}>Stacked</button>
+            <button type="button" className={segBtn(layout === 'side-by-side')} onClick={() => chooseLayout('side-by-side')}>Side&nbsp;by&nbsp;side</button>
 
             {layout === 'single' && (
               <>
                 <span className="w-px h-5 bg-sb-cream/20 mx-1" />
-                <button type="button" className={segBtn(page === 1)} onClick={() => setPagePref(1)}>Page&nbsp;1</button>
-                <button type="button" className={segBtn(page === 2)} onClick={() => setPagePref(2)}>Page&nbsp;2</button>
+                <button type="button" className={segBtn(page === 1)} onClick={() => choosePage(1)}>Page&nbsp;1</button>
+                <button type="button" className={segBtn(page === 2)} onClick={() => choosePage(2)}>Page&nbsp;2</button>
               </>
             )}
           </>
