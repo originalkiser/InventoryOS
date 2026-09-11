@@ -123,7 +123,7 @@ export function ImportPreviewHost() {
   )
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone?: 'warn' }) {
+export function Stat({ label, value, tone }: { label: string; value: number; tone?: 'warn' }) {
   return (
     <div className={[
       'rounded border px-2 py-1.5 flex flex-col',

@@ -10,6 +10,7 @@ import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
+import { Stat } from '@/components/config/ImportPreviewHost'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
@@ -29,6 +30,14 @@ function isYes(v: string): boolean {
   const t = v.trim().toLowerCase(); return t === 'yes' || t === 'y' || t === 'true' || t === '1' || t === 'x'
 }
 
+// Per-vendor: key by vendor + location + product so each vendor's config is
+// separate and re-uploading a vendor's file updates only its rows. Shared
+// between the actual import commit and the review modal's live diff so the
+// two can never disagree about what counts as a match.
+function orderConfigKeyOf(r: Partial<LocationOrderConfig>): string {
+  return `${r.vendor_id ?? ''}|${r.location_id ?? ''}|${r.product_id ?? ''}`
+}
+
 const col = createColumnHelper<LocationOrderConfig>()
 
 export function OrderConfigTab() {
@@ -44,6 +53,11 @@ export function OrderConfigTab() {
   const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [importing, setImporting] = useState(false)
+  // "Update changes only" imports pause here for a live-recomputing review —
+  // reselecting the vendor updates the match counts immediately, since it's
+  // just local state feeding the useMemo below (no server round-trip needed).
+  const [reviewMerge, setReviewMerge] = useState<{ rows: Record<string, string>[]; maps: ColumnMapping[] } | null>(null)
+  const [reviewVendorId, setReviewVendorId] = useState('')
 
   const loadVendors = useCallback(async () => {
     if (!companyId) return
@@ -104,12 +118,12 @@ export function OrderConfigTab() {
     ...ownFields.map((f) => ({ name: f.field_key, label: f.label })),
   ]
 
-  async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
-    setImporting(true)
-    const ownKeys = new Set(ownFields.map((f) => f.field_key))
-    const vName = vendors.find((v) => v.id === uploadVendorId)?.name ?? null
-    const payload = rows.map((row) => {
-      const out: Record<string, unknown> = { vendor_id: uploadVendorId || null, active: true }
+  const ownKeys = useMemo(() => new Set(ownFields.map((f) => f.field_key)), [ownFields])
+
+  function buildImportPayload(rows: Record<string, string>[], maps: ColumnMapping[], vendorId: string): Partial<LocationOrderConfig>[] {
+    const vName = vendors.find((v) => v.id === vendorId)?.name ?? null
+    return rows.map((row) => {
+      const out: Record<string, unknown> = { vendor_id: vendorId || null, active: true }
       const meta: Record<string, unknown> = {}
       let locRaw = ''
       for (const m of maps) {
@@ -131,10 +145,63 @@ export function OrderConfigTab() {
       out.metadata = meta
       return out as Partial<LocationOrderConfig>
     }).filter((r: any) => r.product_id)
-    // Per-vendor: key by vendor + location + product so each vendor's config is
-    // separate and re-uploading a vendor's file updates only its rows.
-    await importRows(payload, { mode, source: 'upload', keyOf: (r: any) => `${r.vendor_id ?? ''}|${r.location_id ?? ''}|${r.product_id}` })
+  }
+
+  // Human-readable label for the review list — the raw key ("<vendor-id>|<location-id>|<product-id>")
+  // is meaningless to a reader, so show the shop label instead of the location's uuid.
+  function friendlyRowLabel(r: Partial<LocationOrderConfig>): string {
+    const meta = (r.metadata as any) ?? {}
+    const locLabel = meta.location_label || (r.location_id ? loc.labelOf(r.location_id) : null) || 'Unmatched location'
+    return `${locLabel} — ${r.product_id ?? ''}`
+  }
+
+  async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
+    if (mode === 'merge') {
+      // Hand off to the review modal below instead of importing immediately —
+      // it lets the vendor be corrected (and match counts recomputed live)
+      // before anything is written, rather than discovering a mismatch after
+      // the fact.
+      setReviewVendorId(uploadVendorId)
+      setReviewMerge({ rows, maps })
+      return
+    }
+    setImporting(true)
+    const payload = buildImportPayload(rows, maps, uploadVendorId)
+    await importRows(payload, { mode, source: 'upload', keyOf: orderConfigKeyOf, labelOf: friendlyRowLabel })
     setImporting(false)
+  }
+
+  // Recomputed on every reviewVendorId change — purely local state, so
+  // reselecting the vendor in the review modal updates matched/new counts
+  // instantly with no extra round-trip.
+  const reviewPayload = useMemo(
+    () => (reviewMerge ? buildImportPayload(reviewMerge.rows, reviewMerge.maps, reviewVendorId) : []),
+    [reviewMerge, reviewVendorId, vendors, loc, ownKeys], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  const reviewDiff = useMemo(() => {
+    if (!reviewMerge) return null
+    const existingByKey = new Map<string, string>()
+    for (const d of data) {
+      if (!d.id) continue
+      const k = orderConfigKeyOf(d)
+      if (!existingByKey.has(k)) existingByKey.set(k, d.id)
+    }
+    let matched = 0
+    const newLabels: string[] = []
+    for (const r of reviewPayload) {
+      if (existingByKey.has(orderConfigKeyOf(r))) matched++
+      else newLabels.push(friendlyRowLabel(r))
+    }
+    return { total: reviewPayload.length, matched, creates: reviewPayload.length - matched, newLabels }
+  }, [reviewMerge, reviewPayload, data]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function confirmMergeImport() {
+    if (!reviewMerge || !reviewDiff) return
+    setImporting(true)
+    const ok = await importRows(reviewPayload, { mode: 'merge', source: 'upload', keyOf: orderConfigKeyOf, confirm: false })
+    setImporting(false)
+    if (ok) setReviewMerge(null)
   }
 
   function resetForm() { setForm({ vendorId: '', locationId: '', product_id: '', uom: '', capacity: '', order_trigger: '', order_limit: '', vmi: false }); setCustomVals({}) }
@@ -237,6 +304,79 @@ export function OrderConfigTab() {
 
       <Modal open={columnsOpen} onClose={() => setColumnsOpen(false)} title="Order Config Columns" size="lg">
         <CustomFieldsEditor section="order_config" linkSections={[{ value: 'locations', label: 'Locations' }]} />
+      </Modal>
+
+      <Modal open={!!reviewMerge} onClose={() => setReviewMerge(null)} title="Review Import" size="lg">
+        {reviewMerge && reviewDiff && (
+          <div className="flex flex-col gap-4">
+            <Combobox
+              label="Vendor for this file"
+              options={[{ value: '', label: '— No vendor —' }, ...vendorOptions]}
+              value={reviewVendorId}
+              onChange={setReviewVendorId}
+              placeholder="Select vendor"
+            />
+            {!reviewVendorId && (
+              <div className="rounded border border-[#E67E22]/40 bg-[#E67E22]/10 px-3 py-2">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-[#E67E22]">No vendor selected</span>
+                <p className="text-xs font-body text-navy leading-relaxed mt-1">
+                  Rows will be matched by location + product only. If the existing config rows for this file were
+                  tagged with a vendor, pick it above — otherwise every row here comes back as new instead of
+                  updating in place.
+                </p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-2">
+              <Stat label="Rows in file" value={reviewDiff.total} />
+              <Stat label="Existing rows updated" value={reviewDiff.matched} />
+              <Stat label="New rows added" value={reviewDiff.creates} tone={reviewDiff.creates > 0 ? 'warn' : undefined} />
+            </div>
+
+            {reviewDiff.creates > 0 && reviewDiff.creates >= reviewDiff.matched && (
+              <div className="rounded border border-[#E67E22]/40 bg-[#E67E22]/10 px-3 py-2">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-[#E67E22]">Check the vendor</span>
+                <p className="text-xs font-body text-navy leading-relaxed mt-1">
+                  Most rows in this file didn't match anything existing. If you expected these to update, try a
+                  different vendor above — a mismatched vendor creates duplicates instead of updating current rows.
+                </p>
+              </div>
+            )}
+
+            {reviewDiff.creates > 0 ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
+                  New records being added ({reviewDiff.creates.toLocaleString()})
+                </span>
+                <div className="max-h-60 overflow-auto rounded border border-navy/20 divide-y divide-navy/10">
+                  {reviewDiff.newLabels.slice(0, 200).map((label, i) => (
+                    <div key={i} className="px-2 py-1 text-xs font-mono text-navy break-all">{label}</div>
+                  ))}
+                </div>
+                {reviewDiff.newLabels.length > 200 && (
+                  <span className="text-[10px] font-mono text-inky/50">
+                    …and {(reviewDiff.newLabels.length - 200).toLocaleString()} more not listed
+                  </span>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs font-body text-inky">
+                No new records — every row in this file matches something that already exists and will be updated in place.
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setReviewMerge(null)}>Cancel</Button>
+              <Button size="sm" onClick={confirmMergeImport} disabled={importing}>
+                {importing
+                  ? 'Importing…'
+                  : reviewDiff.creates > 0
+                    ? `Update ${reviewDiff.matched.toLocaleString()} · Add ${reviewDiff.creates.toLocaleString()}`
+                    : `Update ${reviewDiff.matched.toLocaleString()} rows`}
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )
