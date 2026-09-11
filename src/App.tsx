@@ -12,6 +12,7 @@ import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { SetupPage } from '@/pages/Setup'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
+import { MenuBoardPdfPage } from '@/modules/marketing/menuboard/MenuBoardPdfPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, profile, initialized } = useAuthStore()
@@ -83,7 +84,10 @@ export default function App() {
         <Route path="/f/:shareToken" element={<PublicFormPage />} />
 
         {/* Public menu board — no auth required (share link). Pretty URL
-            /menu-board/<shop>-<hash>, plus the legacy /m/<uuid>. */}
+            /menu-board/<shop>-<hash>, plus the legacy /m/<uuid>. The /pdf
+            variant (from the Shop Links table) rebuilds and downloads that
+            shop's PDF fresh instead of showing the board. */}
+        <Route path="/menu-board/:slug/pdf" element={<MenuBoardPdfPage />} />
         <Route path="/menu-board/:slug" element={<PublicMenuBoardPage />} />
         <Route path="/m/:token" element={<PublicMenuBoardPage />} />
 
