@@ -52,7 +52,9 @@ function firstNumber(s: string): string {
 // Parse a date value safely. Handles Excel serial numbers and rejects absurd
 // years (a serial like 46186 parsed as the year 46186 caused Postgres
 // "time zone displacement out of range"). Returns null when unparseable.
-function parseDateSafe(v: string): Date | null {
+// Exported — reused by any importer that needs to read a date cell outside
+// the full column-mapper transform chain (e.g. Labor Hour Forecast upload).
+export function parseDateSafe(v: string): Date | null {
   const s = String(v ?? '').trim()
   if (!s) return null
   let d: Date
