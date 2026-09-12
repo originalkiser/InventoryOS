@@ -474,6 +474,8 @@ Uses `src/lib/orderEngine.ts`. Key tabs: `NewOrderTab`, `OrderHistoryTab`, `MinR
 - Maps locations via `core.locations.droptop_operation_id`
 - Reads/writes `inventory.count_snapshots`, `inventory.pull_log`
 - Logs sync results to `inventory.droptop_sync_log` (mirrors the Monday.com `location_sync_log` pattern)
+- The Droptop `sig`/`x-api-key` request-signing logic (`DROPTOP_PUBLIC_KEY`/`DROPTOP_PRIVATE_KEY` Supabase secrets) is **copy-pasted identically** into every `supabase/functions/droptop-sync-*` Edge Function rather than shared — there's no common helper module. Copy it from `droptop-sync-orders`/`droptop-sync-staff-time-clock`, never from `droptop-proxy` (dead code, unused, a different non-matching signing scheme).
+- `inventory.droptop_time_records` (migration `20260928_droptop_staff_time_clock.sql`, synced by `droptop-sync-staff-time-clock`): clock-in/clock-out records per location, for comparing staffing against car counts (`inventory.droptop_orders`) and order timing. One row per (company_id, location_id, droptop_user_id, clock_in) — Droptop's `get-staff-time-clock` response has no record id of its own, so that's the natural key. `sync` mode only for now (explicit range or `daysBack`, default 7) — no ongoing incremental mode, sync-state table, dispatcher wiring, or Data Connections UI card yet; that's deliberately deferred until the initial backfill's data has actually been reviewed (`droptop-sync-orders`' own incremental mode needed several rounds of real-production fixes that were much easier to get right with real data already in hand).
 
 ---
 
