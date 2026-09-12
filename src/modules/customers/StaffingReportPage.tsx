@@ -376,6 +376,23 @@ export function StaffingReportPage() {
   const [thresholdDraft, setThresholdDraft] = useState<string>(String(managerWageThreshold))
   useEffect(() => { setThresholdDraft(String(managerWageThreshold)) }, [managerWageThreshold])
 
+  // Staffing List roster — a real employee -> Manager/Hourly mapping,
+  // takes priority over the wage-threshold proxy above for anyone on it.
+  // Keyed by droptop_user_id, not name (names alone can collide across
+  // ~250 shops' worth of staff).
+  const [roster, setRoster] = useState<Map<string, 'manager' | 'hourly'>>(new Map())
+  const loadRoster = useCallback(async () => {
+    if (!companyId) return
+    const sb = supabase as any
+    const { data } = await sb.schema('inventory').from('droptop_staffing_roster')
+      .select('droptop_user_id, role').eq('company_id', companyId)
+    setRoster(new Map((data ?? []).map((r: { droptop_user_id: string; role: 'manager' | 'hourly' }) => [r.droptop_user_id, r.role])))
+  }, [companyId])
+  useEffect(() => { loadRoster() }, [loadRoster])
+  function roleFor(t: Pick<TimeRecordRow, 'droptop_user_id' | 'hourly_wage'>): 'manager' | 'hourly' {
+    return roster.get(t.droptop_user_id) ?? (numWage(t) >= managerWageThreshold ? 'manager' : 'hourly')
+  }
+
   // Shared filters — same Region/Market/AM/Shop shape as Droptop Orders,
   // minus the order-specific dropdowns (Package/Product ID/Vehicle/Fleet)
   // that don't apply to staffing. Apply across all three tabs.
@@ -692,6 +709,104 @@ export function StaffingReportPage() {
     }
   }
 
+  // ---- Staffing List (roster) upload ------------------------------------
+  // Every employee who's ever clocked in, with their most recent known
+  // name — used to resolve an uploaded "Employee" name to a real
+  // droptop_user_id (the upload has no user id, only a name). Loaded once
+  // per company, not per filter/date-range change (small: confirmed ~1.5s
+  // for ~1,700 distinct employees company-wide via EXPLAIN ANALYZE).
+  const [employees, setEmployees] = useState<{ droptopUserId: string; name: string }[]>([])
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    const sb = supabase as any
+    sb.rpc('get_droptop_time_clock_employees').then(({ data }: any) => {
+      if (cancelled) return
+      setEmployees((data ?? []).map((r: { droptop_user_id: string; first_name: string | null; last_name: string | null }) => ({
+        droptopUserId: r.droptop_user_id, name: [r.first_name, r.last_name].filter(Boolean).join(' '),
+      })).filter((e: { name: string }) => e.name))
+    })
+    return () => { cancelled = true }
+  }, [companyId])
+  // name (lowercased) -> every droptop_user_id with that exact full name —
+  // more than one match means the upload's row is genuinely ambiguous
+  // (two different employees, possibly at different shops, happen to
+  // share a name) and needs a human to resolve it, not a guess.
+  const employeesByName = useMemo(() => {
+    const m = new Map<string, string[]>()
+    for (const e of employees) {
+      const key = e.name.trim().toLowerCase()
+      const list = m.get(key) ?? []
+      list.push(e.droptopUserId)
+      m.set(key, list)
+    }
+    return m
+  }, [employees])
+
+  interface ParsedRosterRow {
+    nameRaw: string
+    droptopUserId: string | null
+    matchedName: string | null
+    ambiguous: number | null // count of matches, when >1
+    role: 'manager' | 'hourly' | null
+  }
+  const [rosterUploadPreview, setRosterUploadPreview] = useState<ParsedRosterRow[] | null>(null)
+  const [importingRoster, setImportingRoster] = useState(false)
+
+  function handleRosterParsed(result: ParseResult) {
+    const nameHeader = findHeader(result.headers, [/employee/i, /name/i])
+    const roleHeader = findHeader(result.headers, [/role/i])
+    if (!nameHeader || !roleHeader) {
+      toast.error('Could not find Employee and Role columns in this file — check the headers match what\'s expected above.')
+      return
+    }
+    const parsed: ParsedRosterRow[] = result.rows.map((row) => {
+      const nameRaw = (row[nameHeader] ?? '').trim()
+      const matches = employeesByName.get(nameRaw.toLowerCase()) ?? []
+      const roleRaw = (row[roleHeader] ?? '').trim()
+      const role: 'manager' | 'hourly' | null = /manager|mgr/i.test(roleRaw) ? 'manager' : /hourly|hrly/i.test(roleRaw) ? 'hourly' : null
+      return {
+        nameRaw,
+        droptopUserId: matches.length === 1 ? matches[0] : null,
+        matchedName: matches.length === 1 ? nameRaw : null,
+        ambiguous: matches.length > 1 ? matches.length : null,
+        role,
+      }
+    })
+    setRosterUploadPreview(parsed)
+  }
+
+  async function confirmRosterImport() {
+    if (!rosterUploadPreview || !companyId) return
+    const valid = rosterUploadPreview.filter((r) => r.droptopUserId && r.role)
+    if (!valid.length) { toast.error('No rows had both a matched employee and a recognized role — nothing to import'); return }
+    setImportingRoster(true)
+    try {
+      const sb = supabase as any
+      const BATCH = 500
+      for (let i = 0; i < valid.length; i += BATCH) {
+        const slice = valid.slice(i, i + BATCH).map((r) => {
+          const emp = employees.find((e) => e.droptopUserId === r.droptopUserId)
+          const [firstName, ...rest] = (emp?.name ?? '').split(' ')
+          return {
+            company_id: companyId, droptop_user_id: r.droptopUserId, first_name: firstName || null,
+            last_name: rest.join(' ') || null, role: r.role, updated_by: profile?.id ?? null, updated_at: new Date().toISOString(),
+          }
+        })
+        const { error } = await sb.schema('inventory').from('droptop_staffing_roster')
+          .upsert(slice, { onConflict: 'company_id,droptop_user_id' })
+        if (error) throw new Error(error.message)
+      }
+      toast.success(`Imported ${valid.length} roster row(s)`)
+      setRosterUploadPreview(null)
+      loadRoster()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Import failed')
+    } finally {
+      setImportingRoster(false)
+    }
+  }
+
   const forecastCompareRows = useMemo((): ForecastCompareRow[] => {
     const actualByKey = new Map<string, { hourly: number; manager: number }>()
     for (const t of filteredTimeRecords) {
@@ -699,7 +814,7 @@ export function StaffingReportPage() {
       const key = `${t.location_id}|${date}`
       const e = actualByKey.get(key) ?? { hourly: 0, manager: 0 }
       const h = numHours(t)
-      if (numWage(t) >= managerWageThreshold) e.manager += h; else e.hourly += h
+      if (roleFor(t) === 'manager') e.manager += h; else e.hourly += h
       actualByKey.set(key, e)
     }
     const rows: ForecastCompareRow[] = []
@@ -721,7 +836,7 @@ export function StaffingReportPage() {
     }
     return rows.sort((a, b) => (a.date === b.date ? a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }) : a.date.localeCompare(b.date)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forecastRows, filteredTimeRecords, allowedLocationIds, loc.labelOf, managerWageThreshold])
+  }, [forecastRows, filteredTimeRecords, allowedLocationIds, loc.labelOf, managerWageThreshold, roster])
 
   const forecastTotals = useMemo(() => forecastCompareRows.reduce((acc, r) => ({
     hourlyActual: acc.hourlyActual + r.hourlyActual, hourlyForecast: acc.hourlyForecast + r.hourlyForecast,
@@ -873,22 +988,82 @@ export function StaffingReportPage() {
             <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-rollup-${range.start}-to-${range.end}`} />
           </TabsContent>
 
-          {/* Labor Config — hosts the Labor Hour Forecast upload + the
-              wage-threshold proxy setting. A Staffing List upload (a real
-              employee -> Manager/Hourly roster, to replace the wage-
-              threshold proxy below with an actual classification for
-              anyone on it) is planned for this same tab but not built yet
-              — flagged as a follow-up, not stubbed here. */}
+          {/* Labor Config — hosts the Staffing List roster (real
+              employee -> Manager/Hourly, takes priority over the wage
+              threshold below), the wage-threshold proxy itself (fallback
+              for anyone not on the roster), and the Labor Hour Forecast
+              upload. */}
           <TabsContent value="labor-config">
             <div className="flex flex-col gap-4">
+              <Card>
+                <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Staffing List</span></CardHeader>
+                <CardBody className="flex flex-col gap-3">
+                  <p className="text-[11px] font-mono text-inky/60">
+                    Upload a real roster to replace the wage-threshold guess below for anyone on it. Two columns:
+                    <strong> Employee</strong> (name, matched against everyone who's ever clocked in — ambiguous or
+                    unmatched names are flagged before import) and <strong>Role</strong> (Manager or Hourly). Anyone
+                    not on this list still falls back to the wage threshold.
+                  </p>
+                  <FileUploadZone onParsed={(result) => handleRosterParsed(result)} />
+                </CardBody>
+              </Card>
+
+              {rosterUploadPreview && (() => {
+                const matched = rosterUploadPreview.filter((r) => r.droptopUserId && r.role)
+                const unmatched = rosterUploadPreview.filter((r) => !r.droptopUserId || !r.role)
+                const PREVIEW_LIMIT = 30
+                return (
+                  <Card>
+                    <CardHeader>
+                      <span className="text-xs font-mono text-navy uppercase tracking-wide">
+                        Review Staffing List Import — {matched.length} row(s) ready{unmatched.length ? `, ${unmatched.length} skipped` : ''}
+                      </span>
+                    </CardHeader>
+                    <CardBody className="flex flex-col gap-3">
+                      <div className="overflow-auto rounded border border-navy/30 max-h-72">
+                        <table className="w-full text-xs font-mono">
+                          <thead className="sticky top-0 bg-cream">
+                            <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                              <th className="px-2 py-1.5 text-left">Employee (as uploaded)</th>
+                              <th className="px-2 py-1.5 text-left">Matched Employee</th>
+                              <th className="px-2 py-1.5 text-left">Role</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rosterUploadPreview.slice(0, PREVIEW_LIMIT).map((r, i) => (
+                              <tr key={i} className={[i % 2 ? 'bg-navy/[0.02]' : '', !r.droptopUserId || !r.role ? 'text-[#C0392B]' : ''].join(' ')}>
+                                <td className="px-2 py-1">{r.nameRaw}</td>
+                                <td className="px-2 py-1">
+                                  {r.ambiguous ? `Ambiguous (${r.ambiguous} matches)` : r.droptopUserId ? r.matchedName : 'No match'}
+                                </td>
+                                <td className="px-2 py-1">{r.role ?? 'Unrecognized'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {rosterUploadPreview.length > PREVIEW_LIMIT && (
+                        <p className="text-[11px] font-mono text-inky/60">Showing first {PREVIEW_LIMIT} of {rosterUploadPreview.length} rows.</p>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" loading={importingRoster} disabled={!matched.length} onClick={confirmRosterImport}>
+                          Confirm Import ({matched.length})
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => setRosterUploadPreview(null)}>Cancel</Button>
+                      </div>
+                    </CardBody>
+                  </Card>
+                )
+              })()}
+
               <Card>
                 <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Manager Wage Threshold</span></CardHeader>
                 <CardBody className="flex flex-col gap-2">
                   <p className="text-[11px] font-mono text-inky/60">
                     Droptop's time clock has no role/title field, so there's no direct way to tell a shop manager
-                    apart from an hourly employee. This is a proxy: anyone clocked in at or above this hourly wage
-                    counts as a manager for the Actual-vs-Forecast split below. Adjust it to match your actual pay
-                    bands — it applies company-wide.
+                    apart from an hourly employee. This is the fallback for anyone not on the Staffing List above:
+                    anyone clocked in at or above this hourly wage counts as a manager for the Actual-vs-Forecast
+                    split below. Adjust it to match your actual pay bands — it applies company-wide.
                   </p>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">$/hr and above = Manager</span>
