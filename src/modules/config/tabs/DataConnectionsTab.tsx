@@ -925,37 +925,95 @@ export function DataConnectionsTab() {
   // Routine catch-up (yesterday, or since the last successful pull) runs
   // automatically/on-demand from the main connection card above instead —
   // this is only for reaching further back or re-pulling a specific range.
+  //
+  // Chunked the same two ways as runOrderBackfill below (confirmed live:
+  // an all-shops, ~6-week pull in ONE invocation returned "Edge Function
+  // returned a non-2xx status code" — the edge function loops every
+  // location SEQUENTIALLY, one real Droptop API call each, so a wide
+  // location list alone is enough to blow the platform's execution-time
+  // ceiling regardless of date range). Lighter per-call workload than
+  // Orders (one upsert, no packages/products/services/vehicles child
+  // tables), so both chunk dimensions here are more generous than Orders'.
+  const TIME_CLOCK_LOCATION_CHUNK_SIZE = 15
+  const TIME_CLOCK_WINDOW_DAYS = 14
   async function runTimeClockBackfill() {
-    const locationIds = resolveBackfillLocationIds(timeClockBackfillRegions, timeClockBackfillMarkets, timeClockBackfillShops)
-    if (!companyId || !locationIds?.length) return
+    const targetLocationIds = resolveBackfillLocationIds(timeClockBackfillRegions, timeClockBackfillMarkets, timeClockBackfillShops)
+    if (!companyId || !targetLocationIds?.length) return
     setRunning('time-clock-backfill')
     const store = useSyncTasksStore.getState()
-    store.start(DROPTOP_TIME_CLOCK_TASK_ID, `Droptop Staff Time Clock — historical backfill (${timeClockBackfillStart} to ${timeClockBackfillEnd})`)
-    try {
-      const startUnix = Math.floor(new Date(`${timeClockBackfillStart}T00:00:00.000Z`).getTime() / 1000)
-      const endUnix = Math.floor(new Date(`${timeClockBackfillEnd}T23:59:59.999Z`).getTime() / 1000)
+
+    const rangeStart = new Date(`${timeClockBackfillStart}T00:00:00.000Z`)
+    const rangeEnd = new Date(`${timeClockBackfillEnd}T23:59:59.999Z`)
+    const windows: { startUnix: number; endUnix: number }[] = []
+    for (let winStart = rangeStart; winStart <= rangeEnd; ) {
+      const winEndMs = Math.min(winStart.getTime() + TIME_CLOCK_WINDOW_DAYS * 86400_000 - 1, rangeEnd.getTime())
+      windows.push({ startUnix: Math.floor(winStart.getTime() / 1000), endUnix: Math.floor(winEndMs / 1000) })
+      winStart = new Date(winEndMs + 1)
+    }
+    const locationChunks: string[][] = []
+    for (let i = 0; i < targetLocationIds.length; i += TIME_CLOCK_LOCATION_CHUNK_SIZE) {
+      locationChunks.push(targetLocationIds.slice(i, i + TIME_CLOCK_LOCATION_CHUNK_SIZE))
+    }
+    // Flatten (location chunk, window) into one task list a bounded worker
+    // pool pulls from — every call is an independent upsert, so processing
+    // order doesn't matter once this is no longer strictly sequential.
+    const tasks: { locationIds: string[]; window: { startUnix: number; endUnix: number } }[] = []
+    for (const chunk of locationChunks) for (const w of windows) tasks.push({ locationIds: chunk, window: w })
+
+    const totalSteps = tasks.length
+    store.start(DROPTOP_TIME_CLOCK_TASK_ID, `Droptop Staff Time Clock — historical backfill (${timeClockBackfillStart} to ${timeClockBackfillEnd})`, totalSteps)
+    let recordsTotal = 0
+    let step = 0
+    const warnings: string[] = []
+
+    const CONCURRENCY = 4
+    let nextIndex = 0
+    async function callChunk(locationIds: string[], w: { startUnix: number; endUnix: number }) {
       const { data, error } = await supabase.functions.invoke('droptop-sync-staff-time-clock', {
-        body: { mode: 'sync', startUnix, endUnix, locationIds },
+        body: { mode: 'sync', startUnix: w.startUnix, endUnix: w.endUnix, locationIds },
       })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
-      const warnings: string[] = data.warnings ?? []
-      const summary = `Staff Time Clock: ${data.locations_synced} shop(s), ${data.records_upserted} record(s), ${timeClockBackfillStart} to ${timeClockBackfillEnd}`
-      if (warnings.length) {
-        store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'partial', `${summary} — ${warnings.join(' | ')}`)
-        toast(`${summary} (${warnings.length} issue(s) — see Data Syncs)`, { icon: '⚠️', duration: 12000 })
-      } else {
-        store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'success', summary)
-        toast.success(summary)
-        setTimeClockBackfillShops([]); setTimeClockBackfillRegions([]); setTimeClockBackfillMarkets([])
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Backfill failed'
-      store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'error', message)
-      toast.error(message, { duration: 12000 })
-    } finally {
-      setRunning(null)
+      return data
     }
+    async function worker() {
+      for (;;) {
+        const i = nextIndex++
+        if (i >= tasks.length) return
+        const { locationIds, window: w } = tasks[i]
+        const wLabel = `${new Date(w.startUnix * 1000).toISOString().slice(0, 10)} to ${new Date(w.endUnix * 1000).toISOString().slice(0, 10)}`
+        try {
+          const data = await callChunk(locationIds, w)
+          recordsTotal += data.records_upserted ?? 0
+          if (data.warnings?.length) warnings.push(...(data.warnings as string[]).map((w2: string) => `${wLabel}: ${w2}`))
+        } catch (err) {
+          // One retry on the SAME narrow chunk before giving up — a
+          // platform-level timeout kill is often a one-off (cold start,
+          // momentary contention), same reasoning as runOrderBackfill.
+          try {
+            const data = await callChunk(locationIds, w)
+            recordsTotal += data.records_upserted ?? 0
+            if (data.warnings?.length) warnings.push(...(data.warnings as string[]).map((w2: string) => `${wLabel}: ${w2}`))
+          } catch (err2) {
+            warnings.push(`${wLabel} (${locationIds.length}-shop chunk): ${err2 instanceof Error ? err2.message : String(err2)}`)
+          }
+        }
+        step++
+        store.setProgress(DROPTOP_TIME_CLOCK_TASK_ID, step, totalSteps)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker))
+
+    const summary = `Staff Time Clock: ${recordsTotal} record(s) across ${targetLocationIds.length} shop(s), ${timeClockBackfillStart} to ${timeClockBackfillEnd}`
+    if (warnings.length) {
+      store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'partial', `${summary} — ${warnings.join(' | ')}`)
+      toast(`${summary} (${warnings.length} issue(s) — see Data Syncs)`, { icon: '⚠️', duration: 12000 })
+    } else {
+      store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'success', summary)
+      toast.success(summary)
+      setTimeClockBackfillShops([]); setTimeClockBackfillRegions([]); setTimeClockBackfillMarkets([])
+    }
+    setRunning(null)
   }
 
   // Address-level geocoding for the Customer Heatmap — resolves each
