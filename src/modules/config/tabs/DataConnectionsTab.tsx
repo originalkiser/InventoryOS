@@ -232,6 +232,7 @@ export function DataConnectionsTab() {
   // once loaded means zero orders landed for it yet.
   const [monthStats, setMonthStats] = useState<Record<string, { orders: number; shops: number }> | null>(null)
   const [monthStatsError, setMonthStatsError] = useState<string | null>(null)
+  const [monthStatsUpdatedAt, setMonthStatsUpdatedAt] = useState<string | null>(null)
   // Which eligible shops have at least one order WITHIN the currently
   // selected backfill range (not "ever, at any date" — see the effect
   // below for why that distinction turned out to matter). null = still
@@ -310,32 +311,87 @@ export function DataConnectionsTab() {
   }, [companyId])
   useEffect(() => { loadBackfillPlan() }, [loadBackfillPlan])
 
-  // One grouped query covering every tracked month at once
-  // (get_droptop_order_month_stats, migration 20260918) rather than one
-  // request per row — 15 months today and growing by one every month, and
-  // a per-month loop here would be exactly the kind of unbatched request
-  // pattern that made the gap-detection check above slow enough to time
-  // out. Confirmed via EXPLAIN ANALYZE at ~4s for the full 15-month range.
-  useEffect(() => {
-    if (!companyId || !backfillPlan.length) return
-    let cancelled = false
-    const months = backfillPlan.map((r) => r.year_month).sort()
-    const start = `${months[0]}-01`
-    const [endY, endM] = months[months.length - 1].split('-').map(Number)
-    const end = new Date(endY, endM, 0).toISOString().slice(0, 10) // last day of that month
+  // Reads inventory.droptop_order_month_rollup — a small pre-computed
+  // table (one row per tracked month), NOT a live query against
+  // droptop_orders. This used to call get_droptop_order_month_stats
+  // (migration 20260918) directly on every page load, grouping the WHOLE
+  // tracked range (15+ months) in one query — confirmed fine via EXPLAIN
+  // ANALYZE at the time (~4s), but droptop_orders has grown enough since
+  // that this now blows the 'authenticated' role's statement_timeout
+  // outright ("canceling statement due to statement timeout"), even though
+  // the RESULT is only ~15 tiny rows — the cost is in scanning the full
+  // range, not in what comes back. Reading a pre-computed table sidesteps
+  // that entirely regardless of how large droptop_orders gets; Refresh
+  // Stats below is what actually recomputes it (per month, not the whole
+  // range at once — see that function's own comment for why that matters
+  // even for a background refresh).
+  const loadMonthStatsRollup = useCallback(async () => {
+    if (!companyId) return
     const sb = supabase as any
-    sb.rpc('get_droptop_order_month_stats', { p_start: start, p_end: end }).then(({ data, error }: any) => {
-      if (cancelled) return
-      if (error) { setMonthStatsError(error.message); return }
-      const map: Record<string, { orders: number; shops: number }> = {}
-      for (const row of (data ?? []) as { year_month: string; orders: number | string; shops: number | string }[]) {
-        map[row.year_month] = { orders: Number(row.orders), shops: Number(row.shops) }
+    const { data, error } = await sb.schema('inventory').from('droptop_order_month_rollup')
+      .select('year_month, orders, shops, updated_at').eq('company_id', companyId)
+    if (error) { setMonthStatsError(error.message); return }
+    const map: Record<string, { orders: number; shops: number }> = {}
+    let latestUpdatedAt: string | null = null
+    for (const row of (data ?? []) as { year_month: string; orders: number; shops: number; updated_at: string }[]) {
+      map[row.year_month] = { orders: row.orders, shops: row.shops }
+      if (!latestUpdatedAt || row.updated_at > latestUpdatedAt) latestUpdatedAt = row.updated_at
+    }
+    setMonthStatsError(null)
+    setMonthStats(map)
+    setMonthStatsUpdatedAt(latestUpdatedAt)
+  }, [companyId])
+  useEffect(() => { loadMonthStatsRollup() }, [loadMonthStatsRollup])
+
+  // Recomputes the rollup table — ONE get_droptop_order_month_stats call
+  // PER tracked month (a single-month date range each), not one call
+  // covering the whole multi-month range the way this used to work. A
+  // single-month range is a narrow, index-friendly scan regardless of how
+  // large droptop_orders grows overall; the old one-call-covers-everything
+  // approach's cost scaled with the FULL tracked range's row count, which
+  // is exactly what started blowing the statement timeout. Confirmed via
+  // EXPLAIN ANALYZE: even ONE month is real work at current volume
+  // (~200k orders/month, a multi-second sort to get the distinct-shop
+  // count) — fine for an explicit, user-clicked Refresh with its own
+  // loading state (the whole point is this no longer blocks page load),
+  // but kept to modest concurrency rather than firing every month at once
+  // to limit how much simultaneous heavy-sort load this puts on the same
+  // table every other Droptop Orders feature reads from.
+  const [refreshingMonthStats, setRefreshingMonthStats] = useState(false)
+  async function refreshMonthStats() {
+    if (!companyId || !backfillPlan.length) return
+    setRefreshingMonthStats(true)
+    const sb = supabase as any
+    const months = [...backfillPlan.map((r) => r.year_month)]
+    const warnings: string[] = []
+    const CONCURRENCY = 2
+    let nextIndex = 0
+    async function worker() {
+      for (;;) {
+        const i = nextIndex++
+        if (i >= months.length) return
+        const ym = months[i]
+        const [y, m] = ym.split('-').map(Number)
+        const start = `${ym}-01`
+        const end = new Date(y, m, 0).toISOString().slice(0, 10) // last day of that month
+        const { data, error } = await sb.rpc('get_droptop_order_month_stats', { p_start: start, p_end: end })
+        if (error) { warnings.push(`${ym}: ${error.message}`); continue }
+        const row = (data ?? [])[0] as { orders: number | string; shops: number | string } | undefined
+        const { error: upsertErr } = await sb.schema('inventory').from('droptop_order_month_rollup')
+          .upsert({
+            company_id: companyId, year_month: ym,
+            orders: row ? Number(row.orders) : 0, shops: row ? Number(row.shops) : 0,
+            updated_by: profile?.id ?? null, updated_at: new Date().toISOString(),
+          }, { onConflict: 'company_id,year_month' })
+        if (upsertErr) warnings.push(`${ym}: ${upsertErr.message}`)
       }
-      setMonthStatsError(null)
-      setMonthStats(map)
-    })
-    return () => { cancelled = true }
-  }, [companyId, backfillPlan])
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, months.length) }, worker))
+    setRefreshingMonthStats(false)
+    if (warnings.length) toast.error(`Refreshed with ${warnings.length} issue(s): ${warnings.join(' | ')}`, { duration: 12000 })
+    else toast.success(`Refreshed order/shop counts for ${months.length} month(s)`)
+    loadMonthStatsRollup()
+  }
 
   async function updateBackfillPlanRow(id: string, patch: Partial<{ status: 'pending' | 'in_progress' | 'done'; orders_synced: number | null; notes: string | null }>) {
     const sb = supabase as any
@@ -1363,16 +1419,20 @@ export function DataConnectionsTab() {
 
       {!backfillPlanLoading && backfillPlan.length > 0 && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex items-center justify-between">
             <span className="text-xs font-mono text-navy uppercase tracking-wide">
               Historical Backfill Plan — {backfillPlan.filter((r) => r.status === 'done').length} / {backfillPlan.length} months
             </span>
+            <Button size="sm" variant="secondary" loading={refreshingMonthStats} onClick={refreshMonthStats}>
+              Refresh Stats
+            </Button>
           </CardHeader>
           <CardBody className="flex flex-col gap-2">
             <p className="text-[11px] font-mono text-inky/60">
               Tracked checklist only — working backwards month by month is still done manually with the Historical
               Orders Backfill controls above. "Use This Month" just fills in that range; Run Backfill still has to be
-              clicked there yourself. Orders/Shops are real counts read straight from the synced data, not typed in.
+              clicked there yourself. Orders/Shops are read from a small pre-computed table, not queried live — click
+              Refresh Stats to bring them up to date after a backfill run{monthStatsUpdatedAt ? ` (last refreshed ${new Date(monthStatsUpdatedAt).toLocaleString()})` : ''}.
             </p>
             {monthStatsError && (
               <p className="text-[11px] font-mono text-[#C0392B]">Couldn't load real order/shop counts ({monthStatsError}).</p>
