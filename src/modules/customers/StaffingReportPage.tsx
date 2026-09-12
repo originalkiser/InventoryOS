@@ -133,13 +133,17 @@ function InfoTooltip({ text }: { text: string }) {
 // asks for — looping until a genuinely short page comes back, not trusting
 // a single request to have gotten everything.
 const PAGE = 1000
-async function fetchAllPages<T>(build: (from: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> {
+async function fetchAllPages<T>(
+  build: (from: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+  onPage?: (rowsSoFar: number) => void,
+): Promise<T[]> {
   const all: T[] = []
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await build(from)
     if (error) throw new Error(error.message)
     const batch = (data ?? []) as T[]
     all.push(...batch)
+    onPage?.(all.length)
     if (batch.length < PAGE) break
   }
   return all
@@ -384,6 +388,13 @@ export function StaffingReportPage() {
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Real progress instead of a bare spinner — same pattern as Droptop
+  // Orders' full-detail load: a cheap COUNT-only request up front gives a
+  // denominator, then each page ticks `loaded` up as it lands. This used
+  // to just await fetchAllPages with no progress reporting at all, so the
+  // page silently loaded everything in the background with no visible
+  // indication of how far along it was.
+  const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
@@ -425,19 +436,37 @@ export function StaffingReportPage() {
     let cancelled = false
     setLoading(true)
     setError(null)
+    setLoadProgress({ loaded: 0, total: null })
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
     const endIso = `${range.end}T23:59:59.999Z`
     async function run() {
+      // Best-effort — if either count fails for any reason the load still
+      // proceeds, just without a percentage (falls back to a running
+      // "N loaded so far" count instead, same convention as Droptop Orders).
+      const [{ count: trCount }, { count: ordCount }] = await Promise.all([
+        sb.schema('inventory').from('droptop_time_records').select('location_id', { count: 'exact', head: true })
+          .eq('company_id', companyId).gte('clock_in', startIso).lte('clock_in', endIso),
+        sb.schema('inventory').from('droptop_orders').select('location_id', { count: 'exact', head: true })
+          .eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso),
+      ])
+      if (cancelled) return
+      const total = (trCount ?? 0) + (ordCount ?? 0)
+      setLoadProgress({ loaded: 0, total: total > 0 ? total : null })
+
+      let trLoaded = 0
+      let ordLoaded = 0
+      const tick = () => { if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: trLoaded + ordLoaded })) }
+
       const [tr, ord] = await Promise.all([
         fetchAllPages<TimeRecordRow>((from) => sb.schema('inventory').from('droptop_time_records')
           .select('location_id, droptop_user_id, first_name, last_name, clock_in, clock_out, hours, hourly_wage')
           .eq('company_id', companyId).gte('clock_in', startIso).lte('clock_in', endIso)
-          .order('clock_in', { ascending: true }).range(from, from + PAGE - 1)),
+          .order('clock_in', { ascending: true }).range(from, from + PAGE - 1), (n) => { trLoaded = n; tick() }),
         fetchAllPages<OrderRow>((from) => sb.schema('inventory').from('droptop_orders')
           .select('location_id, order_finalized_at, final_price, status')
           .eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
-          .order('order_finalized_at', { ascending: true }).range(from, from + PAGE - 1)),
+          .order('order_finalized_at', { ascending: true }).range(from, from + PAGE - 1), (n) => { ordLoaded = n; tick() }),
       ])
       if (cancelled) return
       setTimeRecords(tr)
@@ -760,8 +789,14 @@ export function StaffingReportPage() {
 
       {loading ? (
         <LoadingProgress
-          fraction={null}
-          countText="Loading staffing data…"
+          fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
+          countText={
+            loadProgress.total
+              ? `Loading staffing data — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+              : loadProgress.loaded > 0
+                ? `Loading staffing data — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                : 'Loading staffing data…'
+          }
           messages={['Pulling clock-in/clock-out records…', 'Pulling order counts…', 'Matching by shop and day…']}
         />
       ) : (
