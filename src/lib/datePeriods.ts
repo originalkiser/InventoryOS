@@ -25,6 +25,37 @@ function startOfWeek(d: Date): Date {
 
 export interface DateRange { start: string; end: string } // yyyy-mm-dd
 
+// "MM/DD" for one side of a range label — parsed from a 'yyyy-mm-dd'
+// string via split/Number rather than `new Date(range.start)`, which
+// parses a bare date string as UTC midnight and can display as the
+// previous day in any negative-UTC-offset timezone (all of the US).
+function monthDay(isoDate: string): { month: number; day: number; year: number } {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  return { year: y, month: m, day: d }
+}
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+// "08/30-09/05/2026", or "12/28/2026-01/03/2027" if the range crosses a
+// year boundary — the 4-digit year only needs to appear once (at the end)
+// when both sides share a year, otherwise it's shown on both sides so
+// neither date reads as ambiguous.
+export function formatRangeLabel(range: DateRange): string {
+  const s = monthDay(range.start)
+  const e = monthDay(range.end)
+  const startStr = `${pad2(s.month)}/${pad2(s.day)}`
+  const endStr = `${pad2(e.month)}/${pad2(e.day)}`
+  if (s.year === e.year) return `${startStr}-${endStr}/${e.year}`
+  return `${startStr}/${s.year}-${endStr}/${e.year}`
+}
+
+// A named period's dropdown option shouldn't just say "Last Week" — it
+// should say what dates that actually resolves to right now, so it's
+// never ambiguous which week/month is currently selected.
+export function formatPeriodOptionLabel(period: DatePeriod, custom?: DateRange): string {
+  if (period === 'custom') return PERIOD_LABELS.custom
+  return `${PERIOD_LABELS[period]} (${formatRangeLabel(computeRange(period, custom))})`
+}
+
 export function computeRange(period: DatePeriod, custom?: DateRange): DateRange {
   const now = new Date()
   switch (period) {

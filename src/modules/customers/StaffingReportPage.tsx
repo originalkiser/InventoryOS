@@ -64,14 +64,19 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 
 interface OrderRow { location_id: string | null; order_finalized_at: string | null; final_price: string | number | null; status: string | null }
 
-interface DayRow { date: string; staffCount: number; hours: number; orders: number; ordersPerLaborHour: number | null }
+// LHCE = Labor Hours / (Effective) Car = hours ÷ orders. This used to be
+// named/computed the other way around (orders ÷ hours, i.e. cars per
+// labor hour) under the label "Orders / Labor Hour" — caught while
+// renaming the column to LHCE: keeping the old formula under the new name
+// would have silently shown the RECIPROCAL of what LHCE actually means.
+interface DayRow { date: string; staffCount: number; hours: number; orders: number; lhce: number | null }
 interface ShopRollupRow {
   locationId: string
   shopLabel: string
   staffCount: number
   totalHours: number
   totalOrders: number
-  ordersPerLaborHour: number | null
+  lhce: number | null
   days: DayRow[]
 }
 
@@ -97,7 +102,30 @@ interface ForecastCompareRow {
 }
 
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
-const pct = (v: number | null) => v == null ? '—' : `${v.toFixed(0)}%`
+const pct = (v: number | null) => v == null ? '—' : `${fmtNum(v, 0)}%`
+// Thousands-separated, fixed-decimal formatting — a bare .toFixed(2) never
+// adds a comma, which is exactly why a lot of these numbers were hard to
+// read at real volume (hundreds/thousands of hours or dollars).
+function fmtNum(v: number | null | undefined, decimals = 2): string {
+  if (v == null) return '—'
+  return v.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+}
+
+// Hover callout translating the acronym — native title attr is too crude
+// for "here's what this means", so a small custom popover instead.
+function InfoTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="relative inline-block" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <span className="text-inky/50 cursor-help border-b border-dotted border-inky/40">ⓘ</span>
+      {open && (
+        <span className="absolute z-20 left-1/2 -translate-x-1/2 bottom-full mb-1.5 w-max max-w-[220px] rounded bg-navy text-cream text-[10px] font-mono px-2 py-1.5 shadow-lg whitespace-normal text-center">
+          {text}
+        </span>
+      )}
+    </span>
+  )
+}
 
 // Same defensive pagination as every other page in this app that learned
 // the hard way PostgREST silently caps every response at however many rows
@@ -132,6 +160,206 @@ function findHeader(headers: string[], patterns: RegExp[]): string | null {
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] // Monday..Sunday, Date#getDay() is 0=Sunday
 const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+const PAGE_SIZE_OPTIONS: { value: string; label: string }[] = [
+  { value: '25', label: '25' }, { value: '50', label: '50' }, { value: '100', label: '100' }, { value: 'all', label: 'All' },
+]
+
+// The 3-level drill-down (shop -> day -> employee timecard), reused by
+// both the Rollup tab (its own full page) and the Summary tab (a
+// paginated rollup underneath the KPI/day-of-week cards) — each mounted
+// instance keeps its own expand/page state independently, there's nothing
+// shared between the two placements.
+function RollupTable({
+  rows, timecardsFor, exportFilenameBase,
+}: {
+  rows: ShopRollupRow[]
+  timecardsFor: (locationId: string, date: string) => TimeRecordRow[]
+  exportFilenameBase: string
+}) {
+  const [expandedShops, setExpandedShops] = useState<Set<string>>(new Set())
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set())
+  const [pageSize, setPageSize] = useState<string>('25')
+  const [page, setPage] = useState(0)
+  useEffect(() => { setPage(0) }, [rows, pageSize])
+
+  function toggleShop(id: string) {
+    setExpandedShops((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function toggleDay(key: string) {
+    setExpandedDays((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })
+  }
+
+  const sizeNum = pageSize === 'all' ? rows.length || 1 : Number(pageSize)
+  const totalPages = Math.max(1, Math.ceil(rows.length / sizeNum))
+  const pagedRows = pageSize === 'all' ? rows : rows.slice(page * sizeNum, (page + 1) * sizeNum)
+
+  // "Pivot table with drill-downs" export — one row per level (Shop / Day /
+  // Employee), a Level column instead of separate sheets, so the whole
+  // hierarchy for the period is in one flat, filterable/groupable file
+  // matching what's on screen (shop summary, then that shop's daily
+  // summaries, then each day's employee timecards) rather than just the
+  // top-level shop rows.
+  function exportRollup() {
+    const headers = ['Level', 'Shop', 'Date', 'Employee', 'Staff', 'Hours', 'Orders', 'LHCE', 'Wage', 'Labor $']
+    const dataRows: (string | number)[][] = []
+    for (const shop of rows) {
+      dataRows.push(['Shop', shop.shopLabel, '', '', shop.staffCount, shop.totalHours, shop.totalOrders, shop.lhce ?? '', '', ''])
+      for (const day of shop.days) {
+        dataRows.push(['Day', shop.shopLabel, day.date, '', day.staffCount, day.hours, day.orders, day.lhce ?? '', '', ''])
+        for (const c of timecardsFor(shop.locationId, day.date)) {
+          const wage = c.hourly_wage != null ? numWage(c) : ''
+          dataRows.push([
+            'Employee', shop.shopLabel, day.date,
+            [c.first_name, c.last_name].filter(Boolean).join(' ') || c.droptop_user_id,
+            '', numHours(c), '', '', wage, wage !== '' ? numHours(c) * numWage(c) : '',
+          ])
+        }
+      }
+    }
+    const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+    const csv = [headers, ...dataRows].map((r) => r.map(esc).join(',')).join('\n')
+    triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${exportFilenameBase}.csv`)
+    toast.success('Rollup exported')
+  }
+
+  if (rows.length === 0) {
+    return (
+      <Card><CardBody>
+        <p className="text-xs font-mono text-inky/60">
+          No staffing data for this period/filter — run the Droptop — Staff Time Clock sync from Data Connections
+          first (Config → Data Connections), then come back.
+        </p>
+      </CardBody></Card>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Show</span>
+          {PAGE_SIZE_OPTIONS.map((o) => (
+            <button key={o.value} onClick={() => setPageSize(o.value)}
+              className={['px-2 py-1 rounded border text-[11px] font-mono transition-colors',
+                pageSize === o.value ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy/60'].join(' ')}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <Button size="sm" variant="secondary" onClick={exportRollup}>Export</Button>
+      </div>
+
+      <div className="overflow-x-auto rounded border border-navy/30">
+        <table className="w-full text-xs font-mono">
+          <thead className="sticky top-0 bg-cream">
+            <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+              <th className="px-3 py-2 text-left">Shop</th>
+              <th className="px-3 py-2 text-right">Staff</th>
+              <th className="px-3 py-2 text-right">Hours</th>
+              <th className="px-3 py-2 text-right">Orders</th>
+              <th className="px-3 py-2 text-right">
+                <span className="inline-flex items-center gap-1">LHCE <InfoTooltip text="Labor Hours / (Effective) Car" /></span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {pagedRows.map((shop) => {
+              const shopOpen = expandedShops.has(shop.locationId)
+              return (
+                <Fragment key={shop.locationId}>
+                  <tr onClick={() => toggleShop(shop.locationId)} className="border-b border-navy/10 hover:bg-sky/10 cursor-pointer">
+                    <td className="px-3 py-2 text-navy font-bold flex items-center gap-1.5">
+                      <Chevron open={shopOpen} /> {shop.shopLabel}
+                    </td>
+                    <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.staffCount, 0)}</td>
+                    <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.totalHours)}</td>
+                    <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.totalOrders, 0)}</td>
+                    <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.lhce)}</td>
+                  </tr>
+                  {shopOpen && shop.days.map((day) => {
+                    const dayKey = `${shop.locationId}|${day.date}`
+                    const dayOpen = expandedDays.has(dayKey)
+                    return (
+                      <Fragment key={dayKey}>
+                        <tr onClick={() => toggleDay(dayKey)} className="border-b border-navy/10 bg-navy/[0.02] hover:bg-sky/10 cursor-pointer">
+                          <td className="pl-8 pr-3 py-1.5 text-inky flex items-center gap-1.5">
+                            <Chevron open={dayOpen} /> {new Date(`${day.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.staffCount, 0)}</td>
+                          <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.hours)}</td>
+                          <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.orders, 0)}</td>
+                          <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.lhce)}</td>
+                        </tr>
+                        {dayOpen && (
+                          <tr>
+                            <td colSpan={5} className="pl-8 pr-3 py-2 bg-navy/[0.04]">
+                              {(() => {
+                                const cards = timecardsFor(shop.locationId, day.date)
+                                if (!cards.length) return <p className="text-inky/50 italic">No timecards clocked in this day.</p>
+                                return (
+                                  <table className="w-full text-[11px] font-mono">
+                                    <thead>
+                                      <tr className="text-inky/60 uppercase tracking-wide border-b border-navy/20">
+                                        <th className="text-left pb-1 pr-3">Employee</th>
+                                        <th className="text-left pb-1 pr-3">Clock In</th>
+                                        <th className="text-left pb-1 pr-3">Clock Out</th>
+                                        <th className="text-right pb-1 pr-3">Hours</th>
+                                        <th className="text-right pb-1 pr-3">Wage</th>
+                                        <th className="text-right pb-1">Labor $</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {cards.map((c, i) => (
+                                        <tr key={i} className="border-b border-navy/5 last:border-0">
+                                          <td className="py-1 pr-3 text-navy">{[c.first_name, c.last_name].filter(Boolean).join(' ') || c.droptop_user_id}</td>
+                                          <td className="py-1 pr-3 text-inky">{new Date(c.clock_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                                          <td className="py-1 pr-3 text-inky">{c.clock_out ? new Date(c.clock_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                                          <td className="py-1 pr-3 text-right text-navy tabular-nums">{fmtNum(numHours(c))}</td>
+                                          <td className="py-1 pr-3 text-right text-inky tabular-nums">{c.hourly_wage != null ? money(numWage(c)) : '—'}</td>
+                                          <td className="py-1 text-right text-navy tabular-nums">{c.hourly_wage != null ? money(numHours(c) * numWage(c)) : '—'}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )
+                              })()}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  })}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {pageSize !== 'all' && totalPages > 1 && (
+        <div className="flex items-center justify-between text-[11px] font-mono text-inky">
+          <span>Page {page + 1} of {totalPages} ({rows.length} shops)</span>
+          <div className="flex gap-1">
+            <Button size="sm" variant="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Prev</Button>
+            <Button size="sm" variant="secondary" disabled={page >= totalPages - 1} onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}>Next</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function StaffingReportPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -156,15 +384,6 @@ export function StaffingReportPage() {
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  const [expandedShops, setExpandedShops] = useState<Set<string>>(new Set())
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set())
-  function toggleShop(id: string) {
-    setExpandedShops((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
-  }
-  function toggleDay(key: string) {
-    setExpandedDays((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })
-  }
 
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
@@ -274,7 +493,7 @@ export function StaffingReportPage() {
       shop.orders += dayOrders
       shop.days.push({
         date, staffCount: e.staff.size, hours: round2(e.hours), orders: dayOrders,
-        ordersPerLaborHour: e.hours > 0 ? round2(dayOrders / e.hours) : null,
+        lhce: dayOrders > 0 ? round2(e.hours / dayOrders) : null,
       })
       byShop.set(locationId, shop)
     }
@@ -290,14 +509,14 @@ export function StaffingReportPage() {
       if (!shop.days.some((d) => d.date === date)) {
         const dayOrders = ordersByShopDay.get(key) ?? 0
         shop.orders += dayOrders
-        shop.days.push({ date, staffCount: 0, hours: 0, orders: dayOrders, ordersPerLaborHour: null })
+        shop.days.push({ date, staffCount: 0, hours: 0, orders: dayOrders, lhce: null })
       }
     }
     return [...byShop.entries()]
       .map(([locationId, s]) => ({
         locationId, shopLabel: loc.labelOf(locationId), staffCount: s.staff.size,
         totalHours: round2(s.hours), totalOrders: s.orders,
-        ordersPerLaborHour: s.hours > 0 ? round2(s.orders / s.hours) : null,
+        lhce: s.orders > 0 ? round2(s.hours / s.orders) : null,
         days: s.days.sort((a, b) => a.date.localeCompare(b.date)),
       }))
       .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
@@ -331,15 +550,39 @@ export function StaffingReportPage() {
     const start = new Date(`${range.start}T00:00:00`)
     const end = new Date(`${range.end}T00:00:00`)
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) dateCounts[d.getDay()]++
+
     const hoursByDow = new Array(7).fill(0)
+    const laborDollarsByDow = new Array(7).fill(0)
     for (const t of filteredTimeRecords) {
       const d = new Date(`${t.clock_in.slice(0, 10)}T00:00:00`)
-      hoursByDow[d.getDay()] += numHours(t)
+      const dow = d.getDay()
+      hoursByDow[dow] += numHours(t)
+      laborDollarsByDow[dow] += numHours(t) * numWage(t)
     }
-    return WEEKDAY_ORDER.map((dowIndex, i) => ({
-      name: WEEKDAY_NAMES[i], count: dateCounts[dowIndex], hours: round2(hoursByDow[dowIndex]),
-    }))
-  }, [range.start, range.end, filteredTimeRecords])
+    const ordersByDow = new Array(7).fill(0)
+    const revenueByDow = new Array(7).fill(0)
+    for (const o of filteredOrdersFinalized) {
+      const d = new Date(`${o.order_finalized_at!.slice(0, 10)}T00:00:00`)
+      const dow = d.getDay()
+      ordersByDow[dow]++
+      revenueByDow[dow] += Number(o.final_price) || 0
+    }
+    return WEEKDAY_ORDER.map((dowIndex, i) => {
+      const hours = hoursByDow[dowIndex]
+      const count = dateCounts[dowIndex]
+      const revenue = revenueByDow[dowIndex]
+      const laborDollars = laborDollarsByDow[dowIndex]
+      const orders = ordersByDow[dowIndex]
+      return {
+        name: WEEKDAY_NAMES[i],
+        count,
+        totalHours: round2(hours),
+        avgHoursPerDay: count > 0 ? round2(hours / count) : null,
+        laborPctOfRevenue: revenue > 0 ? round2((laborDollars / revenue) * 100) : null,
+        lhce: orders > 0 ? round2(hours / orders) : null,
+      }
+    })
+  }, [range.start, range.end, filteredTimeRecords, filteredOrdersFinalized])
 
   // ---- Labor Hour Forecast tab -------------------------------------------
   const [forecastRows, setForecastRows] = useState<ForecastDbRow[]>([])
@@ -461,14 +704,14 @@ export function StaffingReportPage() {
   const forecastColumns = useMemo(() => [
     fcCol.accessor('date', { header: 'Date', cell: (i) => new Date(`${i.getValue()}T00:00:00`).toLocaleDateString() }),
     fcCol.accessor('shopLabel', { header: 'Shop', cell: (i) => i.getValue() }),
-    fcCol.accessor('hourlyActual', { header: 'Hourly Actual', cell: (i) => i.getValue().toFixed(2) }),
-    fcCol.accessor('hourlyForecast', { header: 'Hourly Forecast', cell: (i) => i.getValue().toFixed(2) }),
+    fcCol.accessor('hourlyActual', { header: 'Hourly Actual', cell: (i) => fmtNum(i.getValue()) }),
+    fcCol.accessor('hourlyForecast', { header: 'Hourly Forecast', cell: (i) => fmtNum(i.getValue()) }),
     fcCol.accessor('hourlyPct', { header: 'Hourly %', cell: (i) => pct(i.getValue()) }),
-    fcCol.accessor('managerActual', { header: 'Manager Actual', cell: (i) => i.getValue().toFixed(2) }),
-    fcCol.accessor('managerForecast', { header: 'Manager Forecast', cell: (i) => i.getValue().toFixed(2) }),
+    fcCol.accessor('managerActual', { header: 'Manager Actual', cell: (i) => fmtNum(i.getValue()) }),
+    fcCol.accessor('managerForecast', { header: 'Manager Forecast', cell: (i) => fmtNum(i.getValue()) }),
     fcCol.accessor('managerPct', { header: 'Manager %', cell: (i) => pct(i.getValue()) }),
-    fcCol.accessor('totalActual', { header: 'Total Actual', cell: (i) => i.getValue().toFixed(2) }),
-    fcCol.accessor('totalForecast', { header: 'Total Forecast', cell: (i) => i.getValue().toFixed(2) }),
+    fcCol.accessor('totalActual', { header: 'Total Actual', cell: (i) => fmtNum(i.getValue()) }),
+    fcCol.accessor('totalForecast', { header: 'Total Forecast', cell: (i) => fmtNum(i.getValue()) }),
     fcCol.accessor('totalPct', { header: 'Total %', cell: (i) => pct(i.getValue()) }),
   ], [fcCol])
   const { table: forecastTable, globalFilter: forecastGlobalFilter, setGlobalFilter: setForecastGlobalFilter } =
@@ -522,119 +765,23 @@ export function StaffingReportPage() {
           messages={['Pulling clock-in/clock-out records…', 'Pulling order counts…', 'Matching by shop and day…']}
         />
       ) : (
-        <Tabs defaultValue="rollup">
+        <Tabs defaultValue="summary">
           <TabsList>
-            <TabsTrigger value="rollup">Rollup</TabsTrigger>
             <TabsTrigger value="summary">Summary</TabsTrigger>
-            <TabsTrigger value="forecast">Labor Hour Forecast</TabsTrigger>
+            <TabsTrigger value="rollup">Rollup</TabsTrigger>
+            <TabsTrigger value="labor-config">Labor Config</TabsTrigger>
           </TabsList>
-
-          <TabsContent value="rollup">
-            {shopRollups.length === 0 ? (
-              <Card><CardBody>
-                <p className="text-xs font-mono text-inky/60">
-                  No staffing data for this period/filter — run the Droptop — Staff Time Clock sync from Data
-                  Connections first (Config → Data Connections), then come back.
-                </p>
-              </CardBody></Card>
-            ) : (
-              <div className="overflow-x-auto rounded border border-navy/30">
-                <table className="w-full text-xs font-mono">
-                  <thead className="sticky top-0 bg-cream">
-                    <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                      <th className="px-3 py-2 text-left">Shop</th>
-                      <th className="px-3 py-2 text-right">Staff</th>
-                      <th className="px-3 py-2 text-right">Hours</th>
-                      <th className="px-3 py-2 text-right">Orders</th>
-                      <th className="px-3 py-2 text-right">Orders / Labor Hour</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shopRollups.map((shop) => {
-                      const shopOpen = expandedShops.has(shop.locationId)
-                      return (
-                        <Fragment key={shop.locationId}>
-                          <tr onClick={() => toggleShop(shop.locationId)} className="border-b border-navy/10 hover:bg-sky/10 cursor-pointer">
-                            <td className="px-3 py-2 text-navy font-bold flex items-center gap-1.5">
-                              <Chevron open={shopOpen} /> {shop.shopLabel}
-                            </td>
-                            <td className="px-3 py-2 text-right text-navy tabular-nums">{shop.staffCount}</td>
-                            <td className="px-3 py-2 text-right text-navy tabular-nums">{shop.totalHours.toFixed(2)}</td>
-                            <td className="px-3 py-2 text-right text-navy tabular-nums">{shop.totalOrders}</td>
-                            <td className="px-3 py-2 text-right text-navy tabular-nums">{shop.ordersPerLaborHour != null ? shop.ordersPerLaborHour.toFixed(2) : '—'}</td>
-                          </tr>
-                          {shopOpen && shop.days.map((day) => {
-                            const dayKey = `${shop.locationId}|${day.date}`
-                            const dayOpen = expandedDays.has(dayKey)
-                            return (
-                              <Fragment key={dayKey}>
-                                <tr onClick={() => toggleDay(dayKey)} className="border-b border-navy/10 bg-navy/[0.02] hover:bg-sky/10 cursor-pointer">
-                                  <td className="pl-8 pr-3 py-1.5 text-inky flex items-center gap-1.5">
-                                    <Chevron open={dayOpen} /> {new Date(`${day.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right text-inky tabular-nums">{day.staffCount}</td>
-                                  <td className="px-3 py-1.5 text-right text-inky tabular-nums">{day.hours.toFixed(2)}</td>
-                                  <td className="px-3 py-1.5 text-right text-inky tabular-nums">{day.orders}</td>
-                                  <td className="px-3 py-1.5 text-right text-inky tabular-nums">{day.ordersPerLaborHour != null ? day.ordersPerLaborHour.toFixed(2) : '—'}</td>
-                                </tr>
-                                {dayOpen && (
-                                  <tr>
-                                    <td colSpan={5} className="pl-8 pr-3 py-2 bg-navy/[0.04]">
-                                      {(() => {
-                                        const cards = timecardsFor(shop.locationId, day.date)
-                                        if (!cards.length) return <p className="text-inky/50 italic">No timecards clocked in this day.</p>
-                                        return (
-                                          <table className="w-full text-[11px] font-mono">
-                                            <thead>
-                                              <tr className="text-inky/60 uppercase tracking-wide border-b border-navy/20">
-                                                <th className="text-left pb-1 pr-3">Employee</th>
-                                                <th className="text-left pb-1 pr-3">Clock In</th>
-                                                <th className="text-left pb-1 pr-3">Clock Out</th>
-                                                <th className="text-right pb-1 pr-3">Hours</th>
-                                                <th className="text-right pb-1 pr-3">Wage</th>
-                                                <th className="text-right pb-1">Labor $</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody>
-                                              {cards.map((c, i) => (
-                                                <tr key={i} className="border-b border-navy/5 last:border-0">
-                                                  <td className="py-1 pr-3 text-navy">{[c.first_name, c.last_name].filter(Boolean).join(' ') || c.droptop_user_id}</td>
-                                                  <td className="py-1 pr-3 text-inky">{new Date(c.clock_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-                                                  <td className="py-1 pr-3 text-inky">{c.clock_out ? new Date(c.clock_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                                                  <td className="py-1 pr-3 text-right text-navy tabular-nums">{numHours(c).toFixed(2)}</td>
-                                                  <td className="py-1 pr-3 text-right text-inky tabular-nums">{c.hourly_wage != null ? money(numWage(c)) : '—'}</td>
-                                                  <td className="py-1 text-right text-navy tabular-nums">{c.hourly_wage != null ? money(numHours(c) * numWage(c)) : '—'}</td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                          </table>
-                                        )
-                                      })()}
-                                    </td>
-                                  </tr>
-                                )}
-                              </Fragment>
-                            )
-                          })}
-                        </Fragment>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </TabsContent>
 
           <TabsContent value="summary">
             <div className="flex flex-col gap-4">
               <div className="flex gap-3 flex-wrap">
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Orders (Effective Cars)</p>
-                  <p className="text-lg font-heading font-bold text-navy">{summary.totalOrders.toLocaleString()}</p>
+                  <p className="text-lg font-heading font-bold text-navy">{fmtNum(summary.totalOrders, 0)}</p>
                 </CardBody></Card>
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Labor Hours</p>
-                  <p className="text-lg font-heading font-bold text-navy">{summary.totalHours.toLocaleString()}</p>
+                  <p className="text-lg font-heading font-bold text-navy">{fmtNum(summary.totalHours)}</p>
                 </CardBody></Card>
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Labor $</p>
@@ -642,22 +789,35 @@ export function StaffingReportPage() {
                 </CardBody></Card>
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Labor % of Revenue</p>
-                  <p className="text-lg font-heading font-bold text-navy">{summary.laborPctOfRevenue != null ? `${summary.laborPctOfRevenue.toFixed(1)}%` : '—'}</p>
+                  <p className="text-lg font-heading font-bold text-navy">{summary.laborPctOfRevenue != null ? `${fmtNum(summary.laborPctOfRevenue, 1)}%` : '—'}</p>
                 </CardBody></Card>
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Labor Hrs / Effective Car</p>
-                  <p className="text-lg font-heading font-bold text-navy">{summary.lhce != null ? summary.lhce.toFixed(2) : '—'}</p>
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide flex items-center gap-1">LHCE <InfoTooltip text="Labor Hours / (Effective) Car" /></p>
+                  <p className="text-lg font-heading font-bold text-navy">{fmtNum(summary.lhce)}</p>
                 </CardBody></Card>
               </div>
 
               <Card>
-                <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Labor Hours by Day of Week</span></CardHeader>
+                <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">By Day of Week</span></CardHeader>
                 <CardBody>
                   <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
                     {dayOfWeekBreakdown.map((d) => (
-                      <div key={d.name} className="rounded border border-navy/20 px-2 py-2 text-center">
+                      <div key={d.name} className="rounded border border-navy/20 px-2 py-2 text-center flex flex-col gap-1.5">
                         <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">{d.name} ({d.count})</p>
-                        <p className="text-sm font-heading font-bold text-navy">{d.hours.toFixed(1)}</p>
+                        <div>
+                          <p className="text-sm font-heading font-bold text-navy">{fmtNum(d.totalHours, 1)}</p>
+                          <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">
+                            Hours{d.count > 1 && d.avgHoursPerDay != null ? ` (avg ${fmtNum(d.avgHoursPerDay, 1)}/day)` : ''}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm font-heading font-bold text-navy">{d.laborPctOfRevenue != null ? `${fmtNum(d.laborPctOfRevenue, 1)}%` : '—'}</p>
+                          <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">Labor % Rev</p>
+                        </div>
+                        <div>
+                          <p className="text-sm font-heading font-bold text-navy">{fmtNum(d.lhce)}</p>
+                          <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">LHCE</p>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -666,10 +826,25 @@ export function StaffingReportPage() {
                   </p>
                 </CardBody>
               </Card>
+
+              <div>
+                <h2 className="text-xs font-mono text-navy uppercase tracking-wide mb-2">Rollup</h2>
+                <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-summary-rollup-${range.start}-to-${range.end}`} />
+              </div>
             </div>
           </TabsContent>
 
-          <TabsContent value="forecast">
+          <TabsContent value="rollup">
+            <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-rollup-${range.start}-to-${range.end}`} />
+          </TabsContent>
+
+          {/* Labor Config — hosts the Labor Hour Forecast upload + the
+              wage-threshold proxy setting. A Staffing List upload (a real
+              employee -> Manager/Hourly roster, to replace the wage-
+              threshold proxy below with an actual classification for
+              anyone on it) is planned for this same tab but not built yet
+              — flagged as a follow-up, not stubbed here. */}
+          <TabsContent value="labor-config">
             <div className="flex flex-col gap-4">
               <Card>
                 <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Manager Wage Threshold</span></CardHeader>
@@ -731,8 +906,8 @@ export function StaffingReportPage() {
                                 <td className="px-2 py-1">{r.shopRaw}</td>
                                 <td className="px-2 py-1">{r.locationId ? loc.labelOf(r.locationId) : 'No match'}</td>
                                 <td className="px-2 py-1">{r.date ?? 'Unparseable'}</td>
-                                <td className="px-2 py-1 text-right">{r.hourlyHours.toFixed(2)}</td>
-                                <td className="px-2 py-1 text-right">{r.managerHours.toFixed(2)}</td>
+                                <td className="px-2 py-1 text-right">{fmtNum(r.hourlyHours)}</td>
+                                <td className="px-2 py-1 text-right">{fmtNum(r.managerHours)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -770,22 +945,22 @@ export function StaffingReportPage() {
                     <Card className="flex-1 min-w-[160px]"><CardBody className="py-3">
                       <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Hourly: Actual / Forecast</p>
                       <p className="text-sm font-heading font-bold text-navy">
-                        {forecastTotals.hourlyActual.toFixed(1)} / {forecastTotals.hourlyForecast.toFixed(1)}
-                        {forecastTotals.hourlyForecast > 0 && ` (${((forecastTotals.hourlyActual / forecastTotals.hourlyForecast) * 100).toFixed(0)}%)`}
+                        {fmtNum(forecastTotals.hourlyActual, 1)} / {fmtNum(forecastTotals.hourlyForecast, 1)}
+                        {forecastTotals.hourlyForecast > 0 && ` (${fmtNum((forecastTotals.hourlyActual / forecastTotals.hourlyForecast) * 100, 0)}%)`}
                       </p>
                     </CardBody></Card>
                     <Card className="flex-1 min-w-[160px]"><CardBody className="py-3">
                       <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Manager: Actual / Forecast</p>
                       <p className="text-sm font-heading font-bold text-navy">
-                        {forecastTotals.managerActual.toFixed(1)} / {forecastTotals.managerForecast.toFixed(1)}
-                        {forecastTotals.managerForecast > 0 && ` (${((forecastTotals.managerActual / forecastTotals.managerForecast) * 100).toFixed(0)}%)`}
+                        {fmtNum(forecastTotals.managerActual, 1)} / {fmtNum(forecastTotals.managerForecast, 1)}
+                        {forecastTotals.managerForecast > 0 && ` (${fmtNum((forecastTotals.managerActual / forecastTotals.managerForecast) * 100, 0)}%)`}
                       </p>
                     </CardBody></Card>
                     <Card className="flex-1 min-w-[160px]"><CardBody className="py-3">
                       <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total: Actual / Forecast</p>
                       <p className="text-sm font-heading font-bold text-navy">
-                        {forecastTotals.totalActual.toFixed(1)} / {forecastTotals.totalForecast.toFixed(1)}
-                        {forecastTotals.totalForecast > 0 && ` (${((forecastTotals.totalActual / forecastTotals.totalForecast) * 100).toFixed(0)}%)`}
+                        {fmtNum(forecastTotals.totalActual, 1)} / {fmtNum(forecastTotals.totalForecast, 1)}
+                        {forecastTotals.totalForecast > 0 && ` (${fmtNum((forecastTotals.totalActual / forecastTotals.totalForecast) * 100, 0)}%)`}
                       </p>
                     </CardBody></Card>
                   </div>

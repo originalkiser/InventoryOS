@@ -1,4 +1,4 @@
-import { PERIOD_LABELS, PERIOD_ORDER, type DatePeriod } from '@/lib/datePeriods'
+import { PERIOD_ORDER, formatPeriodOptionLabel, type DatePeriod } from '@/lib/datePeriods'
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -22,7 +22,7 @@ export function PeriodPicker({
       <label className="flex flex-col gap-0.5">
         <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Period</span>
         <select value={period} onChange={(e) => onPeriodChange(e.target.value as DatePeriod)} className={fieldCls}>
-          {PERIOD_ORDER.map((p) => <option key={p} value={p}>{PERIOD_LABELS[p]}</option>)}
+          {PERIOD_ORDER.map((p) => <option key={p} value={p}>{formatPeriodOptionLabel(p)}</option>)}
         </select>
       </label>
       {period === 'custom' && (
