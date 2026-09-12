@@ -442,6 +442,21 @@ async function runHeatmapRollupRefresh(supabaseUrl: string, secret: string): Pro
   return { status: 'success', message: `${data?.dates_recomputed ?? 0} location-day(s) recomputed, ${data?.rows_upserted ?? 0} zip row(s) written` }
 }
 
+// Same dual-auth shape as heatmap-rollup-refresh — reuses the dispatch
+// secret, no secret of its own. Re-evaluates every enabled Staffing
+// Alerts rule and replaces the company's whole violation set (a
+// snapshot, not a history log — see that table's own migration comment).
+async function runStaffingAlerts(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
+  const res = await fetchWithTimeout(`${supabaseUrl}/functions/v1/staffing-alerts-refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+    body: '{}',
+  })
+  const { data, error } = await parseSyncResponse(res)
+  if (error) return { status: 'error', message: error }
+  return { status: 'success', message: `${data?.rules_checked ?? 0} rule(s) checked, ${data?.violations_found ?? 0} violation(s) found` }
+}
+
 // Same reasoning as runHeatmapRollupRefresh — reuses the dispatch secret,
 // no secret of its own. Replaces the old ad-hoc "Location Data Sources"
 // config UI entirely; this is the only supported way locations sync from
@@ -566,6 +581,9 @@ Deno.serve(async (req) => {
         } else if (s.connection_key === 'heatmap_rollup_refresh') {
           outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
             : await runHeatmapRollupRefresh(supabaseUrl, dispatchSecret)
+        } else if (s.connection_key === 'staffing_alerts') {
+          outcome = !dispatchSecret ? { status: 'error', message: 'DATA_CONNECTION_DISPATCH_SECRET not configured' }
+            : await runStaffingAlerts(supabaseUrl, dispatchSecret)
         } else if (s.connection_key === 'vin_decode') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
           else outcome = await runVinDecode(supabaseUrl, droptopSecret)

@@ -40,7 +40,7 @@ import { useTable } from '@/hooks/useTable'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import type { ParseResult } from '@/lib/fileParser'
 import {
-  Card, CardHeader, CardBody, MultiSelectDropdown, Tabs, TabsList, TabsTrigger, TabsContent, Button, Input,
+  Card, CardHeader, CardBody, MultiSelectDropdown, Tabs, TabsList, TabsTrigger, TabsContent, Button, Input, Toggle,
 } from '@/components/ui'
 
 // hours/hourly_wage/final_price are Postgres `numeric` columns — PostgREST
@@ -161,6 +161,20 @@ function findHeader(headers: string[], patterns: RegExp[]): string | null {
   return null
 }
 
+const KPI_OPTIONS = [
+  { value: 'lhce', label: 'LHCE' },
+  { value: 'labor_pct_revenue', label: 'Labor % of Revenue' },
+  { value: 'daily_hours_employee', label: 'Daily Hours by Employee' },
+  { value: 'weekly_hours_employee', label: 'Weekly Hours by Employee' },
+  { value: 'daily_hours_shop', label: 'Daily Hours by Shop' },
+  { value: 'weekly_hours_shop', label: 'Weekly Hours by Shop' },
+]
+const OPERATOR_OPTIONS: { value: 'gt' | 'lt' | 'between'; label: string }[] = [
+  { value: 'gt', label: 'Greater Than' },
+  { value: 'lt', label: 'Less Than' },
+  { value: 'between', label: 'Between' },
+]
+
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] // Monday..Sunday, Date#getDay() is 0=Sunday
 const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -184,12 +198,20 @@ const PAGE_SIZE_OPTIONS: { value: string; label: string }[] = [
 // paginated rollup underneath the KPI/day-of-week cards) — each mounted
 // instance keeps its own expand/page state independently, there's nothing
 // shared between the two placements.
+interface RowViolation { kpi: string; periodStart: string }
 function RollupTable({
-  rows, timecardsFor, exportFilenameBase,
+  rows, timecardsFor, exportFilenameBase, violationsByLocation,
 }: {
   rows: ShopRollupRow[]
   timecardsFor: (locationId: string, date: string) => TimeRecordRow[]
   exportFilenameBase: string
+  // Conditional formatting from the Alerts tab — a shop with ANY current
+  // violation for a KPI gets that column tinted at the shop-total level;
+  // a day row is additionally tinted only when a daily-grain violation's
+  // own period_start matches that exact date (weekly/LHCE checks are
+  // single-day-equivalent — yesterday — so they naturally line up with at
+  // most one day row too, via the same period_start match).
+  violationsByLocation?: Map<string, RowViolation[]>
 }) {
   const [expandedShops, setExpandedShops] = useState<Set<string>>(new Set())
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set())
@@ -280,6 +302,10 @@ function RollupTable({
           <tbody>
             {pagedRows.map((shop) => {
               const shopOpen = expandedShops.has(shop.locationId)
+              const shopViolations = violationsByLocation?.get(shop.locationId) ?? []
+              const hoursFlagged = shopViolations.some((v) => v.kpi === 'daily_hours_shop' || v.kpi === 'weekly_hours_shop')
+              const lhceFlagged = shopViolations.some((v) => v.kpi === 'lhce')
+              const alertCellCls = 'bg-[#C0392B]/10 text-[#C0392B] font-bold'
               return (
                 <Fragment key={shop.locationId}>
                   <tr onClick={() => toggleShop(shop.locationId)} className="border-b border-navy/10 hover:bg-sky/10 cursor-pointer">
@@ -287,13 +313,15 @@ function RollupTable({
                       <Chevron open={shopOpen} /> {shop.shopLabel}
                     </td>
                     <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.staffCount, 0)}</td>
-                    <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.totalHours)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${hoursFlagged ? alertCellCls : 'text-navy'}`}>{fmtNum(shop.totalHours)}</td>
                     <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.totalOrders, 0)}</td>
-                    <td className="px-3 py-2 text-right text-navy tabular-nums">{fmtNum(shop.lhce)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${lhceFlagged ? alertCellCls : 'text-navy'}`}>{fmtNum(shop.lhce)}</td>
                   </tr>
                   {shopOpen && shop.days.map((day) => {
                     const dayKey = `${shop.locationId}|${day.date}`
                     const dayOpen = expandedDays.has(dayKey)
+                    const dayHoursFlagged = shopViolations.some((v) => v.kpi === 'daily_hours_shop' && v.periodStart === day.date)
+                    const dayLhceFlagged = shopViolations.some((v) => v.kpi === 'lhce' && v.periodStart === day.date)
                     return (
                       <Fragment key={dayKey}>
                         <tr onClick={() => toggleDay(dayKey)} className="border-b border-navy/10 bg-navy/[0.02] hover:bg-sky/10 cursor-pointer">
@@ -301,9 +329,9 @@ function RollupTable({
                             <Chevron open={dayOpen} /> {new Date(`${day.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
                           </td>
                           <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.staffCount, 0)}</td>
-                          <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.hours)}</td>
+                          <td className={`px-3 py-1.5 text-right tabular-nums ${dayHoursFlagged ? alertCellCls : 'text-inky'}`}>{fmtNum(day.hours)}</td>
                           <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.orders, 0)}</td>
-                          <td className="px-3 py-1.5 text-right text-inky tabular-nums">{fmtNum(day.lhce)}</td>
+                          <td className={`px-3 py-1.5 text-right tabular-nums ${dayLhceFlagged ? alertCellCls : 'text-inky'}`}>{fmtNum(day.lhce)}</td>
                         </tr>
                         {dayOpen && (
                           <tr>
@@ -861,6 +889,127 @@ export function StaffingReportPage() {
   const { table: forecastTable, globalFilter: forecastGlobalFilter, setGlobalFilter: setForecastGlobalFilter } =
     useTable(forecastCompareRows, forecastColumns, { persistKey: 'staffing-forecast-compare' })
 
+  // ---- Alerts tab --------------------------------------------------------
+  // Evaluated by a scheduled backend job (staffing-alerts-refresh, same
+  // Data Connections dispatcher pattern as every other scheduled sync)
+  // rather than live in the browser — persists between visits. Run Now
+  // below calls the same function interactively (the caller's own
+  // session) for an immediate refresh right after adding/editing a rule.
+  interface AlertRule {
+    id: string; kpi: string; operator: 'gt' | 'lt' | 'between'
+    threshold_low: number; threshold_high: number | null
+    scope: 'all' | 'selected'; location_ids: string[]; enabled: boolean
+  }
+  interface AlertViolation {
+    id: string; rule_id: string; location_id: string | null; shop_label: string | null
+    droptop_user_id: string | null; employee_name: string | null
+    period_start: string; period_end: string; actual_value: number | string
+    rule_snapshot: { kpi: string; operator: string; threshold_low: number; threshold_high: number | null }
+  }
+  const [alertRules, setAlertRules] = useState<AlertRule[]>([])
+  const [alertViolations, setAlertViolations] = useState<AlertViolation[]>([])
+  const [alertsLoading, setAlertsLoading] = useState(true)
+  const [runningAlerts, setRunningAlerts] = useState(false)
+
+  const loadAlerts = useCallback(async () => {
+    if (!companyId) return
+    setAlertsLoading(true)
+    const sb = supabase as any
+    const [{ data: rules }, { data: viols }] = await Promise.all([
+      sb.schema('inventory').from('staffing_alert_rules').select('*').eq('company_id', companyId).order('created_at'),
+      sb.schema('inventory').from('staffing_alert_violations').select('*').eq('company_id', companyId).order('detected_at', { ascending: false }),
+    ])
+    setAlertRules((rules ?? []) as AlertRule[])
+    setAlertViolations((viols ?? []) as AlertViolation[])
+    setAlertsLoading(false)
+  }, [companyId])
+  useEffect(() => { loadAlerts() }, [loadAlerts])
+
+  const [newRuleKpi, setNewRuleKpi] = useState('lhce')
+  const [newRuleOperator, setNewRuleOperator] = useState<'gt' | 'lt' | 'between'>('gt')
+  const [newRuleLow, setNewRuleLow] = useState('')
+  const [newRuleHigh, setNewRuleHigh] = useState('')
+  const [newRuleScope, setNewRuleScope] = useState<'all' | 'selected'>('all')
+  const [newRuleShops, setNewRuleShops] = useState<string[]>([])
+  const [savingRule, setSavingRule] = useState(false)
+
+  async function addRule() {
+    if (!companyId) return
+    const low = Number(newRuleLow)
+    if (!Number.isFinite(low)) { toast.error('Enter a threshold value'); return }
+    const high = newRuleOperator === 'between' ? Number(newRuleHigh) : null
+    if (newRuleOperator === 'between' && !Number.isFinite(high)) { toast.error('Enter both threshold values for "Between"'); return }
+    if (newRuleScope === 'selected' && !newRuleShops.length) { toast.error('Select at least one shop, or switch to "All Shops"'); return }
+    setSavingRule(true)
+    try {
+      const sb = supabase as any
+      const { error } = await sb.schema('inventory').from('staffing_alert_rules').insert({
+        company_id: companyId, kpi: newRuleKpi, operator: newRuleOperator,
+        threshold_low: low, threshold_high: high,
+        scope: newRuleScope, location_ids: newRuleShops.map((l) => labelToId.get(l)).filter(Boolean),
+        created_by: profile?.id ?? null,
+      })
+      if (error) throw new Error(error.message)
+      setNewRuleLow(''); setNewRuleHigh(''); setNewRuleShops([])
+      toast.success('Alert rule added')
+      loadAlerts()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to add rule')
+    } finally {
+      setSavingRule(false)
+    }
+  }
+  async function deleteRule(id: string) {
+    const sb = supabase as any
+    const { error } = await sb.schema('inventory').from('staffing_alert_rules').delete().eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Rule removed')
+    loadAlerts()
+  }
+  async function toggleRule(id: string, enabled: boolean) {
+    const sb = supabase as any
+    const { error } = await sb.schema('inventory').from('staffing_alert_rules').update({ enabled }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    loadAlerts()
+  }
+  async function runAlertsNow() {
+    setRunningAlerts(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('staffing-alerts-refresh', { body: {} })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      toast.success(`Checked ${data.rules_checked} rule(s) — ${data.violations_found} violation(s) found`)
+      loadAlerts()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Run failed')
+    } finally {
+      setRunningAlerts(false)
+    }
+  }
+
+  function ruleSummary(r: AlertRule): string {
+    const kpiLabel = KPI_OPTIONS.find((k) => k.value === r.kpi)?.label ?? r.kpi
+    const opLabel = r.operator === 'gt' ? '>' : r.operator === 'lt' ? '<' : `between ${fmtNum(r.threshold_low)} and ${fmtNum(r.threshold_high)}`
+    const valuePart = r.operator === 'between' ? '' : ` ${fmtNum(r.threshold_low)}`
+    const scopePart = r.scope === 'all' ? 'All Shops' : `${r.location_ids.length} shop(s)`
+    return `${kpiLabel} ${opLabel}${valuePart} — ${scopePart}`
+  }
+
+  const shopLevelViolations = alertViolations.filter((v) => !v.droptop_user_id)
+  const employeeLevelViolations = alertViolations.filter((v) => v.droptop_user_id)
+  // Conditional formatting for RollupTable — location_id -> every current
+  // shop-level violation for that shop.
+  const violationsByLocation = useMemo(() => {
+    const m = new Map<string, RowViolation[]>()
+    for (const v of shopLevelViolations) {
+      if (!v.location_id) continue
+      const list = m.get(v.location_id) ?? []
+      list.push({ kpi: v.rule_snapshot.kpi, periodStart: v.period_start })
+      m.set(v.location_id, list)
+    }
+    return m
+  }, [shopLevelViolations])
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   const filtersBar = (
@@ -919,6 +1068,7 @@ export function StaffingReportPage() {
           <TabsList>
             <TabsTrigger value="summary">Summary</TabsTrigger>
             <TabsTrigger value="rollup">Rollup</TabsTrigger>
+            <TabsTrigger value="alerts">Alerts{alertViolations.length > 0 ? ` (${alertViolations.length})` : ''}</TabsTrigger>
             <TabsTrigger value="labor-config">Labor Config</TabsTrigger>
           </TabsList>
 
@@ -979,13 +1129,168 @@ export function StaffingReportPage() {
 
               <div>
                 <h2 className="text-xs font-mono text-navy uppercase tracking-wide mb-2">Rollup</h2>
-                <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-summary-rollup-${range.start}-to-${range.end}`} />
+                <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-summary-rollup-${range.start}-to-${range.end}`} violationsByLocation={violationsByLocation} />
               </div>
             </div>
           </TabsContent>
 
           <TabsContent value="rollup">
-            <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-rollup-${range.start}-to-${range.end}`} />
+            <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-rollup-${range.start}-to-${range.end}`} violationsByLocation={violationsByLocation} />
+          </TabsContent>
+
+          <TabsContent value="alerts">
+            <div className="flex flex-col gap-4">
+              <Card>
+                <CardHeader className="flex items-center justify-between">
+                  <span className="text-xs font-mono text-navy uppercase tracking-wide">Add Alert Rule</span>
+                  <Button size="sm" variant="secondary" loading={runningAlerts} onClick={runAlertsNow}>Run Now</Button>
+                </CardHeader>
+                <CardBody className="flex flex-col gap-3">
+                  <p className="text-[11px] font-mono text-inky/60">
+                    Checked once a day by a scheduled job (turn it on from Config → Data Connections, connection
+                    "Staffing Alerts") — LHCE/Labor % of Revenue/Daily Hours check yesterday; Weekly Hours checks the
+                    last full week (Sunday–Saturday). Click Run Now above for an immediate check after adding a rule.
+                  </p>
+                  <div className="flex items-end gap-2 flex-wrap">
+                    <label className="flex flex-col gap-0.5">
+                      <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">KPI</span>
+                      <select value={newRuleKpi} onChange={(e) => setNewRuleKpi(e.target.value)} className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy">
+                        {KPI_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-0.5">
+                      <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Condition</span>
+                      <select value={newRuleOperator} onChange={(e) => setNewRuleOperator(e.target.value as 'gt' | 'lt' | 'between')} className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy">
+                        {OPERATOR_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-0.5">
+                      <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">{newRuleOperator === 'between' ? 'From' : 'Value'}</span>
+                      <Input type="number" value={newRuleLow} onChange={(e) => setNewRuleLow(e.target.value)} className="w-24" />
+                    </label>
+                    {newRuleOperator === 'between' && (
+                      <label className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">To</span>
+                        <Input type="number" value={newRuleHigh} onChange={(e) => setNewRuleHigh(e.target.value)} className="w-24" />
+                      </label>
+                    )}
+                    <div className="flex gap-1">
+                      {(['all', 'selected'] as const).map((s) => (
+                        <button key={s} onClick={() => setNewRuleScope(s)}
+                          className={['px-2 py-1.5 rounded border text-xs font-mono transition-colors',
+                            newRuleScope === s ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy/60'].join(' ')}>
+                          {s === 'all' ? 'All Shops' : 'Selected Shops'}
+                        </button>
+                      ))}
+                    </div>
+                    {newRuleScope === 'selected' && (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
+                        <MultiSelectDropdown options={shopOptions} selected={newRuleShops} onChange={setNewRuleShops} placeholder="Select shop(s)…" showAllOption={false} searchable countNoun="shops" />
+                      </div>
+                    )}
+                    <Button size="sm" loading={savingRule} onClick={addRule}>Add Rule</Button>
+                  </div>
+                </CardBody>
+              </Card>
+
+              {alertRules.length > 0 && (
+                <Card>
+                  <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Rules ({alertRules.length})</span></CardHeader>
+                  <CardBody className="flex flex-col gap-2">
+                    {alertRules.map((r) => (
+                      <div key={r.id} className="flex items-center justify-between gap-2 border-b border-navy/10 pb-2 last:border-0 last:pb-0">
+                        <div className="flex items-center gap-2">
+                          <Toggle checked={r.enabled} onChange={(v) => toggleRule(r.id, v)} size="sm" color="green" />
+                          <span className="text-xs font-mono text-navy">{ruleSummary(r)}</span>
+                        </div>
+                        <button onClick={() => deleteRule(r.id)} className="text-[11px] font-mono text-[#C0392B] hover:underline">Remove</button>
+                      </div>
+                    ))}
+                  </CardBody>
+                </Card>
+              )}
+
+              {alertsLoading ? (
+                <LoadingProgress fraction={null} countText="Loading alerts…" messages={['Pulling rules and violations…']} />
+              ) : (
+                <>
+                  <Card>
+                    <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Shop/Company Violations ({shopLevelViolations.length})</span></CardHeader>
+                    <CardBody>
+                      {shopLevelViolations.length === 0 ? (
+                        <p className="text-xs font-mono text-inky/60">No shop-level violations as of the last check.</p>
+                      ) : (
+                        <div className="overflow-x-auto rounded border border-navy/30 max-h-96 overflow-y-auto">
+                          <table className="w-full text-xs font-mono">
+                            <thead className="sticky top-0 bg-cream">
+                              <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                                <th className="px-3 py-2 text-left">Shop</th>
+                                <th className="px-3 py-2 text-left">KPI</th>
+                                <th className="px-3 py-2 text-left">Period</th>
+                                <th className="px-3 py-2 text-right">Actual</th>
+                                <th className="px-3 py-2 text-left">Rule</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {shopLevelViolations.map((v) => (
+                                <tr key={v.id} className="border-b border-navy/10">
+                                  <td className="px-3 py-1.5 text-navy whitespace-nowrap">{v.shop_label}</td>
+                                  <td className="px-3 py-1.5 text-inky">{KPI_OPTIONS.find((k) => k.value === v.rule_snapshot.kpi)?.label ?? v.rule_snapshot.kpi}</td>
+                                  <td className="px-3 py-1.5 text-inky whitespace-nowrap">{v.period_start === v.period_end ? v.period_start : `${v.period_start} to ${v.period_end}`}</td>
+                                  <td className="px-3 py-1.5 text-right text-navy tabular-nums">{fmtNum(Number(v.actual_value))}</td>
+                                  <td className="px-3 py-1.5 text-inky/60">
+                                    {v.rule_snapshot.operator === 'gt' ? `> ${fmtNum(v.rule_snapshot.threshold_low)}` : v.rule_snapshot.operator === 'lt' ? `< ${fmtNum(v.rule_snapshot.threshold_low)}` : `between ${fmtNum(v.rule_snapshot.threshold_low)} and ${fmtNum(v.rule_snapshot.threshold_high)}`}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardBody>
+                  </Card>
+
+                  <Card>
+                    <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Employee Violations ({employeeLevelViolations.length})</span></CardHeader>
+                    <CardBody>
+                      {employeeLevelViolations.length === 0 ? (
+                        <p className="text-xs font-mono text-inky/60">No employee-level violations as of the last check.</p>
+                      ) : (
+                        <div className="overflow-x-auto rounded border border-navy/30 max-h-96 overflow-y-auto">
+                          <table className="w-full text-xs font-mono">
+                            <thead className="sticky top-0 bg-cream">
+                              <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                                <th className="px-3 py-2 text-left">Employee</th>
+                                <th className="px-3 py-2 text-left">Shop</th>
+                                <th className="px-3 py-2 text-left">KPI</th>
+                                <th className="px-3 py-2 text-left">Period</th>
+                                <th className="px-3 py-2 text-right">Actual Hours</th>
+                                <th className="px-3 py-2 text-left">Rule</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {employeeLevelViolations.map((v) => (
+                                <tr key={v.id} className="border-b border-navy/10">
+                                  <td className="px-3 py-1.5 text-navy whitespace-nowrap">{v.employee_name}</td>
+                                  <td className="px-3 py-1.5 text-inky whitespace-nowrap">{v.shop_label}</td>
+                                  <td className="px-3 py-1.5 text-inky">{KPI_OPTIONS.find((k) => k.value === v.rule_snapshot.kpi)?.label ?? v.rule_snapshot.kpi}</td>
+                                  <td className="px-3 py-1.5 text-inky whitespace-nowrap">{v.period_start === v.period_end ? v.period_start : `${v.period_start} to ${v.period_end}`}</td>
+                                  <td className="px-3 py-1.5 text-right text-navy tabular-nums">{fmtNum(Number(v.actual_value))}</td>
+                                  <td className="px-3 py-1.5 text-inky/60">
+                                    {v.rule_snapshot.operator === 'gt' ? `> ${fmtNum(v.rule_snapshot.threshold_low)}` : v.rule_snapshot.operator === 'lt' ? `< ${fmtNum(v.rule_snapshot.threshold_low)}` : `between ${fmtNum(v.rule_snapshot.threshold_low)} and ${fmtNum(v.rule_snapshot.threshold_high)}`}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardBody>
+                  </Card>
+                </>
+              )}
+            </div>
           </TabsContent>
 
           {/* Labor Config — hosts the Staffing List roster (real

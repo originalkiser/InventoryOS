@@ -93,3 +93,8 @@ verify_jwt = false
 # file's own header comment before ever renaming or exposing this.
 [functions.droptop-webhook-b7a51c94196e610b]
 verify_jwt = false
+
+# Same dual-auth pattern as heatmap-rollup-refresh — the dispatcher
+# (shared secret) or a real logged-in user's "Run Now" from the Alerts tab.
+[functions.staffing-alerts-refresh]
+verify_jwt = false
