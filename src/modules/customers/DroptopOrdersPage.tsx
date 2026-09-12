@@ -139,6 +139,23 @@ export function DroptopOrdersPage() {
   // a denominator, `loaded` ticks up per page.
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
 
+  // Package name -> Oil Change / M5 / None, from the Package Mapping page
+  // (inventory.droptop_package_classification) — small (~80-150 rows),
+  // loaded once per company rather than per filter/date-range change.
+  const [packageClassification, setPackageClassification] = useState<Map<string, 'oil_change' | 'm5' | 'none'>>(new Map())
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    const sb = supabase as any
+    sb.schema('inventory').from('droptop_package_classification')
+      .select('package_name, classification').eq('company_id', companyId)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        setPackageClassification(new Map((data ?? []).map((r: { package_name: string; classification: 'oil_change' | 'm5' | 'none' }) => [r.package_name, r.classification])))
+      })
+    return () => { cancelled = true }
+  }, [companyId])
+
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
   const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
@@ -522,6 +539,24 @@ export function DroptopOrdersPage() {
       .sort((a, b) => b.count - a.count)
   }, [packages, services, packageNameById, filteredOrderIds])
 
+  // M5% = count of M5-classified packages (Air Filter, Cabin Air Filter,
+  // Wiper Blade Replacement, Additives, Tire Rotation) ÷ count of Oil
+  // Change-classified packages, both from Package Mapping's classification
+  // — a package-line-item count, not an order count, since one order can
+  // carry more than one of either (an oil change plus a tire rotation on
+  // the same visit is 1 oil-change package and 1 M5 package, not "1
+  // order").
+  function classificationCountsFor(orderId: string): { m5: number; oilChange: number } {
+    let m5 = 0, oilChange = 0
+    for (const p of packagesByOrder.get(orderId) ?? []) {
+      if (!p.name) continue
+      const c = packageClassification.get(p.name)
+      if (c === 'm5') m5++
+      else if (c === 'oil_change') oilChange++
+    }
+    return { m5, oilChange }
+  }
+
   const totals = useMemo(() => {
     const revenue = filteredOrders.reduce((sum, o) => sum + (o.final_price ?? 0), 0)
     // Average quarts per order, counting only orders that actually had a
@@ -529,9 +564,13 @@ export function DroptopOrdersPage() {
     // (a tire rotation, a filter-only visit) would just drag this toward
     // zero rather than answer "for the oil changes we did, how much oil".
     let oilOrderCount = 0, oilQuartsTotal = 0
+    let m5Count = 0, oilChangeCount = 0
     for (const o of filteredOrders) {
       const q = quartsFor(o.id)
       if (q > 0) { oilOrderCount++; oilQuartsTotal += q }
+      const c = classificationCountsFor(o.id)
+      m5Count += c.m5
+      oilChangeCount += c.oilChange
     }
     return {
       count: filteredOrders.length,
@@ -539,22 +578,28 @@ export function DroptopOrdersPage() {
       avgOrderValue: filteredOrders.length ? revenue / filteredOrders.length : 0,
       avgQuartsPerOilOrder: oilOrderCount ? oilQuartsTotal / oilOrderCount : 0,
       oilOrderCount,
+      m5Count,
+      oilChangeCount,
+      m5Pct: oilChangeCount > 0 ? (m5Count / oilChangeCount) * 100 : null,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredOrders, productsByOrder, servicesByOrder])
+  }, [filteredOrders, productsByOrder, servicesByOrder, packagesByOrder, packageClassification])
 
   // Shop-level rollup: how many orders per shop, and (of the ones that
   // included an oil-change product) the average quarts per order — same
   // "only count orders that actually had oil" reasoning as totals above,
   // just broken out by shop instead of company-wide.
   const shopStats = useMemo(() => {
-    const stats = new Map<string, { count: number; oilOrderCount: number; oilQuartsTotal: number }>()
+    const stats = new Map<string, { count: number; oilOrderCount: number; oilQuartsTotal: number; m5Count: number; oilChangeCount: number }>()
     for (const o of filteredOrders) {
       const key = o.location_id ?? '—'
-      const s = stats.get(key) ?? { count: 0, oilOrderCount: 0, oilQuartsTotal: 0 }
+      const s = stats.get(key) ?? { count: 0, oilOrderCount: 0, oilQuartsTotal: 0, m5Count: 0, oilChangeCount: 0 }
       s.count++
       const q = quartsFor(o.id)
       if (q > 0) { s.oilOrderCount++; s.oilQuartsTotal += q }
+      const c = classificationCountsFor(o.id)
+      s.m5Count += c.m5
+      s.oilChangeCount += c.oilChange
       stats.set(key, s)
     }
     return [...stats.entries()]
@@ -563,10 +608,11 @@ export function DroptopOrdersPage() {
         shopLabel: locationId === '—' ? '—' : (idToLabel.get(locationId) ?? locationId),
         count: s.count,
         avgQuarts: s.oilOrderCount ? s.oilQuartsTotal / s.oilOrderCount : 0,
+        m5Pct: s.oilChangeCount > 0 ? (s.m5Count / s.oilChangeCount) * 100 : null,
       }))
       .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredOrders, productsByOrder, servicesByOrder, idToLabel])
+  }, [filteredOrders, productsByOrder, servicesByOrder, idToLabel, packagesByOrder, packageClassification])
 
   // ---- Build Your Own Report ------------------------------------------
   // Operates on whatever's already loaded (filteredOrders — respects the
@@ -887,6 +933,10 @@ export function DroptopOrdersPage() {
               <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Quarts (Oil Change)</p>
               <p className="text-lg font-heading font-bold text-navy">{totals.avgQuartsPerOilOrder > 0 ? totals.avgQuartsPerOilOrder.toFixed(2) : '—'}</p>
             </CardBody></Card>
+            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Air Filter, Cabin Air Filter, Wiper Blade Replacement, Additives, Tire Rotation — as a % of Oil Change packages. Classify packages on Package Mapping.">M5%</p>
+              <p className="text-lg font-heading font-bold text-navy">{totals.m5Pct != null ? `${totals.m5Pct.toFixed(1)}%` : '—'}</p>
+            </CardBody></Card>
           </div>
 
           {/* Package + Shop summaries, side by side — each half the width
@@ -936,6 +986,7 @@ export function DroptopOrdersPage() {
                           <th className="px-3 py-2 text-left">Shop</th>
                           <th className="px-3 py-2 text-right">Orders</th>
                           <th className="px-3 py-2 text-right">Avg Quarts / Order</th>
+                          <th className="px-3 py-2 text-right">M5%</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -944,6 +995,7 @@ export function DroptopOrdersPage() {
                             <td className="px-3 py-1.5 text-navy whitespace-nowrap">{s.shopLabel}</td>
                             <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
                             <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
+                            <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
                           </tr>
                         ))}
                       </tbody>
