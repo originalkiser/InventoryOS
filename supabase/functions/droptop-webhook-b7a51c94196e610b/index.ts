@@ -6,14 +6,24 @@
 // missed/failed webhook delivery didn't cover — this is additive, not a
 // replacement.
 //
-// AUTH: Droptop's own "Add Endpoint" UI takes only a URL, no signing
-// secret or custom header field — so there is nothing to verify a request
-// actually came from Droptop. This function's name IS the credential: a
-// random 16-hex-char suffix, unguessable and never linked from anywhere
-// public. Do not rename it to something shorter/memorable, and don't
-// paste this function's URL anywhere other than directly into Droptop's
-// endpoint config. If Droptop is ever confirmed to support a real signing
-// secret, add verification here and this comment can go.
+// AUTH: real HMAC-SHA256 verification, per Droptop's "Verifying Webhooks"
+// doc. Every request must carry X-droptop-signature (hex HMAC) and
+// X-droptop-timestamp; the signed message is
+// `${timestamp}.${JSON.stringify(rawBodyText)}` — note that's
+// JSON.stringify of the raw request body TEXT (a string), not of the
+// parsed object, matching Droptop's own Node example exactly (their
+// example reads the body via express.text(), i.e. already a string,
+// before JSON.stringify-ing it again) — re-stringifying a parsed/re-
+// serialized object would produce a different byte sequence and never
+// match. Requires the DROPTOP_WEBHOOK_SECRET secret (from Droptop's
+// webhook settings — get this value from Droptop's dashboard, it's not
+// visible in the plain "Add Endpoint" screen). A request with a missing/
+// invalid signature is rejected (403) before any DB work happens.
+//
+// This function's name (a random 16-hex-char suffix) is a SECONDARY,
+// redundant layer on top of the real HMAC check above — cheap
+// defense-in-depth, not the actual security boundary anymore. Fine to
+// leave as-is; no need to rename now that signature verification exists.
 //
 // verify_jwt = false (supabase/config.toml) — Droptop sends no Supabase
 // JWT at all, so the platform gateway would otherwise reject every
@@ -55,6 +65,26 @@ function ok(body: unknown) {
 // batch sync to eventually catch it up.
 function fail(body: unknown) {
   return new Response(JSON.stringify(body), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } })
+}
+// An unsigned/invalid-signature request — rejected before any DB work.
+function reject(body: unknown) {
+  return new Response(JSON.stringify(body), { status: 403, headers: { ...CORS, 'Content-Type': 'application/json' } })
+}
+
+// ── HMAC signature verification (Droptop's "Verifying Webhooks" doc) ──────
+async function computeHmacHex(secret: string, data: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const sigBuf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data))
+  return [...new Uint8Array(sigBuf)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+// Constant-time compare — a plain === leaks timing info about how many
+// leading characters matched, which is exactly what signature comparison
+// is supposed to not leak.
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
 }
 
 // ── Droptop auth sig — identical to the other Droptop sync functions ──────
@@ -286,9 +316,23 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
 
+  const webhookSecret = Deno.env.get('DROPTOP_WEBHOOK_SECRET')
+  if (!webhookSecret) return fail({ error: 'DROPTOP_WEBHOOK_SECRET not configured' })
+  const signature = req.headers.get('x-droptop-signature')
+  const timestamp = req.headers.get('x-droptop-timestamp')
+  if (!signature || !timestamp) return reject({ error: 'missing signature/timestamp headers' })
+
+  // Read the RAW body text once — the signature is computed over
+  // JSON.stringify(that raw text), not over a parsed-then-reserialized
+  // object (see the header comment). req.text() must happen before any
+  // req.json() call since the body stream can only be consumed once.
+  const rawBody = await req.text()
+  const expectedSig = await computeHmacHex(webhookSecret, `${timestamp}.${JSON.stringify(rawBody)}`)
+  if (!timingSafeEqualHex(expectedSig, signature)) return reject({ error: 'invalid signature' })
+
   let payload: any
   try {
-    payload = await req.json()
+    payload = JSON.parse(rawBody)
   } catch {
     return ok({ error: 'invalid JSON body' })
   }
