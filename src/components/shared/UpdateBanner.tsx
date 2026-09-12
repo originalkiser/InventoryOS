@@ -16,7 +16,34 @@ async function fetchDeployedBuildId(): Promise<string | null> {
   }
 }
 
+// version.json flips to the new buildId the instant a deploy's upload
+// finishes, but that deploy's hashed JS bundle doesn't necessarily finish
+// propagating to every Cloudflare edge node at that exact same moment.
+// Reloading straight to the new index.html could land on a node that
+// still 404s the bundle it references — nothing renders but the empty
+// `<div id="root">`, a genuine white screen, until a later manual refresh
+// happens to hit a caught-up node. Confirm the new bundle is actually
+// fetchable first (briefly retrying) instead of reloading blind; if it
+// never becomes reachable, proceed anyway rather than blocking forever.
+async function waitForNewBundleReachable(): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      const htmlRes = await fetch(`${import.meta.env.BASE_URL}?_v=${Date.now()}`, { cache: 'no-store' })
+      const html = await htmlRes.text()
+      const scriptSrc = html.match(/<script[^>]+type="module"[^>]+src="([^"]+)"/)?.[1]
+      if (scriptSrc) {
+        const assetRes = await fetch(scriptSrc, { cache: 'no-store' })
+        if (assetRes.ok) return
+      }
+    } catch {
+      /* treated the same as "not ready yet" below */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+}
+
 async function forceUpdate() {
+  await waitForNewBundleReachable()
   try {
     if ('caches' in window) {
       const keys = await caches.keys()
@@ -48,6 +75,7 @@ export function UpdateBanner() {
   const { pathname } = useLocation()
   const isPublicShare = isPublicShareRoute(pathname)
   const [available, setAvailable] = useState(false)
+  const [updating, setUpdating] = useState(false)
   const runningId = useRef(__APP_BUILD_ID__).current
 
   useEffect(() => {
@@ -84,14 +112,16 @@ export function UpdateBanner() {
           <div className="text-cream/60">A newer version is ready.</div>
         </div>
         <button
-          onClick={forceUpdate}
-          className="ml-2 rounded bg-inky px-3 py-1.5 font-heading text-xs font-bold uppercase tracking-wide text-cream transition-colors hover:bg-sky hover:text-navy"
+          onClick={() => { setUpdating(true); forceUpdate() }}
+          disabled={updating}
+          className="ml-2 rounded bg-inky px-3 py-1.5 font-heading text-xs font-bold uppercase tracking-wide text-cream transition-colors hover:bg-sky hover:text-navy disabled:opacity-60 disabled:hover:bg-inky disabled:hover:text-cream"
         >
-          Update Now
+          {updating ? 'Updating…' : 'Update Now'}
         </button>
         <button
           onClick={() => setAvailable(false)}
-          className="rounded px-2 py-1.5 font-body text-xs text-cream/40 transition-colors hover:text-cream"
+          disabled={updating}
+          className="rounded px-2 py-1.5 font-body text-xs text-cream/40 transition-colors hover:text-cream disabled:opacity-40"
           aria-label="Dismiss"
         >
           ✕

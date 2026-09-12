@@ -19,6 +19,7 @@ import {
   useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
   DROPTOP_PO_SYNC_TASK_ID, DROPTOP_ORDERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
   GEOCODE_ORDERS_TASK_ID, HEATMAP_ROLLUP_TASK_ID, VIN_DECODE_TASK_ID, MONDAY_LOCATIONS_TASK_ID,
+  DROPTOP_TIME_CLOCK_TASK_ID,
 } from '@/stores/syncTasksStore'
 import toast from 'react-hot-toast'
 
@@ -152,6 +153,7 @@ export function DataConnectionsTab() {
   const [orderBackfillShops, setOrderBackfillShops] = useState<string[]>([])
   const [orderBackfillStart, setOrderBackfillStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().slice(0, 10) })
   const [orderBackfillEnd, setOrderBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
+  const [timeClockDaysBack, setTimeClockDaysBack] = useState(7)
   // Tracked checklist for the "backfill order history back to May 2025,
   // month by month" project — scaffolding only, per explicit direction: a
   // durable cross-session list of which months are done, NOT an automated
@@ -860,6 +862,43 @@ export function DataConnectionsTab() {
     }
   }
 
+  // Manual-only backfill for the new Staff Time Clock connection — same
+  // "sync mode only, no schedule yet" reasoning as droptop-sync-staff-time-
+  // clock's own header comment: a bounded manual pull now, ongoing
+  // incremental/dispatcher wiring deferred until this data's actually been
+  // reviewed. Always covers every shop with a Droptop Operation ID set (no
+  // per-shop picker) — matches the initial ask ("7-day lookback for all
+  // locations"), and unlike the Usage/Orders backfills above there's no
+  // existing history for a subset of shops to worry about clobbering.
+  async function runTimeClockBackfill() {
+    if (!companyId) return
+    setRunning('time-clock-backfill')
+    const store = useSyncTasksStore.getState()
+    store.start(DROPTOP_TIME_CLOCK_TASK_ID, `Droptop Staff Time Clock — ${timeClockDaysBack}-day backfill`)
+    try {
+      const { data, error } = await supabase.functions.invoke('droptop-sync-staff-time-clock', {
+        body: { daysBack: timeClockDaysBack },
+      })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      const warnings: string[] = data.warnings ?? []
+      const summary = `Staff Time Clock: ${data.locations_synced} shop(s), ${data.records_upserted} record(s) (${timeClockDaysBack}-day window)`
+      if (warnings.length) {
+        store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'partial', `${summary} — ${warnings.join(' | ')}`)
+        toast(`${summary} (${warnings.length} issue(s) — see Data Syncs)`, { icon: '⚠️', duration: 12000 })
+      } else {
+        store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'success', summary)
+        toast.success(summary)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Backfill failed'
+      store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'error', message)
+      toast.error(message, { duration: 12000 })
+    } finally {
+      setRunning(null)
+    }
+  }
+
   // Address-level geocoding for the Customer Heatmap — resolves each
   // order's street address to real lat/lng via the free Census Geocoder,
   // as an alternative to zip-centroid plotting. Loops the Edge Function
@@ -1136,6 +1175,34 @@ export function DataConnectionsTab() {
               </Button>
             </div>
           )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Droptop Staff Time Clock</span>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-3">
+          <p className="text-[11px] font-mono text-inky/60">
+            Pulls clock-in/clock-out records per shop from Droptop, for comparing staffing against car counts
+            (Droptop Orders above) and order timing. Sync only for now — no daily automation yet, so pick how many
+            days back to pull and run it whenever fresh data's needed. Always covers every shop with a Droptop
+            Operation ID set.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Days back</span>
+              <input
+                type="number" min={1} max={3650}
+                value={timeClockDaysBack}
+                onChange={(e) => setTimeClockDaysBack(Math.max(1, Number(e.target.value) || 1))}
+                className={`${fieldCls} w-24`}
+              />
+            </label>
+            <Button size="sm" loading={running === 'time-clock-backfill'} onClick={runTimeClockBackfill}>
+              Run Backfill
+            </Button>
+          </div>
         </CardBody>
       </Card>
 

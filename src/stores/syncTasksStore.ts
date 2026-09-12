@@ -55,6 +55,7 @@ export const GEOCODE_ORDERS_TASK_ID = 'geocode-orders'
 export const HEATMAP_ROLLUP_TASK_ID = 'heatmap-rollup-refresh'
 export const VIN_DECODE_TASK_ID = 'vin-decode'
 export const MONDAY_LOCATIONS_TASK_ID = 'monday-locations'
+export const DROPTOP_TIME_CLOCK_TASK_ID = 'droptop-time-clock'
 
 export const useSyncTasksStore = create<SyncTasksState>((set, get) => ({
   tasks: [],
