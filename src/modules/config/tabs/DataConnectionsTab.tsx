@@ -353,10 +353,22 @@ export function DataConnectionsTab() {
   // EXPLAIN ANALYZE: even ONE month is real work at current volume
   // (~200k orders/month, a multi-second sort to get the distinct-shop
   // count) — fine for an explicit, user-clicked Refresh with its own
-  // loading state (the whole point is this no longer blocks page load),
-  // but kept to modest concurrency rather than firing every month at once
-  // to limit how much simultaneous heavy-sort load this puts on the same
-  // table every other Droptop Orders feature reads from.
+  // loading state (the whole point is this no longer blocks page load).
+  //
+  // Real production evidence (2026-09-12): CONCURRENCY=2 still hit
+  // "canceling statement due to statement timeout" on one month (July
+  // 2026) even though that month's real row count (208,687) was in line
+  // with every other month refreshed fine in the same run — confirmed via
+  // direct EXPLAIN ANALYZE that ONE such query alone takes only ~3s,
+  // nowhere near the authenticated role's 30s timeout. So the timeout
+  // wasn't that month being unusually large, it was TWO of these
+  // disk-spilling-sort queries competing for I/O/work_mem at the same
+  // time. Fully sequential (no concurrency at all) removes that
+  // contention entirely — slower wall-clock for the whole refresh, which
+  // is an acceptable tradeoff for a manual, spinner-having action — plus
+  // one retry per month before giving up on it, the same "a statement
+  // timeout is often a one-off, not deterministic" reasoning already used
+  // everywhere else in this codebase's Droptop backfills.
   const [refreshingMonthStats, setRefreshingMonthStats] = useState(false)
   async function refreshMonthStats() {
     if (!companyId || !backfillPlan.length) return
@@ -364,29 +376,26 @@ export function DataConnectionsTab() {
     const sb = supabase as any
     const months = [...backfillPlan.map((r) => r.year_month)]
     const warnings: string[] = []
-    const CONCURRENCY = 2
-    let nextIndex = 0
-    async function worker() {
-      for (;;) {
-        const i = nextIndex++
-        if (i >= months.length) return
-        const ym = months[i]
-        const [y, m] = ym.split('-').map(Number)
-        const start = `${ym}-01`
-        const end = new Date(y, m, 0).toISOString().slice(0, 10) // last day of that month
+    for (const ym of months) {
+      const [y, m] = ym.split('-').map(Number)
+      const start = `${ym}-01`
+      const end = new Date(y, m, 0).toISOString().slice(0, 10) // last day of that month
+      let row: { orders: number | string; shops: number | string } | undefined
+      let lastErr: string | null = null
+      for (let attempt = 0; attempt <= 1; attempt++) {
         const { data, error } = await sb.rpc('get_droptop_order_month_stats', { p_start: start, p_end: end })
-        if (error) { warnings.push(`${ym}: ${error.message}`); continue }
-        const row = (data ?? [])[0] as { orders: number | string; shops: number | string } | undefined
-        const { error: upsertErr } = await sb.schema('inventory').from('droptop_order_month_rollup')
-          .upsert({
-            company_id: companyId, year_month: ym,
-            orders: row ? Number(row.orders) : 0, shops: row ? Number(row.shops) : 0,
-            updated_by: profile?.id ?? null, updated_at: new Date().toISOString(),
-          }, { onConflict: 'company_id,year_month' })
-        if (upsertErr) warnings.push(`${ym}: ${upsertErr.message}`)
+        if (!error) { row = (data ?? [])[0]; lastErr = null; break }
+        lastErr = error.message
       }
+      if (lastErr) { warnings.push(`${ym}: ${lastErr}`); continue }
+      const { error: upsertErr } = await sb.schema('inventory').from('droptop_order_month_rollup')
+        .upsert({
+          company_id: companyId, year_month: ym,
+          orders: row ? Number(row.orders) : 0, shops: row ? Number(row.shops) : 0,
+          updated_by: profile?.id ?? null, updated_at: new Date().toISOString(),
+        }, { onConflict: 'company_id,year_month' })
+      if (upsertErr) warnings.push(`${ym}: ${upsertErr.message}`)
     }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, months.length) }, worker))
     setRefreshingMonthStats(false)
     if (warnings.length) toast.error(`Refreshed with ${warnings.length} issue(s): ${warnings.join(' | ')}`, { duration: 12000 })
     else toast.success(`Refreshed order/shop counts for ${months.length} month(s)`)
