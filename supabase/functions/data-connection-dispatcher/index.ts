@@ -298,8 +298,30 @@ async function runDroptopOrders(
       .filter((r: { last_synced_date: string }) => r.last_synced_date >= targetDateStr)
       .map((r: { location_id: string }) => r.location_id),
   )
+  const lastSyncedByLocation = new Map(
+    (stateRows ?? []).map((r: { location_id: string; last_synced_date: string }) => [r.location_id, r.last_synced_date]),
+  )
   const remaining = allIds.filter((id: string) => !caughtUp.has(id))
   if (!remaining.length) return { status: 'success', message: null }
+
+  // The base query above has no ORDER BY, so without this, "the first
+  // MAX_LOCATIONS_PER_TICK of whatever order Postgres happens to return"
+  // decides who gets attempted each tick — if a subset of locations
+  // consistently fails against Droptop (a stale/invalid
+  // droptop_operation_id, an account-side issue, etc.), they never
+  // advance past this filter, and an arbitrary row order gives nothing
+  // else priority over them. Sorting the most-overdue locations first
+  // (no sync-state row at all == furthest behind) means one tick's worth
+  // of persistently-failing locations can't crowd out everyone else
+  // indefinitely — and a location that's STILL always at the back after
+  // this change is a real, visible signal (check
+  // inventory.droptop_order_sync_state for it) rather than noise from row
+  // ordering.
+  remaining.sort((a: string, b: string) => {
+    const da = lastSyncedByLocation.get(a) ?? ''
+    const db = lastSyncedByLocation.get(b) ?? ''
+    return da < db ? -1 : da > db ? 1 : 0
+  })
 
   const thisTick = remaining.slice(0, MAX_LOCATIONS_PER_TICK)
   const chunks: string[][] = []
