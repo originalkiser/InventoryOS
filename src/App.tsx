@@ -35,6 +35,34 @@ function AuthProvider() {
   return null
 }
 
+// The public menu board lives on its own subdomain (menu.sboc.app) rather
+// than under a /menu-board/ path on the main app domain — a bare hostname
+// check, not a route, since a bare "/:slug" pattern registered on the main
+// domain would collide with every real app route ("/dashboard", "/tasks",
+// etc). This is its own tiny router with nothing else in it: no auth, no
+// AppShell, no admin routes reachable here at all.
+function isMenuBoardHost(): boolean {
+  return window.location.hostname.startsWith('menu.')
+}
+
+function MenuBoardApp() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Legacy links minted before pretty slugs existed. */}
+        <Route path="/m/:token" element={<PublicMenuBoardPage />} />
+        <Route path="/:slug/pdf" element={<MenuBoardPdfPage />} />
+        <Route path="/:slug" element={<PublicMenuBoardPage />} />
+        <Route path="*" element={
+          <div className="min-h-screen flex items-center justify-center bg-sb-navy px-6">
+            <p className="text-sm font-mono text-sb-cream/80 text-center">This menu board link is no longer active.</p>
+          </div>
+        } />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
 export default function App() {
   if (SUPABASE_MISSING) {
     return (
@@ -54,6 +82,8 @@ export default function App() {
       </div>
     )
   }
+
+  if (isMenuBoardHost()) return <MenuBoardApp />
 
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL}>
@@ -80,14 +110,6 @@ export default function App() {
 
         {/* Public form — no auth required */}
         <Route path="/f/:shareToken" element={<PublicFormPage />} />
-
-        {/* Public menu board — no auth required (share link). Pretty URL
-            /menu-board/<shop>-<hash>, plus the legacy /m/<uuid>. The /pdf
-            variant (from the Shop Links table) rebuilds and downloads that
-            shop's PDF fresh instead of showing the board. */}
-        <Route path="/menu-board/:slug/pdf" element={<MenuBoardPdfPage />} />
-        <Route path="/menu-board/:slug" element={<PublicMenuBoardPage />} />
-        <Route path="/m/:token" element={<PublicMenuBoardPage />} />
 
         {/* Unreachable in practice — "/*" above already matches anything
             that isn't one of the explicit paths higher up (which rank

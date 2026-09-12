@@ -803,11 +803,18 @@ function PriceComposite({ price, fs }: { price: number; fs: number }) {
 
 interface ShareRow { token: string; slug: string | null; location_id: string | null; label: string | null; hide_page2: boolean; created_at: string }
 const sb = () => supabase as any
-const APP_URL = `${window.location.origin}${import.meta.env.BASE_URL}`
-// A locked link gets the pretty /menu-board/<slug> URL; anything without a
-// slug (older links, "any shop" links) keeps the /m/<token> URL.
+// The public menu board lives on its own subdomain (see App.tsx's
+// isMenuBoardHost/MenuBoardApp) rather than under a path on this admin app's
+// own domain — hardcoded rather than derived from window.location.origin,
+// since that'd be wrong whenever this admin UI itself is loaded from
+// anywhere else (GitHub Pages during the Cloudflare cutover, localhost in
+// dev) — the share destination is always the same regardless of where the
+// link was generated from.
+const MENU_BOARD_BASE_URL = 'https://menu.sboc.app/'
+// A locked link gets the pretty /<slug> URL; anything without a slug (older
+// links, "any shop" links) keeps the /m/<token> URL.
 const shareUrlFor = (r: Pick<ShareRow, 'token' | 'slug'>) =>
-  r.slug ? `${APP_URL}menu-board/${r.slug}` : `${APP_URL}m/${r.token}`
+  r.slug ? `${MENU_BOARD_BASE_URL}${r.slug}` : `${MENU_BOARD_BASE_URL}m/${r.token}`
 const slugSuffix = () => Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 4).padEnd(4, '0')
 /**
  * Slug for a shop-locked share link: `<shop number>-<4-char hash>`, e.g.
@@ -853,8 +860,8 @@ function ShareMenuBoardModal({ currentLocationId, currentLabel, currentShopNumbe
   async function create() {
     if (!companyId) return
     setCreating(true)
-    // Locked links get /menu-board/<shop>-<hash>. Retry once on the (rare)
-    // slug collision with a fresh hash.
+    // Locked links get menu.sboc.app/<shop>-<hash>. Retry once on the
+    // (rare) slug collision with a fresh hash.
     let lastErr: string | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
       const row = {
@@ -970,7 +977,7 @@ const shopLinkCol = createColumnHelper<ShopLinkRow>()
  * emails / the live board link / a direct PDF-download link. Both links
  * stay "live": the board link always reads the shop's current
  * core.locations prices (see get_menu_board_share_by_slug), and the PDF
- * link (MenuBoardPdfPage, route /menu-board/<slug>/pdf) rebuilds the PDF
+ * link (MenuBoardPdfPage, route menu.sboc.app/<slug>/pdf) rebuilds the PDF
  * from scratch on every visit — nothing is ever a stale cached file, so a
  * price change in the OSL shows up the next time either link is opened,
  * with no "regenerate" step for anyone to remember. Table is the standard
@@ -1063,7 +1070,7 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
       storeEmail: l.store_email,
       amEmail: l.am_email,
       link: share ? shareUrlFor(share) : null,
-      pdfLink: share?.slug ? `${APP_URL}menu-board/${share.slug}/pdf` : null,
+      pdfLink: share?.slug ? `${MENU_BOARD_BASE_URL}${share.slug}/pdf` : null,
       token: share?.token ?? null,
       hidePage2: share?.hidePage2 ?? false,
     }

@@ -33,13 +33,15 @@ async function forceUpdate() {
   window.location.replace(url.toString())
 }
 
-// Public, no-auth share routes (see App.tsx) — "Update Now" reloads to the
-// SB Net root, which would bounce an anonymous viewer (a customer scanning
-// a menu board QR code, someone filling out a shared form) straight into
-// the login screen. The update check itself stays fully live for the real
-// app; it just never runs (or shows) on these.
+// Public, no-auth form share route (see App.tsx) — "Update Now" reloads to
+// the SB Net root, which would bounce an anonymous viewer filling out a
+// shared form straight into the login screen. The update check itself
+// stays fully live for the real app; it just never runs (or shows) here.
+// The menu board's public share links moved to their own subdomain
+// (menu.sboc.app — see App.tsx's MenuBoardApp) which never mounts this
+// component at all, so there's nothing to gate for those anymore.
 function isPublicShareRoute(pathname: string): boolean {
-  return pathname.startsWith('/f/') || pathname.startsWith('/menu-board/') || pathname.startsWith('/m/')
+  return pathname.startsWith('/f/')
 }
 
 export function UpdateBanner() {

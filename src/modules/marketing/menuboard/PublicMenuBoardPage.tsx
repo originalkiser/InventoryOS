@@ -46,7 +46,8 @@ function normalizePackage(raw: any): MenuBoardPackage {
 }
 
 export function PublicMenuBoardPage() {
-  // Two URL shapes: the pretty /menu-board/<slug> and the legacy /m/<uuid>.
+  // Two URL shapes, both on the menu.sboc.app subdomain (see App.tsx's
+  // MenuBoardApp): the pretty /<slug> and the legacy /m/<uuid>.
   const params = useParams<{ token?: string; slug?: string }>()
   const bySlug = !!params.slug
   const key = params.slug ?? params.token ?? ''

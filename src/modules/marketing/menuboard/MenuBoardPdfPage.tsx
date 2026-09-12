@@ -87,7 +87,10 @@ export function MenuBoardPdfPage() {
       if (cancelled) return
       setShopName(name)
 
-      const shareUrl = `${window.location.origin}${import.meta.env.BASE_URL}menu-board/${slug}`
+      // This page is served from the menu.sboc.app subdomain itself (see
+      // App.tsx's MenuBoardApp), so window.location.origin is already the
+      // right base — just swap the /pdf suffix for the plain board URL.
+      const shareUrl = `${window.location.origin}/${slug}`
 
       try {
         const blob = await buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2: !!share.hide_page2 })
