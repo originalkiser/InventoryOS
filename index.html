@@ -3,6 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/src/assets/SBOC-AltCreamBadge.png" />
+    <!-- Apple/Android "Add to Home Screen" icons — %BASE_URL% (Vite's own
+         placeholder, resolved at build time) so these still resolve
+         correctly under GitHub Pages' /InventoryOS/ subpath, not just the
+         Cloudflare root domain. The manifest's own icon paths are plain
+         absolute paths (correct for the live sboc.app root domain); it's a
+         static JSON file Vite doesn't template, so it isn't base-aware. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="%BASE_URL%apple-touch-icon.png" />
+    <link rel="manifest" href="%BASE_URL%site.webmanifest" />
+    <meta name="theme-color" content="#002745" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SB Net</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

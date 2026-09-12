@@ -79,6 +79,7 @@ export const ICONS: Record<string, JSX.Element> = {
   'droptop-orders': <FileText className="w-4 h-4 flex-shrink-0" />,
   'droptop-vehicles': <Car className="w-4 h-4 flex-shrink-0" />,
   'droptop-packages': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
+  'staffing-report': <Users className="w-4 h-4 flex-shrink-0" />,
   'data-connections': <Database className="w-4 h-4 flex-shrink-0" />,
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
@@ -146,6 +147,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
     { key: 'droptop-vehicles', label: 'Vehicles', to: '/droptop-vehicles' },
     { key: 'droptop-packages', label: 'Packages', to: '/droptop-packages' },
+    { key: 'staffing-report', label: 'Staffing Report', to: '/staffing-report' },
   ],
   'data-connections': [
     { key: 'data-connections', label: 'Data Connections', to: '/data-connections' },

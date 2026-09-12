@@ -338,6 +338,67 @@ async function runDroptopOrders(
   return result
 }
 
+// Same "don't retry the whole company every tick" fix as runDroptopOrders
+// above, against its own separate sync-state table
+// (inventory.droptop_time_clock_sync_state) — a lighter pull than orders
+// (one Droptop call per location, no per-order child tables to write), so
+// reuses DROPTOP_CHUNK_SIZE rather than needing orders' own smaller
+// DROPTOP_ORDER_CHUNK_SIZE, but still batches across ticks rather than
+// attempting every location in one invocation — the whole point of moving
+// this off "manual backfill only" is for it to behave like every other
+// Droptop connection here, including under real company-wide location
+// counts.
+async function runDroptopTimeClock(
+  supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
+): Promise<{ status: string; message: string | null }> {
+  const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+  const { data: locs, error: locErr } = await (admin as any)
+    .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
+  if (locErr) return { status: 'error', message: locErr.message }
+  const allIds = (locs ?? []).map((l: { id: string }) => l.id)
+  if (!allIds.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
+
+  const yesterdayUtc = new Date(); yesterdayUtc.setUTCHours(0, 0, 0, 0); yesterdayUtc.setUTCDate(yesterdayUtc.getUTCDate() - 1)
+  const targetDateStr = yesterdayUtc.toISOString().slice(0, 10)
+  const { data: stateRows, error: stateErr } = await (admin as any)
+    .schema('inventory').from('droptop_time_clock_sync_state')
+    .select('location_id, last_synced_date').eq('company_id', companyId).in('location_id', allIds)
+  if (stateErr) return { status: 'error', message: `sync-state read: ${stateErr.message}` }
+  const caughtUp = new Set(
+    (stateRows ?? [])
+      .filter((r: { last_synced_date: string }) => r.last_synced_date >= targetDateStr)
+      .map((r: { location_id: string }) => r.location_id),
+  )
+  const lastSyncedByLocation = new Map(
+    (stateRows ?? []).map((r: { location_id: string; last_synced_date: string }) => [r.location_id, r.last_synced_date]),
+  )
+  const remaining = allIds.filter((id: string) => !caughtUp.has(id))
+  if (!remaining.length) return { status: 'success', message: null }
+
+  // Most-overdue-first — same fairness fix as runDroptopOrders, so a
+  // persistently-failing subset of locations can't crowd out everyone else
+  // tick after tick.
+  remaining.sort((a: string, b: string) => {
+    const da = lastSyncedByLocation.get(a) ?? ''
+    const db = lastSyncedByLocation.get(b) ?? ''
+    return da < db ? -1 : da > db ? 1 : 0
+  })
+
+  const thisTick = remaining.slice(0, MAX_LOCATIONS_PER_TICK)
+  const chunks: string[][] = []
+  for (let i = 0; i < thisTick.length; i += DROPTOP_CHUNK_SIZE) chunks.push(thisTick.slice(i, i + DROPTOP_CHUNK_SIZE))
+
+  const result = await runChunksConcurrently(
+    `${supabaseUrl}/functions/v1/droptop-sync-staff-time-clock`, secret, chunks,
+    (locationIds) => ({ mode: 'incremental', locationIds }),
+  )
+  if (remaining.length > thisTick.length) {
+    const note = `${remaining.length - thisTick.length} more location(s) still catching up — continues on the next tick`
+    return { status: result.status === 'error' ? 'partial' : result.status, message: result.message ? `${result.message} | ${note}` : note }
+  }
+  return result
+}
+
 // run-automated-checks reuses this same dispatch secret rather than minting
 // its own — it's only ever called by this dispatcher or an admin's own
 // interactive session, never unattended by anything else.
@@ -492,6 +553,9 @@ Deno.serve(async (req) => {
         } else if (s.connection_key === 'droptop_orders') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
           else outcome = await runDroptopOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
+        } else if (s.connection_key === 'droptop_time_clock') {
+          if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
+          else outcome = await runDroptopTimeClock(supabaseUrl, serviceKey, droptopSecret, s.company_id)
         } else if (s.connection_key === 'automated_checks') {
           // Run after the Droptop pulls so the movement feed it reads is fresh —
           // schedule its own interval later in the day than droptop_usage's if

@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
+import { useLocations } from '@/hooks/useLocations'
+import { shopNumberCityLabel } from '@/lib/shopLabels'
 import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown } from '@/components/ui'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
@@ -52,6 +54,7 @@ const TASK_ID_FOR: Record<string, string> = {
   droptop_usage: DROPTOP_USAGE_TASK_ID,
   droptop_purchase_orders: DROPTOP_PO_SYNC_TASK_ID,
   droptop_orders: DROPTOP_ORDERS_TASK_ID,
+  droptop_time_clock: DROPTOP_TIME_CLOCK_TASK_ID,
   automated_checks: AUTOMATED_CHECKS_TASK_ID,
   heatmap_rollup_refresh: HEATMAP_ROLLUP_TASK_ID,
   vin_decode: VIN_DECODE_TASK_ID,
@@ -79,12 +82,13 @@ const CONNECTION_META: Record<string, { label: string; description: string }> = 
   droptop_usage: { label: 'Droptop — Usage', description: 'Pulls sales/adjustment activity from Droptop and logs the daily sold/adjusted ledger.' },
   droptop_purchase_orders: { label: 'Droptop — Purchase Orders', description: 'Pulls open/recent POs and their line items — feeds the PO Status page and Orders v2\'s "already on order" check.' },
   droptop_orders: { label: 'Droptop — Orders (Customers)', description: 'Pulls each location\'s orders forward from its last successful sync (yesterday, or a wider catch-up after a missed day) with the placing customer\'s address, and resolves a lat/lng by zip — feeds the Customer Heatmap. Use the Historical Backfill below for a one-time date-ranged pull.' },
+  droptop_time_clock: { label: 'Droptop — Staff Time Clock', description: 'Pulls each location\'s clock-in/clock-out records forward from its last successful sync (yesterday, or a wider catch-up after a missed day) — feeds the Staffing Report (compares headcount against Droptop order volume/timing). Use the Historical Backfill below for a one-time date-ranged, region/market/shop-scoped pull.' },
   automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
   heatmap_rollup_refresh: { label: 'Customer Heatmap — Zip Rollups', description: 'Recomputes the pre-aggregated zip/day rollup table Customer Heatmap reads for period-preset ranges, so those loads skip scanning the full orders table. Run Now right after a large Historical Backfill to skip the ~24h staleness window.' },
   vin_decode: { label: 'Vehicles — Engine/Trim Decode', description: 'Looks up Trim/Engine for synced vehicles\' VINs via NHTSA\'s free VIN-decode API, caching results so nothing is ever decoded twice. A big backlog (209,614 distinct VINs as of 2026-09-03) is caught up incrementally over multiple runs, not all at once — the Droptop Vehicles page\'s own "Decode Engine/Trim" button still works independently for whatever\'s currently in view.' },
   monday_locations: { label: 'Monday.com — Locations', description: 'Syncs the "Open Stores List" Monday.com board into Locations — matches by store number to update existing shops, and adds any board item not already in SB Net (including closed/pre-opening ones the file upload never brought in). Never deactivates a location just because it\'s missing from the board.' },
 }
-const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_orders', 'automated_checks', 'heatmap_rollup_refresh', 'vin_decode', 'monday_locations']
+const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_orders', 'droptop_time_clock', 'automated_checks', 'heatmap_rollup_refresh', 'vin_decode', 'monday_locations']
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -146,14 +150,73 @@ export function DataConnectionsTab() {
   const [saving, setSaving] = useState<string | null>(null)
   const [inspectShop, setInspectShop] = useState('')
   const [inspectProductId, setInspectProductId] = useState('')
-  const [backfillOptions, setBackfillOptions] = useState<{ id: string; label: string }[]>([])
+  // 'other' surface — franchise shops included by default (matches Droptop
+  // Orders/Customer Heatmap, the other Droptop-data surfaces).
+  const loc = useLocations('other')
   const [backfillShops, setBackfillShops] = useState<string[]>([])
+  const [backfillRegions, setBackfillRegions] = useState<string[]>([])
+  const [backfillMarkets, setBackfillMarkets] = useState<string[]>([])
   const [testOrderShop, setTestOrderShop] = useState('')
   const [inspectOrdersShop, setInspectOrdersShop] = useState('')
   const [orderBackfillShops, setOrderBackfillShops] = useState<string[]>([])
+  const [orderBackfillRegions, setOrderBackfillRegions] = useState<string[]>([])
+  const [orderBackfillMarkets, setOrderBackfillMarkets] = useState<string[]>([])
   const [orderBackfillStart, setOrderBackfillStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().slice(0, 10) })
   const [orderBackfillEnd, setOrderBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
-  const [timeClockDaysBack, setTimeClockDaysBack] = useState(7)
+  const [timeClockBackfillShops, setTimeClockBackfillShops] = useState<string[]>([])
+  const [timeClockBackfillRegions, setTimeClockBackfillRegions] = useState<string[]>([])
+  const [timeClockBackfillMarkets, setTimeClockBackfillMarkets] = useState<string[]>([])
+  const [timeClockBackfillStart, setTimeClockBackfillStart] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10) })
+  const [timeClockBackfillEnd, setTimeClockBackfillEnd] = useState(() => new Date().toISOString().slice(0, 10))
+
+  // Shops eligible for any Droptop backfill — same scope as the routine
+  // syncs (a Droptop Operation ID actually set). Shared by all three
+  // backfill cards below (Usage/Orders/Staff Time Clock) rather than each
+  // running its own fetch.
+  const backfillOptions = useMemo(
+    () => loc.locations
+      .filter((l) => l.droptop_operation_id)
+      .map((l) => ({ id: l.id, label: shopNumberCityLabel(l.name, l.shop_city) }))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
+    [loc.locations],
+  )
+  // Region/Market — same "narrow top-down" shape as Droptop Orders' own
+  // filter set, but here they resolve to a location-id allowlist for a
+  // BACKFILL target rather than narrowing an already-loaded result set:
+  // picking a whole region/market lets an admin scope a backfill to "just
+  // these stores" without hand-picking dozens of shops one at a time — the
+  // actual ask behind adding these (large unscoped pulls, like Droptop
+  // Orders, have been a real problem — see runDroptopOrders' own history).
+  const regionOptions = useMemo(
+    () => [...new Set(loc.locations.filter((l) => l.droptop_operation_id).map((l) => l.region ?? '').filter(Boolean))]
+      .sort().map((v) => ({ value: v })),
+    [loc.locations],
+  )
+  function marketOptionsFor(selectedRegions: string[]) {
+    let r = loc.locations.filter((l) => l.droptop_operation_id)
+    if (selectedRegions.length) r = r.filter((l) => selectedRegions.includes(l.region ?? ''))
+    return [...new Set(r.map((l) => loc.fieldValue(l.id, 'market')).filter(Boolean))].sort().map((v) => ({ value: v }))
+  }
+  // Resolves Region/Market/Shop filters (each optional, AND-narrowed
+  // together — an empty filter imposes no restriction from that level) down
+  // to the final location-id set a backfill should target. Requires at
+  // least one non-empty filter — an entirely empty set of filters returns
+  // null (meaning "not scoped to anything, don't run"), which is what keeps
+  // this from silently defaulting to "every shop" the way the old
+  // unscoped historical pulls did.
+  function resolveBackfillLocationIds(regions: string[], markets: string[], shopLabels: string[]): string[] | null {
+    if (!regions.length && !markets.length && !shopLabels.length) return null
+    const shopIds = new Set(shopLabels.map((l) => backfillOptions.find((o) => o.label === l)?.id).filter((id): id is string => !!id))
+    const ids: string[] = []
+    for (const l of loc.locations) {
+      if (!l.droptop_operation_id) continue
+      if (regions.length && !regions.includes(l.region ?? '')) continue
+      if (markets.length && !markets.includes(loc.fieldValue(l.id, 'market'))) continue
+      if (shopIds.size && !shopIds.has(l.id)) continue
+      ids.push(l.id)
+    }
+    return ids
+  }
   // Tracked checklist for the "backfill order history back to May 2025,
   // month by month" project — scaffolding only, per explicit direction: a
   // durable cross-session list of which months are done, NOT an automated
@@ -230,24 +293,6 @@ export function DataConnectionsTab() {
     setGeocodeStats({ eligible: eligibleRes.count ?? 0, done: doneRes.count ?? 0, matched: matchedRes.count ?? 0 })
   }, [companyId])
   useEffect(() => { loadGeocodeStats() }, [loadGeocodeStats])
-
-  // Locations eligible for the historical backfill — only shops already
-  // mapped to a Droptop Operation ID, same scope as the routine usage sync.
-  useEffect(() => {
-    if (!companyId) return
-    let cancelled = false
-    const sb = supabase as any
-    sb.schema('core').from('locations')
-      .select('id, name, shop_city')
-      .eq('company_id', companyId)
-      .not('droptop_operation_id', 'is', null)
-      .order('name')
-      .then(({ data }: any) => {
-        if (cancelled) return
-        setBackfillOptions((data ?? []).map((l: any) => ({ id: l.id, label: l.shop_city ? `${l.name} — ${l.shop_city}` : l.name })))
-      })
-    return () => { cancelled = true }
-  }, [companyId])
 
   const loadBackfillPlan = useCallback(async () => {
     if (!companyId) return
@@ -449,6 +494,16 @@ export function DataConnectionsTab() {
         summary = `Droptop orders: ${r.locations_synced} shop(s), ${r.orders_upserted} new order(s)`
           + (r.orders_missing_zip_match ? ` (${r.orders_missing_zip_match} missing a zip match — excluded from the heatmap)` : '')
         warnings = r.warnings
+      } else if (key === 'droptop_time_clock') {
+        // Steady-state, same shape as droptop_orders above: each location
+        // pulls forward from wherever it last successfully synced through
+        // yesterday. Use the Historical Backfill controls below for a
+        // one-time date-ranged, region/market/shop-scoped pull instead.
+        const { data, error } = await supabase.functions.invoke('droptop-sync-staff-time-clock', { body: { mode: 'incremental' } })
+        if (error) throw new Error(error.message)
+        if (data?.error) throw new Error(data.error)
+        summary = `Staff Time Clock: ${data.locations_synced} shop(s), ${data.records_upserted} record(s)`
+        warnings = data.warnings
       } else if (key === 'automated_checks') {
         const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
         if (error) throw new Error(error.message)
@@ -574,19 +629,18 @@ export function DataConnectionsTab() {
   // from the routine daily job and doesn't need this. Manual-only: no
   // schedule, no automation toggle.
   async function runBackfill() {
-    if (!companyId || !backfillShops.length) return
+    const locationIds = resolveBackfillLocationIds(backfillRegions, backfillMarkets, backfillShops)
+    if (!companyId || !locationIds?.length) return
     setRunning('backfill')
     const store = useSyncTasksStore.getState()
-    store.start(DROPTOP_USAGE_TASK_ID, `Droptop Usage — 30-day backfill (${backfillShops.length} shop${backfillShops.length === 1 ? '' : 's'})`)
+    store.start(DROPTOP_USAGE_TASK_ID, `Droptop Usage — 30-day backfill (${locationIds.length} shop${locationIds.length === 1 ? '' : 's'})`)
     const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(DROPTOP_USAGE_TASK_ID, p.batch, p.totalBatches)
     try {
-      const labelToId = new Map(backfillOptions.map((o) => [o.label, o.id]))
-      const locationIds = backfillShops.map((label) => labelToId.get(label)).filter((id): id is string => !!id)
       const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 30, logDailyActivity: true, locationIds }, onProgress)
       const summary = `Backfill complete: ${r.operations_synced} shop(s), ${r.products_upserted} products — 30 days of history now in the ledger`
       store.finish(DROPTOP_USAGE_TASK_ID, 'success', summary)
       toast.success(summary)
-      setBackfillShops([])
+      setBackfillShops([]); setBackfillRegions([]); setBackfillMarkets([])
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Backfill failed'
       store.finish(DROPTOP_USAGE_TASK_ID, 'error', message)
@@ -741,12 +795,12 @@ export function DataConnectionsTab() {
   // concurrency, narrow the dates and run it again in smaller pieces —
   // every write here is an upsert, so that's always safe to do.
   async function runOrderBackfill() {
-    if (!companyId || !orderBackfillShops.length) return
+    const locationIds = resolveBackfillLocationIds(orderBackfillRegions, orderBackfillMarkets, orderBackfillShops)
+    if (!companyId || !locationIds?.length) return
     const cid = companyId // narrowed once here — TS loses the guard's narrowing once companyId is read from inside the worker() closure below
     setRunning('order-backfill')
     const store = useSyncTasksStore.getState()
-    const labelToId = new Map(backfillOptions.map((o) => [o.label, o.id]))
-    const locationIds = orderBackfillShops.map((label) => labelToId.get(label)).filter((id): id is string => !!id)
+    const idToShopLabel = new Map(backfillOptions.map((o) => [o.id, o.label]))
 
     // Split into weekly sub-windows per shop rather than one request
     // covering the whole selected range. Confirmed 2026-09 — a single
@@ -772,8 +826,8 @@ export function DataConnectionsTab() {
     // from — every call is an independent upsert, so processing order
     // doesn't matter once this is no longer strictly sequential.
     const tasks: { locationId: string; shopLabel: string; window: { startUnix: number; endUnix: number } }[] = []
-    for (let i = 0; i < locationIds.length; i++) {
-      for (const w of windows) tasks.push({ locationId: locationIds[i], shopLabel: orderBackfillShops[i] ?? locationIds[i], window: w })
+    for (const locationId of locationIds) {
+      for (const w of windows) tasks.push({ locationId, shopLabel: idToShopLabel.get(locationId) ?? locationId, window: w })
     }
 
     const totalSteps = tasks.length
@@ -830,7 +884,7 @@ export function DataConnectionsTab() {
     } else {
       store.finish(DROPTOP_ORDERS_TASK_ID, 'success', summary)
       toast.success(summary)
-      setOrderBackfillShops([])
+      setOrderBackfillShops([]); setOrderBackfillRegions([]); setOrderBackfillMarkets([])
     }
     setRunning(null)
 
@@ -862,33 +916,38 @@ export function DataConnectionsTab() {
     }
   }
 
-  // Manual-only backfill for the new Staff Time Clock connection — same
-  // "sync mode only, no schedule yet" reasoning as droptop-sync-staff-time-
-  // clock's own header comment: a bounded manual pull now, ongoing
-  // incremental/dispatcher wiring deferred until this data's actually been
-  // reviewed. Always covers every shop with a Droptop Operation ID set (no
-  // per-shop picker) — matches the initial ask ("7-day lookback for all
-  // locations"), and unlike the Usage/Orders backfills above there's no
-  // existing history for a subset of shops to worry about clobbering.
+  // One-time, explicitly-scoped historical pull for the Staff Time Clock
+  // connection — same reasoning as Historical Orders Backfill above (large
+  // unscoped pulls across every shop for a wide range are exactly what's
+  // been causing trouble with Droptop's real API — see runDroptopOrders'
+  // own history in the dispatcher), so this requires an explicit
+  // Region/Market/Shop scope rather than defaulting to "every shop."
+  // Routine catch-up (yesterday, or since the last successful pull) runs
+  // automatically/on-demand from the main connection card above instead —
+  // this is only for reaching further back or re-pulling a specific range.
   async function runTimeClockBackfill() {
-    if (!companyId) return
+    const locationIds = resolveBackfillLocationIds(timeClockBackfillRegions, timeClockBackfillMarkets, timeClockBackfillShops)
+    if (!companyId || !locationIds?.length) return
     setRunning('time-clock-backfill')
     const store = useSyncTasksStore.getState()
-    store.start(DROPTOP_TIME_CLOCK_TASK_ID, `Droptop Staff Time Clock — ${timeClockDaysBack}-day backfill`)
+    store.start(DROPTOP_TIME_CLOCK_TASK_ID, `Droptop Staff Time Clock — historical backfill (${timeClockBackfillStart} to ${timeClockBackfillEnd})`)
     try {
+      const startUnix = Math.floor(new Date(`${timeClockBackfillStart}T00:00:00.000Z`).getTime() / 1000)
+      const endUnix = Math.floor(new Date(`${timeClockBackfillEnd}T23:59:59.999Z`).getTime() / 1000)
       const { data, error } = await supabase.functions.invoke('droptop-sync-staff-time-clock', {
-        body: { daysBack: timeClockDaysBack },
+        body: { mode: 'sync', startUnix, endUnix, locationIds },
       })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
       const warnings: string[] = data.warnings ?? []
-      const summary = `Staff Time Clock: ${data.locations_synced} shop(s), ${data.records_upserted} record(s) (${timeClockDaysBack}-day window)`
+      const summary = `Staff Time Clock: ${data.locations_synced} shop(s), ${data.records_upserted} record(s), ${timeClockBackfillStart} to ${timeClockBackfillEnd}`
       if (warnings.length) {
         store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'partial', `${summary} — ${warnings.join(' | ')}`)
         toast(`${summary} (${warnings.length} issue(s) — see Data Syncs)`, { icon: '⚠️', duration: 12000 })
       } else {
         store.finish(DROPTOP_TIME_CLOCK_TASK_ID, 'success', summary)
         toast.success(summary)
+        setTimeClockBackfillShops([]); setTimeClockBackfillRegions([]); setTimeClockBackfillMarkets([])
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Backfill failed'
@@ -935,6 +994,9 @@ export function DataConnectionsTab() {
   if (rows === null) return <div className="py-8"><SbLoader /></div>
 
   const ordered = [...rows].sort((a, b) => CONNECTION_ORDER.indexOf(a.connection_key) - CONNECTION_ORDER.indexOf(b.connection_key))
+  const backfillTargetIds = resolveBackfillLocationIds(backfillRegions, backfillMarkets, backfillShops)
+  const orderBackfillTargetIds = resolveBackfillLocationIds(orderBackfillRegions, orderBackfillMarkets, orderBackfillShops)
+  const timeClockBackfillTargetIds = resolveBackfillLocationIds(timeClockBackfillRegions, timeClockBackfillMarkets, timeClockBackfillShops)
 
   return (
     <div className="flex flex-col gap-4">
@@ -1096,23 +1158,31 @@ export function DataConnectionsTab() {
             naturally — no action needed for shops already on Droptop. This is for a shop that's <em>already</em> on
             Droptop when it's acquired (or any other case a shop's history needs pulling in from scratch): it runs a
             real 30-day pull once and backfills the daily activity ledger immediately instead of waiting a month.
-            Manual only — always pick the shop(s) explicitly, never runs on a schedule.
+            Manual only — always scope it to at least a region, market, or shop, never runs on a schedule.
           </p>
           <div className="flex items-end gap-2 flex-wrap">
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Region</span>
+              <MultiSelectDropdown options={regionOptions} selected={backfillRegions} onChange={setBackfillRegions} placeholder="Any region" countNoun="regions" searchable />
+            </div>
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Market</span>
+              <MultiSelectDropdown options={marketOptionsFor(backfillRegions)} selected={backfillMarkets} onChange={setBackfillMarkets} placeholder="Any market" countNoun="markets" searchable />
+            </div>
             <div>
               <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Shop(s)</span>
               <MultiSelectDropdown
                 options={backfillOptions.map((o) => ({ value: o.label }))}
                 selected={backfillShops}
                 onChange={setBackfillShops}
-                placeholder="Select shop(s)…"
+                placeholder="Any shop"
                 showAllOption={false}
                 searchable
                 countNoun="shops"
               />
             </div>
-            <Button size="sm" loading={running === 'backfill'} disabled={!backfillShops.length} onClick={runBackfill}>
-              Run Backfill
+            <Button size="sm" loading={running === 'backfill'} disabled={!backfillTargetIds?.length} onClick={runBackfill}>
+              Run Backfill{backfillTargetIds?.length ? ` (${backfillTargetIds.length} shop${backfillTargetIds.length === 1 ? '' : 's'})` : ''}
             </Button>
           </div>
         </CardBody>
@@ -1133,12 +1203,20 @@ export function DataConnectionsTab() {
           </p>
           <div className="flex items-end gap-2 flex-wrap">
             <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Region</span>
+              <MultiSelectDropdown options={regionOptions} selected={orderBackfillRegions} onChange={setOrderBackfillRegions} placeholder="Any region" countNoun="regions" searchable />
+            </div>
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Market</span>
+              <MultiSelectDropdown options={marketOptionsFor(orderBackfillRegions)} selected={orderBackfillMarkets} onChange={setOrderBackfillMarkets} placeholder="Any market" countNoun="markets" searchable />
+            </div>
+            <div>
               <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Shop(s)</span>
               <MultiSelectDropdown
                 options={backfillOptions.map((o) => ({ value: o.label }))}
                 selected={orderBackfillShops}
                 onChange={setOrderBackfillShops}
-                placeholder="Select shop(s)…"
+                placeholder="Any shop"
                 showAllOption={false}
                 searchable
                 countNoun="shops"
@@ -1152,8 +1230,8 @@ export function DataConnectionsTab() {
               <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">End</span>
               <input type="date" value={orderBackfillEnd} min={orderBackfillStart} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setOrderBackfillEnd(e.target.value)} className={fieldCls} />
             </label>
-            <Button size="sm" loading={running === 'order-backfill'} disabled={!orderBackfillShops.length} onClick={runOrderBackfill}>
-              Run Backfill
+            <Button size="sm" loading={running === 'order-backfill'} disabled={!orderBackfillTargetIds?.length} onClick={runOrderBackfill}>
+              Run Backfill{orderBackfillTargetIds?.length ? ` (${orderBackfillTargetIds.length} shop${orderBackfillTargetIds.length === 1 ? '' : 's'})` : ''}
             </Button>
           </div>
           {locationIdsInRangeError ? (
@@ -1180,27 +1258,46 @@ export function DataConnectionsTab() {
 
       <Card>
         <CardHeader>
-          <span className="text-xs font-mono text-navy uppercase tracking-wide">Droptop Staff Time Clock</span>
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Historical Staff Time Clock Backfill</span>
         </CardHeader>
         <CardBody className="flex flex-col gap-3">
           <p className="text-[11px] font-mono text-inky/60">
-            Pulls clock-in/clock-out records per shop from Droptop, for comparing staffing against car counts
-            (Droptop Orders above) and order timing. Sync only for now — no daily automation yet, so pick how many
-            days back to pull and run it whenever fresh data's needed. Always covers every shop with a Droptop
-            Operation ID set.
+            The routine Droptop — Staff Time Clock sync above only pulls forward from each shop's last successful
+            sync (yesterday, or a catch-up after a missed day). This pulls a specific date range once, for the
+            region/market/shop(s) you pick — reaching further back, or scoped to just the stores that need it,
+            rather than backfilling every shop at once for the whole range.
           </p>
           <div className="flex items-end gap-2 flex-wrap">
-            <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Days back</span>
-              <input
-                type="number" min={1} max={3650}
-                value={timeClockDaysBack}
-                onChange={(e) => setTimeClockDaysBack(Math.max(1, Number(e.target.value) || 1))}
-                className={`${fieldCls} w-24`}
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Region</span>
+              <MultiSelectDropdown options={regionOptions} selected={timeClockBackfillRegions} onChange={setTimeClockBackfillRegions} placeholder="Any region" countNoun="regions" searchable />
+            </div>
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Market</span>
+              <MultiSelectDropdown options={marketOptionsFor(timeClockBackfillRegions)} selected={timeClockBackfillMarkets} onChange={setTimeClockBackfillMarkets} placeholder="Any market" countNoun="markets" searchable />
+            </div>
+            <div>
+              <span className="block text-[10px] font-mono text-inky uppercase tracking-wide mb-1">Shop(s)</span>
+              <MultiSelectDropdown
+                options={backfillOptions.map((o) => ({ value: o.label }))}
+                selected={timeClockBackfillShops}
+                onChange={setTimeClockBackfillShops}
+                placeholder="Any shop"
+                showAllOption={false}
+                searchable
+                countNoun="shops"
               />
+            </div>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Start</span>
+              <input type="date" value={timeClockBackfillStart} max={timeClockBackfillEnd} onChange={(e) => setTimeClockBackfillStart(e.target.value)} className={fieldCls} />
             </label>
-            <Button size="sm" loading={running === 'time-clock-backfill'} onClick={runTimeClockBackfill}>
-              Run Backfill
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">End</span>
+              <input type="date" value={timeClockBackfillEnd} min={timeClockBackfillStart} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setTimeClockBackfillEnd(e.target.value)} className={fieldCls} />
+            </label>
+            <Button size="sm" loading={running === 'time-clock-backfill'} disabled={!timeClockBackfillTargetIds?.length} onClick={runTimeClockBackfill}>
+              Run Backfill{timeClockBackfillTargetIds?.length ? ` (${timeClockBackfillTargetIds.length} shop${timeClockBackfillTargetIds.length === 1 ? '' : 's'})` : ''}
             </Button>
           </div>
         </CardBody>

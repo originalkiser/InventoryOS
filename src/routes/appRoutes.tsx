@@ -49,6 +49,7 @@ import { CustomerHeatmapPage } from '@/modules/customers/CustomerHeatmapPage'
 import { DroptopOrdersPage } from '@/modules/customers/DroptopOrdersPage'
 import { DroptopVehiclesPage } from '@/modules/customers/DroptopVehiclesPage'
 import { DroptopPackagesPage } from '@/modules/customers/DroptopPackagesPage'
+import { StaffingReportPage } from '@/modules/customers/StaffingReportPage'
 import { OrdersV2Landing } from '@/modules/orders-v2/OrdersV2Landing'
 import { OrdersV2Review } from '@/modules/orders-v2/OrdersV2Review'
 import { OrdersV2FinalReview } from '@/modules/orders-v2/OrdersV2FinalReview'
@@ -61,6 +62,7 @@ import { UsersPage } from '@/modules/admin/UsersPage'
 import { FeatureRequestsPage } from '@/modules/feature-requests/FeatureRequestsPage'
 import { FeatureRequestForm } from '@/modules/feature-requests/FeatureRequestForm'
 import { ManageRequestsPage } from '@/modules/feature-requests/ManageRequestsPage'
+import { NotFoundPage } from '@/pages/NotFound'
 
 const DEPT_FIRST_ROUTE: Record<string, string> = {
   marketing: '/marketing-planner',
@@ -148,10 +150,14 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="droptop-orders" element={<DroptopOrdersPage />} />
     <Route path="droptop-vehicles" element={<DroptopVehiclesPage />} />
     <Route path="droptop-packages" element={<DroptopPackagesPage />} />
+    <Route path="staffing-report" element={<StaffingReportPage />} />
     {/* Was previously an outer, top-level catch-all in App.tsx — moved here
         since AppShell's own route is now a "/*" splat and would otherwise
         render its chrome around a blank content area for an unmatched
-        in-app path instead of falling through to this redirect. */}
-    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        in-app path instead of falling through to this redirect. Renders a
+        branded 404 (NotFoundPage) instead of silently redirecting to the
+        dashboard — a stale/broken link used to just bounce you to
+        Dashboard with zero explanation. */}
+    <Route path="*" element={<NotFoundPage />} />
   </>
 )
