@@ -12,6 +12,20 @@ verify_jwt = false
 [functions.admin-password-reset]
 verify_jwt = false
 
+# Same reason as invite-user above — authenticates the caller itself.
+[functions.unlock-user]
+verify_jwt = false
+
+# Called from the login screen before the caller has ANY session (step 1 of
+# the two-step login — see src/pages/Login.tsx) — there is no JWT to verify.
+[functions.check-login-email]
+verify_jwt = false
+
+# Same reason as check-login-email — called right after a sign-in attempt
+# that may well have just failed, so there may be no valid session.
+[functions.record-login-attempt]
+verify_jwt = false
+
 # Cron-triggered (pg_cron -> net.http_post), no interactive user session to
 # carry a Supabase JWT — auth is the X-Sync-Token shared-secret header
 # checked in the function itself instead.

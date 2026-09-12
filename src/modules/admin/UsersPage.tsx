@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { Button, Modal, Input, SbLoader } from '@/components/ui'
+import { Button, Modal, Input, SbLoader, Badge } from '@/components/ui'
 import { InviteUserModal } from './InviteUserModal'
 import { ROLES, ROLE_OPTIONS, getRoleLabel, isDeveloper, isAdminOrDeveloper } from '@/lib/roles'
 import { ASSIGNABLE_SECTIONS } from '@/components/layout/Sidebar'
@@ -81,6 +81,8 @@ function ManageUserModal({
   const [confirmAdminReset, setConfirmAdminReset] = useState(false)
   const [adminResetting, setAdminResetting] = useState(false)
   const [adminResetResult, setAdminResetResult] = useState<{ tempPassword: string; warning?: string } | null>(null)
+  const [locked, setLocked] = useState(!!user.locked_at)
+  const [unlocking, setUnlocking] = useState(false)
 
   useEffect(() => {
     const sb = supabase as any
@@ -223,6 +225,21 @@ function ManageUserModal({
     }
   }
 
+  async function unlockAccount() {
+    setUnlocking(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('unlock-user', { body: { userId: user.id } })
+      if (error || data?.error) throw new Error(data?.error || error?.message || 'Failed to unlock account')
+      setLocked(false)
+      onSaved()
+      toast.success('Account unlocked')
+    } catch (e) {
+      toast.error((e as { message?: string })?.message || 'Failed to unlock account')
+    } finally {
+      setUnlocking(false)
+    }
+  }
+
   async function doRemove() {
     const sb = supabase as any
     const now = new Date().toISOString()
@@ -303,6 +320,16 @@ function ManageUserModal({
           <p className="text-[11px] font-mono text-inky/70 dark:text-[#F2F1E6]/50 bg-navy/5 dark:bg-[#F2F1E6]/5 border border-navy/20 dark:border-[#F2F1E6]/10 rounded px-3 py-2">
             Renaming will also update tasks, project tasks, and issues assigned to this name.
           </p>
+        )}
+
+        {/* Locked-account banner */}
+        {locked && (
+          <div className="flex items-center justify-between gap-3 rounded border border-[#C0392B]/40 bg-[#C0392B]/5 px-3 py-2">
+            <p className="text-[11px] font-body text-navy dark:text-[#F2F1E6]">
+              Locked after too many failed sign-in attempts. This user can't sign in until unlocked.
+            </p>
+            <Button size="sm" variant="danger" loading={unlocking} onClick={unlockAccount}>Unlock</Button>
+          </div>
         )}
 
         {/* Actions row */}
@@ -507,7 +534,10 @@ export function UsersPage() {
                       {u.full_name ?? '—'}
                       {isSelf(u) && <span className="ml-1.5 text-[10px] font-mono text-inky/40 dark:text-[#F2F1E6]/30">(you)</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-inky dark:text-[#F2F1E6]/70">{u.email}</td>
+                    <td className="px-4 py-2.5 text-inky dark:text-[#F2F1E6]/70">
+                      {u.email}
+                      {u.locked_at && <Badge color="red" className="ml-1.5">Locked</Badge>}
+                    </td>
                     <td className="px-4 py-2.5"><RoleBadge role={u.role} /></td>
                     <td className="px-4 py-2.5 text-inky/60 dark:text-[#F2F1E6]/40 font-mono">
                       {u.created_at ? format(new Date(u.created_at), 'MMM d, yyyy') : '—'}

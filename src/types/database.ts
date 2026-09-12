@@ -295,6 +295,11 @@ export interface Profile {
   blocked_days: Array<{ date: string; note?: string }> | null
   // Set by admin-password-reset — forces Set New Password on next login.
   must_reset_password?: boolean | null
+  // Login lockout (migration 20260926_login_lockout.sql) — written by the
+  // check-login-email / record-login-attempt Edge Functions, cleared by
+  // unlock-user. locked_at non-null means the account can't sign in.
+  failed_login_attempts?: number | null
+  locked_at?: string | null
 }
 
 export interface CompanyHoliday {

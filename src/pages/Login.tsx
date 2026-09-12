@@ -20,10 +20,21 @@ export function LoginPage() {
   const [resetEmail, setResetEmail] = useState('')
   const [resetSending, setResetSending] = useState(false)
 
+  // Two-step sign-in: confirm the email belongs to a real, unlocked account
+  // BEFORE the password field ever appears. Someone landing here from a
+  // public menu-board share link (no account, no reason to be here) can't
+  // get anywhere near attempting a password.
+  const [step, setStep] = useState<'email' | 'password'>('email')
+  const [checkingEmail, setCheckingEmail] = useState(false)
+  const [stepError, setStepError] = useState<string | null>(null)
+
   const {
     register,
     handleSubmit,
     watch,
+    trigger,
+    getValues,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormData>({ resolver: zodResolver(schema) })
 
@@ -32,11 +43,44 @@ export function LoginPage() {
     emailValue.toLowerCase().endsWith('@sboilchange.com') ||
     resetEmail.toLowerCase().endsWith('@sboilchange.com')
 
+  async function onContinue() {
+    const valid = await trigger('email')
+    if (!valid) return
+    setStepError(null)
+    setCheckingEmail(true)
+    try {
+      const email = getValues('email')
+      const { data, error } = await supabase.functions.invoke('check-login-email', { body: { email } })
+      if (error || data?.error) { toast.error('Could not verify that email — try again'); return }
+      if (!data.exists) { setStepError("This email isn't registered."); return }
+      if (data.locked) { setStepError('This account is locked after too many failed attempts. Contact an administrator to unlock it.'); return }
+      setStep('password')
+    } finally {
+      setCheckingEmail(false)
+    }
+  }
+
+  function changeEmail() {
+    setStep('email')
+    setStepError(null)
+    setValue('password', '')
+  }
+
   async function onSubmit(data: FormData) {
     const { error } = await supabase.auth.signInWithPassword(data)
     if (error) {
-      toast.error(error.message)
+      const { data: attempt } = await supabase.functions.invoke('record-login-attempt', { body: { email: data.email, success: false } })
+      if (attempt?.locked) {
+        setStep('email')
+        setValue('password', '')
+        setStepError('This account is now locked after too many failed attempts. Contact an administrator to unlock it.')
+      } else if (typeof attempt?.attemptsRemaining === 'number' && attempt.attemptsRemaining <= 2) {
+        toast.error(`Incorrect password. ${attempt.attemptsRemaining} attempt${attempt.attemptsRemaining === 1 ? '' : 's'} remaining before this account is locked.`)
+      } else {
+        toast.error(error.message)
+      }
     } else {
+      supabase.functions.invoke('record-login-attempt', { body: { email: data.email, success: true } }).catch(() => {})
       navigate('/dashboard')
     }
   }
@@ -93,25 +137,44 @@ export function LoginPage() {
               </button>
             </div>
           ) : (
-            <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+            <form
+              onSubmit={step === 'email' ? (e) => { e.preventDefault(); onContinue() } : handleSubmit(onSubmit)}
+              className="flex flex-col gap-4"
+            >
               <h2 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Sign In</h2>
               <Input
                 label="Email"
                 type="email"
                 placeholder="you@example.com"
                 error={errors.email?.message}
+                disabled={step === 'password'}
                 {...register('email')}
               />
-              <Input
-                label="Password"
-                type="password"
-                placeholder="••••••••"
-                error={errors.password?.message}
-                {...register('password')}
-              />
-              <Button type="submit" loading={isSubmitting} className="w-full justify-center">
-                Sign In
+              {step === 'password' && (
+                <Input
+                  label="Password"
+                  type="password"
+                  placeholder="••••••••"
+                  error={errors.password?.message}
+                  autoFocus
+                  {...register('password')}
+                />
+              )}
+              {stepError && (
+                <p className="text-xs font-body text-[#C0392B] -mt-2">{stepError}</p>
+              )}
+              <Button type="submit" loading={step === 'email' ? checkingEmail : isSubmitting} className="w-full justify-center">
+                {step === 'email' ? 'Continue' : 'Sign In'}
               </Button>
+              {step === 'password' && (
+                <button
+                  type="button"
+                  onClick={changeEmail}
+                  className="text-xs text-inky hover:text-navy transition-colors text-center font-body"
+                >
+                  Not you? Change email
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setResetMode(true)}
