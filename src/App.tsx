@@ -12,6 +12,7 @@ import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
 import { MenuBoardPdfPage } from '@/modules/marketing/menuboard/MenuBoardPdfPage'
+import { NearestMenuBoardPage } from '@/modules/marketing/menuboard/NearestMenuBoardPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, profile, initialized } = useAuthStore()
@@ -49,6 +50,9 @@ function MenuBoardApp() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Bare root — no specific shop link, so resolve one via the
+            visitor's geolocation (falls back to a manual picker). */}
+        <Route path="/" element={<NearestMenuBoardPage />} />
         {/* Legacy links minted before pretty slugs existed. */}
         <Route path="/m/:token" element={<PublicMenuBoardPage />} />
         <Route path="/:slug/pdf" element={<MenuBoardPdfPage />} />
