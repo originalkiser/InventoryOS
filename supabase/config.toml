@@ -86,3 +86,10 @@ verify_jwt = false
 # Sources UI entirely.
 [functions.monday-sync-locations]
 verify_jwt = false
+
+# Droptop calls this directly with no Supabase auth at all (Droptop's own
+# webhook config has no way to attach a JWT or custom header) — the
+# function name's own random suffix is the only credential. See that
+# file's own header comment before ever renaming or exposing this.
+[functions.droptop-webhook-b7a51c94196e610b]
+verify_jwt = false
