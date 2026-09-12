@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -182,14 +182,6 @@ export function LoginPage() {
               >
                 Forgot password?
               </button>
-              <div className="border-t border-navy/20 pt-3 text-center">
-                <Link
-                  to="/setup"
-                  className="text-xs text-inky/70 hover:text-navy transition-colors font-body"
-                >
-                  New workspace? Set one up →
-                </Link>
-              </div>
             </form>
           )}
         </div>

@@ -9,7 +9,6 @@ import { UpdateBanner } from '@/components/shared/UpdateBanner'
 import { ImportPreviewHost } from '@/components/config/ImportPreviewHost'
 import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
-import { SetupPage } from '@/pages/Setup'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
 import { MenuBoardPdfPage } from '@/modules/marketing/menuboard/MenuBoardPdfPage'
@@ -64,7 +63,6 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/setup" element={<SetupPage />} />
 
         {/* AppShell owns matching everything under here itself now (see
             src/routes/appRoutes.tsx) — it renders that same route list into
