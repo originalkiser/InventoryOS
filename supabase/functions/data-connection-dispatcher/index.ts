@@ -172,6 +172,7 @@ interface Schedule {
   interval_minutes: number | null
   daily_time: string | null
   last_run_at: string | null
+  still_catching_up: boolean
 }
 
 // Wall-clock hour/minute/date in an IANA timezone, via Intl (no external
@@ -203,7 +204,20 @@ function isDue(s: Schedule, now: Date, tz: string): boolean {
   const nowLocal = wallClockIn(tz, now)
   if (nowLocal.hour < h || (nowLocal.hour === h && nowLocal.minute < m)) return false
   if (!s.last_run_at) return true
-  return wallClockIn(tz, new Date(s.last_run_at)).dateKey !== nowLocal.dateKey
+  const ranToday = wallClockIn(tz, new Date(s.last_run_at)).dateKey === nowLocal.dateKey
+  if (!ranToday) return true
+  // Already ran today — normally that's it until tomorrow. EXCEPTION: a
+  // connection whose own work is too large for one invocation (droptop_orders/
+  // droptop_time_clock, at real production location counts — see those
+  // functions' own header comments) sets still_catching_up when a run left
+  // real work undone, so it keeps getting picked up on ticks for the REST OF
+  // TODAY (this dispatcher already fires every few minutes regardless, for
+  // every other schedule) until it's actually caught up or genuinely stuck —
+  // then still_catching_up clears and it goes quiet again until tomorrow's
+  // daily_time, same as any other daily schedule. This is what lets "runs
+  // once each morning" and "fully syncs every location" both stay true
+  // without turning this into an all-day interval schedule.
+  return s.still_catching_up === true
 }
 
 async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ status: string; message: string | null }> {
@@ -275,7 +289,7 @@ async function runDroptopPurchaseOrders(
 const MAX_LOCATIONS_PER_TICK = 60
 async function runDroptopOrders(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
-): Promise<{ status: string; message: string | null }> {
+): Promise<{ status: string; message: string | null; stillCatchingUp?: boolean }> {
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
   const { data: locs, error: locErr } = await (admin as any)
     .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
@@ -333,9 +347,20 @@ async function runDroptopOrders(
   )
   if (remaining.length > thisTick.length) {
     const note = `${remaining.length - thisTick.length} more location(s) still catching up — continues on the next tick`
-    return { status: result.status === 'error' ? 'partial' : result.status, message: result.message ? `${result.message} | ${note}` : note }
+    // Never report 'success' here — result.status can be 'success' when
+    // every location THIS tick attempted actually worked, but that's not
+    // the whole truth when locations are still waiting behind the
+    // MAX_LOCATIONS_PER_TICK cap. Real bug found 2026-09-13: this used to
+    // pass a same-tick 'success' straight through even with hundreds of
+    // locations still uncaught, which read as "all good" in the UI despite
+    // the message saying otherwise.
+    return {
+      status: result.status === 'success' ? 'partial' : result.status,
+      message: result.message ? `${result.message} | ${note}` : note,
+      stillCatchingUp: true,
+    }
   }
-  return result
+  return { ...result, stillCatchingUp: false }
 }
 
 // Same "don't retry the whole company every tick" fix as runDroptopOrders
@@ -350,7 +375,7 @@ async function runDroptopOrders(
 // counts.
 async function runDroptopTimeClock(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
-): Promise<{ status: string; message: string | null }> {
+): Promise<{ status: string; message: string | null; stillCatchingUp?: boolean }> {
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
   const { data: locs, error: locErr } = await (admin as any)
     .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
@@ -394,9 +419,13 @@ async function runDroptopTimeClock(
   )
   if (remaining.length > thisTick.length) {
     const note = `${remaining.length - thisTick.length} more location(s) still catching up — continues on the next tick`
-    return { status: result.status === 'error' ? 'partial' : result.status, message: result.message ? `${result.message} | ${note}` : note }
+    return {
+      status: result.status === 'success' ? 'partial' : result.status,
+      message: result.message ? `${result.message} | ${note}` : note,
+      stillCatchingUp: true,
+    }
   }
-  return result
+  return { ...result, stillCatchingUp: false }
 }
 
 // run-automated-checks reuses this same dispatch secret rather than minting
@@ -551,7 +580,7 @@ Deno.serve(async (req) => {
       const tz = await timezoneFor(s.company_id)
       if (!isDue(s, now, tz)) return null
 
-      let outcome: { status: string; message: string | null }
+      let outcome: { status: string; message: string | null; stillCatchingUp?: boolean }
       try {
         if (s.connection_key === 'skybitz_tanks') {
           if (!skybitzSecret) { outcome = { status: 'error', message: 'SKYBITZ_SYNC_SECRET not configured' } }
@@ -605,7 +634,19 @@ Deno.serve(async (req) => {
         ? new Date(now.getTime() + s.interval_minutes * 60_000).toISOString()
         : null
       await (admin as any).schema('inventory').from('data_connection_schedules')
-        .update({ last_run_at: now.toISOString(), last_run_status: outcome.status, last_run_message: outcome.message, next_run_at: nextRunAt })
+        .update({
+          last_run_at: now.toISOString(),
+          last_run_status: outcome.status,
+          last_run_message: outcome.message,
+          next_run_at: nextRunAt,
+          // Only droptop_orders/droptop_time_clock ever set this true (see
+          // their own header comments) — every other connection's outcome
+          // always resolves it back to false, which is what lets a daily
+          // schedule that previously needed same-day retries go quiet again
+          // once it's caught up. See isDue()'s own comment for how this is
+          // consumed.
+          still_catching_up: outcome.stillCatchingUp === true,
+        })
         .eq('id', s.id)
 
       return { connection_key: s.connection_key, ...outcome }

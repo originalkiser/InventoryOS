@@ -685,6 +685,12 @@ export function StaffingReportPage() {
   interface ParsedForecastRow { shopRaw: string; locationId: string | null; date: string | null; hourlyHours: number; managerHours: number }
   const [uploadPreview, setUploadPreview] = useState<ParsedForecastRow[] | null>(null)
   const [importing, setImporting] = useState(false)
+  // Tall (one row per shop/date) is the original, still-default format; Wide
+  // (shops as rows, one column per date) is the "widening out like crazy"
+  // alternative some workforce-planning exports use instead. Both funnel
+  // into the exact same ParsedForecastRow[]/uploadPreview/confirmImport
+  // pipeline below — only the parsing differs.
+  const [forecastUploadMode, setForecastUploadMode] = useState<'tall' | 'wide'>('tall')
 
   function handleParsed(result: ParseResult) {
     const shopHeader = findHeader(result.headers, [/shop/i, /location/i])
@@ -706,6 +712,52 @@ export function StaffingReportPage() {
         managerHours: managerHeader ? Number(row[managerHeader]) || 0 : 0,
       }
     })
+    setUploadPreview(parsed)
+  }
+
+  // Wide/matrix format: first Shop/Location column, every OTHER column
+  // header is itself a date (e.g. "9/14/2026") and each cell under it is
+  // that shop's forecast hours for that day — "locations in one column and
+  // days in the other columns, widening out like crazy" per the original
+  // ask, as an alternative to the tall format above for a 30-day forecast
+  // that would otherwise be 30×[locationcount] rows tall. A wide file only
+  // carries ONE number per (shop, date) — no hourly/manager split — so it
+  // lands entirely in hourlyHours, with managerHours left at 0; use the
+  // tall format instead if the split matters. A blank cell means "no
+  // forecast for that day", not zero, so it's skipped rather than imported
+  // as 0 (and won't overwrite an existing value on re-upload).
+  function handleWideParsed(result: ParseResult) {
+    const shopHeader = findHeader(result.headers, [/shop/i, /location/i])
+    if (!shopHeader) {
+      toast.error('Could not find a Shop/Location column in this file — it should be the first column.')
+      return
+    }
+    const dateHeaders = result.headers.filter((h) => h !== shopHeader && parseDateSafe(h))
+    if (!dateHeaders.length) {
+      toast.error('Could not read any of the other column headers as dates — each column after Shop should be a single date, e.g. "9/14/2026".')
+      return
+    }
+    const parsed: ParsedForecastRow[] = []
+    for (const row of result.rows) {
+      const shopRaw = row[shopHeader] ?? ''
+      const locationId = loc.resolveId(shopRaw)
+      for (const dateHeader of dateHeaders) {
+        const raw = row[dateHeader]
+        if (raw == null || raw.trim() === '') continue
+        const dateVal = parseDateSafe(dateHeader)
+        parsed.push({
+          shopRaw,
+          locationId,
+          date: dateVal ? format(dateVal, 'yyyy-MM-dd') : null,
+          hourlyHours: Number(raw) || 0,
+          managerHours: 0,
+        })
+      }
+    }
+    if (!parsed.length) {
+      toast.error('No forecast values found — every cell under the date columns was blank.')
+      return
+    }
     setUploadPreview(parsed)
   }
 
@@ -1382,13 +1434,29 @@ export function StaffingReportPage() {
               <Card>
                 <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Upload Labor Hour Forecast</span></CardHeader>
                 <CardBody className="flex flex-col gap-3">
-                  <p className="text-[11px] font-mono text-inky/60">
-                    One row per shop per date. Expected columns (header names are matched loosely, case-insensitive):
-                    <strong> Shop</strong> (number or name), <strong>Date</strong>, <strong>Hourly Hours</strong> and/or
-                    <strong> Manager Hours</strong> (at least one required). Re-uploading the same shop/date updates
-                    that row rather than duplicating it.
-                  </p>
-                  <FileUploadZone onParsed={(result) => handleParsed(result)} />
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Format</span>
+                    <Button size="sm" variant={forecastUploadMode === 'tall' ? 'primary' : 'secondary'}
+                      onClick={() => setForecastUploadMode('tall')}>Tall (one row per date)</Button>
+                    <Button size="sm" variant={forecastUploadMode === 'wide' ? 'primary' : 'secondary'}
+                      onClick={() => setForecastUploadMode('wide')}>Wide (dates across columns)</Button>
+                  </div>
+                  {forecastUploadMode === 'tall' ? (
+                    <p className="text-[11px] font-mono text-inky/60">
+                      One row per shop per date. Expected columns (header names are matched loosely, case-insensitive):
+                      <strong> Shop</strong> (number or name), <strong>Date</strong>, <strong>Hourly Hours</strong> and/or
+                      <strong> Manager Hours</strong> (at least one required). Re-uploading the same shop/date updates
+                      that row rather than duplicating it.
+                    </p>
+                  ) : (
+                    <p className="text-[11px] font-mono text-inky/60">
+                      One row per shop; every column after <strong>Shop</strong> is itself a date (e.g. <strong>9/14/2026</strong>),
+                      and each cell is that shop's forecast hours for that day. A blank cell is skipped (no forecast for
+                      that day), not treated as zero. Wide uploads carry a single hours value per shop/date — no hourly
+                      vs. manager split — use Tall format instead if you need that split.
+                    </p>
+                  )}
+                  <FileUploadZone onParsed={(result) => (forecastUploadMode === 'wide' ? handleWideParsed(result) : handleParsed(result))} />
                 </CardBody>
               </Card>
 

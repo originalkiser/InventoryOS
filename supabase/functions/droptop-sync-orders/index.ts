@@ -27,11 +27,12 @@
 //   mode        — 'sync' (explicit range, daysBack or startUnix/endUnix) |
 //                 'incremental' (routine steady-state mode — per location,
 //                 pulls from the day after inventory.droptop_order_
-//                 sync_state's last_synced_date through yesterday, capped
-//                 at a 30-day catch-up; see that table's own migration
-//                 comment for the full design, including why it's safe
-//                 for shops closed on Sundays) | 'inspect' (read-only
-//                 raw-shape peek)
+//                 sync_state's last_synced_date through RIGHT NOW (not
+//                 capped at yesterday — see that constant's own comment
+//                 below for why), capped at a 30-day catch-up; see that
+//                 table's own migration comment for the full design,
+//                 including why it's safe for shops closed on Sundays) |
+//                 'inspect' (read-only raw-shape peek)
 //   daysBack    — mode:'sync' only: window size ending now; default 30.
 //                 Ignored if startUnix/endUnix are both given.
 //   startUnix/endUnix — mode:'sync' only: explicit window (unix seconds) —
@@ -273,6 +274,29 @@ Deno.serve(async (req) => {
     const todayUtc = new Date(); todayUtc.setUTCHours(0, 0, 0, 0)
     const yesterdayUtc = new Date(todayUtc); yesterdayUtc.setUTCDate(yesterdayUtc.getUTCDate() - 1)
     const yesterdayEndUnix = Math.floor(yesterdayUtc.getTime() / 1000) + 86399 // 23:59:59 UTC
+    // Real gap found 2026-09-13: this connection's own "yesterday" is a UTC
+    // calendar day, but the company runs on America/New_York — UTC midnight
+    // falls at 8pm Eastern (DST), hours before most shops actually close. A
+    // shop still open past that moment has its last orders land in the UTC
+    // day that's still "today" from this function's perspective, which the
+    // OLD fixed yesterdayEndUnix ceiling always excluded outright — so those
+    // last orders never showed up until the FOLLOWING night's run, no matter
+    // what time this was scheduled, because both a 9pm-that-night run and a
+    // 2am-the-next-morning run land on the same side of that UTC boundary.
+    //
+    // Fix: the actual FETCH ceiling below is nowUnix, not yesterdayEndUnix —
+    // this run always pulls whatever's really available at the moment it
+    // runs, today's partial data included. The WATERMARK (succeededThrough,
+    // below) still only ever advances through yesterdayEndUnix, though —
+    // today isn't a finished day yet, so marking it "done" here would make
+    // tomorrow's run skip re-checking it once it actually is finished. Net
+    // effect: a location gets fetched through "now" once each day (today's
+    // live data, upserted — safe to re-see the same orders twice, this is a
+    // upsert by order_id), and then gets re-fetched again the FOLLOWING day
+    // once today has become a genuinely complete UTC day — which is exactly
+    // what closes the late-orders gap, without turning this into an
+    // all-day-polling connection. (nowUnix itself is already computed above,
+    // for 'sync' mode's default window.)
 
     let locQuery = (admin as any).schema('core').from('locations')
       .select('id, droptop_operation_id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
@@ -363,13 +387,17 @@ Deno.serve(async (req) => {
           if (lastDate) start.setUTCDate(start.getUTCDate() + 1) // day AFTER last synced, not that day again
           if (start < earliestAllowed) start = earliestAllowed
           locStartUnix = Math.floor(start.getTime() / 1000)
-          if (locStartUnix > yesterdayEndUnix) continue // already caught up (e.g. run more than once today)
+          if (locStartUnix > nowUnix) continue // nothing to fetch yet (clock/date edge case)
           // Cap this invocation's window to MAX_SINGLE_PULL_DAYS — see
-          // MAX_SINGLE_PULL_DAYS' own comment above. succeededThrough below
-          // only advances to whatever end this actually is, not straight to
-          // yesterday, so a location with more left keeps making progress
-          // tick by tick instead of retrying one giant window forever.
-          locEndUnix = Math.min(yesterdayEndUnix, locStartUnix + MAX_SINGLE_PULL_DAYS * 86400 - 1)
+          // MAX_SINGLE_PULL_DAYS' own comment above. Ceiling is nowUnix, not
+          // yesterdayEndUnix — see that variable's own comment above for why
+          // this run always reaches through "right now" rather than stopping
+          // at midnight. succeededThrough below still caps the WATERMARK at
+          // yesterdayEndUnix regardless of how far this fetch actually
+          // reached, so a location with more historical catch-up left keeps
+          // making progress tick by tick instead of retrying one giant
+          // window forever, and today never gets marked "done" prematurely.
+          locEndUnix = Math.min(nowUnix, locStartUnix + MAX_SINGLE_PULL_DAYS * 86400 - 1)
         } else {
           locStartUnix = startUnix
           locEndUnix = endUnix
@@ -377,7 +405,7 @@ Deno.serve(async (req) => {
         const orders = await fetchOrders(loc.droptop_operation_id, locStartUnix, locEndUnix, statusTypes, publicKey, privateKey)
         for (const o of orders) ordersByKey.set(`${loc.id}|${o.order_id}`, { o, locationId: loc.id })
         if (mode === 'incremental') {
-          succeededThrough.set(loc.id, locEndUnix)
+          succeededThrough.set(loc.id, Math.min(locEndUnix, yesterdayEndUnix))
           incrementalMinStart = Math.min(incrementalMinStart, locStartUnix)
           incrementalMaxEnd = Math.max(incrementalMaxEnd, locEndUnix)
         }

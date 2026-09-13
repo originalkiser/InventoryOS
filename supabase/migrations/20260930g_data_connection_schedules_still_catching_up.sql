@@ -1,0 +1,21 @@
+-- droptop_orders' schedule was found running in 'daily' mode with 279
+-- Droptop-linked locations and a MAX_LOCATIONS_PER_TICK cap of 60 in the
+-- dispatcher (see data-connection-dispatcher/index.ts's runDroptopOrders) —
+-- 'daily' mode fires ONCE per calendar day, so only the 60 most-overdue
+-- locations ever got attempted per day, with the run reporting 'success'
+-- even though its own message said "N more location(s) still catching up".
+-- Real production impact found 2026-09-13: only 48/279 locations caught up
+-- through yesterday, oldest un-synced date 2026-08-19 (25 days stale).
+--
+-- The fix is NOT to switch this to 'interval' (the user explicitly wants
+-- scheduled runs to fire once each morning, not on a recurring all-day
+-- cadence) — instead, a daily connection whose own work is too large for
+-- one invocation can flag itself as still_catching_up, which lets it keep
+-- getting picked up on the dispatcher's own ambient cadence (it already
+-- fires every few minutes for every other schedule regardless — see that
+-- function's header comment) for the REST OF TODAY until it's actually
+-- caught up or genuinely stuck, then goes quiet again until tomorrow's
+-- daily_time — same as any other daily schedule. See isDue()'s own comment
+-- in the dispatcher for the full mechanics.
+ALTER TABLE inventory.data_connection_schedules
+  ADD COLUMN IF NOT EXISTS still_catching_up boolean NOT NULL DEFAULT false;

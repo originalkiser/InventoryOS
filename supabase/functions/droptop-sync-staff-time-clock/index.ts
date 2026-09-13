@@ -245,6 +245,17 @@ Deno.serve(async (req) => {
     const todayUtc = new Date(); todayUtc.setUTCHours(0, 0, 0, 0)
     const yesterdayUtc = new Date(todayUtc); yesterdayUtc.setUTCDate(yesterdayUtc.getUTCDate() - 1)
     const yesterdayEndUnix = Math.floor(yesterdayUtc.getTime() / 1000) + 86399 // 23:59:59 UTC
+    // Same fix as droptop-sync-orders' own incremental mode (see that
+    // function's header comment for the full reasoning): this connection's
+    // "yesterday" is a UTC calendar day, but the company runs on
+    // America/New_York, where UTC midnight falls at 8pm Eastern (DST) — well
+    // before most shops actually close. The FETCH ceiling below is nowUnix,
+    // not yesterdayEndUnix, so a location still clocking people out after
+    // that UTC boundary gets picked up the same night rather than only on
+    // the FOLLOWING night's run. The WATERMARK (succeededThrough, below)
+    // still only ever advances through yesterdayEndUnix — today isn't a
+    // finished day yet, so marking it "done" here would make tomorrow's run
+    // skip re-checking it once it actually is finished.
 
     let locQuery = (admin as any).schema('core').from('locations')
       .select('id, droptop_operation_id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
@@ -319,8 +330,8 @@ Deno.serve(async (req) => {
           if (lastDate) start.setUTCDate(start.getUTCDate() + 1) // day AFTER last synced, not that day again
           if (start < earliestAllowed) start = earliestAllowed
           locStartUnix = Math.floor(start.getTime() / 1000)
-          if (locStartUnix > yesterdayEndUnix) continue // already caught up (e.g. run more than once today)
-          locEndUnix = Math.min(yesterdayEndUnix, locStartUnix + MAX_SINGLE_PULL_DAYS * 86400 - 1)
+          if (locStartUnix > nowUnix) continue // nothing to fetch yet (clock/date edge case)
+          locEndUnix = Math.min(nowUnix, locStartUnix + MAX_SINGLE_PULL_DAYS * 86400 - 1)
         } else {
           locStartUnix = startUnix
           locEndUnix = endUnix
@@ -330,7 +341,7 @@ Deno.serve(async (req) => {
           recordsByKey.set(`${loc.id}|${user.user_id}|${record.clock_in}`, buildRow(loc.id, user, record, nowIso))
         }
         if (mode === 'incremental') {
-          succeededThrough.set(loc.id, locEndUnix)
+          succeededThrough.set(loc.id, Math.min(locEndUnix, yesterdayEndUnix))
           incrementalMinStart = Math.min(incrementalMinStart, locStartUnix)
           incrementalMaxEnd = Math.max(incrementalMaxEnd, locEndUnix)
         }
