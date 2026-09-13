@@ -10,7 +10,11 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useLocations } from '@/hooks/useLocations'
 import { shopNumberCityLabel } from '@/lib/shopLabels'
-import { Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown } from '@/components/ui'
+import {
+  Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown,
+  Tabs, TabsList, TabsTrigger, TabsContent,
+} from '@/components/ui'
+import { DataHealthTab } from './DataHealthTab'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
 import { runGeocoding } from '@/services/geocodingService'
@@ -1141,6 +1145,14 @@ export function DataConnectionsTab() {
         </div>
       </div>
 
+      <Tabs defaultValue="connections">
+        <TabsList>
+          <TabsTrigger value="connections">Connections</TabsTrigger>
+          <TabsTrigger value="backfill">Backfill</TabsTrigger>
+          <TabsTrigger value="data-health">Data Health</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="connections">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {ordered.map((row) => {
           const meta = CONNECTION_META[row.connection_key] ?? { label: row.connection_key, description: '' }
@@ -1270,7 +1282,9 @@ export function DataConnectionsTab() {
           )
         })}
       </div>
+        </TabsContent>
 
+        <TabsContent value="backfill">
       <Card>
         <CardHeader>
           <span className="text-xs font-mono text-navy uppercase tracking-wide">Historical Usage Backfill</span>
@@ -1537,6 +1551,12 @@ export function DataConnectionsTab() {
           </div>
         </CardBody>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="data-health">
+          <DataHealthTab companyId={companyId} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
