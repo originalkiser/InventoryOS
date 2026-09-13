@@ -14,7 +14,7 @@ import {
   Button, Card, CardHeader, CardBody, Toggle, Badge, Select, SbLoader, MultiSelectDropdown,
   Tabs, TabsList, TabsTrigger, TabsContent,
 } from '@/components/ui'
-import { DataHealthTab } from './DataHealthTab'
+import { DataHealthTab, CoverageEvaluationNote } from './DataHealthTab'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
 import { runGeocoding } from '@/services/geocodingService'
@@ -440,6 +440,12 @@ export function DataConnectionsTab() {
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
+    // Reset to "loading" on every date-range change, not just on mount —
+    // this used to only clear the error and leave the PREVIOUS range's
+    // result in place while the new check ran, so changing dates silently
+    // kept showing stale gap shops with no visible indication a new check
+    // was even in progress.
+    setLocationIdsInRange(null)
     setLocationIdsInRangeError(null)
     const sb = supabase as any
     async function fetchChunk(startStr: string, endStr: string): Promise<string[]> {
@@ -1381,6 +1387,14 @@ export function DataConnectionsTab() {
             <p className="text-[11px] font-mono text-[#C0392B]">
               Unable to check for gap shops ({locationIdsInRangeError}) — some shops may still need backfill; this list can't confirm it right now.
             </p>
+          ) : locationIdsInRange === null ? (
+            <span className="flex items-center gap-1.5 text-[11px] font-mono text-inky/60">
+              <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+              </svg>
+              Evaluating existing orders for this Start–End range…
+            </span>
           ) : gapShopLabels.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap text-[11px] font-mono text-inky/60">
               <span className="text-[#E67E22]">{gapShopLabels.length} shop(s) have no orders in this Start–End range</span>
@@ -1437,6 +1451,12 @@ export function DataConnectionsTab() {
               Run Backfill{timeClockBackfillTargetIds?.length ? ` (${timeClockBackfillTargetIds.length} shop${timeClockBackfillTargetIds.length === 1 ? '' : 's'})` : ''}
             </Button>
           </div>
+          <CoverageEvaluationNote
+            rpc="get_droptop_time_clock_daily_coverage"
+            start={timeClockBackfillStart}
+            end={timeClockBackfillEnd}
+            targetIds={timeClockBackfillTargetIds}
+          />
         </CardBody>
       </Card>
 
