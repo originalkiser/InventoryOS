@@ -426,6 +426,12 @@ Uses `src/lib/orderEngine.ts`. Key tabs: `NewOrderTab`, `OrderHistoryTab`, `MinR
 
 `EndDayModal.tsx` exports `nextWorkday(skipWeekends, holidays, blockedDays)` utility used by `TopBar.tsx`. TopBar polls every 60s to fire EOD prompt at configured time. End Day button glows orange when past EOD time and not yet reviewed (`eod_reviewed_${YYYY-MM-DD}` localStorage key).
 
+### Background sync progress — `src/stores/syncTasksStore.ts` / `src/components/layout/SyncStatusWidget.tsx`
+
+A long-running data pull (a Historical Backfill on Data Connections, in particular — can run for a long while across hundreds of shops) is a plain client-side async function, not a server-side job — but it's deliberately NOT tied to the page that started it. Progress is tracked in `useSyncTasksStore`, called via `.getState()` directly rather than a page-scoped hook, so it's plain module state rather than React component state for any one page. Combined with the Sidebar using `NavLink` (client-side route changes, no page reload), this is what lets a user start a backfill on Data Connections and freely navigate anywhere else in the app without interrupting it — the JS keeps running regardless of what's mounted. `SyncStatusWidget` (always rendered in `TopBar`, so visible from every page) is the one place that reflects it: click the small sync icon (left of Recent Pages) for a live list of running/recently-finished tasks with progress bars.
+
+The one thing that doesn't survive is closing the tab, a hard refresh, or the computer sleeping — there's no server-side job behind this to resume from, so that outright kills whatever's running. `SyncStatusWidget` registers a `beforeunload` guard (browsers show their own fixed wording, not the custom message) while any task's status is `'running'`, specifically so a many-hour backfill doesn't silently vanish to an accidental tab close.
+
 ---
 
 ## Ordering logic — business rules

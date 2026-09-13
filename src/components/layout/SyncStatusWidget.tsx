@@ -29,6 +29,23 @@ export function SyncStatusWidget() {
   const running = tasks.filter((t) => t.status === 'running')
   const finished = tasks.filter((t) => t.status !== 'running')
 
+  // In-app navigation survives fine (see this file's own header comment —
+  // the store is module state, not tied to any page), but an actual tab
+  // close/reload/computer-sleep kills the JS running the sync outright,
+  // with no server-side job behind it to resume from. A long backfill can
+  // run for hours, so warn before that specific action rather than let it
+  // silently vanish. Browsers ignore any custom message text here and show
+  // their own fixed wording, but the confirmation prompt itself still fires.
+  useEffect(() => {
+    if (running.length === 0) return
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [running.length])
+
   function openPanel() {
     const r = buttonRef.current?.getBoundingClientRect()
     if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right })
