@@ -34,3 +34,26 @@ export async function runSkybitzTankSync(): Promise<SkybitzSyncResult> {
     skipped_no_rtuid: data.skipped_no_rtuid ?? 0,
   }
 }
+
+export interface SkybitzLookupResult {
+  file_modified_at: string | null
+  matched: Record<string, string | null>[]
+}
+
+// Read-only — downloads the live SkyBitz file and returns the raw row(s)
+// for the given serial(s), no DB writes. For checking what SkyBitz's own
+// feed currently says about a specific monitor (e.g. has it already been
+// relabeled to a new shop on their end) without waiting for the next
+// scheduled sync.
+export async function lookupSkybitzMonitor(serials: string[]): Promise<SkybitzLookupResult> {
+  const { data, error } = await supabase.functions.invoke('skybitz-tank-sync', { body: { mode: 'lookup', serials } })
+  if (error) throw new Error(error.message)
+  if (data?.error) {
+    throw new Error(
+      data.error === 'credentials_not_configured'
+        ? 'SkyBitz SFTP credentials not configured — add SKYBITZ_SFTP_URL, SKYBITZ_SFTP_USERNAME, and SKYBITZ_SFTP_PASSWORD to Supabase secrets.'
+        : data.error
+    )
+  }
+  return { file_modified_at: data.file_modified_at ?? null, matched: data.matched ?? [] }
+}

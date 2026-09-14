@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Copy, Mail, Columns3, EyeOff } from 'lucide-react'
+import { Copy, Mail, Columns3, EyeOff, Radio } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { lookupSkybitzMonitor, type SkybitzLookupResult } from '@/services/skybitzService'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
@@ -262,27 +263,28 @@ export function TankMonitorsPage() {
   //    gets confused with the definitive case.
   const [locationCheckIgnore, setLocationCheckIgnore] = useAppSetting<string[]>('tank_location_check_ignore', [])
   const locationCheckRows = useMemo(() => {
-    const byKey = new Map<string, { raw: string; locationId: string; monitorCount: number }>()
+    const byKey = new Map<string, { raw: string; locationId: string; monitorCount: number; serials: string[] }>()
     for (const m of monitors) {
       if (!m.location_id) continue // already surfaced by the Unassigned bucket above
       const key = srcKey(m.source_location)
-      const g = byKey.get(key) ?? { raw: m.source_location ?? '', locationId: m.location_id, monitorCount: 0 }
+      const g = byKey.get(key) ?? { raw: m.source_location ?? '', locationId: m.location_id, monitorCount: 0, serials: [] }
       g.monitorCount++
+      if (m.serial_rtu_id) g.serials.push(m.serial_rtu_id)
       byKey.set(key, g)
     }
-    const flagged: { key: string; raw: string; locationId: string; monitorCount: number; reason: 'inactive' | 'mismatch'; suggestedId: string | null }[] = []
+    const flagged: { key: string; raw: string; locationId: string; monitorCount: number; serials: string[]; reason: 'inactive' | 'mismatch'; suggestedId: string | null }[] = []
     for (const [key, g] of byKey) {
       if (locationCheckIgnore.includes(key)) continue
       const assignedLoc = loc.byId(g.locationId)
       const resolved = loc.resolveId(g.raw)
       const suggestedId = resolved && resolved !== g.locationId ? resolved : null
       if (!assignedLoc || !assignedLoc.active) {
-        flagged.push({ key, raw: g.raw, locationId: g.locationId, monitorCount: g.monitorCount, reason: 'inactive', suggestedId })
+        flagged.push({ key, raw: g.raw, locationId: g.locationId, monitorCount: g.monitorCount, serials: g.serials, reason: 'inactive', suggestedId })
         continue
       }
       const rawDigits = g.raw.trim()
       if (/^\d+$/.test(rawDigits) && assignedLoc.name !== rawDigits && suggestedId) {
-        flagged.push({ key, raw: g.raw, locationId: g.locationId, monitorCount: g.monitorCount, reason: 'mismatch', suggestedId })
+        flagged.push({ key, raw: g.raw, locationId: g.locationId, monitorCount: g.monitorCount, serials: g.serials, reason: 'mismatch', suggestedId })
       }
     }
     return flagged.sort((a, b) => a.raw.localeCompare(b.raw, undefined, { numeric: true }))
@@ -675,7 +677,7 @@ function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLo
 // tank monitors pinned to the old, now-inactive location (see this file's
 // own computation of locationCheckRows for the full reasoning).
 function LocationCheckPanel({ rows, shopOptions, loc, onReassign, onIgnore }: {
-  rows: { key: string; raw: string; locationId: string; monitorCount: number; reason: 'inactive' | 'mismatch'; suggestedId: string | null }[]
+  rows: { key: string; raw: string; locationId: string; monitorCount: number; serials: string[]; reason: 'inactive' | 'mismatch'; suggestedId: string | null }[]
   shopOptions: { value: string; label: string }[]
   loc: ReturnType<typeof useLocations>
   onReassign: (raw: string, newLocationId: string) => Promise<void>
@@ -683,6 +685,9 @@ function LocationCheckPanel({ rows, shopOptions, loc, onReassign, onIgnore }: {
 }) {
   const [pick, setPick] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
+  const [feedOpen, setFeedOpen] = useState<string | null>(null)
+  const [feedBusy, setFeedBusy] = useState<string | null>(null)
+  const [feedResult, setFeedResult] = useState<Record<string, SkybitzLookupResult>>({})
 
   async function reassign(row: (typeof rows)[number]) {
     const newLocationId = pick[row.key] ?? row.suggestedId
@@ -690,6 +695,22 @@ function LocationCheckPanel({ rows, shopOptions, loc, onReassign, onIgnore }: {
     setBusy(row.key)
     await onReassign(row.raw, newLocationId)
     setBusy(null)
+  }
+
+  async function checkFeed(row: (typeof rows)[number]) {
+    if (feedOpen === row.key) { setFeedOpen(null); return }
+    setFeedOpen(row.key)
+    if (feedResult[row.key] || row.serials.length === 0) return
+    setFeedBusy(row.key)
+    try {
+      const result = await lookupSkybitzMonitor(row.serials)
+      setFeedResult((p) => ({ ...p, [row.key]: result }))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'SkyBitz lookup failed')
+      setFeedOpen(null)
+    } finally {
+      setFeedBusy(null)
+    }
   }
 
   if (rows.length === 0) {
@@ -714,24 +735,59 @@ function LocationCheckPanel({ rows, shopOptions, loc, onReassign, onIgnore }: {
         </div>
         <div className="flex flex-col gap-2">
           {rows.map((r) => (
-            <div key={r.key} className="flex items-center gap-2 flex-wrap border-b border-navy/10 pb-2 last:border-0 last:pb-0">
-              <div className="w-44 flex-shrink-0">
-                <span className="text-xs font-mono text-navy truncate block" title={r.raw}>{r.raw}</span>
-                <span className="text-[10px] font-mono text-inky/50">{r.monitorCount} monitor(s)</span>
+            <div key={r.key} className="flex flex-col gap-2 border-b border-navy/10 pb-2 last:border-0 last:pb-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="w-44 flex-shrink-0">
+                  <span className="text-xs font-mono text-navy truncate block" title={r.raw}>{r.raw}</span>
+                  <span className="text-[10px] font-mono text-inky/50">{r.monitorCount} monitor(s)</span>
+                </div>
+                <div className="flex flex-col gap-0.5 w-56 flex-shrink-0">
+                  <span className="text-[10px] font-mono text-inky/60">Currently assigned to</span>
+                  <span className="text-xs font-mono text-navy truncate">
+                    {loc.labelOf(r.locationId)}
+                    {r.reason === 'inactive' ? <span className="text-[#C0392B]"> (inactive)</span> : <span className="text-[#E67E22]"> (number mismatch)</span>}
+                  </span>
+                </div>
+                <div className="w-56">
+                  <Combobox options={shopOptions} value={pick[r.key] ?? r.suggestedId ?? ''} onChange={(v) => setPick((p) => ({ ...p, [r.key]: v }))} placeholder="Reassign to shop…" />
+                </div>
+                {r.suggestedId && !pick[r.key] && <span className="text-[10px] font-mono text-[#2ECC71]">suggested</span>}
+                <Button size="sm" loading={busy === r.key} onClick={() => reassign(r)} disabled={!pick[r.key] && !r.suggestedId}>Reassign</Button>
+                <button onClick={() => onIgnore(r.key)} className="text-[11px] font-mono text-inky hover:text-navy hover:underline" title="Dismiss — this specific source location won't be flagged again">Dismiss</button>
+                {r.serials.length > 0 && (
+                  <button onClick={() => checkFeed(r)} title="Pull the live SkyBitz file and see what it currently says for these monitors' serials"
+                    className="ml-auto inline-flex items-center gap-1 text-[11px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">
+                    <Radio className="w-3 h-3" /> {feedBusy === r.key ? 'Checking…' : feedOpen === r.key ? 'Hide SkyBitz feed' : 'Check SkyBitz feed'}
+                  </button>
+                )}
               </div>
-              <div className="flex flex-col gap-0.5 w-56 flex-shrink-0">
-                <span className="text-[10px] font-mono text-inky/60">Currently assigned to</span>
-                <span className="text-xs font-mono text-navy truncate">
-                  {loc.labelOf(r.locationId)}
-                  {r.reason === 'inactive' ? <span className="text-[#C0392B]"> (inactive)</span> : <span className="text-[#E67E22]"> (number mismatch)</span>}
-                </span>
-              </div>
-              <div className="w-56">
-                <Combobox options={shopOptions} value={pick[r.key] ?? r.suggestedId ?? ''} onChange={(v) => setPick((p) => ({ ...p, [r.key]: v }))} placeholder="Reassign to shop…" />
-              </div>
-              {r.suggestedId && !pick[r.key] && <span className="text-[10px] font-mono text-[#2ECC71]">suggested</span>}
-              <Button size="sm" loading={busy === r.key} onClick={() => reassign(r)} disabled={!pick[r.key] && !r.suggestedId}>Reassign</Button>
-              <button onClick={() => onIgnore(r.key)} className="text-[11px] font-mono text-inky hover:text-navy hover:underline" title="Dismiss — this specific source location won't be flagged again">Dismiss</button>
+              {feedOpen === r.key && (
+                <div className="ml-1 pl-3 border-l-2 border-navy/15 flex flex-col gap-2">
+                  {feedBusy === r.key ? (
+                    <div className="py-2"><SbLoader size={20} /></div>
+                  ) : !feedResult[r.key] ? null : (
+                    <>
+                      <span className="text-[10px] font-mono text-inky/60">
+                        SkyBitz file last modified:{' '}
+                        <strong className="text-navy">{feedResult[r.key].file_modified_at ? new Date(feedResult[r.key].file_modified_at as string).toLocaleString() : 'unknown'}</strong>
+                      </span>
+                      {feedResult[r.key].matched.length === 0 ? (
+                        <span className="text-[11px] font-mono text-[#C0392B]">None of these serials appear in the live file at all — SkyBitz may not be reporting on this monitor anymore.</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {feedResult[r.key].matched.map((row, i) => (
+                            <div key={i} className="text-[11px] font-mono border border-navy/15 rounded px-2 py-1.5 bg-navy/[0.03]">
+                              {Object.entries(row).map(([k, v]) => (
+                                <div key={k} className="flex gap-2"><span className="text-inky/50 w-32 truncate">{k}</span><span className="text-navy">{v ?? '—'}</span></div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

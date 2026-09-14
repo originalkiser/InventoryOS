@@ -30,6 +30,11 @@
 //
 // POST body: { path? } — path overrides the file to fetch; defaults to
 // /StricklandBrothers.CSV, the file found by skybitz-sftp-test.
+// POST body: { mode: 'lookup', serial? | serials? } — read-only, no writes.
+// Downloads the same file and returns the raw row(s) for the given
+// serial(s) plus the file's own last-modified time (Tank Monitors' Location
+// Check tab uses this to check what SkyBitz's feed currently says for a
+// specific monitor, independent of our own stored data).
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import SftpClient from 'npm:ssh2-sftp-client@12'
@@ -174,9 +179,16 @@ Deno.serve(async (req) => {
     const remotePath: string = typeof body.path === 'string' ? body.path : '/StricklandBrothers.CSV'
 
     let csvText: string
+    let fileModifiedAt: string | null = null
     const sftp = new SftpClient()
     try {
       await sftp.connect({ host: target.host, port: target.port, username: sftpUser, password: sftpPass, readyTimeout: 20000 })
+      // Best-effort — some SFTP servers don't expose mtime reliably. This is
+      // the file's own last-modified time on SkyBitz's server, independent
+      // of when WE last pulled it — the direct answer to "does SkyBitz only
+      // refresh this file a few times a day" rather than guessing from our
+      // own sync cadence.
+      try { const st = await sftp.stat(remotePath); if (st?.modifyTime) fileModifiedAt = new Date(st.modifyTime).toISOString() } catch { /* ignore */ }
       const buf = await sftp.get(remotePath)
       csvText = (buf as Buffer).toString('utf-8')
     } finally {
@@ -209,6 +221,26 @@ Deno.serve(async (req) => {
       iBattery = idx('Battery Level'), iTime = idx('Inventory Time (UTC)'),
       iLocation = idx('Location'), iProduct = idx('Product')
     if (iRtuid === -1) return ok({ error: 'RTUID column not found in file' })
+
+    // Lookup mode: read-only peek at what THIS pull of the file says right
+    // now for one or more specific serials — never writes anything. Built
+    // for diagnosing a monitor whose location reassignment doesn't seem to
+    // be sticking: shows whether SkyBitz's own feed has already relabeled
+    // the monitor (its Location/Product text, independent of our own
+    // never-updated source_location column) and, via fileModifiedAt above,
+    // whether the feed itself is stale rather than our sync being broken.
+    if (body.mode === 'lookup') {
+      const rawSerial = typeof body.serial === 'string' ? [body.serial] : []
+      const rawSerials = Array.isArray(body.serials) ? body.serials.filter((s: unknown) => typeof s === 'string') : []
+      const serials: string[] = [...rawSerial, ...rawSerials]
+      if (serials.length === 0) return ok({ error: 'serial required' })
+      const wanted = new Set(serials.map((s) => s.trim().toLowerCase()))
+      const matched = lines.slice(1)
+        .map((l) => parseCsvLine(l))
+        .filter((cols) => wanted.has((cols[iRtuid] ?? '').trim().toLowerCase()))
+        .map((cols) => Object.fromEntries(headers.map((h, i) => [h, cols[i] ?? null])))
+      return ok({ success: true, file_modified_at: fileModifiedAt, matched })
+    }
 
     // Existing tank_monitors, keyed by serial — paginated (the Droptop sync
     // in this same codebase learned the hard way that an un-ranged select
