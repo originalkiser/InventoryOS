@@ -7,12 +7,18 @@ import {
 
 /**
  * Edit one shop's custom config — every admin-defined field it has a
- * value for, plus which Menu Board package(s) the custom setup applies to.
- * Used both from Location Lookup's Custom Config box (current shop) and
- * from the Custom Shop Config page (any shop) — `cfg`/`packageOptions` are
- * passed in from whichever already holds them, rather than fetched again
- * here, so the caller's own view refreshes immediately after a save instead
- * of needing a second, independent hook instance to notice the change.
+ * value for, plus which package(s) the custom setup applies to. Used both
+ * from Location Lookup's Custom Config box (current shop) and from the
+ * Custom Shop Config page (any shop) — `cfg`/`packageOptions` are passed
+ * in from whichever already holds them, rather than fetched again here, so
+ * the caller's own view refreshes immediately after a save instead of
+ * needing a second, independent hook instance to notice the change.
+ *
+ * Package selection renders FIRST, not last — a per_package field's inputs
+ * (Price Per Quart, Included Quarts) depend on knowing which packages are
+ * checked, so picking those needs to happen before entering their values,
+ * not after. Shop-wide fields (Shop Supply Fee, Oil Inflation Surcharge)
+ * don't care about package selection at all and render once regardless.
  */
 export function CustomShopConfigModal({ cfg, packageOptions, locationId, locationLabel, onClose }: {
   cfg: ReturnType<typeof useCustomShopConfig>
@@ -22,6 +28,8 @@ export function CustomShopConfigModal({ cfg, packageOptions, locationId, locatio
   onClose: () => void
 }) {
   const { fields, valuesFor, packagesFor, setValue, togglePackage, loading, reload } = cfg
+  // Shop-wide field: keyed by fieldId alone. Per-package field: keyed by
+  // `${fieldId}|${packageKey}`, one entry per currently-checked package.
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [pkgDraft, setPkgDraft] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
@@ -29,16 +37,28 @@ export function CustomShopConfigModal({ cfg, packageOptions, locationId, locatio
   useEffect(() => {
     const existing = valuesFor(locationId)
     const map: Record<string, string> = {}
-    for (const v of existing) map[v.field_id] = v.value ?? ''
+    for (const v of existing) map[v.package_key ? `${v.field_id}|${v.package_key}` : v.field_id] = v.value ?? ''
     setDraft(map)
     setPkgDraft(new Set(packagesFor(locationId).map((p) => p.package_key)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationId, loading])
 
+  const activeFields = fields.filter((f) => f.active)
+  const shopWideFields = activeFields.filter((f) => !f.per_package)
+  const perPackageFields = activeFields.filter((f) => f.per_package)
+  const checkedPackages = packageOptions.filter((p) => pkgDraft.has(p.package_key))
+
   async function save() {
     setSaving(true)
     await Promise.all([
-      ...fields.map((f) => setValue(locationId, f.id, draft[f.id] ?? '')),
+      ...shopWideFields.map((f) => setValue(locationId, f.id, draft[f.id] ?? '')),
+      // Per-package fields only ever save a value for a package that's
+      // actually still checked — unchecking a package after entering a
+      // value clears it rather than leaving an orphaned row for a package
+      // this shop's custom setup no longer applies to.
+      ...perPackageFields.flatMap((f) => checkedPackages.map((p) =>
+        setValue(locationId, f.id, draft[`${f.id}|${p.package_key}`] ?? '', p.package_key),
+      )),
       ...packageOptions.map((p) => togglePackage(locationId, p.package_key, pkgDraft.has(p.package_key))),
     ])
     await reload()
@@ -46,26 +66,11 @@ export function CustomShopConfigModal({ cfg, packageOptions, locationId, locatio
     onClose()
   }
 
-  const activeFields = fields.filter((f) => f.active)
-
   return (
     <Modal open onClose={onClose} title={`Custom Config — ${locationLabel}`} size="md">
       <div className="flex flex-col gap-4">
-        {activeFields.length === 0 ? (
-          <p className="text-xs font-mono text-inky/50 italic">
-            No custom field types defined yet — add some from the Custom Shop Config page.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {activeFields.map((f) => (
-              <FieldInput key={f.id} label={f.name} kind={f.value_kind}
-                value={draft[f.id] ?? ''} onChange={(v) => setDraft((d) => ({ ...d, [f.id]: v }))} />
-            ))}
-          </div>
-        )}
-
         {packageOptions.length > 0 && (
-          <div className="flex flex-col gap-2 border-t border-navy/10 pt-3">
+          <div className="flex flex-col gap-2">
             <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Custom for which package(s)?</span>
             <div className="flex flex-col gap-1">
               {packageOptions.map((p) => (
@@ -80,6 +85,44 @@ export function CustomShopConfigModal({ cfg, packageOptions, locationId, locatio
               ))}
             </div>
           </div>
+        )}
+
+        {shopWideFields.length === 0 && perPackageFields.length === 0 ? (
+          <p className="text-xs font-mono text-inky/50 italic">
+            No custom field types defined yet — add some from the Custom Shop Config page.
+          </p>
+        ) : (
+          <>
+            {shopWideFields.length > 0 && (
+              <div className="flex flex-col gap-2 border-t border-navy/10 pt-3">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop-Wide</span>
+                {shopWideFields.map((f) => (
+                  <FieldInput key={f.id} label={f.name} kind={f.value_kind}
+                    value={draft[f.id] ?? ''} onChange={(v) => setDraft((d) => ({ ...d, [f.id]: v }))} />
+                ))}
+              </div>
+            )}
+
+            {perPackageFields.length > 0 && (
+              <div className="flex flex-col gap-3 border-t border-navy/10 pt-3">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Per Package</span>
+                {checkedPackages.length === 0 ? (
+                  <p className="text-[11px] font-mono text-inky/50 italic">Check a package above to set its {perPackageFields.map((f) => f.name).join(' / ')}.</p>
+                ) : (
+                  checkedPackages.map((p) => (
+                    <div key={p.package_key} className="flex flex-col gap-1.5 rounded border border-navy/10 px-2 py-2">
+                      <span className="text-[11px] font-mono text-navy font-bold">{p.display_name}</span>
+                      {perPackageFields.map((f) => (
+                        <FieldInput key={f.id} label={f.name} kind={f.value_kind}
+                          value={draft[`${f.id}|${p.package_key}`] ?? ''}
+                          onChange={(v) => setDraft((d) => ({ ...d, [`${f.id}|${p.package_key}`]: v }))} />
+                      ))}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </>
         )}
 
         <div className="flex justify-end gap-2 pt-1">

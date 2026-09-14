@@ -14,7 +14,7 @@ import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { useCustomShopConfig, useMenuBoardPackageOptions, formatFieldValue } from './useCustomShopConfig'
+import { useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue } from './useCustomShopConfig'
 import { CustomShopConfigModal } from './CustomShopConfigModal'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Issue, Location, MeetingNote, Project, TankMonitor } from '@/types'
@@ -1433,7 +1433,7 @@ function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () =
 
 function CustomConfigBox({ locationId, locationLabel }: { locationId: string; locationLabel: string }) {
   const cfg = useCustomShopConfig()
-  const packageOptions = useMenuBoardPackageOptions()
+  const packageOptions = useCustomShopConfigPackageOptions()
   const [editing, setEditing] = useState(false)
   const vals = cfg.valuesFor(locationId)
   const pkgs = cfg.packagesFor(locationId)
@@ -1455,7 +1455,7 @@ function CustomConfigBox({ locationId, locationLabel }: { locationId: string; lo
             if (!f) return null
             return (
               <div key={v.id} className="text-xs font-body text-navy flex items-center justify-between gap-2">
-                <span>{f.name}</span>
+                <span>{f.name}{v.package_key ? <span className="text-inky/50"> ({packageLabel(v.package_key)})</span> : null}</span>
                 <span className="font-mono">{formatFieldValue(v.value, f.value_kind)}</span>
               </div>
             )

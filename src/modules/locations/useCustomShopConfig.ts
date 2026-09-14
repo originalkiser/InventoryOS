@@ -25,11 +25,22 @@ export interface CustomShopConfigField {
   value_kind: FieldValueKind
   sort_order: number
   active: boolean
+  // Price Per Quart/Included Quarts vary by which package a shop's custom
+  // pricing is flagged for (a shop can price two packages' oil
+  // differently) — Shop Supply Fee/Oil Inflation Surcharge don't, they're
+  // one value for the whole shop regardless of how many packages are
+  // flagged. See migration 20260930m for the full reasoning.
+  per_package: boolean
 }
 export interface CustomShopConfigValue {
   id: string
   location_id: string
   field_id: string
+  // '' for a shop-wide field's value; set to one of the shop's flagged
+  // package keys for a per_package field's own per-package value. NOT NULL
+  // in the DB (see migration 20260930m for why an empty-string sentinel
+  // was used instead of a nullable column).
+  package_key: string
   value: string | null
   notes: string | null
 }
@@ -73,13 +84,13 @@ export function useCustomShopConfig() {
   }, [companyId])
   useEffect(() => { load() }, [load])
 
-  const addField = useCallback(async (name: string, value_kind: FieldValueKind) => {
+  const addField = useCallback(async (name: string, value_kind: FieldValueKind, per_package: boolean) => {
     if (!companyId) return false
     const trimmed = name.trim()
     if (!trimmed) return false
     const maxOrder = fields.reduce((m, f) => Math.max(m, f.sort_order), 0)
     const { error } = await sb().schema('inventory').from('custom_shop_config_fields')
-      .insert({ company_id: companyId, name: trimmed, value_kind, sort_order: maxOrder + 1, created_by: profile?.id ?? null })
+      .insert({ company_id: companyId, name: trimmed, value_kind, per_package, sort_order: maxOrder + 1, created_by: profile?.id ?? null })
     if (error) { toast.error(error.message); return false }
     toast.success('Field type added')
     await load()
@@ -95,11 +106,19 @@ export function useCustomShopConfig() {
     await load()
   }, [load])
 
-  /** Clearing a value (null/empty) removes the row — the custom list is just every row that exists. */
-  const setValue = useCallback(async (locationId: string, fieldId: string, value: string | null) => {
+  /**
+   * Clearing a value (null/empty) removes the row — the custom list is just
+   * every row that exists. packageKey is a real package key for a
+   * per_package field (one row per flagged package) and left at its '''
+   * default for a shop-wide field (one row for the whole shop) — the
+   * unique constraint (company_id, location_id, field_id, package_key) is
+   * what makes both shapes upsert correctly through the same onConflict
+   * target.
+   */
+  const setValue = useCallback(async (locationId: string, fieldId: string, value: string | null, packageKey: string = '') => {
     if (!companyId) return false
     if (value == null || value.trim() === '') {
-      const existing = values.find((x) => x.location_id === locationId && x.field_id === fieldId)
+      const existing = values.find((x) => x.location_id === locationId && x.field_id === fieldId && x.package_key === packageKey)
       if (existing) {
         const { error } = await sb().schema('inventory').from('custom_shop_config_values').delete().eq('id', existing.id)
         if (error) { toast.error(error.message); return false }
@@ -107,8 +126,10 @@ export function useCustomShopConfig() {
       return true
     }
     const { error } = await sb().schema('inventory').from('custom_shop_config_values')
-      .upsert({ company_id: companyId, location_id: locationId, field_id: fieldId, value: value.trim(), updated_by: profile?.id ?? null, updated_at: new Date().toISOString() },
-        { onConflict: 'company_id,location_id,field_id' })
+      .upsert(
+        { company_id: companyId, location_id: locationId, field_id: fieldId, package_key: packageKey, value: value.trim(), updated_by: profile?.id ?? null, updated_at: new Date().toISOString() },
+        { onConflict: 'company_id,location_id,field_id,package_key' },
+      )
     if (error) { toast.error(error.message); return false }
     return true
   }, [companyId, values, profile?.id])
@@ -149,20 +170,46 @@ export function useCustomShopConfig() {
   }
 }
 
-/** Menu Board package options (key + display name) — read-only here, just to populate the "which package(s)" checklist. */
-export function useMenuBoardPackageOptions() {
+/**
+ * Package options for the "which package(s)" checklist — Menu Board's own
+ * package registry (marketing.menu_board_packages) UNIONED with every
+ * package Package Mapping has classified as Oil Change
+ * (inventory.droptop_package_classification). Originally Menu Board only,
+ * which meant only the ~5 canonical menu tiers were selectable — Package
+ * Mapping's oil-change list is the more complete, current one (it also
+ * covers the cryptic legacy SKU codes and "<Tier> Oil Change - <oil type>"
+ * naming eras Menu Board never listed; see that migration's own comment).
+ * Deduped by normalized display name so a package present in both (e.g.
+ * "Economy") doesn't show up twice — the Menu Board entry wins on a
+ * collision since its package_key is the nicer, curated one; a Package-
+ * Mapping-only entry is keyed by its own raw name instead (this column has
+ * always been a loose text tag, never a hard FK to menu_board_packages, so
+ * mixing key spaces here is safe).
+ */
+export function useCustomShopConfigPackageOptions() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const [options, setOptions] = useState<{ package_key: string; display_name: string }[]>([])
+  const [menuBoard, setMenuBoard] = useState<{ package_key: string; display_name: string }[]>([])
+  const [oilChangeNames, setOilChangeNames] = useState<string[]>([])
 
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
     sb().schema('marketing').from('menu_board_packages')
       .select('package_key, display_name').eq('company_id', companyId).eq('active', true).order('sort_order')
-      .then(({ data, error }: any) => { if (!cancelled && !error) setOptions((data ?? []) as { package_key: string; display_name: string }[]) })
+      .then(({ data, error }: any) => { if (!cancelled && !error) setMenuBoard((data ?? []) as { package_key: string; display_name: string }[]) })
+    sb().schema('inventory').from('droptop_package_classification')
+      .select('package_name').eq('company_id', companyId).eq('classification', 'oil_change')
+      .then(({ data, error }: any) => { if (!cancelled && !error) setOilChangeNames((data ?? []).map((r: { package_name: string }) => r.package_name)) })
     return () => { cancelled = true }
   }, [companyId])
 
-  return options
+  return useMemo(() => {
+    const seen = new Set(menuBoard.map((p) => p.display_name.trim().toLowerCase()))
+    const extra = oilChangeNames
+      .filter((name) => !seen.has(name.trim().toLowerCase()))
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => ({ package_key: name, display_name: name }))
+    return [...menuBoard, ...extra]
+  }, [menuBoard, oilChangeNames])
 }

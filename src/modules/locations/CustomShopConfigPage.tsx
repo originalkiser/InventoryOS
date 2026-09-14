@@ -3,7 +3,7 @@ import { Button, Card, CardBody, Combobox, Input, Select, SbLoader } from '@/com
 import { useLocations } from '@/hooks/useLocations'
 import { byNaturalLabel, naturalCompare } from '@/lib/naturalSort'
 import {
-  useCustomShopConfig, useMenuBoardPackageOptions, formatFieldValue, VALUE_KIND_LABELS,
+  useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue, VALUE_KIND_LABELS,
   type FieldValueKind,
 } from './useCustomShopConfig'
 import { CustomShopConfigModal } from './CustomShopConfigModal'
@@ -17,7 +17,7 @@ import { CustomShopConfigModal } from './CustomShopConfigModal'
 export function CustomShopConfigPage() {
   const loc = useLocations()
   const cfg = useCustomShopConfig()
-  const packageOptions = useMenuBoardPackageOptions()
+  const packageOptions = useCustomShopConfigPackageOptions()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [pickerId, setPickerId] = useState('')
 
@@ -37,7 +37,9 @@ export function CustomShopConfigPage() {
         <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Custom Shop Config</h1>
         <p className="text-xs text-inky mt-0.5">
           Per-shop exceptions that don't fit anywhere else — a custom price per quart, shop supply fee, oil inflation
-          surcharge, and whatever else comes up, flagged to whichever Menu Board package(s) it applies to.
+          surcharge, and whatever else comes up, flagged to whichever package(s) it applies to. Price Per Quart and
+          Included Quarts can be set separately for each flagged package; Shop Supply Fee and Oil Inflation Surcharge
+          always apply once, to the whole shop.
         </p>
       </div>
 
@@ -78,8 +80,19 @@ export function CustomShopConfigPage() {
                     <tr key={id} className="border-b border-navy/20">
                       <td className="px-3 py-1.5 text-navy whitespace-nowrap">{loc.labelOf(id)}</td>
                       {activeFields.map((f) => {
-                        const v = vals.find((x) => x.field_id === f.id)
-                        return <td key={f.id} className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{formatFieldValue(v?.value ?? null, f.value_kind)}</td>
+                        const fieldVals = vals.filter((x) => x.field_id === f.id)
+                        if (!f.per_package) {
+                          return <td key={f.id} className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{formatFieldValue(fieldVals[0]?.value ?? null, f.value_kind)}</td>
+                        }
+                        // Per-package fields can have a different value per
+                        // flagged package — "Economy: $4.25, Premium: $5.00"
+                        // rather than one number that would silently only
+                        // ever be the first package's.
+                        return (
+                          <td key={f.id} className="px-3 py-1.5 text-navy text-right">
+                            {fieldVals.length === 0 ? '—' : fieldVals.map((v) => `${packageLabel(v.package_key)}: ${formatFieldValue(v.value, f.value_kind)}`).join(', ')}
+                          </td>
+                        )
                       })}
                       <td className="px-3 py-1.5 text-navy">
                         {pkgs.length === 0 ? <span className="text-inky/30">—</span> : pkgs.map((p) => packageLabel(p.package_key)).join(', ')}
@@ -106,14 +119,15 @@ export function CustomShopConfigPage() {
 function FieldTypesCard({ cfg }: { cfg: ReturnType<typeof useCustomShopConfig> }) {
   const [name, setName] = useState('')
   const [kind, setKind] = useState<FieldValueKind>('currency')
+  const [perPackage, setPerPackage] = useState(false)
   const [saving, setSaving] = useState(false)
 
   async function add() {
     if (!name.trim()) return
     setSaving(true)
-    const ok = await cfg.addField(name, kind)
+    const ok = await cfg.addField(name, kind, perPackage)
     setSaving(false)
-    if (ok) { setName(''); setKind('currency') }
+    if (ok) { setName(''); setKind('currency'); setPerPackage(false) }
   }
 
   return (
@@ -122,6 +136,8 @@ function FieldTypesCard({ cfg }: { cfg: ReturnType<typeof useCustomShopConfig> }
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Field Types</h3>
         <p className="text-[11px] font-mono text-inky/60 mt-0.5">
           The kinds of custom thing a shop can have. Add more any time — every shop's editor picks up new ones automatically.
+          "Per package" means a shop with more than one custom package gets its own value for each one (e.g. Price Per
+          Quart) instead of one value applied to every flagged package.
         </p>
       </div>
 
@@ -131,6 +147,7 @@ function FieldTypesCard({ cfg }: { cfg: ReturnType<typeof useCustomShopConfig> }
             <div key={f.id} className="flex items-center gap-2 text-xs font-mono text-navy">
               <span className="w-48">{f.name}</span>
               <span className="text-inky/50 w-32">{VALUE_KIND_LABELS[f.value_kind]}</span>
+              <span className="text-inky/50 w-24">{f.per_package ? 'Per package' : 'Shop-wide'}</span>
               <button onClick={() => cfg.removeField(f.id)} className="text-inky/40 hover:text-[#C0392B]" title="Remove — clears every shop's value for this field">✕</button>
             </div>
           ))}
@@ -145,6 +162,10 @@ function FieldTypesCard({ cfg }: { cfg: ReturnType<typeof useCustomShopConfig> }
           <Select label="Value type" value={kind} onChange={(e) => setKind(e.target.value as FieldValueKind)}
             options={(Object.keys(VALUE_KIND_LABELS) as FieldValueKind[]).map((k) => ({ value: k, label: VALUE_KIND_LABELS[k] }))} />
         </div>
+        <label className="flex items-center gap-1.5 text-xs font-mono text-navy pb-2 cursor-pointer">
+          <input type="checkbox" checked={perPackage} onChange={(e) => setPerPackage(e.target.checked)} />
+          Per package
+        </label>
         <Button size="sm" variant="secondary" disabled={!name.trim() || saving} onClick={add}>Add Field Type</Button>
       </div>
     </CardBody></Card>
