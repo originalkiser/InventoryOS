@@ -638,13 +638,24 @@ export function DroptopOrdersPage() {
     { key: 'packages', label: 'Packages', get: (o) => (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—' },
     { key: 'products', label: 'Products', get: (o) => productIdsFor(o.id).join(', ') || '—' },
     { key: 'quarts', label: 'Quarts', get: (o) => { const q = quartsFor(o.id); return q > 0 ? q.toFixed(2) : '—' }, align: 'right' },
+    {
+      // Per-order M5% — same formula as the company/shop-level stat (M5
+      // package line items ÷ Oil Change package line items on THIS one
+      // order), not "does this order have an M5 package" — an order with 2
+      // M5 items and 1 oil change reads as 200%, matching how the
+      // aggregate stat would treat the same mix. N/A (not 0%) when the
+      // order has no oil-change package at all, since dividing by zero
+      // isn't "no M5 sold," it's "this ratio doesn't apply to this order."
+      key: 'm5_pct', label: 'M5%', align: 'right',
+      get: (o) => { const c = classificationCountsFor(o.id); return c.oilChange > 0 ? `${((c.m5 / c.oilChange) * 100).toFixed(1)}%` : 'N/A' },
+    },
     { key: 'vehicle', label: 'Vehicle', get: (o) => vehicleLabelFor(o.id) },
     { key: 'fleet', label: 'Fleet', get: (o) => o.fleet_company_name || '—' },
     { key: 'subtotal', label: 'Subtotal', get: (o) => money(o.subtotal), align: 'right' },
     { key: 'total', label: 'Total', get: (o) => money(o.final_price), align: 'right' },
     { key: 'finalized', label: 'Finalized', get: (o) => (o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—') },
   ]
-  const [reportColumnKeys, setReportColumnKeys] = useState<string[]>(['order_id', 'shop', 'customer', 'packages', 'quarts', 'total', 'finalized'])
+  const [reportColumnKeys, setReportColumnKeys] = useState<string[]>(['order_id', 'shop', 'customer', 'packages', 'quarts', 'm5_pct', 'total', 'finalized'])
   const [reportRegions, setReportRegions] = useState<string[]>([])
   const [reportMarkets, setReportMarkets] = useState<string[]>([])
   const [reportAMs, setReportAMs] = useState<string[]>([])
@@ -993,8 +1004,10 @@ export function DroptopOrdersPage() {
                       </thead>
                       <tbody>
                         {shopStats.map((s) => (
-                          <tr key={s.locationId} className="border-b border-navy/10">
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{s.shopLabel}</td>
+                          <tr key={s.locationId} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10"
+                            title={`See ${s.shopLabel}'s orders`}
+                            onClick={() => { setReportShops(s.locationId === '—' ? [] : [s.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setReportOpen(true) }}>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap underline decoration-dotted">{s.shopLabel}</td>
                             <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
                             <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
                             <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
@@ -1079,7 +1092,8 @@ export function DroptopOrdersPage() {
         </>
       )}
 
-      <Modal open={reportOpen} onClose={() => setReportOpen(false)} title="Build Your Own Report" size="2xl">
+      <Modal open={reportOpen} onClose={() => setReportOpen(false)}
+        title={reportMode === 'detail' && reportShops.length === 1 ? `${reportShops[0]} — Orders` : 'Build Your Own Report'} size="2xl">
         <div className="flex flex-col gap-3">
           <p className="text-[11px] font-mono text-inky/60">
             Built from what&apos;s already loaded above ({range.start} to {range.end}) — the pickers below narrow that
