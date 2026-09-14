@@ -63,7 +63,19 @@ function numHours(t: Pick<TimeRecordRow, 'hours'>): number { return Number(t.hou
 function numWage(t: Pick<TimeRecordRow, 'hourly_wage'>): number { return Number(t.hourly_wage) || 0 }
 const round2 = (n: number) => Math.round(n * 100) / 100
 
-interface OrderRow { id: string; location_id: string | null; order_finalized_at: string | null; final_price: string | number | null; status: string | null }
+interface OrderRow {
+  id: string; location_id: string | null; order_finalized_at: string | null; final_price: string | number | null; status: string | null
+  email: string | null; coupons: unknown; discounts: unknown
+}
+// A very rough "does this look like a real email" check — Droptop doesn't
+// verify addresses, so this is a heuristic for "Good Email %", not a real
+// validator (a typo'd but shaped-like-an-email string still passes).
+function looksLikeEmail(email: string | null): boolean {
+  return !!email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+}
+function hasDiscountOrCoupon(o: Pick<OrderRow, 'coupons' | 'discounts'>): boolean {
+  return (Array.isArray(o.coupons) && o.coupons.length > 0) || (Array.isArray(o.discounts) && o.discounts.length > 0)
+}
 
 // M5 sub-categories, each individually toggleable on the By Day of Week
 // cards (see DOW_KPI_OPTIONS below) — 'm5' itself is the combined
@@ -543,7 +555,7 @@ export function StaffingReportPage() {
           .eq('company_id', companyId).gte('clock_in', startIso).lte('clock_in', endIso)
           .order('clock_in', { ascending: true }).range(from, from + PAGE - 1), (n) => { trLoaded = n; tick() }),
         fetchAllPages<OrderRow>((from) => sb.schema('inventory').from('droptop_orders')
-          .select('id, location_id, order_finalized_at, final_price, status')
+          .select('id, location_id, order_finalized_at, final_price, status, email, coupons, discounts')
           .eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
           .order('order_finalized_at', { ascending: true }).range(from, from + PAGE - 1), (n) => { ordLoaded = n; tick() }),
       ])
@@ -677,6 +689,119 @@ export function StaffingReportPage() {
     }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [singleShopId, filteredOrdersFinalized, shopPackagesByOrder, packageClassification, managerDaysForShop])
+
+  // ---- Manager Performance tab -------------------------------------------
+  // Company-wide (every shop in the current filter), unlike M5% by weekday
+  // above — only metrics computable from data ALREADY loaded for the page
+  // (orders + time records) are included here, specifically to avoid a
+  // separate heavy per-shop package/vehicle fetch multiplied across
+  // potentially hundreds of shops. M5%/HM Capture% (which need package and
+  // vehicle-mileage data respectively) are listed as placeholders below,
+  // not computed here, for that reason — see the Placeholder Metrics
+  // checklist card on this tab.
+  const MGR_PERF_METRICS = [
+    { key: 'ticketAvg', label: 'Ticket Avg', higherIsBetter: true, fmt: (v: number) => money(v) },
+    { key: 'carsPerDay', label: 'Cars per Day', higherIsBetter: true, fmt: (v: number) => fmtNum(v, 1) },
+    { key: 'laborPctRevenue', label: 'Labor % of Revenue', higherIsBetter: false, fmt: (v: number) => `${fmtNum(v, 1)}%` },
+    { key: 'lhce', label: 'LHCE', higherIsBetter: false, fmt: (v: number) => fmtNum(v) },
+    { key: 'goodEmailPct', label: 'Good Email %', higherIsBetter: true, fmt: (v: number) => `${fmtNum(v, 1)}%` },
+    { key: 'discountPct', label: 'Discount %', higherIsBetter: false, fmt: (v: number) => `${fmtNum(v, 1)}%` },
+  ] as const
+  type MgrPerfKey = typeof MGR_PERF_METRICS[number]['key']
+  type MgrPerfMetrics = Record<MgrPerfKey, number | null>
+
+  interface ManagerPerfBucket { orders: number; revenue: number; hours: number; laborDollars: number; emailCount: number; discountCount: number }
+  function emptyMgrPerfBucket(): ManagerPerfBucket { return { orders: 0, revenue: 0, hours: 0, laborDollars: 0, emailCount: 0, discountCount: 0 } }
+
+  const managerPerfRows = useMemo(() => {
+    // Which shop-dates a manager clocked in at all — same roleFor() as
+    // everywhere else on this page, just company-wide instead of one shop.
+    const managerDaysByShop = new Map<string, Set<string>>()
+    for (const t of filteredTimeRecords) {
+      if (!t.location_id || roleFor(t) !== 'manager') continue
+      const set = managerDaysByShop.get(t.location_id) ?? new Set<string>()
+      set.add(t.clock_in.slice(0, 10))
+      managerDaysByShop.set(t.location_id, set)
+    }
+    const observedDaysByShop = new Map<string, Set<string>>()
+    function markObserved(shop: string, date: string) {
+      const set = observedDaysByShop.get(shop) ?? new Set<string>()
+      set.add(date)
+      observedDaysByShop.set(shop, set)
+    }
+
+    const withBuckets = new Map<string, ManagerPerfBucket>()
+    const withoutBuckets = new Map<string, ManagerPerfBucket>()
+    function addTo(map: Map<string, ManagerPerfBucket>, shop: string): ManagerPerfBucket {
+      const b = map.get(shop) ?? emptyMgrPerfBucket()
+      map.set(shop, b)
+      return b
+    }
+
+    for (const o of filteredOrdersFinalized) {
+      if (!o.location_id || !o.order_finalized_at) continue
+      const date = o.order_finalized_at.slice(0, 10)
+      markObserved(o.location_id, date)
+      const isManagerDay = managerDaysByShop.get(o.location_id)?.has(date) ?? false
+      const b = addTo(isManagerDay ? withBuckets : withoutBuckets, o.location_id)
+      b.orders++
+      b.revenue += Number(o.final_price) || 0
+      if (looksLikeEmail(o.email)) b.emailCount++
+      if (hasDiscountOrCoupon(o)) b.discountCount++
+    }
+    for (const t of filteredTimeRecords) {
+      if (!t.location_id) continue
+      const date = t.clock_in.slice(0, 10)
+      markObserved(t.location_id, date)
+      const isManagerDay = managerDaysByShop.get(t.location_id)?.has(date) ?? false
+      const b = addTo(isManagerDay ? withBuckets : withoutBuckets, t.location_id)
+      b.hours += numHours(t)
+      b.laborDollars += numHours(t) * numWage(t)
+    }
+
+    function metricsFor(b: ManagerPerfBucket, days: number): MgrPerfMetrics {
+      return {
+        ticketAvg: b.orders > 0 ? round2(b.revenue / b.orders) : null,
+        carsPerDay: days > 0 ? round2(b.orders / days) : null,
+        laborPctRevenue: b.revenue > 0 ? round2((b.laborDollars / b.revenue) * 100) : null,
+        lhce: b.orders > 0 ? round2(b.hours / b.orders) : null,
+        goodEmailPct: b.orders > 0 ? round2((b.emailCount / b.orders) * 100) : null,
+        discountPct: b.orders > 0 ? round2((b.discountCount / b.orders) * 100) : null,
+      }
+    }
+
+    const allShopIds = new Set([...withBuckets.keys(), ...withoutBuckets.keys()])
+    return [...allShopIds].map((locationId) => {
+      const withDays = managerDaysByShop.get(locationId)?.size ?? 0
+      const observedDays = observedDaysByShop.get(locationId)?.size ?? 0
+      const withoutDays = Math.max(0, observedDays - withDays)
+      return {
+        locationId,
+        shopLabel: loc.labelOf(locationId),
+        withDays,
+        withoutDays,
+        with: metricsFor(withBuckets.get(locationId) ?? emptyMgrPerfBucket(), withDays),
+        without: metricsFor(withoutBuckets.get(locationId) ?? emptyMgrPerfBucket(), withoutDays),
+      }
+    }).sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredOrdersFinalized, filteredTimeRecords, roster, managerWageThreshold, loc.labelOf])
+
+  // Placeholder metrics from the target sheet with no real data source yet
+  // in SB Net today, kept visible (not silently dropped) so it's clear
+  // what's still needed rather than looking like an oversight.
+  const MGR_PERF_PLACEHOLDERS: { label: string; needs: string }[] = [
+    { label: '% of Net Sales', needs: 'A defined sales allocation/plan basis — not tracked anywhere in SB Net today.' },
+    { label: 'Net Sales Plan Var.', needs: 'A sales PLAN/budget figure per shop per period — no budgeting module exists yet.' },
+    { label: 'Net Sales PY Var.', needs: 'Reliable prior-year Droptop order history for the same period — technically possible once historical backfill coverage is confirmed solid; not attempted here given the sync-gap issues fixed this week.' },
+    { label: 'Cars per Day - Plan Var.', needs: 'A planned cars/day figure per shop — no planning module exists yet.' },
+    { label: 'M5 % (+ 5 sub-categories)', needs: 'Buildable (Package Mapping classification already exists) but needs a per-shop package-line-item fetch — company-wide across every shop in the filter would be a much larger fetch than this tab\'s other metrics. Flagging as a follow-up rather than fetching it eagerly here.' },
+    { label: 'R&P Total %', needs: 'Unclear what "R&P" refers to in Droptop\'s own data — needs a definition before this can be built.' },
+    { label: 'HM Capture %', needs: 'Buildable — vehicle mileage data is solid (696k+ of 696.7k vehicles have it) — needs a mileage threshold decision (e.g. 75k mi) and a per-shop vehicle+package fetch, same fetch-size concern as M5% above.' },
+    { label: 'NPS %', needs: 'No customer survey/NPS system feeds SB Net.' },
+    { label: 'Mgr Discount %', needs: 'Droptop\'s discount/coupon data has no field indicating WHO applied a discount or whether it was manager-authorized (checked the real payload shape) — only Discount % (any discount/coupon) is derivable, shown above.' },
+    { label: 'Insp. per Day / Insp. Conv. %', needs: 'No inspection-tracking system feeds SB Net.' },
+  ]
 
   // Company-wide toggle (Labor Config -> Day of Week KPIs) controlling which
   // cards render in the By Day of Week section below — defaults to exactly
@@ -1374,6 +1499,7 @@ export function StaffingReportPage() {
           <TabsList>
             <TabsTrigger value="summary">Summary</TabsTrigger>
             <TabsTrigger value="rollup">Rollup</TabsTrigger>
+            <TabsTrigger value="manager-performance">Manager Performance</TabsTrigger>
             <TabsTrigger value="alerts">Alerts{alertViolations.length > 0 ? ` (${alertViolations.length})` : ''}</TabsTrigger>
             <TabsTrigger value="manager-labor">Manager Labor</TabsTrigger>
             <TabsTrigger value="labor-config">Labor Config</TabsTrigger>
@@ -1486,6 +1612,90 @@ export function StaffingReportPage() {
 
           <TabsContent value="rollup">
             <RollupTable rows={shopRollups} timecardsFor={timecardsFor} exportFilenameBase={`staffing-rollup-${range.start}-to-${range.end}`} violationsByLocation={violationsByLocation} />
+          </TabsContent>
+
+          <TabsContent value="manager-performance">
+            <div className="flex flex-col gap-4">
+              <Card>
+                <CardBody>
+                  <p className="text-xs font-mono text-inky/60">
+                    How each shop performs on days a manager clocked in vs. days it ran without one, for the selected
+                    period ({range.start} to {range.end}) and filters above. Green = manager-present performed better
+                    for that metric, red = worse — a metric with no manager-absent (or no manager-present) days in
+                    range for a shop shows "—" rather than a misleading comparison.
+                  </p>
+                </CardBody>
+              </Card>
+
+              {managerPerfRows.length === 0 ? (
+                <Card><CardBody><p className="text-xs font-mono text-inky/60">No data for this period/filter yet.</p></CardBody></Card>
+              ) : (
+                <Card>
+                  <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">All Shops ({managerPerfRows.length})</span></CardHeader>
+                  <CardBody>
+                    <div className="overflow-auto rounded border border-navy/20 max-h-[36rem]">
+                      <table className="w-full text-xs font-mono">
+                        <thead className="sticky top-0 bg-cream">
+                          <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                            <th className="px-3 py-2 text-left" rowSpan={2}>Shop</th>
+                            {MGR_PERF_METRICS.map((m) => <th key={m.key} className="px-3 py-1 text-center border-l border-navy/10" colSpan={2}>{m.label}</th>)}
+                          </tr>
+                          <tr className="border-b border-navy/30 text-inky/60">
+                            {MGR_PERF_METRICS.map((m) => (
+                              <Fragment key={m.key}>
+                                <th className="px-2 py-1 text-right border-l border-navy/10 font-normal">Mgr</th>
+                                <th className="px-2 py-1 text-right font-normal">No Mgr</th>
+                              </Fragment>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {managerPerfRows.map((r, i) => (
+                            <tr key={r.locationId} className={i % 2 ? 'bg-navy/[0.02]' : ''}>
+                              <td className="px-3 py-1.5 text-navy whitespace-nowrap">
+                                {r.shopLabel}
+                                <span className="text-inky/40 ml-1">({r.withDays}/{r.withoutDays}d)</span>
+                              </td>
+                              {MGR_PERF_METRICS.map((m) => {
+                                const wVal = r.with[m.key]
+                                const woVal = r.without[m.key]
+                                const canCompare = wVal != null && woVal != null && wVal !== woVal
+                                const withIsBetter = canCompare && (m.higherIsBetter ? wVal! > woVal! : wVal! < woVal!)
+                                const cellCls = canCompare
+                                  ? (withIsBetter ? 'bg-[#2ECC71]/10 text-[#1E8449] font-bold' : 'bg-[#C0392B]/10 text-[#C0392B] font-bold')
+                                  : 'text-navy'
+                                return (
+                                  <Fragment key={m.key}>
+                                    <td className={`px-2 py-1.5 text-right border-l border-navy/10 ${cellCls}`}>{wVal != null ? m.fmt(wVal) : '—'}</td>
+                                    <td className="px-2 py-1.5 text-right text-navy">{woVal != null ? m.fmt(woVal) : '—'}</td>
+                                  </Fragment>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-[10px] font-mono text-inky/50 mt-2">"(Xd/Yd)" = X manager-present days / Y manager-absent days observed for that shop in this period.</p>
+                  </CardBody>
+                </Card>
+              )}
+
+              <Card>
+                <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Placeholder Metrics — Not Yet Buildable</span></CardHeader>
+                <CardBody className="flex flex-col gap-2">
+                  <p className="text-[11px] font-mono text-inky/60">
+                    From the target sheet, kept visible so it's clear what's still needed rather than silently missing.
+                  </p>
+                  {MGR_PERF_PLACEHOLDERS.map((p) => (
+                    <div key={p.label} className="flex flex-col gap-0.5 border-b border-navy/10 pb-2 last:border-0 last:pb-0">
+                      <span className="text-xs font-mono text-navy font-bold">{p.label}</span>
+                      <span className="text-[11px] font-mono text-inky/60">{p.needs}</span>
+                    </div>
+                  ))}
+                </CardBody>
+              </Card>
+            </div>
           </TabsContent>
 
           <TabsContent value="alerts">
