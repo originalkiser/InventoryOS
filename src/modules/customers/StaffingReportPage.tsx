@@ -40,7 +40,7 @@ import { useTable } from '@/hooks/useTable'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import type { ParseResult } from '@/lib/fileParser'
 import {
-  Card, CardHeader, CardBody, MultiSelectDropdown, Tabs, TabsList, TabsTrigger, TabsContent, Button, Input, Toggle,
+  Card, CardHeader, CardBody, MultiSelectDropdown, Tabs, TabsList, TabsTrigger, TabsContent, Button, Input, Toggle, Modal,
 } from '@/components/ui'
 import { isM5, type Classification } from './PackageMappingPage'
 
@@ -684,6 +684,113 @@ export function StaffingReportPage() {
   const [dowKpis, setDowKpis] = useAppSetting<string[]>('staffing_dow_kpis', DEFAULT_DOW_KPIS)
   const showDowKpi = (key: string) => dowKpis.includes(key)
 
+  // ---- Manager Labor tab --------------------------------------------------
+  // Fixed trailing 7 FULL days ending yesterday (never today — a shift
+  // still in progress would read as artificially low hours), independent
+  // of whatever period the rest of the page has selected — the user asked
+  // for "last 7 days," not "last 7 days of the selected period." Fetched
+  // separately from the main range-based load above for the same reason.
+  const managerLaborRange = useMemo(() => {
+    const end = new Date(); end.setUTCHours(0, 0, 0, 0); end.setUTCDate(end.getUTCDate() - 1)
+    const start = new Date(end); start.setUTCDate(start.getUTCDate() - 6)
+    const days: string[] = []
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) days.push(d.toISOString().slice(0, 10))
+    return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10), days }
+  }, [])
+  function dayColumnLabel(dateStr: string): string {
+    const [, m, d] = dateStr.split('-')
+    const wd = new Date(`${dateStr}T12:00:00Z`).getUTCDay()
+    return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][wd]} ${m}/${d}`
+  }
+
+  const [managerLaborRecords, setManagerLaborRecords] = useState<TimeRecordRow[]>([])
+  const [managerLaborLoading, setManagerLaborLoading] = useState(true)
+  const [managerLaborError, setManagerLaborError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    setManagerLaborLoading(true)
+    setManagerLaborError(null)
+    const sb = supabase as any
+    const startIso = `${managerLaborRange.start}T00:00:00.000Z`
+    const endIso = `${managerLaborRange.end}T23:59:59.999Z`
+    fetchAllPages<TimeRecordRow>((from) => sb.schema('inventory').from('droptop_time_records')
+      .select('location_id, droptop_user_id, first_name, last_name, clock_in, clock_out, hours, hourly_wage')
+      .eq('company_id', companyId).gte('clock_in', startIso).lte('clock_in', endIso)
+      .order('clock_in', { ascending: true }).range(from, from + PAGE - 1))
+      .then((rows) => { if (!cancelled) { setManagerLaborRecords(rows); setManagerLaborLoading(false) } })
+      .catch((e) => { if (!cancelled) { setManagerLaborError(e instanceof Error ? e.message : 'Failed to load manager labor data'); setManagerLaborLoading(false) } })
+    return () => { cancelled = true }
+  }, [companyId, managerLaborRange.start, managerLaborRange.end])
+
+  // Filterable the same way as the rest of the page — reuses allowedLocationIds
+  // (Region/Market/AM/Shop bar above, shared across every tab).
+  const managerLaborFiltered = useMemo(
+    () => allowedLocationIds ? managerLaborRecords.filter((t) => allowedLocationIds.has(t.location_id)) : managerLaborRecords,
+    [managerLaborRecords, allowedLocationIds],
+  )
+
+  interface ManagerLaborRow { locationId: string; shopLabel: string; hoursByDay: Record<string, number> }
+  const managerLaborRows = useMemo((): ManagerLaborRow[] => {
+    const byShop = new Map<string, Record<string, number>>()
+    for (const t of managerLaborFiltered) {
+      if (roleFor(t) !== 'manager') continue
+      const date = t.clock_in.slice(0, 10)
+      if (!managerLaborRange.days.includes(date)) continue
+      const rec = byShop.get(t.location_id) ?? Object.fromEntries(managerLaborRange.days.map((d) => [d, 0]))
+      rec[date] = (rec[date] ?? 0) + numHours(t)
+      byShop.set(t.location_id, rec)
+    }
+    return [...byShop.entries()]
+      .map(([locationId, hoursByDay]) => ({
+        locationId, shopLabel: loc.labelOf(locationId),
+        hoursByDay: Object.fromEntries(Object.entries(hoursByDay).map(([d, h]) => [d, round2(h)])),
+      }))
+      .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managerLaborFiltered, roster, managerWageThreshold, loc.labelOf, managerLaborRange.days])
+
+  // Conditional formatting rules — company-wide (everyone sees the same
+  // highlighting), as many as the user wants, each an independent
+  // less-than/greater-than threshold + a color the user picks themselves
+  // (a data-highlight color the user is deliberately choosing per rule,
+  // not new app-chrome, so the brand palette restriction doesn't apply the
+  // way it would to a UI element).
+  interface CfRule { id: string; operator: 'gt' | 'lt'; threshold: number; color: string }
+  const [cfRules, setCfRules] = useAppSetting<CfRule[]>('staffing_manager_labor_cf_rules', [])
+  const [cfModalOpen, setCfModalOpen] = useState(false)
+  const [newCfOperator, setNewCfOperator] = useState<'gt' | 'lt'>('lt')
+  const [newCfThreshold, setNewCfThreshold] = useState('4')
+  const [newCfColor, setNewCfColor] = useState('#C0392B')
+
+  function addCfRule() {
+    const threshold = Number(newCfThreshold)
+    if (!Number.isFinite(threshold)) { toast.error('Enter a valid number for the threshold'); return }
+    setCfRules([...cfRules, { id: crypto.randomUUID(), operator: newCfOperator, threshold, color: newCfColor }])
+  }
+  function removeCfRule(id: string) { setCfRules(cfRules.filter((r) => r.id !== id)) }
+  function matchingCfRule(value: number): CfRule | null {
+    for (const r of cfRules) {
+      if (r.operator === 'gt' && value > r.threshold) return r
+      if (r.operator === 'lt' && value < r.threshold) return r
+    }
+    return null
+  }
+  function cfCellStyle(value: number): { backgroundColor: string; color: string; fontWeight: number } | undefined {
+    const rule = matchingCfRule(value)
+    if (!rule) return undefined
+    return { backgroundColor: `${rule.color}22`, color: rule.color, fontWeight: 700 }
+  }
+
+  // One row per shop (not one row per flagged day) — a shop with 3 flagged
+  // days out of the 7 still shows as a single row with those 3 cells
+  // highlighted, same columns as the main table above it.
+  const flaggedManagerLaborRows = useMemo(
+    () => managerLaborRows.filter((r) => managerLaborRange.days.some((d) => matchingCfRule(r.hoursByDay[d] ?? 0))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [managerLaborRows, cfRules, managerLaborRange.days],
+  )
+
   // ---- Rollup tab -------------------------------------------------------
   const ordersByShopDay = useMemo(() => {
     const m = new Map<string, number>()
@@ -1268,6 +1375,7 @@ export function StaffingReportPage() {
             <TabsTrigger value="summary">Summary</TabsTrigger>
             <TabsTrigger value="rollup">Rollup</TabsTrigger>
             <TabsTrigger value="alerts">Alerts{alertViolations.length > 0 ? ` (${alertViolations.length})` : ''}</TabsTrigger>
+            <TabsTrigger value="manager-labor">Manager Labor</TabsTrigger>
             <TabsTrigger value="labor-config">Labor Config</TabsTrigger>
           </TabsList>
 
@@ -1535,6 +1643,121 @@ export function StaffingReportPage() {
             </div>
           </TabsContent>
 
+          <TabsContent value="manager-labor">
+            <div className="flex flex-col gap-4">
+              <Card>
+                <CardBody className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <p className="text-xs font-mono text-navy font-bold">
+                      Manager hours per day, {managerLaborRange.start} to {managerLaborRange.end}
+                    </p>
+                    <p className="text-[11px] font-mono text-inky/60 mt-0.5">
+                      Fixed trailing 7 full days (not tied to the period picker above) — respects the Region/Market/AM/Shop
+                      filters at the top of the page like every other tab.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {cfRules.map((r) => (
+                      <span key={r.id} className="flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: `${r.color}22`, color: r.color }}>
+                        <span className="inline-block w-2 h-2 rounded-full" style={{ background: r.color }} />
+                        {r.operator === 'gt' ? '>' : '<'} {r.threshold}
+                      </span>
+                    ))}
+                    <Button size="sm" variant="secondary" onClick={() => setCfModalOpen(true)}>Conditional Formatting</Button>
+                  </div>
+                </CardBody>
+              </Card>
+
+              {managerLaborError && (
+                <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{managerLaborError}</p>
+              )}
+
+              {managerLaborLoading ? (
+                <LoadingProgress fraction={null} countText="Loading manager labor…" messages={['Pulling the last 7 days of time records…']} />
+              ) : managerLaborRows.length === 0 ? (
+                <Card><CardBody><p className="text-xs font-mono text-inky/60">No manager clock-ins in the last 7 days for this filter.</p></CardBody></Card>
+              ) : (
+                <>
+                  <Card>
+                    <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">All Shops ({managerLaborRows.length})</span></CardHeader>
+                    <CardBody>
+                      <div className="overflow-auto rounded border border-navy/20 max-h-[32rem]">
+                        <table className="w-full text-xs font-mono">
+                          <thead className="sticky top-0 bg-cream">
+                            <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                              <th className="px-3 py-2 text-left">Shop</th>
+                              {managerLaborRange.days.map((d) => <th key={d} className="px-3 py-2 text-right">{dayColumnLabel(d)}</th>)}
+                              <th className="px-3 py-2 text-right">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {managerLaborRows.map((r, i) => {
+                              const total = managerLaborRange.days.reduce((sum, d) => sum + (r.hoursByDay[d] ?? 0), 0)
+                              return (
+                                <tr key={r.locationId} className={i % 2 ? 'bg-navy/[0.02]' : ''}>
+                                  <td className="px-3 py-1.5 text-navy whitespace-nowrap">{r.shopLabel}</td>
+                                  {managerLaborRange.days.map((d) => (
+                                    <td key={d} className="px-3 py-1.5 text-right text-navy" style={cfCellStyle(r.hoursByDay[d] ?? 0)}>
+                                      {fmtNum(r.hoursByDay[d] ?? 0, 1)}
+                                    </td>
+                                  ))}
+                                  <td className="px-3 py-1.5 text-right text-navy font-bold">{fmtNum(total, 1)}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardBody>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <span className="text-xs font-mono text-navy uppercase tracking-wide">
+                        Flagged Shops ({flaggedManagerLaborRows.length})
+                      </span>
+                    </CardHeader>
+                    <CardBody>
+                      {cfRules.length === 0 ? (
+                        <p className="text-xs font-mono text-inky/60">No conditional formatting rules set — add one above to flag shops here.</p>
+                      ) : flaggedManagerLaborRows.length === 0 ? (
+                        <p className="text-xs font-mono text-[#2ECC71]">No shops match any rule in this range/filter.</p>
+                      ) : (
+                        <div className="overflow-auto rounded border border-navy/20 max-h-[32rem]">
+                          <table className="w-full text-xs font-mono">
+                            <thead className="sticky top-0 bg-cream">
+                              <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                                <th className="px-3 py-2 text-left">Shop</th>
+                                {managerLaborRange.days.map((d) => <th key={d} className="px-3 py-2 text-right">{dayColumnLabel(d)}</th>)}
+                                <th className="px-3 py-2 text-right">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {flaggedManagerLaborRows.map((r, i) => {
+                                const total = managerLaborRange.days.reduce((sum, d) => sum + (r.hoursByDay[d] ?? 0), 0)
+                                return (
+                                  <tr key={r.locationId} className={i % 2 ? 'bg-navy/[0.02]' : ''}>
+                                    <td className="px-3 py-1.5 text-navy whitespace-nowrap">{r.shopLabel}</td>
+                                    {managerLaborRange.days.map((d) => (
+                                      <td key={d} className="px-3 py-1.5 text-right text-navy" style={cfCellStyle(r.hoursByDay[d] ?? 0)}>
+                                        {fmtNum(r.hoursByDay[d] ?? 0, 1)}
+                                      </td>
+                                    ))}
+                                    <td className="px-3 py-1.5 text-right text-navy font-bold">{fmtNum(total, 1)}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardBody>
+                  </Card>
+                </>
+              )}
+            </div>
+          </TabsContent>
+
           {/* Labor Config — hosts the Staffing List roster (real
               employee -> Manager/Hourly, takes priority over the wage
               threshold below), the wage-threshold proxy itself (fallback
@@ -1773,6 +1996,46 @@ export function StaffingReportPage() {
           </TabsContent>
         </Tabs>
       )}
+
+      <Modal open={cfModalOpen} onClose={() => setCfModalOpen(false)} title="Conditional Formatting — Manager Labor" size="md">
+        <div className="flex flex-col gap-4">
+          <p className="text-[11px] font-mono text-inky/60">
+            Add as many rules as you want — every cell on the Manager Labor tab is checked against each rule in order,
+            and the first one that matches sets that cell's highlight color.
+          </p>
+          {cfRules.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {cfRules.map((r) => (
+                <div key={r.id} className="flex items-center justify-between gap-2 border-b border-navy/10 pb-2 last:border-0 last:pb-0">
+                  <div className="flex items-center gap-2 text-xs font-mono text-navy">
+                    <span className="inline-block w-3 h-3 rounded-full border border-navy/20" style={{ background: r.color }} />
+                    Hours {r.operator === 'gt' ? 'greater than' : 'less than'} {r.threshold}
+                  </div>
+                  <button onClick={() => removeCfRule(r.id)} className="text-[11px] font-mono text-[#C0392B] hover:underline">Remove</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-2 flex-wrap border-t border-navy/10 pt-3">
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Condition</span>
+              <select value={newCfOperator} onChange={(e) => setNewCfOperator(e.target.value as 'gt' | 'lt')} className="bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy">
+                <option value="lt">Less than</option>
+                <option value="gt">Greater than</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Hours</span>
+              <Input type="number" value={newCfThreshold} onChange={(e) => setNewCfThreshold(e.target.value)} className="w-24" />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Color</span>
+              <input type="color" value={newCfColor} onChange={(e) => setNewCfColor(e.target.value)} className="w-12 h-9 rounded border border-navy/30 bg-cream cursor-pointer" />
+            </label>
+            <Button size="sm" onClick={addCfRule}>Add Rule</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
