@@ -22,13 +22,26 @@ import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import { SbLoader } from '@/components/ui'
 
-type Classification = 'oil_change' | 'm5' | 'none'
+// The generic 'm5' bucket (migration 20260930d) was split into its 5
+// specific sub-categories (migration 20260930j) once the Staffing Report
+// needed each one's own percentage (Tire Rotation %, Air Filter %, etc.),
+// not just one combined M5%. isM5() below is what still lets every
+// existing "M5% = M5 ÷ Oil Change" computation treat all 5 as one bucket
+// without caring which specific one a package is.
+export type Classification = 'oil_change' | 'air_filter' | 'cabin_air_filter' | 'wiper_blades' | 'additives' | 'tire_rotation' | 'none'
+export function isM5(c: Classification): boolean {
+  return c === 'air_filter' || c === 'cabin_air_filter' || c === 'wiper_blades' || c === 'additives' || c === 'tire_rotation'
+}
 interface PackageRow { name: string; orderCount: number; classification: Classification }
 
 const CLASSIFICATION_OPTIONS: { value: Classification; label: string }[] = [
   { value: 'none', label: 'None' },
   { value: 'oil_change', label: 'Oil Change' },
-  { value: 'm5', label: 'M5' },
+  { value: 'air_filter', label: 'M5 — Air Filter' },
+  { value: 'cabin_air_filter', label: 'M5 — Cabin Air Filter' },
+  { value: 'wiper_blades', label: 'M5 — Wiper Blades' },
+  { value: 'additives', label: 'M5 — Additives' },
+  { value: 'tire_rotation', label: 'M5 — Tire Rotation' },
 ]
 const selectCls = 'bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky'
 
@@ -107,9 +120,10 @@ export function PackageMappingPage() {
       <div>
         <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Package Mapping</h1>
         <p className="text-xs text-inky mt-0.5">
-          Classifies every distinct Droptop package name as Oil Change, M5 (Air Filter, Cabin Air Filter, Wiper Blade
-          Replacement, Additives, Tire Rotation), or None — backs the M5% stat on Droptop Orders (M5% = M5 packages ÷
-          Oil Change packages). A newly-introduced or renamed package shows up here as "None" until classified.
+          Classifies every distinct Droptop package name as Oil Change, one of the 5 M5 sub-categories (Air Filter,
+          Cabin Air Filter, Wiper Blades, Additives, Tire Rotation), or None — backs the M5% stat on Droptop Orders
+          and the Staffing Report's per-category M5 breakdown (each % = that category's packages ÷ Oil Change
+          packages). A newly-introduced or renamed package shows up here as "None" until classified.
         </p>
       </div>
 

@@ -42,6 +42,7 @@ import type { ParseResult } from '@/lib/fileParser'
 import {
   Card, CardHeader, CardBody, MultiSelectDropdown, Tabs, TabsList, TabsTrigger, TabsContent, Button, Input, Toggle,
 } from '@/components/ui'
+import { isM5, type Classification } from './PackageMappingPage'
 
 // hours/hourly_wage/final_price are Postgres `numeric` columns — PostgREST
 // serializes those as JSON strings (not numbers), to avoid float-precision
@@ -62,7 +63,40 @@ function numHours(t: Pick<TimeRecordRow, 'hours'>): number { return Number(t.hou
 function numWage(t: Pick<TimeRecordRow, 'hourly_wage'>): number { return Number(t.hourly_wage) || 0 }
 const round2 = (n: number) => Math.round(n * 100) / 100
 
-interface OrderRow { location_id: string | null; order_finalized_at: string | null; final_price: string | number | null; status: string | null }
+interface OrderRow { id: string; location_id: string | null; order_finalized_at: string | null; final_price: string | number | null; status: string | null }
+
+// M5 sub-categories, each individually toggleable on the By Day of Week
+// cards (see DOW_KPI_OPTIONS below) — 'm5' itself is the combined
+// percentage across all 5. Only meaningful once package-line-item data is
+// loaded, which (see loadShopPackages below) only happens when the current
+// filter resolves to exactly one shop.
+const M5_SUBTYPES = ['air_filter', 'cabin_air_filter', 'wiper_blades', 'additives', 'tire_rotation'] as const
+type M5Subtype = typeof M5_SUBTYPES[number]
+const M5_SUBTYPE_LABELS: Record<M5Subtype, string> = {
+  air_filter: 'Air Filter %', cabin_air_filter: 'Cabin Filter %', wiper_blades: 'Wipers %',
+  additives: 'Additives %', tire_rotation: 'Tire Rotation %',
+}
+interface M5Counts { oilChange: number; m5: number; bySubtype: Record<M5Subtype, number> }
+function emptyM5Counts(): M5Counts {
+  return { oilChange: 0, m5: 0, bySubtype: { air_filter: 0, cabin_air_filter: 0, wiper_blades: 0, additives: 0, tire_rotation: 0 } }
+}
+function m5Pct(counts: M5Counts, key: 'm5' | M5Subtype): number | null {
+  return counts.oilChange > 0 ? round2(((key === 'm5' ? counts.m5 : counts.bySubtype[key]) / counts.oilChange) * 100) : null
+}
+
+// Which By-Day-of-Week KPI cards are available to show — the original 4
+// (hours/avgPerDay/laborPctRevenue/lhce) plus M5% and its 5 sub-categories.
+// Company-wide setting (Labor Config -> "Day of Week KPIs"), so every user
+// sees the same cards; defaults to exactly the original 4 so nobody's view
+// changes until an admin opts into more.
+const DOW_KPI_OPTIONS: { key: string; label: string }[] = [
+  { key: 'hours', label: 'Total / Avg Hours' },
+  { key: 'labor_pct_revenue', label: 'Labor % of Revenue' },
+  { key: 'lhce', label: 'LHCE' },
+  { key: 'm5', label: 'M5 % (combined)' },
+  ...M5_SUBTYPES.map((s) => ({ key: s, label: M5_SUBTYPE_LABELS[s] })),
+]
+const DEFAULT_DOW_KPIS = ['hours', 'labor_pct_revenue', 'lhce']
 
 // LHCE = Labor Hours / (Effective) Car = hours ÷ orders. This used to be
 // named/computed the other way around (orders ÷ hours, i.e. cars per
@@ -509,7 +543,7 @@ export function StaffingReportPage() {
           .eq('company_id', companyId).gte('clock_in', startIso).lte('clock_in', endIso)
           .order('clock_in', { ascending: true }).range(from, from + PAGE - 1), (n) => { trLoaded = n; tick() }),
         fetchAllPages<OrderRow>((from) => sb.schema('inventory').from('droptop_orders')
-          .select('location_id, order_finalized_at, final_price, status')
+          .select('id, location_id, order_finalized_at, final_price, status')
           .eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
           .order('order_finalized_at', { ascending: true }).range(from, from + PAGE - 1), (n) => { ordLoaded = n; tick() }),
       ])
@@ -536,6 +570,119 @@ export function StaffingReportPage() {
     () => orders.filter((o) => o.location_id && o.status === 'Finalized' && (!allowedLocationIds || allowedLocationIds.has(o.location_id))),
     [orders, allowedLocationIds],
   )
+
+  // ---- M5% by day of week (single-shop only) -----------------------------
+  // "Shop when manager works" / "shop when manager is off" is inherently a
+  // per-shop question (which manager, which days off, varies shop to shop —
+  // there's no single "the manager's days off" for a group of shops), so
+  // package-line-item data (needed for M5%) is only fetched once the
+  // current filter narrows to exactly one location — never company/region/
+  // market-wide, which would also mean pulling package rows for potentially
+  // hundreds of shops' worth of orders just for a day-of-week card.
+  const singleShopId = allowedLocationIds && allowedLocationIds.size === 1 ? [...allowedLocationIds][0] : null
+  const [packageClassification, setPackageClassification] = useState<Map<string, Classification>>(new Map())
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    const sb = supabase as any
+    sb.schema('inventory').from('droptop_package_classification')
+      .select('package_name, classification').eq('company_id', companyId)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        setPackageClassification(new Map((data ?? []).map((r: { package_name: string; classification: Classification }) => [r.package_name, r.classification])))
+      })
+    return () => { cancelled = true }
+  }, [companyId])
+
+  const [shopPackagesByOrder, setShopPackagesByOrder] = useState<Map<string, { name: string | null }[]>>(new Map())
+  const [shopPackagesLoading, setShopPackagesLoading] = useState(false)
+  useEffect(() => {
+    if (!singleShopId) { setShopPackagesByOrder(new Map()); return }
+    let cancelled = false
+    const orderIds = filteredOrdersFinalized.filter((o) => o.location_id === singleShopId).map((o) => o.id)
+    if (!orderIds.length) { setShopPackagesByOrder(new Map()); return }
+    setShopPackagesLoading(true)
+    const sb = supabase as any
+    const CHUNK = 300
+    async function run() {
+      const byOrder = new Map<string, { name: string | null }[]>()
+      for (let i = 0; i < orderIds.length; i += CHUNK) {
+        const slice = orderIds.slice(i, i + CHUNK)
+        const rows = await fetchAllPages<{ order_id: string; name: string | null }>((from) => sb
+          .schema('inventory').from('droptop_order_packages')
+          .select('order_id, name').in('order_id', slice).range(from, from + PAGE - 1))
+        for (const r of rows) {
+          const list = byOrder.get(r.order_id) ?? []
+          list.push({ name: r.name })
+          byOrder.set(r.order_id, list)
+        }
+      }
+      if (!cancelled) { setShopPackagesByOrder(byOrder); setShopPackagesLoading(false) }
+    }
+    run().catch(() => { if (!cancelled) setShopPackagesLoading(false) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [singleShopId, filteredOrdersFinalized])
+
+  function m5CountsForOrder(orderId: string): M5Counts {
+    const counts = emptyM5Counts()
+    for (const p of shopPackagesByOrder.get(orderId) ?? []) {
+      if (!p.name) continue
+      const c = packageClassification.get(p.name)
+      if (!c) continue
+      if (c === 'oil_change') counts.oilChange++
+      else if (isM5(c)) { counts.m5++; counts.bySubtype[c as M5Subtype]++ }
+    }
+    return counts
+  }
+
+  // Which shop-dates (YYYY-MM-DD) a manager (roster-or-wage-threshold, same
+  // roleFor() as everywhere else on this page) clocked in at all — the
+  // "manager works that day" / "manager off" split reads this, scoped to
+  // singleShopId same as the package data above.
+  const managerDaysForShop = useMemo(() => {
+    const days = new Set<string>()
+    if (!singleShopId) return days
+    for (const t of filteredTimeRecords) {
+      if (t.location_id !== singleShopId) continue
+      if (roleFor(t) === 'manager') days.add(t.clock_in.slice(0, 10))
+    }
+    return days
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredTimeRecords, singleShopId, roster, managerWageThreshold])
+
+  const m5ByWeekday = useMemo(() => {
+    if (!singleShopId) return null
+    const totalByDow = new Array(7).fill(null).map(() => emptyM5Counts())
+    const managerByDow = new Array(7).fill(null).map(() => emptyM5Counts())
+    const offByDow = new Array(7).fill(null).map(() => emptyM5Counts())
+    for (const o of filteredOrdersFinalized) {
+      if (o.location_id !== singleShopId || !o.order_finalized_at) continue
+      const dateStr = o.order_finalized_at.slice(0, 10)
+      const dow = new Date(`${dateStr}T00:00:00`).getDay()
+      const c = m5CountsForOrder(o.id)
+      const add = (target: M5Counts) => {
+        target.oilChange += c.oilChange
+        target.m5 += c.m5
+        for (const s of M5_SUBTYPES) target.bySubtype[s] += c.bySubtype[s]
+      }
+      add(totalByDow[dow])
+      add(managerDaysForShop.has(dateStr) ? managerByDow[dow] : offByDow[dow])
+    }
+    return WEEKDAY_ORDER.map((dowIndex, i) => ({
+      name: WEEKDAY_NAMES[i],
+      total: totalByDow[dowIndex],
+      manager: managerByDow[dowIndex],
+      off: offByDow[dowIndex],
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [singleShopId, filteredOrdersFinalized, shopPackagesByOrder, packageClassification, managerDaysForShop])
+
+  // Company-wide toggle (Labor Config -> Day of Week KPIs) controlling which
+  // cards render in the By Day of Week section below — defaults to exactly
+  // the original 4 metrics so nobody's view changes unless an admin opts in.
+  const [dowKpis, setDowKpis] = useAppSetting<string[]>('staffing_dow_kpis', DEFAULT_DOW_KPIS)
+  const showDowKpi = (key: string) => dowKpis.includes(key)
 
   // ---- Rollup tab -------------------------------------------------------
   const ordersByShopDay = useMemo(() => {
@@ -1153,28 +1300,71 @@ export function StaffingReportPage() {
                 <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">By Day of Week</span></CardHeader>
                 <CardBody>
                   <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-                    {dayOfWeekBreakdown.map((d) => (
-                      <div key={d.name} className="rounded border border-navy/20 px-2 py-2 text-center flex flex-col gap-1.5">
-                        <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">{d.name} ({d.count})</p>
-                        <div>
-                          <p className="text-sm font-heading font-bold text-navy">{fmtNum(d.totalHours, 1)}</p>
-                          <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">
-                            Hours{d.count > 1 && d.avgHoursPerDay != null ? ` (avg ${fmtNum(d.avgHoursPerDay, 1)}/day)` : ''}
-                          </p>
+                    {dayOfWeekBreakdown.map((d, i) => {
+                      const m5 = m5ByWeekday?.[i]
+                      return (
+                        <div key={d.name} className="rounded border border-navy/20 px-2 py-2 text-center flex flex-col gap-1.5">
+                          <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">{d.name} ({d.count})</p>
+                          {showDowKpi('hours') && (
+                            <div>
+                              <p className="text-sm font-heading font-bold text-navy">{fmtNum(d.totalHours, 1)}</p>
+                              <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">
+                                Hours{d.count > 1 && d.avgHoursPerDay != null ? ` (avg ${fmtNum(d.avgHoursPerDay, 1)}/day)` : ''}
+                              </p>
+                            </div>
+                          )}
+                          {showDowKpi('labor_pct_revenue') && (
+                            <div>
+                              <p className="text-sm font-heading font-bold text-navy">{d.laborPctOfRevenue != null ? `${fmtNum(d.laborPctOfRevenue, 1)}%` : '—'}</p>
+                              <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">Labor % Rev</p>
+                            </div>
+                          )}
+                          {showDowKpi('lhce') && (
+                            <div>
+                              <p className="text-sm font-heading font-bold text-navy">{fmtNum(d.lhce)}</p>
+                              <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">LHCE</p>
+                            </div>
+                          )}
+                          {(showDowKpi('m5') || M5_SUBTYPES.some(showDowKpi)) && (
+                            m5 ? (
+                              <>
+                                {showDowKpi('m5') && (
+                                  <div>
+                                    <p className="text-sm font-heading font-bold text-navy">{m5Pct(m5.total, 'm5') != null ? `${fmtNum(m5Pct(m5.total, 'm5')!, 1)}%` : '—'}</p>
+                                    <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">M5 % (shop)</p>
+                                    <p className="text-[9px] font-mono text-[#0E7C86]">
+                                      Mgr: {m5Pct(m5.manager, 'm5') != null ? `${fmtNum(m5Pct(m5.manager, 'm5')!, 1)}%` : '—'}
+                                    </p>
+                                    <p className="text-[9px] font-mono text-inky/50">
+                                      Off: {m5Pct(m5.off, 'm5') != null ? `${fmtNum(m5Pct(m5.off, 'm5')!, 1)}%` : '—'}
+                                    </p>
+                                  </div>
+                                )}
+                                {M5_SUBTYPES.filter(showDowKpi).map((s) => (
+                                  <div key={s}>
+                                    <p className="text-sm font-heading font-bold text-navy">{m5Pct(m5.total, s) != null ? `${fmtNum(m5Pct(m5.total, s)!, 1)}%` : '—'}</p>
+                                    <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">{M5_SUBTYPE_LABELS[s]} (shop)</p>
+                                    <p className="text-[9px] font-mono text-[#0E7C86]">
+                                      Mgr: {m5Pct(m5.manager, s) != null ? `${fmtNum(m5Pct(m5.manager, s)!, 1)}%` : '—'}
+                                    </p>
+                                    <p className="text-[9px] font-mono text-inky/50">
+                                      Off: {m5Pct(m5.off, s) != null ? `${fmtNum(m5Pct(m5.off, s)!, 1)}%` : '—'}
+                                    </p>
+                                  </div>
+                                ))}
+                              </>
+                            ) : (
+                              <p className="text-[9px] font-mono text-inky/40 italic">Select a single shop for M5%</p>
+                            )
+                          )}
                         </div>
-                        <div>
-                          <p className="text-sm font-heading font-bold text-navy">{d.laborPctOfRevenue != null ? `${fmtNum(d.laborPctOfRevenue, 1)}%` : '—'}</p>
-                          <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">Labor % Rev</p>
-                        </div>
-                        <div>
-                          <p className="text-sm font-heading font-bold text-navy">{fmtNum(d.lhce)}</p>
-                          <p className="text-[9px] font-mono text-inky/50 uppercase tracking-wide">LHCE</p>
-                        </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                   <p className="text-[10px] font-mono text-inky/50 mt-2">
                     "({'{'}count{'}'})" is how many of that weekday fall within the selected period (e.g. "Friday (3)" = 3 Fridays).
+                    {(showDowKpi('m5') || M5_SUBTYPES.some(showDowKpi)) && ' M5% cards need exactly one shop selected above — the "which days the manager is off" split is inherently shop-specific.'}
+                    {shopPackagesLoading && ' Loading package data for M5%…'}
                   </p>
                 </CardBody>
               </Card>
@@ -1352,6 +1542,30 @@ export function StaffingReportPage() {
               upload. */}
           <TabsContent value="labor-config">
             <div className="flex flex-col gap-4">
+              <Card>
+                <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Day of Week KPIs</span></CardHeader>
+                <CardBody className="flex flex-col gap-2">
+                  <p className="text-[11px] font-mono text-inky/60">
+                    Which KPI cards show on the Summary tab's By Day of Week section — applies for everyone, company-wide.
+                    The M5 cards need a single shop selected in the filter bar above to show real numbers (the manager
+                    present/off split is inherently shop-specific).
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {DOW_KPI_OPTIONS.map((opt) => (
+                      <label key={opt.key} className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={dowKpis.includes(opt.key)}
+                          onChange={(e) => setDowKpis(e.target.checked ? [...dowKpis, opt.key] : dowKpis.filter((k) => k !== opt.key))}
+                          className="accent-navy"
+                        />
+                        {opt.label}
+                      </label>
+                    ))}
+                  </div>
+                </CardBody>
+              </Card>
+
               <Card>
                 <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Staffing List</span></CardHeader>
                 <CardBody className="flex flex-col gap-3">

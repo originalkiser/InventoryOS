@@ -28,6 +28,7 @@ import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
+import { isM5, type Classification } from './PackageMappingPage'
 
 interface OrderRow {
   id: string
@@ -139,10 +140,11 @@ export function DroptopOrdersPage() {
   // a denominator, `loaded` ticks up per page.
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
 
-  // Package name -> Oil Change / M5 / None, from the Package Mapping page
-  // (inventory.droptop_package_classification) — small (~80-150 rows),
-  // loaded once per company rather than per filter/date-range change.
-  const [packageClassification, setPackageClassification] = useState<Map<string, 'oil_change' | 'm5' | 'none'>>(new Map())
+  // Package name -> Oil Change / one of 5 M5 sub-categories / None, from the
+  // Package Mapping page (inventory.droptop_package_classification) — small
+  // (~80-150 rows), loaded once per company rather than per filter/date-
+  // range change.
+  const [packageClassification, setPackageClassification] = useState<Map<string, Classification>>(new Map())
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
@@ -151,7 +153,7 @@ export function DroptopOrdersPage() {
       .select('package_name, classification').eq('company_id', companyId)
       .then(({ data }: any) => {
         if (cancelled) return
-        setPackageClassification(new Map((data ?? []).map((r: { package_name: string; classification: 'oil_change' | 'm5' | 'none' }) => [r.package_name, r.classification])))
+        setPackageClassification(new Map((data ?? []).map((r: { package_name: string; classification: Classification }) => [r.package_name, r.classification])))
       })
     return () => { cancelled = true }
   }, [companyId])
@@ -551,7 +553,7 @@ export function DroptopOrdersPage() {
     for (const p of packagesByOrder.get(orderId) ?? []) {
       if (!p.name) continue
       const c = packageClassification.get(p.name)
-      if (c === 'm5') m5++
+      if (c && isM5(c)) m5++
       else if (c === 'oil_change') oilChange++
     }
     return { m5, oilChange }
