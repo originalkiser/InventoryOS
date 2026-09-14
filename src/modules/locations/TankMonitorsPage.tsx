@@ -235,6 +235,75 @@ export function TankMonitorsPage() {
     }).length
   }, [filtered, loc.locations, isExcluded, shopFilter, amFilter, ignored])
 
+  // ── Location Check: monitors whose assigned shop may now be stale ────────
+  // Franchise buybacks: a bought-back shop gets renumbered to the company's
+  // own number, and that sometimes lands as a NEW core.locations row (the
+  // old franchisee-numbered row deactivated) rather than an in-place rename
+  // of the existing one. skybitz-tank-sync deliberately never re-touches
+  // location_id once a monitor has one (see that function's own header
+  // comment — "Never touches location_id... once assigned"), so a monitor
+  // stays pinned to the OLD, now-inactive location forever unless someone
+  // notices and manually re-points it — and there was previously no UI to
+  // reassign an ALREADY-assigned monitor at all (UnassignedMatcher below
+  // only ever handles location_id IS NULL). Grouped by source_location
+  // (same raw string) since a re-point always has to apply to every
+  // monitor sharing that raw string, same as UnassignedMatcher's own match.
+  //
+  // Two flag types, in order of confidence:
+  //  - 'inactive': the currently-assigned shop is now inactive — the
+  //    definitive signal a buyback (or any other shop replacement) left
+  //    this monitor behind. Always shown even with no obvious suggestion.
+  //  - 'mismatch': the assigned shop is still active, but the monitor's own
+  //    raw source_location is purely numeric, doesn't match that shop's
+  //    current number, AND the app's own resolveId() (exact/POS-string/
+  //    numeric fallback — the same resolution every import in this app
+  //    already trusts) now resolves that raw string to a DIFFERENT real
+  //    shop. Lower confidence than 'inactive' — kept separate so it never
+  //    gets confused with the definitive case.
+  const [locationCheckIgnore, setLocationCheckIgnore] = useAppSetting<string[]>('tank_location_check_ignore', [])
+  const locationCheckRows = useMemo(() => {
+    const byKey = new Map<string, { raw: string; locationId: string; monitorCount: number }>()
+    for (const m of monitors) {
+      if (!m.location_id) continue // already surfaced by the Unassigned bucket above
+      const key = srcKey(m.source_location)
+      const g = byKey.get(key) ?? { raw: m.source_location ?? '', locationId: m.location_id, monitorCount: 0 }
+      g.monitorCount++
+      byKey.set(key, g)
+    }
+    const flagged: { key: string; raw: string; locationId: string; monitorCount: number; reason: 'inactive' | 'mismatch'; suggestedId: string | null }[] = []
+    for (const [key, g] of byKey) {
+      if (locationCheckIgnore.includes(key)) continue
+      const assignedLoc = loc.byId(g.locationId)
+      const resolved = loc.resolveId(g.raw)
+      const suggestedId = resolved && resolved !== g.locationId ? resolved : null
+      if (!assignedLoc || !assignedLoc.active) {
+        flagged.push({ key, raw: g.raw, locationId: g.locationId, monitorCount: g.monitorCount, reason: 'inactive', suggestedId })
+        continue
+      }
+      const rawDigits = g.raw.trim()
+      if (/^\d+$/.test(rawDigits) && assignedLoc.name !== rawDigits && suggestedId) {
+        flagged.push({ key, raw: g.raw, locationId: g.locationId, monitorCount: g.monitorCount, reason: 'mismatch', suggestedId })
+      }
+    }
+    return flagged.sort((a, b) => a.raw.localeCompare(b.raw, undefined, { numeric: true }))
+  }, [monitors, loc, locationCheckIgnore])
+
+  async function reassignMonitorLocation(raw: string, newLocationId: string) {
+    if (!companyId) return
+    const sb = supabase as any
+    // Upsert (not insert) — a mapping already exists for this raw string
+    // (pointing at the now-stale location), and it needs to be REPLACED,
+    // not left in place alongside a duplicate-key error.
+    const { error: mapErr } = await sb.schema('core').from('pos_location_map')
+      .upsert({ company_id: companyId, pos_string: raw, location_id: newLocationId }, { onConflict: 'company_id,pos_string' })
+    if (mapErr) { toast.error(mapErr.message); return }
+    const { error: updErr } = await sb.schema('inventory').from('tank_monitors')
+      .update({ location_id: newLocationId }).eq('company_id', companyId).eq('source_location', raw)
+    if (updErr) { toast.error(updErr.message); return }
+    toast.success('Monitor(s) reassigned')
+    load(); loc.reload()
+  }
+
   const areaManagers = useMemo(() => [...new Set(loc.locations.filter((l) => !isExcluded(l)).map((l) => metaOf(l, 'area_manager')).filter(Boolean))].sort(), [loc.locations, isExcluded])
   const shopOptions = useMemo(() => loc.locations.filter((l) => l.active && !isExcluded(l)).map((l) => ({ value: l.id, label: l.shop_city || l.name })).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })), [loc.locations, isExcluded])
 
@@ -270,6 +339,7 @@ export function TankMonitorsPage() {
           <TabsTrigger value="all">All Monitors ({filtered.length})</TabsTrigger>
           <TabsTrigger value="offline">Offline ({offline.length})</TabsTrigger>
           <TabsTrigger value="lowvmi">Low VMI Coverage{lowVmiCount ? ` (${lowVmiCount})` : ''}</TabsTrigger>
+          <TabsTrigger value="location-check">Location Check{locationCheckRows.length ? ` (${locationCheckRows.length})` : ''}</TabsTrigger>
           <TabsTrigger value="mapping">Product Mapping{unmatchedProducts.length ? ` (${unmatchedProducts.length})` : ''}</TabsTrigger>
           <TabsTrigger value="templates">Email Templates</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -384,6 +454,16 @@ export function TankMonitorsPage() {
             skipEnabled={skipEnabled} setSkipEnabled={setSkipEnabled} skipDays={skipDays} setSkipDays={setSkipDays} lowVmiCommsRows={lowVmiCommsRows}
             excludePending={excludePending} setExcludePending={setExcludePending} lowVmiPendingSet={lowVmiPendingSet}
             onStartEmail={(targets) => { setEmailTargets(targets); setEmailKind('lowvmi') }} />
+        </TabsContent>
+
+        <TabsContent value="location-check">
+          {loading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div> : (
+            <LocationCheckPanel
+              rows={locationCheckRows} shopOptions={shopOptions} loc={loc}
+              onReassign={reassignMonitorLocation}
+              onIgnore={(key) => setLocationCheckIgnore([...locationCheckIgnore, key])}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="mapping">
@@ -580,6 +660,78 @@ function UnassignedMatcher({ rows, shopOptions, companyId, onMatched, onReloadLo
               <div className="w-56"><Combobox options={shopOptions} value={pick[key] ?? ''} onChange={(v) => setPick((p) => ({ ...p, [key]: v }))} placeholder="Match to shop…" /></div>
               <Button size="sm" loading={busy === key} onClick={() => match(key, raw)} disabled={!pick[key]}>Match</Button>
               <button onClick={() => setMatchIgnore([...matchIgnore, key])} className="text-[11px] font-mono text-inky hover:text-navy hover:underline" title="Hold — stays ignored across uploads">Ignore</button>
+            </div>
+          ))}
+        </div>
+      </CardBody>
+    </Card>
+  )
+}
+
+// ── Location Check: monitors whose ASSIGNED shop might now be stale ────────
+// Unlike UnassignedMatcher above (location_id IS NULL), this is the only UI
+// for re-pointing a monitor that already has a location_id — needed
+// specifically for franchise buybacks, where a shop's renumbering can leave
+// tank monitors pinned to the old, now-inactive location (see this file's
+// own computation of locationCheckRows for the full reasoning).
+function LocationCheckPanel({ rows, shopOptions, loc, onReassign, onIgnore }: {
+  rows: { key: string; raw: string; locationId: string; monitorCount: number; reason: 'inactive' | 'mismatch'; suggestedId: string | null }[]
+  shopOptions: { value: string; label: string }[]
+  loc: ReturnType<typeof useLocations>
+  onReassign: (raw: string, newLocationId: string) => Promise<void>
+  onIgnore: (key: string) => void
+}) {
+  const [pick, setPick] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState<string | null>(null)
+
+  async function reassign(row: (typeof rows)[number]) {
+    const newLocationId = pick[row.key] ?? row.suggestedId
+    if (!newLocationId) { toast.error('Pick the correct shop'); return }
+    setBusy(row.key)
+    await onReassign(row.raw, newLocationId)
+    setBusy(null)
+  }
+
+  if (rows.length === 0) {
+    return (
+      <Card><CardBody>
+        <p className="text-xs font-mono text-[#2ECC71]">No monitors look mismatched — every assigned monitor's shop is active and its source location resolves consistently.</p>
+      </CardBody></Card>
+    )
+  }
+
+  return (
+    <Card className="border-[#C0392B]/40 bg-[#C0392B]/5">
+      <CardBody className="flex flex-col gap-3">
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-[#C0392B] font-bold">Possibly stale assignments ({rows.length})</div>
+          <p className="text-[11px] font-mono text-inky/60 mt-0.5">
+            Common cause: a franchise buyback renumbered this shop to a new location record, but tank monitor syncing
+            never re-points an already-assigned monitor on its own — it has to be done here. Pick the correct current
+            shop and Reassign; this updates the location mapping too, so future uploads for this same monitor land
+            correctly without repeating this step.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2">
+          {rows.map((r) => (
+            <div key={r.key} className="flex items-center gap-2 flex-wrap border-b border-navy/10 pb-2 last:border-0 last:pb-0">
+              <div className="w-44 flex-shrink-0">
+                <span className="text-xs font-mono text-navy truncate block" title={r.raw}>{r.raw}</span>
+                <span className="text-[10px] font-mono text-inky/50">{r.monitorCount} monitor(s)</span>
+              </div>
+              <div className="flex flex-col gap-0.5 w-56 flex-shrink-0">
+                <span className="text-[10px] font-mono text-inky/60">Currently assigned to</span>
+                <span className="text-xs font-mono text-navy truncate">
+                  {loc.labelOf(r.locationId)}
+                  {r.reason === 'inactive' ? <span className="text-[#C0392B]"> (inactive)</span> : <span className="text-[#E67E22]"> (number mismatch)</span>}
+                </span>
+              </div>
+              <div className="w-56">
+                <Combobox options={shopOptions} value={pick[r.key] ?? r.suggestedId ?? ''} onChange={(v) => setPick((p) => ({ ...p, [r.key]: v }))} placeholder="Reassign to shop…" />
+              </div>
+              {r.suggestedId && !pick[r.key] && <span className="text-[10px] font-mono text-[#2ECC71]">suggested</span>}
+              <Button size="sm" loading={busy === r.key} onClick={() => reassign(r)} disabled={!pick[r.key] && !r.suggestedId}>Reassign</Button>
+              <button onClick={() => onIgnore(r.key)} className="text-[11px] font-mono text-inky hover:text-navy hover:underline" title="Dismiss — this specific source location won't be flagged again">Dismiss</button>
             </div>
           ))}
         </div>
