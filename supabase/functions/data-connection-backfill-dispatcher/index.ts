@@ -6,6 +6,14 @@
 // manual backfill cards on Data Connections, which are unaffected by this
 // and remain useful for "pull exactly this range right now").
 //
+// Overnight only (see isOvernight/OVERNIGHT_START_HOUR below) — found live
+// 2026-09-15 that even chunked/rate-limited, a backfill running all day
+// noticeably slowed down unrelated regular pages (Location Lookup,
+// Staffing Report) by competing for the same database connections during
+// business hours. A cron-triggered tick outside 9pm-6am company-local time
+// is skipped with no DB write at all; a manual "Run Tick Now" from a real
+// logged-in user always runs regardless of the hour.
+//
 // Orders / Staff Time Clock: each tick evaluates ONE month (the job's own
 // cursor_month, walking backward), checking that month's real coverage via
 // the existing Data Health RPCs (get_droptop_{orders,time_clock}_daily_
@@ -176,6 +184,26 @@ async function runChunksConcurrently(
   return { status, message: warnings.length ? warnings.join(' | ') : null, chunksProcessed: processed, total }
 }
 
+// Overnight-only: found live 2026-09-15 that a backfill running all day
+// (even chunked/rate-limited) still competes with regular app traffic for
+// the same database connections during business hours, made worse by
+// ticks that overlap the next cron cycle once a big month takes over 10
+// minutes (see the whole file's own header comment on that). Real shops
+// run roughly 7am-7pm Eastern (per core.locations' own typical store
+// hours) — 9pm-6am company-local time is comfortably outside both shop
+// hours and normal corporate-office usage. A cron-triggered tick outside
+// this window is skipped entirely (no DB write at all, same as the
+// routine dispatcher's own isDue() no-op) — a manual "Run Tick Now" click
+// from a real logged-in user always runs regardless of the hour, since
+// that's someone deliberately watching it right now, not an unattended
+// all-day cadence.
+const OVERNIGHT_START_HOUR = 21 // 9pm
+const OVERNIGHT_END_HOUR = 6    // 6am
+function isOvernight(now: Date, tz: string): boolean {
+  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(now))
+  return hour >= OVERNIGHT_START_HOUR || hour < OVERNIGHT_END_HOUR
+}
+
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
@@ -300,7 +328,8 @@ Deno.serve(async (req) => {
     // button, so a job doesn't have to wait for the next cron cycle to
     // show visible progress) — same dual-auth shape as skybitz-tank-sync.
     const suppliedSecret = req.headers.get('x-sync-token') ?? ''
-    let authorized = !!dispatchSecret && suppliedSecret === dispatchSecret
+    const isCronCall = !!dispatchSecret && suppliedSecret === dispatchSecret
+    let authorized = isCronCall
     if (!authorized) {
       const authHeader = req.headers.get('Authorization') ?? ''
       if (authHeader) {
@@ -318,7 +347,26 @@ Deno.serve(async (req) => {
     if (error) return ok({ error: error.message })
 
     const results: Record<string, unknown>[] = []
+    const tzByCompany = new Map<string, string>()
+    async function timezoneFor(companyId: string): Promise<string> {
+      if (tzByCompany.has(companyId)) return tzByCompany.get(companyId)!
+      const { data } = await (admin as any)
+        .schema('platform').from('app_settings').select('value')
+        .eq('company_id', companyId).eq('key', 'data_connection_timezone').maybeSingle()
+      const tz = typeof data?.value === 'string' ? data.value : 'America/Chicago'
+      tzByCompany.set(companyId, tz)
+      return tz
+    }
+    const now = new Date()
+
     for (const job of (jobs ?? []) as BackfillJob[]) {
+      if (isCronCall) {
+        const tz = await timezoneFor(job.company_id)
+        if (!isOvernight(now, tz)) {
+          results.push({ job_id: job.id, connection: job.connection_key, summary: `Skipped — outside the overnight window (${OVERNIGHT_START_HOUR}:00-${OVERNIGHT_END_HOUR}:00 ${tz})` })
+          continue
+        }
+      }
       try {
         if (job.connection_key === 'droptop_usage') {
           results.push(await tickUsageJob(admin, job, supabaseUrl, droptopSecret))
