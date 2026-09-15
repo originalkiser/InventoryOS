@@ -26,22 +26,28 @@ export interface InventoryRow {
 }
 
 
-// Page through a query in 1000-row chunks so we get the FULL table regardless of
-// PostgREST's db-max-rows cap (a single .range(0, 99999) is silently truncated
-// to the server limit). Requires a stable sort key (id) for correct paging.
+// Page through a query in PAGE-row chunks so we get the FULL table regardless
+// of PostgREST's db-max-rows cap (a single .range(0, 99999) is silently
+// truncated to the server limit). Requires a stable sort key (id) for
+// correct paging. PAGE=8000 stays under the project's own Max Rows setting
+// (10,000, raised 2026-09-03 — see skybitz-tank-sync's own PAGE=5000 for the
+// same precedent elsewhere) with headroom rather than sitting exactly at the
+// cap; fewer, bigger pages means less total PostgREST/network round-trip
+// overhead for the same ~300k rows.
 //
 // Fetched CONCURRENTLY (a count-only HEAD request up front for the page
 // count, then a bounded worker pool — same shape as this codebase's other
 // large-table pulls, e.g. Staffing Report's fetchAllPages) rather than one
 // page at a time — found live 2026-09-16 that product_usage has grown to
-// ~300k rows (300 pages), and a sequential loop turned "load Dashboard/On
-// Hand" into 300 one-at-a-time round trips, each paying full PostgREST/
-// network overhead on top of a sub-10ms query. Concurrency is capped
-// (PAGE_CONCURRENCY) rather than firing all pages at once, which would
-// just trade "slow" for "everyone's requests queue behind 300 simultaneous
-// connections" — the exact kind of contention that made unrelated pages
-// (Location Lookup, Staffing Report) feel slow during today's investigation.
-const PAGE = 1000
+// ~300k rows, and a sequential loop of small pages turned "load Dashboard/
+// On Hand" into hundreds of one-at-a-time round trips, each paying full
+// PostgREST/network overhead on top of a sub-10ms query. Concurrency is
+// capped (PAGE_CONCURRENCY) rather than firing every page at once, which
+// would just trade "slow" for "everyone's requests queue behind dozens of
+// simultaneous connections" — the exact kind of contention that made
+// unrelated pages (Location Lookup, Staffing Report) feel slow during the
+// investigation that found this.
+const PAGE = 8000
 const PAGE_CONCURRENCY = 6
 async function fetchAll(table: string, columns: string, companyId: string): Promise<any[]> {
   const { count, error: countErr } = await sb
