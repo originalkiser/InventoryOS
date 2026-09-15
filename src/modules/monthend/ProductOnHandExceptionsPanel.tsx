@@ -32,27 +32,20 @@ export function ProductOnHandExceptionsPanel() {
   // Every product ID that's ever shown up in Product Usage — the broadest
   // source of real product codes, including generic catalog SKUs that
   // wouldn't be in Global Products.
+  //
+  // Found live 2026-09-15 searching for other spots with the same bug as
+  // ProductUsageTab.tsx's own product_usage over-fetch: this picker
+  // paginated the WHOLE ~300k-row table (300 sequential range() requests)
+  // just to dedupe one column, when there are only ~2,500 distinct product
+  // ids in the whole table. Same fix pattern as
+  // get_product_usage_category_counts (migration 20260930s) — one
+  // server-side GROUP BY instead of pulling every row to the client.
   useEffect(() => {
     if (!profile?.company_id) return
     ;(async () => {
-      const sb = supabase as any
-      const seen = new Set<string>()
-      const PAGE = 1000
-      let from = 0
-      for (;;) {
-        const { data: rows, error } = await sb.schema('inventory').from('product_usage')
-          .select('product_id').eq('company_id', profile.company_id)
-          .order('id', { ascending: true }).range(from, from + PAGE - 1)
-        if (error) break
-        const batch = (rows ?? []) as { product_id: string }[]
-        for (const r of batch) if (r.product_id) seen.add(r.product_id)
-        // Exit only on a genuinely empty page — the project's API "Max Rows"
-        // setting silently caps every response at 1000 regardless of the
-        // requested range, so a full page here doesn't mean "last page."
-        if (batch.length === 0) break
-        from += PAGE
-      }
-      setProductOptions([...seen].sort().map((v) => ({ value: v })))
+      const { data: rows } = await (supabase as any).rpc('get_product_usage_product_id_counts')
+      const ids = ((rows ?? []) as { product_id: string }[]).map((r) => r.product_id)
+      setProductOptions([...new Set(ids)].sort().map((v) => ({ value: v })))
     })()
   }, [profile?.company_id])
 

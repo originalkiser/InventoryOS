@@ -221,6 +221,33 @@ export function ProductUsageTab() {
   const [excludeZeroPC, setExcludeZeroPC] = useAppSetting<boolean>('product_usage.excludeZeroPackageCapacity', true)
   const [includedZeroCats, setIncludedZeroCats] = useAppSetting<string[]>('product_usage.includedZeroCategories', [])
 
+  // ---- Category scope (default load, not just a display filter) ----
+  // Found live 2026-09-15 from a user-supplied .har: this tab loaded
+  // inventory.product_usage's ENTIRE company-wide table (~300k rows) via
+  // sequential keyset pagination every visit — confirmed against production
+  // that Engine Oil + Engine Oil Additive together are only 12,000 of
+  // 299,550 rows (96% is other categories this tab doesn't need by
+  // default). `includedCategories` scopes the actual DB query (loadRpc
+  // below), not a client-side filter over an already-fully-loaded table —
+  // the whole point is to never pull the other 96% unless asked. Defaults
+  // to the two categories that matter most day-to-day; `showAllCategories`
+  // is the escape hatch back to the old unscoped behavior.
+  const [includedCategories, setIncludedCategories] = useAppSetting<string[]>('product_usage.includedCategories', ['Engine Oil', 'Engine Oil Additive'])
+  const [showAllCategories, setShowAllCategories] = useAppSetting<boolean>('product_usage.showAllCategories', false)
+  // Every category that exists company-wide, independent of what's currently
+  // in scope — a plain `Array.from(new Set(data.map(...)))` only ever
+  // reflects whatever's already loaded, which is exactly the narrower set
+  // once the load itself is scoped. Loaded once via a server-side GROUP BY
+  // (get_product_usage_category_counts, migration 20260930s) rather than
+  // pulling the whole table just to dedupe category strings.
+  const [allCategories, setAllCategories] = useState<string[]>([])
+  const loadCategoryOptions = useCallback(async () => {
+    if (!profile?.company_id) return
+    const { data: rows } = await (supabase as any).rpc('get_product_usage_category_counts')
+    setAllCategories(((rows ?? []) as { category: string }[]).map((r) => r.category).sort())
+  }, [profile?.company_id])
+  useEffect(() => { loadCategoryOptions() }, [loadCategoryOptions])
+
   const distinctCategories = useMemo(
     () => Array.from(new Set(data.map((r) => r.category || ''))).filter(Boolean).sort(),
     [data]
@@ -252,11 +279,20 @@ export function ProductUsageTab() {
   // regardless of how deep into the table it is, since it's a direct index
   // seek — no rows to skip. Necessarily sequential (each page needs the
   // previous page's last id), trading the old concurrency for reliability.
+  //
+  // Scoped to `includedCategories` by default (unless showAllCategories) —
+  // found live 2026-09-15 that this alone was 69 sequential page round
+  // trips (~300k rows) on every visit, most of it categories this tab
+  // doesn't default to; Engine Oil + Engine Oil Additive together are only
+  // ~12,000 rows (12 pages) of the table's 299,550. This is a real scope on
+  // the query itself, not a client-side filter over an already-fully-loaded
+  // table — the whole point is to never pull the rest unless asked.
   const loadRpc = useCallback(async () => {
     if (!profile?.company_id) return
     setLoading(true)
     const sb = supabase as any
     const PAGE = 1000
+    const scoped = !showAllCategories && includedCategories.length > 0
     const all: ProductUsage[] = []
     let cursor: string | null = null
     let failed = false
@@ -264,6 +300,7 @@ export function ProductUsageTab() {
       let q = sb.schema('inventory').from('product_usage')
         .select('*').eq('company_id', profile.company_id)
         .order('id', { ascending: true }).limit(PAGE)
+      if (scoped) q = q.in('category', includedCategories)
       if (cursor) q = q.gt('id', cursor)
       const { data: rows, error } = await q
       if (error) { failed = true; break }
@@ -278,7 +315,7 @@ export function ProductUsageTab() {
     if (failed) toast.error('Product usage load failed')
     else setData(all)
     setLoading(false)
-  }, [profile?.company_id])
+  }, [profile?.company_id, showAllCategories, includedCategories])
 
   const loadDataSource = useCallback(async () => {
     if (!profile?.company_id) return
@@ -641,6 +678,22 @@ export function ProductUsageTab() {
       <div>
         <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Product Usage</h2>
         <p className="text-xs text-inky mt-0.5">Daily usage, on-hands, and days of supply by location. Use a Divide transform on Daily Usage to convert a period total to a daily figure.</p>
+      </div>
+
+      {/* Category scope — controls what actually gets loaded, not just displayed */}
+      <div className="flex flex-wrap items-center gap-2 rounded border border-navy/20 bg-cream px-3 py-2">
+        <span className="text-xs font-mono text-inky">
+          {showAllCategories ? 'Loading all categories' : `Loading: ${includedCategories.length ? includedCategories.join(', ') : '(none selected)'}`}
+        </span>
+        {!showAllCategories && (
+          <CategoryDropdown categories={allCategories} selected={includedCategories} onChange={setIncludedCategories} />
+        )}
+        <button
+          onClick={() => setShowAllCategories(!showAllCategories)}
+          className="text-xs font-mono text-inky/60 hover:text-navy underline"
+        >
+          {showAllCategories ? 'scope to selected categories' : 'show all categories (slower load)'}
+        </button>
       </div>
 
       {/* Zero package-capacity filter banner */}
