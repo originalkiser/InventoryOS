@@ -3,7 +3,7 @@ import { BarChart, Bar, LineChart, Line, ComposedChart, ReferenceLine, XAxis, YA
 import { Copy } from 'lucide-react'
 import toast from 'react-hot-toast'
 import type { GridCell } from './types'
-import { formatValue, type ValueFormat } from './formatting'
+import { formatValue, toInputValue, type ValueFormat } from './formatting'
 
 // Brand tokens only (see CLAUDE.md's palette + the 3 allowed exception
 // colors) -- cycled across series so a 6-row grid (e.g. Valvoline's Corp/
@@ -119,13 +119,39 @@ function ChartBody({ title, cells, rows, stacked, lineRows, format, height = 280
   )
 }
 
+// The chart's own pivoted table (row x month, same shape ChartBody plots)
+// as tab-separated text — a plain Ctrl+V into PowerPoint takes the image
+// (richer formats win), but Paste Special -> as text (or pasting straight
+// into Excel) turns this into a real, editable table/chart with its own
+// data labels, which a flat PNG can never offer. Values are the same raw
+// editable numbers a cell shows while being edited (percent as 23.8, not
+// 0.238) rather than the $/%/comma-decorated display text, since the whole
+// point is to hand over numbers something can still compute with.
+function buildChartTsv(cells: GridCell[], rows: string[], format: ValueFormat): string {
+  const cols = [...new Map(cells.map((c) => [c.col_key, { key: c.col_key, label: c.col_label, sort: c.col_sort }])).values()]
+    .sort((a, b) => a.sort - b.sort)
+  const lines = [['', ...cols.map((c) => c.label)].join('\t')]
+  for (const r of rows) {
+    const line = [r]
+    for (const col of cols) {
+      const cell = cells.find((c) => c.row_label === r && c.col_key === col.key)
+      line.push(cell?.value_num == null ? '' : toInputValue(cell.value_num, format))
+    }
+    lines.push(line.join('\t'))
+  }
+  return lines.join('\n')
+}
+
 // Screenshots a chart card via html2canvas and puts it on the clipboard as
 // a real image, for pasting straight into a PowerPoint slide — dark (the
 // on-screen deck look) or light (a white-slide-friendly recolor), captured
 // from a permanently-mounted-but-off-screen clone rather than by toggling
 // the visible chart's own theme (recharts needs a real reflow before
-// html2canvas can shoot it, and swapping the visible one would flash).
-async function copyChartImage(node: HTMLElement | null, bg: string) {
+// html2canvas can shoot it, and swapping the visible one would flash). The
+// underlying data rides along as a second clipboard format (text/plain,
+// TSV) in the same write — same image+text-together pattern already
+// proven on Customer Heatmap's own copy button.
+async function copyChartImage(node: HTMLElement | null, bg: string, tsv: string) {
   if (!node) { toast.error('Chart not ready to copy'); return }
   if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
     toast.error('This browser doesn’t support copying images')
@@ -143,8 +169,11 @@ async function copyChartImage(node: HTMLElement | null, bg: string) {
     return blob ?? new Blob()
   })()
   try {
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': buildBlob })])
-    toast.success('Chart copied — paste into PowerPoint')
+    await navigator.clipboard.write([new ClipboardItem({
+      'image/png': buildBlob,
+      'text/plain': new Blob([tsv], { type: 'text/plain' }),
+    })])
+    toast.success('Chart copied (with its data) — paste into PowerPoint, or Paste Special as text for an editable table')
   } catch {
     toast.error('Copy failed')
   }
@@ -157,11 +186,11 @@ export function DeckChart(props: DeckChartProps) {
     <div className="flex flex-col gap-1.5">
       <div ref={darkRef}><ChartBody {...props} variant="dark" /></div>
       <div className="flex justify-end gap-2">
-        <button onClick={() => copyChartImage(darkRef.current, THEME.dark.captureBg)} title="Copy a dark-background image of this chart for PowerPoint"
+        <button onClick={() => copyChartImage(darkRef.current, THEME.dark.captureBg, buildChartTsv(props.cells, props.rows, props.format))} title="Copy a dark-background image of this chart (plus its underlying data) for PowerPoint"
           className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-0.5 hover:border-navy">
           <Copy className="w-3 h-3" /> Copy (Dark)
         </button>
-        <button onClick={() => copyChartImage(lightRef.current, THEME.light.captureBg)} title="Copy a light-background image of this chart for PowerPoint"
+        <button onClick={() => copyChartImage(lightRef.current, THEME.light.captureBg, buildChartTsv(props.cells, props.rows, props.format))} title="Copy a light-background image of this chart (plus its underlying data) for PowerPoint"
           className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-0.5 hover:border-navy">
           <Copy className="w-3 h-3" /> Copy (Light)
         </button>

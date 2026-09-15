@@ -12,6 +12,15 @@ import { formatValue, toInputValue, fromInputValue, type ValueFormat } from './f
 // table cells with room for a left-border accent.
 const CHANGED_INPUT = 'border-[#E67E22] bg-[#E67E22]/10'
 
+const PERIOD_OPTIONS: { value: string; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: '1', label: 'Last Month' },
+  { value: '3', label: 'Last 3 Months' },
+  { value: '6', label: 'Last 6 Months' },
+  { value: '12', label: 'Last 12 Months' },
+  { value: 'custom', label: 'Custom' },
+]
+
 export interface GridSectionProps {
   title: string
   slideKey: string
@@ -35,13 +44,33 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
   const formatFor = (row: string, colKey: string): ValueFormat => rowFormats?.[row] ?? columnFormats?.[colKey] ?? format
   const [showUpload, setShowUpload] = useState(false)
   const [newRow, setNewRow] = useState('')
+  const [period, setPeriod] = useState('all')
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
 
   const rowMap = new Map<string, number>()
   for (const c of cells) rowMap.set(c.row_label, c.row_sort)
   const rowLabels = [...rowMap.entries()].sort((a, b) => a[1] - b[1]).map(([r]) => r)
   const colMap = new Map<string, { label: string; sort: number }>()
   for (const c of cells) colMap.set(c.col_key, { label: c.col_label, sort: c.col_sort })
-  const cols = [...colMap.entries()].sort((a, b) => a[1].sort - b[1].sort).map(([key, v]) => ({ key, ...v }))
+  const allCols = [...colMap.entries()].sort((a, b) => a[1].sort - b[1].sort).map(([key, v]) => ({ key, ...v }))
+
+  // The period picker only makes sense for a month-column grid ("Jul-26",
+  // etc.) — a metric-name grid (Top 3 Markets' Ordered/Invoiced/Received,
+  // Daily Compliance's Day 0..Day 4) has no "last N months" to shrink to.
+  const isMonthly = allCols.length > 0 && allCols.every((c) => /^\d{4}-\d{2}$/.test(c.key))
+  let cols = allCols
+  if (isMonthly) {
+    if (period === 'custom') {
+      cols = allCols.filter((c) => (!customStart || c.key >= customStart) && (!customEnd || c.key <= customEnd))
+    } else if (period !== 'all') {
+      cols = allCols.slice(-Number(period))
+    }
+  }
+  const visibleColKeys = new Set(cols.map((c) => c.key))
+  // Shown chart (and its copy-to-clipboard data) reflects the same window
+  // as the table — "shrink the graphs and tables" together, not just one.
+  const chartCells = isMonthly && period !== 'all' ? cells.filter((c) => visibleColKeys.has(c.col_key)) : cells
 
   function cellFor(row: string, colKey: string) {
     return cells.find((c) => c.row_label === row && c.col_key === colKey) ?? null
@@ -53,18 +82,37 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
     const nextSort = Math.max(0, ...rowLabels.map((r) => rowMap.get(r) ?? 0)) + 1
     // Seed the row with its first column so it has something to key off of;
     // real values get filled in as the user edits cells.
-    if (cols.length > 0) onSaveCell(label, nextSort, cols[0].key, cols[0].label, cols[0].sort, null)
+    if (allCols.length > 0) onSaveCell(label, nextSort, allCols[0].key, allCols[0].label, allCols[0].sort, null)
     setNewRow('')
   }
 
   return (
     <div className="flex flex-col gap-3">
       {chart && chart.rows.length > 0 && (
-        <DeckChart title={title} cells={cells} rows={chart.rows} stacked={chart.stacked} lineRows={chart.lineRows} format={format} referenceLines={chart.referenceLines} />
+        <DeckChart title={title} cells={chartCells} rows={chart.rows} stacked={chart.stacked} lineRows={chart.lineRows} format={format} referenceLines={chart.referenceLines} />
       )}
 
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <span className="text-[11px] font-mono text-inky uppercase tracking-wide">{title} — Data</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] font-mono text-inky uppercase tracking-wide">{title} — Data</span>
+          {isMonthly && (
+            <>
+              <select value={period} onChange={(e) => setPeriod(e.target.value)}
+                className="bg-cream border border-navy/30 rounded px-1.5 py-0.5 text-[11px] font-mono text-navy focus:outline-none focus:border-sky">
+                {PERIOD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              {period === 'custom' && (
+                <>
+                  <input type="month" value={customStart} onChange={(e) => setCustomStart(e.target.value)}
+                    className="bg-cream border border-navy/30 rounded px-1.5 py-0.5 text-[11px] font-mono text-navy focus:outline-none focus:border-sky" />
+                  <span className="text-[11px] font-mono text-inky/50">to</span>
+                  <input type="month" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
+                    className="bg-cream border border-navy/30 rounded px-1.5 py-0.5 text-[11px] font-mono text-navy focus:outline-none focus:border-sky" />
+                </>
+              )}
+            </>
+          )}
+        </div>
         <button onClick={() => setShowUpload((s) => !s)} className="inline-flex items-center gap-1 text-[11px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">
           <Upload className="w-3 h-3" /> Upload to update {showUpload ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
         </button>
@@ -106,15 +154,19 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
                         <td key={c.key} className="px-2 py-1 border-b border-navy/15 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <input
-                              type="number"
-                              defaultValue={toInputValue(cell?.value_num, fmt)}
+                              type="text"
+                              inputMode="decimal"
+                              defaultValue={formatValue(cell?.value_num, fmt)}
+                              onFocus={(e) => { e.target.value = toInputValue(cell?.value_num, fmt) }}
                               onBlur={(e) => {
                                 const v = fromInputValue(e.target.value, fmt)
                                 const prevInput = toInputValue(cell?.value_num, fmt)
-                                if (e.target.value.trim() === prevInput.trim()) return
-                                onSaveCell(row, rowMap.get(row) ?? 0, c.key, c.label, c.sort, v)
+                                if (e.target.value.trim() !== prevInput.trim()) onSaveCell(row, rowMap.get(row) ?? 0, c.key, c.label, c.sort, v)
+                                // Redisplay formatted ($/%/comma) now that editing is done — this is an
+                                // uncontrolled input (defaultValue only applies on mount), so the DOM
+                                // value has to be set back explicitly rather than relying on a re-render.
+                                e.target.value = formatValue(v, fmt)
                               }}
-                              title={formatValue(cell?.value_num, fmt)}
                               className={`w-24 bg-transparent border rounded px-1 py-0.5 text-right text-navy focus:border-sky focus:bg-white ${changed ? CHANGED_INPUT : 'border-transparent hover:border-navy/30'}`}
                             />
                             <FieldHistoryButton label={`${row} — ${c.label}`} entries={fieldHistory} format={fmt}
@@ -143,7 +195,7 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
             placeholder="New row label…"
             className="w-56 bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:border-sky"
           />
-          <Button size="sm" variant="secondary" onClick={addRow} disabled={!newRow.trim() || cols.length === 0}><Plus className="w-3 h-3 mr-1" /> Add Row</Button>
+          <Button size="sm" variant="secondary" onClick={addRow} disabled={!newRow.trim() || allCols.length === 0}><Plus className="w-3 h-3 mr-1" /> Add Row</Button>
         </div>
       )}
     </div>
