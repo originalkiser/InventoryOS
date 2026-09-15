@@ -15,7 +15,7 @@ async function fetchAll<T>(table: string, companyId: string): Promise<T[]> {
   let from = 0
   for (;;) {
     const { data, error } = await sb.schema('inventory').from(table).select('*')
-      .eq('company_id', companyId).order('row_sort', { ascending: true, nullsFirst: true }).range(from, from + PAGE - 1)
+      .eq('company_id', companyId).order('id', { ascending: true }).range(from, from + PAGE - 1)
     if (error) throw error
     const batch = (data ?? []) as T[]
     out.push(...batch)
@@ -45,7 +45,12 @@ export function useProcurementDeck() {
       ])
       setCells(c); setKpis(k); setItems(l)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load Procurement Deck data')
+      // Supabase-js's PostgrestError isn't a real Error instance, so check
+      // for a .message string too -- otherwise a real DB error (bad column,
+      // missing grant) silently degrades to this generic fallback text with
+      // no way to tell what actually went wrong.
+      const msg = e instanceof Error ? e.message : (e as { message?: string } | null)?.message
+      toast.error(msg || 'Failed to load Procurement Deck data')
     } finally {
       setLoading(false)
     }
