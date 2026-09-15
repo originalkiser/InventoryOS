@@ -29,33 +29,60 @@ export interface InventoryRow {
 // Page through a query in 1000-row chunks so we get the FULL table regardless of
 // PostgREST's db-max-rows cap (a single .range(0, 99999) is silently truncated
 // to the server limit). Requires a stable sort key (id) for correct paging.
+//
+// Fetched CONCURRENTLY (a count-only HEAD request up front for the page
+// count, then a bounded worker pool — same shape as this codebase's other
+// large-table pulls, e.g. Staffing Report's fetchAllPages) rather than one
+// page at a time — found live 2026-09-16 that product_usage has grown to
+// ~300k rows (300 pages), and a sequential loop turned "load Dashboard/On
+// Hand" into 300 one-at-a-time round trips, each paying full PostgREST/
+// network overhead on top of a sub-10ms query. Concurrency is capped
+// (PAGE_CONCURRENCY) rather than firing all pages at once, which would
+// just trade "slow" for "everyone's requests queue behind 300 simultaneous
+// connections" — the exact kind of contention that made unrelated pages
+// (Location Lookup, Staffing Report) feel slow during today's investigation.
 const PAGE = 1000
+const PAGE_CONCURRENCY = 6
 async function fetchAll(table: string, columns: string, companyId: string): Promise<any[]> {
-  let from = 0
-  const all: any[] = []
-  for (;;) {
-    const { data, error } = await sb
-      .schema('inventory').from(table)
-      .select(columns).eq('company_id', companyId)
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (error) throw error
-    const batch = (data ?? []) as any[]
-    all.push(...batch)
-    // Exit only on a genuinely empty page — the project's API "Max Rows"
-    // setting silently caps every response at 1000 regardless of the
-    // requested range, so a full page here doesn't mean "last page."
-    if (batch.length === 0) break
-    from += PAGE
+  const { count, error: countErr } = await sb
+    .schema('inventory').from(table).select('id', { count: 'exact', head: true }).eq('company_id', companyId)
+  if (countErr) throw countErr
+  const totalPages = Math.max(1, Math.ceil((count ?? 0) / PAGE))
+  const results: any[][] = new Array(totalPages)
+  let nextPage = 0
+  async function worker() {
+    for (;;) {
+      const i = nextPage++
+      if (i >= totalPages) return
+      const { data, error } = await sb
+        .schema('inventory').from(table)
+        .select(columns).eq('company_id', companyId)
+        .order('id', { ascending: true })
+        .range(i * PAGE, i * PAGE + PAGE - 1)
+      if (error) throw error
+      results[i] = (data ?? []) as any[]
+    }
   }
-  return all
+  await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, totalPages) }, worker))
+  return results.flat()
 }
 
 // Module-level cache shared across every useInventory consumer (Dashboard,
 // On Hand, InventoryView). Survives route changes so returning to a page is
 // instant; a manual reload() or the 5-minute TTL forces a fresh pull.
+//
+// invFetchInFlight de-dupes the OTHER real problem this uncovered: this app
+// deliberately keeps the last 3 visited pages mounted in the background
+// (KeepAlivePages.tsx), so Dashboard, On Hand, and InventoryView can all be
+// alive at once — each independently mounting this hook. Without this
+// guard, all of them would race their own full ~300-page pull the instant
+// none has populated the cache yet (e.g. right after a hard refresh),
+// multiplying the exact load problem the concurrency cap above is trying
+// to bound. Later callers for the same company just await the one already
+// in flight instead of starting their own.
 interface InvCache { companyId: string; usage: ProductUsage[]; orderRows: any[]; fetchedAt: number }
 let invCache: InvCache | null = null
+let invFetchInFlight: { companyId: string; promise: Promise<InvCache> } | null = null
 const CACHE_TTL = 5 * 60 * 1000
 
 // Drop the cached inventory so the next useInventory mount (Dashboard / On Hand)
@@ -89,15 +116,29 @@ export function useInventory() {
     }
     setLoading(true)
     try {
-      const [pu, oc] = await Promise.all([
-        fetchAll('product_usage', '*', companyId),
-        fetchAll('location_order_config', 'id, location_id, product_id', companyId),
-      ])
-      invCache = { companyId, usage: pu as ProductUsage[], orderRows: oc, fetchedAt: Date.now() }
-      setUsage(pu as ProductUsage[])
-      setOrderKeys(orderKeySet(oc))
+      // Another kept-alive instance (Dashboard/On Hand/InventoryView can
+      // all be mounted at once) may already be pulling this exact company —
+      // join that instead of starting a second full pull.
+      let inFlight = invFetchInFlight?.companyId === companyId ? invFetchInFlight.promise : null
+      if (!inFlight || force) {
+        const promise = (async (): Promise<InvCache> => {
+          const [pu, oc] = await Promise.all([
+            fetchAll('product_usage', '*', companyId),
+            fetchAll('location_order_config', 'id, location_id, product_id', companyId),
+          ])
+          const entry = { companyId, usage: pu as ProductUsage[], orderRows: oc, fetchedAt: Date.now() }
+          invCache = entry
+          return entry
+        })()
+        invFetchInFlight = { companyId, promise }
+        inFlight = promise
+      }
+      const entry = await inFlight
+      setUsage(entry.usage)
+      setOrderKeys(orderKeySet(entry.orderRows))
     } finally {
       setLoading(false)
+      if (invFetchInFlight?.companyId === companyId) invFetchInFlight = null
     }
   }, [companyId])
 
