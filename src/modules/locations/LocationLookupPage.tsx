@@ -379,16 +379,51 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       return out
     }
     try {
-      const [tankRes, cfgRes, usageRes, mapRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes] = await Promise.all([
-        sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
+      const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+      // location_order_config + tank_monitors + product_id_mappings fetched
+      // first (all small — one shop's own rows, plus a company-wide but tiny
+      // mapping table) so the product_usage pull below can be scoped to only
+      // the product ids this shop actually needs it for, instead of every
+      // product the shop has ever had usage for — confirmed against
+      // production that a shop's own product_usage rows (avg ~1,070) vastly
+      // outnumber its configured products (avg ~21), and unscoped usage is
+      // otherwise only ever joined onto a config row OR matched against a
+      // tank monitor's product (the On Hand view's Droptop-vs-tank
+      // comparison) below — nothing else on this page reads it. Tank
+      // monitors matter here specifically because keep-fill/VMI products are
+      // deliberately excluded from normal order config (confirmed against
+      // production: 1,616 shop/product pairs have a tank monitor with no
+      // matching location_order_config row at all), so scoping by config
+      // alone would have silently dropped the On Hand view's Droptop data
+      // for every keep-fill product. Either source's usage can also still be
+      // keyed by a retired product id, so the filter includes any old id
+      // that maps (product_id_mappings) onto a config's or a tank's product
+      // id — filtering by the current ids alone would silently drop on-hand
+      // data for anything that's ever been renamed.
+      const [cfgRes, tankRes, mapRes] = await Promise.all([
         sb.schema('inventory').from('location_order_config').select('*').eq('company_id', companyId).eq('location_id', shopId),
-        fetchAllRows((from, to) =>
+        sb.schema('inventory').from('tank_monitors').select('*').eq('company_id', companyId).eq('location_id', shopId).order('product_id'),
+        sb.schema('inventory').from('product_id_mappings').select('old_product_id, new_product_id').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
+      ])
+      const configProducts = (cfgRes.data ?? []) as any[]
+      const tankProducts = (tankRes.data ?? []) as any[]
+      const neededPkeys = new Set([...configProducts, ...tankProducts].map((r) => pkey(r.product_id)).filter(Boolean))
+      const usageIdSet = new Set<string>()
+      for (const c of configProducts) if (c.product_id) usageIdSet.add(c.product_id)
+      for (const t of tankProducts) if (t.product_id) usageIdSet.add(t.product_id)
+      for (const m of ((mapRes?.data ?? []) as any[])) {
+        if (m.old_product_id && m.new_product_id && neededPkeys.has(pkey(m.new_product_id))) usageIdSet.add(m.old_product_id)
+      }
+      const usageIdList = [...usageIdSet]
+
+      const [usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes] = await Promise.all([
+        usageIdList.length === 0 ? Promise.resolve({ data: [] }) : fetchAllRows((from, to) =>
           sb.schema('inventory').from('product_usage')
             .select('product_id, on_hands, daily_usage, updated_at')
             .eq('company_id', companyId).eq('location_id', shopId)
+            .in('product_id', usageIdList)
             .order('product_id').range(from, to)
         ).then((data) => ({ data })).catch(() => ({ data: [] })),
-        sb.schema('inventory').from('product_id_mappings').select('old_product_id, new_product_id').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
         sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
         sb.schema('platform').from('issues').select('*').eq('company_id', companyId).eq('location_id', shopId).is('deleted_at', null).order('created_at', { ascending: false }),
         sb.schema('inventory').from('issue_statuses').select('id, name').eq('company_id', companyId),
@@ -429,8 +464,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // order config already uses the new ones. Resolve each usage row through
       // product_id_mappings (old -> new) and sum anything landing on the same
       // product, so a config row shows what's actually on hand even when the
-      // usage file predates the rename.
-      const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+      // usage file predates the rename. (pkey is declared above, before the
+      // fetch, since the scoped usage query needs it too.)
       const oldToNew = new Map<string, string>()
       for (const m of ((mapRes?.data ?? []) as any[])) {
         if (m.old_product_id && m.new_product_id) oldToNew.set(pkey(m.old_product_id), String(m.new_product_id))

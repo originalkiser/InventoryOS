@@ -55,6 +55,12 @@ export function LocationCommsPage() {
   }
 
   const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
+  // location_comms is its own small table and often resolves before
+  // useLocations()'s core.locations fetch does — without folding loc.loading
+  // in here, the sheet rendered fully with every Shop cell blank ('—') for a
+  // moment, then popped in once locations arrived. Both loads block the
+  // spinner together so the row set and its Shop labels always appear at once.
+  const dataLoading = loading || loc.loading
 
   const load = useCallback(async () => {
     if (!companyId) return
@@ -149,7 +155,7 @@ export function LocationCommsPage() {
         {/* Exactly the rows behind the sidebar badge: not resolved, old
             enough to be stale, and not currently bumped. */}
         <TabsContent value="alerts">
-          {loading ? (
+          {dataLoading ? (
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : alertRows.length === 0 ? (
             <p className="text-xs font-mono text-inky/60 py-8">
@@ -185,7 +191,7 @@ export function LocationCommsPage() {
             <Button size="sm" onClick={() => { setEditing(null); setModalOpen(true) }}>+ New Communication</Button>
           </div>
 
-          {loading ? (
+          {dataLoading ? (
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : error ? (
             <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">{error}</div>

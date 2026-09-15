@@ -49,9 +49,14 @@ export interface InventoryRow {
 // investigation that found this.
 const PAGE = 8000
 const PAGE_CONCURRENCY = 6
-async function fetchAll(table: string, columns: string, companyId: string): Promise<any[]> {
-  const { count, error: countErr } = await sb
-    .schema('inventory').from(table).select('id', { count: 'exact', head: true }).eq('company_id', companyId)
+// `filter` narrows both the count and every page query the same way (e.g.
+// scoping product_usage to a set of product ids) — applied to a fresh query
+// builder each call since a PostgREST query builder can't be reused/cloned.
+async function fetchAll(table: string, columns: string, companyId: string, filter?: (q: any) => any): Promise<any[]> {
+  const base = (q: any) => (filter ? filter(q) : q)
+  const { count, error: countErr } = await base(
+    sb.schema('inventory').from(table).select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+  )
   if (countErr) throw countErr
   const totalPages = Math.max(1, Math.ceil((count ?? 0) / PAGE))
   const results: any[][] = new Array(totalPages)
@@ -60,17 +65,46 @@ async function fetchAll(table: string, columns: string, companyId: string): Prom
     for (;;) {
       const i = nextPage++
       if (i >= totalPages) return
-      const { data, error } = await sb
-        .schema('inventory').from(table)
-        .select(columns).eq('company_id', companyId)
-        .order('id', { ascending: true })
-        .range(i * PAGE, i * PAGE + PAGE - 1)
+      const { data, error } = await base(
+        sb.schema('inventory').from(table).select(columns).eq('company_id', companyId),
+      ).order('id', { ascending: true }).range(i * PAGE, i * PAGE + PAGE - 1)
       if (error) throw error
       results[i] = (data ?? []) as any[]
     }
   }
   await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, totalPages) }, worker))
   return results.flat()
+}
+
+// Found live 2026-09-15 checking out the "why does this pull so much data"
+// complaint further: inventory.product_usage has grown to ~300k rows, but
+// only ~50-ish distinct product ids are ever actually referenced by
+// location_order_config (confirmed via direct SQL — 54 distinct configured
+// product ids, matching just ~7,300 of the table's 299,550 rows). Every
+// consumer of this hook (Dashboard, On Hand, InventoryView) only cares
+// about configured products for the actual ordering workflow — the
+// unconfigured 97%+ of rows were being fetched, paginated, and shipped over
+// the wire for every load just so the "Only products in order config"
+// toggle could be switched OFF to see them, a path confirmed against
+// production to have never actually been used (the one company that had
+// ever saved this setting had already turned it ON). So the default/common
+// fetch now scopes product_usage server-side to whatever product ids
+// location_order_config actually references company-wide (a plain .in())
+// — location_order_config itself is fetched first specifically to get that
+// id list, so this trades the previous full-table pull's page count for one
+// small extra round trip. The exact (location, product) narrowing down to
+// what's REALLY configured at each specific shop still happens client-side
+// via `orderKeys` in `rows` below, unchanged — this server-side scope is
+// intentionally the broader "used anywhere in the company" superset, which
+// is already 97%+ of the win.
+//
+// Turning the "Only products in order config" toggle OFF is a genuine
+// opt-in to see unconfigured products too, so that path still pulls the
+// full unfiltered table exactly as before.
+async function fetchUsage(companyId: string, scoped: boolean, configuredProductIds: string[]): Promise<any[]> {
+  if (!scoped) return fetchAll('product_usage', '*', companyId)
+  if (!configuredProductIds.length) return []
+  return fetchAll('product_usage', '*', companyId, (q) => q.in('product_id', configuredProductIds))
 }
 
 // Module-level cache shared across every useInventory consumer (Dashboard,
@@ -86,9 +120,14 @@ async function fetchAll(table: string, columns: string, companyId: string): Prom
 // multiplying the exact load problem the concurrency cap above is trying
 // to bound. Later callers for the same company just await the one already
 // in flight instead of starting their own.
-interface InvCache { companyId: string; usage: ProductUsage[]; orderRows: any[]; fetchedAt: number }
+// `scoped` records which product_usage pull an entry holds — the fast
+// configured-products-only fetch, or the full unfiltered table (see
+// fetchUsage above) — so a company toggling "Only products in order
+// config" off mid-session correctly triggers the other, genuinely
+// different fetch instead of serving a cache built for the other mode.
+interface InvCache { companyId: string; scoped: boolean; usage: ProductUsage[]; orderRows: any[]; fetchedAt: number }
 let invCache: InvCache | null = null
-let invFetchInFlight: { companyId: string; promise: Promise<InvCache> } | null = null
+let invFetchInFlight: { companyId: string; scoped: boolean; promise: Promise<InvCache> } | null = null
 const CACHE_TTL = 5 * 60 * 1000
 
 // Drop the cached inventory so the next useInventory mount (Dashboard / On Hand)
@@ -106,15 +145,16 @@ export function useInventory() {
   const [flagConfig, setFlagConfig] = useAppSetting<FlagConfig>('flag_config', DEFAULT_FLAG_CONFIG)
   const [exclude] = useAppSetting<boolean>(EXCLUDE_NOT_IN_ORDER_KEY, false)
   const { onlyConfig, setOnlyConfig, excludedCategories, setExcludedCategories } = useInventorySettings()
-  const fresh = invCache?.companyId === companyId
+  const fresh = invCache?.companyId === companyId && invCache.scoped === onlyConfig
   const [usage, setUsage] = useState<ProductUsage[]>(fresh ? invCache!.usage : [])
   const [orderKeys, setOrderKeys] = useState<Set<string>>(fresh ? orderKeySet(invCache!.orderRows) : new Set())
   const [loading, setLoading] = useState(!fresh)
 
   const load = useCallback(async (force = false) => {
     if (!companyId) return
-    // Serve from cache when fresh unless a reload is forced.
-    if (!force && invCache?.companyId === companyId && Date.now() - invCache.fetchedAt < CACHE_TTL) {
+    // Serve from cache when fresh (same company AND same scope — see
+    // InvCache's own comment) unless a reload is forced.
+    if (!force && invCache?.companyId === companyId && invCache.scoped === onlyConfig && Date.now() - invCache.fetchedAt < CACHE_TTL) {
       setUsage(invCache.usage)
       setOrderKeys(orderKeySet(invCache.orderRows))
       setLoading(false)
@@ -123,20 +163,21 @@ export function useInventory() {
     setLoading(true)
     try {
       // Another kept-alive instance (Dashboard/On Hand/InventoryView can
-      // all be mounted at once) may already be pulling this exact company —
-      // join that instead of starting a second full pull.
-      let inFlight = invFetchInFlight?.companyId === companyId ? invFetchInFlight.promise : null
+      // all be mounted at once) may already be pulling this exact company
+      // in this exact scope — join that instead of starting a second pull.
+      let inFlight = invFetchInFlight?.companyId === companyId && invFetchInFlight.scoped === onlyConfig ? invFetchInFlight.promise : null
       if (!inFlight || force) {
         const promise = (async (): Promise<InvCache> => {
-          const [pu, oc] = await Promise.all([
-            fetchAll('product_usage', '*', companyId),
-            fetchAll('location_order_config', 'id, location_id, product_id', companyId),
-          ])
-          const entry = { companyId, usage: pu as ProductUsage[], orderRows: oc, fetchedAt: Date.now() }
+          // location_order_config first (small/fast) so a scoped usage pull
+          // knows which product ids to ask for — see fetchUsage's comment.
+          const oc = await fetchAll('location_order_config', 'id, location_id, product_id', companyId)
+          const configuredProductIds = [...new Set(oc.map((r: any) => r.product_id).filter(Boolean))] as string[]
+          const pu = await fetchUsage(companyId, onlyConfig, configuredProductIds)
+          const entry: InvCache = { companyId, scoped: onlyConfig, usage: pu as ProductUsage[], orderRows: oc, fetchedAt: Date.now() }
           invCache = entry
           return entry
         })()
-        invFetchInFlight = { companyId, promise }
+        invFetchInFlight = { companyId, scoped: onlyConfig, promise }
         inFlight = promise
       }
       const entry = await inFlight
@@ -144,9 +185,9 @@ export function useInventory() {
       setOrderKeys(orderKeySet(entry.orderRows))
     } finally {
       setLoading(false)
-      if (invFetchInFlight?.companyId === companyId) invFetchInFlight = null
+      if (invFetchInFlight?.companyId === companyId && invFetchInFlight.scoped === onlyConfig) invFetchInFlight = null
     }
-  }, [companyId])
+  }, [companyId, onlyConfig])
 
   useEffect(() => { load() }, [load])
 

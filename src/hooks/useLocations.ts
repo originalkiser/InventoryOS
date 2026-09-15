@@ -46,9 +46,15 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
   const { isExcluded } = useLocationExclusions(surface)
   const [locations, setLocations] = useState<Location[]>([])
   const [posMaps, setPosMaps] = useState<PosLocationMap[]>([])
+  // Exposed so a page whose own data loads fast (e.g. Location Comms' own
+  // small table) can hold its loading spinner until locations are ready too
+  // instead of rendering with every location-derived label/lookup still
+  // blank and then popping in a moment later — see loadingRef note below.
+  const [loading, setLoading] = useState(true)
 
   const reload = useCallback(async () => {
-    if (!companyId) { setLocations([]); setPosMaps([]); return }
+    if (!companyId) { setLocations([]); setPosMaps([]); setLoading(false); return }
+    setLoading(true)
     const [loc, pos] = await Promise.all([
       (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
       (supabase as any).schema('core').from('pos_location_map').select('*').eq('company_id', companyId),
@@ -61,6 +67,7 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
     // either.
     setLocations(((loc.data ?? []) as Location[]).filter(isOperationalLocation))
     setPosMaps((pos.data ?? []) as PosLocationMap[])
+    setLoading(false)
   }, [companyId])
 
   useEffect(() => { reload() }, [reload])
@@ -201,6 +208,6 @@ export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
     return byId(id)?.name ?? ''
   }, [byId])
 
-  return useMemo(() => ({ locations, posMaps, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload }),
-    [locations, posMaps, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload])
+  return useMemo(() => ({ locations, posMaps, loading, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload }),
+    [locations, posMaps, loading, options, included, includedOptions, isExcluded, resolveId, byId, labelOf, codeOf, fieldValue, posStringFor, reload])
 }

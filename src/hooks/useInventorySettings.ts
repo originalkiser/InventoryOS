@@ -28,7 +28,15 @@ interface InvSettingsStore {
 }
 
 const useStore = create<InvSettingsStore>((set) => ({
-  onlyConfig: false,
+  // Defaults to true (only configured products) — the only company that had
+  // ever explicitly saved this setting had already turned it on, and
+  // useInventory()'s fetch itself now scopes to configured products by
+  // default for performance (see that file's own comment) — "show all"
+  // requires an explicit opt-in fetch of the full ~300k-row product_usage
+  // table, so defaulting new/untouched companies to the fast path avoids
+  // paying for that pull unless someone actually wants to see unconfigured
+  // products too.
+  onlyConfig: true,
   excludedCategories: [],
   loadedFor: null,
   load: (companyId) => {
