@@ -855,9 +855,11 @@ export function DataConnectionsTab() {
   }
 
   // One-time historical pull for building up real order/pricing history —
-  // the routine sync only pulls a rolling 30-day window (light on Droptop's
-  // API and this app's database), so anything older than that never gets
-  // captured unless something explicitly asks for it. Every (shop, week)
+  // the routine incremental sync (droptop-sync-orders' own MAX_CATCHUP_DAYS/
+  // MAX_SINGLE_PULL_DAYS) only ever moves each shop's watermark forward from
+  // where it left off, so it never reaches back further than 30 days behind
+  // on its own; a newly-connected shop or one that fell further behind than
+  // that still has a real gap this fills in by hand. Every (shop, week)
   // pair below is an independent upsert-only call, so they run through a
   // bounded worker pool (CONCURRENCY, below) instead of strictly one at a
   // time — same pattern droptopChildFetch.ts/useConfigTab.ts already use
@@ -1337,12 +1339,14 @@ export function DataConnectionsTab() {
         </CardHeader>
         <CardBody className="flex flex-col gap-3">
           <p className="text-[11px] font-mono text-inky/60">
-            The routine Droptop Orders sync above only pulls a rolling last-30-days window — enough to keep the
-            Customer Heatmap and Droptop Orders page current, but it won't build a deep pricing/sales history on its
-            own since anything older than 30 days simply isn't in the window it re-pulls each time. This pulls a
-            specific date range once, for the shop(s) you pick. Runs one shop at a time (not chunked) — a wide range
-            on a busy shop can still take a while or need splitting into smaller pieces if it times out; every write
-            here is an upsert, so re-running any part of it is always safe.
+            The routine Droptop Orders sync above only ever pulls forward from where each shop's own watermark left
+            off (typically just the newest day or two once caught up, capped at 7 days per tick, and capped at 30
+            days of lookback if a shop has fallen further behind than that) — it never reaches back further than
+            that on its own. So a newly-connected shop (nothing before its Droptop go-live date) or one whose sync
+            fell more than 30 days behind still has a real gap the routine sync will never fill in by itself. This
+            pulls a specific date range once, for the shop(s) you pick. Runs one shop at a time (not chunked) — a
+            wide range on a busy shop can still take a while or need splitting into smaller pieces if it times out;
+            every write here is an upsert, so re-running any part of it is always safe.
           </p>
           <div className="flex items-end gap-2 flex-wrap">
             <div>
