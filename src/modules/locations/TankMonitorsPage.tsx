@@ -19,6 +19,13 @@ import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
 const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 }))
+// Copy-to-clipboard only — a whole number stays whole ("80", not "80.0"),
+// anything else rounds to 1 decimal instead of whatever floating-point
+// noise the raw sort value happens to carry (on_hand/available_capacity
+// are computed as capacity minus a raw reading, so they're never exactly
+// round — "15.060609999999997" pasted straight into a shop's spreadsheet
+// otherwise).
+const num1 = (v: number | null | undefined) => (v == null ? '' : v.toLocaleString(undefined, { maximumFractionDigits: 1 }))
 const dt = (v: string | null | undefined) => { if (!v) return '—'; try { return format(new Date(v), 'MMM d, yyyy h:mm a') } catch { return String(v) } }
 const metaOf = (l: Location | undefined, key: string): string => {
   if (!l) return ''
@@ -558,7 +565,7 @@ function MonitorTable({ rows, ctx, shopOf, onIgnore }: { rows: TankMonitor[]; ct
     if (id === 'inventory_time') return dt(m.inventory_time ?? m.reading_date)
     if (id === 'updated_at') return dt(m.updated_at)
     const c = colOf(id); const v = c.sort ? c.sort(m, ctx) : null
-    return v == null ? '' : String(v)
+    return v == null ? '' : typeof v === 'number' ? num1(v) : String(v)
   }
   async function copyTable() {
     const header = ['Shop', ...shown.map((id) => colOf(id).label)].join('\t')
