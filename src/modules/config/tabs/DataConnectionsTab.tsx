@@ -15,6 +15,7 @@ import {
   Tabs, TabsList, TabsTrigger, TabsContent,
 } from '@/components/ui'
 import { DataHealthTab, CoverageEvaluationNote } from './DataHealthTab'
+import { BackgroundBackfillPanel } from './BackgroundBackfillPanel'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
 import { runGeocoding } from '@/services/geocodingService'
@@ -1330,6 +1331,7 @@ export function DataConnectionsTab() {
               Run Backfill{backfillTargetIds?.length ? ` (${backfillTargetIds.length} shop${backfillTargetIds.length === 1 ? '' : 's'})` : ''}
             </Button>
           </div>
+          <BackgroundBackfillPanel connectionKey="droptop_usage" companyId={companyId} targetLocationIds={backfillTargetIds} />
         </CardBody>
       </Card>
 
@@ -1408,6 +1410,7 @@ export function DataConnectionsTab() {
               </Button>
             </div>
           )}
+          <BackgroundBackfillPanel connectionKey="droptop_orders" companyId={companyId} targetLocationIds={orderBackfillTargetIds} />
         </CardBody>
       </Card>
 
@@ -1461,6 +1464,7 @@ export function DataConnectionsTab() {
             end={timeClockBackfillEnd}
             targetIds={timeClockBackfillTargetIds}
           />
+          <BackgroundBackfillPanel connectionKey="droptop_time_clock" companyId={companyId} targetLocationIds={timeClockBackfillTargetIds} />
         </CardBody>
       </Card>
 

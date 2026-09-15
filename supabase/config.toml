@@ -42,6 +42,12 @@ verify_jwt = false
 [functions.data-connection-dispatcher]
 verify_jwt = false
 
+# Same reason as data-connection-dispatcher above — its own separate
+# pg_cron schedule (kept apart so a slow backfill tick can never delay the
+# routine incremental syncs), plus a real logged-in user's "Run tick now".
+[functions.data-connection-backfill-dispatcher]
+verify_jwt = false
+
 # Called by the dispatcher above (unattended) and by the Data Connections
 # tab's "Run Now" (interactive) — same reason as the others.
 [functions.run-automated-checks]
