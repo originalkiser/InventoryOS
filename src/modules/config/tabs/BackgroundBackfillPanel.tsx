@@ -12,6 +12,7 @@ interface BackfillJob {
   floor_month: string
   months_pulled: number
   months_skipped: number
+  month_pending_ids: string[] | null
   usage_pending_location_ids: string[] | null
   usage_done_count: number
   last_run_at: string | null

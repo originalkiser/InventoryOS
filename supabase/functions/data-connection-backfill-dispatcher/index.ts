@@ -10,10 +10,12 @@
 // cursor_month, walking backward), checking that month's real coverage via
 // the existing Data Health RPCs (get_droptop_{orders,time_clock}_daily_
 // coverage) against the job's target shops. A month already at or above
-// min_coverage_pct is skipped (cheap — no Droptop API call); otherwise this
-// tick pulls it via that connection's own sync function in mode:'sync' with
-// an explicit date range, then the cursor still moves back one month either
-// way. The job completes once cursor_month passes floor_month.
+// min_coverage_pct is skipped (cheap — no Droptop API call); otherwise the
+// job pulls it via that connection's own sync function in mode:'sync' with
+// an explicit date range — CHUNKED across ticks (month_pending_ids), same
+// as below. The cursor only advances to the previous month once
+// month_pending_ids is genuinely empty. The job completes once cursor_month
+// passes floor_month.
 //
 // Usage: droptop-sync-usage has no historical date-range mode at all —
 // Droptop's usage/inventory API is a live-state snapshot, not a queryable
@@ -23,6 +25,22 @@
 // rolling average to build up on its own — so its job type is flat: a
 // pending shop list, chunked a few shops per tick, done when the list is
 // empty. No month-walking, no coverage-checking, nothing to skip.
+//
+// Found live 2026-09-15: an earlier version of this function called the
+// sync functions with a job's FULL shop list (267 shops) in one unchunked
+// request and never checked the response's HTTP status before treating it
+// as a success — the platform silently killed the invocation partway
+// through (the exact "chunk-timeout at full-company scale" failure the
+// routine data-connection-dispatcher already hit and fixed once, see its
+// own DROPTOP_ORDER_CHUNK_SIZE/runChunksConcurrently/parseSyncResponse
+// comments), and the truncated response read as a plain success. Real
+// damage: May 2026 got pulled for only 12 of 267 shops, April for only 1,
+// before each was wrongly marked "done". Fixed by copying that exact
+// proven pattern here (fetchWithTimeout/parseSyncResponse/callChunk/
+// runChunksConcurrently — this codebase copy-pastes these per function
+// rather than sharing a module, same as the Droptop request-signing logic)
+// plus month_pending_ids to track a month's own remaining shop chunks
+// across ticks instead of assuming one tick finishes a whole month.
 //
 // A tick's error is treated as transient (a Droptop rate limit, a timeout)
 // unless the required secret itself is missing — the job stays 'running'
@@ -61,6 +79,7 @@ interface BackfillJob {
   min_coverage_pct: number
   months_pulled: number
   months_skipped: number
+  month_pending_ids: string[] | null
   usage_pending_location_ids: string[] | null
   usage_done_count: number
 }
@@ -75,56 +94,165 @@ function monthBefore(monthStart: string): string {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)
 }
 
-async function callSyncFn(supabaseUrl: string, secret: string, fnName: string, body: Record<string, unknown>) {
-  const resp = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-    body: JSON.stringify(body),
-  })
-  const data = await resp.json().catch(() => ({ error: `${fnName} returned a non-JSON response (HTTP ${resp.status})` }))
-  if (data?.error) throw new Error(String(data.error))
-  return data
+// ── Chunked-call helpers — copied verbatim (in spirit) from
+// data-connection-dispatcher/index.ts, which already proved this exact
+// pattern out against the exact same failure mode. Kept as its own copy
+// per this codebase's own convention (see the Droptop request-signing
+// logic) rather than a shared module. ──────────────────────────────────
+const FETCH_TIMEOUT_MS = 150_000
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
 }
+
+// A non-2xx response (timeout, crash, killed invocation) or a body that
+// isn't valid JSON must never read as "success" just because .error is
+// absent — that's precisely the bug this function is named after fixing.
+async function parseSyncResponse(res: Response): Promise<{ data: any; error: string | null }> {
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    return { data: null, error: `HTTP ${res.status}${text ? `: ${text.slice(0, 300)}` : ''}` }
+  }
+  try {
+    const data = await res.json()
+    return { data, error: data?.error ? String(data.error) : null }
+  } catch {
+    return { data: null, error: 'Response was not valid JSON (likely a timed-out or killed invocation)' }
+  }
+}
+
+async function callChunk(
+  url: string, secret: string, body: Record<string, unknown>, label: string,
+): Promise<{ ok: boolean; data: any; warnings: string[] }> {
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+      body: JSON.stringify(body),
+    })
+    const { data, error } = await parseSyncResponse(res)
+    if (error) return { ok: false, data: null, warnings: [`${label}: ${error}`] }
+    return { ok: true, data, warnings: ((data?.warnings ?? []) as string[]).map((w) => `${label}: ${w}`) }
+  } catch (err) {
+    return { ok: false, data: null, warnings: [`${label}: ${err instanceof Error ? err.message : String(err)}`] }
+  }
+}
+
+const CHUNK_CONCURRENCY = 4
+const CHUNK_TIME_BUDGET_MS = 100_000
+
+// Unlike the routine dispatcher's own version, this also totals up a
+// numeric field (orders/records upserted) across every chunk that
+// succeeded, and reports how many of the given chunks it actually got
+// through — the caller needs that to know whether to keep the SAME
+// month's remaining ids for next tick or move on.
+async function runChunksConcurrently(
+  url: string, secret: string, chunks: string[][], bodyFor: (ids: string[]) => Record<string, unknown>, countField: string,
+): Promise<{ status: string; message: string | null; chunksProcessed: number; total: number }> {
+  const warnings: string[] = []
+  let anySucceeded = false
+  let processed = 0
+  let total = 0
+  const startedAt = Date.now()
+  let nextIndex = 0
+  async function worker() {
+    for (;;) {
+      if (Date.now() - startedAt > CHUNK_TIME_BUDGET_MS) return
+      const i = nextIndex++
+      if (i >= chunks.length) return
+      const r = await callChunk(url, secret, bodyFor(chunks[i]), `Chunk ${i + 1}/${chunks.length}`)
+      if (r.ok) { anySucceeded = true; if (typeof r.data?.[countField] === 'number') total += r.data[countField] }
+      warnings.push(...r.warnings)
+      processed++
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker))
+  const status = chunks.length === 0 ? 'success' : !anySucceeded ? 'error' : warnings.length ? 'partial' : 'success'
+  return { status, message: warnings.length ? warnings.join(' | ') : null, chunksProcessed: processed, total }
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
+// Bounds how many shops one tick will attempt, same guardrail idea as the
+// routine dispatcher's MAX_LOCATIONS_PER_TICK — keeps a single invocation
+// from ever trying to do a whole 267-shop month in one shot again.
+const MAX_IDS_PER_TICK = 60
 
 async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: BackfillJob, supabaseUrl: string, droptopSecret: string): Promise<Record<string, unknown>> {
   const cursor = job.cursor_month!
   const pStart = cursor
   const pEnd = monthEndOf(cursor)
-  const rpcName = job.connection_key === 'droptop_orders' ? 'get_droptop_orders_daily_coverage' : 'get_droptop_time_clock_daily_coverage'
+  const fnName = job.connection_key === 'droptop_orders' ? 'droptop-sync-orders' : 'droptop-sync-staff-time-clock'
+  // Orders writes up to 4 child tables per order — far heavier per-location
+  // than time clock's single-call-per-location pull, so it needs a much
+  // smaller chunk (this codebase's own routine dispatcher already learned
+  // this the hard way: DROPTOP_ORDER_CHUNK_SIZE=3 vs DROPTOP_CHUNK_SIZE=20).
+  const chunkSize = job.connection_key === 'droptop_orders' ? 3 : 20
+  const countField = job.connection_key === 'droptop_orders' ? 'orders_upserted' : 'records_upserted'
 
-  const { data: days, error: rpcErr } = await (admin as any).rpc(rpcName, { p_start: pStart, p_end: pEnd })
-  if (rpcErr) throw new Error(rpcErr.message)
-  const observed = new Set<string>()
-  for (const row of (days ?? []) as { location_ids: string[] | null }[]) for (const id of row.location_ids ?? []) observed.add(id)
-  const target = job.location_ids
-  const coveredCount = target.filter((id) => observed.has(id)).length
-  const coverage = target.length > 0 ? coveredCount / target.length : 1
-
-  let pulled = false
-  let summary: string
-  if (coverage >= job.min_coverage_pct) {
-    summary = `${pStart} — ${(coverage * 100).toFixed(0)}% of ${target.length} shop(s) already covered, skipped`
-  } else {
-    const fnName = job.connection_key === 'droptop_orders' ? 'droptop-sync-orders' : 'droptop-sync-staff-time-clock'
-    const startUnix = Math.floor(new Date(`${pStart}T00:00:00.000Z`).getTime() / 1000)
-    const endUnix = Math.floor(new Date(`${pEnd}T23:59:59.999Z`).getTime() / 1000)
-    const result = await callSyncFn(supabaseUrl, droptopSecret, fnName, { mode: 'sync', startUnix, endUnix, locationIds: target })
-    pulled = true
-    summary = `${pStart} — pulled (was ${(coverage * 100).toFixed(0)}% covered)`
-    if (typeof result?.orders_upserted === 'number') summary += `, ${result.orders_upserted} orders`
-    if (typeof result?.records_upserted === 'number') summary += `, ${result.records_upserted} records`
+  let pendingIds = job.month_pending_ids
+  let coverageNote = ''
+  if (pendingIds == null) {
+    // Starting a fresh month — check its real coverage first.
+    const rpcName = job.connection_key === 'droptop_orders' ? 'get_droptop_orders_daily_coverage' : 'get_droptop_time_clock_daily_coverage'
+    const { data: days, error: rpcErr } = await (admin as any).rpc(rpcName, { p_start: pStart, p_end: pEnd })
+    if (rpcErr) throw new Error(rpcErr.message)
+    const observed = new Set<string>()
+    for (const row of (days ?? []) as { location_ids: string[] | null }[]) for (const id of row.location_ids ?? []) observed.add(id)
+    const target = job.location_ids
+    const coveredCount = target.filter((id) => observed.has(id)).length
+    const coverage = target.length > 0 ? coveredCount / target.length : 1
+    if (coverage >= job.min_coverage_pct) {
+      const prevMonth = monthBefore(cursor)
+      const completed = prevMonth < job.floor_month
+      const summary = `${pStart} — ${(coverage * 100).toFixed(0)}% of ${target.length} shop(s) already covered, skipped`
+      await (admin as any).schema('inventory').from('data_connection_backfill_jobs').update({
+        cursor_month: completed ? cursor : prevMonth, month_pending_ids: null,
+        months_skipped: job.months_skipped + 1, status: completed ? 'completed' : 'running',
+        last_run_at: new Date().toISOString(), last_tick_summary: summary, error_message: null, updated_at: new Date().toISOString(),
+      }).eq('id', job.id)
+      return { job_id: job.id, connection: job.connection_key, summary, completed }
+    }
+    pendingIds = target
+    coverageNote = ` (was ${(coverage * 100).toFixed(0)}% covered)`
   }
 
+  const thisTickIds = pendingIds.slice(0, MAX_IDS_PER_TICK)
+  const remainingAfterTick = pendingIds.slice(MAX_IDS_PER_TICK)
+  const startUnix = Math.floor(new Date(`${pStart}T00:00:00.000Z`).getTime() / 1000)
+  const endUnix = Math.floor(new Date(`${pEnd}T23:59:59.999Z`).getTime() / 1000)
+  const chunks = chunkArray(thisTickIds, chunkSize)
+  const result = await runChunksConcurrently(
+    `${supabaseUrl}/functions/v1/${fnName}`, droptopSecret, chunks,
+    (ids) => ({ mode: 'sync', startUnix, endUnix, locationIds: ids }),
+    countField,
+  )
+  if (result.status === 'error') throw new Error(result.message ?? 'All chunks failed')
+
+  const monthDone = remainingAfterTick.length === 0
   const prevMonth = monthBefore(cursor)
-  const completed = prevMonth < job.floor_month
+  const completed = monthDone && prevMonth < job.floor_month
+  let summary = `${pStart}${coverageNote} — pulled ${thisTickIds.length} shop(s) this tick (${result.total} ${countField.replace('_upserted', '')})`
+  if (!monthDone) summary += `, ${remainingAfterTick.length} shop(s) left for this month`
+  if (result.message) summary += ` | ${result.message}`
+
   await (admin as any).schema('inventory').from('data_connection_backfill_jobs').update({
-    cursor_month: completed ? cursor : prevMonth,
-    months_pulled: job.months_pulled + (pulled ? 1 : 0),
-    months_skipped: job.months_skipped + (pulled ? 0 : 1),
+    cursor_month: monthDone ? (completed ? cursor : prevMonth) : cursor,
+    month_pending_ids: monthDone ? null : remainingAfterTick,
+    months_pulled: job.months_pulled + (monthDone ? 1 : 0),
     status: completed ? 'completed' : 'running',
     last_run_at: new Date().toISOString(),
     last_tick_summary: summary,
-    error_message: null,
+    error_message: result.status === 'partial' ? result.message : null,
     updated_at: new Date().toISOString(),
   }).eq('id', job.id)
   return { job_id: job.id, connection: job.connection_key, summary, completed }
@@ -141,16 +269,18 @@ async function tickUsageJob(admin: ReturnType<typeof createClient>, job: Backfil
   const CHUNK = 15
   const chunk = pending.slice(0, CHUNK)
   const remaining = pending.slice(CHUNK)
-  const result = await callSyncFn(supabaseUrl, droptopSecret, 'droptop-sync-usage', { mode: 'usage', daysBack: 30, logDailyActivity: true, locationIds: chunk })
+  const r = await callChunk(`${supabaseUrl}/functions/v1/droptop-sync-usage`, droptopSecret,
+    { mode: 'usage', daysBack: 30, logDailyActivity: true, locationIds: chunk }, 'usage backfill')
+  if (!r.ok) throw new Error(r.warnings.join(' | ') || 'droptop-sync-usage failed')
   const completed = remaining.length === 0
-  const summary = `Pulled ${chunk.length} shop(s)${typeof result?.products_upserted === 'number' ? `, ${result.products_upserted} products` : ''} — ${remaining.length} shop(s) remaining`
+  const summary = `Pulled ${chunk.length} shop(s)${typeof r.data?.products_upserted === 'number' ? `, ${r.data.products_upserted} products` : ''} — ${remaining.length} shop(s) remaining`
   await (admin as any).schema('inventory').from('data_connection_backfill_jobs').update({
     usage_pending_location_ids: remaining,
     usage_done_count: job.usage_done_count + chunk.length,
     status: completed ? 'completed' : 'running',
     last_run_at: new Date().toISOString(),
     last_tick_summary: summary,
-    error_message: null,
+    error_message: r.warnings.length ? r.warnings.join(' | ') : null,
     updated_at: new Date().toISOString(),
   }).eq('id', job.id)
   return { job_id: job.id, connection: job.connection_key, summary, completed }

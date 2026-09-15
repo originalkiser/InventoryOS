@@ -1,0 +1,21 @@
+-- Found live 2026-09-15: the month-walk tick called droptop-sync-orders
+-- with the job's FULL location_ids list (267 shops) in one unchunked
+-- request. The platform silently killed the invocation partway through
+-- (the exact same "chunk-timeout at full-company scale" failure this
+-- codebase's own routine dispatcher already hit and fixed once, per its
+-- DROPTOP_ORDER_CHUNK_SIZE/runChunksConcurrently comments) — but the
+-- dispatcher's response parsing never checked res.ok, so the truncated
+-- response read as a plain success. Real damage confirmed: May 2026 got
+-- pulled for only 12 of 267 shops, April for only 1 of 267, before each
+-- was marked "done" and the cursor moved on.
+--
+-- month_pending_ids tracks which of the job's target shops are still left
+-- to pull for the CURRENT cursor_month specifically (chunked and processed
+-- a bounded batch per tick, same MAX_LOCATIONS_PER_TICK-style cap the
+-- routine dispatcher already uses) — null/empty means no pull is in
+-- progress for this month (either not yet started, or finished), so the
+-- next tick does a fresh coverage check before deciding whether to start
+-- one. The cursor only ever advances to the previous month once this list
+-- is genuinely empty, not just because a tick "ran".
+ALTER TABLE inventory.data_connection_backfill_jobs
+  ADD COLUMN IF NOT EXISTS month_pending_ids uuid[];
