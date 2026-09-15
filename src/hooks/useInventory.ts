@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -137,7 +137,17 @@ export function invalidateInventoryCache() { invCache = null }
 const orderKeySet = (rows: any[]) =>
   new Set(rows.map((r) => `${r.location_id ?? ''}|${String(r.product_id ?? '').toLowerCase()}`))
 
-export function useInventory() {
+// `auto: false` skips the automatic fetch-on-mount — for a surface where
+// this data is nice-to-have but not the reason the page was opened (the
+// Dashboard's Inventory Health tile; see loadNow below), so visiting it
+// doesn't cost a product_usage pull nobody asked for. Every other consumer
+// (On Hand, the Location Lookup / overlay InventoryView) omits this and
+// keeps the original eager-load behavior. If a warm cache already exists
+// for this company+scope (e.g. On Hand was visited earlier this session)
+// it's still shown immediately regardless of `auto` — only a genuinely
+// fresh fetch is skipped.
+export function useInventory(opts?: { auto?: boolean }) {
+  const auto = opts?.auto ?? true
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
@@ -148,7 +158,13 @@ export function useInventory() {
   const fresh = invCache?.companyId === companyId && invCache.scoped === onlyConfig
   const [usage, setUsage] = useState<ProductUsage[]>(fresh ? invCache!.usage : [])
   const [orderKeys, setOrderKeys] = useState<Set<string>>(fresh ? orderKeySet(invCache!.orderRows) : new Set())
-  const [loading, setLoading] = useState(!fresh)
+  const [loading, setLoading] = useState(auto && !fresh)
+  // Distinct from `loading`: false only while auto-load is skipped and
+  // nobody has asked for the data yet — the state a placeholder+button
+  // checks for, since `loading` alone can't distinguish "haven't tried"
+  // from "currently fetching".
+  const [loaded, setLoaded] = useState(fresh)
+  const wantsLoad = useRef(auto || fresh)
 
   const load = useCallback(async (force = false) => {
     if (!companyId) return
@@ -158,6 +174,7 @@ export function useInventory() {
       setUsage(invCache.usage)
       setOrderKeys(orderKeySet(invCache.orderRows))
       setLoading(false)
+      setLoaded(true)
       return
     }
     setLoading(true)
@@ -185,11 +202,18 @@ export function useInventory() {
       setOrderKeys(orderKeySet(entry.orderRows))
     } finally {
       setLoading(false)
+      setLoaded(true)
       if (invFetchInFlight?.companyId === companyId && invFetchInFlight.scoped === onlyConfig) invFetchInFlight = null
     }
   }, [companyId, onlyConfig])
 
-  useEffect(() => { load() }, [load])
+  // Skips the fetch entirely when auto=false and nobody has loaded yet
+  // (wantsLoad starts false in that case) — but once loadNow() flips it on,
+  // a later companyId/onlyConfig change (this effect's real deps, via
+  // `load`'s own identity) still re-fetches normally, same as an eager
+  // consumer.
+  useEffect(() => { if (wantsLoad.current) load() }, [load])
+  const loadNow = useCallback(() => { wantsLoad.current = true; return load() }, [load])
 
   // Distinct categories present in the data — feeds the dashboard category filter.
   const categories = useMemo(
@@ -240,7 +264,7 @@ export function useInventory() {
 
   const reload = useCallback(() => load(true), [load])
   return {
-    rows, stats, flagConfig, setFlagConfig, exclude, loading, reload,
+    rows, stats, flagConfig, setFlagConfig, exclude, loading, loaded, loadNow, reload,
     categories, onlyConfig, setOnlyConfig, excludedCategories, setExcludedCategories,
   }
 }

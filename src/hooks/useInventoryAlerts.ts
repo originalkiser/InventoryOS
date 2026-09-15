@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
+import { LOCATION_COLUMNS_SANS_MONDAY_PAYLOAD } from '@/hooks/useLocations'
 import type { Location } from '@/types'
 
 // Inventory alerts — cross-shop configuration gaps surfaced in one place.
@@ -38,7 +39,7 @@ async function fetchConnectionIssueCount(companyId: string): Promise<number> {
 async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; locById: Record<string, Location>; connectionIssueCount: number }> {
   const sb = supabase as any
   const [{ data: locs }, { data: vends }, cfgCountRes, connectionIssueCount] = await Promise.all([
-    sb.schema('core').from('locations').select('*').eq('company_id', companyId),
+    sb.schema('core').from('locations').select(LOCATION_COLUMNS_SANS_MONDAY_PAYLOAD).eq('company_id', companyId),
     sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
     sb.schema('inventory').from('location_order_config').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
     fetchConnectionIssueCount(companyId),

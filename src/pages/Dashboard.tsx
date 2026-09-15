@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { Card, CardHeader, CardBody, Badge, SbLoader, Toggle } from '@/components/ui'
+import { Card, CardHeader, CardBody, Badge, Button, SbLoader, Toggle } from '@/components/ui'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { format, endOfWeek } from 'date-fns'
 import { useInventory } from '@/hooks/useInventory'
@@ -52,6 +52,18 @@ function CompactList({ columns, rows }: { columns: string[]; rows: (string | num
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Shown in place of the Inventory Health / Days of Supply cards until the
+// user asks for product_usage data — see the `inv` comment in
+// DashboardPage for why this isn't auto-loaded.
+function LoadUsagePlaceholder({ loading, onLoad }: { loading: boolean; onLoad: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+      <p className="text-xs text-inky font-body">Product usage isn't loaded yet.</p>
+      <Button size="sm" variant="secondary" loading={loading} onClick={onLoad}>Load Data</Button>
     </div>
   )
 }
@@ -169,7 +181,12 @@ export function DashboardPage() {
   const [ordersView, setOrdersView] = useTileView('recent_orders', 'list')
   const [countView, setCountView] = useTileView('count_progress', 'graph')
   const [invView, setInvView] = useTileView('inventory', 'list')
-  const inv = useInventory()
+  // Not auto-loaded here — a full product_usage pull isn't worth paying on
+  // every Dashboard visit just for this one card. Placeholder below with a
+  // "Load Data" button triggers it on demand; On Hand / the Location Lookup
+  // overlay still load it eagerly since that data is the reason those pages
+  // are opened at all.
+  const inv = useInventory({ auto: false })
   const { locations } = useLocations()
   const { isExcluded } = useLocationExclusions()
 
@@ -321,26 +338,30 @@ export function DashboardPage() {
           />
         </CardHeader>
         <CardBody>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <div>
-              <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Critical Shops</div>
-              <div className="text-2xl font-heading font-bold" style={{ color: FLAG_HEX.red }}>{inv.stats.shopsWithCritical.toLocaleString()}</div>
+          {!inv.loaded ? (
+            <LoadUsagePlaceholder loading={inv.loading} onLoad={inv.loadNow} />
+          ) : (
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div>
+                <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Critical Shops</div>
+                <div className="text-2xl font-heading font-bold" style={{ color: FLAG_HEX.red }}>{inv.stats.shopsWithCritical.toLocaleString()}</div>
+              </div>
+              <div>
+                <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Products Tracked</div>
+                <div className="text-2xl font-heading font-bold text-navy">{inv.stats.totalProducts.toLocaleString()}</div>
+                <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.flaggedProducts.toLocaleString()} flagged</div>
+              </div>
+              <div>
+                <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Avg Flagged / Shop</div>
+                <div className="text-2xl font-heading font-bold text-inky">{inv.stats.avgFlaggedPerShop}</div>
+              </div>
+              <div>
+                <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Worst Shop</div>
+                <div className="text-sm font-heading font-bold text-navy truncate">{inv.stats.worstShop}</div>
+                <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.worstCount.toLocaleString()} flagged</div>
+              </div>
             </div>
-            <div>
-              <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Products Tracked</div>
-              <div className="text-2xl font-heading font-bold text-navy">{inv.stats.totalProducts.toLocaleString()}</div>
-              <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.flaggedProducts.toLocaleString()} flagged</div>
-            </div>
-            <div>
-              <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Avg Flagged / Shop</div>
-              <div className="text-2xl font-heading font-bold text-inky">{inv.stats.avgFlaggedPerShop}</div>
-            </div>
-            <div>
-              <div className="text-xs text-inky font-heading uppercase tracking-wide mb-1">Worst Shop</div>
-              <div className="text-sm font-heading font-bold text-navy truncate">{inv.stats.worstShop}</div>
-              <div className="text-xs text-inky/70 font-body mt-1">{inv.stats.worstCount.toLocaleString()} flagged</div>
-            </div>
-          </div>
+          )}
         </CardBody>
       </Card>
 
@@ -352,7 +373,9 @@ export function DashboardPage() {
             <TileToggle view={invView} onChange={setInvView} />
           </CardHeader>
           <CardBody>
-            {invView === 'graph' ? (
+            {!inv.loaded ? (
+              <LoadUsagePlaceholder loading={inv.loading} onLoad={inv.loadNow} />
+            ) : invView === 'graph' ? (
               flaggedByShop.length === 0 ? <p className="text-xs text-inky font-body italic">No flagged products</p> : (
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={flaggedByShop} layout="vertical" margin={{ left: 0 }}>

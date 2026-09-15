@@ -29,6 +29,31 @@ export function isOperationalLocation(l: Pick<Location, 'name' | 'location_type'
   return isRealShopLocation(l) && l.location_type !== 'car_wash'
 }
 
+// Every core.locations column except raw_monday_data (confirmed via
+// information_schema.columns 2026-09-15, not just this doc/the TS type —
+// see CLAUDE.md's own "verify empirically" history with this table).
+// raw_monday_data is never read anywhere in the frontend (write-only, the
+// Monday sync's own source-payload archive) but averages ~2KB/row and was
+// going out on every single core.locations fetch regardless — a real
+// contributor to a live-reported 2.7MB response for a ~370-row table.
+// Exported so any other direct `.from('locations').select('*')` call site
+// (useInventoryAlerts.ts is the other one right now) can drop the same
+// column without duplicating this list or drifting from it.
+export const LOCATION_COLUMNS_SANS_MONDAY_PAYLOAD =
+  'id, company_id, name, shop_city, region, active, metadata, created_at, updated_at, updated_by, last_change_source, ' +
+  'order_date, district, monday_item_id, last_synced_at, owner, market, area_manager, am_phone, am_email, director, rd_email, ' +
+  'status, address, city, state, county, zip, store_phone, store_email, location, num_bays, pit_type, store_type, classification, ' +
+  'groups, entity_name, brand_used, developer, landlord, num_days_open, manager_workweek, second_asm_approved, date_opened, ' +
+  'acquisition_date, year_opened, droptop_go_live, last_price_change, review_pricing_date, last_day_of_business, monday_hours, ' +
+  'tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours, holiday_hours, tire_rotations, ' +
+  'safety_inspections, emissions_inspections, royalty_rate, local_ad_percent, local_ad_dollar, brand_fund, technology_fee, ' +
+  'sales_quartile, economy, premium_hm, premium_full_synthetic, premium_full_synthetic_hm, rp, diesel_syn_blend, diesel_full_syn, ' +
+  'european, supply_fee, disposal_fee, oil_inflation_surcharge, planned_2023, planned_2024, valvoline_account_num, ai_shop_id, ' +
+  'ai_username, partnerconnect_username, google_review_url, google_review_qr_code, training_shops, integration_manager_region, ' +
+  'opus_serial_primary, opus_serial_secondary, former_fz_store_num, tmcw_ql, am_data_map, rd_data_map, droptop_num, ' +
+  'droptop_operation_id, reladyne_delivery_day, ai_call_center, ai_call_center_phone, mighty_fz, camera_system, ' +
+  'inspection_station_id, mighty_po_upload, marketing_manager, mm_email, mm_cell, hrbp, latitude, longitude, location_type'
+
 // Loads the company's locations and provides id <-> code/name resolution,
 // plus access to each location's custom metadata for cross-section linking.
 // Also consults the POS location map so uploads whose location value is a POS
@@ -40,37 +65,85 @@ export function isOperationalLocation(l: Pick<Location, 'name' | 'location_type'
 // rule; 'other' (Customer Heatmap, Droptop Orders, and other
 // non-operational surfaces) includes them by default instead. See
 // useLocationExclusions' own comment for the full reasoning.
+// Module-level cache + in-flight de-dup, same shape/reasoning as
+// useInventory.ts's invCache — found live 2026-09-15 (a .har of a slow
+// Order Config load) that this hook had neither: three concurrent
+// `core.locations?select=*` pulls fired at once (two identical calls from
+// two KeepAlivePages-mounted pages each running their own useLocations()
+// instance, plus a third from useInventoryAlerts()'s separate fetch),
+// and — with Supabase's own edge layer visibly degraded that day — a
+// single one of those took 104 seconds, so doing it 2-3x concurrently
+// multiplied real wall-clock wait for something that should be one shared
+// pull. `surface` only affects useLocationExclusions below, never the raw
+// fetch itself, so the cache key is just companyId.
+interface LocCache { companyId: string; locations: Location[]; posMaps: PosLocationMap[]; fetchedAt: number }
+let locCache: LocCache | null = null
+let locFetchInFlight: { companyId: string; promise: Promise<LocCache> } | null = null
+const LOC_CACHE_TTL = 5 * 60 * 1000
+
 export function useLocations(surface: 'inventory' | 'other' = 'inventory') {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const { isExcluded } = useLocationExclusions(surface)
-  const [locations, setLocations] = useState<Location[]>([])
-  const [posMaps, setPosMaps] = useState<PosLocationMap[]>([])
+  const fresh = locCache?.companyId === companyId
+  const [locations, setLocations] = useState<Location[]>(fresh ? locCache!.locations : [])
+  const [posMaps, setPosMaps] = useState<PosLocationMap[]>(fresh ? locCache!.posMaps : [])
   // Exposed so a page whose own data loads fast (e.g. Location Comms' own
   // small table) can hold its loading spinner until locations are ready too
   // instead of rendering with every location-derived label/lookup still
   // blank and then popping in a moment later — see loadingRef note below.
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!fresh)
 
-  const reload = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     if (!companyId) { setLocations([]); setPosMaps([]); setLoading(false); return }
+    if (!force && locCache?.companyId === companyId && Date.now() - locCache.fetchedAt < LOC_CACHE_TTL) {
+      setLocations(locCache.locations)
+      setPosMaps(locCache.posMaps)
+      setLoading(false)
+      return
+    }
     setLoading(true)
-    const [loc, pos] = await Promise.all([
-      (supabase as any).schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
-      (supabase as any).schema('core').from('pos_location_map').select('*').eq('company_id', companyId),
-    ])
-    // Filtered here (not at the query) so Config -> Locations and the
-    // Locations page's own Car Wash/Closed groups, which read core.locations
-    // directly and not through this hook, still see header rows and
-    // car-wash locations — this hook feeds the operational surfaces
-    // (Location Lookup, AM/RD Lookup, most dropdowns) that should never see
-    // either.
-    setLocations(((loc.data ?? []) as Location[]).filter(isOperationalLocation))
-    setPosMaps((pos.data ?? []) as PosLocationMap[])
-    setLoading(false)
-  }, [companyId])
+    try {
+      let inFlight = locFetchInFlight?.companyId === companyId ? locFetchInFlight.promise : null
+      if (!inFlight || force) {
+        const promise = (async (): Promise<LocCache> => {
+          const [loc, pos] = await Promise.all([
+            (supabase as any).schema('core').from('locations').select(LOCATION_COLUMNS_SANS_MONDAY_PAYLOAD).eq('company_id', companyId).order('name'),
+            (supabase as any).schema('core').from('pos_location_map').select('*').eq('company_id', companyId),
+          ])
+          // Filtered here (not at the query) so Config -> Locations and the
+          // Locations page's own Car Wash/Closed groups, which read
+          // core.locations directly and not through this hook, still see
+          // header rows and car-wash locations — this hook feeds the
+          // operational surfaces (Location Lookup, AM/RD Lookup, most
+          // dropdowns) that should never see either.
+          const entry: LocCache = {
+            companyId,
+            locations: ((loc.data ?? []) as Location[]).filter(isOperationalLocation),
+            posMaps: (pos.data ?? []) as PosLocationMap[],
+            fetchedAt: Date.now(),
+          }
+          locCache = entry
+          return entry
+        })()
+        locFetchInFlight = { companyId, promise }
+        inFlight = promise
+      }
+      const entry = await inFlight
+      setLocations(entry.locations)
+      setPosMaps(entry.posMaps)
+    } finally {
+      setLoading(false)
+      if (locFetchInFlight?.companyId === companyId) locFetchInFlight = null
+    }
+  }, [companyId, isExcluded])
 
-  useEffect(() => { reload() }, [reload])
+  // Manual refresh (after editing/matching a location elsewhere) always
+  // bypasses the cache — the 2 real call sites (Tank Monitors' unassigned
+  // matcher, Menu Board's revisit refresh) need a genuinely fresh pull.
+  const reload = useCallback(() => load(true), [load])
+
+  useEffect(() => { load() }, [load])
 
   // Precomputed once per data load rather than per resolveId call — each
   // call used to be up to four full linear scans (locations twice,

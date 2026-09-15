@@ -43,7 +43,7 @@ const col = createColumnHelper<LocationOrderConfig>()
 export function OrderConfigTab() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
-  const { data, loading, insert, update, remove, removeMany, importRows, clearAll } = useConfigTab<LocationOrderConfig>('location_order_config', 'inventory')
+  const { data, loading, insert, update, bulkPatch, remove, removeMany, importRows, clearAll } = useConfigTab<LocationOrderConfig>('location_order_config', 'inventory')
   const { active: customFields, addField } = useCustomFields('order_config')
   const loc = useLocations()
 
@@ -58,6 +58,27 @@ export function OrderConfigTab() {
   // just local state feeding the useMemo below (no server round-trip needed).
   const [reviewMerge, setReviewMerge] = useState<{ rows: Record<string, string>[]; maps: ColumnMapping[] } | null>(null)
   const [reviewVendorId, setReviewVendorId] = useState('')
+
+  // Mass edit — for the exact case that prompted it: swapping a retired
+  // product id (e.g. EURO-SYN-0W30C) for its replacement across every shop
+  // that has it configured, without touching each row's own location or its
+  // other, legitimately-per-shop values. Each field is opt-in (unchecked =
+  // leave that field alone on every selected row) rather than one shared
+  // form that would silently blank out fields nobody meant to touch.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [clearSelectionToken, setClearSelectionToken] = useState(0)
+  const [massEditOpen, setMassEditOpen] = useState(false)
+  const [massEditBusy, setMassEditBusy] = useState(false)
+  type MassField<V> = { on: boolean; value: V }
+  const massEditDefaults = {
+    product_id: { on: false, value: '' } as MassField<string>,
+    uom: { on: false, value: '' } as MassField<string>,
+    capacity: { on: false, value: '' } as MassField<string>,
+    order_trigger: { on: false, value: '' } as MassField<string>,
+    order_limit: { on: false, value: '' } as MassField<string>,
+    vmi: { on: false, value: false } as MassField<boolean>,
+  }
+  const [massEdit, setMassEdit] = useState(massEditDefaults)
 
   const loadVendors = useCallback(async () => {
     if (!companyId) return
@@ -246,13 +267,59 @@ export function OrderConfigTab() {
     await remove(editId); resetForm(); setAddOpen(false); setEditId(null)
   }
 
+  const selectedRows = useMemo(() => data.filter((r) => selectedIds.has(r.id)), [data, selectedIds])
+
+  function openMassEdit() { setMassEdit(massEditDefaults); setMassEditOpen(true) }
+
+  // Would applying the mass edit's product-id change land two selected (or
+  // one selected + one untouched) rows on the same (vendor, location,
+  // product) key? Doesn't block — a genuine consolidation is legitimate —
+  // but it's exactly the kind of silent duplicate this app has been bitten
+  // by before, so it's surfaced rather than left to be discovered later.
+  const massEditDupeWarning = useMemo(() => {
+    if (!massEdit.product_id.on || !massEdit.product_id.value.trim()) return null
+    const newId = massEdit.product_id.value.trim()
+    const selectedIdSet = new Set(selectedRows.map((r) => r.id))
+    const targetKeys = new Set(selectedRows.map((r) => orderConfigKeyOf({ ...r, product_id: newId })))
+    const collisions = data.filter((r) => !selectedIdSet.has(r.id) && targetKeys.has(orderConfigKeyOf(r)))
+    return collisions.length ? collisions.length : null
+  }, [massEdit.product_id, selectedRows, data])
+
+  async function confirmMassEdit() {
+    if (!selectedRows.length) return
+    const f = massEdit
+    if (!f.product_id.on && !f.uom.on && !f.capacity.on && !f.order_trigger.on && !f.order_limit.on && !f.vmi.on) return
+    setMassEditBusy(true)
+    const patches = selectedRows.map((r) => {
+      const patch: Partial<LocationOrderConfig> & { id: string } = { id: r.id }
+      if (f.product_id.on) patch.product_id = f.product_id.value.trim()
+      if (f.capacity.on) patch.capacity = num(f.capacity.value)
+      if (f.order_trigger.on) patch.order_trigger = num(f.order_trigger.value)
+      if (f.order_limit.on) patch.order_limit = num(f.order_limit.value)
+      if (f.uom.on || f.vmi.on) {
+        const meta: Record<string, unknown> = { ...(r.metadata as any ?? {}) }
+        if (f.uom.on) meta.uom = f.uom.value.trim() || null
+        if (f.vmi.on) meta.vmi = f.vmi.value ? 'Yes' : null
+        patch.metadata = meta as any
+      }
+      return patch
+    })
+    const ok = await bulkPatch(patches)
+    setMassEditBusy(false)
+    if (ok) { setMassEditOpen(false); setSelectedIds(new Set()); setClearSelectionToken((t) => t + 1) }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
         exportFilename="order_config.csv" exportData={data} loading={loading}
         onBulkDelete={removeMany}
+        onSelectionChange={setSelectedIds} clearSelectionToken={clearSelectionToken}
         dangerZone={<ClearTableButton clearAll={clearAll} />}
         actions={<>
+          {selectedIds.size > 0 && (
+            <Button size="sm" variant="secondary" onClick={openMassEdit}>Mass Edit {selectedIds.size} selected</Button>
+          )}
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
           <Button size="sm" onClick={openAdd}>+ Add Config</Button>
         </>}
@@ -298,6 +365,81 @@ export function OrderConfigTab() {
               <Button variant="secondary" size="sm" onClick={() => { setAddOpen(false); setEditId(null) }}>Discard</Button>
               <Button size="sm" onClick={onSubmit} disabled={!form.locationId || !form.product_id.trim()}>{editId ? 'Save Changes' : 'Save'}</Button>
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={massEditOpen} onClose={() => setMassEditOpen(false)} title={`Mass Edit ${selectedRows.length} Row${selectedRows.length !== 1 ? 's' : ''}`} size="lg">
+        <div className="flex flex-col gap-3">
+          <p className="text-xs font-body text-inky">
+            Each selected row keeps its own vendor and location. Check a field below to overwrite it on every
+            selected row — leave a field unchecked to keep each row's existing value.
+          </p>
+          <label className="flex items-center gap-2 text-xs font-mono text-navy">
+            <input type="checkbox" checked={massEdit.product_id.on} onChange={(e) => setMassEdit((m) => ({ ...m, product_id: { ...m.product_id, on: e.target.checked } }))} className="accent-inky" />
+            Product ID
+          </label>
+          {massEdit.product_id.on && (
+            <Input value={massEdit.product_id.value} onChange={(e) => setMassEdit((m) => ({ ...m, product_id: { ...m.product_id, value: e.target.value } }))} placeholder="New product ID for every selected row" />
+          )}
+          {massEditDupeWarning != null && (
+            <div className="rounded border border-[#E67E22]/40 bg-[#E67E22]/10 px-3 py-2">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-[#E67E22]">Possible duplicate</span>
+              <p className="text-xs font-body text-navy leading-relaxed mt-1">
+                {massEditDupeWarning} existing row{massEditDupeWarning !== 1 ? 's' : ''} already use this vendor + location + product ID combination.
+                Saving will leave two configs for the same shop/product — check the table after saving if that's not intended.
+              </p>
+            </div>
+          )}
+
+          <label className="flex items-center gap-2 text-xs font-mono text-navy mt-1">
+            <input type="checkbox" checked={massEdit.uom.on} onChange={(e) => setMassEdit((m) => ({ ...m, uom: { ...m.uom, on: e.target.checked } }))} className="accent-inky" />
+            Unit of Measure
+          </label>
+          {massEdit.uom.on && (
+            <Input value={massEdit.uom.value} onChange={(e) => setMassEdit((m) => ({ ...m, uom: { ...m.uom, value: e.target.value } }))} />
+          )}
+
+          <label className="flex items-center gap-2 text-xs font-mono text-navy mt-1">
+            <input type="checkbox" checked={massEdit.capacity.on} onChange={(e) => setMassEdit((m) => ({ ...m, capacity: { ...m.capacity, on: e.target.checked } }))} className="accent-inky" />
+            Capacity
+          </label>
+          {massEdit.capacity.on && (
+            <Input value={massEdit.capacity.value} onChange={(e) => setMassEdit((m) => ({ ...m, capacity: { ...m.capacity, value: e.target.value } }))} />
+          )}
+
+          <label className="flex items-center gap-2 text-xs font-mono text-navy mt-1">
+            <input type="checkbox" checked={massEdit.order_trigger.on} onChange={(e) => setMassEdit((m) => ({ ...m, order_trigger: { ...m.order_trigger, on: e.target.checked } }))} className="accent-inky" />
+            Order Trigger
+          </label>
+          {massEdit.order_trigger.on && (
+            <Input value={massEdit.order_trigger.value} onChange={(e) => setMassEdit((m) => ({ ...m, order_trigger: { ...m.order_trigger, value: e.target.value } }))} />
+          )}
+
+          <label className="flex items-center gap-2 text-xs font-mono text-navy mt-1">
+            <input type="checkbox" checked={massEdit.order_limit.on} onChange={(e) => setMassEdit((m) => ({ ...m, order_limit: { ...m.order_limit, on: e.target.checked } }))} className="accent-inky" />
+            Order Limit (0 = inactive)
+          </label>
+          {massEdit.order_limit.on && (
+            <Input value={massEdit.order_limit.value} onChange={(e) => setMassEdit((m) => ({ ...m, order_limit: { ...m.order_limit, value: e.target.value } }))} />
+          )}
+
+          <label className="flex items-center gap-2 text-xs font-mono text-navy mt-1">
+            <input type="checkbox" checked={massEdit.vmi.on} onChange={(e) => setMassEdit((m) => ({ ...m, vmi: { ...m.vmi, on: e.target.checked } }))} className="accent-inky" />
+            VMI
+          </label>
+          {massEdit.vmi.on && (
+            <label className="flex items-center gap-2 text-xs font-mono text-inky pl-1">
+              <Toggle checked={massEdit.vmi.value} onChange={(v) => setMassEdit((m) => ({ ...m, vmi: { ...m.vmi, value: v } }))} size="sm" />
+              Vendor-managed inventory (excluded from self-generated orders)
+            </label>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" size="sm" onClick={() => setMassEditOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={confirmMassEdit} disabled={massEditBusy || (!massEdit.product_id.on && !massEdit.uom.on && !massEdit.capacity.on && !massEdit.order_trigger.on && !massEdit.order_limit.on && !massEdit.vmi.on)}>
+              {massEditBusy ? 'Saving…' : `Save to ${selectedRows.length} row${selectedRows.length !== 1 ? 's' : ''}`}
+            </Button>
           </div>
         </div>
       </Modal>

@@ -269,6 +269,22 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     return true
   }
 
+  // Applies a different, already-merged patch to each row (e.g. a mass-edit
+  // across selected rows where only some fields change and a jsonb column
+  // like `metadata` needs per-row merging first, done by the caller, since a
+  // shared `.update()` would overwrite each row's own metadata wholesale
+  // instead of merging into it). One or a few chunked upserts, not N
+  // sequential round trips.
+  async function bulkPatch(rows: Array<Partial<T> & { id: string }>): Promise<boolean> {
+    if (!profile?.company_id || !rows.length) return false
+    const payload = rows.map((r) => stamp(r as Record<string, unknown>, 'manual'))
+    const error = await writeInBatches(payload, 'upsert')
+    if (error) { toast.error(error.message); return false }
+    toast.success(`Updated ${rows.length.toLocaleString()} row${rows.length !== 1 ? 's' : ''}`)
+    invalidate(); await load()
+    return true
+  }
+
   async function remove(id: string) {
     const { error } = await tbl().delete().eq('id', id)
     if (error) toast.error(error.message)
@@ -300,5 +316,5 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
     await load()
   }
 
-  return { data, loading, load, refresh, insert, update, upsertBatch, importRows, remove, removeMany, clearAll }
+  return { data, loading, load, refresh, insert, update, bulkPatch, upsertBatch, importRows, remove, removeMany, clearAll }
 }
