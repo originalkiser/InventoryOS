@@ -2,9 +2,15 @@ import { useState } from 'react'
 import { Upload, Trash2, Plus, ChevronDown, ChevronUp } from 'lucide-react'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { Button } from '@/components/ui'
-import type { GridCell } from './types'
+import type { GridCell, FieldHistoryEntry } from './types'
 import { DeckChart } from './DeckChart'
+import { FieldHistoryButton } from './FieldHistoryButton'
 import { formatValue, toInputValue, fromInputValue, type ValueFormat } from './formatting'
+
+// Same visual language as Orders v2's OVERRIDE_CELL (orange = manually
+// changed) — a full input border here since these are inline inputs, not
+// table cells with room for a left-border accent.
+const CHANGED_INPUT = 'border-[#E67E22] bg-[#E67E22]/10'
 
 export interface GridSectionProps {
   title: string
@@ -16,14 +22,16 @@ export interface GridSectionProps {
   // and a percent row/column in the same table (row wins if both match).
   rowFormats?: Record<string, ValueFormat>
   columnFormats?: Record<string, ValueFormat>
-  chart?: { rows: string[]; stacked?: boolean; lineRows?: string[] }
+  chart?: { rows: string[]; stacked?: boolean; lineRows?: string[]; referenceLines?: { label: string; value: number }[] }
   allowAddRow?: boolean
   onSaveCell: (rowLabel: string, rowSort: number, colKey: string, colLabel: string, colSort: number, value: number | null) => void
   onDeleteRow: (rowLabel: string) => void
   onUpload: (headers: string[], rows: Record<string, string>[]) => void
+  isChanged?: (row: string, col: string) => boolean
+  historyOf?: (row: string, col: string) => FieldHistoryEntry[]
 }
 
-export function GridSection({ title, slideKey, tableKey, cells, format, rowFormats, columnFormats, chart, allowAddRow, onSaveCell, onDeleteRow, onUpload }: GridSectionProps) {
+export function GridSection({ title, slideKey, tableKey, cells, format, rowFormats, columnFormats, chart, allowAddRow, onSaveCell, onDeleteRow, onUpload, isChanged, historyOf }: GridSectionProps) {
   const formatFor = (row: string, colKey: string): ValueFormat => rowFormats?.[row] ?? columnFormats?.[colKey] ?? format
   const [showUpload, setShowUpload] = useState(false)
   const [newRow, setNewRow] = useState('')
@@ -52,7 +60,7 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
   return (
     <div className="flex flex-col gap-3">
       {chart && chart.rows.length > 0 && (
-        <DeckChart title={title} cells={cells} rows={chart.rows} stacked={chart.stacked} lineRows={chart.lineRows} format={format} />
+        <DeckChart title={title} cells={cells} rows={chart.rows} stacked={chart.stacked} lineRows={chart.lineRows} format={format} referenceLines={chart.referenceLines} />
       )}
 
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -92,20 +100,26 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
                     {cols.map((c) => {
                       const cell = cellFor(row, c.key)
                       const fmt = formatFor(row, c.key)
+                      const changed = isChanged?.(row, c.key) ?? false
+                      const fieldHistory = historyOf?.(row, c.key) ?? []
                       return (
                         <td key={c.key} className="px-2 py-1 border-b border-navy/15 text-right">
-                          <input
-                            type="number"
-                            defaultValue={toInputValue(cell?.value_num, fmt)}
-                            onBlur={(e) => {
-                              const v = fromInputValue(e.target.value, fmt)
-                              const prevInput = toInputValue(cell?.value_num, fmt)
-                              if (e.target.value.trim() === prevInput.trim()) return
-                              onSaveCell(row, rowMap.get(row) ?? 0, c.key, c.label, c.sort, v)
-                            }}
-                            title={formatValue(cell?.value_num, fmt)}
-                            className="w-24 bg-transparent border border-transparent hover:border-navy/30 focus:border-sky focus:bg-white rounded px-1 py-0.5 text-right text-navy"
-                          />
+                          <div className="flex items-center justify-end gap-1">
+                            <input
+                              type="number"
+                              defaultValue={toInputValue(cell?.value_num, fmt)}
+                              onBlur={(e) => {
+                                const v = fromInputValue(e.target.value, fmt)
+                                const prevInput = toInputValue(cell?.value_num, fmt)
+                                if (e.target.value.trim() === prevInput.trim()) return
+                                onSaveCell(row, rowMap.get(row) ?? 0, c.key, c.label, c.sort, v)
+                              }}
+                              title={formatValue(cell?.value_num, fmt)}
+                              className={`w-24 bg-transparent border rounded px-1 py-0.5 text-right text-navy focus:border-sky focus:bg-white ${changed ? CHANGED_INPUT : 'border-transparent hover:border-navy/30'}`}
+                            />
+                            <FieldHistoryButton label={`${row} — ${c.label}`} entries={fieldHistory} format={fmt}
+                              onRevert={(value) => onSaveCell(row, rowMap.get(row) ?? 0, c.key, c.label, c.sort, value)} />
+                          </div>
                         </td>
                       )
                     })}

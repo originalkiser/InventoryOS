@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import toast from 'react-hot-toast'
-import type { GridCell, KpiItem, ListItemRow } from './types'
+import type { GridCell, KpiItem, ListItemRow, FieldHistoryEntry, PeriodConfig } from './types'
+
+const cellKey = (slideKey: string, tableKey: string, row: string, col: string) => `${slideKey}|${tableKey}|${row}|${col}`
+const kpiFieldKey = (slideKey: string, tableKey: string, kpiKey: string) => `${slideKey}|${tableKey}|${kpiKey}`
 
 // Loads and edits every table this Procurement Deck page needs in one shot —
 // 683 seeded grid cells + 34 KPIs + 16 list items today, comfortably under
@@ -32,18 +35,26 @@ export function useProcurementDeck() {
   const [cells, setCells] = useState<GridCell[]>([])
   const [kpis, setKpis] = useState<KpiItem[]>([])
   const [items, setItems] = useState<ListItemRow[]>([])
+  const [history, setHistory] = useState<FieldHistoryEntry[]>([])
+  const [periods, setPeriods] = useState<PeriodConfig[]>([])
   const [loading, setLoading] = useState(true)
+  // Plain client-side state, deliberately never persisted — "this field was
+  // just edited" only means something for the current visit to the page.
+  const [changedThisSession, setChangedThisSession] = useState<Set<string>>(new Set())
+  const markChanged = (key: string) => setChangedThisSession((prev) => new Set(prev).add(key))
 
   const load = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [c, k, l] = await Promise.all([
+      const [c, k, l, h, p] = await Promise.all([
         fetchAll<GridCell>('procurement_deck_grid_cells', companyId),
         fetchAll<KpiItem>('procurement_deck_kpis', companyId),
         fetchAll<ListItemRow>('procurement_deck_list_items', companyId),
+        fetchAll<FieldHistoryEntry>('procurement_deck_field_history', companyId),
+        fetchAll<PeriodConfig>('procurement_deck_periods', companyId),
       ])
-      setCells(c); setKpis(k); setItems(l)
+      setCells(c); setKpis(k); setItems(l); setHistory(h); setPeriods(p)
     } catch (e) {
       // Supabase-js's PostgrestError isn't a real Error instance, so check
       // for a .message string too -- otherwise a real DB error (bad column,
@@ -63,10 +74,28 @@ export function useProcurementDeck() {
     kpis.filter((k) => k.slide_key === slideKey && k.table_key === tableKey).sort((a, b) => a.sort_order - b.sort_order), [kpis])
   const listOf = useCallback((slideKey: string, tableKey: string) =>
     items.filter((i) => i.slide_key === slideKey && i.table_key === tableKey).sort((a, b) => a.sort_order - b.sort_order), [items])
+  const periodsOf = useCallback((slideKey: string) =>
+    periods.filter((p) => p.slide_key === slideKey), [periods])
+  const historyOfCell = useCallback((slideKey: string, tableKey: string, rowLabel: string, colKey: string) =>
+    history.filter((h) => h.field_kind === 'grid' && h.slide_key === slideKey && h.table_key === tableKey && h.row_label === rowLabel && h.col_key === colKey)
+      .sort((a, b) => b.changed_at.localeCompare(a.changed_at)), [history])
+  const historyOfKpi = useCallback((slideKey: string, tableKey: string, kpiKey: string) =>
+    history.filter((h) => h.field_kind === 'kpi' && h.slide_key === slideKey && h.table_key === tableKey && h.kpi_key === kpiKey)
+      .sort((a, b) => b.changed_at.localeCompare(a.changed_at)), [history])
+  const isChanged = useCallback((key: string) => changedThisSession.has(key), [changedThisSession])
+
+  // Best-effort — logging the field's prior value is an audit convenience,
+  // never worth failing (or even toasting about) if it doesn't land.
+  async function logFieldHistory(entry: Record<string, unknown>) {
+    const sb = supabase as any
+    const { data } = await sb.schema('inventory').from('procurement_deck_field_history').insert(entry).select().single()
+    if (data) setHistory((prev) => [...prev, data as FieldHistoryEntry])
+  }
 
   async function saveCell(slideKey: string, tableKey: string, rowLabel: string, rowSort: number, colKey: string, colLabel: string, colSort: number, value: number | null) {
     if (!companyId) return
     const sb = supabase as any
+    const previous = cells.find((c) => c.slide_key === slideKey && c.table_key === tableKey && c.row_label === rowLabel && c.col_key === colKey)
     const { data, error } = await sb.schema('inventory').from('procurement_deck_grid_cells')
       .upsert({
         company_id: companyId, slide_key: slideKey, table_key: tableKey,
@@ -80,6 +109,12 @@ export function useProcurementDeck() {
       next.push(data as GridCell)
       return next
     })
+    // Only a genuine edit of an already-filled field counts — a first-time
+    // fill of a previously-empty cell isn't "changed", it's just filled in.
+    if (previous && previous.value_num != null && previous.value_num !== value) {
+      markChanged(cellKey(slideKey, tableKey, rowLabel, colKey))
+      logFieldHistory({ company_id: companyId, slide_key: slideKey, table_key: tableKey, field_kind: 'grid', row_label: rowLabel, col_key: colKey, old_value_num: previous.value_num, changed_by: userId })
+    }
   }
 
   async function deleteGridRow(slideKey: string, tableKey: string, rowLabel: string) {
@@ -95,12 +130,36 @@ export function useProcurementDeck() {
   async function saveKpi(slideKey: string, tableKey: string, kpiKey: string, label: string, valueText: string, sortOrder: number) {
     if (!companyId) return
     const sb = supabase as any
+    const previous = kpis.find((k) => k.slide_key === slideKey && k.table_key === tableKey && k.kpi_key === kpiKey)
     const { data, error } = await sb.schema('inventory').from('procurement_deck_kpis')
       .upsert({ company_id: companyId, slide_key: slideKey, table_key: tableKey, kpi_key: kpiKey, label, value_text: valueText, sort_order: sortOrder, updated_by: userId, updated_at: new Date().toISOString() },
         { onConflict: 'company_id,slide_key,table_key,kpi_key' })
       .select().single()
     if (error) { toast.error(error.message); return }
     setKpis((prev) => [...prev.filter((k) => !(k.slide_key === slideKey && k.table_key === tableKey && k.kpi_key === kpiKey)), data as KpiItem])
+    if (previous && previous.value_text && previous.value_text !== valueText) {
+      markChanged(kpiFieldKey(slideKey, tableKey, kpiKey))
+      logFieldHistory({ company_id: companyId, slide_key: slideKey, table_key: tableKey, field_kind: 'kpi', kpi_key: kpiKey, old_value_text: previous.value_text, changed_by: userId })
+    }
+  }
+
+  async function savePeriod(slideKey: string, periodKey: 'usage' | 'contract', patch: { startColKey?: string | null; startLabel?: string | null; endColKey?: string | null; endLabel?: string | null; targetNum?: number | null }) {
+    if (!companyId) return
+    const sb = supabase as any
+    const existing = periods.find((p) => p.slide_key === slideKey && p.period_key === periodKey)
+    const { data, error } = await sb.schema('inventory').from('procurement_deck_periods')
+      .upsert({
+        company_id: companyId, slide_key: slideKey, period_key: periodKey,
+        start_col_key: patch.startColKey !== undefined ? patch.startColKey : existing?.start_col_key ?? null,
+        start_label: patch.startLabel !== undefined ? patch.startLabel : existing?.start_label ?? null,
+        end_col_key: patch.endColKey !== undefined ? patch.endColKey : existing?.end_col_key ?? null,
+        end_label: patch.endLabel !== undefined ? patch.endLabel : existing?.end_label ?? null,
+        target_num: patch.targetNum !== undefined ? patch.targetNum : existing?.target_num ?? null,
+        updated_by: userId, updated_at: new Date().toISOString(),
+      }, { onConflict: 'company_id,slide_key,period_key' })
+      .select().single()
+    if (error) { toast.error(error.message); return }
+    setPeriods((prev) => [...prev.filter((p) => !(p.slide_key === slideKey && p.period_key === periodKey)), data as PeriodConfig])
   }
 
   async function addKpi(slideKey: string, tableKey: string, label: string) {
@@ -202,12 +261,14 @@ export function useProcurementDeck() {
   }
 
   return {
-    loading, cells, kpis, items,
-    gridOf, kpisOf, listOf,
+    loading, cells, kpis, items, periods,
+    gridOf, kpisOf, listOf, periodsOf,
     saveCell, deleteGridRow,
     saveKpi, addKpi, deleteKpi,
     addListItem, saveListItem, deleteListItem, moveListItem,
+    savePeriod,
     uploadGrid,
+    historyOfCell, historyOfKpi, isChanged, cellKey, kpiFieldKey,
     reload: load,
   }
 }
