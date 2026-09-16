@@ -43,6 +43,12 @@ export interface CommsConfig {
   // bumpDays via the Bump action).
   staleDays: number
   bumpDays: number
+  // Cause Detail values typed in (not picked from the fixed causeTaxonomy.ts
+  // list), keyed by Cause category — same shape that list already uses, so
+  // the two merge without a lookup mismatch. Company-scoped, same as every
+  // other comms_config list; unlike the others this one is nested since a
+  // Cause Detail's meaning depends on which Cause category it's under.
+  customCauseSubcauses: Record<string, string[]>
 }
 
 export const DEFAULT_COMMS_CONFIG: CommsConfig = {
@@ -52,6 +58,7 @@ export const DEFAULT_COMMS_CONFIG: CommsConfig = {
   actionTaken: ['Ad Hoc Order', 'Ordering on Next Order'],
   staleDays: 3,
   bumpDays: 3,
+  customCauseSubcauses: {},
 }
 
 // Logged automatically by the Tank Monitors email workflow (TankEmailModal's

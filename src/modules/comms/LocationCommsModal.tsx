@@ -40,11 +40,38 @@ interface Props {
 const today = () => new Date().toISOString().split('T')[0]
 const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 1 }))
 
+// Draft cache — an accidental backdrop click or Escape closes this modal
+// with no confirmation, and everything typed was gone. Keyed per-record
+// (existing.id) or per-shop-for-a-new-comm (lockedLocationId) so drafts for
+// different comms never collide, localStorage-only (no cross-device need,
+// and no server round trip for something this disposable). Expires after a
+// day so a long-abandoned draft doesn't resurface confusingly out of
+// nowhere weeks later.
+const COMM_DRAFT_TTL_MS = 24 * 60 * 60 * 1000
+function commDraftKey(existingId: string | null | undefined, lockedLocationId: string | null | undefined): string {
+  return existingId ? `loccomm_draft:${existingId}` : `loccomm_draft:new:${lockedLocationId ?? 'unlocked'}`
+}
+function loadCommDraft(key: string): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { savedAt: number; fields: Record<string, unknown> }
+    if (!parsed?.fields || Date.now() - parsed.savedAt > COMM_DRAFT_TTL_MS) { localStorage.removeItem(key); return null }
+    return parsed.fields
+  } catch { return null }
+}
+function saveCommDraft(key: string, fields: Record<string, unknown>) {
+  try { localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), fields })) } catch { /* storage full/blocked — draft caching is best-effort */ }
+}
+function clearCommDraft(key: string) {
+  try { localStorage.removeItem(key) } catch { /* ignore */ }
+}
+
 export function LocationCommsModal({ open, onClose, existing, lockedLocationId, onSaved, onDelete }: Props) {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const loc = useLocations()
-  const { config, addOption } = useCommsConfig()
+  const { config, addOption, addCauseSubcause } = useCommsConfig()
   const { config: excConfig } = useExceptionConfig()
 
   const [locationId, setLocationId] = useState('')
@@ -78,9 +105,59 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
   const [addPick, setAddPick] = useState('')
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [restoredDraft, setRestoredDraft] = useState(false)
+
+  const draftKey = commDraftKey(existing?.id, lockedLocationId)
 
   useEffect(() => {
     if (!open) return
+    const draft = loadCommDraft(draftKey)
+    setLocationId((draft?.locationId as string) ?? existing?.location_id ?? lockedLocationId ?? '')
+    setCommDate((draft?.commDate as string) ?? existing?.comm_date ?? (existing?.id ? '' : today()))
+    setContactMethod((draft?.contactMethod as string) ?? existing?.contact_method ?? '')
+    setEmailSubject((draft?.emailSubject as string) ?? existing?.email_subject ?? '')
+    setWhoContacted((draft?.whoContacted as string) ?? existing?.who_contacted ?? '')
+    setCommType((draft?.commType as string) ?? existing?.comm_type ?? '')
+    setProducts((draft?.products as CommProduct[]) ?? (existing?.products as CommProduct[]) ?? [])
+    setActionTaken((draft?.actionTaken as string) ?? existing?.action_taken ?? '')
+    setStatus((draft?.status as string) ?? existing?.status ?? (existing?.id ? '' : DEFAULT_STATUS))
+    setNotes((draft?.notes as string) ?? existing?.notes ?? '')
+    setResolution((draft?.resolution as string) ?? resolutionNotes(existing))
+    setCauseCategory((draft?.causeCategory as string) ?? ((existing?.metadata as any)?.cause_category as string) ?? '')
+    setCauseSubcause((draft?.causeSubcause as string) ?? ((existing?.metadata as any)?.cause_subcause as string) ?? '')
+    setProductsExpanded(draft ? !!draft.productsExpanded : (PRODUCTS_EXPANDED_BY_DEFAULT.includes(existing?.comm_type ?? '') || !!(existing?.products as CommProduct[] | undefined)?.length))
+    setReportType((draft?.reportType as string) ?? '')
+    setIssue((draft?.issue as string) ?? '')
+    setDetails((draft?.details as string) ?? '')
+    setResponse((draft?.response as string) ?? '')
+    setResponseDate((draft?.responseDate as string) ?? '')
+    setResponseNotes((draft?.responseNotes as string) ?? '')
+    setFollowUp((draft?.followUp as string) ?? '')
+    setExcMetadata((draft?.excMetadata as Record<string, unknown>) ?? {})
+    setDeleteConfirm(false)
+    setRestoredDraft(!!draft)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existing, open, lockedLocationId, draftKey])
+
+  // Autosave the draft to localStorage while this modal is open, so an
+  // accidental backdrop click or Escape doesn't lose what was typed —
+  // restored (or discarded) via the effect above / discardDraft below.
+  const draftFieldsJson = useMemo(() => JSON.stringify({
+    locationId, commDate, contactMethod, emailSubject, whoContacted, commType, products, actionTaken,
+    status, notes, resolution, causeCategory, causeSubcause, productsExpanded,
+    reportType, issue, details, response, responseDate, responseNotes, followUp, excMetadata,
+  }), [locationId, commDate, contactMethod, emailSubject, whoContacted, commType, products, actionTaken,
+    status, notes, resolution, causeCategory, causeSubcause, productsExpanded,
+    reportType, issue, details, response, responseDate, responseNotes, followUp, excMetadata])
+  useEffect(() => {
+    if (!open) return
+    saveCommDraft(draftKey, JSON.parse(draftFieldsJson))
+  }, [open, draftKey, draftFieldsJson])
+
+  function discardDraft() {
+    clearCommDraft(draftKey)
+    setRestoredDraft(false)
+    // Re-apply the plain existing/locked defaults, same as a fresh open.
     setLocationId(existing?.location_id ?? lockedLocationId ?? '')
     setCommDate(existing?.comm_date ?? (existing?.id ? '' : today()))
     setContactMethod(existing?.contact_method ?? '')
@@ -97,9 +174,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
     setProductsExpanded(PRODUCTS_EXPANDED_BY_DEFAULT.includes(existing?.comm_type ?? '') || !!(existing?.products as CommProduct[] | undefined)?.length)
     setReportType(''); setIssue(''); setDetails(''); setResponse(''); setResponseDate(''); setResponseNotes('')
     setFollowUp(''); setExcMetadata({})
-    setDeleteConfirm(false)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existing, open, lockedLocationId])
+  }
 
   // When editing a comm linked to an exception, load that exception's fields.
   useEffect(() => {
@@ -208,6 +283,7 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
     if (error) { toast.error(error.message); setSaving(false); return }
     toast.success(existing?.id ? 'Communication updated' : 'Communication logged')
     setSaving(false)
+    clearCommDraft(draftKey)
     onSaved()
     onClose()
   }
@@ -217,6 +293,12 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
 
   return (
     <Modal open={open} onClose={onClose} title={existing?.id ? 'Edit Communication' : 'New Communication'} size="lg">
+      {restoredDraft && (
+        <div className="mb-3 flex items-center justify-between gap-2 rounded border border-sky/40 bg-sky/10 px-3 py-2">
+          <span className="text-xs font-mono text-navy">Restored unsaved changes from last time.</span>
+          <button onClick={discardDraft} className="text-xs font-mono text-inky hover:text-navy hover:underline shrink-0">Discard draft</button>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2">
           <Combobox label="Shop *" options={loc.includedOptions} value={locationId} onChange={setLocationId} placeholder="Select shop…" />
@@ -294,8 +376,11 @@ export function LocationCommsModal({ open, onClose, existing, lockedLocationId, 
 
         <Combobox label="Cause (optional)" options={CAUSE_CATEGORIES.map((c) => ({ value: c, label: c }))}
           value={causeCategory} onChange={(v) => { setCauseCategory(v); setCauseSubcause('') }} placeholder="None" />
-        <Combobox label="Cause Detail" options={(CAUSE_SUBCAUSES[causeCategory] ?? []).map((s) => ({ value: s, label: s }))}
-          value={causeSubcause} onChange={setCauseSubcause} placeholder={causeCategory ? 'Select…' : 'Pick a cause first'} />
+        <Combobox label="Cause Detail"
+          options={opt([...(CAUSE_SUBCAUSES[causeCategory] ?? []), ...(config.customCauseSubcauses[causeCategory] ?? [])], causeSubcause)}
+          value={causeSubcause} onChange={setCauseSubcause} placeholder={causeCategory ? 'Select or add…' : 'Pick a cause first'}
+          allowCreate={!!causeCategory}
+          onCreateOption={async (value) => { addCauseSubcause(causeCategory, value); return { value, label: value } }} />
 
         {isException && (
           <div className="col-span-2 flex flex-col gap-3 rounded-lg border border-navy/20 p-3">

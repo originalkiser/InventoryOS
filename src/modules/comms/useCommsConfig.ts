@@ -15,6 +15,7 @@ export function useCommsConfig() {
     actionTaken: raw.actionTaken?.length ? raw.actionTaken : DEFAULT_COMMS_CONFIG.actionTaken,
     staleDays: raw.staleDays ?? DEFAULT_COMMS_CONFIG.staleDays,
     bumpDays: raw.bumpDays ?? DEFAULT_COMMS_CONFIG.bumpDays,
+    customCauseSubcauses: raw.customCauseSubcauses ?? DEFAULT_COMMS_CONFIG.customCauseSubcauses,
   }
   // Append a value to a config list and persist.
   const addOption = (field: 'contactMethods' | 'whoContacted' | 'commTypes' | 'actionTaken', value: string) => {
@@ -22,5 +23,14 @@ export function useCommsConfig() {
     if (!value || cur.includes(value)) return
     save({ ...config, [field]: [...cur, value] })
   }
-  return { config, save: (c: CommsConfig) => save(c), addOption, loaded }
+  // Same idea as addOption, but nested under a Cause category — a typed-in
+  // Cause Detail only ever applies to whichever category it was added
+  // under, same as the fixed causeTaxonomy.ts list it's merged with.
+  const addCauseSubcause = (category: string, value: string) => {
+    if (!category || !value) return
+    const cur = config.customCauseSubcauses[category] ?? []
+    if (cur.includes(value)) return
+    save({ ...config, customCauseSubcauses: { ...config.customCauseSubcauses, [category]: [...cur, value] } })
+  }
+  return { config, save: (c: CommsConfig) => save(c), addOption, addCauseSubcause, loaded }
 }
