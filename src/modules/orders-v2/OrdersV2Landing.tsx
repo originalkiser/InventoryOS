@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
-import { Button, Card, CardBody, Combobox, Input, Modal, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Button, Card, CardBody, Combobox, Input, Modal, MultiSelectDropdown, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
 import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow, type DraftAggregate } from './useOrdersV2'
@@ -34,6 +34,15 @@ export function OrdersV2Landing() {
   const [orderDow, setOrderDow] = useState<number>(() => new Date().getDay())
   const [starting, setStarting] = useState(false)
   const coverage = useOrderDayCoverage(vendors.byId(vendorId || null)?.name)
+  // Ad hoc: order a vendor for an explicit, manually-picked set of shops
+  // instead of the vendor's regular order-day schedule (or "every shop" for
+  // a vendor with no schedule at all) — for a one-off run limited to
+  // specific shops, e.g. a shop that needs a rush order outside its normal
+  // cadence. Works for any vendor, not just RelaDyne.
+  const [adHoc, setAdHoc] = useState(false)
+  const [adHocShops, setAdHocShops] = useState<string[]>([]) // shop LABELS, same shape as MultiSelectDropdown elsewhere
+  const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
+  const shopLabelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
 
   // Shared filters across both lists.
   const [fVendor, setFVendor] = useState('')
@@ -80,7 +89,8 @@ export function OrdersV2Landing() {
 
   async function start() {
     setStarting(true)
-    const id = await createDraft(vendorId || null, orderDate, settings, orderDow)
+    const adHocIds = adHoc ? adHocShops.map((l) => shopLabelToId.get(l)).filter((v): v is string => !!v) : null
+    const id = await createDraft(vendorId || null, orderDate, settings, orderDow, adHocIds)
     setStarting(false)
     if (id) { setStartOpen(false); navigate(`/orders-v2/draft/${id}`) }
   }
@@ -190,7 +200,28 @@ export function OrdersV2Landing() {
           <Combobox label="Vendor" options={vendors.options} value={vendorId} onChange={setVendorId} placeholder="Select vendor…" />
           <Input label="Order Date" type="date" value={orderDate} onChange={(e) => pickDate(e.target.value)} />
 
-          {coverage.applies ? (
+          <label className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
+            <input type="checkbox" checked={adHoc} onChange={(e) => setAdHoc(e.target.checked)} className="accent-inky" />
+            Ad hoc — order specific shop(s) only, instead of the regular schedule
+          </label>
+
+          {adHoc ? (
+            <>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[11px] font-mono text-inky/60">Shop(s)</span>
+                <MultiSelectDropdown options={shopOptions} selected={adHocShops} onChange={setAdHocShops}
+                  placeholder="Select shops…" countNoun="shops" searchable showAllOption={false} />
+              </div>
+              {adHocShops.length === 0 ? (
+                <p className="text-[11px] font-mono text-[#C0392B]">Pick at least one shop to run an ad hoc order.</p>
+              ) : (
+                <p className="text-[11px] font-mono text-inky/60">
+                  Generates the same way as a regular order — DOS targets, minimums, smoothing — limited to
+                  {' '}{adHocShops.length} selected shop{adHocShops.length !== 1 ? 's' : ''}.
+                </p>
+              )}
+            </>
+          ) : coverage.applies ? (
             <>
               <Select label="Order day (which shops to include)" value={String(orderDow)}
                 onChange={(e) => setOrderDow(Number(e.target.value))}
@@ -218,7 +249,7 @@ export function OrdersV2Landing() {
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => setStartOpen(false)}>Cancel</Button>
-            <Button size="sm" loading={starting} disabled={!profile?.company_id} onClick={start}>Create Draft</Button>
+            <Button size="sm" loading={starting} disabled={!profile?.company_id || (adHoc && adHocShops.length === 0)} onClick={start}>Create Draft</Button>
           </div>
         </div>
       </Modal>

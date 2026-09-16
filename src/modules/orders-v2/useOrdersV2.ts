@@ -204,13 +204,20 @@ export function useDrafts() {
    */
   async function createDraft(
     vendorId: string | null, orderDate: string, settings: OrderSettings, orderDow?: number | null,
+    adHocLocationIds?: string[] | null,
   ): Promise<string | null> {
     if (!companyId) return null
     const { data, error } = await sb().schema('inventory').from('ov2_order_drafts').insert({
       company_id: companyId, vendor_id: vendorId, order_date: orderDate, status: 'generating',
       // __order_dow rides along with the settings snapshot so the draft
-      // remembers which weekday's shops it was built for.
-      settings_snapshot: { ...settings, __order_dow: orderDow ?? null },
+      // remembers which weekday's shops it was built for. __adhoc_location_ids
+      // (added 2026-09-16) is the same idea for an ad hoc, manually-scoped
+      // order — an explicit shop list that overrides the schedule-derived
+      // eligibility entirely (see draftAdHocLocationIds/runGeneration).
+      settings_snapshot: {
+        ...settings, __order_dow: orderDow ?? null,
+        __adhoc_location_ids: adHocLocationIds?.length ? adHocLocationIds : null,
+      },
       created_by: profile?.id ?? null, last_edited_by: profile?.id ?? null,
     }).select('id').single()
     if (error) { toast.error(error.message); return null }
@@ -1001,6 +1008,17 @@ export function draftOrderDow(draft: { order_date: string; settings_snapshot?: R
   const stored = (draft.settings_snapshot as any)?.__order_dow
   if (typeof stored === 'number' && stored >= 0 && stored <= 6) return stored
   return new Date(draft.order_date + 'T00:00:00').getDay()
+}
+
+/**
+ * An ad hoc order's explicit shop list, if this draft was scoped to
+ * specific shops rather than the vendor's regular order-day schedule.
+ * `null` (the common case) means "not ad hoc — use the normal schedule
+ * derivation" (see eligibleLocations/runGeneration).
+ */
+export function draftAdHocLocationIds(draft: { settings_snapshot?: Record<string, unknown> | null }): string[] | null {
+  const stored = (draft.settings_snapshot as any)?.__adhoc_location_ids
+  return Array.isArray(stored) && stored.length ? stored as string[] : null
 }
 
 /**

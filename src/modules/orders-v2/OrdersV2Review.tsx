@@ -12,7 +12,7 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import {
   useDraft, useGenerationData, useOrderSettings, useVendorRules,
-  buildGenerationInputs, eligibleLocations, draftOrderDow, shopsPerOrderDay, type DraftLineRow,
+  buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
@@ -82,6 +82,11 @@ export function OrdersV2Review() {
   // section below doesn't need to recompute it separately.
   const [eligibleLocationIds, setEligibleLocationIds] = useState<Set<string> | null>(null)
   const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
+  // Ad hoc drafts bypass the vendor's order-day schedule entirely (see
+  // runGeneration below) — the weekday selector/labels further down don't
+  // apply and would be actively misleading (implying day-based filtering
+  // that isn't happening), so they're suppressed wherever this is true.
+  const isAdHoc = draft ? !!draftAdHocLocationIds(draft) : false
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [movingToFinal, setMovingToFinal] = useState(false)
   // Per-order DOS target/trigger/max — seeded from the real company settings
@@ -147,7 +152,16 @@ export function OrdersV2Review() {
       )
       const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
       setAllInputs(inputs)
-      const eligibleIds = eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
+      // An ad hoc draft (explicit shop list, set at "Start New Order") wins
+      // outright over the vendor's regular order-day schedule — the whole
+      // point is to scope to exactly those shops regardless of what day it
+      // is or whether the vendor even uses order days at all. Everything
+      // else about generation (DOS targets, minimums, smoothing, flags)
+      // runs identically; eligibleLocationIds is the one thing that changes.
+      const adHocIds = draftAdHocLocationIds(draft)
+      const eligibleIds = adHocIds
+        ? new Set(adHocIds)
+        : eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
       setEligibleLocationIds(eligibleIds)
       const result = generateOrder(inputs, {
         settings: effectiveSettings,
@@ -222,7 +236,15 @@ export function OrdersV2Review() {
       // line or re-fetching tank data.
       setDayCounts(shopsPerOrderDay(days))
       await (supabase as any).schema('inventory').from('ov2_order_drafts')
-        .update({ settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts }, status: 'review' })
+        .update({
+          // Rebuilding this object from effectiveSettings (not spreading
+          // draft.settings_snapshot) drops any other __-prefixed field that
+          // isn't explicitly carried forward here — __adhoc_location_ids
+          // has to be threaded through explicitly or a regenerate silently
+          // reverts an ad hoc draft back to the vendor's regular schedule.
+          settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts, __adhoc_location_ids: adHocIds },
+          status: 'review',
+        })
         .eq('id', draft.id)
       await reload()
       toast.success(`Generated ${withDelivery.length} line${withDelivery.length !== 1 ? 's' : ''} across ${shops} shop${shops !== 1 ? 's' : ''}`)
@@ -407,7 +429,7 @@ export function OrdersV2Review() {
           <Button size="sm" variant="muted" onClick={() => navigate('/orders-v2')} className="mb-1">← Orders v2</Button>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
           <p className="text-xs text-inky mt-0.5">
-            {vendorName} · {draft.order_date}{usesOrderDays ? ` · ${DOW[orderDow]} shops` : ''} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
+            {vendorName} · {draft.order_date}{isAdHoc ? ' · Ad hoc' : (usesOrderDays ? ` · ${DOW[orderDow]} shops` : '')} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -469,7 +491,7 @@ export function OrdersV2Review() {
           <Toggle checked={showVmi} onChange={setShowVmi} size="sm" color="cyan" />
           Show VMI / keepfill
         </label>
-        {usesOrderDays && (
+        {usesOrderDays && !isAdHoc && (
           <label className="flex items-center gap-2 text-xs font-mono text-inky">
             Order day
             <select value={String(orderDow)} onChange={(e) => void runGeneration(Number(e.target.value))}
@@ -479,6 +501,11 @@ export function OrdersV2Review() {
               ))}
             </select>
           </label>
+        )}
+        {isAdHoc && (
+          <span className="rounded px-1.5 py-0.5 bg-sky/20 text-navy border border-sky/40 text-xs font-mono">
+            Ad hoc · {eligibleLocationIds?.size ?? 0} shop{(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}
+          </span>
         )}
         <span className="text-xs font-mono text-inky">
           {lines.length} line{lines.length !== 1 ? 's' : ''}
@@ -515,7 +542,7 @@ export function OrdersV2Review() {
       {!generating && lines.length === 0 && (
         <div className="py-8 flex flex-col gap-2">
           <p className="text-xs font-mono text-inky/60">Nothing to order for this run.</p>
-          {usesOrderDays && dayCounts[orderDow] === 0 ? (
+          {usesOrderDays && !isAdHoc && dayCounts[orderDow] === 0 ? (
             <p className="text-xs font-mono text-[#C0392B]">
               No shops have {DOW[orderDow]} as their order day
               {dayCounts.some((c) => c > 0)
@@ -525,8 +552,9 @@ export function OrdersV2Review() {
             </p>
           ) : (
             <p className="text-xs font-mono text-inky/60">
-              {usesOrderDays && `${dayCounts[orderDow]} shop${dayCounts[orderDow] !== 1 ? 's' : ''} order on ${DOW[orderDow]}, but none `}
-              {!usesOrderDays && 'No product is '}
+              {usesOrderDays && !isAdHoc && `${dayCounts[orderDow]} shop${dayCounts[orderDow] !== 1 ? 's' : ''} order on ${DOW[orderDow]}, but none `}
+              {isAdHoc && `${eligibleLocationIds?.size ?? 0} selected shop${(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}, but none `}
+              {!usesOrderDays && !isAdHoc && 'No product is '}
               below the minimum days-of-supply trigger. Check Order Settings, or that Product Usage has current
               on-hand and daily usage for these shops.
             </p>
@@ -653,7 +681,7 @@ export function OrdersV2Review() {
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <p className="text-[10px] font-mono text-inky/50">
-                  On {DOW[orderDow]}'s order day, but nothing ended up included in this order — expand a shop to see everything configured for it and add items if something's missing.
+                  {isAdHoc ? 'Selected for this ad hoc order, but nothing' : `On ${DOW[orderDow]}'s order day, but nothing`} ended up included in this order — expand a shop to see everything configured for it and add items if something's missing.
                 </p>
                 <label className="flex items-center gap-1.5 text-[10px] font-mono text-inky/60 flex-shrink-0">
                   <Toggle checked={showConfigVmi} onChange={setShowConfigVmi} size="sm" color="cyan" />
