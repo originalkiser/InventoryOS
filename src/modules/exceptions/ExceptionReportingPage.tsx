@@ -119,6 +119,17 @@ export function ExceptionReportingPage() {
     [automatedRows],
   )
 
+  // Placeholder tab (2026-09-16) for the RelaDyne open-order/invoice
+  // reconciliation check (Orders v2's upload buttons) — its own
+  // metadata.source so these stay out of both Reports and the real
+  // Automated Checks tab while the matching logic is still being proven
+  // out. Same table component, no separate settings panel yet.
+  const testAutoRows = useMemo(() => rowsAll.filter((r) => (r.metadata as any)?.source === 'po_reconciliation_test'), [rowsAll])
+  const testAutoOpenCount = useMemo(
+    () => testAutoRows.filter((r) => !(r.status ?? '').toLowerCase().includes('closed')).length,
+    [testAutoRows],
+  )
+
   // Same predicate the nav badge counts, so the Alerts tab and the sidebar
   // number can never disagree.
   const alertRows = useMemo(
@@ -181,6 +192,7 @@ export function ExceptionReportingPage() {
             <TabsTrigger value="summary">Summary</TabsTrigger>
             <TabsTrigger value="reports">Reports</TabsTrigger>
             <TabsTrigger value="automated">Automated Checks{automatedOpenCount > 0 ? ` (${automatedOpenCount})` : ''}</TabsTrigger>
+            <TabsTrigger value="test_auto">Test - AutoExceptions{testAutoOpenCount > 0 ? ` (${testAutoOpenCount})` : ''}</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </div>
         </div>
@@ -240,6 +252,28 @@ export function ExceptionReportingPage() {
               rows={automatedRows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
               companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} onQuick={openQuick}
             />
+          )}
+        </TabsContent>
+
+        <TabsContent value="test_auto">
+          {loading ? (
+            <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
+          ) : (
+            <>
+              <p className="text-xs font-body text-inky mb-3">
+                Placeholder for testing the RelaDyne open-order/invoice reconciliation check (uploaded from
+                Orders v2) before it graduates into the real Automated Checks tab. "Not received"/"Improperly
+                received" findings from that check land here, tagged <code>metadata.source = 'po_reconciliation_test'</code>.
+              </p>
+              {testAutoRows.length === 0 ? (
+                <p className="text-xs font-mono text-inky/60 py-8">
+                  Nothing here yet — upload an Open Sales Order or Open Invoice report from Orders v2 to run a check.
+                </p>
+              ) : (
+                <ExceptionTable rows={testAutoRows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
+                  companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} onQuick={openQuick} />
+              )}
+            </>
           )}
         </TabsContent>
 

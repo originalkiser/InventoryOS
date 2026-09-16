@@ -1,13 +1,24 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Upload } from 'lucide-react'
 import { Button, Card, CardBody, Combobox, Input, Modal, MultiSelectDropdown, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
 import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow, type DraftAggregate } from './useOrdersV2'
 import { useOrderHistory } from './useOrderHistory'
+import { useRdReports } from './useRdReports'
 import { useVendors, useUserNames } from './useLookups'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
+
+// True when an ISO timestamp falls on today's calendar date (local time) —
+// drives the upload buttons' "glow orange, needs a fresh upload" state.
+function isToday(iso: string | null): boolean {
+  if (!iso) return false
+  const d = new Date(iso)
+  const now = new Date()
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+}
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -25,6 +36,9 @@ export function OrdersV2Landing() {
   const { orders, loading: histLoading } = useOrderHistory()
   const vendors = useVendors()
   const names = useUserNames()
+  const rd = useRdReports()
+  const [soOpen, setSoOpen] = useState(false)
+  const [ioOpen, setIoOpen] = useState(false)
 
   const [startOpen, setStartOpen] = useState(false)
   const [vendorId, setVendorId] = useState('')
@@ -104,7 +118,9 @@ export function OrdersV2Landing() {
             Generate proposed orders from on-hand and usage, review and adjust, then export per vendor.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-start gap-2">
+          <RdReportButton label="Open Sales Order Report" lastUploadedAt={rd.lastOpenOrdersAt} onClick={() => setSoOpen(true)} />
+          <RdReportButton label="Open Invoice Report" lastUploadedAt={rd.lastOpenInvoicesAt} onClick={() => setIoOpen(true)} />
           <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/exceptions')}>Product Exceptions</Button>
           <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
           <Button size="sm" onClick={() => setStartOpen(true)}><Plus className="w-3.5 h-3.5 mr-1" /> Start New Order</Button>
@@ -253,6 +269,55 @@ export function OrdersV2Landing() {
           </div>
         </div>
       </Modal>
+
+      <Modal open={soOpen} onClose={() => setSoOpen(false)} title="Upload Open Sales Order Report" size="sm">
+        <div className="flex flex-col gap-3">
+          <p className="text-[11px] font-mono text-inky/60">
+            RelaDyne's own "Open SO" export — every order still pending delivery. Replaces whatever was uploaded
+            before; this is a snapshot of what's open right now, not a running history. Runs a check against Droptop
+            receiving data as soon as it's uploaded — see the Test - AutoExceptions tab on Exception Reporting.
+          </p>
+          <FileUploadZone label="Drop the Open Sales Order .xlsx here" onParsed={(r) => { rd.uploadOpenOrders(r.rows); setSoOpen(false) }} />
+          {rd.uploading === 'orders' && <div className="flex justify-center py-2"><SbLoader size={24} /></div>}
+        </div>
+      </Modal>
+
+      <Modal open={ioOpen} onClose={() => setIoOpen(false)} title="Upload Open Invoice Report" size="sm">
+        <div className="flex flex-col gap-3">
+          <p className="text-[11px] font-mono text-inky/60">
+            RelaDyne's own "Open Invoice (IO)" export — recently shipped/invoiced orders. Replaces whatever was
+            uploaded before. Runs a check against Droptop receiving data as soon as it's uploaded, flagging any
+            variance between what was invoiced and what was actually received.
+          </p>
+          <FileUploadZone label="Drop the Open Invoice .xlsx here" onParsed={(r) => { rd.uploadOpenInvoices(r.rows); setIoOpen(false) }} />
+          {rd.uploading === 'invoices' && <div className="flex justify-center py-2"><SbLoader size={24} /></div>}
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+// Glows orange (with "last updated" text underneath) whenever today's
+// report hasn't been uploaded yet — the explicit visual cue asked for, so
+// nobody has to remember to check whether today's file already went in.
+function RdReportButton({ label, lastUploadedAt, onClick }: { label: string; lastUploadedAt: string | null; onClick: () => void }) {
+  const stale = !isToday(lastUploadedAt)
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <button
+        onClick={onClick}
+        className={[
+          'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border text-[11px] font-heading uppercase tracking-wide bg-transparent transition-all',
+          stale
+            ? 'border-[#E67E22] text-[#E67E22] shadow-[0_0_10px_2px_rgba(230,126,34,0.45)] animate-pulse'
+            : 'border-navy text-navy hover:bg-navy hover:text-cream',
+        ].join(' ')}
+      >
+        <Upload className="w-3.5 h-3.5" /> {label}
+      </button>
+      <span className={`text-[10px] font-mono ${stale ? 'text-[#E67E22]' : 'text-inky/60'}`}>
+        {lastUploadedAt ? `Last updated ${dShort(lastUploadedAt)}` : 'Never uploaded'}
+      </span>
     </div>
   )
 }
