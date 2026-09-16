@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { Card, CardBody, Combobox, SbLoader, Badge, Button, Toggle, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Card, CardBody, Combobox, MultiSelectDropdown, SbLoader, Badge, Button, Toggle, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { ColumnManagerModal } from './ColumnManagerModal'
 import { TankEmailModal, type EmailTarget } from './TankEmailModal'
 import { TankEmailTemplates } from './TankEmailTemplates'
@@ -71,8 +71,15 @@ export function TankMonitorsPage() {
   const [monitors, setMonitors] = useState<TankMonitor[]>([])
   const [parts, setParts] = useState<VendorPart[]>([])
   const [loading, setLoading] = useState(true)
-  const [shopFilter, setShopFilter] = useState('')
-  const [amFilter, setAmFilter] = useState('')
+  // Shop filter stores LABELS (same "value = display label" shape
+  // MultiSelectDropdown expects everywhere else it's used for a shop
+  // multi-select — DroptopOrdersPage/StaffingReportPage precedent) rather
+  // than ids; shopFilterIds below resolves labels back to ids for the
+  // actual row filtering. Area manager values are already plain strings,
+  // so no id/label split is needed there.
+  const [shopFilters, setShopFilters] = useState<string[]>([])
+  const [amFilters, setAmFilters] = useState<string[]>([])
+  const [allSearch, setAllSearch] = useState('')
   const [offlineVmiOnly, setOfflineVmiOnly] = useState(true)
   const [ignored, setIgnored] = useAppSetting<string[]>('tank_low_vmi_ignore', [])
   const [matchIgnore, setMatchIgnore, matchIgnoreLoaded] = useAppSetting<string[]>('tank_match_ignore', [])
@@ -177,12 +184,38 @@ export function TankMonitorsPage() {
   const assigned = useMemo(() => monitors.filter((m) => m.location_id && !isHidden(m.location_id)), [monitors, isHidden])
   const unassigned = useMemo(() => monitors.filter((m) => !m.location_id && !matchIgnore.includes(srcKey(m.source_location))), [monitors, matchIgnore])
 
+  // Shop filter options/label<->id maps for the multi-select above — same
+  // shape as DroptopOrdersPage/StaffingReportPage's own shop filters.
+  const shopFilterOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
+  const shopLabelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
+  const shopFilterIds = useMemo(() => new Set(shopFilters.map((l) => shopLabelToId.get(l)).filter((v): v is string => !!v)), [shopFilters, shopLabelToId])
+
   // Filters (shop / area manager) applied to assigned monitors.
   const filtered = useMemo(() => assigned.filter((m) => {
-    if (shopFilter && m.location_id !== shopFilter) return false
-    if (amFilter && metaOf(loc.byId(m.location_id), 'area_manager') !== amFilter) return false
+    if (shopFilterIds.size > 0 && (!m.location_id || !shopFilterIds.has(m.location_id))) return false
+    if (amFilters.length > 0 && !amFilters.includes(metaOf(loc.byId(m.location_id), 'area_manager'))) return false
     return true
-  }), [assigned, shopFilter, amFilter, loc])
+  }), [assigned, shopFilterIds, amFilters, loc])
+
+  // All Monitors tab's own free-text search — checks every column's own
+  // sortable value (same values MonitorTable's cellText/copyTable use), not
+  // just Product/Product ID/Serial#, so "search by any of the columns" from
+  // whichever ones happen to be shown holds even though those three are the
+  // ones actually asked for. Scoped to this one tab (via `filtered`, not a
+  // change to `filtered` itself) since the other tabs' own row sets don't
+  // need it.
+  const searchedAll = useMemo(() => {
+    const q = allSearch.trim().toLowerCase()
+    if (!q) return filtered
+    return filtered.filter((m) => {
+      if (ctx.shopOf(m.location_id).toLowerCase().includes(q)) return true
+      for (const c of COLS) {
+        const v = c.sort ? c.sort(m, ctx) : null
+        if (v != null && String(v).toLowerCase().includes(q)) return true
+      }
+      return false
+    })
+  }, [filtered, allSearch, ctx])
 
   // Offline = last reading > 1 day behind the freshest reading in the dataset.
   const latestReading = useMemo(() => Math.max(0, ...monitors.map((m) => readingTime(m) ?? 0)), [monitors])
@@ -236,12 +269,12 @@ export function TankMonitorsPage() {
     for (const m of filtered) { if (!m.location_id || !m.keep_fill) continue; keepfillByShop.set(m.location_id, (keepfillByShop.get(m.location_id) ?? 0) + 1) }
     return loc.locations.filter((l) => {
       if (!l.active || isExcluded(l)) return false
-      if (shopFilter && l.id !== shopFilter) return false
-      if (amFilter && metaOf(l, 'area_manager') !== amFilter) return false
+      if (shopFilterIds.size > 0 && !shopFilterIds.has(l.id)) return false
+      if (amFilters.length > 0 && !amFilters.includes(metaOf(l, 'area_manager'))) return false
       if (ignored.includes(l.id)) return false
       return (keepfillByShop.get(l.id) ?? 0) < 4
     }).length
-  }, [filtered, loc.locations, isExcluded, shopFilter, amFilter, ignored])
+  }, [filtered, loc.locations, isExcluded, shopFilterIds, amFilters, ignored])
 
   // ── Location Check: monitors whose assigned shop may now be stale ────────
   // Franchise buybacks: a bought-back shop gets renumbered to the company's
@@ -336,10 +369,26 @@ export function TankMonitorsPage() {
         <Button size="sm" variant="secondary" onClick={() => navigate('/config?tab=tank-monitor')}>Upload / Update Data ↗</Button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="w-60"><Combobox options={[{ value: '', label: 'All shops' }, ...shopOptions]} value={shopFilter} onChange={setShopFilter} placeholder="Filter by shop…" /></div>
-        <div className="w-80"><Combobox options={[{ value: '', label: 'All area managers' }, ...areaManagers.map((a) => ({ value: a, label: a }))]} value={amFilter} onChange={setAmFilter} placeholder="Filter by area manager…" /></div>
-        {(shopFilter || amFilter) && <button onClick={() => { setShopFilter(''); setAmFilter('') }} className="text-[11px] font-mono text-inky hover:text-navy hover:underline">Clear filters</button>}
+      {/* relative z-50: without this the table below (its sticky Shop
+          column/header sit at z-40, see MonitorTable) wins ties against
+          these dropdowns' own panels and clips them — found live
+          2026-09-16 from a screenshot of the shop filter's open panel
+          rendering behind the table. Establishing a higher stacking
+          context on this whole row, not just raising the panels' own
+          z-index, is what actually fixes it regardless of which dropdown
+          component is used here. */}
+      <div className="relative z-50 flex flex-wrap items-center gap-3">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop</span>
+          <MultiSelectDropdown options={shopFilterOptions} selected={shopFilters} onChange={setShopFilters} placeholder="All shops" countNoun="shops" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Area Manager</span>
+          <MultiSelectDropdown options={areaManagers.map((a) => ({ value: a }))} selected={amFilters} onChange={setAmFilters} placeholder="All area managers" countNoun="AMs" searchable />
+        </div>
+        {(shopFilters.length > 0 || amFilters.length > 0) && (
+          <button onClick={() => { setShopFilters([]); setAmFilters([]) }} className="text-[11px] font-mono text-inky hover:text-navy hover:underline self-end mb-1">Clear filters</button>
+        )}
       </div>
 
       <Tabs defaultValue="all">
@@ -374,7 +423,13 @@ export function TankMonitorsPage() {
                 </div>
               )}
               {unassigned.length > 0 && <UnassignedMatcher rows={unassigned} shopOptions={shopOptions} companyId={companyId} onMatched={load} onReloadLocations={loc.reload} matchIgnore={matchIgnore} setMatchIgnore={setMatchIgnore} />}
-              <MonitorTable rows={filtered} ctx={ctx} shopOf={ctx.shopOf} />
+              <input
+                value={allSearch}
+                onChange={(e) => setAllSearch(e.target.value)}
+                placeholder="Search product, product ID, serial #, or any other column…"
+                className="w-full max-w-md rounded border border-navy/30 bg-cream px-2 py-1.5 text-xs font-mono text-navy placeholder-inky/50 focus:border-sky focus:outline-none"
+              />
+              <MonitorTable rows={searchedAll} ctx={ctx} shopOf={ctx.shopOf} />
             </div>
           )}
         </TabsContent>
@@ -459,7 +514,7 @@ export function TankMonitorsPage() {
         </TabsContent>
 
         <TabsContent value="lowvmi">
-          <LowVmiView monitors={filtered} loc={loc} isExcluded={isExcluded} shopFilter={shopFilter} amFilter={amFilter} ignored={ignored} setIgnored={setIgnored} ctx={ctx}
+          <LowVmiView monitors={filtered} loc={loc} isExcluded={isExcluded} shopFilterIds={shopFilterIds} amFilters={amFilters} ignored={ignored} setIgnored={setIgnored} ctx={ctx}
             skipEnabled={skipEnabled} setSkipEnabled={setSkipEnabled} skipDays={skipDays} setSkipDays={setSkipDays} lowVmiCommsRows={lowVmiCommsRows}
             excludePending={excludePending} setExcludePending={setExcludePending} lowVmiPendingSet={lowVmiPendingSet}
             onStartEmail={(targets) => { setEmailTargets(targets); setEmailKind('lowvmi') }} />
@@ -804,8 +859,8 @@ function LocationCheckPanel({ rows, shopOptions, loc, onReassign, onIgnore }: {
 }
 
 // ── Low VMI coverage ────────────────────────────────────────────────────────
-function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, setIgnored, ctx, skipEnabled, setSkipEnabled, skipDays, setSkipDays, lowVmiCommsRows, excludePending, setExcludePending, lowVmiPendingSet, onStartEmail }: {
-  monitors: TankMonitor[]; loc: ReturnType<typeof useLocations>; isExcluded: (l: Location) => boolean; shopFilter: string; amFilter: string; ignored: string[]; setIgnored: (v: string[]) => void; ctx: Ctx
+function LowVmiView({ monitors, loc, isExcluded, shopFilterIds, amFilters, ignored, setIgnored, ctx, skipEnabled, setSkipEnabled, skipDays, setSkipDays, lowVmiCommsRows, excludePending, setExcludePending, lowVmiPendingSet, onStartEmail }: {
+  monitors: TankMonitor[]; loc: ReturnType<typeof useLocations>; isExcluded: (l: Location) => boolean; shopFilterIds: Set<string>; amFilters: string[]; ignored: string[]; setIgnored: (v: string[]) => void; ctx: Ctx
   skipEnabled: boolean; setSkipEnabled: (v: boolean) => void; skipDays: number; setSkipDays: (v: number) => void
   lowVmiCommsRows: { location_id: string | null; comm_date: string | null; updated_at: string; products: unknown; status: string | null }[]
   excludePending: boolean; setExcludePending: (v: boolean) => void; lowVmiPendingSet: Map<string, Set<string>>
@@ -842,11 +897,11 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilter, amFilter, ignored, 
 
   const shops = useMemo(() => loc.locations.filter((l) => {
     if (!l.active || isExcluded(l)) return false
-    if (shopFilter && l.id !== shopFilter) return false
-    if (amFilter && metaOf(l, 'area_manager') !== amFilter) return false
+    if (shopFilterIds.size > 0 && !shopFilterIds.has(l.id)) return false
+    if (amFilters.length > 0 && !amFilters.includes(metaOf(l, 'area_manager'))) return false
     const keepfill = (byShop.get(l.id) ?? []).filter((mo) => mo.keep_fill).length
     return keepfill < 4
-  }).sort((a, b) => (a.shop_city || a.name).localeCompare(b.shop_city || b.name, undefined, { numeric: true })), [loc.locations, byShop, shopFilter, amFilter, isExcluded])
+  }).sort((a, b) => (a.shop_city || a.name).localeCompare(b.shop_city || b.name, undefined, { numeric: true })), [loc.locations, byShop, shopFilterIds, amFilters, isExcluded])
 
   const visible = shops.filter((l) => !ignored.includes(l.id) && !(skipEnabled && isRecentlyEmailed(l.id)) && !(excludePending && hasPendingComm(l.id)))
   const toggleIgnore = (id: string) => setIgnored(ignored.includes(id) ? ignored.filter((x) => x !== id) : [...ignored, id])
