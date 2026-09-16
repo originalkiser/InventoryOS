@@ -280,18 +280,25 @@ Deno.serve(async (req) => {
     // Droptop API call), low concurrency isn't needed here the way it is
     // for the usage sync since get-purchase-orders is one call per page,
     // not one call per product.
-    // Keyed by po_id, not pushed to an array — a real run surfaced Postgres'
-    // "ON CONFLICT DO UPDATE command cannot affect row a second time",
-    // meaning the same po_id showed up more than once within one batch
-    // (seemingly the same PO visible under more than one operation_id —
-    // Droptop's po_id apparently isn't strictly per-operation the way the
-    // docs imply). A Map here means a repeat just overwrites in place
-    // instead of the upsert ever seeing the same conflict key twice.
+    // Droptop's po_id ("PO178", "PO179", ...) is scoped PER OPERATION
+    // (per shop), not company-wide — confirmed live 2026-09-16 (two
+    // different shops each independently have their own PO178/179/180).
+    // Keyed by (location_id, po_id), not bare po_id — an earlier version
+    // keyed this Map by po_id alone (comment used to claim "the same PO
+    // visible under more than one operation_id", which was the wrong
+    // read of the same evidence) and paired it with a company-wide
+    // UNIQUE(company_id, po_id) DB constraint; together those silently
+    // collapsed every shop's Nth PO into whichever shop's sync happened to
+    // run last for that number, which is the actual reason only a small,
+    // arbitrary set of shops ever ended up with any PO data at all. See
+    // migration 20260930w_droptop_po_unique_per_location.sql.
+    const poKey = (locationId: string | null, poId: string) => `${locationId ?? ''}|${poId}`
     const posByPoId = new Map<string, { po: any; locationId: string | null }>()
     for (const loc of locations) {
       try {
         const pos = await fetchPurchaseOrders(loc.droptop_operation_id, cutoffUnix, poStatus, publicKey, privateKey)
-        for (const po of pos) posByPoId.set(po.po_id, { po, locationId: opToLocation.get(loc.droptop_operation_id) ?? null })
+        const locationId = opToLocation.get(loc.droptop_operation_id) ?? null
+        for (const po of pos) posByPoId.set(poKey(locationId, po.po_id), { po, locationId })
       } catch (e) {
         warnings.push(`location ${loc.id}: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -330,17 +337,19 @@ Deno.serve(async (req) => {
       synced_at: nowIso,
     }))
 
-    // po_id -> saved row id, filled in as each upsert batch returns.
+    // (location_id, po_id) -> saved row id, filled in as each upsert batch
+    // returns — same composite key as posByPoId above, so a bare-po_id
+    // collision between two shops can't cross-contaminate items either.
     const idByPoId = new Map<string, string>()
     for (let i = 0; i < headers.length; i += BATCH) {
       const slice = headers.slice(i, i + BATCH)
       const { data: saved, error: upsertErr } = await withRetry(() =>
         (admin as any).schema('inventory').from('droptop_purchase_orders')
-          .upsert(slice, { onConflict: 'company_id,po_id' })
-          .select('id, po_id'),
+          .upsert(slice, { onConflict: 'company_id,location_id,po_id' })
+          .select('id, po_id, location_id'),
       )
       if (upsertErr) { warnings.push(`PO batch ${i}-${i + slice.length}: ${upsertErr}`); continue }
-      for (const row of (saved ?? []) as { id: string; po_id: string }[]) idByPoId.set(row.po_id, row.id)
+      for (const row of (saved ?? []) as { id: string; po_id: string; location_id: string | null }[]) idByPoId.set(poKey(row.location_id, row.po_id), row.id)
       posUpserted += saved?.length ?? 0
     }
 
@@ -356,8 +365,8 @@ Deno.serve(async (req) => {
         if (delErr) warnings.push(`Item delete batch ${i}: ${delErr}`)
       }
 
-      const allItems = allPos.flatMap(({ po }) => {
-        const purchaseOrderId = idByPoId.get(po.po_id)
+      const allItems = allPos.flatMap(({ po, locationId }) => {
+        const purchaseOrderId = idByPoId.get(poKey(locationId, po.po_id))
         if (!purchaseOrderId) return []
         return (po.items ?? []).map((it: any) => ({
           purchase_order_id: purchaseOrderId,
