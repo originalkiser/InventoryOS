@@ -602,6 +602,7 @@ export function OrdersV2Review() {
                       <Td align="right">{money(dollars)}</Td>
                       <td className="px-2 py-1">
                         <Flags flags={(l.flags ?? []) as LineFlag[]} />
+                        {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
                         {(l.flags ?? []).includes('covered_by_open_po') && (
                           <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
                         )}

@@ -307,7 +307,7 @@ export function useDraft(draftId: string | null) {
       dos_before: numOr(l.dos_before, null), dos_after: numOr(l.dos_after, null),
       dos_after_delivery: numOr(l.dos_after_delivery, null),
       max_capacity_gallons: numOr(l.max_capacity_gallons, null), quarts_per_unit: numOr(l.quarts_per_unit, null), flags: l.flags,
-      added_by_smoothing: l.added_by_smoothing, triggered_smoothing: l.triggered_smoothing,
+      added_by_smoothing: l.added_by_smoothing, triggered_smoothing: l.triggered_smoothing, note: l.note ?? null,
     }))
     const CHUNK = 500
     for (let i = 0; i < payload.length; i += CHUNK) {

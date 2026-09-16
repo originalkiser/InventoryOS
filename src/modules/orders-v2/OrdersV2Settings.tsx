@@ -76,6 +76,22 @@ export function OrdersV2SettingsBody() {
             dollars={draft.order_minimum_dollars_bulk}
             onChange={(t, d, q) => setDraft((x) => ({ ...x, bulk_minimum_type: t, order_minimum_dollars_bulk: d, bulk_minimum_qty: q }))} />
         </div>
+        {(draft.bulk_minimum_type === 'gallons_per_product' || draft.bulk_minimum_type === 'units_per_product') && (
+          <div className="rounded border border-navy/20 p-3 flex flex-col gap-3">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Bulk per-product minimum — round-up rule</span>
+            <p className="text-[11px] font-mono text-inky/60">
+              A vendor won't ship a partial drum, so a line under the bulk minimum isn't always worth rounding up
+              to it. Below the threshold, it's skipped instead — unless the shop's current days of supply is
+              already critical, in which case it still orders early.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {numField('bulk_round_up_threshold_gal', 'Round up if calculated demand is at least (gal)',
+                'Below this, the line is skipped rather than bumped to the full minimum')}
+              {numField('bulk_urgent_dos_threshold', 'Unless current days of supply is below',
+                'Below this, the minimum is still ordered early regardless of the threshold above')}
+            </div>
+          </div>
+        )}
       </CardBody></Card>
 
       <Card><CardBody className="flex flex-col gap-3">

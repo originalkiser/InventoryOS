@@ -67,6 +67,7 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   po_decision_override: { label: 'PO: order anyway', tone: 'sky', title: 'Decided to order the full suggested quantity regardless of the open PO' },
   po_decision_exclude: { label: 'PO: excluded', tone: 'sky', title: 'Decided the open PO already covers this — excluded from the order' },
   po_decision_combine: { label: 'PO: combined', tone: 'sky', title: 'Decided to factor the open PO\'s outstanding quantity into on-hand and re-target the order quantity' },
+  rounded_to_bulk_minimum: { label: 'Rounded: bulk min', tone: 'sky', title: 'Raised to the bulk per-product minimum (a full drum) — see the note on this line for the real calculated amount' },
 }
 
 export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {

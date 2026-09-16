@@ -392,7 +392,10 @@ export function OrdersV2FinalReview() {
                 <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>
                 <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after_delivery)}</td>
                 <td className="px-2 py-1 text-right text-navy">{money(Number(l.qty) * Number(l.unit_cost ?? 0))}</td>
-                <td className="px-2 py-1"><Flags flags={(l.flags ?? []) as LineFlag[]} /></td>
+                <td className="px-2 py-1">
+                  <Flags flags={(l.flags ?? []) as LineFlag[]} />
+                  {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
+                </td>
               </tr>
             ))}
           </tbody>

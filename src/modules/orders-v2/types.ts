@@ -62,6 +62,19 @@ export interface OrderSettings {
   // fractional gallon figure no vendor actually ships in. 1 = whole
   // gallons. Cases/drums/bay boxes always order in whole units regardless.
   bulk_rounding_increment: number
+  // A bulk per-product minimum (e.g. 55 real gallons — a drum) isn't always
+  // worth rounding a shortfall up to, since the vendor won't ship a partial
+  // drum anyway: a line whose own calculated demand is below this many real
+  // gallons is skipped entirely (not ordered) rather than bumped to the
+  // full minimum — UNLESS the shop's current days of supply is already
+  // below bulk_urgent_dos_threshold, meaning it would likely run low again
+  // before the next order cycle regardless, in which case the drum is
+  // ordered early anyway. Only applies to bulk per-product minimums
+  // (min.type 'gallons_per_product'/'units_per_product' on a bulk group) —
+  // package per-product floors, and the dollar/units-per-order minimums,
+  // are unaffected.
+  bulk_round_up_threshold_gal: number
+  bulk_urgent_dos_threshold: number
 }
 
 export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
@@ -79,6 +92,8 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   flag_cumulative_days: 30,
   flag_cumulative_dos_over: 45,
   bulk_rounding_increment: 1,
+  bulk_round_up_threshold_gal: 35,
+  bulk_urgent_dos_threshold: 15,
 }
 
 // Per shop x product ordering rules. Named fields say "gallons" for
@@ -199,6 +214,7 @@ export type LineFlag =
   | 'po_decision_override'   // user chose: order the full suggested qty anyway
   | 'po_decision_exclude'    // user chose: the open PO covers it, don't order more
   | 'po_decision_combine'    // user chose: factor the open PO's outstanding qty into on-hand and re-target
+  | 'rounded_to_bulk_minimum' // bulk per-product minimum: raised to the drum minimum, see GeneratedLine.note for the real calculated amount
 
 export interface GeneratedLine {
   location_id: string
@@ -223,6 +239,10 @@ export interface GeneratedLine {
   flags: LineFlag[]
   added_by_smoothing: boolean
   triggered_smoothing: boolean
+  // Free-text explanation for a decision a fixed LineFlag can't carry the
+  // specific numbers for (e.g. "can order 33, rounding up to minimum" —
+  // see the bulk_round_up_threshold_gal rule in engine.ts). null otherwise.
+  note: string | null
 }
 
 // Prior-order facts used only by the flag rules, read from ov2_order_history_lines.

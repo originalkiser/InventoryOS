@@ -147,6 +147,52 @@ describe('per-product minimums', () => {
   })
 })
 
+describe('bulk minimum round-up threshold (2026-09-16)', () => {
+  // Common shape: units_per_uom_gallons: 4 (1 unit = 1 real gallon, this
+  // module's internal quarts convention aside — see the regression test
+  // above), daily_usage: 1 so dos_before === on_hand directly, and a
+  // generous min_trigger/dos_max so the only thing gating each scenario is
+  // the bulk threshold logic itself, not an unrelated cap.
+  const bulkRule = { uom: 'bulk' as const, units_per_uom_gallons: 4, unit_cost: 4 }
+  const permissive = { days_of_supply_min_trigger: 100, days_of_supply_max: 500 }
+  const bulkMin = (qty: number) => ({ vendor_id: 'V1', caseTypeMinimums: {}, usesOrderDays: false,
+    minimums: { bulk: { type: 'gallons_per_product' as const, dollars: 0, qty } } })
+
+  it('skips the line entirely when calculated demand is under the round-up threshold and DOS is not urgent', () => {
+    // on_hand 20, daily_usage 1 -> dos_before 20 (>= bulk_urgent_dos_threshold 15).
+    // days_of_supply_target 60 -> calc = (60*1 - 20)/4 = 10 (< bulk_round_up_threshold_gal 35).
+    const a = input({ on_hand: 20, daily_usage: 1, rule: bulkRule })
+    const c = ctx({ settings: { ...DEFAULT_ORDER_SETTINGS, ...permissive, days_of_supply_target: 60 }, vendor: bulkMin(55) })
+    const res = generateOrder([a], c)
+    expect(res.lines).toHaveLength(0)
+    expect(res.skipped).toContainEqual({ location_id: 'L1', product_id: 'P1', reason: 'below_bulk_minimum' })
+  })
+
+  it('rounds up to the minimum (with a note showing the real calculated amount) once demand clears the threshold', () => {
+    // Same dos_before (20, not urgent) as above, but days_of_supply_target
+    // 180 -> calc = (180 - 20)/4 = 40 (>= 35, < the 55 floor).
+    const a = input({ on_hand: 20, daily_usage: 1, rule: bulkRule })
+    const c = ctx({ settings: { ...DEFAULT_ORDER_SETTINGS, ...permissive, days_of_supply_target: 180 }, vendor: bulkMin(55) })
+    const res = generateOrder([a], c)
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBe(55)
+    expect(res.lines[0].flags).toContain('rounded_to_bulk_minimum')
+    expect(res.lines[0].note).toBe('can order 40, rounding up to minimum')
+  })
+
+  it('still rounds up even under the threshold when the shop is already critically low (urgent DOS override)', () => {
+    // on_hand 5, daily_usage 1 -> dos_before 5 (< bulk_urgent_dos_threshold 15).
+    // days_of_supply_target 45 -> calc = (45 - 5)/4 = 10 (< 35), but urgency wins.
+    const a = input({ on_hand: 5, daily_usage: 1, rule: bulkRule })
+    const c = ctx({ settings: { ...DEFAULT_ORDER_SETTINGS, ...permissive, days_of_supply_target: 45 }, vendor: bulkMin(55) })
+    const res = generateOrder([a], c)
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBe(55)
+    expect(res.lines[0].flags).toContain('rounded_to_bulk_minimum')
+    expect(res.lines[0].note).toBe('can order 10, rounding up to minimum')
+  })
+})
+
 describe('vendor case-type minimums', () => {
   it('tops the order up to at least the case-type minimum across products', () => {
     // DOS 12 with a target of 13 => 1 bay box due on each product, 2 in total.

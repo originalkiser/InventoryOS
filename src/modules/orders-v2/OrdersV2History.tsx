@@ -150,7 +150,10 @@ export function OrdersV2History() {
                 <td className="px-2 py-1 text-right text-navy">{money(l.unit_cost)}</td>
                 <td className="px-2 py-1 text-right text-navy">{money(l.line_total)}</td>
                 <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>
-                <td className="px-2 py-1"><Flags flags={(l.flags ?? []) as LineFlag[]} /></td>
+                <td className="px-2 py-1">
+                  <Flags flags={(l.flags ?? []) as LineFlag[]} />
+                  {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
+                </td>
               </tr>
             ))}
           </tbody>

@@ -305,6 +305,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
     flags,
     added_by_smoothing: false,
     triggered_smoothing: false,
+    note: null,
   }
 }
 
@@ -384,6 +385,73 @@ function applyPerProductMinimum(
     if (l.qty + 1e-9 < floorUnits) allMet = false
   }
   return allMet
+}
+
+/**
+ * Bulk-only variant of the per-product floor above (2026-09-16 request): a
+ * vendor won't ship a partial drum, so a line whose own calculated demand
+ * falls well short of the configured minimum (e.g. 55 real gallons) isn't
+ * automatically worth rounding all the way up — that would force-order a
+ * near-full drum for what might be a handful of gallons of real need. Below
+ * `bulk_round_up_threshold_gal` of calculated demand, the line is dropped
+ * entirely (reported in `skipped`, same surface as every other "not
+ * ordered" reason) UNLESS the shop's current days of supply is already
+ * under `bulk_urgent_dos_threshold` — meaning it's likely to run low again
+ * before the next order cycle regardless of this shortfall, so the drum
+ * goes out early anyway. At/above the threshold, the line still rounds up
+ * to the full minimum, same as the generic floor, but records what the
+ * real calculated amount was in `note` so the bump doesn't read as organic
+ * demand growth later.
+ *
+ * Real gallons, not quarts: a correctly-configured bulk rule uses
+ * units_per_uom_gallons: 4 (1 order unit = 1 real gallon = 4 quarts, this
+ * module's internal unit — see applyPerProductMinimum's own comment on the
+ * historical quarts/gallons bug), so `l.qty` for a bulk line already IS the
+ * real gallon figure a human would recognize; no extra conversion here.
+ */
+function applyBulkPerProductMinimum(
+  lines: GeneratedLine[], min: OrderMinimum, ctx: GenerationContext,
+  inputs: Map<string, GenerationInput>, skipped: GenerationResult['skipped'],
+): { lines: GeneratedLine[]; allMet: boolean } {
+  const floor = n(min.qty)
+  if (floor <= 0) return { lines, allMet: true }
+  const roundUpThreshold = n(ctx.settings.bulk_round_up_threshold_gal)
+  const urgentDos = n(ctx.settings.bulk_urgent_dos_threshold)
+  let allMet = true
+  const kept: GeneratedLine[] = []
+  for (const l of lines) {
+    const inp = inputs.get(`${l.location_id}|${l.product_id}`)
+    if (!inp) { kept.push(l); continue }
+    const per = gallonsPerUnit(inp.rule)
+    const floorUnits = min.type === 'gallons_per_product' ? (floor * QUARTS_PER_GALLON) / per : floor
+    if (l.qty >= floorUnits) { kept.push(l); continue }
+
+    const calc = l.qty
+    const urgent = l.dos_before != null && l.dos_before < urgentDos
+    if (calc < roundUpThreshold && !urgent) {
+      skipped.push({ location_id: l.location_id, product_id: l.product_id, reason: 'below_bulk_minimum' })
+      continue
+    }
+
+    // Physical capacity still wins, same rounding-direction logic as the
+    // generic floor.
+    const hard = capsFor(inp, ctx, { respectDosMax: false })
+    const capacityBinds = hard.maxUnits < floorUnits
+    const target = capacityBinds ? hard.maxUnits : floorUnits
+    const rounded = roundQty(target, l.uom, ctx.settings.bulk_rounding_increment, capacityBinds ? 'down' : 'up')
+    if (rounded > l.qty) {
+      const calcRounded = roundQty(calc, l.uom, ctx.settings.bulk_rounding_increment)
+      l.note = `can order ${calcRounded}, rounding up to minimum`
+      l.qty = rounded
+      l.system_qty = rounded
+      l.dos_after = daysOfSupply(n(l.on_hand) + rounded * per, l.daily_usage)
+      markOverDosMax(l, ctx)
+      if (!l.flags.includes('rounded_to_bulk_minimum')) l.flags.push('rounded_to_bulk_minimum')
+    }
+    if (l.qty + 1e-9 < floorUnits) allMet = false
+    kept.push(l)
+  }
+  return { lines: kept, allMet }
 }
 
 /**
@@ -664,7 +732,8 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
   const ruleOf = (l: GeneratedLine) => inputByKey.get(`${l.location_id}|${l.product_id}`)?.rule
   const groups: ShopGroupResult[] = []
 
-  for (const [key, lines] of byGroup) {
+  for (const [key, groupLines] of byGroup) {
+    let lines = groupLines
     const [location_id, order_type] = key.split('|') as [string, OrderType]
     const min: OrderMinimum = ctx.vendor.minimums[order_type] ?? {
       type: order_type === 'bulk' ? ctx.settings.bulk_minimum_type : ctx.settings.package_minimum_type,
@@ -675,7 +744,17 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     // A per-product minimum is a floor on each line, so it's handled up front
     // and doesn't involve the dollar-smoothing path at all.
     if (min.type !== 'dollars') {
-      const met = applyPerProductMinimum(lines, min, ctx, inputByKey)
+      // Bulk gets its own, more nuanced version of the floor (see
+      // applyBulkPerProductMinimum) — package per-product floors keep the
+      // original always-round-up behavior unchanged.
+      let met: boolean
+      if (order_type === 'bulk') {
+        const result = applyBulkPerProductMinimum(lines, min, ctx, inputByKey, skipped)
+        lines = result.lines
+        met = result.allMet
+      } else {
+        met = applyPerProductMinimum(lines, min, ctx, inputByKey)
+      }
       applyCaseTypeMinimums(lines, ctx, inputByKey)
       if (!met) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
       groups.push({

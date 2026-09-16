@@ -55,6 +55,7 @@ export interface HistoryLine {
   dos_after_delivery: number | null
   quarts_per_unit: number | null
   flags: string[]
+  note: string | null
   edited_after_finalize: boolean
   edited_by: string | null
   edited_at: string | null
@@ -203,7 +204,7 @@ export async function finalizeDraft(
     system_qty: l.system_qty, qty: l.qty, is_override: l.is_override, unit_cost: l.unit_cost,
     line_total: Number(l.qty) * Number(l.unit_cost ?? 0),
     on_hand: l.on_hand, daily_usage: l.daily_usage, dos_before: l.dos_before, dos_after: l.dos_after,
-    dos_after_delivery: l.dos_after_delivery, quarts_per_unit: l.quarts_per_unit, flags: l.flags,
+    dos_after_delivery: l.dos_after_delivery, quarts_per_unit: l.quarts_per_unit, flags: l.flags, note: l.note ?? null,
   }))
   const CHUNK = 500
   for (let i = 0; i < payload.length; i += CHUNK) {
