@@ -5,7 +5,7 @@
 // regardless of whether they're mid-way through building a new order.
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
-import { Button, Card, CardBody, Combobox, Input, Select, SbLoader, Toggle } from '@/components/ui'
+import { Button, Card, CardBody, Combobox, Input, Modal, Select, SbLoader, Toggle } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -195,18 +195,29 @@ export function PoStatusPage() {
 
   // Read-only single-location peek at Droptop's raw get-purchase-orders
   // response — for diagnosing a real sync that completes but writes nothing
-  // (a response-shape mismatch) without waiting through another full,
-  // multi-minute company-wide sync to find out. Logs to the console, writes
-  // nothing.
+  // (a response-shape mismatch), or a shop with zero synced POs, without
+  // waiting through another full, multi-minute company-wide sync to find
+  // out. Writes nothing.
+  const [inspectResult, setInspectResult] = useState<{ opId: string; raw: unknown; sample: any[] } | null>(null)
   async function inspectOne() {
+    // Found live 2026-09-16: this never sent the Shop filter's location at
+    // all, so the edge function's own locQuery (which DOES support
+    // locationId) fell through to "every Droptop-enabled location" and
+    // inspected whichever one the DB happened to return first — completely
+    // unrelated to whatever shop was selected on screen. A user diagnosing
+    // a specific quiet shop got a different shop's data with no way to
+    // tell, since the result only ever went to the console. Now explicitly
+    // scoped to the selected shop (required — see the disabled button
+    // below) and shown on screen, not just logged.
+    if (!fLocation) { toast.error('Pick a shop first — Inspect always needs one.'); return }
     setInspecting(true)
     try {
-      const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'inspect' } })
+      const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'inspect', locationId: fLocation } })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
       // eslint-disable-next-line no-console
       console.log('Droptop PO inspect result:', data)
-      toast.success(`Inspect complete — logged to the browser console (F12). ${data.parsed_sample?.length ?? 0} PO(s) parsed.`)
+      setInspectResult({ opId: data.operation_id, raw: data.raw_response, sample: data.parsed_sample ?? [] })
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Inspect failed')
     } finally {
@@ -266,8 +277,8 @@ export function PoStatusPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={inspectOne} disabled={inspecting || syncing} loading={inspecting}
-            title="Read-only peek at one location's raw Droptop response, logged to the browser console — writes nothing">
+          <Button size="sm" variant="secondary" onClick={inspectOne} disabled={inspecting || syncing || !fLocation} loading={inspecting}
+            title={fLocation ? "Read-only peek at the selected shop's raw Droptop response — writes nothing" : 'Pick a shop in the filter below first'}>
             Inspect
           </Button>
           <Button size="sm" variant="secondary" onClick={syncNow} disabled={syncing}>
@@ -407,6 +418,44 @@ export function PoStatusPage() {
           </div>
         </CardBody></Card>
       )}
+
+      <Modal open={!!inspectResult} onClose={() => setInspectResult(null)} title={`Inspect — ${shopLabel(fLocation || null)}`} size="lg">
+        {inspectResult && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[11px] font-mono text-inky/60">
+              Operation ID <span className="text-navy">{inspectResult.opId}</span> — {inspectResult.sample.length} PO(s) in this raw sample
+              (Droptop's own response, not yet mapped/upserted). Full raw response logged to the browser console (F12) too.
+            </p>
+            {inspectResult.sample.length === 0 ? (
+              <p className="text-xs font-mono text-[#C0392B]">
+                Droptop returned zero purchase orders for this shop's operation ID — a real gap on Droptop's side, not a sync bug.
+              </p>
+            ) : (
+              <div className="overflow-auto max-h-96 rounded border border-navy/20">
+                <table className="w-full text-[11px] font-mono">
+                  <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
+                    <th className="text-left px-2 py-1">po_id</th><th className="text-left px-2 py-1">custom_po_id</th>
+                    <th className="text-left px-2 py-1">po_status</th><th className="text-left px-2 py-1">delivery_status</th>
+                  </tr></thead>
+                  <tbody>
+                    {inspectResult.sample.map((po: any, i: number) => (
+                      <tr key={i} className="border-t border-navy/10">
+                        <td className="px-2 py-1 text-navy">{po.po_id ?? '—'}</td>
+                        <td className="px-2 py-1 text-navy">{po.custom_po_id ?? '—'}</td>
+                        <td className="px-2 py-1 text-inky/70">{po.po_status ?? '—'}</td>
+                        <td className="px-2 py-1 text-inky/70">{po.delivery_status ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <Button size="sm" variant="secondary" onClick={() => setInspectResult(null)}>Close</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
