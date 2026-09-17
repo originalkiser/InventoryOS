@@ -60,18 +60,26 @@ const BOARD_CONTENT_RIGHT_PCT = 94.84
 
 // The disclaimer LINE's own vertical band (as a % of the full page-1 art
 // height) — pixel-scanned off MenuBoard-01.png (a small local canvas script
-// sampling row-by-row pixel brightness in the BOARD_CONTENT_LEFT/RIGHT_PCT
-// x-range found the printed text's real glyph rows at y 4002–4042 of the
-// 4950px-tall art, cleanly isolated from "ADDITIONAL CHARGES APPLY" above
-// and the solid divider bar below by wide (46–84px) blank gaps on both
-// sides) — replacing an earlier visual estimate that was ~3x too tall and
-// bled into those neighboring elements. Padded 12px each way for the
-// glyphs' anti-aliased edges while staying well clear of both neighbors.
-// Used only by the Franchise "fees included" override (see footerNote on
-// Board/buildMenuBoardPdf below), which masks over the printed disclaimer
-// and draws different text in its place.
-const FOOTER_NOTE_TOP_PCT = 80.6061
-const FOOTER_NOTE_HEIGHT_PCT = 1.2929
+// sampling pixel brightness in the BOARD_CONTENT_LEFT/RIGHT_PCT x-range
+// found the printed text's real glyph rows at y 4002–4042 of the 4950px-
+// tall art, cleanly isolated from "ADDITIONAL CHARGES APPLY" above and the
+// solid divider bar below by wide (46–84px) blank gaps on both sides).
+// FOOTER_NOTE_TOP_PCT is the box's vertical CENTER, not its top edge — both
+// render paths below treat it that way (the DOM version's own
+// `translateY(-50%)`, the canvas version's `noteCenterY`) — so it's the
+// text's measured center, (4002+4042)/2 = 4022 of 4950, not the top of the
+// padded box. (An earlier pass supplied the padded box's top edge here
+// instead of its center, which silently shifted the whole mask upward by
+// about half its own height — it "mostly" covered the printed text only
+// because that version's height was also hugely overestimated; tightening
+// the height without fixing this would have uncovered even more of it.)
+// Height is padded generously (20px each side beyond the measured 41px
+// glyph height) since this box is solid navy on a solid navy background —
+// extra padding is invisible, so it costs nothing to stay safely clear of
+// both neighbors while fully covering the text regardless of a few stray
+// anti-aliased pixels at its true edges.
+const FOOTER_NOTE_TOP_PCT = 81.2525
+const FOOTER_NOTE_HEIGHT_PCT = 1.6364
 // The printed disclaimer's own font size, in the same "px at a 480-wide
 // reference board" terms every other overlay font size on this page uses.
 // Solved (not guessed) via canvas.measureText: the ORIGINAL disclaimer's
