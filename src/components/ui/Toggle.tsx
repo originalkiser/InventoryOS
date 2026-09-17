@@ -23,7 +23,15 @@ export function Toggle({ checked, onChange, label, size = 'md', color = 'cyan' }
       <div
         onClick={() => onChange(!checked)}
         className={[
-          'relative inline-block rounded-full transition-colors duration-200 cursor-pointer',
+          // shrink-0: the thumb below is `absolute`, so it never contributes
+          // to this div's own intrinsic content size — without shrink-0, a
+          // long sibling label (inline-flex row, no wrap) can force a flex
+          // layout to shrink this track below its fixed w-8/w-10 anyway,
+          // while the thumb keeps its fixed absolute offset and spills
+          // outside the now-narrower oval. Found live via the Franchise
+          // Menu Board form's toggle, whose label is by far the longest of
+          // any Toggle usage in the app — short labels never hit this.
+          'relative inline-block shrink-0 rounded-full transition-colors duration-200 cursor-pointer',
           trackW, trackH,
           checked ? colorClasses[color] : 'bg-[#2a2d3e]',
         ].join(' ')}
