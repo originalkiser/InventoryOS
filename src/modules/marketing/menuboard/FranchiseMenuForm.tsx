@@ -1,15 +1,20 @@
-// Franchise Menu Board creation form (2026-09-18 request) — picks an open,
+// Franchise Menu Board creation form (2026-09-18 request, extended
+// 2026-09-18 with the public self-service setup flow) — picks an open,
 // non-corporate shop, auto-populates the 5 canonical package base prices
 // from core.locations (flagging which ones came from the list vs. still
 // need entering), takes optional fees + an "include fees in pricing"
 // toggle, and shows a live BoardViewer preview reflecting all of it in
 // real time — the exact same board-rendering path every other menu board
 // uses, just fed a location-shaped object with the confirmed prices
-// swapped in for the real ones (see previewLocation below).
+// swapped in for the real ones (see previewLocation below). Rendered from
+// two places: FranchiseTab (an authenticated admin, `locations` from
+// useLocations()) and PublicFranchiseSetupPage (an anonymous franchisee via
+// a setup link, `locations` from the get_franchise_setup_context RPC) — the
+// `setupToken` prop is what tells FranchiseConfirmModal which of those two
+// contexts it's creating the share under.
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Card, CardBody, Combobox, Toggle } from '@/components/ui'
 import { ownerBucket } from '@/hooks/useLocationExclusions'
-import { useLocations } from '@/hooks/useLocations'
 import { byNaturalLabel } from '@/lib/naturalSort'
 import type { Location } from '@/types'
 import type { MenuBoardPackage } from './useMenuBoard'
@@ -27,26 +32,37 @@ const EMPTY_FLAGS: Record<FranchisePackageKey, boolean> = {
   economy: false, premium_hm: false, premium_full_synthetic: false, premium_full_synthetic_hm: false, rp: false,
 }
 
-export function FranchiseMenuForm({ loc, packages, resolveQuart, onCancel, onCreated }: {
-  loc: ReturnType<typeof useLocations>
+export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToken, onCancel, onCreated }: {
+  locations: Location[]
   packages: MenuBoardPackage[]
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
-  onCancel: () => void
-  onCreated: () => void
+  /** Set when rendered from the public, no-auth franchisee setup page (see
+   *  PublicFranchiseSetupPage) — forwarded to FranchiseConfirmModal so it
+   *  creates the share via the token-scoped RPC instead of a direct insert
+   *  under the logged-in admin's own session. */
+  setupToken?: string
+  /** Omitted on the public setup page — there's no internal list to cancel
+   *  back to, so the "✕" button simply isn't rendered. */
+  onCancel?: () => void
+  onCreated: (url: string) => void
 }) {
   // "Open, non-corporate" = active AND owner isn't literally 'Corporate' —
   // ownerBucket() is the existing app-wide Corporate/Franchise split
-  // (useLocationExclusions.ts), reused here rather than re-deriving it.
+  // (useLocationExclusions.ts), reused here rather than re-deriving it. The
+  // public setup page's own get_franchise_setup_context RPC already applies
+  // this same rule server-side before the shop list ever reaches here, so
+  // this filter is a no-op there — kept anyway so this component's own
+  // behavior doesn't depend on which caller already filtered.
   const franchiseShopOptions = useMemo(
-    () => loc.locations
+    () => locations
       .filter((l) => l.active && ownerBucket(l.owner ?? '') !== 'Corporate')
       .map((l) => ({ value: l.id, label: l.shop_city || l.name }))
       .sort(byNaturalLabel),
-    [loc.locations],
+    [locations],
   )
 
   const [locationId, setLocationId] = useState('')
-  const location = loc.locations.find((l) => l.id === locationId)
+  const location = locations.find((l) => l.id === locationId)
 
   const [priceInputs, setPriceInputs] = useState<Record<FranchisePackageKey, string>>(EMPTY_PRICES)
   // Tracks "this value came from the location list and hasn't been
@@ -117,7 +133,7 @@ export function FranchiseMenuForm({ loc, packages, resolveQuart, onCancel, onCre
         <Card><CardBody className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">New Franchise Menu Board</h3>
-            <button onClick={onCancel} className="text-inky/50 hover:text-navy text-sm" title="Cancel">✕</button>
+            {onCancel && <button onClick={onCancel} className="text-inky/50 hover:text-navy text-sm" title="Cancel">✕</button>}
           </div>
 
           <Combobox label="Shop (franchise, open only)" options={franchiseShopOptions} value={locationId} onChange={setLocationId} placeholder="Search…" />
@@ -204,8 +220,9 @@ export function FranchiseMenuForm({ loc, packages, resolveQuart, onCancel, onCre
         <FranchiseConfirmModal
           location={location} address={address} packages={activePackages} resolveQuart={resolveQuart}
           prices={parsedPrices as Record<FranchisePackageKey, number>} fees={fees} feesIncluded={feesIncluded}
+          setupToken={setupToken}
           onClose={() => setConfirmOpen(false)}
-          onCreated={() => { setConfirmOpen(false); onCreated() }}
+          onCreated={(url) => { setConfirmOpen(false); onCreated(url) }}
         />
       )}
     </div>

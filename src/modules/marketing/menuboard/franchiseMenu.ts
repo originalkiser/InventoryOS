@@ -6,6 +6,13 @@
 // and the public PublicFranchiseMenuBoardPage.
 
 export const FZMENU_BASE_URL = 'https://fzmenu.sboc.app/'
+// Franchisee self-service setup links (2026-09-18 follow-up) live under a
+// path on the SAME fzmenu.sboc.app subdomain rather than a whole new one —
+// avoids a second manual Cloudflare/DNS setup step for infrastructure that
+// otherwise works identically. Open (not per-shop): the franchisee picks
+// their own shop after opening the link (see marketing.franchise_setup_links'
+// own migration comment for why).
+export const FRANCHISE_SETUP_BASE_URL = 'https://fzmenu.sboc.app/setup/'
 
 // The 5 canonical board packages, in board display order — key names match
 // core.locations' own price columns 1:1 so auto-populating from a location

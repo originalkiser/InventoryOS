@@ -11,6 +11,7 @@ import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { PublicFranchiseMenuBoardPage } from '@/pages/PublicFranchiseMenuBoardPage'
+import { PublicFranchiseSetupPage } from '@/pages/PublicFranchiseSetupPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
 import { MenuBoardPdfPage } from '@/modules/marketing/menuboard/MenuBoardPdfPage'
 import { NearestMenuBoardPage } from '@/modules/marketing/menuboard/NearestMenuBoardPage'
@@ -110,6 +111,15 @@ function FzMenuApp() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Franchisee self-service setup (2026-09-18 follow-up) — a
+            reusable, open (not shop-locked) link handed directly to a
+            franchisee so they can build their own board with no SB Net
+            login. Lives on this same subdomain under its own path prefix
+            rather than a whole new subdomain, since that would mean a
+            second manual Cloudflare/DNS setup step for identical
+            infrastructure. A distinct 2-segment path shape from "/:slug"
+            below, so there's no route-matching ambiguity between the two. */}
+        <Route path="/setup/:token" element={<PublicFranchiseSetupPage />} />
         <Route path="/:slug" element={<PublicFranchiseMenuBoardPage />} />
         <Route path="*" element={
           <div className="min-h-screen flex items-center justify-center bg-sb-navy px-6">

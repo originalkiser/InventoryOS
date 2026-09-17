@@ -19,7 +19,7 @@ import {
 const sb = supabase as any
 const CONFIRM_DELAY_SECONDS = 10
 
-export function FranchiseConfirmModal({ location, address, packages, resolveQuart, prices, fees, feesIncluded, onClose, onCreated }: {
+export function FranchiseConfirmModal({ location, address, packages, resolveQuart, prices, fees, feesIncluded, setupToken, onClose, onCreated }: {
   location: Location
   address: string
   packages: MenuBoardPackage[]
@@ -27,8 +27,12 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
   prices: Record<FranchisePackageKey, number>
   fees: FranchiseFees
   feesIncluded: boolean
+  /** Set on the public, no-auth franchisee setup flow — creates the share
+   *  via the token-scoped RPC (no session, no profile.company_id) instead
+   *  of the direct insert the authenticated admin flow uses. */
+  setupToken?: string
   onClose: () => void
-  onCreated: () => void
+  onCreated: (url: string) => void
 }) {
   const { profile } = useAuthStore()
   const [secondsLeft, setSecondsLeft] = useState(CONFIRM_DELAY_SECONDS)
@@ -56,11 +60,41 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
   }
 
   async function confirm() {
-    if (!profile?.company_id) return
+    if (!setupToken && !profile?.company_id) return
     setSubmitting(true)
     try {
+      if (setupToken) {
+        // Public setup-link flow — no session to satisfy franchise_menu_shares'
+        // own RLS policy, so this goes through a SECURITY DEFINER RPC that
+        // resolves the company from the token and does its own slug-retry
+        // server-side (see that migration's own header comment).
+        const { data, error } = await sb.rpc('create_franchise_menu_share_via_setup_link', {
+          p_token: setupToken,
+          p_location_id: location.id,
+          p_price_economy: prices.economy,
+          p_price_premium_hm: prices.premium_hm,
+          p_price_premium_full_synthetic: prices.premium_full_synthetic,
+          p_price_premium_full_synthetic_hm: prices.premium_full_synthetic_hm,
+          p_price_rp: prices.rp,
+          p_shop_supply_fee: fees.shopSupplyFee,
+          p_disposal_fee: fees.disposalFee,
+          p_oil_inflation_surcharge: fees.oilInflationSurcharge,
+          p_fees_included: feesIncluded,
+          p_address: address,
+        })
+        if (error || data?.error) {
+          toast.error(error?.message ?? `Could not create the franchise menu board (${data?.error})`)
+          return
+        }
+        const url = `${FZMENU_BASE_URL}${data.slug}`
+        navigator.clipboard?.writeText(url).catch(() => {})
+        toast.success(`Franchise menu board created — link copied: ${url}`, { duration: 8000 })
+        onCreated(url)
+        return
+      }
+
       const base = {
-        company_id: profile.company_id,
+        company_id: profile!.company_id,
         location_id: location.id,
         price_economy: prices.economy,
         price_premium_hm: prices.premium_hm,
@@ -72,7 +106,7 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
         oil_inflation_surcharge: fees.oilInflationSurcharge,
         fees_included_in_pricing: feesIncluded,
         address,
-        created_by: profile.id ?? null,
+        created_by: profile!.id ?? null,
       }
       // Same retry-on-slug-collision shape as ShareMenuBoardModal's own
       // create() — a fresh 4-char hash suffix on each attempt.
@@ -84,7 +118,7 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
           const url = `${FZMENU_BASE_URL}${slug}`
           navigator.clipboard?.writeText(url).catch(() => {})
           toast.success(`Franchise menu board created — link copied: ${url}`, { duration: 8000 })
-          onCreated()
+          onCreated(url)
           return
         }
         lastErrMessage = error.message

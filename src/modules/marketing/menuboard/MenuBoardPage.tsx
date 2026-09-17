@@ -264,7 +264,7 @@ export function MenuBoardPage() {
         </TabsContent>
 
         <TabsContent value="franchise">
-          <FranchiseTab loc={loc} packages={packages} resolveQuart={quartPricing.resolve} />
+          <FranchiseTab locations={loc.locations} packages={packages} resolveQuart={quartPricing.resolve} />
         </TabsContent>
       </Tabs>
     </div>
