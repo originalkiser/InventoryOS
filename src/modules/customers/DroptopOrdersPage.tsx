@@ -50,6 +50,11 @@ interface PackageRow {
   order_id: string
   package_id: string | null
   name: string | null
+  // The package's own list price before any discount/coupon is applied —
+  // what to compare against core.locations' configured price columns
+  // (economy, premium_hm, etc.) to audit that Droptop is actually selling
+  // at the price the location list says it should be.
+  base_service_price: number | null
   price_total: number | null
   price_total_after_discount: number | null
 }
@@ -94,7 +99,7 @@ interface OrderRowEmbedded extends OrderRow {
 }
 const ORDER_EMBED_SELECT = `
   id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at, fleet_company_name,
-  droptop_order_packages(package_id, name, price_total, price_total_after_discount),
+  droptop_order_packages(package_id, name, base_service_price, price_total, price_total_after_discount),
   droptop_order_products(product_id, product_type, uom, quantity_total),
   droptop_order_services(package_id, products),
   droptop_order_vehicles(vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year, mileage)
@@ -636,6 +641,15 @@ export function DroptopOrdersPage() {
     { key: 'city', label: 'City', get: (o) => o.city || '—' },
     { key: 'status', label: 'Status', get: (o) => o.status || '—' },
     { key: 'packages', label: 'Packages', get: (o) => (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—' },
+    {
+      // The package's own base_service_price (list price before
+      // coupons/discounts) — for auditing that what Droptop actually sold
+      // matches core.locations' configured price columns. Joined in the
+      // same order as the Packages column above so the two line up
+      // side-by-side for an order with more than one package.
+      key: 'base_price', label: 'Base Service Price', align: 'right',
+      get: (o) => (packagesByOrder.get(o.id) ?? []).map((p) => p.base_service_price != null ? money(p.base_service_price) : null).filter(Boolean).join(', ') || '—',
+    },
     { key: 'products', label: 'Products', get: (o) => productIdsFor(o.id).join(', ') || '—' },
     { key: 'quarts', label: 'Quarts', get: (o) => { const q = quartsFor(o.id); return q > 0 ? q.toFixed(2) : '—' }, align: 'right' },
     {
@@ -655,7 +669,7 @@ export function DroptopOrdersPage() {
     { key: 'total', label: 'Total', get: (o) => money(o.final_price), align: 'right' },
     { key: 'finalized', label: 'Finalized', get: (o) => (o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—') },
   ]
-  const [reportColumnKeys, setReportColumnKeys] = useState<string[]>(['order_id', 'shop', 'customer', 'packages', 'quarts', 'm5_pct', 'total', 'finalized'])
+  const [reportColumnKeys, setReportColumnKeys] = useState<string[]>(['order_id', 'shop', 'customer', 'packages', 'base_price', 'quarts', 'm5_pct', 'total', 'finalized'])
   const [reportRegions, setReportRegions] = useState<string[]>([])
   const [reportMarkets, setReportMarkets] = useState<string[]>([])
   const [reportAMs, setReportAMs] = useState<string[]>([])
