@@ -10,6 +10,7 @@ import { ImportPreviewHost } from '@/components/config/ImportPreviewHost'
 import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { PublicFormPage } from '@/pages/PublicFormPage'
+import { PublicFranchiseMenuBoardPage } from '@/pages/PublicFranchiseMenuBoardPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
 import { MenuBoardPdfPage } from '@/modules/marketing/menuboard/MenuBoardPdfPage'
 import { NearestMenuBoardPage } from '@/modules/marketing/menuboard/NearestMenuBoardPage'
@@ -94,6 +95,32 @@ function FormsApp() {
   )
 }
 
+// Blank franchise menu boards (fzmenu.sboc.app/:slug) — same hostname-check
+// pattern as MenuBoardApp/FormsApp above, and its own subdomain rather than
+// a menu.sboc.app path so these never mix with the regular Shop Links
+// system at all (different table, different RPC, always locked to one
+// shop with page 2 always hidden). Requires fzmenu.sboc.app to be added as
+// its own Cloudflare Pages custom domain + DNS record before it resolves —
+// see CLAUDE.md's Deployment notes; this file alone can't provision that.
+function isFzMenuHost(): boolean {
+  return window.location.hostname.startsWith('fzmenu.')
+}
+
+function FzMenuApp() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/:slug" element={<PublicFranchiseMenuBoardPage />} />
+        <Route path="*" element={
+          <div className="min-h-screen flex items-center justify-center bg-sb-navy px-6">
+            <p className="text-sm font-mono text-sb-cream/80 text-center">This menu board link is no longer active.</p>
+          </div>
+        } />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
 export default function App() {
   if (SUPABASE_MISSING) {
     return (
@@ -115,6 +142,7 @@ export default function App() {
   }
 
   if (isMenuBoardHost()) return <MenuBoardApp />
+  if (isFzMenuHost()) return <FzMenuApp />
   if (isFormsHost()) return <FormsApp />
 
   return (

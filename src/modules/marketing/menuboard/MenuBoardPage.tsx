@@ -17,6 +17,7 @@ import { requestImportConfirm } from '@/components/config/ImportPreviewHost'
 import type { ImportMode } from '@/modules/config/useConfigTab'
 import { mappedValue } from '@/lib/columnTransform'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
+import { FranchiseTab } from './FranchiseTab'
 import { byNaturalLabel, naturalCompare } from '@/lib/naturalSort'
 import { imagesToPdf } from '@/lib/imagesToPdf'
 import type { Location, ColumnMapping } from '@/types'
@@ -56,6 +57,19 @@ const LAYOUT_KEY = 'menu-board:layout'
 // scrolling to see it.
 const BOARD_CONTENT_LEFT_PCT = 4.88
 const BOARD_CONTENT_RIGHT_PCT = 94.84
+
+// The disclaimer LINE's own vertical band (as a % of the full page-1 art
+// height) — visually estimated off the same art file, not pixel-scanned
+// like the X bounds above (no image-inspection tooling available in this
+// environment). Used only by the Franchise "fees included" override (see
+// footerNote on Board/buildMenuBoardPdf below), which masks over the
+// printed disclaimer and draws different text in its place. Spot-check
+// this band against the live rendered board before trusting it exactly —
+// it's deliberately a little taller than the printed line to tolerate
+// being slightly off, at the cost of touching a sliver of the bar above
+// or the divider lines below if the estimate is off by more than ~1%.
+const FOOTER_NOTE_TOP_PCT = 80.6
+const FOOTER_NOTE_HEIGHT_PCT = 2.8
 
 // The numeric price columns on core.locations a package can be fed from —
 // the Package Mapping "Source Column" dropdown. Kept as an explicit list
@@ -186,6 +200,7 @@ export function MenuBoardPage() {
           <TabsTrigger value="quarts">Quart Pricing</TabsTrigger>
           <TabsTrigger value="custom">Custom Pricing ({quartPricing.overrides.length})</TabsTrigger>
           <TabsTrigger value="links">Shop Links</TabsTrigger>
+          <TabsTrigger value="franchise">Franchise</TabsTrigger>
         </TabsList>
 
         <TabsContent value="board">
@@ -210,6 +225,10 @@ export function MenuBoardPage() {
 
         <TabsContent value="links">
           <ShopLinksTab loc={loc} />
+        </TabsContent>
+
+        <TabsContent value="franchise">
+          <FranchiseTab loc={loc} packages={packages} resolveQuart={quartPricing.resolve} />
         </TabsContent>
       </Tabs>
     </div>
@@ -279,7 +298,7 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
  * updates position live, committed to the DB on release. Reused read-only
  * by the public share page (no editMode, no updatePackage).
  */
-export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1, shareUrl, hidePage2 }: {
+export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1, shareUrl, hidePage2, footerNote }: {
   location: Location | undefined
   packages: MenuBoardPackage[]
   editMode?: boolean
@@ -297,6 +316,11 @@ export function Board({ location, packages, editMode = false, updatePackage, res
   shareUrl?: string
   /** Share-level toggle to omit the page-2 staff reference sheet entirely. */
   hidePage2?: boolean
+  /** Franchise "fees included in pricing" override — when set, masks over
+   *  the printed disclaimer line ("* * * * * ALL OIL CHANGES ARE SUBJECT
+   *  TO A SHOP SUPPLY AND/OR DISPOSAL FEE. * * * * *") and draws this text
+   *  in its place instead. Omitted/undefined leaves the printed line as-is. */
+  footerNote?: string | null
 }) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<{ id: string; field: 'price' | 'quart' } | null>(null)
@@ -387,6 +411,18 @@ export function Board({ location, packages, editMode = false, updatePackage, res
               </div>
             )
           })}
+          {footerNote && (
+            <div
+              className="absolute flex items-center justify-center text-center font-mono font-bold bg-sb-navy text-sb-cream px-2 leading-tight"
+              style={{
+                left: `${BOARD_CONTENT_LEFT_PCT}%`, width: `${BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT}%`,
+                top: `${FOOTER_NOTE_TOP_PCT}%`, height: `${FOOTER_NOTE_HEIGHT_PCT}%`,
+                transform: 'translateY(-50%)', fontSize: 11 * scale,
+              }}
+            >
+              {footerNote}
+            </div>
+          )}
         </div>
 
         {/* The real art is a generic template with no shop-specific address
@@ -518,7 +554,7 @@ function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
   ctx.fillText('PLUS TAX', x + (colW - wPT) / 2, smallBaseline + ptFs + fs * 0.02)
 }
 
-export async function buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2 }: {
+export async function buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2, footerNote }: {
   packages: MenuBoardPackage[]
   location: Location | undefined
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
@@ -527,6 +563,11 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
   shareUrl?: string
   /** Omit the page-2 staff reference sheet — a single-page PDF. */
   hidePage2?: boolean
+  /** Same "fees included" override as Board's own footerNote prop — masks
+   *  the printed disclaimer and draws this text in its place. Must be kept
+   *  in sync with Board's DOM version since this is a separate canvas
+   *  render, not a screenshot of it (see this file's own PDF export comment). */
+  footerNote?: string | null
 }): Promise<Blob> {
   await Promise.all([
     document.fonts.load('700 100px "Chakra Petch"'),
@@ -566,6 +607,24 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
       ctx1.textBaseline = 'middle'
       ctx1.fillText(`$${q.pricePerQuart.toFixed(2)} per extra quart`, (p.quart_pos_x / 100) * PDF_W, (p.quart_pos_y / 100) * h1Art)
     }
+  }
+
+  // Franchise "fees included" override — same mask-and-redraw as Board's
+  // own DOM version (kept in sync by hand, see this export's own header
+  // comment); #002745/#F2F1E6 here match this function's other draw calls
+  // below, not new colors.
+  if (footerNote) {
+    const noteCenterY = h1Art * (FOOTER_NOTE_TOP_PCT / 100)
+    const noteH = h1Art * (FOOTER_NOTE_HEIGHT_PCT / 100)
+    const contentX = PDF_W * (BOARD_CONTENT_LEFT_PCT / 100)
+    const contentW = PDF_W * ((BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT) / 100)
+    ctx1.fillStyle = '#002745'
+    ctx1.fillRect(contentX, noteCenterY - noteH / 2, contentW, noteH)
+    ctx1.fillStyle = '#F2F1E6'
+    ctx1.font = `700 ${Math.round(noteH * 0.5)}px "DM Mono", monospace`
+    ctx1.textAlign = 'center'
+    ctx1.textBaseline = 'middle'
+    ctx1.fillText(footerNote, PDF_W / 2, noteCenterY)
   }
 
   ctx1.fillStyle = '#002745'
@@ -699,6 +758,7 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.C
         address: props.address,
         shareUrl,
         hidePage2,
+        footerNote: props.footerNote,
       })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
