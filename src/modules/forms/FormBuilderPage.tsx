@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  DndContext, DragOverlay, PointerSensor, useSensor, useSensors, closestCenter, useDraggable, useDroppable,
+  DndContext, DragOverlay, PointerSensor, useSensor, useSensors, closestCenter, pointerWithin, useDraggable, useDroppable,
   type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import {
@@ -52,9 +52,10 @@ const FIELD_TYPES: { type: FieldType; label: string; icon: string; desc: string 
 // Prefix for a palette item's dnd-kit drag id, so it can never collide with
 // a real field's uuid inside the one shared DndContext both live in.
 const PALETTE_PREFIX = 'palette-'
-// The always-present drop target at the end of the canvas — covers both the
-// empty-canvas placeholder and "drop after the last field."
-const CANVAS_DROPZONE_ID = 'canvas-dropzone'
+// Precise "insert here" slots, one before each field plus one after the
+// last (N fields -> gap-0..gap-N) — gap-${i} means "insert at index i."
+// Only mounted during a palette drag; see isPaletteDrag at the render site.
+const GAP_PREFIX = 'gap-'
 
 const DEPARTMENTS = ['All', 'Inventory', 'Operations', 'Finance', 'Accounting', 'Marketing', 'HR']
 
@@ -169,25 +170,38 @@ function PaletteDragPreview({ type }: { type: FieldType }) {
   )
 }
 
-// Always-present drop target at the end of the canvas — the empty-canvas
-// placeholder IS this dropzone (rather than a separate non-droppable div),
-// so a palette item can be dropped even before any field exists yet.
-function CanvasDropzone({ empty, onImportClick }: { empty: boolean; onImportClick: () => void }) {
-  const { setNodeRef, isOver } = useDroppable({ id: CANVAS_DROPZONE_ID })
-  if (empty) {
-    return (
-      <div ref={setNodeRef}
-        className={['flex flex-col items-center justify-center h-64 gap-3 rounded border-2 border-dashed transition-colors',
-          isOver ? 'border-[#00e5ff] bg-[#00e5ff]/5' : 'border-navy/20'].join(' ')}>
-        <p className="text-sm font-mono text-inky/50">{isOver ? 'Drop to add this field' : 'Canvas is empty'}</p>
-        <p className="text-xs font-mono text-inky/40">Drag a field from the left panel, or import from spreadsheet</p>
-        <button onClick={onImportClick} className="text-xs font-mono border border-navy/20 rounded px-3 py-1.5 text-inky hover:border-navy/40">↑ Import from Spreadsheet</button>
-      </div>
-    )
-  }
+// The whole empty canvas IS the one drop target (gap-0) when there are no
+// fields yet, so a palette item can be dropped even before any field
+// exists — same id space as GapDropzone below (gap-${index}).
+function EmptyCanvasDropzone({ onImportClick }: { onImportClick: () => void }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${GAP_PREFIX}0` })
   return (
     <div ref={setNodeRef}
-      className={['h-8 rounded border-2 border-dashed transition-colors', isOver ? 'border-[#00e5ff] bg-[#00e5ff]/5' : 'border-transparent'].join(' ')} />
+      className={['flex flex-col items-center justify-center h-64 gap-3 rounded border-2 border-dashed transition-colors',
+        isOver ? 'border-inky/50 bg-inky/10' : 'border-navy/20'].join(' ')}>
+      <p className="text-sm font-mono text-inky/50">{isOver ? 'Drop to add this field' : 'Canvas is empty'}</p>
+      <p className="text-xs font-mono text-inky/40">Drag a field from the left panel, or import from spreadsheet</p>
+      <button onClick={onImportClick} className="text-xs font-mono border border-navy/20 rounded px-3 py-1.5 text-inky hover:border-navy/40">↑ Import from Spreadsheet</button>
+    </div>
+  )
+}
+
+// A precise "insert here" slot between two fields (or before the first /
+// after the last) — only mounted while dragging a NEW field in from the
+// palette (see isPaletteDrag at the render site), so it never competes
+// with the existing field-reorder drag's own collision detection. Resting
+// height is a thin strip; growing to a full rectangle on hover is what
+// gives the "fields spread apart to make room" effect — a plain CSS height
+// transition on this element is enough to smoothly push its later
+// siblings down in normal document flow, no separate animation needed on
+// the field cards themselves.
+function GapDropzone({ id }: { id: string }) {
+  const { setNodeRef, isOver } = useDroppable({ id })
+  return (
+    <div ref={setNodeRef} style={{ height: isOver ? 52 : 14, transition: 'height 150ms ease' }}>
+      <div className={['h-full rounded border-2 border-dashed transition-colors',
+        isOver ? 'border-inky/50 bg-inky/10' : 'border-transparent'].join(' ')} />
+    </div>
   )
 }
 
@@ -1452,16 +1466,27 @@ export function FormBuilderPage() {
   }
 
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
+  const isPaletteDrag = activeDragId?.startsWith(PALETTE_PREFIX) ?? false
+  // dnd-kit's DragOverlay, by default, animates itself collapsing into
+  // wherever the ACTIVE draggable's own DOM node currently sits once the
+  // drag ends — for a palette button that node never moves (it's a
+  // permanent sidebar element, not the thing that got added), so the
+  // default "fly back to the sidebar" animation played every time,
+  // success or not. Suppressed only when a palette drag actually lands on
+  // a valid target — a genuinely cancelled drag still gets the normal
+  // snap-back, which correctly reads as "that didn't do anything."
+  const [suppressDropAnimation, setSuppressDropAnimation] = useState(false)
 
   function onDragStart(e: DragStartEvent) {
     setActiveDragId(String(e.active.id))
+    setSuppressDropAnimation(false)
   }
 
   // Handles BOTH dragging a new field type in from the palette (id prefixed
-  // PALETTE_PREFIX — inserted at the drop position, not just appended) and
-  // reordering an already-placed field — one shared DndContext covers both
-  // so a palette item can be dropped directly at a specific spot in the
-  // canvas instead of always landing at the end.
+  // PALETTE_PREFIX — inserted at the exact gap slot dropped on, not just
+  // appended) and reordering an already-placed field — one shared
+  // DndContext covers both so a palette item can be dropped directly at a
+  // specific spot in the canvas instead of always landing at the end.
   function onDragEnd(e: DragEndEvent) {
     setActiveDragId(null)
     const { active, over } = e
@@ -1470,9 +1495,15 @@ export function FormBuilderPage() {
     const overId = String(over.id)
 
     if (activeId.startsWith(PALETTE_PREFIX)) {
+      setSuppressDropAnimation(true)
       const type = activeId.slice(PALETTE_PREFIX.length) as FieldType
       setFields((prev) => {
-        const at = overId === CANVAS_DROPZONE_ID ? prev.length : Math.max(0, prev.findIndex((f) => f.id === overId))
+        // Precise gap slot wins when the pointer landed on one; falling
+        // onto a field card itself (a coarser, still-valid target) inserts
+        // just before that card, same as before gaps existed.
+        const at = overId.startsWith(GAP_PREFIX)
+          ? Number(overId.slice(GAP_PREFIX.length))
+          : (() => { const i = prev.findIndex((f) => f.id === overId); return i === -1 ? prev.length : i })()
         const next = [...prev]
         next.splice(at, 0, newField(type, at))
         return next.map((f, i) => ({ ...f, sort_order: i }))
@@ -1540,6 +1571,7 @@ export function FormBuilderPage() {
         updated_at: new Date().toISOString(),
       }
       let id = savedId
+      const isNew = !id
       if (id) {
         const { error } = await sb.schema('forms').from('forms').update(payload).eq('id', id)
         if (error) { toast.error(error.message); return }
@@ -1549,17 +1581,28 @@ export function FormBuilderPage() {
           .select().single()
         if (error) { toast.error(error.message); return }
         id = data.id
-        setSavedId(id)
-        navigate(`/forms/${id}/edit`, { replace: true })
       }
       // Best-effort: skip silently if the column isn't present in this environment.
       if (category !== undefined) {
         sb.schema('forms').from('forms').update({ category }).eq('id', id!)
           .then(({ error }: any) => { if (error) console.warn('Form category not saved (column missing?):', error.message) })
       }
-      await saveFormFields(id!, fields as FormField[], conditions)
+      const fieldsSaved = await saveFormFields(id!, fields as FormField[], conditions)
+      if (!fieldsSaved) return
       if (formData.visibility === 'departments') {
         await saveDeptShares(id!, deptShares)
+      }
+      // Adopt the new id / change the URL only AFTER every write above has
+      // actually landed. Doing this earlier (as this used to) flipped the
+      // `formId` route param immediately, which re-triggers the
+      // loadFormWithFields effect below WHILE saveFormFields was still in
+      // flight — a fresh (still-empty, since nothing had been inserted
+      // yet) read raced the write and reset the in-memory `fields` back to
+      // empty. A confused re-save in that emptied state then genuinely
+      // deleted the fields for real (saveFormFields([]) clears them).
+      if (isNew) {
+        setSavedId(id)
+        navigate(`/forms/${id}/edit`, { replace: true })
       }
       if (publish != null) {
         setFormData((f) => ({ ...f, is_published: publish }))
@@ -1621,7 +1664,7 @@ export function FormBuilderPage() {
           field type in) and the canvas (reorder existing fields), so a
           palette item can be dropped at a specific position instead of
           only ever appending to the end. */}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={isPaletteDrag ? pointerWithin : closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left panel */}
         <div className="w-72 flex-shrink-0 border-r border-navy/20 bg-cream flex flex-col overflow-hidden">
@@ -1744,29 +1787,37 @@ export function FormBuilderPage() {
         <div className="flex-1 overflow-y-auto p-6 bg-navy/5">
           <SortableContext items={fields.map((f) => f.id)} strategy={verticalListSortingStrategy}>
             <div className="flex flex-col gap-2 max-w-2xl mx-auto">
-              {fields.map((field) => (
-                <FieldCard
-                  key={field.id}
-                  field={field}
-                  allFields={fields}
-                  condition={conditionFor(field.id)}
-                  clipboardFieldId={clipboardFieldId}
-                  onUpdate={(patch) => updateField(field.id, patch)}
-                  onDelete={() => deleteField(field.id)}
-                  onDuplicate={() => duplicateField(field.id)}
-                  onCopy={() => copyField(field.id)}
-                  onPasteAbove={fieldClipboard ? () => pasteField(field.id, 'above') : null}
-                  onPasteBelow={fieldClipboard ? () => pasteField(field.id, 'below') : null}
-                  onConditionSave={saveCondition}
-                  onConditionRemove={() => removeCondition(field.id)}
-                />
-              ))}
-              <CanvasDropzone empty={fields.length === 0} onImportClick={() => setImportOpen(true)} />
+              {fields.length === 0 ? (
+                <EmptyCanvasDropzone onImportClick={() => setImportOpen(true)} />
+              ) : (
+                <>
+                  {isPaletteDrag && <GapDropzone id={`${GAP_PREFIX}0`} />}
+                  {fields.map((field, i) => (
+                    <Fragment key={field.id}>
+                      <FieldCard
+                        field={field}
+                        allFields={fields}
+                        condition={conditionFor(field.id)}
+                        clipboardFieldId={clipboardFieldId}
+                        onUpdate={(patch) => updateField(field.id, patch)}
+                        onDelete={() => deleteField(field.id)}
+                        onDuplicate={() => duplicateField(field.id)}
+                        onCopy={() => copyField(field.id)}
+                        onPasteAbove={fieldClipboard ? () => pasteField(field.id, 'above') : null}
+                        onPasteBelow={fieldClipboard ? () => pasteField(field.id, 'below') : null}
+                        onConditionSave={saveCondition}
+                        onConditionRemove={() => removeCondition(field.id)}
+                      />
+                      {isPaletteDrag && <GapDropzone id={`${GAP_PREFIX}${i + 1}`} />}
+                    </Fragment>
+                  ))}
+                </>
+              )}
             </div>
           </SortableContext>
         </div>
       </div>
-      <DragOverlay>
+      <DragOverlay dropAnimation={suppressDropAnimation ? null : undefined}>
         {activeDragId?.startsWith(PALETTE_PREFIX) ? (
           <PaletteDragPreview type={activeDragId.slice(PALETTE_PREFIX.length) as FieldType} />
         ) : activeDragId ? (
