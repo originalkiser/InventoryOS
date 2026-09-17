@@ -8,6 +8,7 @@ import type {
   FormDefinition, FormField, FormSubmission, FormResponse, ScoreStreak,
   SubmissionColumn, SubmissionColumnValue, ResponseOverride,
 } from '@/types/forms'
+import { effectivePenetrationPct, effectiveOtdPrice, formatMoney, formatPct, summarizePackageRow } from '@/lib/packagePricing'
 import { format } from 'date-fns'
 import * as XLSX from 'xlsx'
 import toast from 'react-hot-toast'
@@ -103,6 +104,64 @@ function OverrideCellPopover({
 }
 
 // ── Response cell (editable with override support) ────────────────────────────
+
+// Package Pricing responses are an array of rows, not a scalar — shown as a
+// count + a modal with the full per-package breakdown, bypassing
+// ResponseCell's override machinery (which only knows scalar/array/option
+// values) entirely for this field type.
+function PackagePricingCell({ response }: { response: FormResponse | undefined }) {
+  const [open, setOpen] = useState(false)
+  const rows = response?.value_json ?? []
+  if (!rows.length) return <span className="text-inky/40">—</span>
+  const pcts = effectivePenetrationPct(rows)
+
+  return (
+    <>
+      <button onClick={() => setOpen(true)} className="text-navy underline hover:text-inky text-left">
+        {rows.length} package{rows.length !== 1 ? 's' : ''}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm p-4" onClick={() => setOpen(false)}>
+          <div className="bg-cream rounded-lg border border-navy/30 shadow-2xl p-4 max-w-4xl w-full max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Package Pricing</h3>
+              <button onClick={() => setOpen(false)} className="text-inky/50 hover:text-navy">✕</button>
+            </div>
+            <table className="w-full text-xs font-mono">
+              <thead><tr className="border-b border-navy/20 text-inky uppercase">
+                <th className="text-left px-2 py-1">Package</th><th className="text-left px-2 py-1">Oil</th>
+                <th className="text-right px-2 py-1">Price</th><th className="text-right px-2 py-1">Qts Incl.</th>
+                <th className="text-right px-2 py-1">$/Qt After</th><th className="text-left px-2 py-1">Tax</th>
+                <th className="text-left px-2 py-1">Filter</th><th className="text-right px-2 py-1">OTD Price</th>
+                <th className="text-right px-2 py-1">Penetration</th>
+              </tr></thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const isAuto = r.penetration_pct == null
+                  return (
+                    <tr key={r.id} className="border-b border-navy/10">
+                      <td className="px-2 py-1 text-navy">{r.package_name || '—'}</td>
+                      <td className="px-2 py-1 text-inky">{r.oil_type || '—'}{r.oil_brand ? ` (${r.oil_brand})` : ''}</td>
+                      <td className="px-2 py-1 text-right text-navy">{formatMoney(r.package_price)}</td>
+                      <td className="px-2 py-1 text-right text-inky">{r.quarts_included ?? '—'}</td>
+                      <td className="px-2 py-1 text-right text-inky">{formatMoney(r.price_per_quart_after)}</td>
+                      <td className="px-2 py-1 text-inky capitalize">{r.tax_mode ?? '—'}</td>
+                      <td className="px-2 py-1 text-inky capitalize">{r.filter_mode ?? '—'}</td>
+                      <td className="px-2 py-1 text-right text-navy">{formatMoney(effectiveOtdPrice(r))}</td>
+                      <td className="px-2 py-1 text-right" style={isAuto ? { color: '#E67E22' } : undefined}>
+                        {formatPct(pcts[i])}{isAuto ? ' (auto)' : ''}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
 
 function ResponseCell({
   response, override, field, canWrite, onOverrideSave, onRevert,
@@ -382,6 +441,12 @@ export function FormResultsPage() {
 
   function displayValue(resp: FormResponse | undefined, field: FormField): string {
     if (!resp) return '—'
+    if (field.field_type === 'package_pricing') {
+      const rows = resp.value_json ?? []
+      if (!rows.length) return '—'
+      const pcts = effectivePenetrationPct(rows)
+      return rows.map((r, i) => summarizePackageRow(r, pcts[i], r.penetration_pct == null)).join('; ')
+    }
     const ov = overrideMap[resp.id] ?? null
     const resolved = resolveDisplayValue(resp, ov)
     if (field.field_type === 'multiple_choice' || field.field_type === 'dropdown') {
@@ -584,6 +649,9 @@ export function FormResultsPage() {
                       </td>
                       {dataFields.map((field) => {
                         const resp = responseMap[sub.id]?.[field.id]
+                        if (field.field_type === 'package_pricing') {
+                          return <td key={field.id} className="px-3 py-2 max-w-[140px]"><PackagePricingCell response={resp} /></td>
+                        }
                         const ov = resp ? (overrideMap[resp.id] ?? null) : null
                         return (
                           <td key={field.id} className="px-3 py-2 max-w-[140px] relative">

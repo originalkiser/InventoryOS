@@ -11,6 +11,8 @@ export type FieldType =
   | 'date'
   | 'number'
   | 'calculation'
+  | 'formula'
+  | 'package_pricing'
 
 export interface FieldOption {
   id: string
@@ -18,10 +20,48 @@ export interface FieldOption {
   score: number
 }
 
+// `calculation` (score-total, unchanged) keeps `operation: 'sum'` — its
+// runtime value is actually a blanket sum of every scored choice field on
+// the form (FormCanvas's calcScore()), not scoped by `source_fields` at
+// all; this config only ever fed the builder's own picker UI. `formula`
+// (2026-09-16, general-purpose calculating field) is a distinct field type
+// that DOES use `source_fields`/`operation` for real, plus the additional
+// `formula` operator: a free-text expression referencing other fields as
+// `{Field Label}` tokens, evaluated by src/lib/formulaEval.ts (no eval()).
+// Both types share this one jsonb config shape/column since it was already
+// a flexible bag with no fixed shape at the DB level.
 export interface CalculationConfig {
   source_fields: string[]
-  operation: 'sum'
+  operation: 'sum' | 'average' | 'difference' | 'product' | 'formula'
+  formula?: string
   label: string
+}
+
+// One row of a `package_pricing` field's response (2026-09-16, acquisition
+// pricing worksheets) — see src/lib/packagePricing.ts for the shared
+// OTD-default/penetration-auto-split math. Stored as an ARRAY on
+// FormResponse.value_json for that (submission, field) — package_pricing
+// is the one field type whose response isn't a single scalar.
+export interface PackagePricingRow {
+  id: string
+  package_name: string
+  oil_type: string
+  oil_brand: string | null
+  package_price: number | null
+  quarts_included: number | null
+  price_per_quart_after: number | null
+  tax_mode: 'included' | 'added' | null
+  filter_mode: 'included' | 'added' | null
+  // Out-the-door price: auto-fills from package_price until the analyst
+  // types their own number, at which point otd_price_is_manual flips true
+  // and it stops following package_price.
+  otd_price: number | null
+  otd_price_is_manual: boolean
+  // Penetration % of total volume for this package — null means "not yet
+  // entered," in which case it splits the remaining percentage evenly with
+  // every other not-yet-entered row (see effectivePenetrationPct()); a
+  // non-null value is the seller/analyst's own explicit figure.
+  penetration_pct: number | null
 }
 
 export interface FormField {
@@ -112,6 +152,10 @@ export interface FormResponse {
   value_option_id: string | null
   value_score: number | null
   file_paths: string[] | null
+  // Generic structured-value escape hatch (migration
+  // 20260930x_forms_formula_package_pricing.sql) — currently only used by
+  // `package_pricing` fields, holding a PackagePricingRow[].
+  value_json?: PackagePricingRow[] | null
 }
 
 export interface ScoreStreak {

@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { loadPublicForm, submitForm } from '@/hooks/useForms'
 import { FormCanvas } from '@/modules/forms/FormBuilderPage'
 import { useAuthStore } from '@/stores/authStore'
-import type { FormDefinition, FormField, FieldCondition } from '@/types/forms'
+import type { FormDefinition, FormField, FieldCondition, PackagePricingRow } from '@/types/forms'
 import { resolveThemeColors } from '@/lib/resolveThemeColors'
 import toast from 'react-hot-toast'
 
@@ -66,6 +66,7 @@ export function PublicFormPage() {
         let valueArray: string[] | null = null
         let valueOptionId: string | null = null
         let valueScore: number | null = null
+        let valueJson: PackagePricingRow[] | null = null
 
         if (field.field_type === 'multiple_choice' || field.field_type === 'dropdown') {
           valueOptionId = val ?? null
@@ -73,13 +74,15 @@ export function PublicFormPage() {
         } else if (field.field_type === 'multi_select') {
           valueArray = Array.isArray(val) ? val : null
           if (valueArray) valueScore = valueArray.reduce((s, id) => s + (field.options.find((o) => o.id === id)?.score ?? 0), 0)
+        } else if (field.field_type === 'package_pricing') {
+          valueJson = Array.isArray(val) ? val : null
         } else {
           valueText = val != null ? String(val) : null
         }
 
-        return { fieldId: field.id, valueText, valueArray, valueOptionId, valueScore, filePaths: fPaths }
+        return { fieldId: field.id, valueText, valueArray, valueOptionId, valueScore, valueJson, filePaths: fPaths }
       })
-      .filter((r) => r.valueText != null || r.valueArray != null || r.valueOptionId != null || (r.filePaths?.length ?? 0) > 0)
+      .filter((r) => r.valueText != null || r.valueArray != null || r.valueOptionId != null || (r.valueJson?.length ?? 0) > 0 || (r.filePaths?.length ?? 0) > 0)
 
     const subId = await submitForm({
       formId: form.id,

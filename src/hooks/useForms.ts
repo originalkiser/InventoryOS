@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import type { FormDefinition, FormField, FieldCondition, ConditionRule } from '@/types/forms'
+import type { FormDefinition, FormField, FieldCondition, ConditionRule, PackagePricingRow } from '@/types/forms'
 import toast from 'react-hot-toast'
 
 const sb = supabase as any
@@ -160,6 +160,7 @@ export async function submitForm(payload: {
     valueArray?: string[] | null
     valueOptionId?: string | null
     valueScore?: number | null
+    valueJson?: PackagePricingRow[] | null
     filePaths?: string[] | null
   }[]
   totalScore: number | null
@@ -186,6 +187,7 @@ export async function submitForm(payload: {
         value_array: r.valueArray ?? null,
         value_option_id: r.valueOptionId ?? null,
         value_score: r.valueScore ?? null,
+        value_json: r.valueJson ?? null,
         file_paths: r.filePaths ?? null,
       }))
     )

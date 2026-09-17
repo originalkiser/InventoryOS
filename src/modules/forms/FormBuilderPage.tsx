@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
+  DndContext, DragOverlay, PointerSensor, useSensor, useSensors, closestCenter, useDraggable, useDroppable,
+  type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import {
   SortableContext, useSortable, arrayMove, verticalListSortingStrategy,
@@ -11,15 +12,18 @@ import { HexColorPicker } from 'react-colorful'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { loadFormWithFields, saveFormFields } from '@/hooks/useForms'
+import { useUndoableState } from '@/hooks/useUndoableState'
 import { RichTextEditor, RichTextDisplay } from '@/components/shared/RichTextEditor'
 import { BRAND_ASSETS, type BrandAssetKey } from '@/lib/formBrandAssets'
 import { resolveThemeColors, DEFAULT_THEME, PRESET_COLORS, type FormTheme, type FormColors } from '@/lib/resolveThemeColors'
 import {
   downloadFormImportTemplate, parseFormImportFile, importRowToField, type ImportPreviewRow,
 } from '@/lib/formImportTemplate'
+import { evaluateFieldFormula } from '@/lib/formulaEval'
+import { newPackagePricingRow, effectivePenetrationPct, effectiveOtdPrice } from '@/lib/packagePricing'
 import type {
   FormDefinition, FormField, FieldType, FieldOption, FieldCondition, ConditionRule,
-  DraftField, FormDepartmentShare, SubmissionAccessRule,
+  DraftField, FormDepartmentShare, SubmissionAccessRule, PackagePricingRow,
 } from '@/types/forms'
 import toast from 'react-hot-toast'
 
@@ -41,7 +45,16 @@ const FIELD_TYPES: { type: FieldType; label: string; icon: string; desc: string 
   { type: 'date',            label: 'Date',             icon: '📅', desc: 'Date picker' },
   { type: 'number',          label: 'Number',           icon: '#',  desc: 'Numeric input' },
   { type: 'calculation',     label: 'Calculation',      icon: 'Σ',  desc: 'Auto-computed score total' },
+  { type: 'formula',         label: 'Formula',          icon: 'ƒ',  desc: 'Calculates from other number fields' },
+  { type: 'package_pricing', label: 'Package Pricing',  icon: '🛢', desc: 'Repeating table for acquisition pricing' },
 ]
+
+// Prefix for a palette item's dnd-kit drag id, so it can never collide with
+// a real field's uuid inside the one shared DndContext both live in.
+const PALETTE_PREFIX = 'palette-'
+// The always-present drop target at the end of the canvas — covers both the
+// empty-canvas placeholder and "drop after the last field."
+const CANVAS_DROPZONE_ID = 'canvas-dropzone'
 
 const DEPARTMENTS = ['All', 'Inventory', 'Operations', 'Finance', 'Accounting', 'Marketing', 'HR']
 
@@ -83,11 +96,99 @@ function newField(type: FieldType, order: number): DraftField {
     is_required: false,
     sort_order: order,
     options: [],
-    calculation_config: { source_fields: [], operation: 'sum', label: 'Total Score' },
+    calculation_config: { source_fields: [], operation: 'sum', label: type === 'formula' ? 'Calculated Value' : 'Total Score' },
     file_types_allowed: null,
     max_file_size_mb: 25,
     content: null,
   }
+}
+
+// Live value for a 'formula' field — used both in the builder's preview and
+// the real public fill-out page (PublicFormPage.tsx imports this too, so
+// the number shown while filling out the form and the number actually
+// stored on submit can never disagree). Returns null (not 0) whenever a
+// referenced field isn't answered yet, so a half-filled form never shows a
+// falsely-confident calculated result.
+export function computeFormulaValue(field: FormField, allFields: FormField[], responses: Record<string, any>): number | null {
+  const cfg = field.calculation_config
+  const ids = cfg?.source_fields ?? []
+  if (!ids.length) return null
+
+  if (cfg?.operation === 'formula') {
+    const valuesByLabel: Record<string, number | null> = {}
+    for (const id of ids) {
+      const f = allFields.find((x) => x.id === id)
+      if (!f) continue
+      const raw = Number(responses[id])
+      valuesByLabel[f.label] = Number.isFinite(raw) ? raw : null
+    }
+    return evaluateFieldFormula(cfg.formula ?? '', valuesByLabel)
+  }
+
+  const nums = ids.map((id) => { const v = Number(responses[id]); return Number.isFinite(v) ? v : null })
+  if (nums.some((n) => n == null)) return null
+  const vals = nums as number[]
+  switch (cfg?.operation) {
+    case 'average': return vals.reduce((a, b) => a + b, 0) / vals.length
+    case 'difference': return vals.slice(1).reduce((a, b) => a - b, vals[0])
+    case 'product': return vals.reduce((a, b) => a * b, 1)
+    case 'sum':
+    default: return vals.reduce((a, b) => a + b, 0)
+  }
+}
+
+// ── Palette item (draggable into the canvas at a specific position, or click to append) ──
+
+function PaletteButton({ ft, onClick }: { ft: typeof FIELD_TYPES[number]; onClick: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `${PALETTE_PREFIX}${ft.type}` })
+  const style: React.CSSProperties = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: 40 } : {}
+  return (
+    <button
+      ref={setNodeRef} style={style} {...listeners} {...attributes} onClick={onClick}
+      className={[
+        'flex items-center gap-3 px-3 py-2 rounded border border-navy/15 bg-cream hover:border-[#00e5ff]/60 hover:bg-[#00e5ff]/5 text-left transition-colors cursor-grab',
+        isDragging ? 'opacity-40' : '',
+      ].join(' ')}>
+      <span className="text-sm text-inky/70 w-5 text-center flex-shrink-0">{ft.icon}</span>
+      <div className="min-w-0">
+        <div className="text-xs font-heading text-navy">{ft.label}</div>
+        <div className="text-[9px] font-mono text-inky/50 truncate">{ft.desc}</div>
+      </div>
+    </button>
+  )
+}
+
+function PaletteDragPreview({ type }: { type: FieldType }) {
+  const ft = FIELD_TYPES.find((f) => f.type === type)
+  if (!ft) return null
+  return (
+    <div className="flex items-center gap-3 px-3 py-2 rounded border border-[#00e5ff] bg-cream shadow-lg">
+      <span className="text-sm text-inky/70 w-5 text-center flex-shrink-0">{ft.icon}</span>
+      <div className="text-xs font-heading text-navy">{ft.label}</div>
+    </div>
+  )
+}
+
+// Always-present drop target at the end of the canvas — the empty-canvas
+// placeholder IS this dropzone (rather than a separate non-droppable div),
+// so a palette item can be dropped even before any field exists yet.
+function CanvasDropzone({ empty, onImportClick }: { empty: boolean; onImportClick: () => void }) {
+  const { setNodeRef, isOver } = useDroppable({ id: CANVAS_DROPZONE_ID })
+  if (empty) {
+    return (
+      <div ref={setNodeRef}
+        className={['flex flex-col items-center justify-center h-64 gap-3 rounded border-2 border-dashed transition-colors',
+          isOver ? 'border-[#00e5ff] bg-[#00e5ff]/5' : 'border-navy/20'].join(' ')}>
+        <p className="text-sm font-mono text-inky/50">{isOver ? 'Drop to add this field' : 'Canvas is empty'}</p>
+        <p className="text-xs font-mono text-inky/40">Drag a field from the left panel, or import from spreadsheet</p>
+        <button onClick={onImportClick} className="text-xs font-mono border border-navy/20 rounded px-3 py-1.5 text-inky hover:border-navy/40">↑ Import from Spreadsheet</button>
+      </div>
+    )
+  }
+  return (
+    <div ref={setNodeRef}
+      className={['h-8 rounded border-2 border-dashed transition-colors', isOver ? 'border-[#00e5ff] bg-[#00e5ff]/5' : 'border-transparent'].join(' ')} />
+  )
 }
 
 // ── Color Picker Swatch ───────────────────────────────────────────────────────
@@ -555,6 +656,8 @@ function FieldCard({
   const hasOptions = ['multiple_choice', 'multi_select', 'dropdown'].includes(field.field_type)
   const isTextBlock = field.field_type === 'text_block'
   const isCalculation = field.field_type === 'calculation'
+  const isFormula = field.field_type === 'formula'
+  const isPackagePricing = field.field_type === 'package_pricing'
   const hasCondition = condition != null
   const isInClipboard = clipboardFieldId === field.id
   const hasClipboard = fieldClipboard != null
@@ -635,7 +738,7 @@ function FieldCard({
         {expanded && (
           <div className="border-t border-navy/10 px-3 py-3 flex flex-col gap-3">
             {/* Required toggle — first control (per spec) */}
-            {!isTextBlock && !isCalculation && (
+            {!isTextBlock && !isCalculation && !isFormula && (
               <label className="flex items-center gap-2 cursor-pointer pb-2 border-b border-navy/10">
                 <input type="checkbox" checked={field.is_required} onChange={(e) => onUpdate({ is_required: e.target.checked })} className="accent-navy" />
                 <span className="text-xs font-mono text-inky font-semibold">Required</span>
@@ -762,6 +865,76 @@ function FieldCard({
                     className="rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none" />
                 </div>
               </div>
+            )}
+
+            {/* Formula config — general-purpose calculating field, separate
+                from the Calculation type above (that one is hard-wired to
+                the score/streak system's blanket total). */}
+            {isFormula && (
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Operation</label>
+                <select
+                  value={field.calculation_config?.operation ?? 'sum'}
+                  onChange={(e) => onUpdate({ calculation_config: { ...field.calculation_config, operation: e.target.value as any } })}
+                  className="rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none">
+                  <option value="sum">Sum</option>
+                  <option value="average">Average</option>
+                  <option value="difference">Difference (first minus the rest)</option>
+                  <option value="product">Product</option>
+                  <option value="formula">Custom Formula</option>
+                </select>
+
+                <label className="text-[10px] font-mono text-inky uppercase tracking-wide mt-1">Number Fields Used</label>
+                <div className="flex flex-col gap-1">
+                  {allFields.filter((f) => f.field_type === 'number' && f.id !== field.id).map((f) => {
+                    const srcIds = field.calculation_config?.source_fields ?? []
+                    const checked = srcIds.includes(f.id)
+                    return (
+                      <label key={f.id} className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={checked} className="accent-navy"
+                          onChange={(e) => {
+                            const next = e.target.checked ? [...srcIds, f.id] : srcIds.filter((id) => id !== f.id)
+                            onUpdate({ calculation_config: { ...field.calculation_config, source_fields: next } })
+                          }} />
+                        <span className="text-xs font-mono text-inky">{f.label}</span>
+                      </label>
+                    )
+                  })}
+                  {allFields.filter((f) => f.field_type === 'number' && f.id !== field.id).length === 0 && (
+                    <p className="text-[10px] font-mono text-inky/50">Add a Number field elsewhere on this form first.</p>
+                  )}
+                </div>
+
+                {field.calculation_config?.operation === 'formula' && (
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Formula</label>
+                    <input value={field.calculation_config?.formula ?? ''}
+                      onChange={(e) => onUpdate({ calculation_config: { ...field.calculation_config, formula: e.target.value } })}
+                      placeholder="e.g. {Package Price} + {Filter Cost}"
+                      className="rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy placeholder-inky/40 focus:border-[#00e5ff] focus:outline-none" />
+                    <p className="text-[10px] font-mono text-inky/50">
+                      Reference a checked field above by its label in curly braces. Supports + − × ÷ and parentheses.
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Display Label</label>
+                  <input value={field.calculation_config?.label ?? field.label}
+                    onChange={(e) => onUpdate({ calculation_config: { ...field.calculation_config, label: e.target.value } })}
+                    className="rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none" />
+                </div>
+              </div>
+            )}
+
+            {/* Package Pricing — no build-time config; rows are added by
+                whoever fills out the form. */}
+            {isPackagePricing && (
+              <p className="text-[10px] font-mono text-inky/60 bg-navy/5 rounded px-2 py-2">
+                Respondents add one row per package when filling out the form (name, oil type/brand, pricing,
+                tax/filter handling, out-the-door price, and penetration %). "Required" means at least one
+                package row must be entered.
+              </p>
             )}
 
             {/* Conditional logic button */}
@@ -1188,7 +1361,15 @@ export function FormBuilderPage() {
     requires_login: false,
     theme: DEFAULT_THEME,
   })
-  const [fields, setFields] = useState<DraftField[]>([])
+  // Undo/redo covers every field-list edit (add/delete/reorder/duplicate/
+  // paste/property changes, INCLUDING a Location Seeder batch — that flows
+  // through the same setFields() as everything else) — see
+  // src/hooks/useUndoableState.ts. Nothing here is durable until Save, so
+  // this only ever protects an in-progress edit, matching how forms already
+  // save (whole-form delete-and-reinsert).
+  const fieldsHistory = useUndoableState<DraftField[]>([])
+  const fields = fieldsHistory.value
+  const setFields = fieldsHistory.set
   const [conditions, setConditions] = useState<FieldCondition[]>([])
   const [deptShares, setDeptShares] = useState<string[]>([]) // department names
   const [leftTab, setLeftTab] = useState<'fields' | 'general' | 'appearance' | 'access'>('fields')
@@ -1207,7 +1388,7 @@ export function FormBuilderPage() {
     loadFormWithFields(formId).then((res) => {
       if (!res) return
       setFormData(res.form)
-      setFields(res.fields)
+      fieldsHistory.reset(res.fields)
       setConditions(res.conditions)
       setSavedId(formId)
     })
@@ -1270,12 +1451,55 @@ export function FormBuilderPage() {
     toast.success(`Field pasted ${position}`, { duration: 1500 })
   }
 
-  function onDragEnd(e: DragEndEvent) {
-    const { active, over } = e
-    if (!over || active.id === over.id) return
-    const ids = fields.map((f) => f.id)
-    setFields(arrayMove(fields, ids.indexOf(active.id as string), ids.indexOf(over.id as string)))
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
+
+  function onDragStart(e: DragStartEvent) {
+    setActiveDragId(String(e.active.id))
   }
+
+  // Handles BOTH dragging a new field type in from the palette (id prefixed
+  // PALETTE_PREFIX — inserted at the drop position, not just appended) and
+  // reordering an already-placed field — one shared DndContext covers both
+  // so a palette item can be dropped directly at a specific spot in the
+  // canvas instead of always landing at the end.
+  function onDragEnd(e: DragEndEvent) {
+    setActiveDragId(null)
+    const { active, over } = e
+    if (!over) return
+    const activeId = String(active.id)
+    const overId = String(over.id)
+
+    if (activeId.startsWith(PALETTE_PREFIX)) {
+      const type = activeId.slice(PALETTE_PREFIX.length) as FieldType
+      setFields((prev) => {
+        const at = overId === CANVAS_DROPZONE_ID ? prev.length : Math.max(0, prev.findIndex((f) => f.id === overId))
+        const next = [...prev]
+        next.splice(at, 0, newField(type, at))
+        return next.map((f, i) => ({ ...f, sort_order: i }))
+      })
+      return
+    }
+
+    if (activeId === overId) return
+    const ids = fields.map((f) => f.id)
+    const oldIndex = ids.indexOf(activeId)
+    const newIndex = ids.indexOf(overId)
+    if (oldIndex === -1 || newIndex === -1) return
+    setFields(arrayMove(fields, oldIndex, newIndex))
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      if (typing) return
+      const key = e.key.toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.shiftKey) { e.preventDefault(); fieldsHistory.undo() }
+      else if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); fieldsHistory.redo() }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [fieldsHistory])
 
   function conditionFor(fieldId: string): FieldCondition | null {
     return conditions.find((c) => c.target_field_id === fieldId) ?? null
@@ -1370,6 +1594,12 @@ export function FormBuilderPage() {
           onChange={(e) => setFormData((f) => ({ ...f, title: e.target.value }))}
           className="flex-1 min-w-0 bg-transparent text-sm font-heading font-bold text-navy focus:outline-none border-b border-transparent focus:border-navy/30"
           placeholder="Form title…" />
+        <div className="flex items-center gap-0.5" title="Undo / Redo (Ctrl+Z / Ctrl+Shift+Z)">
+          <button onClick={fieldsHistory.undo} disabled={!fieldsHistory.canUndo}
+            className="text-xs font-mono border border-navy/20 rounded-l px-2 py-1.5 text-inky hover:border-navy/40 disabled:opacity-30">↶</button>
+          <button onClick={fieldsHistory.redo} disabled={!fieldsHistory.canRedo}
+            className="text-xs font-mono border border-l-0 border-navy/20 rounded-r px-2 py-1.5 text-inky hover:border-navy/40 disabled:opacity-30">↷</button>
+        </div>
         <button onClick={() => setImportOpen(true)} className="text-xs font-mono border border-navy/20 rounded px-2 py-1.5 text-inky hover:border-navy/40">↑ Import</button>
         <button onClick={() => setPreviewOpen(true)} className="text-xs font-mono border border-navy/20 rounded px-2 py-1.5 text-inky hover:border-navy/40">Preview</button>
         {savedId && (
@@ -1387,7 +1617,11 @@ export function FormBuilderPage() {
         </button>
       </div>
 
-      {/* Body */}
+      {/* Body — one shared DndContext for both the palette (drag a new
+          field type in) and the canvas (reorder existing fields), so a
+          palette item can be dropped at a specific position instead of
+          only ever appending to the end. */}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left panel */}
         <div className="w-72 flex-shrink-0 border-r border-navy/20 bg-cream flex flex-col overflow-hidden">
@@ -1404,19 +1638,12 @@ export function FormBuilderPage() {
             {leftTab === 'fields' && (
               <div className="flex flex-col gap-1">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-[10px] font-mono text-inky/60">Click to add a field to the canvas.</p>
+                  <p className="text-[10px] font-mono text-inky/60">Drag a field onto the canvas, or click to add it at the end.</p>
                   <button onClick={downloadFormImportTemplate} title="Download import template"
                     className="text-[10px] font-mono text-inky/50 hover:text-navy underline">template</button>
                 </div>
                 {FIELD_TYPES.map((ft) => (
-                  <button key={ft.type} onClick={() => addField(ft.type)}
-                    className="flex items-center gap-3 px-3 py-2 rounded border border-navy/15 bg-cream hover:border-[#00e5ff]/60 hover:bg-[#00e5ff]/5 text-left transition-colors">
-                    <span className="text-sm text-inky/70 w-5 text-center flex-shrink-0">{ft.icon}</span>
-                    <div className="min-w-0">
-                      <div className="text-xs font-heading text-navy">{ft.label}</div>
-                      <div className="text-[9px] font-mono text-inky/50 truncate">{ft.desc}</div>
-                    </div>
-                  </button>
+                  <PaletteButton key={ft.type} ft={ft} onClick={() => addField(ft.type)} />
                 ))}
               </div>
             )}
@@ -1515,39 +1742,40 @@ export function FormBuilderPage() {
 
         {/* Canvas */}
         <div className="flex-1 overflow-y-auto p-6 bg-navy/5">
-          {fields.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 gap-3 rounded border-2 border-dashed border-navy/20">
-              <p className="text-sm font-mono text-inky/50">Canvas is empty</p>
-              <p className="text-xs font-mono text-inky/40">Add fields from the left panel or import from spreadsheet</p>
-              <button onClick={() => setImportOpen(true)} className="text-xs font-mono border border-navy/20 rounded px-3 py-1.5 text-inky hover:border-navy/40">↑ Import from Spreadsheet</button>
+          <SortableContext items={fields.map((f) => f.id)} strategy={verticalListSortingStrategy}>
+            <div className="flex flex-col gap-2 max-w-2xl mx-auto">
+              {fields.map((field) => (
+                <FieldCard
+                  key={field.id}
+                  field={field}
+                  allFields={fields}
+                  condition={conditionFor(field.id)}
+                  clipboardFieldId={clipboardFieldId}
+                  onUpdate={(patch) => updateField(field.id, patch)}
+                  onDelete={() => deleteField(field.id)}
+                  onDuplicate={() => duplicateField(field.id)}
+                  onCopy={() => copyField(field.id)}
+                  onPasteAbove={fieldClipboard ? () => pasteField(field.id, 'above') : null}
+                  onPasteBelow={fieldClipboard ? () => pasteField(field.id, 'below') : null}
+                  onConditionSave={saveCondition}
+                  onConditionRemove={() => removeCondition(field.id)}
+                />
+              ))}
+              <CanvasDropzone empty={fields.length === 0} onImportClick={() => setImportOpen(true)} />
             </div>
-          ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-              <SortableContext items={fields.map((f) => f.id)} strategy={verticalListSortingStrategy}>
-                <div className="flex flex-col gap-2 max-w-2xl mx-auto">
-                  {fields.map((field) => (
-                    <FieldCard
-                      key={field.id}
-                      field={field}
-                      allFields={fields}
-                      condition={conditionFor(field.id)}
-                      clipboardFieldId={clipboardFieldId}
-                      onUpdate={(patch) => updateField(field.id, patch)}
-                      onDelete={() => deleteField(field.id)}
-                      onDuplicate={() => duplicateField(field.id)}
-                      onCopy={() => copyField(field.id)}
-                      onPasteAbove={fieldClipboard ? () => pasteField(field.id, 'above') : null}
-                      onPasteBelow={fieldClipboard ? () => pasteField(field.id, 'below') : null}
-                      onConditionSave={saveCondition}
-                      onConditionRemove={() => removeCondition(field.id)}
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
-          )}
+          </SortableContext>
         </div>
       </div>
+      <DragOverlay>
+        {activeDragId?.startsWith(PALETTE_PREFIX) ? (
+          <PaletteDragPreview type={activeDragId.slice(PALETTE_PREFIX.length) as FieldType} />
+        ) : activeDragId ? (
+          <div className="rounded border border-[#00e5ff] bg-cream shadow-lg px-3 py-2.5 text-xs font-heading text-navy max-w-xs">
+            {fields.find((f) => f.id === activeDragId)?.label ?? 'Field'}
+          </div>
+        ) : null}
+      </DragOverlay>
+      </DndContext>
 
       {/* Share modal — updated with org/public clarity */}
       {shareOpen && shareUrl && (
@@ -1724,11 +1952,12 @@ export function FormCanvas({
     // Validate required fields — inline errors instead of toast
     const errors: Record<string, string> = {}
     for (const field of visibleFields) {
-      if (!field.is_required || field.field_type === 'text_block' || field.field_type === 'calculation') continue
+      if (!field.is_required || field.field_type === 'text_block' || field.field_type === 'calculation' || field.field_type === 'formula') continue
       const val = responses[field.id]
       let empty = false
       if (field.field_type === 'multi_select') empty = !Array.isArray(val) || val.length === 0
       else if (field.field_type === 'file_upload') empty = !(files[field.id]?.length)
+      else if (field.field_type === 'package_pricing') empty = !Array.isArray(val) || !val.some((r: PackagePricingRow) => r.package_name.trim())
       else empty = val == null || val === ''
       if (empty) errors[field.id] = `"${field.label}" is required`
     }
@@ -1744,8 +1973,15 @@ export function FormCanvas({
     if (!onSubmit) return
     setSubmitting(true)
     try {
+      // Snapshot computed Formula-field values into the responses that
+      // actually get submitted — nothing writes a response for these any
+      // other way, since there's no input to type into.
+      const withComputed = { ...responses }
+      for (const field of visibleFields) {
+        if (field.field_type === 'formula') withComputed[field.id] = computeFormulaValue(field, fields, responses)
+      }
       await onSubmit({
-        responses, files,
+        responses: withComputed, files,
         anonName: anonName || null,
         anonEmail: anonEmail || null,
         ...calcScore(),
@@ -1840,6 +2076,7 @@ export function FormCanvas({
             colors={colors}
             scoreTotal={field.field_type === 'calculation' ? total : undefined}
             scoreMax={field.field_type === 'calculation' ? max : undefined}
+            formulaValue={field.field_type === 'formula' ? computeFormulaValue(field, fields, responses) : undefined}
             validationError={validationErrors[field.id] ?? null}
           />
         ))}
@@ -1867,7 +2104,7 @@ export function FormCanvas({
 // ── Field Renderer ────────────────────────────────────────────────────────────
 
 function FieldRenderer({
-  field, value, fileList, onChange, onFiles, colors, scoreTotal, scoreMax, validationError,
+  field, value, fileList, onChange, onFiles, colors, scoreTotal, scoreMax, formulaValue, validationError,
 }: {
   field: FormField
   value: any
@@ -1877,6 +2114,7 @@ function FieldRenderer({
   colors: FormColors
   scoreTotal?: number
   scoreMax?: number
+  formulaValue?: number | null
   validationError?: string | null
 }) {
   const inputClass = 'w-full rounded border px-3 py-2 text-sm focus:outline-none'
@@ -1901,6 +2139,20 @@ function FieldRenderer({
         <div className="text-2xl font-bold" style={{ color: colors.accent }}>
           {scoreTotal ?? 0} <span className="text-sm font-normal opacity-60">/ {scoreMax ?? 0}</span>
         </div>
+      </div>
+    )
+  }
+
+  if (field.field_type === 'formula') {
+    return (
+      <div className="rounded px-4 py-3" style={{ background: colors.surface, borderLeft: `3px solid ${colors.accent}` }}>
+        <div className="text-xs font-mono mb-1" style={labelStyle}>{field.calculation_config?.label ?? field.label}</div>
+        <div className="text-2xl font-bold" style={{ color: colors.accent }}>
+          {formulaValue == null ? '—' : formulaValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </div>
+        {formulaValue == null && (
+          <p className="text-[11px] mt-1" style={{ color: colors.text, opacity: 0.5 }}>Fill in the fields above to calculate this.</p>
+        )}
       </div>
     )
   }
@@ -1984,9 +2236,143 @@ function FieldRenderer({
         />
       )}
 
+      {field.field_type === 'package_pricing' && (
+        <PackagePricingEditor
+          rows={Array.isArray(value) ? value : []}
+          onChange={onChange}
+          colors={colors}
+          hasError={hasError}
+        />
+      )}
+
       {/* Inline validation error */}
       {hasError && (
         <p className="text-xs font-mono text-red-500 mt-0.5">{validationError}</p>
+      )}
+    </div>
+  )
+}
+
+// ── Package Pricing (acquisition pricing worksheet, 2026-09-16) ──────────────
+// A repeating table of packages — see src/types/forms.ts's PackagePricingRow
+// doc comment and src/lib/packagePricing.ts for the shared OTD-default /
+// penetration-auto-split math (also reused by FormResultsPage.tsx so a
+// submission displays exactly what the respondent saw while filling it out).
+
+function PackagePricingEditor({ rows, onChange, colors, hasError }: {
+  rows: PackagePricingRow[]
+  onChange: (rows: PackagePricingRow[]) => void
+  colors: FormColors
+  hasError: boolean
+}) {
+  const effectivePcts = effectivePenetrationPct(rows)
+  const miniInputClass = 'w-full rounded border px-2 py-1.5 text-xs focus:outline-none'
+  const miniInputStyle = { background: colors.input_bg, borderColor: colors.input_border, color: colors.text }
+  const labelStyle = { color: colors.label }
+
+  function patchRow(id: string, patch: Partial<PackagePricingRow>) {
+    onChange(rows.map((r) => r.id === id ? { ...r, ...patch } : r))
+  }
+
+  function priceChanged(row: PackagePricingRow, price: number | null) {
+    // OTD keeps following Package Price until the analyst edits OTD
+    // directly (otd_price_is_manual) — see effectiveOtdPrice().
+    patchRow(row.id, { package_price: price, otd_price: row.otd_price_is_manual ? row.otd_price : price })
+  }
+
+  return (
+    <div className={['flex flex-col gap-3 rounded p-2', hasError ? 'border border-red-400' : ''].join(' ')}>
+      {rows.map((row, i) => {
+        const isAuto = row.penetration_pct == null
+        const otd = effectiveOtdPrice(row)
+        return (
+          <div key={row.id} className="rounded border p-3 flex flex-col gap-2" style={{ borderColor: colors.input_border, background: colors.surface }}>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono uppercase tracking-wide opacity-60" style={labelStyle}>Package {i + 1}</span>
+              <button type="button" onClick={() => onChange(rows.filter((r) => r.id !== row.id))}
+                className="text-xs opacity-50 hover:opacity-100" style={{ color: colors.text }}>✕ Remove</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-0.5 col-span-2">
+                <span className="text-[10px]" style={labelStyle}>Package Name</span>
+                <input className={miniInputClass} style={miniInputStyle} value={row.package_name}
+                  onChange={(e) => patchRow(row.id, { package_name: e.target.value })} placeholder="e.g. Premium Full Synthetic" />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Type of Oil</span>
+                <input className={miniInputClass} style={miniInputStyle} value={row.oil_type}
+                  onChange={(e) => patchRow(row.id, { oil_type: e.target.value })} placeholder="e.g. Full Synthetic" />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Brand (if special)</span>
+                <input className={miniInputClass} style={miniInputStyle} value={row.oil_brand ?? ''}
+                  onChange={(e) => patchRow(row.id, { oil_brand: e.target.value || null })} />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Package Price ($)</span>
+                <input type="number" step="0.01" className={miniInputClass} style={miniInputStyle}
+                  value={row.package_price ?? ''} onChange={(e) => priceChanged(row, e.target.value === '' ? null : Number(e.target.value))} />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Quarts Included</span>
+                <input type="number" step="1" className={miniInputClass} style={miniInputStyle}
+                  value={row.quarts_included ?? ''} onChange={(e) => patchRow(row.id, { quarts_included: e.target.value === '' ? null : Number(e.target.value) })} />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Price / Quart After ($)</span>
+                <input type="number" step="0.01" className={miniInputClass} style={miniInputStyle}
+                  value={row.price_per_quart_after ?? ''} onChange={(e) => patchRow(row.id, { price_per_quart_after: e.target.value === '' ? null : Number(e.target.value) })} />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Tax</span>
+                <select className={miniInputClass} style={miniInputStyle} value={row.tax_mode ?? ''}
+                  onChange={(e) => patchRow(row.id, { tax_mode: (e.target.value || null) as PackagePricingRow['tax_mode'] })}>
+                  <option value="">Select…</option>
+                  <option value="included">Included in price</option>
+                  <option value="added">Added on top</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Oil Filter</span>
+                <select className={miniInputClass} style={miniInputStyle} value={row.filter_mode ?? ''}
+                  onChange={(e) => patchRow(row.id, { filter_mode: (e.target.value || null) as PackagePricingRow['filter_mode'] })}>
+                  <option value="">Select…</option>
+                  <option value="included">Included in price</option>
+                  <option value="added">Added on top</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>Avg. Out-The-Door Price ($)</span>
+                <input type="number" step="0.01" className={miniInputClass} style={miniInputStyle}
+                  value={otd ?? ''}
+                  onChange={(e) => patchRow(row.id, { otd_price: e.target.value === '' ? null : Number(e.target.value), otd_price_is_manual: true })} />
+                {!row.otd_price_is_manual && <span className="text-[9px] opacity-50" style={labelStyle}>Defaults to package price — edit to override</span>}
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[10px]" style={labelStyle}>
+                  Penetration % of Volume {isAuto && <span style={{ color: '#E67E22' }}>(auto — needs update)</span>}
+                </span>
+                <input type="number" step="0.1" className={miniInputClass}
+                  style={isAuto ? { ...miniInputStyle, borderColor: '#E67E22', color: '#E67E22' } : miniInputStyle}
+                  value={row.penetration_pct ?? (isAuto ? Number(effectivePcts[i].toFixed(1)) : '')}
+                  onChange={(e) => patchRow(row.id, { penetration_pct: e.target.value === '' ? null : Number(e.target.value) })} />
+              </label>
+            </div>
+          </div>
+        )
+      })}
+
+      <button type="button" onClick={() => onChange([...rows, newPackagePricingRow()])}
+        className="self-start text-xs rounded border px-3 py-1.5"
+        style={{ borderColor: colors.input_border, color: colors.text }}>
+        + Add Package
+      </button>
+
+      {rows.length > 1 && (
+        <p className="text-[10px] opacity-60" style={{ color: colors.text }}>
+          Penetration % across all packages should add up to 100 — any package left blank auto-splits the remainder evenly with the others left blank.
+        </p>
       )}
     </div>
   )
