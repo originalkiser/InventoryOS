@@ -80,6 +80,15 @@ const BOARD_CONTENT_RIGHT_PCT = 94.84
 // anti-aliased pixels at its true edges.
 const FOOTER_NOTE_TOP_PCT = 81.2525
 const FOOTER_NOTE_HEIGHT_PCT = 1.6364
+// The mask's own left/right bounds pad a bit past BOARD_CONTENT_LEFT/
+// RIGHT_PCT (kept untouched since "fit to screen" sizing elsewhere depends
+// on it) — the printed asterisks' true edges sit right at that boundary
+// with essentially no margin, so at typical rendered sizes sub-pixel
+// rounding could still leave a hair of the original asterisk visible
+// past the mask's edge. ~25px of native-scale padding each side costs
+// nothing (solid navy on solid navy) and removes that margin entirely.
+const FOOTER_NOTE_PAD_PCT = 0.9
+
 // The printed disclaimer's own font size, in the same "px at a 480-wide
 // reference board" terms every other overlay font size on this page uses.
 // Solved (not guessed) via canvas.measureText: the ORIGINAL disclaimer's
@@ -442,7 +451,7 @@ export function Board({ location, packages, editMode = false, updatePackage, res
             <div
               className="absolute flex items-center justify-center whitespace-nowrap font-heading font-bold leading-none bg-sb-navy text-sb-cream"
               style={{
-                left: `${BOARD_CONTENT_LEFT_PCT}%`, width: `${BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT}%`,
+                left: `${BOARD_CONTENT_LEFT_PCT - FOOTER_NOTE_PAD_PCT}%`, width: `${BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT + FOOTER_NOTE_PAD_PCT * 2}%`,
                 top: `${FOOTER_NOTE_TOP_PCT}%`, height: `${FOOTER_NOTE_HEIGHT_PCT}%`,
                 transform: 'translateY(-50%)', fontSize: FOOTER_NOTE_FONT_SIZE_REF * scale,
               }}
@@ -643,8 +652,8 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
   if (footerNote) {
     const noteCenterY = h1Art * (FOOTER_NOTE_TOP_PCT / 100)
     const noteH = h1Art * (FOOTER_NOTE_HEIGHT_PCT / 100)
-    const contentX = PDF_W * (BOARD_CONTENT_LEFT_PCT / 100)
-    const contentW = PDF_W * ((BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT) / 100)
+    const contentX = PDF_W * ((BOARD_CONTENT_LEFT_PCT - FOOTER_NOTE_PAD_PCT) / 100)
+    const contentW = PDF_W * ((BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT + FOOTER_NOTE_PAD_PCT * 2) / 100)
     ctx1.fillStyle = '#002745'
     ctx1.fillRect(contentX, noteCenterY - noteH / 2, contentW, noteH)
     ctx1.fillStyle = '#F2F1E6'
