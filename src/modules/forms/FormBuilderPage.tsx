@@ -11,7 +11,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { HexColorPicker } from 'react-colorful'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { loadFormWithFields, saveFormFields } from '@/hooks/useForms'
+import { loadFormWithFields, saveFormFields, isSlugAvailable } from '@/hooks/useForms'
 import { useUndoableState } from '@/hooks/useUndoableState'
 import { RichTextEditor, RichTextDisplay } from '@/components/shared/RichTextEditor'
 import { BRAND_ASSETS, type BrandAssetKey } from '@/lib/formBrandAssets'
@@ -56,6 +56,16 @@ const PALETTE_PREFIX = 'palette-'
 // last (N fields -> gap-0..gap-N) — gap-${i} means "insert at index i."
 // Only mounted during a palette drag; see isPaletteDrag at the render site.
 const GAP_PREFIX = 'gap-'
+
+// Hardcoded (not derived from window.location.origin) for the same reason
+// as Menu Board's own MENU_BOARD_BASE_URL — the admin UI generating this
+// link is loaded from the main app domain, not the forms subdomain, so
+// deriving it from the current origin would be wrong.
+const FORMS_BASE_URL = 'https://forms.sboc.app/'
+
+function slugify(s: string): string {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
 
 const DEPARTMENTS = ['All', 'Inventory', 'Operations', 'Finance', 'Accounting', 'Marketing', 'HR']
 
@@ -1389,6 +1399,9 @@ export function FormBuilderPage() {
   const [leftTab, setLeftTab] = useState<'fields' | 'general' | 'appearance' | 'access'>('fields')
   const [saving, setSaving] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [slugInput, setSlugInput] = useState('')
+  const [slugSaving, setSlugSaving] = useState(false)
+  const [slugError, setSlugError] = useState<string | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [savedId, setSavedId] = useState<string | null>(formId ?? null)
@@ -1410,6 +1423,8 @@ export function FormBuilderPage() {
     sb.schema('forms').from('form_department_shares').select('department').eq('form_id', formId)
       .then(({ data }: any) => setDeptShares((data ?? []).map((r: any) => r.department)))
   }, [formId])
+
+  useEffect(() => { setSlugInput(formData.slug ?? '') }, [formData.slug])
 
   useEffect(() => {
     if (!profile?.company_id) return
@@ -1554,6 +1569,33 @@ export function FormBuilderPage() {
       await sb.schema('forms').from('form_department_shares').insert(
         newShares.map((dept) => ({ form_id: formId, department: dept, created_by: profile?.id }))
       )
+    }
+  }
+
+  // Custom public URL (forms.sboc.app/:slug) — globally unique across every
+  // company, since the subdomain path has no company qualifier in it.
+  async function saveSlug() {
+    if (!savedId) return
+    const cleaned = slugify(slugInput)
+    setSlugError(null)
+    setSlugSaving(true)
+    try {
+      if (!cleaned) {
+        const { error } = await sb.schema('forms').from('forms').update({ slug: null }).eq('id', savedId)
+        if (error) { setSlugError(error.message); return }
+        setFormData((f) => ({ ...f, slug: null }))
+        toast.success('Custom URL removed')
+        return
+      }
+      const available = await isSlugAvailable(cleaned, savedId)
+      if (!available) { setSlugError('That URL is already taken — try another.'); return }
+      const { error } = await sb.schema('forms').from('forms').update({ slug: cleaned }).eq('id', savedId)
+      if (error) { setSlugError(error.message); return }
+      setFormData((f) => ({ ...f, slug: cleaned }))
+      setSlugInput(cleaned)
+      toast.success('Custom URL saved')
+    } finally {
+      setSlugSaving(false)
     }
   }
 
@@ -1865,6 +1907,34 @@ export function FormBuilderPage() {
               </div>
             </div>
 
+            {/* Custom URL — forms.sboc.app/:slug, a memorable alternative
+                to the random share_token link above. Editable any time;
+                clearing it just reverts to the token-only link. */}
+            <div className="border-t border-navy/10 pt-3 flex flex-col gap-2">
+              <span className="text-xs font-heading font-bold text-navy">Custom URL</span>
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className="text-xs font-mono text-inky/60">{FORMS_BASE_URL}</span>
+                <input value={slugInput} onChange={(e) => { setSlugInput(e.target.value); setSlugError(null) }}
+                  placeholder="my-form-name"
+                  className="flex-1 min-w-[120px] rounded border border-navy/30 bg-cream px-2 py-1 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none" />
+                <button onClick={saveSlug} disabled={slugSaving || slugify(slugInput) === (formData.slug ?? '')}
+                  className="text-xs font-mono border border-navy/20 rounded px-2 py-1 text-inky hover:border-navy/40 disabled:opacity-40">
+                  {slugSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {slugError && <p className="text-[10px] font-mono text-[#C0392B]">{slugError}</p>}
+              {formData.slug && (
+                <div className="flex gap-2">
+                  <input readOnly value={`${FORMS_BASE_URL}${formData.slug}`} className="flex-1 rounded border border-navy/30 bg-navy/5 px-2 py-1.5 text-xs font-mono text-navy focus:outline-none" />
+                  <button onClick={() => { navigator.clipboard.writeText(`${FORMS_BASE_URL}${formData.slug}`); toast.success('Link copied') }}
+                    className="text-xs font-mono border border-navy/20 rounded px-3 py-1.5 text-inky hover:border-navy/40">
+                    Copy
+                  </button>
+                </div>
+              )}
+              <p className="text-[10px] font-mono text-inky/50">Letters, numbers, and hyphens only — spaces and symbols convert automatically.</p>
+            </div>
+
             {/* Toggle auth requirement */}
             <div className="border-t border-navy/10 pt-3">
               <button
@@ -1898,13 +1968,16 @@ export function FormBuilderPage() {
         </div>
       )}
 
-      {/* Preview modal */}
+      {/* Preview modal — the close button lives in its own flex-shrink-0 row
+          OUTSIDE the scrolling area, so a tall form (which needs its own
+          scroll to fit within the viewport at all) can never push it out of
+          reach the way it could when both shared one scrolling column. */}
       {previewOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm overflow-y-auto py-8">
-          <div className="w-full max-w-xl flex flex-col gap-0">
-            <div className="flex justify-end mb-2">
-              <button onClick={() => setPreviewOpen(false)} className="text-cream/80 hover:text-cream text-sm font-mono bg-navy/40 rounded px-3 py-1">✕ Close Preview</button>
-            </div>
+        <div className="fixed inset-0 z-50 flex flex-col items-center bg-navy/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-xl flex justify-end mb-2 flex-shrink-0">
+            <button onClick={() => setPreviewOpen(false)} className="text-cream/80 hover:text-cream text-sm font-mono bg-navy/40 rounded px-3 py-1">✕ Close Preview</button>
+          </div>
+          <div className="w-full max-w-xl flex-1 min-h-0 overflow-y-auto rounded-lg">
             <FormCanvas
               form={{ ...(formData as FormDefinition), id: '' }}
               fields={fields as FormField[]}

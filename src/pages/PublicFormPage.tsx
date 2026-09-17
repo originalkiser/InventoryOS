@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { loadPublicForm, submitForm } from '@/hooks/useForms'
+import { loadPublicForm, loadPublicFormBySlug, submitForm } from '@/hooks/useForms'
 import { FormCanvas } from '@/modules/forms/FormBuilderPage'
 import { useAuthStore } from '@/stores/authStore'
 import type { FormDefinition, FormField, FieldCondition, PackagePricingRow } from '@/types/forms'
@@ -11,7 +11,11 @@ import toast from 'react-hot-toast'
 const sb = supabase as any
 
 export function PublicFormPage() {
-  const { shareToken } = useParams<{ shareToken: string }>()
+  // Reached two ways: /f/:shareToken on the main app domain (the original,
+  // always-present random-token link), or /:slug on the forms.sboc.app
+  // subdomain (the customizable, memorable link set in the Share modal's
+  // Custom URL field) — same page either way, just a different lookup key.
+  const { shareToken, slug } = useParams<{ shareToken?: string; slug?: string }>()
   const [searchParams] = useSearchParams()
   const assignmentId = searchParams.get('assignment')
   const { session, profile } = useAuthStore()
@@ -23,15 +27,16 @@ export function PublicFormPage() {
   const [notFound, setNotFound] = useState(false)
 
   useEffect(() => {
-    if (!shareToken) return
-    loadPublicForm(shareToken).then((res) => {
+    if (!shareToken && !slug) return
+    const load = shareToken ? loadPublicForm(shareToken) : loadPublicFormBySlug(slug!)
+    load.then((res) => {
       if (!res) { setNotFound(true); setLoading(false); return }
       setForm(res.form)
       setFields(res.fields)
       setConditions(res.conditions)
       setLoading(false)
     })
-  }, [shareToken])
+  }, [shareToken, slug])
 
   async function handleSubmit(data: {
     responses: Record<string, any>

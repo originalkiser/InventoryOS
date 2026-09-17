@@ -91,6 +91,10 @@ export interface FormDefinition {
   visibility: 'private' | 'org' | 'departments' | 'public'
   created_by: string | null
   share_token: string
+  // Customizable, memorable public URL segment — forms.sboc.app/:slug —
+  // set from the Share modal's Custom URL field. Globally unique (not just
+  // per-company): the subdomain path has no company qualifier in it.
+  slug: string | null
   is_published: boolean
   is_accepting_responses: boolean
   show_score_to_respondent: boolean

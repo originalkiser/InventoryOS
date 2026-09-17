@@ -115,6 +115,29 @@ export async function loadPublicForm(shareToken: string): Promise<{
   return loadFormWithFields(formRes.data.id)
 }
 
+// Same lookup, keyed by the customizable, memorable slug (forms.sboc.app/:slug)
+// instead of the always-present random share_token — see the "Custom URL"
+// section of FormBuilderPage's Share modal, where a slug is set.
+export async function loadPublicFormBySlug(slug: string): Promise<{
+  form: FormDefinition
+  fields: FormField[]
+  conditions: FieldCondition[]
+} | null> {
+  const formRes = await (sb as any).schema('forms').from('forms').select('*').eq('slug', slug).maybeSingle()
+  if (!formRes.data) return null
+  return loadFormWithFields(formRes.data.id)
+}
+
+// Checks whether `slug` is free (or already belongs to `excludeFormId`, so
+// re-saving a form's own unchanged slug doesn't self-reject) — used by the
+// Share modal's Custom URL field before saving.
+export async function isSlugAvailable(slug: string, excludeFormId?: string): Promise<boolean> {
+  let q = (sb as any).schema('forms').from('forms').select('id').eq('slug', slug)
+  if (excludeFormId) q = q.neq('id', excludeFormId)
+  const { data } = await q.maybeSingle()
+  return !data
+}
+
 export async function saveFormFields(
   formId: string,
   fields: FormField[],

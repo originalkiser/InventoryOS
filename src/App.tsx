@@ -67,6 +67,33 @@ function MenuBoardApp() {
   )
 }
 
+// Public forms with a custom, memorable URL (forms.sboc.app/:slug) instead
+// of the always-random /f/:shareToken link on the main app domain — same
+// hostname-check pattern as MenuBoardApp above, and for the same reason: a
+// bare "/:slug" route on the main domain would collide with every other
+// real app route. Requires forms.sboc.app to actually be added as a custom
+// domain on this same Cloudflare Pages project (+ its own DNS CNAME),
+// mirroring however menu.sboc.app was originally set up — this file alone
+// can't provision that.
+function isFormsHost(): boolean {
+  return window.location.hostname.startsWith('forms.')
+}
+
+function FormsApp() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/:slug" element={<PublicFormPage />} />
+        <Route path="*" element={
+          <div className="min-h-screen flex items-center justify-center bg-navy px-6">
+            <p className="text-sm font-mono text-cream/80 text-center">This form link is no longer active.</p>
+          </div>
+        } />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
 export default function App() {
   if (SUPABASE_MISSING) {
     return (
@@ -88,6 +115,7 @@ export default function App() {
   }
 
   if (isMenuBoardHost()) return <MenuBoardApp />
+  if (isFormsHost()) return <FormsApp />
 
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL}>
