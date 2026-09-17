@@ -59,17 +59,36 @@ const BOARD_CONTENT_LEFT_PCT = 4.88
 const BOARD_CONTENT_RIGHT_PCT = 94.84
 
 // The disclaimer LINE's own vertical band (as a % of the full page-1 art
-// height) — visually estimated off the same art file, not pixel-scanned
-// like the X bounds above (no image-inspection tooling available in this
-// environment). Used only by the Franchise "fees included" override (see
-// footerNote on Board/buildMenuBoardPdf below), which masks over the
-// printed disclaimer and draws different text in its place. Spot-check
-// this band against the live rendered board before trusting it exactly —
-// it's deliberately a little taller than the printed line to tolerate
-// being slightly off, at the cost of touching a sliver of the bar above
-// or the divider lines below if the estimate is off by more than ~1%.
-const FOOTER_NOTE_TOP_PCT = 80.6
-const FOOTER_NOTE_HEIGHT_PCT = 2.8
+// height) — pixel-scanned off MenuBoard-01.png (a small local canvas script
+// sampling row-by-row pixel brightness in the BOARD_CONTENT_LEFT/RIGHT_PCT
+// x-range found the printed text's real glyph rows at y 4002–4042 of the
+// 4950px-tall art, cleanly isolated from "ADDITIONAL CHARGES APPLY" above
+// and the solid divider bar below by wide (46–84px) blank gaps on both
+// sides) — replacing an earlier visual estimate that was ~3x too tall and
+// bled into those neighboring elements. Padded 12px each way for the
+// glyphs' anti-aliased edges while staying well clear of both neighbors.
+// Used only by the Franchise "fees included" override (see footerNote on
+// Board/buildMenuBoardPdf below), which masks over the printed disclaimer
+// and draws different text in its place.
+const FOOTER_NOTE_TOP_PCT = 80.6061
+const FOOTER_NOTE_HEIGHT_PCT = 1.2929
+// The printed disclaimer's own font size, in the same "px at a 480-wide
+// reference board" terms every other overlay font size on this page uses.
+// Solved (not guessed) via canvas.measureText: the ORIGINAL disclaimer's
+// asterisk-to-asterisk span exactly fills BOARD_CONTENT_LEFT/RIGHT_PCT by
+// design, so the font size that makes "* * * * * ALL OIL CHANGES ARE
+// SUBJECT TO A SHOP SUPPLY AND/OR DISPOSAL FEE. * * * * *" measure out to
+// that exact width IS the real printed size — confirmed against the
+// pixel-scanned glyph height above (predicted cap-height came out within
+// 3% of the measured 41px). The replacement text uses this same size
+// rather than stretching itself to fill the width, since it's shorter and
+// a disclaimer line isn't supposed to visually shout louder just because
+// its wording is briefer. Font is Chakra Petch bold — the same font this
+// module's own price/quart overlays already use to match this printed
+// board's numerals (see PriceComposite/drawPriceComposite) — confirmed by
+// that same measurement to be an accurate match for the board's body text
+// too, not just its numerals.
+const FOOTER_NOTE_FONT_SIZE_REF = 10.1569
 
 // The numeric price columns on core.locations a package can be fed from —
 // the Package Mapping "Source Column" dropdown. Kept as an explicit list
@@ -413,11 +432,11 @@ export function Board({ location, packages, editMode = false, updatePackage, res
           })}
           {footerNote && (
             <div
-              className="absolute flex items-center justify-center text-center font-mono font-bold bg-sb-navy text-sb-cream px-2 leading-tight"
+              className="absolute flex items-center justify-center whitespace-nowrap font-heading font-bold leading-none bg-sb-navy text-sb-cream"
               style={{
                 left: `${BOARD_CONTENT_LEFT_PCT}%`, width: `${BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT}%`,
                 top: `${FOOTER_NOTE_TOP_PCT}%`, height: `${FOOTER_NOTE_HEIGHT_PCT}%`,
-                transform: 'translateY(-50%)', fontSize: 11 * scale,
+                transform: 'translateY(-50%)', fontSize: FOOTER_NOTE_FONT_SIZE_REF * scale,
               }}
             >
               {footerNote}
@@ -621,7 +640,9 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
     ctx1.fillStyle = '#002745'
     ctx1.fillRect(contentX, noteCenterY - noteH / 2, contentW, noteH)
     ctx1.fillStyle = '#F2F1E6'
-    ctx1.font = `700 ${Math.round(noteH * 0.5)}px "DM Mono", monospace`
+    // Same font/size as the DOM version's footerNote (Board, above) — see
+    // FOOTER_NOTE_FONT_SIZE_REF's own comment for how this size was solved.
+    ctx1.font = `700 ${FOOTER_NOTE_FONT_SIZE_REF * scale}px "Chakra Petch", sans-serif`
     ctx1.textAlign = 'center'
     ctx1.textBaseline = 'middle'
     ctx1.fillText(footerNote, PDF_W / 2, noteCenterY)

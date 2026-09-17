@@ -40,4 +40,9 @@ export function effectivePackagePrice(base: number | null, fees: FranchiseFees, 
   return base + (fees.shopSupplyFee ?? 0) + (fees.disposalFee ?? 0) + (fees.oilInflationSurcharge ?? 0)
 }
 
-export const FRANCHISE_FOOTER_NOTE = 'Menu pricing includes a shop supply and/or disposal fee.'
+// Matches the printed disclaimer's own punctuation exactly (5 asterisks,
+// single-spaced, on each side) — this is masked over the printed line and
+// drawn in its place (see MenuBoardPage's FOOTER_NOTE_* constants), so it
+// has to look like it belongs on the same board, not like an app-generated
+// callout.
+export const FRANCHISE_FOOTER_NOTE = '* * * * * MENU PRICING INCLUDES A SHOP SUPPLY AND/OR DISPOSAL FEE. * * * * *'
