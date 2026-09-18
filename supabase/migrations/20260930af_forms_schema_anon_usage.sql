@@ -1,0 +1,19 @@
+-- Public form links (forms.sboc.app/:slug, /f/:shareToken) go through
+-- loadPublicForm()/loadPublicFormBySlug() (src/hooks/useForms.ts), which read
+-- forms.forms/forms.fields/forms.field_conditions DIRECTLY as the anon role
+-- via PostgREST's schema() cast — unlike Menu Board/Franchise's public pages,
+-- which go through SECURITY DEFINER RPCs and so never need the caller's own
+-- schema privileges. Every one of those tables already had the right anon
+-- SELECT grants (and forms_read's RLS already allows is_published = true for
+-- anon), but PostgREST/Postgres still checks USAGE on the SCHEMA ITSELF
+-- before it ever gets to table-level grants or RLS — and anon was never
+-- granted USAGE on the forms schema at all (confirmed live: every other
+-- schema anon touches — marketing, inventory, core, platform, outlier —
+-- already has it; only forms and archive, which is deliberately anon-free,
+-- were missing it). The result was a flat 401 "permission denied for schema
+-- forms" for every public form request, which loadPublicForm[BySlug]'s
+-- `if (!formRes.data) return null` collapses into a generic "Form Not
+-- Found" — indistinguishable from a genuinely missing/mistyped slug, so this
+-- went unnoticed by the form's own creator (always authenticated, which
+-- already has this grant) until an actual anonymous recipient tried the link.
+grant usage on schema forms to anon;
