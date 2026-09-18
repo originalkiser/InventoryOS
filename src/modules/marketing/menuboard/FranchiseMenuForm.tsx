@@ -209,7 +209,7 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
           ) : (
             <BoardViewer
               location={previewLocation} packages={activePackages} resolveQuart={resolveQuart}
-              address={address} hidePage2 shopName={location.shop_city || location.name}
+              address={address} hidePage2 hideDownload shopName={location.shop_city || location.name}
               footerNote={feesIncluded ? FRANCHISE_FOOTER_NOTE : null}
             />
           )}

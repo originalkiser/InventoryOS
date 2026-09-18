@@ -714,8 +714,13 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
  * this control, which stays reachable by scrolling past the board rather
  * than competing with it for the top of the viewport. Used by the admin
  * Board tab and the public share page so both get the same viewing controls.
+ * `hideDownload` omits the Download PDF button — used by the Franchise
+ * form's live preview (both the internal admin flow and the public
+ * self-service setup page), which is showing draft/unconfirmed pricing that
+ * doesn't exist as a real board yet; downloading only makes sense once
+ * "Confirm & Generate" has actually created the link.
  */
-export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.ComponentProps<typeof Board> & { shopName?: string }) {
+export function BoardViewer({ shopName, shareUrl, hidePage2, hideDownload, ...props }: React.ComponentProps<typeof Board> & { shopName?: string; hideDownload?: boolean }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [fitW, setFitW] = useState(BOARD_REF_WIDTH)
@@ -855,10 +860,12 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, ...props }: React.C
           </>
         )}
 
-        <button type="button" onClick={downloadPdf} disabled={pdfBusy}
-          className="ml-auto px-3 h-7 rounded bg-sb-sky hover:brightness-95 disabled:opacity-50 text-sb-navy font-mono font-bold text-[11px] uppercase tracking-wide">
-          {pdfBusy ? 'Building…' : 'Download PDF'}
-        </button>
+        {!hideDownload && (
+          <button type="button" onClick={downloadPdf} disabled={pdfBusy}
+            className="ml-auto px-3 h-7 rounded bg-sb-sky hover:brightness-95 disabled:opacity-50 text-sb-navy font-mono font-bold text-[11px] uppercase tracking-wide">
+            {pdfBusy ? 'Building…' : 'Download PDF'}
+          </button>
+        )}
       </div>
     </div>
   )
