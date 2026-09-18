@@ -32,6 +32,20 @@ const EMPTY_FLAGS: Record<FranchisePackageKey, boolean> = {
   economy: false, premium_hm: false, premium_full_synthetic: false, premium_full_synthetic_hm: false, rp: false,
 }
 
+// Every price/fee field on this form is `type="text" inputMode="decimal"`,
+// not `type="number"` — a native number input's up/down spinner arrows
+// clip the last digit in this form's narrow boxes and aren't needed (typing
+// is the only realistic way anyone enters a price), and `inputMode="decimal"`
+// still brings up a numeric keypad on a phone without them. This sanitizer
+// keeps what a plain number input would have rejected anyway (letters, a
+// second decimal point) from ever landing in state.
+function sanitizeDecimalInput(raw: string): string {
+  let cleaned = raw.replace(/[^0-9.]/g, '')
+  const dot = cleaned.indexOf('.')
+  if (dot !== -1) cleaned = cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '')
+  return cleaned
+}
+
 export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToken, allowQuartPricing, onCancel, onCreated }: {
   locations: Location[]
   packages: MenuBoardPackage[]
@@ -131,12 +145,12 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   }, [locationId])
 
   function setPrice(key: FranchisePackageKey, value: string) {
-    setPriceInputs((p) => ({ ...p, [key]: value }))
+    setPriceInputs((p) => ({ ...p, [key]: sanitizeDecimalInput(value) }))
     setAutoFilled((p) => ({ ...p, [key]: false }))
   }
 
   function setQuartPrice(key: FranchisePackageKey, value: string) {
-    setQuartPriceInputs((p) => ({ ...p, [key]: value }))
+    setQuartPriceInputs((p) => ({ ...p, [key]: sanitizeDecimalInput(value) }))
     setQuartAutoFilled((p) => ({ ...p, [key]: false }))
   }
 
@@ -144,6 +158,35 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   const [disposalFee, setDisposalFee] = useState('')
   const [oilInflationSurcharge, setOilInflationSurcharge] = useState('')
   const [feesIncluded, setFeesIncluded] = useState(false)
+  // "Blocked" state (2026-09-19 follow-up) — turning the fees-included
+  // toggle on requires at least one fee filled in (even "0" counts, just
+  // not blank) so the toggle doesn't silently do nothing. Clicking it with
+  // every fee blank sets this instead of the real toggle, which drives the
+  // shake + callout + red fee borders below; the effect right under this
+  // clears it (and actually turns the toggle on) the instant any fee field
+  // stops being blank, so there's no separate "confirm" step once a value
+  // is entered.
+  const [feesToggleBlocked, setFeesToggleBlocked] = useState(false)
+  const [feesToggleShake, setFeesToggleShake] = useState(false)
+  const hasAnyFee = shopSupplyFee.trim() !== '' || disposalFee.trim() !== '' || oilInflationSurcharge.trim() !== ''
+
+  useEffect(() => {
+    if (feesToggleBlocked && hasAnyFee) {
+      setFeesIncluded(true)
+      setFeesToggleBlocked(false)
+    }
+  }, [feesToggleBlocked, hasAnyFee])
+
+  function handleFeesToggleChange(next: boolean) {
+    if (next && !hasAnyFee) {
+      setFeesToggleBlocked(true)
+      setFeesToggleShake(true)
+      setTimeout(() => setFeesToggleShake(false), 400)
+      return
+    }
+    setFeesIncluded(next)
+    setFeesToggleBlocked(false)
+  }
 
   const fees: FranchiseFees = {
     shopSupplyFee: shopSupplyFee.trim() === '' ? null : Number(shopSupplyFee),
@@ -237,7 +280,7 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
                   <div key={key} className="flex items-center justify-between gap-2 px-2 py-1.5">
                     <span className="text-xs font-mono text-navy">{FRANCHISE_PACKAGE_LABELS[key]}</span>
                     <div className="flex items-center gap-1">
-                      <input type="number" step="0.01" value={raw} onChange={(e) => setPrice(key, e.target.value)}
+                      <input type="text" inputMode="decimal" value={raw} onChange={(e) => setPrice(key, e.target.value)}
                         disabled={!locationId} title="Base price"
                         className={[
                           moneyInputCls,
@@ -246,7 +289,7 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
                             : 'border-navy/30 bg-cream text-navy',
                         ].join(' ')} />
                       {allowQuartPricing && (
-                        <input type="number" step="0.01" value={qRaw} onChange={(e) => setQuartPrice(key, e.target.value)}
+                        <input type="text" inputMode="decimal" value={qRaw} onChange={(e) => setQuartPrice(key, e.target.value)}
                           disabled={!locationId} placeholder="qt" title="Price per extra quart"
                           className={[
                             quartMoneyInputCls,
@@ -276,24 +319,33 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
             <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Fees (optional)</label>
             <label className="flex items-center justify-between gap-2">
               <span className="text-xs font-mono text-navy">Shop Supply Fee</span>
-              <input type="number" step="0.01" value={shopSupplyFee} onChange={(e) => setShopSupplyFee(e.target.value)}
-                className={`${moneyInputCls} border-navy/30 bg-cream text-navy`} />
+              <input type="text" inputMode="decimal" value={shopSupplyFee} onChange={(e) => setShopSupplyFee(sanitizeDecimalInput(e.target.value))}
+                className={[moneyInputCls, feesToggleBlocked ? 'border-[#C0392B] bg-[#C0392B]/10' : 'border-navy/30 bg-cream text-navy'].join(' ')} />
             </label>
             <label className="flex items-center justify-between gap-2">
               <span className="text-xs font-mono text-navy">Disposal Fee</span>
-              <input type="number" step="0.01" value={disposalFee} onChange={(e) => setDisposalFee(e.target.value)}
-                className={`${moneyInputCls} border-navy/30 bg-cream text-navy`} />
+              <input type="text" inputMode="decimal" value={disposalFee} onChange={(e) => setDisposalFee(sanitizeDecimalInput(e.target.value))}
+                className={[moneyInputCls, feesToggleBlocked ? 'border-[#C0392B] bg-[#C0392B]/10' : 'border-navy/30 bg-cream text-navy'].join(' ')} />
             </label>
             <label className="flex items-center justify-between gap-2">
               <span className="text-xs font-mono text-navy">Oil Inflation Surcharge</span>
-              <input type="number" step="0.01" value={oilInflationSurcharge} onChange={(e) => setOilInflationSurcharge(e.target.value)}
-                className={`${moneyInputCls} border-navy/30 bg-cream text-navy`} />
+              <input type="text" inputMode="decimal" value={oilInflationSurcharge} onChange={(e) => setOilInflationSurcharge(sanitizeDecimalInput(e.target.value))}
+                className={[moneyInputCls, feesToggleBlocked ? 'border-[#C0392B] bg-[#C0392B]/10' : 'border-navy/30 bg-cream text-navy'].join(' ')} />
             </label>
           </div>
 
           <div className="flex flex-col gap-1 border-t border-navy/10 pt-3">
-            <Toggle checked={feesIncluded} onChange={setFeesIncluded} color="cyan" size="sm"
-              label="Include supply fee, disposal fee, and/or oil inflation surcharge in pricing" />
+            <div className="relative">
+              <div className={feesToggleShake ? 'shake-x' : undefined}>
+                <Toggle checked={feesIncluded} onChange={handleFeesToggleChange} color="cyan" size="sm"
+                  label="Include supply fee, disposal fee, and/or oil inflation surcharge in pricing" />
+              </div>
+              {feesToggleBlocked && (
+                <div className="absolute left-0 -top-1 -translate-y-full z-10 w-56 rounded border border-[#C0392B] bg-cream px-2 py-1.5 text-[10px] font-mono text-[#C0392B] shadow-lg">
+                  Add at least one fee to the above fields to use this option
+                </div>
+              )}
+            </div>
             <p className="text-[10px] font-mono text-inky">
               {feesIncluded ? 'Pricing on Menu will be after fees, still before taxes.' : 'Pricing on Menu will be the base price.'}
             </p>
