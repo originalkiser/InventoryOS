@@ -4,7 +4,7 @@
 // list, never merged into (or read from) the regular Shop Links tab/table
 // — franchise links live in marketing.franchise_menu_shares, a completely
 // separate table (see that migration's own header comment for why).
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Button, Card, CardBody, SbLoader } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
@@ -12,7 +12,10 @@ import { useAuthStore } from '@/stores/authStore'
 import type { Location } from '@/types'
 import type { MenuBoardPackage } from './useMenuBoard'
 import { FranchiseMenuForm } from './FranchiseMenuForm'
-import { FZMENU_BASE_URL, FRANCHISE_SETUP_BASE_URL } from './franchiseMenu'
+import {
+  FZMENU_BASE_URL, FRANCHISE_SETUP_BASE_URL, FRANCHISE_PACKAGE_KEYS, FRANCHISE_PACKAGE_LABELS,
+  type FranchisePackageKey,
+} from './franchiseMenu'
 
 const sb = supabase as any
 
@@ -70,6 +73,38 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
     const l = locations.find((x) => x.id === locationId)
     return l ? (l.shop_city || l.name) : locationId
   }
+
+  // Pricing discrepancies (2026-09-19 follow-up) — a franchisee's confirmed
+  // board price can drift from what's in the location list (they typed
+  // their own number over the auto-filled one, or the list changed after
+  // their board was generated) — this compares each shop's MOST RECENT
+  // active board against the location list's CURRENT price live, so it's
+  // always "what needs updating right now," not a historical log of past
+  // edits that may already be reconciled. Needs no new table/RPC: `rows`
+  // (already sorted newest-first by the query above) and `locations` are
+  // both already loaded for this tab.
+  const discrepancies = useMemo(() => {
+    const latestByLocation = new Map<string, FranchiseShareRow>()
+    for (const r of rows) {
+      if (!latestByLocation.has(r.location_id)) latestByLocation.set(r.location_id, r)
+    }
+    const out: { locationId: string; shopLabel: string; createdAt: string; diffs: Partial<Record<FranchisePackageKey, { listPrice: number | null; boardPrice: number }>> }[] = []
+    for (const [locationId, r] of latestByLocation) {
+      const loc = locations.find((l) => l.id === locationId)
+      if (!loc) continue
+      const diffs: (typeof out)[number]['diffs'] = {}
+      for (const key of FRANCHISE_PACKAGE_KEYS) {
+        const listPrice = (loc as any)[key] as number | null
+        const boardPrice = (r as any)[`price_${key}`] as number
+        const matches = listPrice != null && Math.abs(listPrice - boardPrice) < 0.005
+        if (!matches) diffs[key] = { listPrice, boardPrice }
+      }
+      if (Object.keys(diffs).length > 0) {
+        out.push({ locationId, shopLabel: loc.shop_city || loc.name, createdAt: r.created_at, diffs })
+      }
+    }
+    return out.sort((a, b) => a.shopLabel.localeCompare(b.shopLabel))
+  }, [rows, locations])
 
   // Franchisee self-service setup links (2026-09-18 follow-up) — a
   // completely separate table/list from the generated board links above.
@@ -131,6 +166,49 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
           Blank menu boards for franchise shops — the franchisee's own confirmed pricing, on its own <span className="text-navy">fzmenu.sboc.app</span> link. Never listed on the regular Shop Links tab.
         </p>
         <Button size="sm" onClick={() => setShowForm(true)}>+ New Franchise Menu Board</Button>
+      </CardBody></Card>
+
+      <Card><CardBody className="flex flex-col gap-2">
+        <div>
+          <h4 className="text-xs font-heading font-bold text-[#C0392B] uppercase tracking-wide">Pricing Discrepancies</h4>
+          <p className="text-[11px] font-mono text-inky mt-0.5">
+            Where a shop's most recently generated franchise board no longer matches the location list — a franchisee edited a price, or the list changed after their board was made. Update the location list here so the next auto-fill (e.g. if they lose their link and need a new one) is accurate.
+          </p>
+        </div>
+
+        {loading ? (
+          <div className="py-6 flex justify-center"><SbLoader size={28} /></div>
+        ) : discrepancies.length === 0 ? (
+          <p className="text-xs font-mono text-inky/60 py-3 text-center">No discrepancies — every franchise board matches the location list.</p>
+        ) : (
+          <div className="overflow-auto rounded border border-[#C0392B]/30 mt-1">
+            <table className="w-full text-xs font-mono">
+              <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/20">
+                <th className="text-left px-3 py-2 sticky left-0 bg-cream">Shop</th>
+                {FRANCHISE_PACKAGE_KEYS.map((key) => (
+                  <th key={key} className="text-center px-3 py-2 whitespace-nowrap font-normal normal-case">{FRANCHISE_PACKAGE_LABELS[key]}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {discrepancies.map((d) => (
+                  <tr key={d.locationId} className="border-b border-navy/10 hover:bg-navy/5">
+                    <td className="px-3 py-2 text-navy sticky left-0 bg-cream whitespace-nowrap">{d.shopLabel}</td>
+                    {FRANCHISE_PACKAGE_KEYS.map((key) => {
+                      const diff = d.diffs[key]
+                      if (!diff) return <td key={key} className="px-3 py-2 text-center text-inky/30">—</td>
+                      return (
+                        <td key={key} className="px-3 py-2 text-center whitespace-nowrap">
+                          <div className="text-inky">List: {diff.listPrice != null ? `$${diff.listPrice.toFixed(2)}` : '—'}</div>
+                          <div className="text-[#C0392B] font-bold">Board: ${diff.boardPrice.toFixed(2)}</div>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardBody></Card>
 
       <Card><CardBody className="flex flex-col gap-2">
