@@ -9,6 +9,7 @@ import type {
   SubmissionColumn, SubmissionColumnValue, ResponseOverride,
 } from '@/types/forms'
 import { effectivePenetrationPct, effectiveOtdPrice, formatMoney, formatPct, formatFilterMode, summarizePackageRow } from '@/lib/packagePricing'
+import { ShareSubmissionsModal } from './ShareSubmissionsModal'
 import { format } from 'date-fns'
 import * as XLSX from 'xlsx'
 import toast from 'react-hot-toast'
@@ -20,7 +21,7 @@ interface ResolvedResponse extends FormResponse {
   override?: ResponseOverride
 }
 
-function resolveDisplayValue(response: FormResponse, override: ResponseOverride | null): ResolvedResponse {
+export function resolveDisplayValue(response: FormResponse, override: ResponseOverride | null): ResolvedResponse {
   if (!override) return response
   return {
     ...response,
@@ -109,6 +110,29 @@ function OverrideCellPopover({
 // count + a modal with the full per-package breakdown, bypassing
 // ResponseCell's override machinery (which only knows scalar/array/option
 // values) entirely for this field type.
+export function displayValueFor(resp: FormResponse | undefined, field: FormField, overrideMap: Record<string, ResponseOverride>): string {
+  if (!resp) return '—'
+  if (field.field_type === 'package_pricing') {
+    const rows = resp.value_json ?? []
+    if (!rows.length) return '—'
+    const pcts = effectivePenetrationPct(rows)
+    return rows.map((r, i) => summarizePackageRow(r, pcts[i], r.penetration_pct == null)).join('; ')
+  }
+  const ov = overrideMap[resp.id] ?? null
+  const resolved = resolveDisplayValue(resp, ov)
+  if (field.field_type === 'multiple_choice' || field.field_type === 'dropdown') {
+    return field.options.find((o) => o.id === resolved.value_option_id)?.label ?? resolved.value_option_id ?? '—'
+  }
+  if (field.field_type === 'multi_select') {
+    return (resolved.value_array ?? []).map((id) => field.options.find((o) => o.id === id)?.label ?? id).join(', ') || '—'
+  }
+  if (field.field_type === 'file_upload') {
+    const c = resolved.file_paths?.length ?? 0
+    return c ? `${c} file${c > 1 ? 's' : ''}` : '—'
+  }
+  return resolved.value_text ?? '—'
+}
+
 function PackagePricingCell({ response }: { response: FormResponse | undefined }) {
   const [open, setOpen] = useState(false)
   const rows = response?.value_json ?? []
@@ -286,6 +310,134 @@ function ResponseCell({
   )
 }
 
+// ── Submissions results table (shared: FormResultsPage + public share page) ──
+// Everything below the stats/tabs row on FormResultsPage's own responses
+// tab, pulled out so PublicSubmissionSharePage.tsx (2026-09-18, non-login
+// share links) can render the exact same table read-only or with edit
+// controls — same precedent as FormCanvas already being shared between the
+// builder preview and PublicFormPage's own fill-out flow. `canWrite` alone
+// decides whether any editing UI renders at all; a read-only share link
+// passes onOverrideSave/onRevert/onSaveColumnValue that are simply never
+// called since ResponseCell/the column-value cell below both gate on it.
+
+export function SubmissionsResultsTable({
+  dataFields, submissions, responseMap, overrideMap, submissionColumns, columnValueMap,
+  canWrite, onOverrideSave, onRevert, onSaveColumnValue, submitterNameFor,
+}: {
+  dataFields: FormField[]
+  submissions: FormSubmission[]
+  responseMap: Record<string, Record<string, FormResponse>>
+  overrideMap: Record<string, ResponseOverride>
+  submissionColumns: SubmissionColumn[]
+  columnValueMap: Record<string, Record<string, string>>
+  canWrite: boolean
+  onOverrideSave: (fieldId: string, responseId: string, submissionId: string, value: any, note?: string) => Promise<void>
+  onRevert: (responseId: string) => Promise<void>
+  onSaveColumnValue: (submissionId: string, columnId: string, value: string) => Promise<void>
+  submitterNameFor: (sub: FormSubmission) => { name: string; title?: string }
+}) {
+  const [editingCell, setEditingCell] = useState<{ submId: string; colId: string } | null>(null)
+  const [editCellValue, setEditCellValue] = useState('')
+
+  if (submissions.length === 0) {
+    return <p className="text-xs font-mono text-inky py-8 text-center">No responses yet.</p>
+  }
+
+  return (
+    <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
+      <table className="w-full text-xs font-mono" style={{ minWidth: 600 }}>
+        <thead className="sticky top-0">
+          <tr className="border-b border-navy/30 bg-cream">
+            <th className="px-3 py-2 text-left text-inky uppercase tracking-wide w-8">#</th>
+            <th className="px-3 py-2 text-left text-inky uppercase tracking-wide whitespace-nowrap">Submitted At</th>
+            <th className="px-3 py-2 text-left text-inky uppercase tracking-wide whitespace-nowrap">Submitted By</th>
+            <th className="px-3 py-2 text-right text-inky uppercase tracking-wide">Score</th>
+            {dataFields.map((f) => (
+              <th key={f.id} className="px-3 py-2 text-left text-inky uppercase tracking-wide truncate max-w-[120px]">{f.label}</th>
+            ))}
+            {submissionColumns.map((col) => (
+              <th key={col.id} className="px-3 py-2 text-left text-inky uppercase tracking-wide whitespace-nowrap bg-amber-50/40">
+                {col.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {submissions.map((sub, idx) => {
+            const submitter = submitterNameFor(sub)
+            return (
+              <tr key={sub.id} className="border-b border-navy/10 hover:bg-navy/5">
+                <td className="px-3 py-2 text-inky/40">{idx + 1}</td>
+                <td className="px-3 py-2 text-inky/70 whitespace-nowrap">
+                  {format(new Date(sub.submitted_at), 'MMM d, yyyy h:mm a')}
+                </td>
+                <td className="px-3 py-2 text-navy">
+                  <span title={submitter.title}>{submitter.name}</span>
+                </td>
+                <td className="px-3 py-2 text-right text-navy">
+                  {sub.total_score != null ? `${sub.total_score}/${sub.max_possible_score ?? '?'}` : '—'}
+                </td>
+                {dataFields.map((field) => {
+                  const resp = responseMap[sub.id]?.[field.id]
+                  if (field.field_type === 'package_pricing') {
+                    return <td key={field.id} className="px-3 py-2 max-w-[140px]"><PackagePricingCell response={resp} /></td>
+                  }
+                  const ov = resp ? (overrideMap[resp.id] ?? null) : null
+                  return (
+                    <td key={field.id} className="px-3 py-2 max-w-[140px] relative">
+                      <ResponseCell
+                        response={resp}
+                        override={ov}
+                        field={field}
+                        canWrite={canWrite}
+                        onOverrideSave={onOverrideSave}
+                        onRevert={onRevert}
+                      />
+                    </td>
+                  )
+                })}
+                {submissionColumns.map((col) => {
+                  const currentVal = columnValueMap[sub.id]?.[col.id] ?? ''
+                  const isEditing = editingCell?.submId === sub.id && editingCell?.colId === col.id
+                  return (
+                    <td key={col.id} className="px-3 py-2 bg-amber-50/20">
+                      {canWrite ? (
+                        isEditing ? (
+                          <input
+                            autoFocus
+                            value={editCellValue}
+                            onChange={(e) => setEditCellValue(e.target.value)}
+                            onBlur={async () => {
+                              await onSaveColumnValue(sub.id, col.id, editCellValue)
+                              setEditingCell(null)
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.currentTarget.blur() }
+                              if (e.key === 'Escape') setEditingCell(null)
+                            }}
+                            className="rounded border border-navy/30 bg-cream px-1.5 py-0.5 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none w-full" />
+                        ) : (
+                          <span
+                            className="cursor-pointer hover:bg-navy/5 rounded px-1 -mx-1 text-navy min-w-[40px] inline-block"
+                            onClick={() => { setEditingCell({ submId: sub.id, colId: col.id }); setEditCellValue(currentVal) }}>
+                            {currentVal || <span className="text-inky/30">—</span>}
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-navy">{currentVal || '—'}</span>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ── Add Custom Column Modal ───────────────────────────────────────────────────
 
 function AddColumnModal({ formId, profile, onAdded, onClose }: {
@@ -365,9 +517,8 @@ export function FormResultsPage() {
   const [tab, setTab] = useState<'responses' | 'streaks'>('responses')
   const [loading, setLoading] = useState(true)
   const [addColumnOpen, setAddColumnOpen] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
   const [canWrite, setCanWrite] = useState(false)
-  const [editingCell, setEditingCell] = useState<{ submId: string; colId: string } | null>(null)
-  const [editCellValue, setEditCellValue] = useState('')
 
   useEffect(() => {
     if (!formId || !profile?.id) return
@@ -440,29 +591,6 @@ export function FormResultsPage() {
     }
     return map
   }, [columnValues])
-
-  function displayValue(resp: FormResponse | undefined, field: FormField): string {
-    if (!resp) return '—'
-    if (field.field_type === 'package_pricing') {
-      const rows = resp.value_json ?? []
-      if (!rows.length) return '—'
-      const pcts = effectivePenetrationPct(rows)
-      return rows.map((r, i) => summarizePackageRow(r, pcts[i], r.penetration_pct == null)).join('; ')
-    }
-    const ov = overrideMap[resp.id] ?? null
-    const resolved = resolveDisplayValue(resp, ov)
-    if (field.field_type === 'multiple_choice' || field.field_type === 'dropdown') {
-      return field.options.find((o) => o.id === resolved.value_option_id)?.label ?? resolved.value_option_id ?? '—'
-    }
-    if (field.field_type === 'multi_select') {
-      return (resolved.value_array ?? []).map((id) => field.options.find((o) => o.id === id)?.label ?? id).join(', ') || '—'
-    }
-    if (field.field_type === 'file_upload') {
-      const c = resolved.file_paths?.length ?? 0
-      return c ? `${c} file${c > 1 ? 's' : ''}` : '—'
-    }
-    return resolved.value_text ?? '—'
-  }
 
   async function handleOverrideSave(fieldId: string, responseId: string, submissionId: string, value: any) {
     if (!profile?.id) return
@@ -542,7 +670,7 @@ export function FormResultsPage() {
         'Max Score': sub.max_possible_score ?? '',
       }
       for (const field of dataFields) {
-        row[field.label] = displayValue(responseMap[sub.id]?.[field.id], field)
+        row[field.label] = displayValueFor(responseMap[sub.id]?.[field.id], field, overrideMap)
       }
       for (const col of submissionColumns) {
         row[col.label] = columnValueMap[sub.id]?.[col.id] ?? ''
@@ -572,6 +700,7 @@ export function FormResultsPage() {
       <div className="flex items-center gap-3">
         <button onClick={() => navigate('/forms')} className="text-xs font-mono text-inky hover:text-navy">← Forms</button>
         <h1 className="flex-1 text-sm font-heading font-bold text-navy">{form.title} — Results</h1>
+        {canWrite && <Button size="sm" variant="secondary" onClick={() => setShareOpen(true)}>Share Results</Button>}
         <Button size="sm" variant="secondary" onClick={exportExcel}>Export Excel</Button>
         <Button size="sm" onClick={() => navigate(`/forms/${formId}/edit`)}>Edit Form</Button>
       </div>
@@ -610,104 +739,22 @@ export function FormResultsPage() {
       </div>
 
       {tab === 'responses' && (
-        submissions.length === 0 ? (
-          <p className="text-xs font-mono text-inky py-8 text-center">No responses yet.</p>
-        ) : (
-          <div className="overflow-auto max-h-[calc(100vh-300px)] rounded border border-navy/30">
-            <table className="w-full text-xs font-mono" style={{ minWidth: 600 }}>
-              <thead className="sticky top-0">
-                <tr className="border-b border-navy/30 bg-cream">
-                  <th className="px-3 py-2 text-left text-inky uppercase tracking-wide w-8">#</th>
-                  <th className="px-3 py-2 text-left text-inky uppercase tracking-wide whitespace-nowrap">Submitted At</th>
-                  <th className="px-3 py-2 text-left text-inky uppercase tracking-wide whitespace-nowrap">Submitted By</th>
-                  <th className="px-3 py-2 text-right text-inky uppercase tracking-wide">Score</th>
-                  {dataFields.map((f) => (
-                    <th key={f.id} className="px-3 py-2 text-left text-inky uppercase tracking-wide truncate max-w-[120px]">{f.label}</th>
-                  ))}
-                  {submissionColumns.map((col) => (
-                    <th key={col.id} className="px-3 py-2 text-left text-inky uppercase tracking-wide whitespace-nowrap bg-amber-50/40">
-                      {col.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {submissions.map((sub, idx) => {
-                  const submitter = sub.submitted_by ? submitterProfiles[sub.submitted_by] : null
-                  const submitterName = submitter?.full_name ?? sub.respondent_name ?? (sub.submitted_by ? null : null)
-                  return (
-                    <tr key={sub.id} className="border-b border-navy/10 hover:bg-navy/5">
-                      <td className="px-3 py-2 text-inky/40">{idx + 1}</td>
-                      <td className="px-3 py-2 text-inky/70 whitespace-nowrap">
-                        {format(new Date(sub.submitted_at), 'MMM d, yyyy h:mm a')}
-                      </td>
-                      <td className="px-3 py-2 text-navy">
-                        <span title={submitter?.email ?? undefined}>
-                          {submitterName ?? '(anonymous)'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right text-navy">
-                        {sub.total_score != null ? `${sub.total_score}/${sub.max_possible_score ?? '?'}` : '—'}
-                      </td>
-                      {dataFields.map((field) => {
-                        const resp = responseMap[sub.id]?.[field.id]
-                        if (field.field_type === 'package_pricing') {
-                          return <td key={field.id} className="px-3 py-2 max-w-[140px]"><PackagePricingCell response={resp} /></td>
-                        }
-                        const ov = resp ? (overrideMap[resp.id] ?? null) : null
-                        return (
-                          <td key={field.id} className="px-3 py-2 max-w-[140px] relative">
-                            <ResponseCell
-                              response={resp}
-                              override={ov}
-                              field={field}
-                              canWrite={canWrite}
-                              onOverrideSave={handleOverrideSave}
-                              onRevert={handleRevert}
-                            />
-                          </td>
-                        )
-                      })}
-                      {submissionColumns.map((col) => {
-                        const currentVal = columnValueMap[sub.id]?.[col.id] ?? ''
-                        const isEditing = editingCell?.submId === sub.id && editingCell?.colId === col.id
-                        return (
-                          <td key={col.id} className="px-3 py-2 bg-amber-50/20">
-                            {canWrite ? (
-                              isEditing ? (
-                                <input
-                                  autoFocus
-                                  value={editCellValue}
-                                  onChange={(e) => setEditCellValue(e.target.value)}
-                                  onBlur={async () => {
-                                    await saveColumnValue(sub.id, col.id, editCellValue)
-                                    setEditingCell(null)
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') { e.currentTarget.blur() }
-                                    if (e.key === 'Escape') setEditingCell(null)
-                                  }}
-                                  className="rounded border border-navy/30 bg-cream px-1.5 py-0.5 text-xs font-mono text-navy focus:border-[#00e5ff] focus:outline-none w-full" />
-                              ) : (
-                                <span
-                                  className="cursor-pointer hover:bg-navy/5 rounded px-1 -mx-1 text-navy min-w-[40px] inline-block"
-                                  onClick={() => { setEditingCell({ submId: sub.id, colId: col.id }); setEditCellValue(currentVal) }}>
-                                  {currentVal || <span className="text-inky/30">—</span>}
-                                </span>
-                              )
-                            ) : (
-                              <span className="text-navy">{currentVal || '—'}</span>
-                            )}
-                          </td>
-                        )
-                      })}
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )
+        <SubmissionsResultsTable
+          dataFields={dataFields}
+          submissions={submissions}
+          responseMap={responseMap}
+          overrideMap={overrideMap}
+          submissionColumns={submissionColumns}
+          columnValueMap={columnValueMap}
+          canWrite={canWrite}
+          onOverrideSave={handleOverrideSave}
+          onRevert={handleRevert}
+          onSaveColumnValue={saveColumnValue}
+          submitterNameFor={(sub) => {
+            const submitter = sub.submitted_by ? submitterProfiles[sub.submitted_by] : null
+            return { name: submitter?.full_name ?? sub.respondent_name ?? '(anonymous)', title: submitter?.email ?? undefined }
+          }}
+        />
       )}
 
       {tab === 'streaks' && (
@@ -746,6 +793,10 @@ export function FormResultsPage() {
           onAdded={(col) => { setSubmissionColumns((p) => [...p, col]); setAddColumnOpen(false) }}
           onClose={() => setAddColumnOpen(false)}
         />
+      )}
+
+      {shareOpen && formId && (
+        <ShareSubmissionsModal formId={formId} onClose={() => setShareOpen(false)} />
       )}
     </div>
   )

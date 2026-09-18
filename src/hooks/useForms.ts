@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import type { FormDefinition, FormField, FieldCondition, ConditionRule, PackagePricingRow } from '@/types/forms'
+import type { FormDefinition, FormField, FieldCondition, ConditionRule, PackagePricingRow, SubmissionShare } from '@/types/forms'
 import toast from 'react-hot-toast'
 
 const sb = supabase as any
@@ -224,4 +224,86 @@ export async function submitForm(payload: {
   }
 
   return sub.id as string
+}
+
+// ── Submission (Results table) share links — 2026-09-18 ──────────────────────
+// Authenticated management side is plain table CRUD (the admin's own RLS on
+// forms.submission_shares already scopes it — see that migration). The
+// public read/write side (below) goes through SECURITY DEFINER RPCs instead,
+// same reasoning as loadPublicForm[BySlug] NOT applying here: a submissions
+// table can carry real respondent business data, so this never grants anon
+// direct table access the way the public fill-out form's own schema-USAGE
+// grant does.
+
+export async function loadSubmissionShares(formId: string): Promise<SubmissionShare[]> {
+  const { data } = await sb.schema('forms').from('submission_shares')
+    .select('*').eq('form_id', formId).order('created_at', { ascending: false })
+  return (data ?? []) as SubmissionShare[]
+}
+
+export async function createSubmissionShare(params: {
+  formId: string
+  companyId: string
+  createdBy: string | null
+  label: string | null
+  permission: 'read' | 'edit'
+  expiresAt: string | null
+}): Promise<SubmissionShare | null> {
+  const { data, error } = await sb.schema('forms').from('submission_shares').insert({
+    form_id: params.formId,
+    company_id: params.companyId,
+    created_by: params.createdBy,
+    label: params.label,
+    permission: params.permission,
+    expires_at: params.expiresAt,
+  }).select().single()
+  if (error) { toast.error(error.message); return null }
+  return data as SubmissionShare
+}
+
+export async function updateSubmissionShare(token: string, patch: Partial<Pick<SubmissionShare, 'label' | 'permission' | 'expires_at' | 'active'>>): Promise<boolean> {
+  const { error } = await sb.schema('forms').from('submission_shares').update(patch).eq('token', token)
+  if (error) { toast.error(error.message); return false }
+  return true
+}
+
+export async function deleteSubmissionShare(token: string): Promise<boolean> {
+  const { error } = await sb.schema('forms').from('submission_shares').delete().eq('token', token)
+  if (error) { toast.error(error.message); return false }
+  return true
+}
+
+// Public: everything PublicSubmissionSharePage needs to render, in one RPC
+// call — see get_submission_share_data in the same migration. `error` is
+// 'not_found' (bad/inactive token) or 'expired' (past its own expires_at).
+export async function loadSubmissionShareData(token: string): Promise<any> {
+  const { data, error } = await sb.rpc('get_submission_share_data', { p_token: token })
+  if (error) return { error: 'not_found' }
+  return data
+}
+
+export async function saveSubmissionShareOverride(
+  token: string, responseId: string,
+  valueText: string | null, valueArray: string[] | null, valueOptionId: string | null,
+): Promise<boolean> {
+  const { data, error } = await sb.rpc('submission_share_save_override', {
+    p_token: token, p_response_id: responseId,
+    p_value_text: valueText, p_value_array: valueArray, p_value_option_id: valueOptionId,
+  })
+  if (error || data?.error) { toast.error('Unable to save — this link may have expired'); return false }
+  return true
+}
+
+export async function revertSubmissionShareOverride(token: string, responseId: string): Promise<boolean> {
+  const { data, error } = await sb.rpc('submission_share_revert_override', { p_token: token, p_response_id: responseId })
+  if (error || data?.error) { toast.error('Unable to revert — this link may have expired'); return false }
+  return true
+}
+
+export async function saveSubmissionShareColumnValue(token: string, submissionId: string, columnId: string, value: string): Promise<boolean> {
+  const { data, error } = await sb.rpc('submission_share_save_column_value', {
+    p_token: token, p_submission_id: submissionId, p_column_id: columnId, p_value: value,
+  })
+  if (error || data?.error) { toast.error('Unable to save — this link may have expired'); return false }
+  return true
 }

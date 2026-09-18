@@ -200,6 +200,27 @@ export interface SubmissionAccessRule {
   created_at: string
 }
 
+// Non-login share link for a form's Results/submissions table (2026-09-18)
+// — a token grants either 'read' (view only) or 'edit' (same override +
+// tracking-column editing an internal canWrite user already has) access to
+// ONE form's submissions, with an optional expiration. Public reads/writes
+// go through SECURITY DEFINER RPCs (get_submission_share_data,
+// submission_share_save_override/_revert_override/_save_column_value —
+// see migration 20260930ag_forms_submission_shares.sql), never a direct
+// anon table read, since a submissions table can carry real respondent
+// business data.
+export interface SubmissionShare {
+  token: string
+  form_id: string
+  company_id: string
+  label: string | null
+  permission: 'read' | 'edit'
+  expires_at: string | null
+  active: boolean
+  created_by: string | null
+  created_at: string
+}
+
 export interface SubmissionColumn {
   id: string
   form_id: string

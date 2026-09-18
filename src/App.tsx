@@ -10,6 +10,7 @@ import { ImportPreviewHost } from '@/components/config/ImportPreviewHost'
 import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { PublicFormPage } from '@/pages/PublicFormPage'
+import { PublicSubmissionSharePage } from '@/pages/PublicSubmissionSharePage'
 import { PublicFranchiseMenuBoardPage } from '@/pages/PublicFranchiseMenuBoardPage'
 import { PublicFranchiseSetupPage } from '@/pages/PublicFranchiseSetupPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
@@ -180,6 +181,13 @@ export default function App() {
 
         {/* Public form — no auth required */}
         <Route path="/f/:shareToken" element={<PublicFormPage />} />
+
+        {/* Public, non-login share link for a form's Results table
+            (2026-09-18) — read-only or edit, per the share row's own
+            permission (see ShareSubmissionsModal). No new subdomain
+            needed: "/results/:token" doesn't collide with any real app
+            route, unlike a bare "/:slug". */}
+        <Route path="/results/:token" element={<PublicSubmissionSharePage />} />
 
         {/* Unreachable in practice — "/*" above already matches anything
             that isn't one of the explicit paths higher up (which rank
