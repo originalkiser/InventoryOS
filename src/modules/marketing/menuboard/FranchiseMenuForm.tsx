@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, Card, CardBody, Combobox, Toggle } from '@/components/ui'
 import { ownerBucket } from '@/hooks/useLocationExclusions'
 import { byNaturalLabel } from '@/lib/naturalSort'
+import { sanitizeDecimalInput } from '@/lib/decimalInput'
 import type { Location } from '@/types'
 import type { MenuBoardPackage } from './useMenuBoard'
 import { BoardViewer } from './MenuBoardPage'
@@ -30,20 +31,6 @@ const EMPTY_PRICES: Record<FranchisePackageKey, string> = {
 }
 const EMPTY_FLAGS: Record<FranchisePackageKey, boolean> = {
   economy: false, premium_hm: false, premium_full_synthetic: false, premium_full_synthetic_hm: false, rp: false,
-}
-
-// Every price/fee field on this form is `type="text" inputMode="decimal"`,
-// not `type="number"` — a native number input's up/down spinner arrows
-// clip the last digit in this form's narrow boxes and aren't needed (typing
-// is the only realistic way anyone enters a price), and `inputMode="decimal"`
-// still brings up a numeric keypad on a phone without them. This sanitizer
-// keeps what a plain number input would have rejected anyway (letters, a
-// second decimal point) from ever landing in state.
-function sanitizeDecimalInput(raw: string): string {
-  let cleaned = raw.replace(/[^0-9.]/g, '')
-  const dot = cleaned.indexOf('.')
-  if (dot !== -1) cleaned = cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '')
-  return cleaned
 }
 
 export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToken, allowQuartPricing, onCancel, onCreated }: {

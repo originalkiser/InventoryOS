@@ -51,7 +51,15 @@ export interface PackagePricingRow {
   quarts_included: number | null
   price_per_quart_after: number | null
   tax_mode: 'included' | 'added' | null
-  filter_mode: 'included' | 'added' | null
+  // 'premium_only' (2026-09-18) — the filter is only added on top for the
+  // premium tier, not every sale; paired with avg_filter_price the same way
+  // 'added' is, just a distinct label so the two aren't conflated on the
+  // results table.
+  filter_mode: 'included' | 'added' | 'premium_only' | null
+  // Average filter price entered only when filter_mode is 'added' or
+  // 'premium_only' — omitted (null) for 'included', where there's no
+  // separate filter charge to average.
+  avg_filter_price: number | null
   // Out-the-door price: auto-fills from package_price until the analyst
   // types their own number, at which point otd_price_is_manual flips true
   // and it stops following package_price.

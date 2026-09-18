@@ -21,6 +21,7 @@ import {
 } from '@/lib/formImportTemplate'
 import { evaluateFieldFormula } from '@/lib/formulaEval'
 import { newPackagePricingRow, effectivePenetrationPct, effectiveOtdPrice } from '@/lib/packagePricing'
+import { sanitizeDecimalInput } from '@/lib/decimalInput'
 import type {
   FormDefinition, FormField, FieldType, FieldOption, FieldCondition, ConditionRule,
   DraftField, FormDepartmentShare, SubmissionAccessRule, PackagePricingRow,
@@ -2017,6 +2018,12 @@ export function FormCanvas({
   const [anonName, setAnonName] = useState('')
   const [anonEmail, setAnonEmail] = useState('')
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  // Set once required-field validation passes AND the form has an answered
+  // package_pricing field — swaps the whole canvas to a review/summary step
+  // (PackagePricingConfirmTable) instead of submitting immediately. Cleared
+  // by "Back to form"; "Confirm & Submit" calls doSubmit() directly rather
+  // than re-entering handleSubmit, so it can never re-trigger this gate.
+  const [pendingPackageFieldId, setPendingPackageFieldId] = useState<string | null>(null)
 
   const colors = resolveThemeColors(form.theme)
 
@@ -2094,6 +2101,16 @@ export function FormCanvas({
     }
     setValidationErrors({})
 
+    // A form with an answered Package Pricing field gets a review step
+    // first instead of submitting straight away — doSubmit() only runs once
+    // the analyst clicks "Confirm & Submit" on that summary.
+    const pkgField = visibleFields.find((f) => f.field_type === 'package_pricing' && Array.isArray(responses[f.id]) && responses[f.id].length > 0)
+    if (pkgField) { setPendingPackageFieldId(pkgField.id); return }
+
+    await doSubmit()
+  }
+
+  async function doSubmit() {
     if (!onSubmit) return
     setSubmitting(true)
     try {
@@ -2136,6 +2153,35 @@ export function FormCanvas({
             Your Score: {total} / {max}
           </div>
         )}
+      </div>
+    )
+  }
+
+  if (pendingPackageFieldId) {
+    const rows: PackagePricingRow[] = responses[pendingPackageFieldId] ?? []
+    const shopName = findShopNameValue(fields, responses)
+    return (
+      <div className="form-root rounded-lg p-6 flex flex-col gap-4" style={{ ...cssVars, background: colors.background }}>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-lg font-bold" style={{ color: colors.text }}>Review Your Packages</h2>
+          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs" style={{ color: colors.text, opacity: 0.85 }}>
+            <span className="opacity-60">Shop Name</span><span>{shopName ?? '—'}</span>
+            <span className="opacity-60">Number of Packages</span><span>{rows.length}</span>
+          </div>
+        </div>
+        <PackagePricingConfirmTable rows={rows} onChange={(next) => setResp(pendingPackageFieldId, next)} colors={colors} />
+        <div className="flex gap-3">
+          <button type="button" onClick={() => setPendingPackageFieldId(null)}
+            className="rounded border px-4 py-2.5 text-sm font-bold"
+            style={{ borderColor: colors.input_border, color: colors.text }}>
+            ← Back to Form
+          </button>
+          <button type="button" onClick={doSubmit} disabled={submitting}
+            className="flex-1 rounded py-2.5 text-sm font-bold disabled:opacity-50"
+            style={{ background: colors.button_bg, color: colors.button_text }}>
+            {submitting ? 'Submitting…' : 'Confirm & Submit'}
+          </button>
+        </div>
       </div>
     )
   }
@@ -2383,6 +2429,180 @@ function FieldRenderer({
 // penetration-auto-split math (also reused by FormResultsPage.tsx so a
 // submission displays exactly what the respondent saw while filling it out).
 
+const OIL_TYPE_OPTIONS = ['Conventional', 'Synthetic Blend', 'Synthetic']
+
+// A plain `type="number"` input's up/down spinner arrows clip a narrow
+// box's last digit and aren't a realistic way to enter a price (same
+// finding as the Franchise Menu Board setup form) — this renders as
+// `type="text" inputMode="decimal"` instead, still bringing up a numeric
+// keypad on a phone. Keeps its OWN local text state rather than deriving
+// display text straight from the numeric `value` prop: a controlled input
+// whose displayed value is `String(Number(text))` on every keystroke would
+// silently eat a trailing "." (or a trailing "0" after it) the instant it's
+// typed, making it impossible to ever type e.g. "12.50". The effect only
+// resyncs from an external value change (another field driving this one,
+// like Package Price auto-following into OTD) — a change that merely
+// reflects what THIS input just committed is left alone.
+function DecimalMiniInput({ value, onChange, className, style, placeholder }: {
+  value: number | null
+  onChange: (v: number | null) => void
+  className: string
+  style: React.CSSProperties
+  placeholder?: string
+}) {
+  const [text, setText] = useState(value == null ? '' : String(value))
+  useEffect(() => {
+    const parsedLocal = text === '' ? null : Number(text)
+    if (parsedLocal !== value) setText(value == null ? '' : String(value))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+  return (
+    <input type="text" inputMode="decimal" className={className} style={style} placeholder={placeholder} value={text}
+      onChange={(e) => {
+        const cleaned = sanitizeDecimalInput(e.target.value)
+        setText(cleaned)
+        onChange(cleaned === '' ? null : Number(cleaned))
+      }} />
+  )
+}
+
+// Best-effort "which shop is this for" lookup for the submit-time summary
+// below — this app has no formal concept of a "shop field" on a form, so
+// this is a heuristic (first field whose label contains "shop"), flagged
+// to the user as an assumption. Falls back to '—' when no such field
+// exists or it hasn't been answered yet.
+function findShopNameValue(fields: FormField[], responses: Record<string, any>): string | null {
+  const shopField = fields.find((f) => /shop/i.test(f.label) && ['short_answer', 'dropdown', 'multiple_choice'].includes(f.field_type))
+  if (!shopField) return null
+  const val = responses[shopField.id]
+  if (val == null || val === '') return null
+  if (shopField.field_type === 'dropdown' || shopField.field_type === 'multiple_choice') {
+    return shopField.options.find((o) => o.id === val)?.label ?? String(val)
+  }
+  return String(val)
+}
+
+// Compact, inline-editable version of PackagePricingEditor's own fields —
+// one row per package instead of one card per package — shown on the
+// submit-time review step (see FormCanvas's pendingPackageFieldId) so an
+// analyst can fix a typo without leaving the summary and returning to the
+// full form.
+function PackagePricingConfirmTable({ rows, onChange, colors }: {
+  rows: PackagePricingRow[]
+  onChange: (rows: PackagePricingRow[]) => void
+  colors: FormColors
+}) {
+  const effectivePcts = effectivePenetrationPct(rows)
+  const cellInputClass = 'w-full min-w-[5.5rem] rounded border px-1.5 py-1 text-[11px] focus:outline-none'
+  const cellInputStyle = { background: colors.input_bg, borderColor: colors.input_border, color: colors.text }
+  const thClass = 'px-2 py-1.5 font-normal whitespace-nowrap'
+
+  function patchRow(id: string, patch: Partial<PackagePricingRow>) {
+    onChange(rows.map((r) => r.id === id ? { ...r, ...patch } : r))
+  }
+  function priceChanged(row: PackagePricingRow, price: number | null) {
+    patchRow(row.id, { package_price: price, otd_price: row.otd_price_is_manual ? row.otd_price : price })
+  }
+
+  return (
+    <div className="overflow-x-auto rounded border" style={{ borderColor: colors.input_border }}>
+      <table className="w-full text-[11px]" style={{ color: colors.text }}>
+        <thead>
+          <tr className="uppercase text-left" style={{ color: colors.label }}>
+            <th className={thClass}>Package</th>
+            <th className={thClass}>Oil Type</th>
+            <th className={thClass}>Brand</th>
+            <th className={[thClass, 'text-right'].join(' ')}>Price ($)</th>
+            <th className={[thClass, 'text-right'].join(' ')}>Qts Incl.</th>
+            <th className={[thClass, 'text-right'].join(' ')}>$/Qt After</th>
+            <th className={thClass}>Tax</th>
+            <th className={thClass}>Filter</th>
+            <th className={[thClass, 'text-right'].join(' ')}>Avg Filter $</th>
+            <th className={[thClass, 'text-right'].join(' ')}>OTD Price ($)</th>
+            <th className={[thClass, 'text-right'].join(' ')}>Penetration %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => {
+            const isAuto = row.penetration_pct == null
+            const otd = effectiveOtdPrice(row)
+            const otdIsAuto = !row.otd_price_is_manual
+            const showFilterPrice = row.filter_mode === 'added' || row.filter_mode === 'premium_only'
+            return (
+              <tr key={row.id} className="border-t align-top" style={{ borderColor: colors.input_border }}>
+                <td className="px-2 py-1">
+                  <input className={cellInputClass} style={cellInputStyle} value={row.package_name}
+                    onChange={(e) => patchRow(row.id, { package_name: e.target.value })} />
+                </td>
+                <td className="px-2 py-1">
+                  <select className={cellInputClass} style={cellInputStyle} value={row.oil_type}
+                    onChange={(e) => patchRow(row.id, { oil_type: e.target.value })}>
+                    <option value="">—</option>
+                    {OIL_TYPE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </td>
+                <td className="px-2 py-1">
+                  <input className={cellInputClass} style={cellInputStyle} value={row.oil_brand ?? ''}
+                    onChange={(e) => patchRow(row.id, { oil_brand: e.target.value || null })} />
+                </td>
+                <td className="px-2 py-1">
+                  <DecimalMiniInput className={[cellInputClass, 'text-right'].join(' ')} style={cellInputStyle}
+                    value={row.package_price} onChange={(v) => priceChanged(row, v)} />
+                </td>
+                <td className="px-2 py-1">
+                  <DecimalMiniInput className={[cellInputClass, 'text-right'].join(' ')} style={cellInputStyle}
+                    value={row.quarts_included} onChange={(v) => patchRow(row.id, { quarts_included: v })} />
+                </td>
+                <td className="px-2 py-1">
+                  <DecimalMiniInput className={[cellInputClass, 'text-right'].join(' ')} style={cellInputStyle}
+                    value={row.price_per_quart_after} onChange={(v) => patchRow(row.id, { price_per_quart_after: v })} />
+                </td>
+                <td className="px-2 py-1">
+                  <select className={cellInputClass} style={cellInputStyle} value={row.tax_mode ?? ''}
+                    onChange={(e) => patchRow(row.id, { tax_mode: (e.target.value || null) as PackagePricingRow['tax_mode'] })}>
+                    <option value="">—</option>
+                    <option value="included">Included</option>
+                    <option value="added">Added</option>
+                  </select>
+                </td>
+                <td className="px-2 py-1">
+                  <select className={cellInputClass} style={cellInputStyle} value={row.filter_mode ?? ''}
+                    onChange={(e) => {
+                      const filter_mode = (e.target.value || null) as PackagePricingRow['filter_mode']
+                      patchRow(row.id, { filter_mode, avg_filter_price: filter_mode === 'added' || filter_mode === 'premium_only' ? row.avg_filter_price : null })
+                    }}>
+                    <option value="">—</option>
+                    <option value="included">Included</option>
+                    <option value="added">Added</option>
+                    <option value="premium_only">Premium only</option>
+                  </select>
+                </td>
+                <td className="px-2 py-1">
+                  {showFilterPrice
+                    ? <DecimalMiniInput className={[cellInputClass, 'text-right'].join(' ')} style={cellInputStyle}
+                        value={row.avg_filter_price} onChange={(v) => patchRow(row.id, { avg_filter_price: v })} />
+                    : <span className="opacity-40">—</span>}
+                </td>
+                <td className="px-2 py-1">
+                  <DecimalMiniInput className={[cellInputClass, 'text-right'].join(' ')}
+                    style={otdIsAuto ? { ...cellInputStyle, borderColor: '#E67E22', color: '#E67E22' } : cellInputStyle}
+                    value={otd} onChange={(v) => patchRow(row.id, { otd_price: v, otd_price_is_manual: true })} />
+                </td>
+                <td className="px-2 py-1">
+                  <DecimalMiniInput className={[cellInputClass, 'text-right'].join(' ')}
+                    style={isAuto ? { ...cellInputStyle, borderColor: '#E67E22', color: '#E67E22' } : cellInputStyle}
+                    value={row.penetration_pct ?? (isAuto ? Number(effectivePcts[i].toFixed(1)) : null)}
+                    onChange={(v) => patchRow(row.id, { penetration_pct: v })} />
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function PackagePricingEditor({ rows, onChange, colors, hasError }: {
   rows: PackagePricingRow[]
   onChange: (rows: PackagePricingRow[]) => void
@@ -2393,6 +2613,20 @@ function PackagePricingEditor({ rows, onChange, colors, hasError }: {
   const miniInputClass = 'w-full rounded border px-2 py-1.5 text-xs focus:outline-none'
   const miniInputStyle = { background: colors.input_bg, borderColor: colors.input_border, color: colors.text }
   const labelStyle = { color: colors.label }
+
+  // Pre-seed 5 empty packages once, on first mount, so a respondent sees
+  // right away that they can list more than one — removable individually
+  // afterward. Only fires once (empty dep array): a respondent who removes
+  // every package down to zero should end up with a genuinely empty list,
+  // not have it silently refilled.
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (!seededRef.current && rows.length === 0) {
+      seededRef.current = true
+      onChange([newPackagePricingRow(), newPackagePricingRow(), newPackagePricingRow(), newPackagePricingRow(), newPackagePricingRow()])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function patchRow(id: string, patch: Partial<PackagePricingRow>) {
     onChange(rows.map((r) => r.id === id ? { ...r, ...patch } : r))
@@ -2409,6 +2643,8 @@ function PackagePricingEditor({ rows, onChange, colors, hasError }: {
       {rows.map((row, i) => {
         const isAuto = row.penetration_pct == null
         const otd = effectiveOtdPrice(row)
+        const otdIsAuto = !row.otd_price_is_manual
+        const showFilterPrice = row.filter_mode === 'added' || row.filter_mode === 'premium_only'
         return (
           <div key={row.id} className="rounded border p-3 flex flex-col gap-2" style={{ borderColor: colors.input_border, background: colors.surface }}>
             <div className="flex items-center justify-between">
@@ -2425,28 +2661,31 @@ function PackagePricingEditor({ rows, onChange, colors, hasError }: {
               </label>
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>Type of Oil</span>
-                <input className={miniInputClass} style={miniInputStyle} value={row.oil_type}
-                  onChange={(e) => patchRow(row.id, { oil_type: e.target.value })} placeholder="e.g. Full Synthetic" />
+                <select className={miniInputClass} style={miniInputStyle} value={row.oil_type}
+                  onChange={(e) => patchRow(row.id, { oil_type: e.target.value })}>
+                  <option value="">Select…</option>
+                  {OIL_TYPE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
               </label>
               <label className="flex flex-col gap-0.5">
-                <span className="text-[10px]" style={labelStyle}>Brand (if special)</span>
+                <span className="text-[10px]" style={labelStyle}>Brand (if specific)</span>
                 <input className={miniInputClass} style={miniInputStyle} value={row.oil_brand ?? ''}
                   onChange={(e) => patchRow(row.id, { oil_brand: e.target.value || null })} />
               </label>
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>Package Price ($)</span>
-                <input type="number" step="0.01" className={miniInputClass} style={miniInputStyle}
-                  value={row.package_price ?? ''} onChange={(e) => priceChanged(row, e.target.value === '' ? null : Number(e.target.value))} />
+                <DecimalMiniInput className={miniInputClass} style={miniInputStyle}
+                  value={row.package_price} onChange={(v) => priceChanged(row, v)} />
               </label>
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>Quarts Included</span>
-                <input type="number" step="1" className={miniInputClass} style={miniInputStyle}
-                  value={row.quarts_included ?? ''} onChange={(e) => patchRow(row.id, { quarts_included: e.target.value === '' ? null : Number(e.target.value) })} />
+                <DecimalMiniInput className={miniInputClass} style={miniInputStyle}
+                  value={row.quarts_included} onChange={(v) => patchRow(row.id, { quarts_included: v })} />
               </label>
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>Price / Quart After ($)</span>
-                <input type="number" step="0.01" className={miniInputClass} style={miniInputStyle}
-                  value={row.price_per_quart_after ?? ''} onChange={(e) => patchRow(row.id, { price_per_quart_after: e.target.value === '' ? null : Number(e.target.value) })} />
+                <DecimalMiniInput className={miniInputClass} style={miniInputStyle}
+                  value={row.price_per_quart_after} onChange={(v) => patchRow(row.id, { price_per_quart_after: v })} />
               </label>
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>Tax</span>
@@ -2460,27 +2699,43 @@ function PackagePricingEditor({ rows, onChange, colors, hasError }: {
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>Oil Filter</span>
                 <select className={miniInputClass} style={miniInputStyle} value={row.filter_mode ?? ''}
-                  onChange={(e) => patchRow(row.id, { filter_mode: (e.target.value || null) as PackagePricingRow['filter_mode'] })}>
+                  onChange={(e) => {
+                    const filter_mode = (e.target.value || null) as PackagePricingRow['filter_mode']
+                    patchRow(row.id, { filter_mode, avg_filter_price: filter_mode === 'added' || filter_mode === 'premium_only' ? row.avg_filter_price : null })
+                  }}>
                   <option value="">Select…</option>
                   <option value="included">Included in price</option>
                   <option value="added">Added on top</option>
+                  <option value="premium_only">Only for premium filters</option>
                 </select>
               </label>
+              {showFilterPrice && (
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[10px]" style={labelStyle}>
+                    {row.filter_mode === 'premium_only' ? 'Average Premium Filter Price ($)' : 'Average Filter Price ($)'}
+                  </span>
+                  <DecimalMiniInput className={miniInputClass} style={miniInputStyle}
+                    value={row.avg_filter_price} onChange={(v) => patchRow(row.id, { avg_filter_price: v })} />
+                </label>
+              )}
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>Avg. Out-The-Door Price ($)</span>
-                <input type="number" step="0.01" className={miniInputClass} style={miniInputStyle}
-                  value={otd ?? ''}
-                  onChange={(e) => patchRow(row.id, { otd_price: e.target.value === '' ? null : Number(e.target.value), otd_price_is_manual: true })} />
-                {!row.otd_price_is_manual && <span className="text-[9px] opacity-50" style={labelStyle}>Defaults to package price — edit to override</span>}
+                <DecimalMiniInput
+                  className={miniInputClass}
+                  style={otdIsAuto ? { ...miniInputStyle, borderColor: '#E67E22', color: '#E67E22' } : miniInputStyle}
+                  value={otd}
+                  onChange={(v) => patchRow(row.id, { otd_price: v, otd_price_is_manual: true })} />
+                {otdIsAuto && <span className="text-[9px]" style={{ color: '#E67E22' }}>Defaults to package price — edit to override</span>}
               </label>
               <label className="flex flex-col gap-0.5">
                 <span className="text-[10px]" style={labelStyle}>
                   Penetration % of Volume {isAuto && <span style={{ color: '#E67E22' }}>(auto — needs update)</span>}
                 </span>
-                <input type="number" step="0.1" className={miniInputClass}
+                <DecimalMiniInput
+                  className={miniInputClass}
                   style={isAuto ? { ...miniInputStyle, borderColor: '#E67E22', color: '#E67E22' } : miniInputStyle}
-                  value={row.penetration_pct ?? (isAuto ? Number(effectivePcts[i].toFixed(1)) : '')}
-                  onChange={(e) => patchRow(row.id, { penetration_pct: e.target.value === '' ? null : Number(e.target.value) })} />
+                  value={row.penetration_pct ?? (isAuto ? Number(effectivePcts[i].toFixed(1)) : null)}
+                  onChange={(v) => patchRow(row.id, { penetration_pct: v })} />
               </label>
             </div>
           </div>

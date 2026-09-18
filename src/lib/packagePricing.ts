@@ -15,6 +15,7 @@ export function newPackagePricingRow(): PackagePricingRow {
     price_per_quart_after: null,
     tax_mode: null,
     filter_mode: null,
+    avg_filter_price: null,
     otd_price: null,
     otd_price_is_manual: false,
     penetration_pct: null,
@@ -52,6 +53,14 @@ export function formatPct(v: number | null | undefined): string {
   return v == null ? '—' : `${v.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`
 }
 
+/** Human label for a filter_mode value — 'premium_only' doesn't read well through plain CSS capitalize(), unlike 'included'/'added'. */
+export function formatFilterMode(mode: PackagePricingRow['filter_mode']): string {
+  if (mode === 'premium_only') return 'Premium only'
+  if (mode === 'added') return 'Added'
+  if (mode === 'included') return 'Included'
+  return '—'
+}
+
 /** One-line plain-text summary of a package row, for the results table/export — see FormResultsPage.tsx. */
 export function summarizePackageRow(row: PackagePricingRow, effectivePct: number, isAuto: boolean): string {
   const parts = [
@@ -61,7 +70,8 @@ export function summarizePackageRow(row: PackagePricingRow, effectivePct: number
   if (row.quarts_included != null) parts.push(`${row.quarts_included} qt incl.`)
   if (row.price_per_quart_after != null) parts.push(`+${formatMoney(row.price_per_quart_after)}/qt after`)
   if (row.tax_mode) parts.push(`tax ${row.tax_mode}`)
-  if (row.filter_mode) parts.push(`filter ${row.filter_mode}`)
+  if (row.filter_mode) parts.push(`filter ${formatFilterMode(row.filter_mode)}`)
+  if (row.avg_filter_price != null) parts.push(`avg filter ${formatMoney(row.avg_filter_price)}`)
   parts.push(`OTD ${formatMoney(effectiveOtdPrice(row))}`)
   parts.push(`${formatPct(effectivePct)}${isAuto ? ' auto' : ''} penetration`)
   return parts.join(', ')

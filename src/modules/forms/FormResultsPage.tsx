@@ -8,7 +8,7 @@ import type {
   FormDefinition, FormField, FormSubmission, FormResponse, ScoreStreak,
   SubmissionColumn, SubmissionColumnValue, ResponseOverride,
 } from '@/types/forms'
-import { effectivePenetrationPct, effectiveOtdPrice, formatMoney, formatPct, summarizePackageRow } from '@/lib/packagePricing'
+import { effectivePenetrationPct, effectiveOtdPrice, formatMoney, formatPct, formatFilterMode, summarizePackageRow } from '@/lib/packagePricing'
 import { format } from 'date-fns'
 import * as XLSX from 'xlsx'
 import toast from 'react-hot-toast'
@@ -132,7 +132,8 @@ function PackagePricingCell({ response }: { response: FormResponse | undefined }
                 <th className="text-left px-2 py-1">Package</th><th className="text-left px-2 py-1">Oil</th>
                 <th className="text-right px-2 py-1">Price</th><th className="text-right px-2 py-1">Qts Incl.</th>
                 <th className="text-right px-2 py-1">$/Qt After</th><th className="text-left px-2 py-1">Tax</th>
-                <th className="text-left px-2 py-1">Filter</th><th className="text-right px-2 py-1">OTD Price</th>
+                <th className="text-left px-2 py-1">Filter</th><th className="text-right px-2 py-1">Avg Filter $</th>
+                <th className="text-right px-2 py-1">OTD Price</th>
                 <th className="text-right px-2 py-1">Penetration</th>
               </tr></thead>
               <tbody>
@@ -146,7 +147,8 @@ function PackagePricingCell({ response }: { response: FormResponse | undefined }
                       <td className="px-2 py-1 text-right text-inky">{r.quarts_included ?? '—'}</td>
                       <td className="px-2 py-1 text-right text-inky">{formatMoney(r.price_per_quart_after)}</td>
                       <td className="px-2 py-1 text-inky capitalize">{r.tax_mode ?? '—'}</td>
-                      <td className="px-2 py-1 text-inky capitalize">{r.filter_mode ?? '—'}</td>
+                      <td className="px-2 py-1 text-inky">{formatFilterMode(r.filter_mode)}</td>
+                      <td className="px-2 py-1 text-right text-inky">{formatMoney(r.avg_filter_price)}</td>
                       <td className="px-2 py-1 text-right text-navy">{formatMoney(effectiveOtdPrice(r))}</td>
                       <td className="px-2 py-1 text-right" style={isAuto ? { color: '#E67E22' } : undefined}>
                         {formatPct(pcts[i])}{isAuto ? ' (auto)' : ''}
