@@ -6,7 +6,7 @@
 // separate table (see that migration's own header comment for why).
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Button, Card, CardBody, SbLoader } from '@/components/ui'
+import { Button, Card, CardBody, SbLoader, Toggle } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import type { Location } from '@/types'
@@ -36,6 +36,7 @@ interface FranchiseShareRow {
 interface SetupLinkRow {
   token: string
   label: string | null
+  allow_quart_pricing: boolean
   created_at: string
 }
 
@@ -115,12 +116,15 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
   const [setupLinks, setSetupLinks] = useState<SetupLinkRow[]>([])
   const [setupLoading, setSetupLoading] = useState(true)
   const [creatingSetupLink, setCreatingSetupLink] = useState(false)
+  // Pre-creation option, not baked into the link permanently — the toggle
+  // per-row below lets this be flipped later on an already-live link too.
+  const [newLinkAllowQuartPricing, setNewLinkAllowQuartPricing] = useState(false)
 
   const loadSetupLinks = useCallback(async () => {
     if (!companyId) { setSetupLoading(false); return }
     setSetupLoading(true)
     const { data, error } = await sb.schema('marketing').from('franchise_setup_links')
-      .select('token, label, created_at')
+      .select('token, label, allow_quart_pricing, created_at')
       .eq('company_id', companyId).eq('active', true).order('created_at', { ascending: false })
     if (error) toast.error(`Setup links didn't load: ${error.message}`)
     else setSetupLinks((data ?? []) as SetupLinkRow[])
@@ -132,8 +136,8 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
     if (!companyId) return
     setCreatingSetupLink(true)
     const { data, error } = await sb.schema('marketing').from('franchise_setup_links')
-      .insert({ company_id: companyId, created_by: profile?.id ?? null })
-      .select('token, label, created_at').single()
+      .insert({ company_id: companyId, allow_quart_pricing: newLinkAllowQuartPricing, created_by: profile?.id ?? null })
+      .select('token, label, allow_quart_pricing, created_at').single()
     setCreatingSetupLink(false)
     if (error) { toast.error(error.message); return }
     setSetupLinks((r) => [data as SetupLinkRow, ...r])
@@ -147,6 +151,15 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
     if (error) { toast.error(error.message); return }
     setSetupLinks((r) => r.filter((x) => x.token !== token))
     toast.success('Setup link revoked')
+  }
+
+  async function setLinkAllowQuartPricing(token: string, allow: boolean) {
+    setSetupLinks((r) => r.map((x) => (x.token === token ? { ...x, allow_quart_pricing: allow } : x)))
+    const { error } = await sb.schema('marketing').from('franchise_setup_links').update({ allow_quart_pricing: allow }).eq('token', token)
+    if (error) {
+      toast.error(error.message)
+      setSetupLinks((r) => r.map((x) => (x.token === token ? { ...x, allow_quart_pricing: !allow } : x)))
+    }
   }
 
   if (showForm) {
@@ -219,9 +232,15 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
               Hand one of these directly to a franchisee — no SB Net login needed. They pick their own shop and build their board through this exact same form; the result shows up in the list below just like one you create yourself.
             </p>
           </div>
-          <Button size="sm" onClick={createSetupLink} disabled={creatingSetupLink}>
-            {creatingSetupLink ? 'Creating…' : '+ New Setup Link'}
-          </Button>
+          <div className="flex flex-col items-end gap-1.5">
+            <label className="flex items-center gap-2 text-[11px] font-mono text-inky cursor-pointer">
+              <Toggle checked={newLinkAllowQuartPricing} onChange={setNewLinkAllowQuartPricing} size="sm" color="cyan" />
+              Allow price-per-quart editing
+            </label>
+            <Button size="sm" onClick={createSetupLink} disabled={creatingSetupLink}>
+              {creatingSetupLink ? 'Creating…' : '+ New Setup Link'}
+            </Button>
+          </div>
         </div>
 
         {setupLoading ? (
@@ -233,6 +252,7 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
             <table className="w-full text-xs font-mono">
               <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/20">
                 <th className="text-left px-3 py-2">Link</th>
+                <th className="text-left px-3 py-2">Quart Pricing</th>
                 <th className="text-left px-3 py-2">Created</th>
                 <th className="px-3 py-2" />
               </tr></thead>
@@ -244,6 +264,9 @@ export function FranchiseTab({ locations, packages, resolveQuart }: {
                       <td className="px-3 py-2">
                         <button onClick={() => { navigator.clipboard.writeText(url); toast.success('Link copied') }}
                           className="text-navy underline hover:text-inky">{url}</button>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Toggle checked={r.allow_quart_pricing} onChange={(v) => setLinkAllowQuartPricing(r.token, v)} size="sm" color="cyan" />
                       </td>
                       <td className="px-3 py-2 text-inky">{new Date(r.created_at).toLocaleDateString()}</td>
                       <td className="px-3 py-2 text-right">

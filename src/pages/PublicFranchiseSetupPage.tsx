@@ -56,6 +56,7 @@ export function PublicFranchiseSetupPage() {
   const [locations, setLocations] = useState<Location[]>([])
   const [packages, setPackages] = useState<MenuBoardPackage[]>([])
   const [quartDefaults, setQuartDefaults] = useState<QuartRow[]>([])
+  const [allowQuartPricing, setAllowQuartPricing] = useState(false)
   const [created, setCreated] = useState<string[]>([])
   const [formKey, setFormKey] = useState(0)
 
@@ -70,6 +71,7 @@ export function PublicFranchiseSetupPage() {
       setLocations((data.shops ?? []) as any as Location[])
       setPackages(((data.packages ?? []) as any[]).map(normalizePackage))
       setQuartDefaults((data.quart_defaults ?? []) as QuartRow[])
+      setAllowQuartPricing(!!data.allow_quart_pricing)
       setStatus('ok')
     })
   }, [token])
@@ -117,7 +119,7 @@ export function PublicFranchiseSetupPage() {
         <FranchiseMenuForm
           key={formKey}
           locations={locations} packages={packages} resolveQuart={resolveQuart}
-          setupToken={token}
+          setupToken={token} allowQuartPricing={allowQuartPricing}
           onCreated={(url) => { setCreated((c) => [url, ...c]); setFormKey((k) => k + 1) }}
         />
       </div>

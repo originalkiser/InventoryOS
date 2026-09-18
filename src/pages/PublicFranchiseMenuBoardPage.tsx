@@ -43,6 +43,12 @@ export function PublicFranchiseMenuBoardPage() {
   const [status, setStatus] = useState<'loading' | 'ok' | 'notfound'>('loading')
   const [packages, setPackages] = useState<MenuBoardPackage[]>([])
   const [quartDefaults, setQuartDefaults] = useState<QuartRow[]>([])
+  // Confirmed per-quart price overrides (2026-09-19 follow-up), package_key
+  // -> price — only present when the setup link that generated this board
+  // had "allow price-per-quart editing" on AND the franchisee actually
+  // entered a value for that package. Empty object otherwise (the RPC
+  // always returns '{}'::jsonb, never null).
+  const [quartOverrides, setQuartOverrides] = useState<Record<string, number>>({})
   const [boardLocation, setBoardLocation] = useState<any>(null)
   const [address, setAddress] = useState('')
   const [shopName, setShopName] = useState('')
@@ -54,6 +60,7 @@ export function PublicFranchiseMenuBoardPage() {
       if (error || !data || data.error) { setStatus('notfound'); return }
       setPackages(((data.packages ?? []) as any[]).map(normalizePackage))
       setQuartDefaults((data.quart_defaults ?? []) as QuartRow[])
+      setQuartOverrides((data.quart_price_overrides ?? {}) as Record<string, number>)
       const fees = { shopSupplyFee: data.shop_supply_fee, disposalFee: data.disposal_fee, oilInflationSurcharge: data.oil_inflation_surcharge }
       const feesIncluded = !!data.fees_included_in_pricing
       const feeTotal = feesIncluded
@@ -77,8 +84,10 @@ export function PublicFranchiseMenuBoardPage() {
 
   const resolveQuart = useMemo(() => (_locationId: string, packageKey: string) => {
     const d = quartDefaults.find((r) => r.package_key === packageKey)
+    const override = quartOverrides[packageKey]
+    if (override != null) return { pricePerQuart: override, includedQuarts: d?.included_quarts ?? null, isCustom: true }
     return { pricePerQuart: d?.price_per_quart ?? null, includedQuarts: d?.included_quarts ?? null, isCustom: false }
-  }, [quartDefaults])
+  }, [quartDefaults, quartOverrides])
 
   const activePackages = useMemo(
     () => packages.filter((p) => p.active).sort((a, b) => a.sort_order - b.sort_order),

@@ -19,7 +19,7 @@ import {
 const sb = supabase as any
 const CONFIRM_DELAY_SECONDS = 10
 
-export function FranchiseConfirmModal({ location, address, packages, resolveQuart, prices, fees, feesIncluded, setupToken, onClose, onCreated }: {
+export function FranchiseConfirmModal({ location, address, packages, resolveQuart, prices, fees, feesIncluded, setupToken, quartPrices, onClose, onCreated }: {
   location: Location
   address: string
   packages: MenuBoardPackage[]
@@ -31,6 +31,10 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
    *  via the token-scoped RPC (no session, no profile.company_id) instead
    *  of the direct insert the authenticated admin flow uses. */
   setupToken?: string
+  /** Setup-link-only (2026-09-19 follow-up) — whatever the franchisee typed
+   *  into the optional per-quart fields, only stored (and only shown here)
+   *  when the setup link's own allow_quart_pricing flag is on. */
+  quartPrices?: Partial<Record<FranchisePackageKey, number | null>>
   onClose: () => void
   onCreated: (url: string) => void
 }) {
@@ -68,6 +72,11 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
         // own RLS policy, so this goes through a SECURITY DEFINER RPC that
         // resolves the company from the token and does its own slug-retry
         // server-side (see that migration's own header comment).
+        // Only entries the franchisee actually filled in — the RPC treats a
+        // key's absence as "no override" the same way it treats null.
+        const quartPricesPayload = quartPrices
+          ? Object.fromEntries(Object.entries(quartPrices).filter(([, v]) => v != null))
+          : null
         const { data, error } = await sb.rpc('create_franchise_menu_share_via_setup_link', {
           p_token: setupToken,
           p_location_id: location.id,
@@ -81,6 +90,7 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
           p_oil_inflation_surcharge: fees.oilInflationSurcharge,
           p_fees_included: feesIncluded,
           p_address: address,
+          p_quart_prices: quartPricesPayload && Object.keys(quartPricesPayload).length > 0 ? quartPricesPayload : null,
         })
         if (error || data?.error) {
           toast.error(error?.message ?? `Could not create the franchise menu board (${data?.error})`)
@@ -152,6 +162,7 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
               <th className="text-left py-1 font-normal">Package</th>
               <th className="text-right py-1 font-normal">Base</th>
               <th className="text-right py-1 font-normal">On Menu</th>
+              {quartPrices && <th className="text-right py-1 font-normal">Per Quart</th>}
             </tr></thead>
             <tbody>
               {FRANCHISE_PACKAGE_KEYS.map((k) => (
@@ -159,6 +170,9 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
                   <td className="py-1 text-navy">{FRANCHISE_PACKAGE_LABELS[k]}</td>
                   <td className="text-right text-inky">${prices[k].toFixed(2)}</td>
                   <td className="text-right text-navy font-bold">${(effectivePackagePrice(prices[k], fees, feesIncluded) ?? 0).toFixed(2)}</td>
+                  {quartPrices && (
+                    <td className="text-right text-inky">{quartPrices[k] != null ? `$${quartPrices[k]!.toFixed(2)}` : '—'}</td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -32,7 +32,7 @@ const EMPTY_FLAGS: Record<FranchisePackageKey, boolean> = {
   economy: false, premium_hm: false, premium_full_synthetic: false, premium_full_synthetic_hm: false, rp: false,
 }
 
-export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToken, onCancel, onCreated }: {
+export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToken, allowQuartPricing, onCancel, onCreated }: {
   locations: Location[]
   packages: MenuBoardPackage[]
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
@@ -41,6 +41,13 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
    *  creates the share via the token-scoped RPC instead of a direct insert
    *  under the logged-in admin's own session. */
   setupToken?: string
+  /** From the setup link's own allow_quart_pricing flag (2026-09-19 follow-up)
+   *  — when set, an editable "price per extra quart" field appears next to
+   *  each base package price, auto-filled from `resolveQuart` (the same
+   *  source the board's own quart-price display already reads from) and
+   *  flagged orange like the base prices. Never set from the internal admin
+   *  flow — this is a setup-link-only feature per the request. */
+  allowQuartPricing?: boolean
   /** Omitted on the public setup page — there's no internal list to cancel
    *  back to, so the "✕" button simply isn't rendered. */
   onCancel?: () => void
@@ -72,8 +79,18 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   // regardless of this flag.
   const [autoFilled, setAutoFilled] = useState<Record<FranchisePackageKey, boolean>>(EMPTY_FLAGS)
 
+  // Same shape as priceInputs/autoFilled above, for the optional
+  // price-per-quart fields (allowQuartPricing) — auto-filled from
+  // resolveQuart instead of the location row directly.
+  const [quartPriceInputs, setQuartPriceInputs] = useState<Record<FranchisePackageKey, string>>(EMPTY_PRICES)
+  const [quartAutoFilled, setQuartAutoFilled] = useState<Record<FranchisePackageKey, boolean>>(EMPTY_FLAGS)
+
   useEffect(() => {
-    if (!location) { setPriceInputs(EMPTY_PRICES); setAutoFilled(EMPTY_FLAGS); return }
+    if (!location) {
+      setPriceInputs(EMPTY_PRICES); setAutoFilled(EMPTY_FLAGS)
+      setQuartPriceInputs(EMPTY_PRICES); setQuartAutoFilled(EMPTY_FLAGS)
+      return
+    }
     const next: Record<FranchisePackageKey, string> = { ...EMPTY_PRICES }
     const nextAuto: Record<FranchisePackageKey, boolean> = { ...EMPTY_FLAGS }
     for (const key of FRANCHISE_PACKAGE_KEYS) {
@@ -82,6 +99,17 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
     }
     setPriceInputs(next)
     setAutoFilled(nextAuto)
+
+    if (allowQuartPricing) {
+      const nextQuart: Record<FranchisePackageKey, string> = { ...EMPTY_PRICES }
+      const nextQuartAuto: Record<FranchisePackageKey, boolean> = { ...EMPTY_FLAGS }
+      for (const key of FRANCHISE_PACKAGE_KEYS) {
+        const q = resolveQuart(location.id, key).pricePerQuart
+        if (q != null) { nextQuart[key] = String(q); nextQuartAuto[key] = true }
+      }
+      setQuartPriceInputs(nextQuart)
+      setQuartAutoFilled(nextQuartAuto)
+    }
     // Only re-seed when the SHOP changes, not on every location list
     // refresh/re-render — an in-progress manual edit shouldn't get
     // silently overwritten by a background reload of the same location.
@@ -91,6 +119,11 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   function setPrice(key: FranchisePackageKey, value: string) {
     setPriceInputs((p) => ({ ...p, [key]: value }))
     setAutoFilled((p) => ({ ...p, [key]: false }))
+  }
+
+  function setQuartPrice(key: FranchisePackageKey, value: string) {
+    setQuartPriceInputs((p) => ({ ...p, [key]: value }))
+    setQuartAutoFilled((p) => ({ ...p, [key]: false }))
   }
 
   const [shopSupplyFee, setShopSupplyFee] = useState('')
@@ -117,6 +150,32 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   const missingPrice = FRANCHISE_PACKAGE_KEYS.some((k) => parsedPrices[k] == null)
   const canGenerate = !!location && !missingPrice
 
+  // Quart pricing is always optional (unlike base pricing) — a blank field
+  // just means no override for that package, never blocks generation.
+  const parsedQuartPrices = useMemo(() => {
+    const out = {} as Record<FranchisePackageKey, number | null>
+    for (const key of FRANCHISE_PACKAGE_KEYS) {
+      const raw = quartPriceInputs[key].trim()
+      const n = raw === '' ? null : Number(raw)
+      out[key] = n != null && Number.isFinite(n) ? n : null
+    }
+    return out
+  }, [quartPriceInputs])
+
+  // Feeds the live preview (and, via the same shape, FranchiseConfirmModal's
+  // own preview) whatever the franchisee has typed into the quart fields so
+  // far, falling back to the real resolveQuart (SB Net's own pricing) for
+  // any package they haven't touched. Only wraps resolveQuart at all when
+  // allowQuartPricing is on — otherwise behaves exactly as before.
+  const previewResolveQuart = useMemo(() => {
+    if (!allowQuartPricing) return resolveQuart
+    return (locId: string, packageKey: string) => {
+      const base = resolveQuart(locId, packageKey)
+      const override = parsedQuartPrices[packageKey as FranchisePackageKey]
+      return override == null ? base : { pricePerQuart: override, includedQuarts: base.includedQuarts, isCustom: true }
+    }
+  }, [allowQuartPricing, resolveQuart, parsedQuartPrices])
+
   const address = location ? [location.address, location.city, location.state, location.zip].filter(Boolean).join(', ') : ''
   const previewLocation: Location | undefined = location ? {
     ...location,
@@ -126,6 +185,7 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   const [confirmOpen, setConfirmOpen] = useState(false)
   const activePackages = useMemo(() => packages.filter((p) => p.active), [packages])
   const moneyInputCls = 'w-24 rounded border px-2 py-1 text-xs font-mono text-right focus:outline-none focus:border-sky'
+  const quartMoneyInputCls = 'w-16 rounded border px-1.5 py-1 text-xs font-mono text-right focus:outline-none focus:border-sky'
 
   return (
     <div className="flex flex-col lg:flex-row gap-4">
@@ -146,23 +206,41 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
                 const raw = priceInputs[key]
                 const needsPrice = raw.trim() === ''
                 const isImported = autoFilled[key] && !needsPrice
+                const qRaw = quartPriceInputs[key]
+                const qIsImported = quartAutoFilled[key] && qRaw.trim() !== ''
                 return (
                   <div key={key} className="flex items-center justify-between gap-2 px-2 py-1.5">
                     <span className="text-xs font-mono text-navy">{FRANCHISE_PACKAGE_LABELS[key]}</span>
-                    <input type="number" step="0.01" value={raw} onChange={(e) => setPrice(key, e.target.value)}
-                      disabled={!locationId}
-                      className={[
-                        moneyInputCls,
-                        needsPrice ? 'border-[#C0392B] bg-[#C0392B]/10 text-[#C0392B]'
-                          : isImported ? 'border-[#E67E22] bg-[#E67E22]/10 text-navy'
-                          : 'border-navy/30 bg-cream text-navy',
-                      ].join(' ')} />
+                    <div className="flex items-center gap-1">
+                      <input type="number" step="0.01" value={raw} onChange={(e) => setPrice(key, e.target.value)}
+                        disabled={!locationId} title="Base price"
+                        className={[
+                          moneyInputCls,
+                          needsPrice ? 'border-[#C0392B] bg-[#C0392B]/10 text-[#C0392B]'
+                            : isImported ? 'border-[#E67E22] bg-[#E67E22]/10 text-navy'
+                            : 'border-navy/30 bg-cream text-navy',
+                        ].join(' ')} />
+                      {allowQuartPricing && (
+                        <input type="number" step="0.01" value={qRaw} onChange={(e) => setQuartPrice(key, e.target.value)}
+                          disabled={!locationId} placeholder="qt" title="Price per extra quart"
+                          className={[
+                            quartMoneyInputCls,
+                            qIsImported ? 'border-[#E67E22] bg-[#E67E22]/10 text-navy' : 'border-navy/30 bg-cream text-navy',
+                          ].join(' ')} />
+                      )}
+                    </div>
                   </div>
                 )
               })}
             </div>
+            {allowQuartPricing && (
+              <p className="text-[10px] font-mono text-inky mt-1">Second box is price per extra quart (optional).</p>
+            )}
             {locationId && FRANCHISE_PACKAGE_KEYS.some((k) => autoFilled[k] && priceInputs[k].trim() !== '') && (
               <p className="text-[10px] font-mono text-[#E67E22] mt-1">Pricing imported from list, edit if needed.</p>
+            )}
+            {locationId && allowQuartPricing && FRANCHISE_PACKAGE_KEYS.some((k) => quartAutoFilled[k] && quartPriceInputs[k].trim() !== '') && (
+              <p className="text-[10px] font-mono text-[#E67E22] mt-1">Quart pricing imported from SB Net, edit if needed.</p>
             )}
             {locationId && missingPrice && (
               <p className="text-[10px] font-mono text-[#C0392B] mt-1">Pricing needed — every package needs a price before generating.</p>
@@ -208,7 +286,7 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
             <p className="text-xs font-mono text-inky py-16 text-center">Select a shop to preview its franchise menu board.</p>
           ) : (
             <BoardViewer
-              location={previewLocation} packages={activePackages} resolveQuart={resolveQuart}
+              location={previewLocation} packages={activePackages} resolveQuart={previewResolveQuart}
               address={address} hidePage2 hideDownload shopName={location.shop_city || location.name}
               footerNote={feesIncluded ? FRANCHISE_FOOTER_NOTE : null}
             />
@@ -218,9 +296,9 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
 
       {confirmOpen && location && (
         <FranchiseConfirmModal
-          location={location} address={address} packages={activePackages} resolveQuart={resolveQuart}
+          location={location} address={address} packages={activePackages} resolveQuart={previewResolveQuart}
           prices={parsedPrices as Record<FranchisePackageKey, number>} fees={fees} feesIncluded={feesIncluded}
-          setupToken={setupToken}
+          setupToken={setupToken} quartPrices={allowQuartPricing ? parsedQuartPrices : undefined}
           onClose={() => setConfirmOpen(false)}
           onCreated={(url) => { setConfirmOpen(false); onCreated(url) }}
         />
