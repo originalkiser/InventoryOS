@@ -71,6 +71,19 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   const [locationId, setLocationId] = useState('')
   const location = locations.find((l) => l.id === locationId)
 
+  // FRANCHISE_PACKAGE_KEYS are core.locations COLUMN names (economy,
+  // premium_hm, ...), which is exactly right for base pricing — but
+  // resolveQuart() is keyed by marketing.menu_board_packages' own
+  // package_key, which for Restore & Protect is "valvoline_restore_protect",
+  // not "rp". The other 4 packages' package_key happens to equal their own
+  // price_column by coincidence, so only RP ever exposed this: its quart
+  // price silently never auto-filled. Bridge through the real packages
+  // array (matched by price_column) instead of assuming the names line up.
+  const packageKeyByPriceColumn = useMemo(
+    () => new Map(packages.map((p) => [p.price_column, p.package_key] as const)),
+    [packages],
+  )
+
   const [priceInputs, setPriceInputs] = useState<Record<FranchisePackageKey, string>>(EMPTY_PRICES)
   // Tracks "this value came from the location list and hasn't been
   // touched yet" — cleared the instant the field is edited, independent of
@@ -104,7 +117,8 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
       const nextQuart: Record<FranchisePackageKey, string> = { ...EMPTY_PRICES }
       const nextQuartAuto: Record<FranchisePackageKey, boolean> = { ...EMPTY_FLAGS }
       for (const key of FRANCHISE_PACKAGE_KEYS) {
-        const q = resolveQuart(location.id, key).pricePerQuart
+        const realPackageKey = packageKeyByPriceColumn.get(key)
+        const q = realPackageKey ? resolveQuart(location.id, realPackageKey).pricePerQuart : null
         if (q != null) { nextQuart[key] = String(q); nextQuartAuto[key] = true }
       }
       setQuartPriceInputs(nextQuart)
@@ -166,15 +180,20 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
   // own preview) whatever the franchisee has typed into the quart fields so
   // far, falling back to the real resolveQuart (SB Net's own pricing) for
   // any package they haven't touched. Only wraps resolveQuart at all when
-  // allowQuartPricing is on — otherwise behaves exactly as before.
+  // allowQuartPricing is on — otherwise behaves exactly as before. Board
+  // calls this with each package's own REAL package_key, so the override
+  // lookup has to go through the same price_column bridge the auto-fill
+  // above uses, not index parsedQuartPrices (keyed by price_column) with
+  // the real package_key directly.
   const previewResolveQuart = useMemo(() => {
     if (!allowQuartPricing) return resolveQuart
     return (locId: string, packageKey: string) => {
       const base = resolveQuart(locId, packageKey)
-      const override = parsedQuartPrices[packageKey as FranchisePackageKey]
+      const priceColumn = packages.find((p) => p.package_key === packageKey)?.price_column as FranchisePackageKey | null | undefined
+      const override = priceColumn ? parsedQuartPrices[priceColumn] : null
       return override == null ? base : { pricePerQuart: override, includedQuarts: base.includedQuarts, isCustom: true }
     }
-  }, [allowQuartPricing, resolveQuart, parsedQuartPrices])
+  }, [allowQuartPricing, resolveQuart, parsedQuartPrices, packages])
 
   const address = location ? [location.address, location.city, location.state, location.zip].filter(Boolean).join(', ') : ''
   const previewLocation: Location | undefined = location ? {
@@ -199,8 +218,14 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
           <Combobox label="Shop (franchise, open only)" options={franchiseShopOptions} value={locationId} onChange={setLocationId} placeholder="Search…" />
 
           <div>
-            <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Base Pricing</label>
+            <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Pricing</label>
             <p className="text-[10px] font-mono text-inky mb-2">Pricing before taxes, fees, etc.</p>
+            {allowQuartPricing && (
+              <div className="flex items-center justify-end gap-1 px-2 pb-1">
+                <span className="w-24 text-[9px] font-mono text-inky/70 uppercase tracking-wide text-center">Base Package</span>
+                <span className="w-16 text-[9px] font-mono text-inky/70 uppercase tracking-wide text-center">Per Quart</span>
+              </div>
+            )}
             <div className="flex flex-col gap-1.5 rounded border border-navy/10 divide-y divide-navy/10">
               {FRANCHISE_PACKAGE_KEYS.map((key) => {
                 const raw = priceInputs[key]

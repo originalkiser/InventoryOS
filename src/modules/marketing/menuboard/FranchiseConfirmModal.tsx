@@ -72,10 +72,24 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
         // own RLS policy, so this goes through a SECURITY DEFINER RPC that
         // resolves the company from the token and does its own slug-retry
         // server-side (see that migration's own header comment).
-        // Only entries the franchisee actually filled in — the RPC treats a
-        // key's absence as "no override" the same way it treats null.
+        // Stored keyed by the package's own REAL package_key (matching how
+        // menu_board_quart_defaults/menu_board_quart_overrides already key
+        // their own quart pricing) rather than by FranchisePackageKey/price
+        // column — Board's own resolveQuart is always called with the real
+        // package_key, so storing it that way means the public board page
+        // needs no translation on the way back out. quartPrices itself is
+        // still collected keyed by price column (matching the base-price
+        // fields it sits next to), so translate here, once, at the boundary.
+        // Only entries the franchisee actually filled in AND that resolve to
+        // a real package are included — the RPC treats a key's absence as
+        // "no override" the same way it treats null.
         const quartPricesPayload = quartPrices
-          ? Object.fromEntries(Object.entries(quartPrices).filter(([, v]) => v != null))
+          ? Object.fromEntries(
+              Object.entries(quartPrices)
+                .filter(([, v]) => v != null)
+                .map(([priceColumn, v]) => [packages.find((p) => p.price_column === priceColumn)?.package_key, v])
+                .filter(([packageKey]) => packageKey != null),
+            )
           : null
         const { data, error } = await sb.rpc('create_franchise_menu_share_via_setup_link', {
           p_token: setupToken,
