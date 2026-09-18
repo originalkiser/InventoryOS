@@ -133,14 +133,14 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
         <Card><CardBody className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">New Franchise Menu Board</h3>
-            {onCancel && <button onClick={onCancel} className="text-inky/50 hover:text-navy text-sm" title="Cancel">✕</button>}
+            {onCancel && <button onClick={onCancel} className="text-inky hover:text-navy text-sm" title="Cancel">✕</button>}
           </div>
 
           <Combobox label="Shop (franchise, open only)" options={franchiseShopOptions} value={locationId} onChange={setLocationId} placeholder="Search…" />
 
           <div>
             <label className="text-[10px] font-mono text-inky uppercase tracking-wide">Base Pricing</label>
-            <p className="text-[10px] font-mono text-inky/50 mb-2">Pricing before taxes, fees, etc.</p>
+            <p className="text-[10px] font-mono text-inky mb-2">Pricing before taxes, fees, etc.</p>
             <div className="flex flex-col gap-1.5 rounded border border-navy/10 divide-y divide-navy/10">
               {FRANCHISE_PACKAGE_KEYS.map((key) => {
                 const raw = priceInputs[key]
@@ -191,7 +191,7 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
           <div className="flex flex-col gap-1 border-t border-navy/10 pt-3">
             <Toggle checked={feesIncluded} onChange={setFeesIncluded} color="cyan" size="sm"
               label="Include supply fee, disposal fee, and/or oil inflation surcharge in pricing" />
-            <p className="text-[10px] font-mono text-inky/60">
+            <p className="text-[10px] font-mono text-inky">
               {feesIncluded ? 'Pricing on Menu will be after fees, still before taxes.' : 'Pricing on Menu will be the base price.'}
             </p>
           </div>
@@ -205,7 +205,7 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
       <div className="flex-1 min-w-0">
         <Card><CardBody>
           {!location ? (
-            <p className="text-xs font-mono text-inky/60 py-16 text-center">Select a shop to preview its franchise menu board.</p>
+            <p className="text-xs font-mono text-inky py-16 text-center">Select a shop to preview its franchise menu board.</p>
           ) : (
             <BoardViewer
               location={previewLocation} packages={activePackages} resolveQuart={resolveQuart}

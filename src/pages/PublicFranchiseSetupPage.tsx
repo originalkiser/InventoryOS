@@ -85,7 +85,7 @@ export function PublicFranchiseSetupPage() {
   if (status === 'notfound') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-cream px-6">
-        <p className="text-sm font-mono text-inky/70 text-center">This setup link is no longer active. Contact Strickland Brothers for a new one.</p>
+        <p className="text-sm font-mono text-inky text-center">This setup link is no longer active. Contact Strickland Brothers for a new one.</p>
       </div>
     )
   }
@@ -95,14 +95,14 @@ export function PublicFranchiseSetupPage() {
       <div className="max-w-[1000px] mx-auto flex flex-col gap-4">
         <div>
           <h1 className="text-lg font-heading font-bold text-navy uppercase tracking-wide">Franchise Menu Board Setup</h1>
-          <p className="text-xs font-mono text-inky/60 mt-1">
+          <p className="text-xs font-mono text-inky mt-1">
             Pick your shop, confirm your pricing, and generate your menu board link below. You can come back to this same page anytime — for another shop, or to update your pricing later.
           </p>
         </div>
 
         {created.length > 0 && (
           <div className="rounded border border-sky bg-sky/10 px-3 py-2 flex flex-col gap-1.5">
-            <p className="text-[10px] font-mono uppercase tracking-wide text-navy/70">
+            <p className="text-[10px] font-mono uppercase tracking-wide text-navy">
               {created.length === 1 ? 'Menu board created' : 'Menu boards created this visit'}
             </p>
             {created.map((url) => (
