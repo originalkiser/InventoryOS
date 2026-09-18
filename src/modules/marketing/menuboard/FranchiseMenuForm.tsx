@@ -177,6 +177,18 @@ export function FranchiseMenuForm({ locations, packages, resolveQuart, setupToke
     }
   }, [feesToggleBlocked, hasAnyFee])
 
+  // The reverse case (live report 2026-09-19): a fee got typed in, auto-
+  // turning the toggle on via the effect above, then deleted right back
+  // out — the toggle previously just stayed on with nothing backing it.
+  // Forces it off unconditionally whenever every fee field is blank again,
+  // regardless of how it got turned on (this effect, or a normal click
+  // while a fee was already filled in).
+  useEffect(() => {
+    if (!hasAnyFee && feesIncluded) {
+      setFeesIncluded(false)
+    }
+  }, [hasAnyFee, feesIncluded])
+
   function handleFeesToggleChange(next: boolean) {
     if (next && !hasAnyFee) {
       setFeesToggleBlocked(true)
