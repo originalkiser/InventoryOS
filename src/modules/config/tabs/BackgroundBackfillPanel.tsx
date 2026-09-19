@@ -83,7 +83,10 @@ export function BackgroundBackfillPanel({ connectionKey, companyId, targetLocati
     setBusy(true)
     const sb = supabase as any
     const { error } = await sb.schema('inventory').from('data_connection_backfill_jobs')
-      .update({ status: 'completed', last_tick_summary: 'Stopped manually' }).eq('id', job.id)
+      // error_message has to be cleared here too — otherwise a stale
+      // failure from before the stop keeps showing "(will retry
+      // automatically)" underneath a job that will never tick again.
+      .update({ status: 'completed', last_tick_summary: 'Stopped manually', error_message: null }).eq('id', job.id)
     if (error) toast.error(error.message)
     await load()
     setBusy(false)
@@ -127,7 +130,11 @@ export function BackgroundBackfillPanel({ connectionKey, companyId, targetLocati
           {job.last_tick_summary ? ` — last tick: ${job.last_tick_summary}` : ''}
         </p>
       )}
-      {job?.error_message && <p className="text-[11px] font-mono text-[#C0392B]">Last tick error (will retry automatically): {job.error_message}</p>}
+      {job?.error_message && (
+        <p className="text-[11px] font-mono text-[#C0392B]">
+          Last tick error{job.status === 'running' ? ' (will retry automatically)' : ''}: {job.error_message}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         {!running ? (
           <Button size="sm" variant="secondary" loading={busy} disabled={!targetLocationIds?.length} onClick={start}>

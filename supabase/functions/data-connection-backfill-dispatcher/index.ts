@@ -159,10 +159,26 @@ const CHUNK_TIME_BUDGET_MS = 100_000
 // succeeded, and reports how many of the given chunks it actually got
 // through — the caller needs that to know whether to keep the SAME
 // month's remaining ids for next tick or move on.
+//
+// `unresolvedIds` (found live 2026-09-19, real data-completeness bug) —
+// every id belonging to a chunk that either FAILED (timed out / aborted,
+// same "The signal has been aborted" seen repeatedly in production —
+// FETCH_TIMEOUT_MS or the platform's own invocation limit hitting before
+// Droptop responds for a heavy shop's month of orders) or was never even
+// ATTEMPTED because CHUNK_TIME_BUDGET_MS ran out first. The caller used to
+// treat this tick's whole `thisTickIds` batch as "handled" regardless of
+// which chunks actually succeeded, permanently dropping those shops from
+// the month — real production job rows show 1-5 of 20 chunks failing on
+// MOST ticks, so this wasn't a rare edge case, it was silently skipping a
+// meaningful slice of shops on nearly every tick since this dispatcher
+// shipped (2026-09-15). Every id in a claimed-but-not-fully-succeeded
+// chunk index now comes back here so the caller can put it back in the
+// pending queue instead of losing it.
 async function runChunksConcurrently(
   url: string, secret: string, chunks: string[][], bodyFor: (ids: string[]) => Record<string, unknown>, countField: string,
-): Promise<{ status: string; message: string | null; chunksProcessed: number; total: number }> {
+): Promise<{ status: string; message: string | null; chunksProcessed: number; total: number; unresolvedIds: string[] }> {
   const warnings: string[] = []
+  const unresolvedIds: string[] = []
   let anySucceeded = false
   let processed = 0
   let total = 0
@@ -175,13 +191,21 @@ async function runChunksConcurrently(
       if (i >= chunks.length) return
       const r = await callChunk(url, secret, bodyFor(chunks[i]), `Chunk ${i + 1}/${chunks.length}`)
       if (r.ok) { anySucceeded = true; if (typeof r.data?.[countField] === 'number') total += r.data[countField] }
+      else unresolvedIds.push(...chunks[i])
       warnings.push(...r.warnings)
       processed++
     }
   }
   await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker))
-  const status = chunks.length === 0 ? 'success' : !anySucceeded ? 'error' : warnings.length ? 'partial' : 'success'
-  return { status, message: warnings.length ? warnings.join(' | ') : null, chunksProcessed: processed, total }
+  // `nextIndex` only ever advances by a worker claiming a chunk right
+  // before awaiting it to completion, so every chunk below this final
+  // value was fully attempted (succeeded or already added to
+  // unresolvedIds above) — anything at or past it was never claimed at
+  // all because the time budget ran out first, and needs the same
+  // never-silently-drop treatment.
+  for (const chunk of chunks.slice(Math.min(nextIndex, chunks.length))) unresolvedIds.push(...chunk)
+  const status = chunks.length === 0 ? 'success' : !anySucceeded ? 'error' : (warnings.length || unresolvedIds.length) ? 'partial' : 'success'
+  return { status, message: warnings.length ? warnings.join(' | ') : null, chunksProcessed: processed, total, unresolvedIds }
 }
 
 // Overnight-only: found live 2026-09-15 that a backfill running all day
@@ -266,16 +290,24 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
   )
   if (result.status === 'error') throw new Error(result.message ?? 'All chunks failed')
 
-  const monthDone = remainingAfterTick.length === 0
+  // A chunk that failed or was never attempted this tick goes back into
+  // the pending queue (ahead of ids not yet tried at all this month) so
+  // it gets retried on a later tick instead of being silently skipped for
+  // the rest of the month — see runChunksConcurrently's own header
+  // comment on the real production bug this fixes.
+  const newPending = [...result.unresolvedIds, ...remainingAfterTick]
+  const succeededCount = thisTickIds.length - result.unresolvedIds.length
+  const monthDone = newPending.length === 0
   const prevMonth = monthBefore(cursor)
   const completed = monthDone && prevMonth < job.floor_month
-  let summary = `${pStart}${coverageNote} — pulled ${thisTickIds.length} shop(s) this tick (${result.total} ${countField.replace('_upserted', '')})`
-  if (!monthDone) summary += `, ${remainingAfterTick.length} shop(s) left for this month`
+  let summary = `${pStart}${coverageNote} — pulled ${succeededCount} shop(s) this tick (${result.total} ${countField.replace('_upserted', '')})`
+  if (result.unresolvedIds.length) summary += `, ${result.unresolvedIds.length} failed/timed out (requeued)`
+  if (!monthDone) summary += `, ${newPending.length} shop(s) left for this month`
   if (result.message) summary += ` | ${result.message}`
 
   await (admin as any).schema('inventory').from('data_connection_backfill_jobs').update({
     cursor_month: monthDone ? (completed ? cursor : prevMonth) : cursor,
-    month_pending_ids: monthDone ? null : remainingAfterTick,
+    month_pending_ids: monthDone ? null : newPending,
     months_pulled: job.months_pulled + (monthDone ? 1 : 0),
     status: completed ? 'completed' : 'running',
     last_run_at: new Date().toISOString(),
