@@ -1,0 +1,22 @@
+-- Fairness fix for the routine Droptop Purchase Orders scheduled sync
+-- (found live 2026-09-19, real "Stopped after 8/15 chunks (time budget)"
+-- partial run) -- see data-connection-dispatcher/index.ts's
+-- runDroptopPurchaseOrders for the full story. This connection has no
+-- per-location watermark the way droptop_orders/droptop_time_clock do
+-- (a PO's own status can change well after it's first synced, so a simple
+-- "already caught up" watermark doesn't map cleanly here -- deliberately
+-- deferred per this repo's own CLAUDE.md notes on that connection), so
+-- every scheduled run re-chunked the exact same unordered location list
+-- from the top every time. Combined with a real, recurring time-budget
+-- truncation, whichever locations fell past the cutoff were silently
+-- starved forever, day after day, since nothing remembered how far a
+-- prior run actually got.
+--
+-- This rotating cursor sidesteps the harder "what does caught-up even
+-- mean for a mutable-status record" question entirely: it just guarantees
+-- fairness -- each run starts right after wherever the last run's
+-- confirmed-good prefix of locations ended (ordered by id), wrapping back
+-- to the start once it reaches the end, so no location can be
+-- permanently stuck behind a chronic truncation point.
+ALTER TABLE inventory.data_connection_schedules
+  ADD COLUMN po_cursor_location_id uuid;

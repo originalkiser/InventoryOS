@@ -72,8 +72,19 @@ export function BackgroundBackfillPanel({ connectionKey, companyId, targetLocati
       payload.cursor_month = nowMonth
     }
     const { error } = await sb.schema('inventory').from('data_connection_backfill_jobs').insert(payload)
-    if (error) toast.error(error.message)
-    else toast.success('Background backfill started — it will keep running even if you leave this page')
+    if (error) {
+      // A DB-level partial unique index (company_id, connection_key) WHERE
+      // status='running' (2026-09-19) blocks a second background job for
+      // this same connection from ever starting while one's already going
+      // — race-proof regardless of how many users/tabs are looking at this
+      // page, unlike a client-side check-then-insert. Without it, the
+      // dispatcher used to tick BOTH rows every cycle, each hitting
+      // Droptop's API independently for potentially the same shops/months.
+      if (error.code === '23505') toast.error('A background backfill for this connection is already running')
+      else toast.error(error.message)
+    } else {
+      toast.success('Background backfill started — it will keep running even if you leave this page')
+    }
     await load()
     setBusy(false)
   }

@@ -1,0 +1,24 @@
+-- Corrects 20260930aj_backfill_jobs_one_running_per_connection.sql, applied
+-- minutes earlier the same session -- that migration assumed no DB-level
+-- guard existed against two 'running' jobs for the same (company_id,
+-- connection_key), based on reading application code only (Background
+-- BackfillPanel.tsx's start(), the dispatcher's own job-select query)
+-- without first checking pg_indexes or this table's own original
+-- migration. A real duplicate-insert test (inside a rolled-back
+-- transaction) immediately surfaced that the protection already existed --
+-- inventory.data_connection_backfill_jobs' very first migration
+-- (20260930p_data_connection_backfill_jobs.sql) already added the
+-- identical unique partial index (idx_backfill_jobs_one_running) the day
+-- this table was created. 20260930aj's new index was pure duplication of
+-- that pre-existing one, not a new protection -- dropping it here rather
+-- than leaving two indexes doing the exact same job.
+--
+-- The one thing that WAS a real, if smaller, bug: the client only ever
+-- surfaced this constraint's raw violation text
+-- ("duplicate key value violates unique constraint ...") to the user
+-- rather than a friendly message -- BackgroundBackfillPanel.tsx's start()
+-- was fixed the same session to catch that specific error code (23505)
+-- and show "A background backfill for this connection is already
+-- running" instead. That fix stays; only this migration's own redundant
+-- index is being removed.
+DROP INDEX inventory.data_connection_backfill_jobs_one_running_per_connection;

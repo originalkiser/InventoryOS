@@ -113,10 +113,22 @@ async function callChunk(
 const CHUNK_CONCURRENCY = 4
 const CHUNK_TIME_BUDGET_MS = 100_000
 
+// `chunkSucceeded[i]` (added 2026-09-19) tells the caller exactly which
+// input chunks actually succeeded, indexed the same as `chunks` — `false`
+// for both a chunk that failed AND a chunk never even attempted before the
+// time budget ran out (both leave `chunkSucceeded[i]` at its `false`
+// default). `runDroptopOrders`/`runDroptopTimeClock` don't need this (they
+// already re-derive "what's left" from a real per-location sync-state
+// watermark next tick, so a dropped chunk there just naturally reappears
+// in `remaining`) — this exists for `runDroptopPurchaseOrders`, which has
+// no such watermark and used to silently re-attempt the exact same
+// location list from the top every single scheduled run, permanently
+// starving whichever locations sat in a chunk past the time-budget cutoff.
 async function runChunksConcurrently(
   url: string, secret: string, chunks: string[][], bodyFor: (ids: string[]) => Record<string, unknown>,
-): Promise<{ status: string; message: string | null }> {
+): Promise<{ status: string; message: string | null; chunkSucceeded: boolean[] }> {
   const warnings: string[] = []
+  const chunkSucceeded: boolean[] = new Array(chunks.length).fill(false)
   let anySucceeded = false
   let processed = 0
   const startedAt = Date.now()
@@ -127,7 +139,7 @@ async function runChunksConcurrently(
       const i = nextIndex++
       if (i >= chunks.length) return
       const r = await callChunk(url, secret, bodyFor(chunks[i]), `Chunk ${i + 1}/${chunks.length}`)
-      if (r.ok) anySucceeded = true
+      if (r.ok) { anySucceeded = true; chunkSucceeded[i] = true }
       warnings.push(...r.warnings)
       processed++
     }
@@ -136,8 +148,8 @@ async function runChunksConcurrently(
   if (processed < chunks.length) {
     warnings.push(`Stopped after ${processed}/${chunks.length} chunks (time budget) — remaining continue on the next scheduled run`)
   }
-  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed' }
-  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null }
+  if (!anySucceeded) return { status: 'error', message: warnings.join(' | ') || 'All chunks failed', chunkSucceeded }
+  return { status: warnings.length ? 'partial' : 'success', message: warnings.length ? warnings.join(' | ') : null, chunkSucceeded }
 }
 
 // A non-2xx response (timeout, crash, killed invocation) or a body that
@@ -173,6 +185,7 @@ interface Schedule {
   daily_time: string | null
   last_run_at: string | null
   still_catching_up: boolean
+  po_cursor_location_id: string | null
 }
 
 // Wall-clock hour/minute/date in an IANA timezone, via Intl (no external
@@ -235,23 +248,65 @@ async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ s
 // low per-shop volume, but a real run proved otherwise ("Edge Function
 // returned a non-2xx status code" after ~3 minutes on the full location
 // list). Same fix: bounded batches, one invocation per batch.
+//
+// Real production bug found live 2026-09-19: this always chunked the SAME
+// unordered `SELECT id` result from the top every single scheduled run —
+// combined with a real daily "Stopped after 8/15 chunks (time budget)"
+// truncation, whichever locations happened to fall past the cutoff never
+// got attempted, day after day, forever (no per-location watermark exists
+// for this connection the way droptop_orders/droptop_time_clock have —
+// see this file's header comment on that being a deliberately-deferred
+// question for a MUTABLE-status record like a PO). Fixed with a much
+// simpler fairness mechanism that sidesteps that harder question entirely:
+// a persisted rotating cursor (inventory.data_connection_schedules.
+// po_cursor_location_id) — each run starts right after wherever the LAST
+// run's confirmed-good prefix of chunks ended (ordering locations by `id`
+// so "after the cursor" is well-defined), wrapping back to the start once
+// it reaches the end. A location that's starved by one truncated run is
+// first in line on the very next tick instead of waiting for tomorrow's
+// run to reach the same spot and stall again in the same place.
 async function runDroptopPurchaseOrders(
-  supabaseUrl: string, serviceKey: string, secret: string, companyId: string,
-): Promise<{ status: string; message: string | null }> {
+  supabaseUrl: string, serviceKey: string, secret: string, companyId: string, cursorLocationId: string | null,
+): Promise<{ status: string; message: string | null; newCursorLocationId?: string | null; stillCatchingUp?: boolean }> {
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
   const { data: locs, error: locErr } = await (admin as any)
     .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
+    .order('id')
   if (locErr) return { status: 'error', message: locErr.message }
   const ids = (locs ?? []).map((l: { id: string }) => l.id)
   if (!ids.length) return { status: 'error', message: 'No locations have a Droptop Operation ID set.' }
 
-  const chunks: string[][] = []
-  for (let i = 0; i < ids.length; i += DROPTOP_CHUNK_SIZE) chunks.push(ids.slice(i, i + DROPTOP_CHUNK_SIZE))
+  // A cursor pointing at a location that's since been deactivated/removed
+  // (or a first-ever run, cursor null) just starts from the top — no
+  // special-casing needed beyond indexOf returning -1.
+  const cursorIdx = cursorLocationId ? ids.indexOf(cursorLocationId) : -1
+  const rotated = cursorIdx === -1 ? ids : [...ids.slice(cursorIdx + 1), ...ids.slice(0, cursorIdx + 1)]
 
-  return runChunksConcurrently(
+  const chunks: string[][] = []
+  for (let i = 0; i < rotated.length; i += DROPTOP_CHUNK_SIZE) chunks.push(rotated.slice(i, i + DROPTOP_CHUNK_SIZE))
+
+  const result = await runChunksConcurrently(
     `${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, secret, chunks,
     (locationIds) => ({ mode: 'sync', daysBack: 180, locationIds }),
   )
+
+  // Advance the cursor only through the longest UNBROKEN prefix of chunks
+  // that actually succeeded, starting from chunk 0 — a chunk that failed
+  // or was never attempted has to stay at the FRONT of the next run, not
+  // get skipped over just because a later chunk happened to finish first
+  // under CHUNK_CONCURRENCY. `stillCatchingUp` (same generic mechanism
+  // isDue() already gives droptop_orders/droptop_time_clock) lets a
+  // truncated run retry again later the SAME day instead of waiting until
+  // tomorrow's scheduled time, so full coverage typically completes within
+  // one day/night rather than drip-feeding across many.
+  let lastGoodChunk = -1
+  for (let i = 0; i < result.chunkSucceeded.length; i++) {
+    if (result.chunkSucceeded[i]) lastGoodChunk = i
+    else break
+  }
+  const newCursorLocationId = lastGoodChunk >= 0 ? chunks[lastGoodChunk][chunks[lastGoodChunk].length - 1] : cursorLocationId
+  const stillCatchingUp = lastGoodChunk < chunks.length - 1
+  return { status: result.status, message: result.message, newCursorLocationId, stillCatchingUp }
 }
 
 // Replaces the earlier runDroptopCustomers (droptop-sync-customers is
@@ -580,7 +635,7 @@ Deno.serve(async (req) => {
       const tz = await timezoneFor(s.company_id)
       if (!isDue(s, now, tz)) return null
 
-      let outcome: { status: string; message: string | null; stillCatchingUp?: boolean }
+      let outcome: { status: string; message: string | null; stillCatchingUp?: boolean; newCursorLocationId?: string | null }
       try {
         if (s.connection_key === 'skybitz_tanks') {
           if (!skybitzSecret) { outcome = { status: 'error', message: 'SKYBITZ_SYNC_SECRET not configured' } }
@@ -593,7 +648,7 @@ Deno.serve(async (req) => {
           )
         } else if (s.connection_key === 'droptop_purchase_orders') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
-          else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
+          else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id, s.po_cursor_location_id)
         } else if (s.connection_key === 'droptop_orders') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
           else outcome = await runDroptopOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
@@ -639,13 +694,20 @@ Deno.serve(async (req) => {
           last_run_status: outcome.status,
           last_run_message: outcome.message,
           next_run_at: nextRunAt,
-          // Only droptop_orders/droptop_time_clock ever set this true (see
-          // their own header comments) — every other connection's outcome
-          // always resolves it back to false, which is what lets a daily
-          // schedule that previously needed same-day retries go quiet again
-          // once it's caught up. See isDue()'s own comment for how this is
-          // consumed.
+          // droptop_orders/droptop_time_clock/droptop_purchase_orders set
+          // this true when real work remains — every other connection's
+          // outcome always resolves it back to false, which is what lets a
+          // daily schedule that previously needed same-day retries go quiet
+          // again once it's caught up. See isDue()'s own comment for how
+          // this is consumed.
           still_catching_up: outcome.stillCatchingUp === true,
+          // Purchase Orders' own rotating-cursor fairness fix (2026-09-19,
+          // see runDroptopPurchaseOrders' header comment) — every other
+          // connection never sets this, so leaving it out of the payload
+          // (rather than writing undefined/null) means their rows are
+          // simply never touched, per Supabase JS's own "only SETs columns
+          // present in the payload" behavior.
+          ...(outcome.newCursorLocationId !== undefined ? { po_cursor_location_id: outcome.newCursorLocationId } : {}),
         })
         .eq('id', s.id)
 

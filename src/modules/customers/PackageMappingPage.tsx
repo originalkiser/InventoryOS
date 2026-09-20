@@ -21,8 +21,26 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
-import { SbLoader, Toggle, Modal } from '@/components/ui'
-import { FRANCHISE_PACKAGE_KEYS, FRANCHISE_PACKAGE_LABELS, type FranchisePackageKey } from '@/modules/marketing/menuboard/franchiseMenu'
+import { SbLoader, Toggle, Modal, Combobox } from '@/components/ui'
+import { FRANCHISE_PACKAGE_KEYS, FRANCHISE_PACKAGE_LABELS } from '@/modules/marketing/menuboard/franchiseMenu'
+
+// Which core.locations price columns an oil-change package can map to for
+// the audit below — deliberately NOT the same as FranchisePackageKey/
+// FRANCHISE_PACKAGE_KEYS (the Menu Board's own fixed 5-package layout).
+// diesel_syn_blend/diesel_full_syn/european are real oil-change price
+// columns on core.locations that some shops sell but that were never part
+// of the printed Menu Board (confirmed via information_schema.columns,
+// 2026-09-19 request) — supply_fee/disposal_fee/oil_inflation_surcharge
+// are fees, not oil-change tiers, and are deliberately excluded.
+// price_column itself stores a plain string (widened CHECK constraint,
+// migration 20260930al), not a FranchisePackageKey.
+const LOCATION_PRICE_COLUMNS: { value: string; label: string }[] = [
+  ...FRANCHISE_PACKAGE_KEYS.map((k) => ({ value: k, label: FRANCHISE_PACKAGE_LABELS[k] })),
+  { value: 'diesel_syn_blend', label: 'Diesel Synthetic Blend' },
+  { value: 'diesel_full_syn', label: 'Diesel Full Synthetic' },
+  { value: 'european', label: 'European' },
+]
+const NOT_MAPPED_OPTION = { value: '', label: 'Not mapped' }
 
 // The generic 'm5' bucket (migration 20260930d) was split into its 5
 // specific sub-categories (migration 20260930j) once the Staffing Report
@@ -34,7 +52,7 @@ export type Classification = 'oil_change' | 'air_filter' | 'cabin_air_filter' | 
 export function isM5(c: Classification): boolean {
   return c === 'air_filter' || c === 'cabin_air_filter' || c === 'wiper_blades' || c === 'additives' || c === 'tire_rotation'
 }
-interface PackageRow { name: string; orderCount: number; classification: Classification; priceColumn: FranchisePackageKey | null }
+interface PackageRow { name: string; orderCount: number; classification: Classification; priceColumn: string | null }
 
 const CLASSIFICATION_OPTIONS: { value: Classification; label: string }[] = [
   { value: 'none', label: 'None' },
@@ -70,8 +88,8 @@ export function PackageMappingPage() {
       const { data: classRows, error: classErr } = await sb.schema('inventory').from('droptop_package_classification')
         .select('package_name, classification, price_column').eq('company_id', companyId)
       if (classErr) throw new Error(classErr.message)
-      const classByName = new Map<string, { package_name: string; classification: Classification; price_column: FranchisePackageKey | null }>(
-        (classRows ?? []).map((r: { package_name: string; classification: Classification; price_column: FranchisePackageKey | null }) => [r.package_name, r]),
+      const classByName = new Map<string, { package_name: string; classification: Classification; price_column: string | null }>(
+        (classRows ?? []).map((r: { package_name: string; classification: Classification; price_column: string | null }) => [r.package_name, r]),
       )
       const merged: PackageRow[] = ((pkgCounts ?? []) as { name: string; order_count: number | string }[])
         .map((r): PackageRow => {
@@ -105,7 +123,7 @@ export function PackageMappingPage() {
   // conflict); a brand-new row falls back to the column's own DB default
   // ('none') the same way updateClassification's own upsert already relies
   // on for price_column (NULL by default).
-  async function updatePriceColumn(name: string, priceColumn: FranchisePackageKey | '') {
+  async function updatePriceColumn(name: string, priceColumn: string) {
     if (!companyId) return
     const value = priceColumn === '' ? null : priceColumn
     setRows((prev) => prev?.map((r) => (r.name === name ? { ...r, priceColumn: value } : r)) ?? prev)
@@ -139,10 +157,14 @@ export function PackageMappingPage() {
         const row = i.row.original
         if (row.classification !== 'oil_change') return <span className="text-inky/40">—</span>
         return (
-          <select value={row.priceColumn ?? ''} onChange={(e) => updatePriceColumn(row.name, e.target.value as FranchisePackageKey | '')} className={selectCls}>
-            <option value="">Not mapped</option>
-            {FRANCHISE_PACKAGE_KEYS.map((k) => <option key={k} value={k}>{FRANCHISE_PACKAGE_LABELS[k]}</option>)}
-          </select>
+          <div className="w-48">
+            <Combobox
+              options={[NOT_MAPPED_OPTION, ...LOCATION_PRICE_COLUMNS]}
+              value={row.priceColumn ?? ''}
+              onChange={(value) => updatePriceColumn(row.name, value)}
+              placeholder="Not mapped"
+            />
+          </div>
         )
       },
     }),
@@ -199,7 +221,7 @@ interface RawAuditRow {
 
 interface EnrichedAuditRow extends RawAuditRow {
   classification: Classification
-  priceColumn: FranchisePackageKey | null
+  priceColumn: string | null
   listPrice: number | null
   mismatch: boolean
 }
@@ -284,14 +306,17 @@ function PriceAuditSection({ oilChangeOnly, classificationByName }: {
   )
 
   // Exception summary — one row per shop with at least one oil-change
-  // mismatch, columns for the 5 canonical packages (Droptop price next to
-  // list price) rather than one row per (shop, package) — matches the same
-  // shape as the Franchise tab's own pricing-discrepancy report. If more
-  // than one raw package name maps to the same column for a shop (a rare
-  // cross-naming-era overlap), keeps whichever has more orders behind it.
+  // mismatch, one column per LOCATION_PRICE_COLUMNS entry (Droptop price
+  // next to list price) rather than one row per (shop, package) — matches
+  // the same shape as the Franchise tab's own pricing-discrepancy report.
+  // Covers every mappable column, not just the 5 canonical Menu Board
+  // packages, since a package mapped to e.g. "european" or
+  // "diesel_full_syn" (2026-09-19 follow-up) needs to show up here too. If
+  // more than one raw package name maps to the same column for a shop (a
+  // rare cross-naming-era overlap), keeps whichever has more orders behind it.
   const exceptions = useMemo(() => {
     type ExceptionCell = { totalCount: number; droptopPrice: number; listPrice: number }
-    const byShop = new Map<string, Partial<Record<FranchisePackageKey, ExceptionCell>>>()
+    const byShop = new Map<string, Partial<Record<string, ExceptionCell>>>()
     for (const r of enriched) {
       if (r.classification !== 'oil_change' || !r.priceColumn || !r.mismatch || r.listPrice == null) continue
       const bucket = byShop.get(r.locationId) ?? {}
@@ -385,19 +410,19 @@ function PriceAuditSection({ oilChangeOnly, classificationByName }: {
           <table className="w-full text-xs font-mono">
             <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/20">
               <th className="text-left px-3 py-2 sticky left-0 bg-cream">Shop</th>
-              {FRANCHISE_PACKAGE_KEYS.map((key) => (
-                <th key={key} className="text-center px-3 py-2 whitespace-nowrap font-normal normal-case">{FRANCHISE_PACKAGE_LABELS[key]}</th>
+              {LOCATION_PRICE_COLUMNS.map(({ value, label }) => (
+                <th key={value} className="text-center px-3 py-2 whitespace-nowrap font-normal normal-case">{label}</th>
               ))}
             </tr></thead>
             <tbody>
               {exceptions.map((ex) => (
                 <tr key={ex.locationId} className="border-b border-navy/10 hover:bg-navy/5">
                   <td className="px-3 py-2 text-navy sticky left-0 bg-cream whitespace-nowrap">{ex.shopLabel}</td>
-                  {FRANCHISE_PACKAGE_KEYS.map((key) => {
-                    const diff = ex.diffs[key]
-                    if (!diff) return <td key={key} className="px-3 py-2 text-center text-inky/30">—</td>
+                  {LOCATION_PRICE_COLUMNS.map(({ value }) => {
+                    const diff = ex.diffs[value]
+                    if (!diff) return <td key={value} className="px-3 py-2 text-center text-inky/30">—</td>
                     return (
-                      <td key={key} className="px-3 py-2 text-center whitespace-nowrap">
+                      <td key={value} className="px-3 py-2 text-center whitespace-nowrap">
                         <div className="text-inky">List: ${diff.listPrice.toFixed(2)}</div>
                         <div className="text-[#C0392B] font-bold">Droptop: ${diff.droptopPrice.toFixed(2)}</div>
                       </td>
