@@ -108,7 +108,8 @@ inventoryos/
     │   ├── issues/                # IssuesPage, IssueFormModal
     │   ├── locations/             # LocationsPage, LocationLookupPage/Overlay, AmRdLookupPage,
     │   │                          #   TankMonitorsPage, TankEmailModal, TankProductMapping,
-    │   │                          #   LocationDataSourceConfig, MapRoutesTab
+    │   │                          #   MapRoutesTab (LocationDataSourceConfig.tsx no longer exists —
+    │   │                          #   removed with the old Monday/Azure config UI, see schema ref below)
     │   ├── marketing/             # MarketingPlannerPage, modals/, tabs/ (campaign planning);
     │   │                          #   menuboard/ (Menu Board — MenuBoardPage, PublicMenuBoardPage,
     │   │                          #   MenuBoardPdfPage, useMenuBoard)
@@ -276,8 +277,8 @@ Palette from `tailwind.config.ts` — CSS-variable-backed for dark mode:
 ### `core.company_holidays`
 `id, company_id, date, name, created_by, created_at` (unique on `company_id, date`)
 
-### `inventory.location_data_source`
-`id, source_type, monday_board_id, monday_name_column, monday_code_column, monday_region_column, monday_market_column, monday_status_filter, azure_container_path, sync_schedule, last_synced_at, last_sync_count, updated_by, updated_at`
+### `inventory.location_data_source` — DOES NOT EXIST (confirmed via `information_schema.tables`, 2026-09-20)
+This table (and its own config UI, `LocationDataSourceConfig.tsx`) was fully removed when `monday-sync-locations` replaced it — see that Edge Function's own header comment ("This replaces the old ad-hoc 'Location Data Sources' config UI... That whole UI has been removed"). **There is no admin-configurable column mapping for the Monday.com sync** — the real mapping lives entirely in code, a hardcoded `FIELD_MAP` array in `supabase/functions/monday-sync-locations/index.ts` (`[core.locations column, Monday.com column id, value kind]`). To add a new mapped column: (1) add the column to `core.locations` via a migration if it doesn't exist yet, (2) find the Monday column's internal id (Monday's own API/GraphQL explorer, e.g. `boards(ids:[2536769965]){columns{id title type}}` — no in-app way to look this up as of 2026-09-20), (3) add a `FIELD_MAP` entry with the right `FieldKind` (`text`/`mirror`/`relation`/`bool`/`int`/`numeric`/`date`/`phone` — matching the MONDAY column's real type, not the DB column's, since a wrong kind either mis-parses the value or throws a Postgres type error on every affected row, same as `planned_2023`/`planned_2024`'s own documented gotcha in that file), (4) add it to `CORE_FIELDS` too if anything else in the app reads it directly (controls whether a bad value in this ONE column can fail the whole per-shop update, or gets safely dropped from a fallback-narrower retry), (5) deploy the function. `raw_monday_data` always captures the full raw item regardless of `FIELD_MAP`, so nothing from Monday is ever truly unrecoverable even before a column gets a real mapping.
 
 ### `inventory.exception_reports`
 `id, company_id, location_id, area_manager, date_of_finding, date_of_shop_action, report_type ('PO Match'|'Activity'|'Current On Hand'), issue, details, contacted (bool), contacted_date, response, rd_if_no, response_notes, status, metadata (jsonb), updated_by, last_change_source, created_at, updated_at`
@@ -374,8 +375,8 @@ AM Dashboard header shows: assigned item count + "N needs attention" (orange) fo
   - **Shop / Area Manager filters are `MultiSelectDropdown`, not single-select `Combobox`** (added 2026-09-16) — `shopFilters`/`amFilters` are now `string[]` (shop filter stores LABELS, same `{value: label}` shape as the Droptop Orders/Staffing Report shop filters, resolved back to ids via a `shopLabelToId` map for the actual row filtering — `shopFilterIds: Set<string>` is what every filter predicate actually checks). Applies across every tab that reads `filtered`/`lowVmiCount`, including `LowVmiView`'s own internal filter (now takes `shopFilterIds`/`amFilters` props instead of single strings). The filter bar's wrapping div is `relative z-50` — without it, the table below (its sticky Shop header/column sit at `z-40`, see `MonitorTable`) won a same-or-higher z-index tie by DOM order and clipped the open dropdown panel behind it; wrapping the whole filter row in its own higher stacking context fixes this regardless of which dropdown component is used there.
   - **All Monitors tab has its own free-text search** (`allSearch` state, scoped to that one tab via `searchedAll`, not a change to the shared `filtered` set other tabs read) — checks every column's own `sort()` value (same values `MonitorTable`'s `cellText`/`copyTable` already use) plus the shop label, so it covers Product/Product ID/Serial # (the ones asked for) and every other column too, not just those three.
 - `TankProductMapping.tsx` — maps tank monitor products to `inventory.vendor_parts`.
-- `LocationDataSourceConfig.tsx` — Monday.com / Azure source config.
 - `MapRoutesTab.tsx` / `ManualRouteModal.tsx` — route mapping (migration `20260702_location_routes.sql`).
+- **No Monday.com/Azure source config UI exists** — `LocationDataSourceConfig.tsx` was removed along with `inventory.location_data_source` when `monday-sync-locations` replaced the old ad-hoc scaffold; see the Database schema reference entry for that table (now DB-confirmed nonexistent) for how Monday.com column mapping actually works today (a hardcoded `FIELD_MAP` in the Edge Function, not a UI).
 
 Filter hierarchy: `meta:owner` → `region` → `meta:market` → `meta:area_manager` → `meta:regional_director` (falls back to `meta:director`). Apply filters **before** passing data to `useTable()`.
 
