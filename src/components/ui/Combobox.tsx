@@ -1,4 +1,5 @@
-﻿import React, { useState, useRef, useEffect } from 'react'
+﻿import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface ComboboxOption {
   value: string
@@ -34,7 +35,23 @@ export function Combobox({
   // highlighted, without requiring a mouse click. -1 = nothing highlighted.
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const ref = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // Found live 2026-09-20 (Package Mapping's price-column cell, the first
+  // real use of this component inside a scrollable table body): the
+  // dropdown panel used to be a plain `absolute` child positioned via
+  // `top-full`/`min-w-full`, which any ancestor with `overflow: auto/
+  // hidden/scroll` (DataTable's own scrolling wrapper, in particular)
+  // clips the instant it extends past that ancestor's visible bounds —
+  // z-index cannot fix this, overflow clipping happens regardless of
+  // stacking order. Portaling the open panel to `document.body` and
+  // positioning it with `fixed` + the trigger's own `getBoundingClientRect()`
+  // escapes every such ancestor entirely; `menuRect` is recomputed on open
+  // and kept in sync with `scroll`/`resize` while open (capture-phase scroll
+  // listener, since scroll events don't bubble but DO fire in capture on
+  // any ancestor, including whichever scrollable container the trigger
+  // happens to sit inside).
+  const [menuRect, setMenuRect] = useState<{ top: number; left: number; width: number } | null>(null)
 
   // Only show a label when the value actually matches an option — otherwise the
   // field would falsely imply a selection (e.g. a stale/unlinked id).
@@ -56,7 +73,14 @@ export function Combobox({
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      // listRef's own panel is portaled to document.body now, so it's no
+      // longer a DOM descendant of `ref` — without this second check, a
+      // mousedown on an option would itself count as "outside" and close
+      // the menu before the option's own click handler ever ran.
+      if (ref.current?.contains(target)) return
+      if (listRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -72,6 +96,29 @@ export function Combobox({
     setHighlightedIndex(matchedIdx >= 0 ? matchedIdx : highlightCount > 0 ? 0 : -1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, query])
+
+  const updateMenuRect = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect()
+    if (!r) return
+    setMenuRect({ top: r.bottom + 4, left: r.left, width: r.width })
+  }, [])
+
+  // Position (and keep repositioned) the portaled panel while it's open —
+  // computed fresh right before paint so it never flashes at a stale
+  // position on open, and kept in sync on scroll (capture phase — scroll
+  // events don't bubble, but DO fire in capture on every ancestor, so this
+  // one listener covers the trigger scrolling inside ANY scrollable
+  // container, not just the window) and on resize.
+  useLayoutEffect(() => {
+    if (!open) return
+    updateMenuRect()
+    window.addEventListener('scroll', updateMenuRect, true)
+    window.addEventListener('resize', updateMenuRect)
+    return () => {
+      window.removeEventListener('scroll', updateMenuRect, true)
+      window.removeEventListener('resize', updateMenuRect)
+    }
+  }, [open, updateMenuRect])
 
   // Keep the highlighted row scrolled into view as it moves past the edge
   // of the dropdown's own scroll container.
@@ -134,6 +181,7 @@ export function Combobox({
         <label className="text-xs font-mono text-inky uppercase tracking-wide">{label}</label>
       )}
       <div
+        ref={triggerRef}
         role="combobox"
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -155,8 +203,13 @@ export function Combobox({
         </svg>
       </div>
 
-      {open && (
-        <div ref={listRef} role="listbox" className="absolute top-full left-0 z-30 mt-1 min-w-full w-max max-w-[min(88vw,640px)] bg-cream border border-navy/30 rounded shadow-xl max-h-60 overflow-auto">
+      {open && menuRect && createPortal(
+        <div
+          ref={listRef}
+          role="listbox"
+          style={{ position: 'fixed', top: menuRect.top, left: menuRect.left, minWidth: menuRect.width }}
+          className="z-[100] w-max max-w-[min(88vw,640px)] bg-cream border border-navy/30 rounded shadow-xl max-h-60 overflow-auto"
+        >
           <div className="px-3 py-2 border-b border-navy/30">
             <input
               autoFocus
@@ -207,7 +260,8 @@ export function Combobox({
           {filtered.length === 0 && !showCreate && (
             <div className="px-3 py-2 text-xs text-inky font-mono">No results</div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
       {error && <p className="text-xs text-red-400 font-mono">{error}</p>}
     </div>
