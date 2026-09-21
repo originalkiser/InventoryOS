@@ -213,6 +213,29 @@ export function ProductUsageTab() {
   const [droptopLocationId, setDroptopLocationId] = useState<string>('')
   const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number } | null>(null)
   const [droptopError, setDroptopError] = useState<string | null>(null)
+  // Read-only peek at Droptop's raw get-inventory item shape (2026-09-21) —
+  // same purpose/pattern as PoStatusPage.tsx's own Inspect button: the sync
+  // only reads product_id/quantity_on_hand/product_type today, so this is
+  // how to check whether Droptop's inventory API carries a supplier/vendor
+  // field at all before deciding whether droptop-sync-usage can capture one.
+  const [inspecting, setInspecting] = useState(false)
+  const [inspectResult, setInspectResult] = useState<{ locationId: string; raw: unknown } | null>(null)
+  async function inspectOne() {
+    if (!droptopLocationId) { toast.error('Pick a single location first — Inspect always needs one.'); return }
+    setInspecting(true)
+    try {
+      const { data, error } = await (supabase as any).functions.invoke('droptop-sync-usage', { body: { mode: 'inspect', locationId: droptopLocationId } })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      // eslint-disable-next-line no-console
+      console.log('[droptop-sync-usage inspect]', data)
+      setInspectResult({ locationId: droptopLocationId, raw: data.inventory_sample ?? [] })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Inspect failed')
+    } finally {
+      setInspecting(false)
+    }
+  }
 
   const droptopLocations = useMemo(
     () => loc.locations.filter((l: any) => l.droptop_operation_id),
@@ -857,6 +880,9 @@ export function ProductUsageTab() {
             <Button size="sm" variant="secondary" onClick={() => syncFromDroptop('usage')} disabled={droptopSyncing != null}>
               {droptopSyncing === 'usage' ? syncingLabel(droptopProgress) : 'Usage Only'}
             </Button>
+            <Button size="sm" variant="secondary" onClick={inspectOne} disabled={inspecting || droptopSyncing != null || !droptopLocationId} loading={inspecting}>
+              Inspect
+            </Button>
           </div>
           <p className="text-[10px] font-mono text-inky/50">
             On-Hands Only = 1 API call per location (cheap, schedule daily). Usage Only pages through change events for the window (heavier — run less often). Partial syncs keep the other side's existing values.
@@ -872,6 +898,27 @@ export function ProductUsageTab() {
           )}
         </div>
       </div>
+
+      <Modal open={!!inspectResult} onClose={() => setInspectResult(null)} title="Inspect — Droptop raw inventory items" size="xl">
+        {inspectResult && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[11px] font-mono text-inky/60">
+              Droptop's own get-inventory response for {loc.codeOf(inspectResult.locationId) || inspectResult.locationId} — not yet
+              mapped/upserted. Full response also logged to the browser console (F12).
+            </p>
+            {(inspectResult.raw as unknown[]).length === 0 ? (
+              <p className="text-xs font-mono text-[#C0392B]">Droptop returned zero inventory items for this location.</p>
+            ) : (
+              <pre className="overflow-auto max-h-96 rounded border border-navy/20 bg-navy/5 p-3 text-[11px] font-mono text-navy whitespace-pre-wrap">
+                {JSON.stringify(inspectResult.raw, null, 2)}
+              </pre>
+            )}
+            <div className="flex justify-end">
+              <Button size="sm" variant="secondary" onClick={() => setInspectResult(null)}>Close</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <InventoryAlertsSection locationLabel={(id) => loc.labelOf(id)} />
 
