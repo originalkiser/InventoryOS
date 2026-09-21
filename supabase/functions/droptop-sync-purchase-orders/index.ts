@@ -13,11 +13,18 @@
 //   mode        — 'sync' (default) | 'inspect' (read-only raw-shape peek,
 //                 same purpose as droptop-sync-usage's inspect mode — never
 //                 writes anything)
-//   daysBack    — only fetch/keep POs created within this many days; default
-//                 180. Results come back newest-created-first, so once a
-//                 page's oldest PO is older than the cutoff, pagination
-//                 stops early rather than walking the vendor's entire
-//                 history every run.
+//   daysBack    — hard safety ceiling on how far back a location's own
+//                 known-still-open POs will be chased (see recentDaysBack);
+//                 default 180. Results come back newest-created-first, so
+//                 once a page's oldest PO predates this, pagination stops
+//                 outright rather than walking the vendor's entire history.
+//   recentDaysBack — the everyday window for catching brand-new POs;
+//                 default 14. Once past this point, a location only keeps
+//                 paging as long as it still has POs from OUR OWN table
+//                 that aren't yet terminal (see isTerminal()) — most
+//                 locations stop right here. daysBack is the outer bound
+//                 for the rare location still chasing a genuinely old
+//                 back-order.
 //   locationId  — sync a single location
 //   locationIds — sync a specific batch of locations (client-side chunking,
 //                 same as runDroptopSync in droptopService.ts). Ignored if
@@ -144,14 +151,48 @@ async function callDroptop(
   }
 }
 
-// Fetches every PO for one operation created within the cutoff, paginating
-// via startingAfter until either the vendor says more_available: false or a
-// page's oldest PO predates cutoffUnix (results sort newest-created-first,
-// so that's a safe place to stop rather than walking the entire history).
+// Droptop's get-purchase-orders has no "updated since" filter at all — only
+// pagination sorted newest-created-first plus a poStatus filter. That's the
+// entire reason this used to always walk back a fixed `daysBack` (180) for
+// EVERY location on EVERY run: a PO's status/delivery info can keep
+// changing long after it was created (confirmed live 2026-09-21: 262 real
+// rows are po_status='closed' with delivery_status='back_ordered' — closed
+// on the ordering side, still not physically received), so the only way to
+// catch a status change on an old PO was to keep re-fetching a wide window
+// of everything, whether it had actually changed or not.
+//
+// isTerminal()/recentCutoffUnix+stillOpenPoIds below make this adaptive
+// instead of a blind fixed window. Real production data check the same
+// day: 72% of all POs are already terminal by this definition and will
+// never need to be looked at again once found; the remaining ~28% (which
+// tail out to 5-6 months old for a genuinely slow back-order) are exactly
+// what stillOpenPoIds tracks. delivery_status='fully_received' is the real
+// "done" signal (a physical state that shouldn't reverse) — po_status
+// alone isn't reliable, per the closed+back_ordered evidence above.
+// po_status='cancelled' is terminal regardless of delivery_status (nothing
+// further should happen to a cancelled order). Everything else — including
+// a null/unknown status, which must never be assumed done — stays tracked
+// until it reaches one of these two states.
+function isTerminal(poStatus: string | null | undefined, deliveryStatus: string | null | undefined): boolean {
+  return deliveryStatus === 'fully_received' || poStatus === 'cancelled'
+}
+
+// Paginates one operation's POs (newest-created-first) and stops once BOTH:
+// (a) we're past recentCutoffUnix (catches everything genuinely new), AND
+// (b) every po_id in stillOpenPoIds (this location's own already-known,
+// not-yet-terminal POs, from OUR OWN table — Droptop can't be asked for
+// them directly) has actually been observed in this run.
+// hardFloorUnix is the original daysBack-derived absolute ceiling, kept as
+// a safety net — if a known-still-open PO somehow never turns up even at
+// that depth, pagination stops anyway rather than walking Droptop's entire
+// history, and that PO's stored status just stays whatever it was last
+// synced as until a future run finds it.
 async function fetchPurchaseOrders(
-  operationId: string, cutoffUnix: number, poStatus: string | undefined, pub: string, priv: string,
+  operationId: string, recentCutoffUnix: number, hardFloorUnix: number, stillOpenPoIds: Set<string>,
+  poStatus: string | undefined, pub: string, priv: string,
 ): Promise<any[]> {
   const all: any[] = []
+  const remaining = new Set(stillOpenPoIds)
   let cursor: string | null = null
   while (true) {
     const params: Record<string, string> = { operation_ids: operationId, limit: '250' }
@@ -165,12 +206,15 @@ async function fetchPurchaseOrders(
     // (more_available/next_cursor/data) is exactly what comes back either.
     const inner = res?.data && !Array.isArray(res.data) && 'data' in res.data ? res.data : res
     const pos: any[] = Array.isArray(inner?.data) ? inner.data : []
-    let hitCutoff = false
+    let stop = false
     for (const po of pos) {
-      if (Number(po.created_timestamp) < cutoffUnix) { hitCutoff = true; break }
+      const created = Number(po.created_timestamp)
+      if (created < hardFloorUnix) { stop = true; break }
       all.push(po)
+      remaining.delete(String(po.po_id))
+      if (created < recentCutoffUnix && remaining.size === 0) { stop = true; break }
     }
-    if (hitCutoff || !inner?.more_available || !inner?.next_cursor) break
+    if (stop || !inner?.more_available || !inner?.next_cursor) break
     cursor = inner.next_cursor
   }
   return all
@@ -242,8 +286,14 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}))
     const mode: 'sync' | 'inspect' = body.mode === 'inspect' ? 'inspect' : 'sync'
+    // daysBack is now the hard SAFETY CEILING (see fetchPurchaseOrders'
+    // own comment), not "always pull this much" — recentDaysBack is the
+    // actual everyday window; a location only pages further back than that
+    // when it genuinely still has known-open POs to find.
     const daysBack = Math.min(730, Math.max(1, Number(body.daysBack) || 180))
-    const cutoffUnix = Math.floor(Date.now() / 1000) - daysBack * 86400
+    const hardFloorUnix = Math.floor(Date.now() / 1000) - daysBack * 86400
+    const recentDaysBack = Math.min(daysBack, Math.max(1, Number(body.recentDaysBack) || 14))
+    const recentCutoffUnix = Math.floor(Date.now() / 1000) - recentDaysBack * 86400
     const poStatus: string | undefined = typeof body.poStatus === 'string' ? body.poStatus : undefined
     const locationId: string | undefined = body.locationId
     const locationIds: string[] = Array.isArray(body.locationIds) ? body.locationIds : []
@@ -267,7 +317,9 @@ Deno.serve(async (req) => {
       const rawParams: Record<string, string> = { operation_ids: opId, limit: '5' }
       if (poStatus) rawParams.poStatus = poStatus
       const raw = await callDroptop('get-purchase-orders', rawParams, publicKey, privateKey)
-      const pos = await fetchPurchaseOrders(opId, cutoffUnix, poStatus, publicKey, privateKey)
+      // Diagnostic peek only — no need for the still-open tracking below,
+      // a plain single-cutoff pass matches this mode's original purpose.
+      const pos = await fetchPurchaseOrders(opId, hardFloorUnix, hardFloorUnix, new Set(), poStatus, publicKey, privateKey)
       return ok({ success: true, operation_id: opId, raw_response: raw, parsed_sample: pos.slice(0, 3) })
     }
 
@@ -275,6 +327,25 @@ Deno.serve(async (req) => {
     let itemsWritten = 0
     const opToLocation = new Map<string, string>(locations.map((l: any) => [l.droptop_operation_id, l.id]))
     const warnings: string[] = []
+
+    // Already-known, not-yet-terminal POs for exactly the locations in this
+    // run — one combined query rather than one per location. See
+    // isTerminal()/fetchPurchaseOrders' own comments for why this is what
+    // lets most locations stop after just recentDaysBack instead of always
+    // walking the full daysBack ceiling.
+    const targetLocationIds = locations.map((l: any) => opToLocation.get(l.droptop_operation_id)).filter(Boolean) as string[]
+    const { data: knownRows, error: knownErr } = await (admin as any)
+      .schema('inventory').from('droptop_purchase_orders')
+      .select('location_id, po_id, po_status, delivery_status')
+      .eq('company_id', companyId).in('location_id', targetLocationIds)
+    if (knownErr) return ok({ error: `Existing PO lookup failed: ${knownErr.message}` })
+    const stillOpenByLocation = new Map<string, Set<string>>()
+    for (const row of (knownRows ?? []) as { location_id: string | null; po_id: string; po_status: string | null; delivery_status: string | null }[]) {
+      if (!row.location_id || isTerminal(row.po_status, row.delivery_status)) continue
+      const set = stillOpenByLocation.get(row.location_id) ?? new Set<string>()
+      set.add(row.po_id)
+      stillOpenByLocation.set(row.location_id, set)
+    }
 
     // Fetch phase — sequential per location (has to be: each is its own
     // Droptop API call), low concurrency isn't needed here the way it is
@@ -296,8 +367,11 @@ Deno.serve(async (req) => {
     const posByPoId = new Map<string, { po: any; locationId: string | null }>()
     for (const loc of locations) {
       try {
-        const pos = await fetchPurchaseOrders(loc.droptop_operation_id, cutoffUnix, poStatus, publicKey, privateKey)
         const locationId = opToLocation.get(loc.droptop_operation_id) ?? null
+        const stillOpen = (locationId && stillOpenByLocation.get(locationId)) || new Set<string>()
+        const pos = await fetchPurchaseOrders(
+          loc.droptop_operation_id, recentCutoffUnix, hardFloorUnix, stillOpen, poStatus, publicKey, privateKey,
+        )
         for (const po of pos) posByPoId.set(poKey(locationId, po.po_id), { po, locationId })
       } catch (e) {
         warnings.push(`location ${loc.id}: ${e instanceof Error ? e.message : String(e)}`)
