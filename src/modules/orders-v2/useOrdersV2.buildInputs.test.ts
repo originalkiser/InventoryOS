@@ -72,6 +72,24 @@ describe('buildGenerationInputs — equivalent case types', () => {
     expect(bb.daily_usage).toBe(20) // its zero usage isn't added
   })
 
+  // Found live 2026-09-22: this base product has no usage of its own (e.g.
+  // a case type nobody's sold recently), and used to silently discard a
+  // sibling's real usage entirely because the old logic required THIS
+  // product to already have a usage figure before it would add anything —
+  // leaving daily_usage null and DOS reading as infinite even though the
+  // family combine had real usage to work with. On-hand combines
+  // unconditionally; usage should adopt whichever side(s) actually have a
+  // figure the same way.
+  it('adopts a sibling\'s usage when the base product has none of its own', () => {
+    const configs = [config('5W30BB'), config('5W30D')]
+    const usageRows = [usage('5W30BB', 100, null), usage('5W30D', 10, 5)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+
+    const bb = inputs.find((i) => i.product_id === '5W30BB')!
+    expect(bb.on_hand).toBe(110)
+    expect(bb.daily_usage).toBe(5) // adopted from the sibling, not left null
+  })
+
   it('never combines case types for a VMI/keep-fill product', () => {
     const configs = [
       config('5W30BB', { metadata: { vmi: 'yes' } }),

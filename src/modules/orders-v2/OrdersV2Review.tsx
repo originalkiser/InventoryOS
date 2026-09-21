@@ -148,6 +148,38 @@ export function OrdersV2Review() {
     return 'text-[#C0392B]'
   }, [dosOverride])
 
+  // Read-only counterpart to runGeneration below — fetches/builds the same
+  // candidate set (allInputs/eligibleLocationIds/ozProductIds) but never
+  // touches the draft's persisted lines or status. Needed because
+  // runGeneration only auto-fires once, for a brand-new empty draft (see
+  // its own effect below) — revisiting an already-generated draft later
+  // left allInputs at its initial empty state for the rest of the session,
+  // which silently starved "Every product configured for this shop" down
+  // to just the shop's already-ordered lines (found live 2026-09-22: shop
+  // 212-Paris has 18 active RelaDyne configs, only 2 of which had lines,
+  // and the expand view showed only those 2 instead of all 18). Runs once
+  // per draft load, gated on allInputs still being empty so it never
+  // fights a real (destructive) generation run.
+  const loadCandidatesForDisplay = useCallback(async () => {
+    if (!draft || !profile?.company_id) return
+    const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, exceptions, days } = await fetchInputs(
+      draft.vendor_id, settings.flag_cumulative_days,
+    )
+    const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
+    setAllInputs(inputs)
+    setOzProductIds(new Set(globalProducts.filter((g) => isOunceUnit(g.unit_of_measure)).map((g) => g.product_id)))
+    const adHocIds = draftAdHocLocationIds(draft)
+    const eligibleIds = adHocIds
+      ? new Set(adHocIds)
+      : eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, draftOrderDow(draft))
+    setEligibleLocationIds(eligibleIds)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.id, profile?.company_id, fetchInputs, settings, rulesFor, vendors])
+
+  useEffect(() => {
+    if (draft && !loading && lines.length > 0 && allInputs.length === 0 && !generating) void loadCandidatesForDisplay()
+  }, [draft, loading, lines.length, allInputs.length, generating, loadCandidatesForDisplay])
+
   /** Run the engine and replace the draft's lines with the result. */
   const runGeneration = useCallback(async (dow?: number) => {
     if (!draft || !profile?.company_id) return

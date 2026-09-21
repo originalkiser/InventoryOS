@@ -983,11 +983,18 @@ export function buildGenerationInputs(
     const combinedOnHand = b.on_hand + siblings.reduce((sum, s) => sum + s.on_hand, 0)
     // Same treatment for usage — a sibling recording zero usage of its own
     // adds nothing real, so it's excluded here too rather than folded in as
-    // a no-op.
+    // a no-op. Found live 2026-09-22: this used to also require b.daily_usage
+    // itself to be non-null before combining ANY sibling usage in, which
+    // meant a base product with no usage of its own (e.g. a BB case type
+    // nobody's sold recently) silently discarded a sibling's real usage
+    // entirely rather than adopting it — on-hand combines unconditionally
+    // (see above), usage should too, whichever side(s) actually have a
+    // figure. Only stays null when NEITHER side has any usage recorded —
+    // never inventing a rate from nothing.
     const usageSiblings = siblings.filter((s) => s.daily_usage != null && s.daily_usage > 0)
-    const combinedUsage = b.daily_usage != null
-      ? Number(b.daily_usage) + usageSiblings.reduce((sum, s) => sum + Number(s.daily_usage), 0)
-      : b.daily_usage
+    const combinedUsage = b.daily_usage != null || usageSiblings.length > 0
+      ? Number(b.daily_usage ?? 0) + usageSiblings.reduce((sum, s) => sum + Number(s.daily_usage), 0)
+      : null
     return {
       location_id: b.location_id, product_id: b.product_id, rule: b.rule,
       on_hand: combinedOnHand, daily_usage: combinedUsage,
