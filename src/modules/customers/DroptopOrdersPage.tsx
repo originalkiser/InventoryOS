@@ -26,6 +26,7 @@ import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
+import { DataCompletenessBadge } from '@/components/shared/DataCompletenessBadge'
 import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
 import { isM5, type Classification } from './PackageMappingPage'
@@ -842,11 +843,14 @@ export function DroptopOrdersPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Droptop Orders</h1>
-        <p className="text-xs text-inky mt-0.5">
-          Search, filter, and summarize synced orders. Populated by Config → Data Connections' Droptop — Orders sync.
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Droptop Orders</h1>
+          <p className="text-xs text-inky mt-0.5">
+            Search, filter, and summarize synced orders. Populated by Config → Data Connections' Droptop — Orders sync.
+          </p>
+        </div>
+        <DataCompletenessBadge connectionKey="droptop_orders" />
       </div>
 
       {/* Filters — Region/Market/AM/Shop(s) first (narrows top-down), then

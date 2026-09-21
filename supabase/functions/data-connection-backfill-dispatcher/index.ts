@@ -176,7 +176,19 @@ const CHUNK_TIME_BUDGET_MS = 100_000
 // pending queue instead of losing it.
 async function runChunksConcurrently(
   url: string, secret: string, chunks: string[][], bodyFor: (ids: string[]) => Record<string, unknown>, countField: string,
+  // concurrency/delayMs (added 2026-09-20, real production evidence: EVERY
+  // chunk of a 3-shop/full-month Orders pull was aborting — "The signal has
+  // been aborted" on nearly every attempted chunk, not an occasional one).
+  // Orders passes {concurrency: 1, delayMs} to go fully sequential with a
+  // pause between shops — the request explicitly wants this gentler and
+  // slower rather than fast: "we don't need it all at once ... without
+  // using a bunch of compute and without killing Droptop's servers." Time
+  // Clock is unaffected (no opts passed) since there's no evidence it's
+  // struggling at its existing concurrency.
+  opts: { concurrency?: number; delayMs?: number } = {},
 ): Promise<{ status: string; message: string | null; chunksProcessed: number; total: number; unresolvedIds: string[] }> {
+  const concurrency = opts.concurrency ?? CHUNK_CONCURRENCY
+  const delayMs = opts.delayMs ?? 0
   const warnings: string[] = []
   const unresolvedIds: string[] = []
   let anySucceeded = false
@@ -189,6 +201,7 @@ async function runChunksConcurrently(
       if (Date.now() - startedAt > CHUNK_TIME_BUDGET_MS) return
       const i = nextIndex++
       if (i >= chunks.length) return
+      if (delayMs > 0 && i > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
       const r = await callChunk(url, secret, bodyFor(chunks[i]), `Chunk ${i + 1}/${chunks.length}`)
       if (r.ok) { anySucceeded = true; if (typeof r.data?.[countField] === 'number') total += r.data[countField] }
       else unresolvedIds.push(...chunks[i])
@@ -196,7 +209,7 @@ async function runChunksConcurrently(
       processed++
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, worker))
   // `nextIndex` only ever advances by a worker claiming a chunk right
   // before awaiting it to completion, so every chunk below this final
   // value was fully attempted (succeeded or already added to
@@ -239,17 +252,62 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 // from ever trying to do a whole 267-shop month in one shot again.
 const MAX_IDS_PER_TICK = 60
 
+// A shop shouldn't be expected to have Droptop order/time-clock data for a
+// month before it actually went live or was acquired (added 2026-09-20, in
+// response to a direct question) — the job's own location_ids is a fixed
+// list set once at creation with no regard for shop history, so every
+// month back to floor_month was asking (and, below min_coverage_pct,
+// actually pulling) shops that couldn't possibly have data yet. Uses
+// whichever is LATER of core.locations.droptop_go_live/acquisition_date as
+// the "no real data before this" cutoff — acquisition_date matters even
+// when Droptop itself has earlier records (a franchise buyback's prior
+// owner's activity shouldn't count as SB's own history), droptop_go_live
+// matters for a new-build with no acquisition at all. A shop missing BOTH
+// dates is always treated as eligible — the conservative default, since
+// most existing shops predate this Monday.com field (see CLAUDE.md's own
+// migration/data-completeness caveats) — so this only ever excludes a shop
+// when we positively know it wasn't live yet, never for lack of data.
+async function eligibleLocationIdsFor(
+  admin: ReturnType<typeof createClient>, allIds: string[], monthEnd: string,
+): Promise<string[]> {
+  if (allIds.length === 0) return []
+  const { data, error } = await (admin as any)
+    .schema('core').from('locations').select('id, droptop_go_live, acquisition_date').in('id', allIds)
+  if (error) throw new Error(error.message)
+  const cutoffById = new Map<string, string | null>()
+  for (const l of (data ?? []) as { id: string; droptop_go_live: string | null; acquisition_date: string | null }[]) {
+    const dates = [l.droptop_go_live, l.acquisition_date].filter((d): d is string => !!d)
+    cutoffById.set(l.id, dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null)
+  }
+  return allIds.filter((id) => {
+    const cutoff = cutoffById.get(id)
+    return !cutoff || cutoff <= monthEnd
+  })
+}
+
 async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: BackfillJob, supabaseUrl: string, droptopSecret: string): Promise<Record<string, unknown>> {
   const cursor = job.cursor_month!
   const pStart = cursor
   const pEnd = monthEndOf(cursor)
   const fnName = job.connection_key === 'droptop_orders' ? 'droptop-sync-orders' : 'droptop-sync-staff-time-clock'
   // Orders writes up to 4 child tables per order — far heavier per-location
-  // than time clock's single-call-per-location pull, so it needs a much
-  // smaller chunk (this codebase's own routine dispatcher already learned
-  // this the hard way: DROPTOP_ORDER_CHUNK_SIZE=3 vs DROPTOP_CHUNK_SIZE=20).
-  const chunkSize = job.connection_key === 'droptop_orders' ? 3 : 20
+  // than time clock's single-call-per-location pull. Shrunk from 3 shops/
+  // chunk to 1 (2026-09-20, real production evidence: a 3-shop/full-month
+  // chunk was aborting on nearly every attempt — "The signal has been
+  // aborted" on 4-5 of 5 chunks in a single tick). One shop's month is a
+  // small enough unit that FETCH_TIMEOUT_MS should comfortably cover it for
+  // the vast majority of shops; a shop that still times out at this
+  // granularity just requeues on its own without dragging two others down
+  // with it, instead of every shop in a failed 3-shop chunk being retried
+  // together.
+  const chunkSize = job.connection_key === 'droptop_orders' ? 1 : 20
   const countField = job.connection_key === 'droptop_orders' ? 'orders_upserted' : 'records_upserted'
+  // Sequential with a pause between shops for Orders — explicitly requested
+  // ("without using a bunch of compute and without killing Droptop's
+  // servers ... we don't need it all at once"). Time Clock keeps its
+  // existing concurrency (no opts passed) since nothing suggests it needs
+  // the same treatment.
+  const chunkOpts = job.connection_key === 'droptop_orders' ? { concurrency: 1, delayMs: 3000 } : {}
 
   let pendingIds = job.month_pending_ids
   let coverageNote = ''
@@ -260,7 +318,7 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
     if (rpcErr) throw new Error(rpcErr.message)
     const observed = new Set<string>()
     for (const row of (days ?? []) as { location_ids: string[] | null }[]) for (const id of row.location_ids ?? []) observed.add(id)
-    const target = job.location_ids
+    const target = await eligibleLocationIdsFor(admin, job.location_ids, pEnd)
     const coveredCount = target.filter((id) => observed.has(id)).length
     const coverage = target.length > 0 ? coveredCount / target.length : 1
     if (coverage >= job.min_coverage_pct) {
@@ -287,6 +345,7 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
     `${supabaseUrl}/functions/v1/${fnName}`, droptopSecret, chunks,
     (ids) => ({ mode: 'sync', startUnix, endUnix, locationIds: ids }),
     countField,
+    chunkOpts,
   )
   if (result.status === 'error') throw new Error(result.message ?? 'All chunks failed')
 
@@ -372,6 +431,14 @@ Deno.serve(async (req) => {
     }
     if (!authorized) return ok({ error: 'Not authorized' })
     if (!droptopSecret) return ok({ error: 'DROPTOP_SYNC_SECRET not configured' })
+
+    // Emergency kill switch (added 2026-09-20, live Disk IO Budget incident)
+    // — same secret data-connection-dispatcher checks, see its own comment.
+    // A manual "Run tick now" click is also blocked while this is set, since
+    // the whole point right now is zero extra load against a struggling DB.
+    if (Deno.env.get('EMERGENCY_PAUSE_DISPATCH') === 'true') {
+      return ok({ status: 'paused', message: 'Dispatcher paused via EMERGENCY_PAUSE_DISPATCH secret' })
+    }
 
     const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
     const { data: jobs, error } = await (admin as any)
