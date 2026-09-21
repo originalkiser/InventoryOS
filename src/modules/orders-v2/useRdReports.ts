@@ -47,6 +47,28 @@ async function replaceSnapshot(table: string, companyId: string, rows: Record<st
   }
 }
 
+// Accumulating history ledgers, separate from the two snapshot tables above
+// (see migration 20260930au_rd_order_delivery_ledgers.sql's own header
+// comment for why they can't be repurposed for this). Order ledger allows
+// updates (a still-open sales order's qty/dates can genuinely change);
+// delivery ledger is insert-only (ignoreDuplicates) since a shipped
+// quantity should never be overwritten once invoiced.
+async function upsertOrderLedger(companyId: string, rows: Record<string, unknown>[]) {
+  for (let i = 0; i < rows.length; i += 1000) {
+    const { error } = await sb().schema('inventory').from('rd_order_ledger')
+      .upsert(rows.slice(i, i + 1000), { onConflict: 'company_id,sales_order_no,product_code' })
+    if (error) throw error
+  }
+}
+
+async function insertDeliveryLedger(companyId: string, rows: Record<string, unknown>[]) {
+  for (let i = 0; i < rows.length; i += 1000) {
+    const { error } = await sb().schema('inventory').from('rd_delivery_ledger')
+      .upsert(rows.slice(i, i + 1000), { onConflict: 'company_id,sales_order_no,product_code', ignoreDuplicates: true })
+    if (error) throw error
+  }
+}
+
 export function useRdReports() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -220,6 +242,13 @@ export function useRdReports() {
         qty_ordered: r.qty_ordered, uploaded_at: uploadedAt, uploaded_by: profile?.id ?? null,
       }))
       await replaceSnapshot('rd_open_orders', companyId, payload)
+      const ledgerRows = parsed.map((r) => ({
+        company_id: companyId, location_id: r.shop_number ? locationIdByShop.get(r.shop_number) ?? null : null,
+        sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
+        order_date: r.order_date, order_type: r.order_type, ship_to_name: r.ship_to_name,
+        product_desc: r.product_desc, qty_ordered: r.qty_ordered, last_updated_at: uploadedAt,
+      }))
+      await upsertOrderLedger(companyId, ledgerRows)
       setLastOpenOrdersAt(uploadedAt)
       toast.success(`Open Sales Order report uploaded — ${payload.length} lines`)
       await runReconciliation()
@@ -245,6 +274,14 @@ export function useRdReports() {
         uploaded_at: uploadedAt, uploaded_by: profile?.id ?? null,
       }))
       await replaceSnapshot('rd_open_invoices', companyId, payload)
+      const ledgerRows = parsed.map((r) => ({
+        company_id: companyId, location_id: r.shop_number ? locationIdByShop.get(r.shop_number) ?? null : null,
+        sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
+        invoice_no: r.invoice_no, order_date: r.order_date, invoice_date: r.invoice_date,
+        ship_to_name: r.ship_to_name, product_desc: r.product_desc, qty_ordered: r.qty_ordered,
+        qty_shipped: r.qty_shipped, gallons_ordered: r.gallons_ordered, gallons_shipped: r.gallons_shipped,
+      }))
+      await insertDeliveryLedger(companyId, ledgerRows)
       setLastOpenInvoicesAt(uploadedAt)
       toast.success(`Open Invoice report uploaded — ${payload.length} lines`)
       await runReconciliation()
@@ -255,5 +292,59 @@ export function useRdReports() {
     }
   }, [companyId, locationIdByShop, profile?.id, runReconciliation])
 
-  return { lastOpenOrdersAt, lastOpenInvoicesAt, uploading, reconciling, uploadOpenOrders, uploadOpenInvoices, runReconciliation }
+  // Read access to the two accumulating ledgers, by shop+product — backs
+  // "we should be able to access these two tables after we upload the
+  // data." Not wired into a dedicated page yet (no specific display was
+  // requested); callers can key off location_id/product_code to show this
+  // wherever it's actually needed (e.g. a shop's Order Config or Product
+  // Sales History).
+  const fetchRdProductHistory = useCallback(async (): Promise<RdProductHistoryRow[]> => {
+    const [{ data: ordered, error: orderedErr }, { data: delivered, error: deliveredErr }] = await Promise.all([
+      sb().rpc('get_rd_last_ordered_by_shop_product'),
+      sb().rpc('get_rd_last_delivered_by_shop_product'),
+    ])
+    if (orderedErr) throw orderedErr
+    if (deliveredErr) throw deliveredErr
+    const byKey = new Map<string, RdProductHistoryRow>()
+    const keyOf = (locationId: string | null, productCode: string) => `${locationId ?? ''}|${productCode}`
+    for (const o of (ordered ?? []) as any[]) {
+      byKey.set(keyOf(o.location_id, o.product_code), {
+        location_id: o.location_id, product_code: o.product_code,
+        last_order_date: o.last_order_date, last_qty_ordered: o.last_qty_ordered, last_order_sales_order_no: o.sales_order_no,
+        last_invoice_date: null, last_qty_shipped: null, last_delivery_sales_order_no: null,
+      })
+    }
+    for (const d of (delivered ?? []) as any[]) {
+      const key = keyOf(d.location_id, d.product_code)
+      const existing = byKey.get(key)
+      if (existing) {
+        existing.last_invoice_date = d.last_invoice_date
+        existing.last_qty_shipped = d.last_qty_shipped
+        existing.last_delivery_sales_order_no = d.sales_order_no
+      } else {
+        byKey.set(key, {
+          location_id: d.location_id, product_code: d.product_code,
+          last_order_date: null, last_qty_ordered: null, last_order_sales_order_no: null,
+          last_invoice_date: d.last_invoice_date, last_qty_shipped: d.last_qty_shipped, last_delivery_sales_order_no: d.sales_order_no,
+        })
+      }
+    }
+    return Array.from(byKey.values())
+  }, [])
+
+  return {
+    lastOpenOrdersAt, lastOpenInvoicesAt, uploading, reconciling, uploadOpenOrders, uploadOpenInvoices, runReconciliation,
+    fetchRdProductHistory,
+  }
+}
+
+export interface RdProductHistoryRow {
+  location_id: string | null
+  product_code: string
+  last_order_date: string | null
+  last_qty_ordered: number | null
+  last_order_sales_order_no: string | null
+  last_invoice_date: string | null
+  last_qty_shipped: number | null
+  last_delivery_sales_order_no: string | null
 }
