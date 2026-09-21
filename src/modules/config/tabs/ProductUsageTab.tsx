@@ -213,13 +213,15 @@ export function ProductUsageTab() {
   const [droptopLocationId, setDroptopLocationId] = useState<string>('')
   const [droptopResult, setDroptopResult] = useState<{ operations_synced: number; products_upserted: number } | null>(null)
   const [droptopError, setDroptopError] = useState<string | null>(null)
-  // Read-only peek at Droptop's raw get-inventory item shape (2026-09-21) —
-  // same purpose/pattern as PoStatusPage.tsx's own Inspect button: the sync
-  // only reads product_id/quantity_on_hand/product_type today, so this is
-  // how to check whether Droptop's inventory API carries a supplier/vendor
-  // field at all before deciding whether droptop-sync-usage can capture one.
+  // Read-only peek at Droptop's raw item shapes (2026-09-21) — same purpose/
+  // pattern as PoStatusPage.tsx's own Inspect button. One mode:'inspect'
+  // call already fetches BOTH halves: get-inventory (on-hand snapshot +
+  // product/supplier metadata — inventorySample) and get-inventory-changes
+  // (the sale/adjustment events daily_usage is aggregated from —
+  // changesSample/productBreakdown, the "usage" side). Both shown together
+  // so it's clear this is one command, not two.
   const [inspecting, setInspecting] = useState(false)
-  const [inspectResult, setInspectResult] = useState<{ locationId: string; raw: unknown } | null>(null)
+  const [inspectResult, setInspectResult] = useState<{ locationId: string; inventorySample: unknown[]; changesSample: unknown[]; productBreakdown: unknown[] } | null>(null)
   async function inspectOne() {
     if (!droptopLocationId) { toast.error('Pick a single location first — Inspect always needs one.'); return }
     setInspecting(true)
@@ -229,7 +231,12 @@ export function ProductUsageTab() {
       if (data?.error) throw new Error(data.error)
       // eslint-disable-next-line no-console
       console.log('[droptop-sync-usage inspect]', data)
-      setInspectResult({ locationId: droptopLocationId, raw: data.inventory_sample ?? [] })
+      setInspectResult({
+        locationId: droptopLocationId,
+        inventorySample: data.inventory_sample ?? [],
+        changesSample: data.changes_sample ?? [],
+        productBreakdown: data.product_breakdown ?? [],
+      })
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Inspect failed')
     } finally {
@@ -899,20 +906,39 @@ export function ProductUsageTab() {
         </div>
       </div>
 
-      <Modal open={!!inspectResult} onClose={() => setInspectResult(null)} title="Inspect — Droptop raw inventory items" size="xl">
+      <Modal open={!!inspectResult} onClose={() => setInspectResult(null)} title="Inspect — Droptop raw items" size="xl">
         {inspectResult && (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             <p className="text-[11px] font-mono text-inky/60">
-              Droptop's own get-inventory response for {loc.codeOf(inspectResult.locationId) || inspectResult.locationId} — not yet
-              mapped/upserted. Full response also logged to the browser console (F12).
+              One mode:'inspect' call, showing both halves of what it fetched for {loc.codeOf(inspectResult.locationId) || inspectResult.locationId} —
+              neither has been mapped/upserted. Full response also logged to the browser console (F12).
             </p>
-            {(inspectResult.raw as unknown[]).length === 0 ? (
-              <p className="text-xs font-mono text-[#C0392B]">Droptop returned zero inventory items for this location.</p>
-            ) : (
-              <pre className="overflow-auto max-h-96 rounded border border-navy/20 bg-navy/5 p-3 text-[11px] font-mono text-navy whitespace-pre-wrap">
-                {JSON.stringify(inspectResult.raw, null, 2)}
-              </pre>
-            )}
+            <div>
+              <p className="text-[10px] font-mono text-inky/70 uppercase tracking-wide mb-1">get-inventory (on-hand snapshot + product/supplier metadata)</p>
+              {inspectResult.inventorySample.length === 0 ? (
+                <p className="text-xs font-mono text-[#C0392B]">Droptop returned zero inventory items for this location.</p>
+              ) : (
+                <pre className="overflow-auto max-h-72 rounded border border-navy/20 bg-navy/5 p-3 text-[11px] font-mono text-navy whitespace-pre-wrap">
+                  {JSON.stringify(inspectResult.inventorySample, null, 2)}
+                </pre>
+              )}
+            </div>
+            <div>
+              <p className="text-[10px] font-mono text-inky/70 uppercase tracking-wide mb-1">get-inventory-changes (the "usage" side — daily_usage is aggregated from these)</p>
+              {inspectResult.changesSample.length === 0 ? (
+                <p className="text-xs font-mono text-[#C0392B]">Droptop returned zero change events for this location in the sync window.</p>
+              ) : (
+                <>
+                  <pre className="overflow-auto max-h-56 rounded border border-navy/20 bg-navy/5 p-3 text-[11px] font-mono text-navy whitespace-pre-wrap">
+                    {JSON.stringify(inspectResult.changesSample, null, 2)}
+                  </pre>
+                  <p className="text-[10px] font-mono text-inky/70 uppercase tracking-wide mt-3 mb-1">Per-product breakdown (sale events aggregated into daily_usage)</p>
+                  <pre className="overflow-auto max-h-56 rounded border border-navy/20 bg-navy/5 p-3 text-[11px] font-mono text-navy whitespace-pre-wrap">
+                    {JSON.stringify(inspectResult.productBreakdown, null, 2)}
+                  </pre>
+                </>
+              )}
+            </div>
             <div className="flex justify-end">
               <Button size="sm" variant="secondary" onClick={() => setInspectResult(null)}>Close</Button>
             </div>

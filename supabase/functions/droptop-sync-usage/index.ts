@@ -243,6 +243,21 @@ async function fetchInventory(operationId: string, pub: string, priv: string): P
   return Array.isArray(items) ? items : []
 }
 
+// Each inventory item can carry more than one supplier — real production
+// data (2026-09-21 inspect) confirmed the shape via item.suppliers: [{
+// supplier_id, name, is_active, purchase_uom, ... }]. Only an is_active
+// supplier counts (per explicit request); the first one found wins if more
+// than one is somehow active at once, since product_usage.supplier is a
+// single text column, not a list. Deliberately NOT item.brand_name, which
+// is a different concept (e.g. "Mighty" the brand vs. "Mighty" the
+// supplier can coincide but aren't the same field, and RelaDyne-sourced
+// oil shows brand_name "Duramax" with supplier name "RelaDyne").
+function activeSupplierName(item: any): string | null {
+  const suppliers = Array.isArray(item?.suppliers) ? item.suppliers : []
+  const active = suppliers.find((s: any) => s?.is_active === true)
+  return active?.name ? String(active.name) : null
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -530,7 +545,7 @@ Deno.serve(async (req) => {
       for (;;) {
         const { data: rows, error } = await (admin as any)
           .schema('inventory').from('product_usage')
-          .select('id, location_id, product_id, category, daily_usage, on_hands')
+          .select('id, location_id, product_id, category, daily_usage, on_hands, supplier')
           .eq('company_id', companyId)
           .in('location_id', chunkLocationIds)
           .order('location_id', { ascending: true })
@@ -626,13 +641,14 @@ Deno.serve(async (req) => {
         }
 
         // Index inventory by product_id (same case-insensitive keying)
-        const invByProduct = new Map<string, { on_hands: number; product_type: string }>()
+        const invByProduct = new Map<string, { on_hands: number; product_type: string; supplier: string | null }>()
         for (const item of inventory) {
           if (!matchesCategory(item.product_type)) continue
           const key = item.product_id.toLowerCase()
           invByProduct.set(key, {
             on_hands: parseFloat(item.quantity_on_hand || '0'),
             product_type: item.product_type || '',
+            supplier: activeSupplierName(item),
           })
           if (!displayId.has(key)) displayId.set(key, item.product_id)
         }
@@ -694,6 +710,13 @@ Deno.serve(async (req) => {
             location_id: loc.id,
             product_id: productId,
             category: invData?.product_type || existing?.category || null,
+            // Pulled side wins, carried over from the existing row
+            // otherwise (e.g. a mode:'usage' run, where inventory/invData
+            // is never fetched) — same pattern as category above. Needs
+            // existingMap's own query to select supplier too, or this
+            // silently wipes an already-set value on every non-inventory
+            // sync run.
+            supplier: invData?.supplier ?? existing?.supplier ?? null,
             daily_usage: dailyUsage,
             on_hands: onHands,
             days_of_supply: daysOfSupply,
