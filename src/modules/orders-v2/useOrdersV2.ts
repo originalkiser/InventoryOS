@@ -205,6 +205,11 @@ export function useDrafts() {
   async function createDraft(
     vendorId: string | null, orderDate: string, settings: OrderSettings, orderDow?: number | null,
     adHocLocationIds?: string[] | null,
+    // Mighty orders have no location_order_config-driven engine path (see
+    // mightyEngine.ts) — Target Days of Supply and Lead Time are set once
+    // per order instead of coming from per-shop config, and ride along in
+    // the same settings_snapshot spot as __order_dow/__adhoc_location_ids.
+    mightyOptions?: { targetDays: number; leadTimeDays: number } | null,
   ): Promise<string | null> {
     if (!companyId) return null
     const { data, error } = await sb().schema('inventory').from('ov2_order_drafts').insert({
@@ -217,6 +222,8 @@ export function useDrafts() {
       settings_snapshot: {
         ...settings, __order_dow: orderDow ?? null,
         __adhoc_location_ids: adHocLocationIds?.length ? adHocLocationIds : null,
+        __mighty_target_days: mightyOptions?.targetDays ?? null,
+        __mighty_lead_time_days: mightyOptions?.leadTimeDays ?? null,
       },
       created_by: profile?.id ?? null, last_edited_by: profile?.id ?? null,
     }).select('id').single()
@@ -1019,6 +1026,14 @@ export function draftOrderDow(draft: { order_date: string; settings_snapshot?: R
 export function draftAdHocLocationIds(draft: { settings_snapshot?: Record<string, unknown> | null }): string[] | null {
   const stored = (draft.settings_snapshot as any)?.__adhoc_location_ids
   return Array.isArray(stored) && stored.length ? stored as string[] : null
+}
+
+/** Order-level Target Days of Supply / Lead Time for a Mighty draft — see mightyEngine.ts. */
+export function draftMightySettings(draft: { settings_snapshot?: Record<string, unknown> | null }): { targetDays: number; leadTimeDays: number } {
+  const snap = (draft.settings_snapshot as any) ?? {}
+  const targetDays = typeof snap.__mighty_target_days === 'number' ? snap.__mighty_target_days : 21
+  const leadTimeDays = typeof snap.__mighty_lead_time_days === 'number' ? snap.__mighty_lead_time_days : 3
+  return { targetDays, leadTimeDays }
 }
 
 /**

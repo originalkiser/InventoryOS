@@ -54,7 +54,7 @@ import { StaffingReportPage } from '@/modules/customers/StaffingReportPage'
 import { PackageMappingPage } from '@/modules/customers/PackageMappingPage'
 import { ProductSalesHistoryPage } from '@/modules/customers/ProductSalesHistoryPage'
 import { OrdersV2Landing } from '@/modules/orders-v2/OrdersV2Landing'
-import { OrdersV2Review } from '@/modules/orders-v2/OrdersV2Review'
+import { OrdersV2DraftPage } from '@/modules/orders-v2/OrdersV2DraftPage'
 import { OrdersV2FinalReview } from '@/modules/orders-v2/OrdersV2FinalReview'
 import { OrdersV2Export } from '@/modules/orders-v2/OrdersV2Export'
 import { OrdersV2Settings } from '@/modules/orders-v2/OrdersV2Settings'
@@ -125,7 +125,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="orders-v2" element={<OrdersV2Landing />} />
     <Route path="orders-v2/settings" element={<OrdersV2Settings />} />
     <Route path="orders-v2/exceptions" element={<OrdersV2Exceptions />} />
-    <Route path="orders-v2/draft/:draftId" element={<OrdersV2Review />} />
+    <Route path="orders-v2/draft/:draftId" element={<OrdersV2DraftPage />} />
     <Route path="orders-v2/draft/:draftId/final" element={<OrdersV2FinalReview />} />
     <Route path="orders-v2/draft/:draftId/export" element={<OrdersV2Export />} />
     <Route path="orders-v2/history/:orderId" element={<OrdersV2History />} />

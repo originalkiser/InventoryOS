@@ -57,6 +57,15 @@ export function OrdersV2Landing() {
   const [adHocShops, setAdHocShops] = useState<string[]>([]) // shop LABELS, same shape as MultiSelectDropdown elsewhere
   const shopOptions = useMemo(() => loc.includedOptions.map((o) => ({ value: o.label })), [loc.includedOptions])
   const shopLabelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
+  // Mighty has no regular order-day schedule at all (see mightyEngine.ts) —
+  // every Mighty order is inherently the ad hoc case, so the checkbox is
+  // hidden and the shop picker always shows once this vendor is selected.
+  // Target Days of Supply / Lead Time replace the per-shop config Mighty
+  // shops don't have — set once for the whole order, editable later from
+  // the draft itself.
+  const isMighty = vendors.isMighty(vendorId)
+  const [mightyTargetDays, setMightyTargetDays] = useState(21)
+  const [mightyLeadTimeDays, setMightyLeadTimeDays] = useState(3)
 
   // Shared filters across both lists.
   const [fVendor, setFVendor] = useState('')
@@ -103,8 +112,10 @@ export function OrdersV2Landing() {
 
   async function start() {
     setStarting(true)
-    const adHocIds = adHoc ? adHocShops.map((l) => shopLabelToId.get(l)).filter((v): v is string => !!v) : null
-    const id = await createDraft(vendorId || null, orderDate, settings, orderDow, adHocIds)
+    const useAdHoc = adHoc || isMighty
+    const adHocIds = useAdHoc ? adHocShops.map((l) => shopLabelToId.get(l)).filter((v): v is string => !!v) : null
+    const mightyOptions = isMighty ? { targetDays: mightyTargetDays, leadTimeDays: mightyLeadTimeDays } : null
+    const id = await createDraft(vendorId || null, orderDate, settings, orderDow, adHocIds, mightyOptions)
     setStarting(false)
     if (id) { setStartOpen(false); navigate(`/orders-v2/draft/${id}`) }
   }
@@ -216,12 +227,23 @@ export function OrdersV2Landing() {
           <Combobox label="Vendor" options={vendors.options} value={vendorId} onChange={setVendorId} placeholder="Select vendor…" />
           <Input label="Order Date" type="date" value={orderDate} onChange={(e) => pickDate(e.target.value)} />
 
-          <label className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
-            <input type="checkbox" checked={adHoc} onChange={(e) => setAdHoc(e.target.checked)} className="accent-inky" />
-            Ad hoc — order specific shop(s) only, instead of the regular schedule
-          </label>
+          {!isMighty && (
+            <label className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
+              <input type="checkbox" checked={adHoc} onChange={(e) => setAdHoc(e.target.checked)} className="accent-inky" />
+              Ad hoc — order specific shop(s) only, instead of the regular schedule
+            </label>
+          )}
 
-          {adHoc ? (
+          {isMighty && (
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Target Days of Supply" type="number" min={1} max={365} value={mightyTargetDays}
+                onChange={(e) => setMightyTargetDays(Math.max(1, Number(e.target.value) || 1))} />
+              <Input label="Lead Time (days)" type="number" min={0} max={90} value={mightyLeadTimeDays}
+                onChange={(e) => setMightyLeadTimeDays(Math.max(0, Number(e.target.value) || 0))} />
+            </div>
+          )}
+
+          {adHoc || isMighty ? (
             <>
               <div className="flex flex-col gap-0.5">
                 <span className="text-[11px] font-mono text-inky/60">Shop(s)</span>
@@ -229,7 +251,12 @@ export function OrdersV2Landing() {
                   placeholder="Select shops…" countNoun="shops" searchable showAllOption={false} />
               </div>
               {adHocShops.length === 0 ? (
-                <p className="text-[11px] font-mono text-[#C0392B]">Pick at least one shop to run an ad hoc order.</p>
+                <p className="text-[11px] font-mono text-[#C0392B]">Pick at least one shop to run {isMighty ? 'a Mighty' : 'an ad hoc'} order.</p>
+              ) : isMighty ? (
+                <p className="text-[11px] font-mono text-inky/60">
+                  Orders every Mighty-supplied product at {adHocShops.length} selected shop{adHocShops.length !== 1 ? 's' : ''}
+                  {' '}up to {mightyTargetDays} days of supply, {mightyLeadTimeDays}d lead time.
+                </p>
               ) : (
                 <p className="text-[11px] font-mono text-inky/60">
                   Generates the same way as a regular order — DOS targets, minimums, smoothing — limited to
@@ -265,7 +292,7 @@ export function OrdersV2Landing() {
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => setStartOpen(false)}>Cancel</Button>
-            <Button size="sm" loading={starting} disabled={!profile?.company_id || (adHoc && adHocShops.length === 0)} onClick={start}>Create Draft</Button>
+            <Button size="sm" loading={starting} disabled={!profile?.company_id || ((adHoc || isMighty) && adHocShops.length === 0)} onClick={start}>Create Draft</Button>
           </div>
         </div>
       </Modal>
