@@ -162,19 +162,21 @@ async function callDroptop(
 // of everything, whether it had actually changed or not.
 //
 // isTerminal()/recentCutoffUnix+stillOpenPoIds below make this adaptive
-// instead of a blind fixed window. Real production data check the same
-// day: 72% of all POs are already terminal by this definition and will
-// never need to be looked at again once found; the remaining ~28% (which
-// tail out to 5-6 months old for a genuinely slow back-order) are exactly
-// what stillOpenPoIds tracks. delivery_status='fully_received' is the real
-// "done" signal (a physical state that shouldn't reverse) — po_status
-// alone isn't reliable, per the closed+back_ordered evidence above.
-// po_status='cancelled' is terminal regardless of delivery_status (nothing
-// further should happen to a cancelled order). Everything else — including
-// a null/unknown status, which must never be assumed done — stays tracked
-// until it reaches one of these two states.
-function isTerminal(poStatus: string | null | undefined, deliveryStatus: string | null | undefined): boolean {
-  return deliveryStatus === 'fully_received' || poStatus === 'cancelled'
+// instead of a blind fixed window. Terminal = po_status is 'closed' or
+// 'cancelled' — an explicit product decision (2026-09-21): po_status is the
+// shop's own "nothing more to do here" signal, independent of whatever
+// delivery_status happens to say. Deliberately NOT keyed on
+// delivery_status='fully_received' — real production data shows 4,436 rows
+// that are po_status='closed' with a non-final delivery_status (2,278
+// partially_received, 1,896 null, 262 back_ordered): once a shop closes a
+// PO, Droptop apparently doesn't keep delivery_status current for it
+// either, so a stale/incomplete delivery_status on an already-closed PO
+// isn't a real still-open order needing action, it's just Droptop not
+// bothering to update a field nobody's tracking anymore. A null/unknown
+// po_status is NOT treated as terminal — stays tracked until it actually
+// reaches closed or cancelled.
+function isTerminal(poStatus: string | null | undefined): boolean {
+  return poStatus === 'closed' || poStatus === 'cancelled'
 }
 
 // Paginates one operation's POs (newest-created-first) and stops once BOTH:
@@ -336,12 +338,12 @@ Deno.serve(async (req) => {
     const targetLocationIds = locations.map((l: any) => opToLocation.get(l.droptop_operation_id)).filter(Boolean) as string[]
     const { data: knownRows, error: knownErr } = await (admin as any)
       .schema('inventory').from('droptop_purchase_orders')
-      .select('location_id, po_id, po_status, delivery_status')
+      .select('location_id, po_id, po_status')
       .eq('company_id', companyId).in('location_id', targetLocationIds)
     if (knownErr) return ok({ error: `Existing PO lookup failed: ${knownErr.message}` })
     const stillOpenByLocation = new Map<string, Set<string>>()
-    for (const row of (knownRows ?? []) as { location_id: string | null; po_id: string; po_status: string | null; delivery_status: string | null }[]) {
-      if (!row.location_id || isTerminal(row.po_status, row.delivery_status)) continue
+    for (const row of (knownRows ?? []) as { location_id: string | null; po_id: string; po_status: string | null }[]) {
+      if (!row.location_id || isTerminal(row.po_status)) continue
       const set = stillOpenByLocation.get(row.location_id) ?? new Set<string>()
       set.add(row.po_id)
       stillOpenByLocation.set(row.location_id, set)
