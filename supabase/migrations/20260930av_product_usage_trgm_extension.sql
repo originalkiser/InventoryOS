@@ -1,0 +1,14 @@
+-- Found live 2026-09-21 via a pg_stat_statements review: Orders v2's own
+-- generation-input fetch (useOrdersV2.ts's fetchInputs, scoping
+-- inventory.product_usage to the product "families" in play via a chain
+-- of `product_id ilike 'X%'` OR conditions) was BY FAR the single most
+-- expensive query in the whole project — 26 calls averaging 15.7s each,
+-- 49.5% of all query time captured in the report, on a table with no
+-- index at all on product_id alone (only compound indexes leading with
+-- location_id, confirmed via pg_indexes). Every one of those 26 calls was
+-- a full sequential scan over 300k+ rows. pg_trgm's GIN index (next
+-- migration) is what actually speeds up ILIKE — this migration only
+-- installs the extension, matching this project's existing convention of
+-- putting extensions in the `extensions` schema (pgcrypto, uuid-ossp, etc,
+-- confirmed via pg_extension/pg_namespace).
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;

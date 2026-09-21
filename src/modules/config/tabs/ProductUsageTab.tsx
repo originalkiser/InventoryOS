@@ -323,7 +323,15 @@ export function ProductUsageTab() {
     if (!profile?.company_id) return
     setLoading(true)
     const sb = supabase as any
-    const PAGE = 1000
+    // This project's own Data API "Max Rows" setting is 10,000 (confirmed
+    // in the dashboard 2026-09-21) — PAGE was left at the old 1,000 default
+    // long after that got raised, so a full "show all categories" load
+    // (300k+ rows) paid for ~300 sequential round trips for no reason: the
+    // underlying keyset query itself is cheap either way (~9ms per page,
+    // confirmed via pg_stat_statements — the ~3min wall time was almost
+    // entirely per-request network/JSON overhead, not DB time). Kept a bit
+    // under the real 10,000 cap rather than exactly at it.
+    const PAGE = 8000
     const scoped = !showAllCategories && includedCategories.length > 0
     const all: ProductUsage[] = []
     let cursor: string | null = null
@@ -338,9 +346,9 @@ export function ProductUsageTab() {
       if (error) { failed = true; break }
       const batch = (rows ?? []) as ProductUsage[]
       for (const r of batch) all.push({ ...r, category: (String(r.category ?? '').trim() || null) })
-      // Exit only on a genuinely empty page — the project's API "Max Rows"
-      // setting silently caps every response at 1000 regardless of
-      // .limit(PAGE), so a full page here doesn't mean "last page."
+      // Exit only on a genuinely empty page — a page short of PAGE doesn't
+      // by itself prove "last page" if the server's own Max Rows setting
+      // is ever lower than PAGE, so only a truly empty page ends the loop.
       if (batch.length === 0) break
       cursor = batch[batch.length - 1].id
     }
@@ -360,12 +368,13 @@ export function ProductUsageTab() {
     setDataSource((link as ExistingDataSource) ?? null)
   }, [profile?.company_id])
 
-  // Package Capacity comes from Order Config; page through it (1000/req) so the
-  // map covers the whole table regardless of the server row cap.
+  // Package Capacity comes from Order Config; page through it so the map
+  // covers the whole table regardless of the server row cap (8,000/req —
+  // see loadRpc()'s own comment on the real Max Rows setting).
   const loadCapacities = useCallback(async () => {
     if (!profile?.company_id) return
     const sb = supabase as any
-    const PAGE = 1000
+    const PAGE = 8000
     let from = 0
     const m = new Map<string, number>()
     for (;;) {
@@ -394,10 +403,11 @@ export function ProductUsageTab() {
       sb.schema('inventory').from('vendors').select('id, name').eq('company_id', profile.company_id),
     ])
     setVendors(((vRes.data ?? []) as any[]).map((v) => ({ id: v.id, name: v.name })))
-    // Page through (server caps a single request at ~1000 rows) so a vendor
-    // with parts past that cutoff still resolves — this is what silently
-    // dropped every match for a vendor whose rows land later in the table.
-    const PAGE = 1000
+    // Page through (server caps a single request, see loadRpc()'s own
+    // comment) so a vendor with parts past that cutoff still resolves —
+    // this is what silently dropped every match for a vendor whose rows
+    // land later in the table.
+    const PAGE = 8000
     let from = 0
     const all: { vendor_id: string | null; part_number: string | null; our_part_number: string | null }[] = []
     for (;;) {

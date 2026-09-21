@@ -1,0 +1,21 @@
+-- Separate migration from the extension install above — CREATE INDEX
+-- CONCURRENTLY cannot run inside a transaction block, and pairing it with
+-- CREATE EXTENSION in the same file risks the runner wrapping both in one
+-- (same precedent as this project's own 20260930am geocode index, its own
+-- single-purpose file). CONCURRENTLY specifically so this doesn't hold a
+-- write lock on a 300k+ row table while it builds.
+--
+-- A trigram GIN index (not a plain btree) because the query is `product_id
+-- ILIKE 'X%'` — case-insensitive, and Postgres can't use a plain btree for
+-- ILIKE without an exact-matching expression index. Trigram indexes make
+-- ANY ILIKE pattern (prefix or not) index-accelerated, so this also covers
+-- a future non-prefix search without needing a second index.
+--
+-- No company_id column in this index (unlike most other indexes on this
+-- table): this app is single-tenant in practice (see the Droptop sync
+-- functions' own "single-tenant deployment" comments) and GIN doesn't mix
+-- well with a leading equality column the way btree does — the trigram
+-- index alone already collapses this from a full table scan to a targeted
+-- lookup per pattern.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_product_usage_product_id_trgm
+  ON inventory.product_usage USING gin (product_id extensions.gin_trgm_ops);
