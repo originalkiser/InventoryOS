@@ -649,7 +649,7 @@ export function OrdersV2Review() {
                       </td>
                       <Td>{l.product_id}</Td>
                       <Td>{l.uom ?? '—'}</Td>
-                      <Td align="right">{num(l.max_capacity_gallons, 0)}</Td>
+                      <Td align="right">{num(isOz ? toOz(l.max_capacity_gallons) : l.max_capacity_gallons, 0)}</Td>
                       <td className="px-2 py-1 text-right text-navy whitespace-nowrap">
                         {num(isOz ? toOz(input?.own_on_hand ?? l.on_hand) : (input?.own_on_hand ?? l.on_hand))}
                         {input?.equivalent_products && input.equivalent_products.length > 0 && (
@@ -872,7 +872,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz }: {
     <tr className="border-t border-navy/10">
       <td className="py-1 text-navy">{productId}</td>
       <td className="text-inky/70">{uom ?? '—'}</td>
-      <td className="text-right text-inky/70">{num(capacity, 0)}</td>
+      <td className="text-right text-inky/70">{num(isOz ? toOz(capacity) : capacity, 0)}</td>
       <td className="text-right text-inky/70">
         {num(isOz ? toOz(input?.own_on_hand ?? onHand) : (input?.own_on_hand ?? onHand))}
         {input?.equivalent_products && input.equivalent_products.length > 0 && (
