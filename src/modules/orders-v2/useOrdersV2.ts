@@ -68,6 +68,25 @@ async function fetchAll<T>(schema: string, table: string, select: string, compan
   return out
 }
 
+// A plain `.in(column, values)` sends every value as a URL query param —
+// fine at the "31 open POs" scale this was written for, but a real 400
+// Bad Request once openPoIds legitimately grew into the hundreds (found
+// live 2026-09-21: 964 open POs company-wide blew out the request and,
+// after fetchAll's own error-swallowing bug was fixed the same day, that
+// finally surfaced as a visible — and, worse, endlessly retried, see
+// runGeneration's own guard — error instead of silently returning
+// nothing). Chunking the `.in()` list keeps each request small regardless
+// of how large the open-PO count grows.
+const IN_CHUNK = 150
+async function fetchAllChunkedIn<T>(schema: string, table: string, select: string, companyId: string, column: string, values: string[]): Promise<T[]> {
+  const out: T[] = []
+  for (let i = 0; i < values.length; i += IN_CHUNK) {
+    const chunk = values.slice(i, i + IN_CHUNK)
+    out.push(...await fetchAll<T>(schema, table, select, companyId, (q: any) => q.in(column, chunk)))
+  }
+  return out
+}
+
 // ── Module settings ─────────────────────────────────────────────────────
 
 export function useOrderSettings() {
@@ -565,8 +584,7 @@ export function useGenerationData() {
       // anyway. An empty openPoIds means literally nothing is outstanding
       // anywhere, so skip the query rather than send `.in('...', [])`.
       openPoIds.length
-        ? step(fetchAll<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId,
-            (q: any) => q.in('purchase_order_id', openPoIds)))
+        ? step(fetchAllChunkedIn<PoItemRow>('inventory', 'droptop_purchase_order_items', 'purchase_order_id, product_id, quantity, received_quantity, remaining_quantity, purchase_uom', companyId, 'purchase_order_id', openPoIds))
         : step(Promise.resolve([] as PoItemRow[])),
       step(fetchAll<ExceptionRow>('inventory', 'ov2_product_exceptions', 'location_id, product_id, floor_qty, ceiling_qty, ceiling_unit', companyId)),
       step(fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),

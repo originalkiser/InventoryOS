@@ -320,9 +320,24 @@ export function OrdersV2Review() {
     }
   }, [draft, profile?.company_id, fetchInputs, settings, effectiveSettings, rulesFor, replaceLines, reload, vendors])
 
-  // Generate automatically the first time a fresh draft is opened.
+  // Generate automatically the first time a fresh draft is opened. Guarded
+  // by autoGenAttemptedRef (not just draft.status) — found live 2026-09-21:
+  // when runGeneration() throws (a real fetch error, now surfaced instead
+  // of swallowed — see fetchAll's own comment in useOrdersV2.ts), it never
+  // reaches the status:'review' update, so draft.status stays 'generating'
+  // forever. Without this guard, generating flipping true->false on the
+  // failed attempt re-satisfies every condition below and this effect
+  // re-fires immediately — an infinite retry loop hammering the same
+  // failing query and re-toasting the same error on every pass. The ref is
+  // keyed per draft id so switching to a different draft still auto-fires
+  // once, and a genuinely successful run's reload() (new lines, status
+  // 'review') exits the loop through lines.length/status same as before.
+  const autoGenAttemptedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (draft && draft.status === 'generating' && !loading && lines.length === 0 && !generating) void runGeneration()
+    if (!draft || draft.status !== 'generating' || loading || lines.length !== 0 || generating) return
+    if (autoGenAttemptedRef.current === draft.id) return
+    autoGenAttemptedRef.current = draft.id
+    void runGeneration()
   }, [draft, loading, lines.length, generating, runGeneration])
 
   // ---- grouping + derived numbers -----------------------------------------
