@@ -38,7 +38,17 @@ export function isOunceUnit(raw: string | null | undefined): boolean {
 // product_usage query to just the families in play, below).
 const baseProductId = (id: string): string => id.replace(/[A-Z]+$/i, '') || id
 
-/** Page through a table so a big company isn't silently truncated at ~1000 rows. */
+/**
+ * Page through a table so a big company isn't silently truncated at ~1000
+ * rows. Throws on a query error instead of swallowing it (found live
+ * 2026-09-21: this used to `break` on error and return whatever partial
+ * data it had collected — during a real transient DB hiccup, that let
+ * generation silently proceed as if `product_usage` were genuinely empty,
+ * bake null on_hand/daily_usage into every line, and still persist +
+ * toast "success," since runGeneration's own try/catch never saw an error
+ * to catch. Matches useRdReports.ts's own fetchAllRows, which already
+ * throws for exactly this reason.
+ */
 async function fetchAll<T>(schema: string, table: string, select: string, companyId: string, extra?: (q: any) => any): Promise<T[]> {
   const out: T[] = []
   let from = 0
@@ -46,7 +56,7 @@ async function fetchAll<T>(schema: string, table: string, select: string, compan
     let q = sb().schema(schema).from(table).select(select).eq('company_id', companyId)
     if (extra) q = extra(q)
     const { data, error } = await q.order('id', { ascending: true }).range(from, from + PAGE - 1)
-    if (error) break
+    if (error) throw new Error(`Failed to load ${schema}.${table}: ${error.message}`)
     const batch = (data ?? []) as T[]
     out.push(...batch)
     // Exit only on a genuinely empty page — the project's API "Max Rows"

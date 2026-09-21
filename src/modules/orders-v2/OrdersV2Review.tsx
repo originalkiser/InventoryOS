@@ -177,17 +177,25 @@ export function OrdersV2Review() {
   // fights a real (destructive) generation run.
   const loadCandidatesForDisplay = useCallback(async () => {
     if (!draft || !profile?.company_id) return
-    const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, exceptions, days } = await fetchInputs(
-      draft.vendor_id, settings.flag_cumulative_days,
-    )
-    const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
-    setAllInputs(inputs)
-    setOzProductIds(new Set(globalProducts.filter((g) => isOunceUnit(g.unit_of_measure)).map((g) => g.product_id)))
-    const adHocIds = draftAdHocLocationIds(draft)
-    const eligibleIds = adHocIds
-      ? new Set(adHocIds)
-      : eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, draftOrderDow(draft))
-    setEligibleLocationIds(eligibleIds)
+    try {
+      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, exceptions, days } = await fetchInputs(
+        draft.vendor_id, settings.flag_cumulative_days,
+      )
+      const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
+      setAllInputs(inputs)
+      setOzProductIds(new Set(globalProducts.filter((g) => isOunceUnit(g.unit_of_measure)).map((g) => g.product_id)))
+      const adHocIds = draftAdHocLocationIds(draft)
+      const eligibleIds = adHocIds
+        ? new Set(adHocIds)
+        : eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, draftOrderDow(draft))
+      setEligibleLocationIds(eligibleIds)
+    } catch (e) {
+      // Never leave this silent — a failed fetch here previously left
+      // allInputs empty with no explanation, reading as "no other products
+      // configured" rather than "couldn't load." See fetchAll's own comment
+      // in useOrdersV2.ts for the matching runGeneration-side fix.
+      toast.error(e instanceof Error ? e.message : 'Failed to load configured products')
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.id, profile?.company_id, fetchInputs, settings, rulesFor, vendors])
 
