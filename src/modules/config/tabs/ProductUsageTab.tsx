@@ -78,6 +78,7 @@ const REQUIRED_FIELDS = [
   { name: 'on_hands', label: 'On Hands' },
   { name: 'package_capacity', label: 'Package Capacity' },
   { name: 'cost_per_unit', label: 'Cost / Unit' },
+  { name: 'supplier', label: 'Supplier' },
 ]
 // Same shape, but for files that only carry the vendor's own part number (e.g.
 // a Valvoline usage export) — resolved to our_part_number via inventory.vendor_parts
@@ -90,6 +91,7 @@ const REQUIRED_FIELDS_VENDOR_PART = [
   { name: 'on_hands', label: 'On Hands' },
   { name: 'package_capacity', label: 'Package Capacity' },
   { name: 'cost_per_unit', label: 'Cost / Unit' },
+  { name: 'supplier', label: 'Supplier' },
 ]
 
 const BATCH = 2000
@@ -174,7 +176,7 @@ function CategoryDropdown({
 
 // ---------------------------------------------------------------------------
 const col = createColumnHelper<ProductUsage>()
-const EMPTY = { locationId: '', product_id: '', category: '', daily_usage: '', on_hands: '', package_capacity: '', cost_per_unit: '' }
+const EMPTY = { locationId: '', product_id: '', category: '', daily_usage: '', on_hands: '', package_capacity: '', cost_per_unit: '', supplier: '' }
 // Columns not offered in the column manager (always shown, kept out of ordering).
 const UNMANAGED_COLS = new Set(['edit'])
 
@@ -429,6 +431,7 @@ export function ProductUsageTab() {
     col.accessor('on_hands', { header: 'On Hands', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('package_capacity', { header: 'Package Capacity', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('cost_per_unit', { header: 'Cost / Unit', cell: (i) => { const v = i.getValue(); return v == null ? '—' : formatCurrency(v) } }),
+    col.accessor('supplier', { header: 'Supplier', cell: (i) => i.getValue() ?? '—' }),
     { id: 'total_cost', header: 'Total Cost',
       accessorFn: (r: ProductUsage) => (r.cost_per_unit == null ? null : (r.on_hands ?? 0) * r.cost_per_unit),
       cell: (i: any) => { const v = i.getValue(); return v == null ? '—' : formatCurrency(v) } },
@@ -482,6 +485,7 @@ export function ProductUsageTab() {
       on_hands: r.on_hands?.toString() ?? '',
       package_capacity: r.package_capacity?.toString() ?? '',
       cost_per_unit: r.cost_per_unit?.toString() ?? '',
+      supplier: r.supplier ?? '',
     })
     setAddOpen(true)
   }
@@ -490,8 +494,9 @@ export function ProductUsageTab() {
   async function onSubmit() {
     if (!profile?.company_id || !form.product_id.trim()) return
     const du = parseNum(form.daily_usage), oh = parseNum(form.on_hands), pc = parseNum(form.package_capacity), cpu = parseNum(form.cost_per_unit)
-    // Core columns (guaranteed to exist). cost_per_unit is saved best-effort
-    // afterward so add/edit still works if the cost migration isn't applied yet.
+    // Core columns (guaranteed to exist). cost_per_unit/supplier are saved
+    // best-effort afterward so add/edit still works if either migration
+    // isn't applied yet.
     const payload: Record<string, unknown> = {
       company_id: profile.company_id,
       location_id: form.locationId || null,
@@ -515,8 +520,11 @@ export function ProductUsageTab() {
       savedId = res.data?.id ?? null
     }
     if (error) { toast.error(error.message); return }
-    // best-effort: cost_per_unit column may be pending migration
-    if (savedId) sb.schema('inventory').from('product_usage').update({ cost_per_unit: cpu }).eq('id', savedId).then(() => {})
+    // best-effort: cost_per_unit/supplier columns may be pending migration
+    if (savedId) {
+      sb.schema('inventory').from('product_usage')
+        .update({ cost_per_unit: cpu, supplier: form.supplier.trim() || null }).eq('id', savedId).then(() => {})
+    }
     toast.success(editId ? 'Updated' : 'Saved')
     resetForm(); setAddOpen(false); setEditId(null)
     invalidateInventoryCache()
@@ -579,15 +587,18 @@ export function ProductUsageTab() {
     if (usesVendorPart && !importVendorId) { toast.error('Pick which vendor these part numbers belong to'); return }
     setImporting(true)
     const sb = supabase as any
-    // Only send cost_per_unit when the file actually maps it, so imports without
-    // a cost column still work if the cost migration isn't applied yet.
+    // Only send cost_per_unit/supplier when the file actually maps them, so
+    // imports without those columns still work if a migration adding them
+    // isn't applied in this environment yet.
     const hasCost = maps.some((m) => m.fieldName === 'cost_per_unit')
+    const hasSupplier = maps.some((m) => m.fieldName === 'supplier')
 
     let unresolved = 0
     let payload = rows.map((row) => {
       let location_id: string | null = null
       let product_id = '', category: string | null = null
       let daily_usage: number | null = null, on_hands: number | null = null, package_capacity: number | null = null, cost_per_unit: number | null = null
+      let supplier: string | null = null
       for (const m of maps) {
         const v = mappedValue(row, m, maps)
         if (m.fieldName === 'location') location_id = loc.resolveId(v)
@@ -602,8 +613,14 @@ export function ProductUsageTab() {
         else if (m.fieldName === 'on_hands') on_hands = parseNum(v)
         else if (m.fieldName === 'package_capacity') package_capacity = parseNum(v)
         else if (m.fieldName === 'cost_per_unit') cost_per_unit = parseNum(v)
+        else if (m.fieldName === 'supplier') supplier = v.trim() || null
       }
-      return { location_id, product_id, category, daily_usage, on_hands, package_capacity, days_of_supply: daysOfSupply(on_hands, daily_usage), ...(hasCost ? { cost_per_unit } : {}) }
+      return {
+        location_id, product_id, category, daily_usage, on_hands, package_capacity,
+        days_of_supply: daysOfSupply(on_hands, daily_usage),
+        ...(hasCost ? { cost_per_unit } : {}),
+        ...(hasSupplier ? { supplier } : {}),
+      }
     }).filter((r) => r.product_id)
 
     if (unresolved > 0) toast.error(`${unresolved.toLocaleString()} row(s) skipped — vendor part number not found in Vendor Parts for that vendor`)
@@ -868,6 +885,7 @@ export function ProductUsageTab() {
             <Input label="On Hands" type="number" step="0.01" value={form.on_hands} onChange={(e) => setForm({ ...form, on_hands: e.target.value })} />
             <Input label="Package Capacity" type="number" step="0.01" value={form.package_capacity} onChange={(e) => setForm({ ...form, package_capacity: e.target.value })} />
             <Input label="Cost / Unit" type="number" step="0.01" value={form.cost_per_unit} onChange={(e) => setForm({ ...form, cost_per_unit: e.target.value })} />
+            <Input label="Supplier" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} />
           </div>
           <div className="flex items-center gap-6">
             <p className="text-xs font-mono text-inky">Days of Supply: <span className="text-inky">{dosDisplay(daysOfSupply(parseNum(form.on_hands), parseNum(form.daily_usage)), parseNum(form.on_hands))}</span></p>

@@ -131,6 +131,7 @@ export interface ProductUsage {
   on_hands: number | null
   package_capacity: number | null
   cost_per_unit: number | null
+  supplier: string | null
   days_of_supply: number | null
   updated_by: string | null
   last_change_source: string | null
