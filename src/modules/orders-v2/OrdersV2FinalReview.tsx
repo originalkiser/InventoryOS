@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Copy, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -6,7 +6,8 @@ import { Button, Card, CardBody, Input, Modal } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { useLocations } from '@/hooks/useLocations'
 import { parseWeekday, orderDayFromDelivery } from '@/lib/orderDay'
-import { useDraft, useOrderSettings, useVendorRules, type DraftLineRow } from './useOrdersV2'
+import { supabase } from '@/lib/supabase'
+import { useDraft, useOrderSettings, useVendorRules, isOunceUnit, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { Flags } from './OrdersV2Review'
 import { OrderStepper } from './OrderStepper'
@@ -32,6 +33,26 @@ export function OrdersV2FinalReview() {
 
   const [filter, setFilter] = useState('')
   const [openShop, setOpenShop] = useState<{ locationId: string; orderType: OrderType } | null>(null)
+
+  // Display-only ounce conversion for a product tracked that way (e.g.
+  // HM0806, global_products.unit_of_measure = "Ounces") — same purpose as
+  // OrdersV2Review's own ozProductIds, re-derived here since this page
+  // doesn't otherwise fetch global_products. The underlying quarts math
+  // (dos_after, dollars, capacity/minimum checks) is untouched; only the
+  // qty-in-ounces annotation and Daily Usage display change.
+  const [ozProductIds, setOzProductIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    const productIds = [...new Set(lines.map((l) => l.product_id))]
+    if (!productIds.length) { setOzProductIds(new Set()); return }
+    let cancelled = false
+    ;(supabase as any).schema('inventory').from('global_products')
+      .select('product_id, unit_of_measure').in('product_id', productIds)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        setOzProductIds(new Set((data ?? []).filter((g: any) => isOunceUnit(g.unit_of_measure)).map((g: any) => g.product_id)))
+      })
+    return () => { cancelled = true }
+  }, [lines])
 
   const shopLabel = useCallback(
     (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
@@ -386,7 +407,11 @@ export function OrdersV2FinalReview() {
                     onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
                     className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
                   {l.quarts_per_unit != null && (
-                    <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
+                    <div className="text-[10px] text-inky/50 mt-0.5">
+                      {ozProductIds.has(l.product_id)
+                        ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
+                        : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+                    </div>
                   )}
                 </td>
                 <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>
@@ -423,10 +448,14 @@ export function OrdersV2FinalReview() {
                           onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
                           className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
                         {l.quarts_per_unit != null && (
-                          <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
+                          <div className="text-[10px] text-inky/50 mt-0.5">
+                            {ozProductIds.has(l.product_id)
+                              ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
+                              : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+                          </div>
                         )}
                       </td>
-                      <td className="px-2 py-1 text-right text-navy">{num(l.daily_usage)}</td>
+                      <td className="px-2 py-1 text-right text-navy">{num(ozProductIds.has(l.product_id) && l.daily_usage != null ? l.daily_usage * 32 : l.daily_usage)}</td>
                       <td className="px-2 py-1 text-right text-navy">{money(Number(l.qty) * Number(l.unit_cost ?? 0))}</td>
                       <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>
                       <td className="px-2 py-1 text-right">

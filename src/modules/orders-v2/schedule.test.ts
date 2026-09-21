@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveDeliveryDate, addBusinessDays, businessDaysBetween, weekStartOf, generateOrder } from './engine'
-import { buildGenerationInputs, eligibleLocations, shopsPerOrderDay, draftOrderDow } from './useOrdersV2'
+import { buildGenerationInputs, eligibleLocations, shopsPerOrderDay, draftOrderDow, isOunceUnit } from './useOrdersV2'
 import { DEFAULT_ORDER_SETTINGS, type DeliverySchedule, type GenerationContext, type GenerationInput, type ProductRule, type WeekCalendar } from './types'
 
 // 2026-08-19 is a Wednesday. Weekday numbers: Sun 0 … Sat 6.
@@ -403,4 +403,16 @@ describe('on-hand unit conversion', () => {
       const [i] = buildGenerationInputs([cfg('HM0806')], [], [use('HM0806', 320, 32)], [], [], [], [gp('HM0806', unit)])
       expect(i.on_hand).toBeCloseTo(10, 6)
     })
+
+  // isOunceUnit is the exported, standalone version of the same match this
+  // conversion uses internally — the Review page relies on it to know which
+  // lines to show back in ounces (display-only; see OrdersV2Review.tsx's
+  // ozProductIds). Covered directly so it can't silently drift from the
+  // conversion logic above.
+  it.each(['oz', 'OZ', 'Oz.', 'ounce', 'Ounces', 'fl oz', 'fluid ounces'])('isOunceUnit(%j) is true', (unit) => {
+    expect(isOunceUnit(unit)).toBe(true)
+  })
+  it.each(['Quarts', 'qt', 'gal', 'bulk', null, undefined])('isOunceUnit(%j) is false', (unit) => {
+    expect(isOunceUnit(unit)).toBe(false)
+  })
 })

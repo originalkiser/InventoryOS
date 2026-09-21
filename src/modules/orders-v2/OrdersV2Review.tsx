@@ -12,7 +12,7 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import {
   useDraft, useGenerationData, useOrderSettings, useVendorRules,
-  buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, type DraftLineRow,
+  buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, isOunceUnit, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
@@ -81,6 +81,15 @@ export function OrdersV2Review() {
   // run's own eligibleLocations() call so the "Shops With No Orders"
   // section below doesn't need to recompute it separately.
   const [eligibleLocationIds, setEligibleLocationIds] = useState<Set<string> | null>(null)
+  // A product whose real-world tracking unit is ounces (global_products.
+  // unit_of_measure, e.g. HM0806 = "Ounces") is converted to quarts before
+  // it ever reaches the engine, since the deficit/capacity/DOS math all
+  // assumes quarts throughout (see buildGenerationInputs' own comment) —
+  // that conversion is correct and stays untouched. This is display-only:
+  // for exactly these products, On Hand/Daily Usage/the order-amount
+  // annotation are shown back in ounces (the unit that actually guides
+  // ordering decisions for them) rather than their quarts-equivalent.
+  const [ozProductIds, setOzProductIds] = useState<Set<string>>(new Set())
   const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
   // Ad hoc drafts bypass the vendor's order-day schedule entirely (see
   // runGeneration below) — the weekday selector/labels further down don't
@@ -152,6 +161,7 @@ export function OrdersV2Review() {
       )
       const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
       setAllInputs(inputs)
+      setOzProductIds(new Set(globalProducts.filter((g) => isOunceUnit(g.unit_of_measure)).map((g) => g.product_id)))
       // An ad hoc draft (explicit shop list, set at "Start New Order") wins
       // outright over the vendor's regular order-day schedule — the whole
       // point is to scope to exactly those shops regardless of what day it
@@ -589,6 +599,10 @@ export function OrdersV2Review() {
                 const isLastOfShop = idx === visible.length - 1 || visible[idx + 1].location_id !== l.location_id
                 const shopOpen = expanded.has(locId)
                 const input = inputByLineKey.get(`${l.location_id}|${l.product_id}`)
+                // Display-only ounce conversion (see ozProductIds' own
+                // comment) — 32 oz/quart, the engine's own internal unit.
+                const isOz = ozProductIds.has(l.product_id)
+                const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
                 return (
                   <Fragment key={l.id}>
                     <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
@@ -605,7 +619,7 @@ export function OrdersV2Review() {
                       <Td>{l.uom ?? '—'}</Td>
                       <Td align="right">{num(l.max_capacity_gallons, 0)}</Td>
                       <td className="px-2 py-1 text-right text-navy whitespace-nowrap">
-                        {num(input?.own_on_hand ?? l.on_hand)}
+                        {num(isOz ? toOz(input?.own_on_hand ?? l.on_hand) : (input?.own_on_hand ?? l.on_hand))}
                         {input?.equivalent_products && input.equivalent_products.length > 0 && (
                           <div className="text-[9px] text-inky/50 leading-tight font-normal">
                             <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
@@ -615,14 +629,18 @@ export function OrdersV2Review() {
                           </div>
                         )}
                       </td>
-                      <Td align="right">{num(l.daily_usage)}</Td>
+                      <Td align="right">{num(isOz ? toOz(l.daily_usage) : l.daily_usage)}</Td>
                       <Td align="right">{dos(l.dos_before)}</Td>
                       <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
                         <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
                           onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
                           className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
                         {l.quarts_per_unit != null && (
-                          <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(l.qty) * l.quarts_per_unit, 1)} qt</div>
+                          <div className="text-[10px] text-inky/50 mt-0.5">
+                            {isOz
+                              ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
+                              : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+                          </div>
                         )}
                       </td>
                       <td className={`px-2 py-1 text-right whitespace-nowrap font-bold ${dosAfterColorClass(l.dos_after)}`}>{dos(l.dos_after)}</td>
@@ -657,6 +675,7 @@ export function OrdersV2Review() {
                             onPatch={patchQty}
                             onAdd={addConfiguredProduct}
                             showVmi={showConfigVmi}
+                            ozProductIds={ozProductIds}
                           />
                         </td>
                       </tr>
@@ -705,6 +724,7 @@ export function OrdersV2Review() {
                           onPatch={patchQty}
                           onAdd={addConfiguredProduct}
                           showVmi={showConfigVmi}
+                          ozProductIds={ozProductIds}
                         />
                       </div>
                     )}
@@ -752,7 +772,7 @@ function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }
  * "why isn't this shop ordering more" and "why isn't this shop ordering
  * anything" use the exact same product list, columns, and add-a-line
  * behavior. */
-function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi }: {
+function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds }: {
   rows: { input?: GenerationInput; line?: DraftLineRow }[]
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
@@ -762,6 +782,9 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi }: {
   // either via its own config (input) or, once ordered, the flag the
   // engine already stamped onto its line.
   showVmi: boolean
+  // See OrdersV2Review's own ozProductIds comment — display-only ounce
+  // conversion for a product tracked that way (e.g. HM0806).
+  ozProductIds: Set<string>
 }) {
   const visible = showVmi ? rows : rows.filter((r) =>
     !(r.input?.rule.vmi_keepfill_enabled || r.line?.flags?.includes('vmi_keepfill')))
@@ -776,7 +799,8 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi }: {
       </tr></thead>
       <tbody>
         {visible.map((r) => (
-          <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd} />
+          <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd}
+            isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')} />
         ))}
       </tbody>
     </table>
@@ -786,10 +810,11 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi }: {
 /** One row in a shop's product list — an existing line (editable in place)
  * or a configured-but-not-ordered candidate (typing a qty adds it). Shared
  * by the smoothing panel and the shop-name expand row below the table. */
-function SmoothingRow({ input, line, onPatch, onAdd }: {
+function SmoothingRow({ input, line, onPatch, onAdd, isOz }: {
   input?: GenerationInput; line?: DraftLineRow
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
+  isOz: boolean
 }) {
   const productId = line?.product_id ?? input?.product_id ?? ''
   const unitCost = Number(line?.unit_cost ?? input?.rule.unit_cost ?? 0)
@@ -807,6 +832,9 @@ function SmoothingRow({ input, line, onPatch, onAdd }: {
   const whyClass = line?.triggered_smoothing ? 'text-[#C0392B]'
     : line?.added_by_smoothing ? 'text-sky'
     : 'text-inky/40'
+  // Display-only — see ozProductIds' own comment on OrdersV2Review.
+  const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
+  const quartsPerUnit = line?.quarts_per_unit ?? (input ? gallonsPerUnit(input.rule) : null)
 
   return (
     <tr className="border-t border-navy/10">
@@ -814,7 +842,7 @@ function SmoothingRow({ input, line, onPatch, onAdd }: {
       <td className="text-inky/70">{uom ?? '—'}</td>
       <td className="text-right text-inky/70">{num(capacity, 0)}</td>
       <td className="text-right text-inky/70">
-        {num(input?.own_on_hand ?? onHand)}
+        {num(isOz ? toOz(input?.own_on_hand ?? onHand) : (input?.own_on_hand ?? onHand))}
         {input?.equivalent_products && input.equivalent_products.length > 0 && (
           <div className="text-[9px] text-inky/50 leading-tight font-normal">
             <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
@@ -824,7 +852,7 @@ function SmoothingRow({ input, line, onPatch, onAdd }: {
           </div>
         )}
       </td>
-      <td className="text-right text-inky/70">{num(dailyUsage)}</td>
+      <td className="text-right text-inky/70">{num(isOz ? toOz(dailyUsage) : dailyUsage)}</td>
       <td className="text-right text-inky/70">{dos(dosNow)}</td>
       <td className="text-right">
         {line ? (
@@ -837,6 +865,9 @@ function SmoothingRow({ input, line, onPatch, onAdd }: {
             title="Add this product to the order"
             className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
         ) : null}
+        {isOz && line && quartsPerUnit != null && (
+          <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(line.qty) * quartsPerUnit * 32, 0)}oz</div>
+        )}
       </td>
       <td className="text-right text-inky/70">{dos(dosAfter)}</td>
       <td className="text-right text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>

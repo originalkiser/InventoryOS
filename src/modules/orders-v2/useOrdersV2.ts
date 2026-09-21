@@ -20,6 +20,16 @@ const sb = () => supabase as any
 // of what the real cap is.
 const PAGE = 5000
 const pkey = (v: unknown) => String(v ?? '').toLowerCase().trim()
+// Same substring match buildGenerationInputs' own quartsPerSourceUnit uses
+// for global_products.unit_of_measure — exported so the Review page can
+// identify an ounce-tracked product (e.g. HM0806) for its own display-only
+// purposes (showing on-hand/usage/order amount in ounces instead of the
+// engine's internal quarts) without duplicating (and risking drifting
+// from) the conversion-factor logic itself.
+export function isOunceUnit(raw: string | null | undefined): boolean {
+  const u = pkey(raw).replace(/\./g, '')
+  return u.includes('oz') || u.includes('ounce')
+}
 // Same convention as RecountLogicTab.tsx's "equivalent case types" on-hand
 // lookup: a trailing run of letters marks the case-type suffix (e.g. "D"
 // for drum, "BB" for bulk/tote) — stripping it gives the product family
@@ -793,7 +803,7 @@ export function buildGenerationInputs(
     if (['quart', 'quarts', 'qt', 'qts'].includes(u)) return 1
     if (['pint', 'pints', 'pt'].includes(u)) return 0.5
     if (['gallon', 'gallons', 'gal'].includes(u)) return 4
-    if (u.includes('oz') || u.includes('ounce')) return 1 / 32
+    if (isOunceUnit(u)) return 1 / 32
     return 1
   }
   // Resolved the same direction as usage above: global_products may still
