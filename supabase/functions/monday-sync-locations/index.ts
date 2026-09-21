@@ -32,7 +32,7 @@
 // exist... and adds new locations" scope this was explicitly built to.
 //
 // Field mapping: every column on the board with a clear, verified 1:1
-// counterpart on core.locations is synced (FIELD_MAP below — built by
+// counterpart on core.locations is synced (STATIC_FIELD_MAP below — built by
 // cross-referencing the board's real column ids against
 // information_schema.columns, not guessed). A handful of fields with no
 // board equivalent (order_date, marketing_manager/mm_email/mm_cell,
@@ -62,7 +62,14 @@ function ok(body: unknown) {
 // (not hand-guessed): every title here matched a real column, and no id or
 // db column is reused across two rows.
 type FieldKind = 'text' | 'mirror' | 'relation' | 'bool' | 'int' | 'numeric' | 'date' | 'phone'
-const FIELD_MAP: [string, string, FieldKind][] = [
+// Renamed from FIELD_MAP to STATIC_FIELD_MAP (2026-09-20, column-mapper UI)
+// — this hardcoded list is unchanged and still the source of truth for
+// every field mapped before that UI existed. New mappings added through
+// the UI land in core.monday_column_mappings instead (see
+// core.add_monday_mapped_column) and get merged in at request time by
+// the effectiveFieldMap merge inside the request handler below, so this array itself never needs editing for
+// a mapping added that way.
+const STATIC_FIELD_MAP: [string, string, FieldKind][] = [
   ['owner', 'owner9', 'text'],
   ['market', 'mirror6__1', 'mirror'],
   ['region', 'dup__of_rd_2_email__1', 'mirror'],
@@ -165,14 +172,42 @@ const FIELD_MAP: [string, string, FieldKind][] = [
   ['longitude', 'longitude', 'numeric'],
 ]
 const STATUS_COLUMN_ID = 'status2'
-const ALL_COLUMN_IDS = [...new Set([...FIELD_MAP.map(([, id]) => id), STATUS_COLUMN_ID])]
+
+// Best-effort suggestion only for the column-mapper UI (2026-09-20) — an
+// admin can override both field_kind and the Postgres column type before
+// confirming, so getting this wrong for an unusual Monday column type just
+// means one extra click, not a bad mapping. Falls back to the safest
+// default (plain text) for any Monday column type not listed here, same
+// as how most of STATIC_FIELD_MAP's own dropdown/status/tags/color columns
+// are already treated as plain text.
+const MONDAY_TYPE_SUGGESTIONS: Record<string, { fieldKind: FieldKind; pgType: string }> = {
+  text: { fieldKind: 'text', pgType: 'text' },
+  long_text: { fieldKind: 'text', pgType: 'text' },
+  email: { fieldKind: 'text', pgType: 'text' },
+  link: { fieldKind: 'text', pgType: 'text' },
+  numeric: { fieldKind: 'numeric', pgType: 'numeric' },
+  numbers: { fieldKind: 'numeric', pgType: 'numeric' },
+  checkbox: { fieldKind: 'bool', pgType: 'boolean' },
+  date: { fieldKind: 'date', pgType: 'date' },
+  phone: { fieldKind: 'phone', pgType: 'text' },
+  mirror: { fieldKind: 'mirror', pgType: 'text' },
+  board_relation: { fieldKind: 'relation', pgType: 'text' },
+  connect_boards: { fieldKind: 'relation', pgType: 'text' },
+}
+function suggestionFor(mondayType: string): { fieldKind: FieldKind; pgType: string } {
+  return MONDAY_TYPE_SUGGESTIONS[mondayType] ?? { fieldKind: 'text', pgType: 'text' }
+}
+
+function columnIdsFor(fieldMap: [string, string, FieldKind][]): string[] {
+  return [...new Set([...fieldMap.map(([, id]) => id), STATUS_COLUMN_ID])]
+}
 
 // Fields something else in the app actually reads — Location Lookup's
 // sidebar, AM/RD Lookup, Tank Monitor email routing (am_email/rd_email),
 // Month-End's AM rollup, Droptop's own location matching
 // (droptop_operation_id), and the Customer Heatmap/Map Routes (lat/lng) —
 // verified by grepping each consuming file, not guessed. The other ~70
-// FIELD_MAP columns are Global-Config-editable reference data (royalty
+// STATIC_FIELD_MAP columns are Global-Config-editable reference data (royalty
 // rate, brand fund, opening hours, etc.) with no other reader in the app.
 // See buildLocationFields()/the update-with-fallback logic below for why
 // this distinction matters: a bad value in any ONE of the ~90 mapped
@@ -234,7 +269,7 @@ async function mondayQuery(apiKey: string, query: string, variables?: Record<str
 // class of bug this codebase has hit (and fixed) more than once elsewhere
 // (see project memory on the PostgREST Max Rows cap). items_page/
 // next_items_page is Monday's own cursor pattern, confirmed live.
-async function fetchAllItems(apiKey: string): Promise<MondayItem[]> {
+async function fetchAllItems(apiKey: string, columnIds: string[]): Promise<MondayItem[]> {
   const items: MondayItem[] = []
   const colValuesQuery = `id text ... on MirrorValue { display_value } ... on BoardRelationValue { display_value }`
   const first = await mondayQuery(
@@ -244,7 +279,7 @@ async function fetchAllItems(apiKey: string): Promise<MondayItem[]> {
         items_page(limit: ${PAGE_SIZE}) { cursor items { id name column_values(ids: $ids) { ${colValuesQuery} } } }
       }
     }`,
-    { boardId: BOARD_ID, ids: ALL_COLUMN_IDS },
+    { boardId: BOARD_ID, ids: columnIds },
   )
   const page = first.boards?.[0]?.items_page
   if (!page) throw new Error(`Board ${BOARD_ID} not found or not accessible`)
@@ -256,12 +291,26 @@ async function fetchAllItems(apiKey: string): Promise<MondayItem[]> {
       `query($cursor: String!, $ids: [String!]) {
         next_items_page(limit: ${PAGE_SIZE}, cursor: $cursor) { cursor items { id name column_values(ids: $ids) { ${colValuesQuery} } } }
       }`,
-      { cursor, ids: ALL_COLUMN_IDS },
+      { cursor, ids: columnIds },
     )
     items.push(...next.next_items_page.items)
     cursor = next.next_items_page.cursor
   }
   return items
+}
+
+// All columns on the board, unfiltered — backs the column-mapper UI's
+// "list_columns" mode. Separate from fetchAllItems since it needs no items,
+// just the board's own column definitions.
+async function fetchBoardColumns(apiKey: string): Promise<{ id: string; title: string; type: string }[]> {
+  const data = await mondayQuery(
+    apiKey,
+    `query($boardId: ID!) { boards(ids: [$boardId]) { columns { id title type } } }`,
+    { boardId: BOARD_ID },
+  )
+  const columns = data.boards?.[0]?.columns
+  if (!columns) throw new Error(`Board ${BOARD_ID} not found or not accessible`)
+  return columns
 }
 
 function colVal(item: MondayItem, id: string): string | null {
@@ -324,9 +373,9 @@ function buildShopCity(storeNumber: string, city: string | null): string | null 
   return alreadyPrefixed ? city : `${storeNumber}-${city}`
 }
 
-function buildLocationFields(item: MondayItem, storeNumber: string): Record<string, unknown> {
+function buildLocationFields(item: MondayItem, storeNumber: string, fieldMap: [string, string, FieldKind][]): Record<string, unknown> {
   const fields: Record<string, unknown> = {}
-  for (const [dbCol, mondayId, kind] of FIELD_MAP) fields[dbCol] = valueFor(item, mondayId, kind)
+  for (const [dbCol, mondayId, kind] of fieldMap) fields[dbCol] = valueFor(item, mondayId, kind)
 
   const status = colVal(item, STATUS_COLUMN_ID)
   fields.status = status
@@ -368,6 +417,9 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } }) as any
 
+    let body: { mode?: string } = {}
+    try { body = await req.json() } catch { /* no body (e.g. dispatcher's plain POST) — default sync mode */ }
+
     // Single-tenant deployment (same assumption skybitz-tank-sync and the
     // dispatcher itself already make) — resolve the one real company_id
     // rather than hard-coding it.
@@ -377,7 +429,49 @@ Deno.serve(async (req) => {
     if (!companyRow?.company_id) return ok({ error: 'No existing locations to resolve company_id from' })
     const companyId = companyRow.company_id
 
-    const items = await fetchAllItems(mondayApiKey)
+    const { data: dynamicRows, error: dynamicErr } = await admin
+      .schema('core').from('monday_column_mappings').select('*').eq('company_id', companyId)
+    if (dynamicErr) return ok({ error: dynamicErr.message })
+    const dynamicMappings = (dynamicRows ?? []) as {
+      monday_column_id: string; monday_column_title: string; monday_column_type: string
+      core_column: string; field_kind: FieldKind
+    }[]
+
+    // Column-mapper UI mode (2026-09-20): list every column on the board,
+    // marking which are already covered (statically in STATIC_FIELD_MAP, or
+    // dynamically via core.monday_column_mappings) so the UI can offer only
+    // genuinely-unmapped ones. Read-only — no items fetched, no writes.
+    if (body.mode === 'list_columns') {
+      const boardColumns = await fetchBoardColumns(mondayApiKey)
+      const staticIds = new Set(STATIC_FIELD_MAP.map(([, id]) => id))
+      const dynamicByMondayId = new Map(dynamicMappings.map((m) => [m.monday_column_id, m]))
+      const columns = boardColumns
+        .filter((c) => c.id !== STATUS_COLUMN_ID)
+        .map((c) => {
+          const dynamic = dynamicByMondayId.get(c.id)
+          const staticEntry = STATIC_FIELD_MAP.find(([, id]) => id === c.id)
+          const mapped = staticIds.has(c.id) || !!dynamic
+          const suggestion = suggestionFor(c.type)
+          return {
+            id: c.id,
+            title: c.title,
+            type: c.type,
+            mapped,
+            mappedTo: dynamic?.core_column ?? staticEntry?.[0] ?? null,
+            source: dynamic ? 'dynamic' : staticEntry ? 'static' : null,
+            suggestedFieldKind: suggestion.fieldKind,
+            suggestedPgType: suggestion.pgType,
+          }
+        })
+      return ok({ columns })
+    }
+
+    const effectiveFieldMap: [string, string, FieldKind][] = [
+      ...STATIC_FIELD_MAP,
+      ...dynamicMappings.map((m): [string, string, FieldKind] => [m.core_column, m.monday_column_id, m.field_kind]),
+    ]
+
+    const items = await fetchAllItems(mondayApiKey, columnIdsFor(effectiveFieldMap))
 
     const { data: existing, error: existingErr } = await admin
       .schema('core').from('locations').select('id, name').eq('company_id', companyId)
@@ -397,7 +491,7 @@ Deno.serve(async (req) => {
     for (const item of items) {
       if (!isRealStoreNumber(item.name)) { skipped++; continue }
       const storeNumber = normalizeStoreNumber(item.name)
-      const fields = buildLocationFields(item, storeNumber)
+      const fields = buildLocationFields(item, storeNumber, effectiveFieldMap)
       const existingId = byStoreNumber.get(storeNumber)
       if (existingId) {
         toUpdate.push({ id: existingId, fields })

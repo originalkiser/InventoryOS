@@ -6,8 +6,9 @@ import { LocationsTab } from './tabs/LocationsTab'
 import { SupplementalLocationTab } from './tabs/SupplementalLocationTab'
 import { PosLocationMapTab } from './tabs/PosLocationMapTab'
 import { CompanyHolidaysTab } from './tabs/CompanyHolidaysTab'
+import { MondayMappingTab } from './tabs/MondayMappingTab'
 
-const GLOBAL_TABS = ['locations', 'supplemental', 'pos-map', 'holidays']
+const GLOBAL_TABS = ['locations', 'supplemental', 'pos-map', 'holidays', 'monday-mapping']
 
 export function GlobalConfigPage() {
   const { profile } = useAuthStore()
@@ -40,12 +41,14 @@ export function GlobalConfigPage() {
           <TabsTrigger value="supplemental">Supplemental Data</TabsTrigger>
           <TabsTrigger value="pos-map">Location Mapping</TabsTrigger>
           <TabsTrigger value="holidays">Holidays</TabsTrigger>
+          <TabsTrigger value="monday-mapping">Monday.com Mapping</TabsTrigger>
         </TabsList>
 
         <TabsContent value="locations"><LocationsTab /></TabsContent>
         <TabsContent value="supplemental"><SupplementalLocationTab /></TabsContent>
         <TabsContent value="pos-map"><PosLocationMapTab /></TabsContent>
         <TabsContent value="holidays"><CompanyHolidaysTab /></TabsContent>
+        <TabsContent value="monday-mapping"><MondayMappingTab /></TabsContent>
       </Tabs>
     </div>
   )
