@@ -425,6 +425,15 @@ export interface ExceptionRow {
   location_id: string; product_id: string
   floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: CeilingUnit | null
 }
+// Sentinel location_id meaning "applies to every shop" for a Product
+// Exception (2026-09-22) — a real, valid (never-a-real-location) UUID
+// rather than a nullable location_id column: the existing
+// UNIQUE(company_id, location_id, product_id) constraint already prevents
+// more than one global exception per product this way, with zero new
+// schema or a second partial-unique-index/onConflict-branching needed. A
+// shop-specific exception always wins over a global one for the same
+// product — see resolveFloor/resolveCeiling below.
+export const GLOBAL_EXCEPTION_LOCATION_ID = '00000000-0000-0000-0000-000000000000'
 export interface UomMappingRow { vendor_id: string | null; from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }
 // Derived from core.locations.reladyne_delivery_day rather than a table of
 // its own — the location list is already the source of truth for it.
@@ -632,14 +641,24 @@ export function buildGenerationInputs(
   const ruleKey = (l: string, p: string) => `${l}|${String(p).toLowerCase().trim()}`
   const ruleMap = new Map(rules.map((r) => [ruleKey(r.location_id, r.product_id), r]))
   const floorMap = new Map<string, number>()
+  const globalFloorMap = new Map<string, number>()
   const ceilingMap = new Map<string, { qty: number; unit: CeilingUnit }>()
+  const globalCeilingMap = new Map<string, { qty: number; unit: CeilingUnit }>()
   for (const e of exceptions) {
-    const k = ruleKey(e.location_id, e.product_id)
-    if (e.floor_qty != null && Number(e.floor_qty) > 0) floorMap.set(k, Number(e.floor_qty))
+    const isGlobal = e.location_id === GLOBAL_EXCEPTION_LOCATION_ID
+    const k = isGlobal ? pkey(e.product_id) : ruleKey(e.location_id, e.product_id)
+    if (e.floor_qty != null && Number(e.floor_qty) > 0) (isGlobal ? globalFloorMap : floorMap).set(k, Number(e.floor_qty))
     if (e.ceiling_qty != null && Number(e.ceiling_qty) > 0 && e.ceiling_unit) {
-      ceilingMap.set(k, { qty: Number(e.ceiling_qty), unit: e.ceiling_unit })
+      ;(isGlobal ? globalCeilingMap : ceilingMap).set(k, { qty: Number(e.ceiling_qty), unit: e.ceiling_unit })
     }
   }
+  // Shop-specific exception wins over a global (all-shops) one for the same
+  // product — same "most specific wins" precedence this app already uses
+  // elsewhere (e.g. min-order-rule scoping).
+  const resolveFloor = (locationId: string, productId: string) =>
+    floorMap.get(ruleKey(locationId, productId)) ?? globalFloorMap.get(pkey(productId))
+  const resolveCeiling = (locationId: string, productId: string) =>
+    ceilingMap.get(ruleKey(locationId, productId)) ?? globalCeilingMap.get(pkey(productId))
   // Subtracts a shop+product floor exception from raw on-hand — the amount
   // below the floor is physically there but not usable, so it's removed
   // before anything downstream (DOS math, the critical-minimum check,
@@ -648,7 +667,7 @@ export function buildGenerationInputs(
   // no reading at all).
   const applyFloor = (locationId: string, productId: string, onHand: number | null): number | null => {
     if (onHand == null) return onHand
-    const floor = floorMap.get(ruleKey(locationId, productId))
+    const floor = resolveFloor(locationId, productId)
     return floor ? Math.max(0, onHand - floor) : onHand
   }
 
@@ -880,7 +899,7 @@ export function buildGenerationInputs(
     // Entered in the product's own orderable unit ("cases" — needs
     // units_per_uom_gallons, resolved just above), quarts (this module's
     // own internal unit — no conversion), or gallons.
-    const ceiling = ceilingMap.get(k)
+    const ceiling = resolveCeiling(c.location_id, c.product_id)
     if (ceiling) {
       const per = rule.units_per_uom_gallons && rule.units_per_uom_gallons > 0 ? rule.units_per_uom_gallons : 1
       rule.max_capacity_gallons = ceiling.unit === 'gallons' ? ceiling.qty * 4
@@ -939,9 +958,9 @@ export function buildGenerationInputs(
     if (u.on_hands == null || vmiKeys.has(ruleKey(u.location_id, u.product_id))) continue
     const factor = quartsFromSourceUnit(u.product_id)
     // A sibling case type can carry its own floor exception too (same
-    // (location, product) key) — applied here rather than via applyFloor
-    // since this on_hand is never null at this point.
-    const floor = floorMap.get(ruleKey(u.location_id, u.product_id)) ?? 0
+    // (location, product) key, or a global one) — applied here rather than
+    // via applyFloor since this on_hand is never null at this point.
+    const floor = resolveFloor(u.location_id, u.product_id) ?? 0
     const onHand = Math.max(0, Number(u.on_hands) * factor - floor)
     const dailyUsage = u.daily_usage != null ? Number(u.daily_usage) * factor : null
     const fam = `${u.location_id}|${pkey(baseProductId(u.product_id))}`

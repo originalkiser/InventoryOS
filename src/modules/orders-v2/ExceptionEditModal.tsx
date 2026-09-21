@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Input, Modal, Select } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useProductExceptions, caseTypeLabel } from './useProductExceptions'
-import type { CeilingUnit } from './useOrdersV2'
+import { GLOBAL_EXCEPTION_LOCATION_ID, type CeilingUnit } from './useOrdersV2'
 
 const sb = () => supabase as any
 
@@ -37,14 +37,27 @@ export function ExceptionEditModal({
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [fetchedUom, setFetchedUom] = useState<string | null>(null)
+  // 'shop' (this location only) or 'global' (every shop, for this
+  // product) — see GLOBAL_EXCEPTION_LOCATION_ID's own comment. Choosable
+  // only when adding a brand-new exception; editing an existing one keeps
+  // whichever scope it was already saved under (same "fixed for the life
+  // of the modal" rule as location/product themselves — converting scope
+  // means deleting and adding a new one).
+  const [scope, setScope] = useState<'shop' | 'global'>('shop')
 
-  const existing = rows.find((r) => r.location_id === locationId && r.product_id === productId) ?? null
+  const existingShop = rows.find((r) => r.location_id === locationId && r.product_id === productId) ?? null
+  const existingGlobal = rows.find((r) => r.location_id === GLOBAL_EXCEPTION_LOCATION_ID && r.product_id === productId) ?? null
+  // Shop-specific wins for display/edit when both happen to exist — same
+  // precedence the engine itself uses (see useOrdersV2.ts's resolveFloor/
+  // resolveCeiling).
+  const existing = existingShop ?? existingGlobal
 
   // Seed the form from whatever's already saved (if anything) every time the
   // modal opens for a new location/product pair — not on every `rows`
   // refresh, or a save mid-edit would stomp on what's still being typed.
   useEffect(() => {
     if (!open) return
+    setScope(existingShop ? 'shop' : existingGlobal ? 'global' : 'shop')
     setFloorQty(existing?.floor_qty?.toString() ?? '')
     setCeilingQty(existing?.ceiling_qty?.toString() ?? '')
     setCeilingUnit(existing?.ceiling_unit ?? 'cases')
@@ -72,9 +85,10 @@ export function ExceptionEditModal({
     const num = (v: string): number | null => { const t = v.trim(); if (!t) return null; const n = Number(t); return isNaN(n) ? null : n }
     const floor = num(floorQty)
     const ceiling = num(ceilingQty)
+    const targetLocationId = scope === 'global' ? GLOBAL_EXCEPTION_LOCATION_ID : locationId
     setSaving(true)
     const ok = await save({
-      id: existing?.id, location_id: locationId, product_id: productId,
+      id: existing?.id, location_id: targetLocationId, product_id: productId,
       floor_qty: floor, ceiling_qty: ceiling, ceiling_unit: ceiling != null ? ceilingUnit : null,
       notes: notes.trim() || null,
     })
@@ -95,6 +109,24 @@ export function ExceptionEditModal({
   return (
     <Modal open={open} onClose={onClose} title={`${existing ? 'Edit' : 'Add'} Exception${title ? ` — ${title}` : ''}`}>
       <div className="flex flex-col gap-3">
+        {existing ? (
+          <p className="text-[11px] font-mono text-inky/60">
+            Applies to {existing.location_id === GLOBAL_EXCEPTION_LOCATION_ID ? <strong className="text-navy">all shops</strong> : <strong className="text-navy">{shopLabel ?? 'this shop'} only</strong>}.
+            {' '}To change scope, delete this and add a new one.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[11px] font-mono text-inky/60">Applies to</span>
+            <div className="flex gap-1.5">
+              {(['shop', 'global'] as const).map((s) => (
+                <button key={s} type="button" onClick={() => setScope(s)}
+                  className={`px-2.5 py-1 text-xs font-mono rounded border ${scope === s ? 'border-navy bg-navy text-cream' : 'border-navy/30 text-inky hover:border-navy'}`}>
+                  {s === 'shop' ? `${shopLabel ?? 'This shop'} only` : 'All shops'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="flex flex-col gap-0.5">
             <Input label="Floor (quarts)" type="number" step={1} value={floorQty} onChange={(e) => setFloorQty(e.target.value)} />

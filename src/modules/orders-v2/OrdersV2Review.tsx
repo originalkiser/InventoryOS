@@ -1,10 +1,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { RefreshCw, ChevronRight, ChevronDown, Settings } from 'lucide-react'
+import { RefreshCw, ChevronRight, ChevronDown, Settings, Plus, Pencil } from 'lucide-react'
 import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
 import { OrderStepper } from './OrderStepper'
+import { ExceptionEditModal } from './ExceptionEditModal'
+import { useProductExceptions } from './useProductExceptions'
 import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
@@ -12,7 +14,8 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import {
   useDraft, useGenerationData, useOrderSettings, useVendorRules,
-  buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, isOunceUnit, type DraftLineRow,
+  buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, isOunceUnit,
+  GLOBAL_EXCEPTION_LOCATION_ID, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
@@ -44,6 +47,18 @@ export function OrdersV2Review() {
   const { rulesFor } = useVendorRules()
   const { fetchInputs } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
+  // For the inline +/Edit button next to each line's Qty box — whether a
+  // shop-specific or global exception already exists decides which icon
+  // shows (Plus = add, Pencil = edit an existing one), matching Product
+  // Exceptions' own page. rows is the full company-wide list (small table),
+  // shared here rather than re-fetched per line.
+  const { rows: exceptionRows } = useProductExceptions()
+  const [exceptionTarget, setExceptionTarget] = useState<{ locationId: string; productId: string } | null>(null)
+  const exceptionFor = useCallback((locationId: string, productId: string) =>
+    exceptionRows.find((r) => r.location_id === locationId && r.product_id === productId)
+      ?? exceptionRows.find((r) => r.location_id === GLOBAL_EXCEPTION_LOCATION_ID && r.product_id === productId)
+      ?? null,
+    [exceptionRows])
   // Manual raw-tank-name -> our_part_number overrides (Tank Monitors'
   // Product Mapping tab) — needed so a keep-fill product's tank reading
   // actually matches its order-config product_id (tank telemetry names
@@ -475,6 +490,9 @@ export function OrdersV2Review() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/exceptions')}>
+            Product Exceptions
+          </Button>
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
@@ -491,6 +509,16 @@ export function OrdersV2Review() {
       <Modal open={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} title="Order Settings" size="xl">
         <OrdersV2SettingsBody />
       </Modal>
+
+      {exceptionTarget && (
+        <ExceptionEditModal
+          open={!!exceptionTarget}
+          onClose={() => setExceptionTarget(null)}
+          locationId={exceptionTarget.locationId}
+          productId={exceptionTarget.productId}
+          shopLabel={shopLabel(exceptionTarget.locationId)}
+        />
+      )}
 
       {dosOverride && (
         <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
@@ -664,16 +692,26 @@ export function OrdersV2Review() {
                       <Td align="right">{num(isOz ? toOz(l.daily_usage) : l.daily_usage)}</Td>
                       <Td align="right">{dos(l.dos_before)}</Td>
                       <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
-                        <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
-                          onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
-                          className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-                        {l.quarts_per_unit != null && (
-                          <div className="text-[10px] text-inky/50 mt-0.5">
-                            {isOz
-                              ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
-                              : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+                        <div className="flex items-start justify-end gap-1">
+                          <div>
+                            <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
+                              onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
+                              className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+                            {l.quarts_per_unit != null && (
+                              <div className="text-[10px] text-inky/50 mt-0.5">
+                                {isOz
+                                  ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
+                                  : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+                              </div>
+                            )}
                           </div>
-                        )}
+                          <button
+                            onClick={() => setExceptionTarget({ locationId: l.location_id ?? '', productId: l.product_id })}
+                            title={exceptionFor(l.location_id ?? '', l.product_id) ? 'Edit product exception' : 'Add product exception'}
+                            className="text-inky/40 hover:text-navy flex-shrink-0 mt-1.5">
+                            {exceptionFor(l.location_id ?? '', l.product_id) ? <Pencil className="w-3 h-3" /> : <Plus className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
                       </td>
                       <td className={`px-2 py-1 text-right whitespace-nowrap font-bold ${dosAfterColorClass(l.dos_after)}`}>{dos(l.dos_after)}</td>
                       <Td align="right">{dos(l.dos_after_delivery)}</Td>
@@ -708,6 +746,8 @@ export function OrdersV2Review() {
                             onAdd={addConfiguredProduct}
                             showVmi={showConfigVmi}
                             ozProductIds={ozProductIds}
+                            exceptionFor={exceptionFor}
+                            onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
                           />
                         </td>
                       </tr>
@@ -757,6 +797,8 @@ export function OrdersV2Review() {
                           onAdd={addConfiguredProduct}
                           showVmi={showConfigVmi}
                           ozProductIds={ozProductIds}
+                          exceptionFor={exceptionFor}
+                          onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
                         />
                       </div>
                     )}
@@ -804,7 +846,7 @@ function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }
  * "why isn't this shop ordering more" and "why isn't this shop ordering
  * anything" use the exact same product list, columns, and add-a-line
  * behavior. */
-function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds }: {
+function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException }: {
   rows: { input?: GenerationInput; line?: DraftLineRow }[]
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
@@ -817,6 +859,11 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductI
   // See OrdersV2Review's own ozProductIds comment — display-only ounce
   // conversion for a product tracked that way (e.g. HM0806).
   ozProductIds: Set<string>
+  // See OrdersV2Review's own exceptionFor/exceptionTarget — same inline
+  // +/Edit button as the main table, here too since this is the other
+  // place a shop's full product list is reviewed.
+  exceptionFor: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>['rows'][number] | null
+  onOpenException: (locationId: string, productId: string) => void
 }) {
   const visible = showVmi ? rows : rows.filter((r) =>
     !(r.input?.rule.vmi_keepfill_enabled || r.line?.flags?.includes('vmi_keepfill')))
@@ -832,7 +879,8 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductI
       <tbody>
         {visible.map((r) => (
           <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd}
-            isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')} />
+            isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')}
+            exceptionFor={exceptionFor} onOpenException={onOpenException} />
         ))}
       </tbody>
     </table>
@@ -842,13 +890,16 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductI
 /** One row in a shop's product list — an existing line (editable in place)
  * or a configured-but-not-ordered candidate (typing a qty adds it). Shared
  * by the smoothing panel and the shop-name expand row below the table. */
-function SmoothingRow({ input, line, onPatch, onAdd, isOz }: {
+function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenException }: {
   input?: GenerationInput; line?: DraftLineRow
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
   isOz: boolean
+  exceptionFor: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>['rows'][number] | null
+  onOpenException: (locationId: string, productId: string) => void
 }) {
   const productId = line?.product_id ?? input?.product_id ?? ''
+  const locationId = line?.location_id ?? input?.location_id ?? ''
   const unitCost = Number(line?.unit_cost ?? input?.rule.unit_cost ?? 0)
   const uom = line?.uom ?? input?.rule.uom ?? null
   const capacity = line?.max_capacity_gallons ?? input?.rule.max_capacity_gallons ?? null
@@ -887,19 +938,31 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz }: {
       <td className="text-right text-inky/70">{num(isOz ? toOz(dailyUsage) : dailyUsage)}</td>
       <td className="text-right text-inky/70">{dos(dosNow)}</td>
       <td className="text-right">
-        {line ? (
-          <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
-            onChange={(e) => onPatch(line, Number(e.target.value) || 0)}
-            className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-        ) : input ? (
-          <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
-            onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(input, v) }}
-            title="Add this product to the order"
-            className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
-        ) : null}
-        {isOz && line && quartsPerUnit != null && (
-          <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(line.qty) * quartsPerUnit * 32, 0)}oz</div>
-        )}
+        <div className="flex items-start justify-end gap-1">
+          <div>
+            {line ? (
+              <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
+                onChange={(e) => onPatch(line, Number(e.target.value) || 0)}
+                className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+            ) : input ? (
+              <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
+                onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(input, v) }}
+                title="Add this product to the order"
+                className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
+            ) : null}
+            {isOz && line && quartsPerUnit != null && (
+              <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(line.qty) * quartsPerUnit * 32, 0)}oz</div>
+            )}
+          </div>
+          {locationId && productId && (
+            <button
+              onClick={() => onOpenException(locationId, productId)}
+              title={exceptionFor(locationId, productId) ? 'Edit product exception' : 'Add product exception'}
+              className="text-inky/40 hover:text-navy flex-shrink-0 mt-0.5">
+              {exceptionFor(locationId, productId) ? <Pencil className="w-3 h-3" /> : <Plus className="w-3.5 h-3.5" />}
+            </button>
+          )}
+        </div>
       </td>
       <td className="text-right text-inky/70">{dos(dosAfter)}</td>
       <td className="text-right text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>

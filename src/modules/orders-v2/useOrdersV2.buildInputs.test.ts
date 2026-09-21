@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGenerationInputs, type OrderConfigRow, type UsageRow, type PurchaseOrderRow, type PoItemRow, type TankOnHandRow, type VendorPartRow, type GlobalProductRow, type ExceptionRow } from './useOrdersV2'
+import { buildGenerationInputs, GLOBAL_EXCEPTION_LOCATION_ID, type OrderConfigRow, type UsageRow, type PurchaseOrderRow, type PoItemRow, type TankOnHandRow, type VendorPartRow, type GlobalProductRow, type ExceptionRow } from './useOrdersV2'
 
 // buildGenerationInputs' "equivalent case types" combine — 5W30D and
 // 5W30BB both resolve to the family "5W30" (a trailing run of letters is
@@ -359,5 +359,47 @@ describe('buildGenerationInputs — shop/product exceptions (floor & ceiling)', 
     const inputs = buildGenerationInputs(configs, [], usageRows)
 
     expect(inputs.find((i) => i.product_id === 'HM0806')!.rule.max_capacity_gallons).toBe(2000) // 500 * 4
+  })
+
+  // Global exceptions (2026-09-22) — location_id = GLOBAL_EXCEPTION_LOCATION_ID
+  // means "every shop", so a config for a shop that never got its own
+  // exception row still picks it up.
+  it('applies a global floor to a shop with no exception row of its own', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 200, 10)]
+    const exceptions = [exc({ location_id: GLOBAL_EXCEPTION_LOCATION_ID, floor_qty: 50 })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.on_hand).toBe(150)
+  })
+
+  it('applies a global ceiling to a shop with no exception row of its own', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 40, 2)]
+    const exceptions = [exc({ location_id: GLOBAL_EXCEPTION_LOCATION_ID, ceiling_qty: 25, ceiling_unit: 'gallons' })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.rule.max_capacity_gallons).toBe(100)
+  })
+
+  it('a shop-specific exception wins over a global one for the same product', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 200, 10)]
+    const exceptions = [
+      exc({ location_id: GLOBAL_EXCEPTION_LOCATION_ID, floor_qty: 10 }),
+      exc({ location_id: 'L1', floor_qty: 50 }),
+    ]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.on_hand).toBe(150) // 200-50, not 200-10
+  })
+
+  it('a global exception does not apply to a different product', () => {
+    const configs = [config('HM0806')]
+    const usageRows = [usage('HM0806', 200, 10)]
+    const exceptions = [exc({ location_id: GLOBAL_EXCEPTION_LOCATION_ID, product_id: 'OTHER', floor_qty: 50 })]
+    const inputs = buildGenerationInputs(configs, [], usageRows, [], [], [], [], [], [], [], {}, exceptions)
+
+    expect(inputs.find((i) => i.product_id === 'HM0806')!.on_hand).toBe(200)
   })
 })
