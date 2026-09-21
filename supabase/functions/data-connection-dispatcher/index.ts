@@ -305,7 +305,19 @@ async function runDroptopPurchaseOrders(
     else break
   }
   const newCursorLocationId = lastGoodChunk >= 0 ? chunks[lastGoodChunk][chunks[lastGoodChunk].length - 1] : cursorLocationId
-  const stillCatchingUp = lastGoodChunk < chunks.length - 1
+  // Root cause of the 2026-09-20 Disk IO Budget incident: this used to be
+  // `lastGoodChunk < chunks.length - 1` with no regard for WHY chunks
+  // didn't finish — a run where every single chunk failed outright
+  // (result.status === 'error', zero successes) got the exact same
+  // "retry in ~5 minutes" treatment as a run that made real progress and
+  // simply ran out of time budget. When the failure reason is the
+  // downstream DB/API itself struggling, that retry-every-5-minutes
+  // behavior is a self-inflicted retry storm — it hammers the same
+  // already-struggling resource repeatedly all day instead of backing
+  // off. A total failure now falls back to the ORIGINAL safe behavior
+  // (wait for tomorrow's daily_time); only genuine partial progress
+  // (status 'partial', at least one real success) stays same-day-retried.
+  const stillCatchingUp = result.status !== 'error' && lastGoodChunk < chunks.length - 1
   return { status: result.status, message: result.message, newCursorLocationId, stillCatchingUp }
 }
 
@@ -597,6 +609,15 @@ Deno.serve(async (req) => {
 
     const suppliedSecret = req.headers.get('x-sync-token') ?? ''
     if (!dispatchSecret || suppliedSecret !== dispatchSecret) return ok({ error: 'Not authorized' })
+
+    // Emergency kill switch (added 2026-09-20, live Disk IO Budget incident)
+    // — set as a plain Supabase secret so it can be flipped without a code
+    // deploy. Checked before any DB access so it works even while Postgres
+    // itself is unreachable/degraded; toggle off (`supabase secrets unset
+    // EMERGENCY_PAUSE_DISPATCH`) once the project is healthy again.
+    if (Deno.env.get('EMERGENCY_PAUSE_DISPATCH') === 'true') {
+      return ok({ status: 'paused', message: 'Dispatcher paused via EMERGENCY_PAUSE_DISPATCH secret' })
+    }
 
     const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
     const { data: schedules, error } = await (admin as any)
