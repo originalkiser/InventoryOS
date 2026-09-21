@@ -36,6 +36,18 @@ const DROPTOP_CHUNK_SIZE = 20
 // services line items were added (up to 4 tables' worth of rows per order
 // now, not 1). See that constant's own comment for the full story.
 const DROPTOP_ORDER_CHUNK_SIZE = 3
+// Found 2026-09-21: Purchase Orders had been reusing DROPTOP_CHUNK_SIZE
+// (20 — sized for Usage/On-Hand's lightweight single-table snapshot pull)
+// for its own 180-day, multi-table (PO header + line items) sync, which is
+// heavier per location than even a full month of Orders. Real production
+// evidence: EVERY chunk of the daily scheduled run aborted, several days
+// running ("The signal has been aborted" on 4/4 attempted chunks) — not an
+// occasional straggler, a chunk size that was simply always too big for
+// this specific sync's workload. Shrunk to 1 location/chunk, sequential,
+// with a pause between calls (see its own runChunksConcurrently opts) —
+// same fix already proven out on the historical Orders backfill's own
+// identical symptom the day before.
+const DROPTOP_PO_CHUNK_SIZE = 1
 
 // Bounds every downstream sync call so one hung/slow invocation can't
 // consume the rest of this dispatcher run — see the header comment on the
@@ -126,7 +138,15 @@ const CHUNK_TIME_BUDGET_MS = 100_000
 // starving whichever locations sat in a chunk past the time-budget cutoff.
 async function runChunksConcurrently(
   url: string, secret: string, chunks: string[][], bodyFor: (ids: string[]) => Record<string, unknown>,
+  // concurrency/delayMs (added 2026-09-21, real production evidence: Purchase
+  // Orders' daily sync has been aborting on EVERY chunk, multiple days
+  // running — see runDroptopPurchaseOrders's own comment on why its chunk
+  // size was the real culprit). Defaults preserve every other caller's
+  // existing behavior unchanged.
+  opts: { concurrency?: number; delayMs?: number } = {},
 ): Promise<{ status: string; message: string | null; chunkSucceeded: boolean[] }> {
+  const concurrency = opts.concurrency ?? CHUNK_CONCURRENCY
+  const delayMs = opts.delayMs ?? 0
   const warnings: string[] = []
   const chunkSucceeded: boolean[] = new Array(chunks.length).fill(false)
   let anySucceeded = false
@@ -138,13 +158,14 @@ async function runChunksConcurrently(
       if (Date.now() - startedAt > CHUNK_TIME_BUDGET_MS) return
       const i = nextIndex++
       if (i >= chunks.length) return
+      if (delayMs > 0 && i > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
       const r = await callChunk(url, secret, bodyFor(chunks[i]), `Chunk ${i + 1}/${chunks.length}`)
       if (r.ok) { anySucceeded = true; chunkSucceeded[i] = true }
       warnings.push(...r.warnings)
       processed++
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, worker))
   if (processed < chunks.length) {
     warnings.push(`Stopped after ${processed}/${chunks.length} chunks (time budget) — remaining continue on the next scheduled run`)
   }
@@ -283,11 +304,12 @@ async function runDroptopPurchaseOrders(
   const rotated = cursorIdx === -1 ? ids : [...ids.slice(cursorIdx + 1), ...ids.slice(0, cursorIdx + 1)]
 
   const chunks: string[][] = []
-  for (let i = 0; i < rotated.length; i += DROPTOP_CHUNK_SIZE) chunks.push(rotated.slice(i, i + DROPTOP_CHUNK_SIZE))
+  for (let i = 0; i < rotated.length; i += DROPTOP_PO_CHUNK_SIZE) chunks.push(rotated.slice(i, i + DROPTOP_PO_CHUNK_SIZE))
 
   const result = await runChunksConcurrently(
     `${supabaseUrl}/functions/v1/droptop-sync-purchase-orders`, secret, chunks,
     (locationIds) => ({ mode: 'sync', daysBack: 180, locationIds }),
+    { concurrency: 1, delayMs: 3000 },
   )
 
   // Advance the cursor only through the longest UNBROKEN prefix of chunks
