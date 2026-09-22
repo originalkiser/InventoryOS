@@ -6,6 +6,7 @@ import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
 import { OrderStepper } from './OrderStepper'
 import { ExceptionEditModal } from './ExceptionEditModal'
+import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { useProductExceptions } from './useProductExceptions'
 import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -52,13 +53,29 @@ export function OrdersV2Review() {
   // shows (Plus = add, Pencil = edit an existing one), matching Product
   // Exceptions' own page. rows is the full company-wide list (small table),
   // shared here rather than re-fetched per line.
-  const { rows: exceptionRows } = useProductExceptions()
+  const { rows: exceptionRows, reload: reloadExceptions } = useProductExceptions()
   const [exceptionTarget, setExceptionTarget] = useState<{ locationId: string; productId: string } | null>(null)
   const exceptionFor = useCallback((locationId: string, productId: string) =>
     exceptionRows.find((r) => r.location_id === locationId && r.product_id === productId)
       ?? exceptionRows.find((r) => r.location_id === GLOBAL_EXCEPTION_LOCATION_ID && r.product_id === productId)
       ?? null,
     [exceptionRows])
+  // Opened in place instead of navigating to /orders-v2/exceptions (per
+  // request — leaving this page loses the whole review state and requires
+  // reopening the order). needsRegenerate flags the Regenerate button
+  // whenever something changed that this order's ALREADY-persisted lines
+  // don't reflect yet: an exception applied to ALL shops (which can affect
+  // shop/product combos not currently on screen), or the DOS targets card
+  // below — not a plain qty edit, which the user already sees and controls
+  // directly. A shop-specific exception is deliberately excluded: it only
+  // ever affects the one shop/product the user is already looking at right
+  // where they added it.
+  const [exceptionsModalOpen, setExceptionsModalOpen] = useState(false)
+  const [needsRegenerate, setNeedsRegenerate] = useState(false)
+  const onExceptionChanged = useCallback((locationId?: string) => {
+    reloadExceptions()
+    if (locationId === GLOBAL_EXCEPTION_LOCATION_ID) setNeedsRegenerate(true)
+  }, [reloadExceptions])
   // Manual raw-tank-name -> our_part_number overrides (Tank Monitors'
   // Product Mapping tab) — needed so a keep-fill product's tank reading
   // actually matches its order-config product_id (tank telemetry names
@@ -312,6 +329,7 @@ export function OrdersV2Review() {
         })
         .eq('id', draft.id)
       await reload()
+      setNeedsRegenerate(false)
       toast.success(`Generated ${withDelivery.length} line${withDelivery.length !== 1 ? 's' : ''} across ${shops} shop${shops !== 1 ? 's' : ''}`)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Generation failed')
@@ -513,7 +531,7 @@ export function OrdersV2Review() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/exceptions')}>
+          <Button size="sm" variant="secondary" onClick={() => setExceptionsModalOpen(true)}>
             Product Exceptions
           </Button>
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
@@ -540,8 +558,13 @@ export function OrdersV2Review() {
           locationId={exceptionTarget.locationId}
           productId={exceptionTarget.productId}
           shopLabel={shopLabel(exceptionTarget.locationId)}
+          onSaved={onExceptionChanged}
         />
       )}
+
+      <Modal open={exceptionsModalOpen} onClose={() => setExceptionsModalOpen(false)} title="Product Exceptions" size="xl">
+        <ProductExceptionsManager onChanged={onExceptionChanged} />
+      </Modal>
 
       {dosOverride && (
         <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
@@ -549,19 +572,19 @@ export function OrdersV2Review() {
           <label className="flex flex-col gap-0.5">
             <span className="text-[10px] font-mono text-inky/50">Target</span>
             <input type="number" min={0} value={dosOverride.target}
-              onChange={(e) => setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d))}
+              onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
               className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
           </label>
           <label className="flex flex-col gap-0.5">
             <span className="text-[10px] font-mono text-inky/50">Min trigger</span>
             <input type="number" min={0} value={dosOverride.trigger}
-              onChange={(e) => setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d))}
+              onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
               className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
           </label>
           <label className="flex flex-col gap-0.5">
             <span className="text-[10px] font-mono text-inky/50">Max</span>
             <input type="number" min={0} value={dosOverride.max}
-              onChange={(e) => setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d))}
+              onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
               className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
           </label>
           <p className="text-[10px] font-mono text-inky/50 max-w-xs">
@@ -572,7 +595,13 @@ export function OrdersV2Review() {
               <span className="text-[#E67E22]">■</span> over max
             </span>
           </p>
-          <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()} className="ml-auto">
+          {needsRegenerate && (
+            <p className="text-[10px] font-mono text-[#E67E22] font-bold ml-auto">
+              Changes require regenerating order for accuracy
+            </p>
+          )}
+          <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}
+            className={needsRegenerate ? 'ring-2 ring-[#E67E22] ring-offset-2 ring-offset-cream animate-pulse' : 'ml-auto'}>
             <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
           </Button>
         </CardBody></Card>

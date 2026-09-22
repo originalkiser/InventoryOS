@@ -28,7 +28,12 @@ export function ExceptionEditModal({
   shopLabel?: string
   productLabel?: string
   caseUnitLabel?: string
-  onSaved?: () => void
+  // Reports which location_id the save/delete actually applied to —
+  // GLOBAL_EXCEPTION_LOCATION_ID for an all-shops exception, this
+  // component's own `locationId` otherwise. Callers that care whether a
+  // change was global (e.g. OrdersV2Review's "needs regenerating" prompt)
+  // check this; everyone else can keep ignoring the argument.
+  onSaved?: (locationId?: string) => void
 }) {
   const { rows, save, remove } = useProductExceptions()
   const [floorQty, setFloorQty] = useState('')
@@ -93,14 +98,14 @@ export function ExceptionEditModal({
       notes: notes.trim() || null,
     })
     setSaving(false)
-    if (ok) { onSaved?.(); onClose() }
+    if (ok) { onSaved?.(targetLocationId); onClose() }
   }
 
   async function onDelete() {
     if (!existing) return
     if (!confirm('Delete this exception?')) return
     await remove(existing.id)
-    onSaved?.()
+    onSaved?.(existing.location_id)
     onClose()
   }
 
