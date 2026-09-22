@@ -961,7 +961,7 @@ function esPlusTaxLabel(): string {
   return esPlusTaxLabelCache
 }
 const plusTaxLabel = (lang: 'en' | 'es') => (lang === 'es' ? esPlusTaxLabel() : 'PLUS TAX')
-const perExtraQuartLabel = (lang: 'en' | 'es') => (lang === 'es' ? 'POR CADA CUARTO ADICIONAL' : 'per extra quart')
+const perExtraQuartLabel = (lang: 'en' | 'es') => (lang === 'es' ? 'por cada cuarto adicional' : 'per extra quart')
 
 /**
  * The printed-board price treatment: a smaller "$", big whole dollars, a
