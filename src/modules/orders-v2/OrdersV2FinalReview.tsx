@@ -9,6 +9,7 @@ import { parseWeekday, orderDayFromDelivery } from '@/lib/orderDay'
 import { supabase } from '@/lib/supabase'
 import { useDraft, useOrderSettings, useVendorRules, isOunceUnit, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
+import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { Flags } from './OrdersV2Review'
 import { OrderStepper } from './OrderStepper'
 import { daysOfSupply, daysBetween, nextDeliveryDate } from './engine'
@@ -30,6 +31,9 @@ export function OrdersV2FinalReview() {
   const { settings } = useOrderSettings()
   const { rulesFor } = useVendorRules()
   const { draft, lines, loading, patchLine, removeLine } = useDraft(draftId || null)
+  // Same Last Ordered/Last Delivered + on-hand plausibility flag as
+  // OrdersV2Review — see that hook's own header comment for scope/design.
+  const lastOrderedInfo = useLastOrderedInfo(draft?.vendor_id ?? null, vendors.byId(draft?.vendor_id ?? null)?.name ?? null)
 
   const [filter, setFilter] = useState('')
   const [openShop, setOpenShop] = useState<{ locationId: string; orderType: OrderType } | null>(null)
@@ -389,12 +393,16 @@ export function OrdersV2FinalReview() {
         <table className="w-full text-xs font-mono">
           <thead className="sticky top-0 z-10"><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
             <th className="text-left px-2 py-2">Shop</th><th className="text-left px-2 py-2">Product</th>
-            <th className="text-left px-2 py-2">UOM</th><th className="text-right px-2 py-2">Qty</th>
+            <th className="text-left px-2 py-2">UOM</th>
+            <th className="text-left px-2 py-2">Last Ordered</th><th className="text-left px-2 py-2">Last Delivered</th>
+            <th className="text-right px-2 py-2">Qty</th>
             <th className="text-right px-2 py-2">DOS After</th><th className="text-right px-2 py-2">DOS @ Delivery</th>
             <th className="text-right px-2 py-2">$</th><th className="text-left px-2 py-2">Flags</th>
           </tr></thead>
           <tbody>
-            {visible.map((l) => (
+            {visible.map((l) => {
+              const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
+              return (
               <tr key={l.id} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
                 <td className="px-2 py-1">
                   <button onClick={() => setOpenShop({ locationId: l.location_id ?? '', orderType: l.order_type })}
@@ -402,6 +410,25 @@ export function OrdersV2FinalReview() {
                 </td>
                 <td className="px-2 py-1 text-navy">{l.product_id}</td>
                 <td className="px-2 py-1 text-navy">{l.uom ?? '—'}</td>
+                <td className="px-2 py-1 text-navy whitespace-nowrap">
+                  {info.lastOrderDate ? (
+                    <>
+                      <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
+                      {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
+                    </>
+                  ) : '—'}
+                </td>
+                <td className="px-2 py-1 text-navy whitespace-nowrap">
+                  {info.lastDeliveredDate
+                    ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
+                    : '—'}
+                  {info.onHandCheck && !info.onHandCheck.withinRange && (
+                    <div className="text-[9px] text-[#C0392B] font-bold"
+                      title={`Based on the last delivery, on hand was expected to be roughly ${num(info.onHandCheck.expected)} (${num(info.onHandCheck.low)}–${num(info.onHandCheck.high)})`}>
+                      ⚠ On hand may be off
+                    </div>
+                  )}
+                </td>
                 <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
                   <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
                     onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
@@ -422,7 +449,8 @@ export function OrdersV2FinalReview() {
                   {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>

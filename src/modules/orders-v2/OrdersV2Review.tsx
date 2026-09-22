@@ -8,6 +8,7 @@ import { OrderStepper } from './OrderStepper'
 import { ExceptionEditModal } from './ExceptionEditModal'
 import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { useProductExceptions } from './useProductExceptions'
+import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
@@ -20,7 +21,7 @@ import {
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
-import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty } from './shared'
+import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty, dShort } from './shared'
 import type { LineFlag, GenerationInput } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
@@ -48,6 +49,11 @@ export function OrdersV2Review() {
   const { rulesFor } = useVendorRules()
   const { fetchInputs } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
+  // Last Ordered/Last Delivered columns + on-hand plausibility flag
+  // (2026-09-22 request) — called unconditionally (before the loading/
+  // not-found early returns below) per Rules of Hooks; vendors.byId
+  // tolerates a still-null draft.vendor_id fine.
+  const lastOrderedInfo = useLastOrderedInfo(draft?.vendor_id ?? null, vendors.byId(draft?.vendor_id ?? null)?.name ?? null)
   // For the inline +/Edit button next to each line's Qty box — whether a
   // shop-specific or global exception already exists decides which icon
   // shows (Plus = add, Pencil = edit an existing one), matching Product
@@ -696,6 +702,8 @@ export function OrdersV2Review() {
                 <Th align="right">On Hand</Th>
                 <Th align="right">Usage/day</Th>
                 <Th align="right">DOS Now</Th>
+                <Th>Last Ordered</Th>
+                <Th>Last Delivered</Th>
                 <Th onClick={() => toggleSort('qty')} active={sortKey === 'qty'} dir={sortDir} align="right">Qty</Th>
                 <Th onClick={() => toggleSort('dos_after')} active={sortKey === 'dos_after'} dir={sortDir} align="right">DOS After</Th>
                 <Th align="right">DOS @ Delivery</Th>
@@ -715,6 +723,7 @@ export function OrdersV2Review() {
                 // comment) — 32 oz/quart, the engine's own internal unit.
                 const isOz = ozProductIds.has(l.product_id)
                 const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
+                const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
                 return (
                   <Fragment key={l.id}>
                     <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
@@ -740,9 +749,28 @@ export function OrdersV2Review() {
                             ))}
                           </div>
                         )}
+                        {info.onHandCheck && !info.onHandCheck.withinRange && (
+                          <div className="text-[9px] text-[#C0392B] font-bold mt-0.5 normal-case"
+                            title={`Based on the last delivery, on hand was expected to be roughly ${num(info.onHandCheck.expected)} (${num(info.onHandCheck.low)}–${num(info.onHandCheck.high)})`}>
+                            ⚠ On hand may be off
+                          </div>
+                        )}
                       </td>
                       <Td align="right">{num(isOz ? toOz(l.daily_usage) : l.daily_usage)}</Td>
                       <Td align="right">{dos(l.dos_before)}</Td>
+                      <td className="px-2 py-1 text-navy whitespace-nowrap">
+                        {info.lastOrderDate ? (
+                          <>
+                            <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
+                            {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
+                          </>
+                        ) : '—'}
+                      </td>
+                      <td className="px-2 py-1 text-navy whitespace-nowrap">
+                        {info.lastDeliveredDate
+                          ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
+                          : '—'}
+                      </td>
                       <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
                         <div className="flex items-start justify-end gap-1">
                           <div>
@@ -788,7 +816,7 @@ export function OrdersV2Review() {
                     </tr>
                     {isLastOfShop && shopOpen && (
                       <tr className="border-b border-navy/15 bg-navy/[0.02]">
-                        <td colSpan={13} className="px-3 py-2">
+                        <td colSpan={15} className="px-3 py-2">
                           <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-1">
                             Every product configured for {shopLabel(l.location_id)}
                           </p>
