@@ -597,11 +597,36 @@ async function runMondayLocations(supabaseUrl: string, secret: string): Promise<
   }
 }
 
+// Company-local "YYYY-MM-01" for the month currently in its month-end
+// period (last 10 days of the month — same rule as src/utils/monthEndUtils
+// .ts's isMonthEndPeriod, re-implemented timezone-aware here since a Deno
+// edge function's own "now" has no relationship to any one company's local
+// calendar day). Returns null outside that window.
+function monthEndCountMonthFor(date: Date, timeZone: string): string | null {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date)
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value)
+  const year = get('year'), month = get('month'), day = get('day')
+  const lastDay = new Date(year, month, 0).getDate()
+  if (day < lastDay - 9) return null
+  return `${year}-${String(month).padStart(2, '0')}-01`
+}
+
 // Chunks locations the same way the interactive "Sync All" button does —
 // sequential batches, so one automated run can't run long enough to hit the
 // platform's per-invocation execution time limit.
+//
+// countMonth (added 2026-09-22, live report: the Month-End panel's own
+// "Pull Now" is the ONLY thing that ever fed inventory.count_products — the
+// routine scheduled on-hand sync ran every morning, logged a "success" row
+// to the same droptop_sync_log table the panel displays, and never once
+// wrote to count_products, so the panel's own "no separate upload needed
+// for what's already pulled today" claim was false for every automatic
+// run). Passed only for mode:'inventory' (the on-hand connection) — usage-
+// mode rows never carry on_hands, so the count_products feed's own
+// `on_hands != null` filter would exclude all of them anyway.
 async function runDroptopChunked(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string, mode: 'inventory' | 'usage',
+  countMonth: string | null = null,
 ): Promise<{ status: string; message: string | null }> {
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
   const { data: locs, error: locErr } = await (admin as any)
@@ -615,7 +640,9 @@ async function runDroptopChunked(
 
   return runChunksConcurrently(
     `${supabaseUrl}/functions/v1/droptop-sync-usage`, secret, chunks,
-    (locationIds) => (mode === 'usage' ? { mode, locationIds, daysBack: 1, logDailyActivity: true } : { mode, locationIds }),
+    (locationIds) => (mode === 'usage'
+      ? { mode, locationIds, daysBack: 1, logDailyActivity: true }
+      : { mode, locationIds, ...(countMonth ? { writeToCountProducts: true, countMonth } : {}) }),
   )
 }
 
@@ -688,6 +715,7 @@ Deno.serve(async (req) => {
           else outcome = await runDroptopChunked(
             supabaseUrl, serviceKey, droptopSecret, s.company_id,
             s.connection_key === 'droptop_on_hand' ? 'inventory' : 'usage',
+            s.connection_key === 'droptop_on_hand' ? monthEndCountMonthFor(now, tz) : null,
           )
         } else if (s.connection_key === 'droptop_purchase_orders') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
