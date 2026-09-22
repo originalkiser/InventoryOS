@@ -463,19 +463,40 @@ export function RecountLogicTab() {
   }, [companyId, countMonth])
   useEffect(() => { loadPreviewActions() }, [loadPreviewActions])
 
+  // recount_preview_actions' RLS checks `company_id = (SELECT ... WHERE id =
+  // auth.uid())` — if the client's access token is momentarily stale (e.g.
+  // the tab sat in the background past the token's expiry and the JS
+  // client's own background refresh timer hasn't caught up yet), auth.uid()
+  // evaluates to null for that one request and every RLS check tied to it
+  // fails with "new row violates row-level security policy," even though
+  // the user is genuinely still logged in. A single explicit refreshSession
+  // + retry clears this without bothering the user; only a genuine failure
+  // (still 42501 after a fresh token, or a different error entirely) surfaces.
+  async function withRlsRetry<T>(run: () => Promise<{ error: { code?: string; message: string } | null } & T>) {
+    const first = await run()
+    if (first.error && first.error.code === '42501') {
+      const { error: refreshErr } = await supabase.auth.refreshSession()
+      if (!refreshErr) return run()
+    }
+    return first
+  }
+
   async function addPreviewAction(locationId: string, action: 'hidden_product' | 'excluded_shop' | 'flagged_later', productId: string | null = null) {
     if (!companyId) return
-    const { error } = await (supabase as any).schema('inventory').from('recount_preview_actions')
+    const { error } = await withRlsRetry(() => (supabase as any).schema('inventory').from('recount_preview_actions')
       .upsert({ company_id: companyId, count_month: countMonth, location_id: locationId, product_id: productId, action, created_by: profile?.id ?? null },
-        { onConflict: 'company_id,count_month,location_id,product_id,action' })
+        { onConflict: 'company_id,count_month,location_id,product_id,action' }))
     if (error) { toast.error(error.message); return }
     await loadPreviewActions()
   }
   async function removePreviewAction(locationId: string, action: 'hidden_product' | 'excluded_shop' | 'flagged_later', productId: string | null = null) {
     if (!companyId) return
-    const sb = (supabase as any).schema('inventory').from('recount_preview_actions')
-      .delete().eq('company_id', companyId).eq('count_month', countMonth).eq('location_id', locationId).eq('action', action)
-    const { error } = productId ? await sb.eq('product_id', productId) : await sb.is('product_id', null)
+    const del = () => {
+      const sb = (supabase as any).schema('inventory').from('recount_preview_actions')
+        .delete().eq('company_id', companyId).eq('count_month', countMonth).eq('location_id', locationId).eq('action', action)
+      return productId ? sb.eq('product_id', productId) : sb.is('product_id', null)
+    }
+    const { error } = await withRlsRetry(del)
     if (error) { toast.error(error.message); return }
     await loadPreviewActions()
   }
