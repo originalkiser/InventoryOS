@@ -677,8 +677,28 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Products touched by the side(s) we pulled
-        const productKeys = new Set([...salesByProduct.keys(), ...invByProduct.keys()])
+        // Products touched by the side(s) we pulled. Includes every changed
+        // product regardless of change_type, not just salesByProduct's own
+        // sale-only keys — found live 2026-09-22: a product whose most
+        // recent Droptop activity is a non-sale event (adjustment, receive,
+        // etc.) never entered this set before, so it never reached
+        // allUpsertRows/step 5b's rolling-average recompute below on that
+        // day, freezing daily_usage at whatever (often null) it already was
+        // — even though the ledger itself logs every change type and had
+        // the real sales history to compute a correct average from.
+        // Confirmed against production: 97% of products whose latest ledger
+        // entry was non-sale had a null daily_usage, vs 26% for sale-touched
+        // ones (some genuinely-new products with a single day of history).
+        const touchedKeys = new Set<string>()
+        for (const change of changes) {
+          if (!matchesCategory(change.product_type)) continue
+          const pid: string = change.product_id
+          if (!pid) continue
+          const key = pid.toLowerCase()
+          touchedKeys.add(key)
+          if (!displayId.has(key)) displayId.set(key, pid)
+        }
+        const productKeys = new Set([...salesByProduct.keys(), ...invByProduct.keys(), ...touchedKeys])
 
         for (const key of productKeys) {
           const dedupeKey = `${loc.id ?? ''}|${key}`

@@ -17,6 +17,7 @@ import { useAppSetting } from '@/hooks/useAppSetting'
 import { useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue } from './useCustomShopConfig'
 import { CustomShopConfigModal } from './CustomShopConfigModal'
 import { orderDayFromDelivery } from '@/lib/orderDay'
+import { baseProductId } from '@/lib/productFamily'
 import type { Issue, Location, MeetingNote, Project, TankMonitor } from '@/types'
 import { format, differenceInCalendarDays, differenceInMonths } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -50,8 +51,12 @@ interface ConfigRow {
   capacity: number | null; order_trigger: number | null; order_limit: number | null
   metadata: Record<string, unknown> | null; updated_at?: string | null
   // Joined from inventory.product_usage by product_id — on hand / daily usage
-  // for the On Hand / Daily Usage / Days of Supply columns.
-  usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null } | null
+  // for the On Hand / Daily Usage / Days of Supply columns. equivalent_products
+  // lists any sibling case-type product ids (same base family, e.g. 5W30D +
+  // 5W30BB) whose own on-hand/usage got folded into this row's own — same
+  // combine Orders v2's generation engine already does, so a shop selling or
+  // receiving under the "wrong" case type still shows real usage here.
+  usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null; equivalent_products?: string[] } | null
   // Joined from inventory.ov2_product_exceptions by product_id — Orders v2's
   // shop+product floor/ceiling override, if one's been set for this row.
   exception?: { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null } | null
@@ -253,9 +258,21 @@ const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', '
 // rather than the order config row itself. Days of Supply is always
 // computed here (on hand ÷ daily usage), not read from the table's own
 // days_of_supply column, so it stays consistent with what's displayed.
+// A combined figure (see combinedUsageFor above) shows a small sky-colored
+// "+" with a tooltip naming the sibling case-type(s) folded in, so a number
+// that's bigger than this one exact SKU's own reading doesn't read as a
+// mistake.
+function UsageValue({ value, siblings }: { value: string; siblings?: string[] }) {
+  if (!siblings?.length) return <>{value}</>
+  return (
+    <span title={`Includes ${siblings.join(', ')}`}>
+      {value}<span className="text-sky font-bold">+</span>
+    </span>
+  )
+}
 const USAGE_COLS: Col<ConfigRow>[] = [
-  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? num(r.usage.on_hands) : '—'), sort: (r) => r.usage?.on_hands ?? null },
-  { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? num(r.usage.daily_usage) : '—'), sort: (r) => r.usage?.daily_usage ?? null },
+  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? <UsageValue value={num(r.usage.on_hands)} siblings={r.usage.equivalent_products} /> : '—'), sort: (r) => r.usage?.on_hands ?? null },
+  { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? <UsageValue value={num(r.usage.daily_usage)} siblings={r.usage.equivalent_products} /> : '—'), sort: (r) => r.usage?.daily_usage ?? null },
   {
     id: 'days_of_supply', label: 'Days of Supply', align: 'right', width: 'w-24', tint: true,
     render: (r) => {
@@ -383,7 +400,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // location_order_config + tank_monitors + product_id_mappings fetched
       // first (all small — one shop's own rows, plus a company-wide but tiny
       // mapping table) so the product_usage pull below can be scoped to only
-      // the product ids this shop actually needs it for, instead of every
+      // the product FAMILIES this shop actually needs, instead of every
       // product the shop has ever had usage for — confirmed against
       // production that a shop's own product_usage rows (avg ~1,070) vastly
       // outnumber its configured products (avg ~21), and unscoped usage is
@@ -415,13 +432,22 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         if (m.old_product_id && m.new_product_id && neededPkeys.has(pkey(m.new_product_id))) usageIdSet.add(m.old_product_id)
       }
       const usageIdList = [...usageIdSet]
+      // Widened from an exact-id list to a family-prefix match (same
+      // "equivalent case types" convention as Orders v2's own generation
+      // engine — baseProductId strips a trailing case-type suffix like "D"/
+      // "BB") so a sibling SKU with no order-config row of its own (a case
+      // type the shop isn't configured to order, or a manual mis-ring) still
+      // gets pulled in for the on-hand/usage combine below. A family prefix
+      // always matches its own exact id too (ilike(base%)), so this
+      // subsumes the old exact-match list rather than needing both.
+      const usageFamilies = [...new Set([...usageIdList].map((p) => pkey(baseProductId(p))).filter(Boolean))]
 
       const [usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes] = await Promise.all([
-        usageIdList.length === 0 ? Promise.resolve({ data: [] }) : fetchAllRows((from, to) =>
+        usageFamilies.length === 0 ? Promise.resolve({ data: [] }) : fetchAllRows((from, to) =>
           sb.schema('inventory').from('product_usage')
             .select('product_id, on_hands, daily_usage, updated_at')
             .eq('company_id', companyId).eq('location_id', shopId)
-            .in('product_id', usageIdList)
+            .or(usageFamilies.map((f) => `product_id.ilike.${f}%`).join(','))
             .order('product_id').range(from, to)
         ).then((data) => ({ data })).catch(() => ({ data: [] })),
         sb.schema('inventory').from('vendors').select('id, name').eq('company_id', companyId),
@@ -493,9 +519,49 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         if (!e.product_id) continue
         exceptionByProduct.set(resolvedKey(e.product_id), { floor_qty: e.floor_qty, ceiling_qty: e.ceiling_qty, ceiling_unit: e.ceiling_unit })
       }
+      // Combine on-hand/usage across "equivalent case types" of the same
+      // base product (e.g. 5W30D + 5W30BB both resolve to family "5W30") —
+      // same convention Orders v2's generation engine already uses, so a
+      // shop selling or receiving under a different case-type SKU (or a
+      // straight-up mis-ring) still shows real usage on its own configured
+      // row instead of reading as "no usage." On-hand and daily usage
+      // combine as a pair (never one without the other) so Days of Supply
+      // stays mathematically consistent; a sibling with zero/no on-hand
+      // contributes nothing (excluded, not zeroed).
+      const familyMembers = new Map<string, { product_id: string; on_hands: number; daily_usage: number | null }[]>()
+      for (const [pid, u] of usageByProduct) {
+        if (u.on_hands == null || Number(u.on_hands) <= 0) continue
+        const fam = pkey(baseProductId(pid))
+        if (!familyMembers.has(fam)) familyMembers.set(fam, [])
+        familyMembers.get(fam)!.push({ product_id: pid, on_hands: Number(u.on_hands), daily_usage: u.daily_usage })
+      }
+      const combinedUsageFor = (r: { product_id: string | null; metadata: Record<string, unknown> | null }) => {
+        if (!r.product_id) return null
+        const ownKey = resolvedKey(r.product_id)
+        const own = usageByProduct.get(ownKey) ?? null
+        // Keep-fill/VMI on-hand comes from its own tank monitor reading, not
+        // another case type's Droptop figure — never a combine target,
+        // matching Orders v2's own vmiKeys exclusion.
+        const isVmi = String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes'
+        if (isVmi) return own
+        const fam = pkey(baseProductId(ownKey))
+        const siblings = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== ownKey)
+        if (siblings.length === 0) return own
+        const ownOnHand = own?.on_hands != null ? Number(own.on_hands) : 0
+        const combinedOnHand = ownOnHand + siblings.reduce((sum, s) => sum + s.on_hands, 0)
+        const usageSiblings = siblings.filter((s) => s.daily_usage != null && s.daily_usage > 0)
+        const combinedUsage = own?.daily_usage != null || usageSiblings.length > 0
+          ? Number(own?.daily_usage ?? 0) + usageSiblings.reduce((sum, s) => sum + Number(s.daily_usage), 0)
+          : null
+        return {
+          on_hands: combinedOnHand, daily_usage: combinedUsage,
+          updated_at: own?.updated_at ?? null,
+          equivalent_products: siblings.map((s) => s.product_id),
+        }
+      }
       setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({
         ...r,
-        usage: r.product_id ? usageByProduct.get(resolvedKey(r.product_id)) ?? null : null,
+        usage: combinedUsageFor(r),
         exception: r.product_id ? exceptionByProduct.get(resolvedKey(r.product_id)) ?? null : null,
       })))
       // Also exposed at component scope (not just baked into `configs`) —
