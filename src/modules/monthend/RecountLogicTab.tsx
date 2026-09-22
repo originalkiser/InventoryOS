@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { Button, Input, Toggle, Badge, Card, CardHeader, CardBody } from '@/components/ui'
+import { Button, Input, Toggle, Badge, Card, CardHeader, CardBody, Modal, MultiSelectDropdown } from '@/components/ui'
 import { RECOUNT_FLAG_LABELS, RECOUNT_FLAG_DESCRIPTIONS } from '@/lib/recountEngine'
 import {
   fetchPeriodEvalData, evaluateCounts, draftToConfig, fetchTankVarianceCandidates,
@@ -63,14 +63,20 @@ function omitHiddenProducts<T extends { product_id: string }>(
 // Which flag source hit a product in the preview table's Products cell, and
 // the color used to border that chip — restricted to the CLAUDE.md-approved
 // off-palette colors (red/green/orange) since none of the brand tokens are
-// distinct enough from each other for this purpose.
-type FlagType = 'exception' | 'tank' | 'oil'
+// distinct enough from each other for this purpose. 'manual' (a user-added
+// product, not auto-detected) uses the sky brand token instead, since all
+// three off-palette colors are already spoken for.
+type FlagType = 'exception' | 'tank' | 'oil' | 'manual'
 const FLAG_COLORS: Record<FlagType, string> = {
   exception: '#C0392B', // sb-red — product/category range exception
   tank: '#2ECC71',      // sb-green — tank monitor variance
   oil: '#E67E22',       // sb-orange — oil on hand, not configured to order
+  manual: '#B7E0DE',    // sky — manually added by a user
 }
-const FLAG_ORDER: FlagType[] = ['exception', 'tank', 'oil']
+const FLAG_ORDER: FlagType[] = ['exception', 'tank', 'oil', 'manual']
+
+// recount_preview_actions.action values this tab writes/reads.
+type PreviewActionType = 'hidden_product' | 'excluded_shop' | 'flagged_later' | 'manual_product'
 
 // A product hit by more than one flag type gets its border split into equal
 // color segments (one per flag) via a hard-stop border-image gradient,
@@ -105,6 +111,7 @@ const FLAG_TYPE_TO_FLAG_KEY: Record<FlagType, string> = {
   exception: 'product_range_exception',
   tank: 'tank_monitor_variance',
   oil: 'unconfigured_oil',
+  manual: 'manually_added',
 }
 
 // Same base-product-id convention as get_product_expectation_exceptions'
@@ -120,16 +127,25 @@ function baseProductId(id: string): string {
 // location via the composite index on count_products, rather than loading
 // every product's siblings up front.
 function ProductChip({
-  productId, qty, types, hidden, locationId, companyId, countMonth, onToggleHide,
+  productId, qty, types, hidden, locationId, companyId, countMonth, onToggleHide, onAddSibling, addedProductIds,
 }: {
   productId: string
-  qty: number
+  qty: number | null
   types: Set<FlagType>
   hidden: boolean
   locationId: string | null
   companyId: string
   countMonth: string
   onToggleHide: () => void
+  // Adds a sibling case type shown in the hover panel to this shop's manual
+  // recount product list — undefined for a chip that shouldn't offer this
+  // (there isn't one today, but keeps the prop optional rather than forcing
+  // every call site to pass a no-op).
+  onAddSibling?: (productId: string) => void
+  // Siblings already added (or already flagged some other way and thus
+  // already in the Products cell) — their "+" becomes a plain checkmark
+  // instead of an actionable button, so the same product can't be added twice.
+  addedProductIds?: Set<string>
 }) {
   const [equiv, setEquiv] = useState<{ product_id: string; on_hand: number }[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -165,7 +181,7 @@ function ProductChip({
           hidden ? 'border border-navy/10 text-inky/30 line-through hover:text-inky/60' : 'text-inky hover:text-[#C0392B]',
         ].join(' ')}
       >
-        {productId} <span className="opacity-70">({fmt(qty)})</span>
+        {productId} {qty != null && <span className="opacity-70">({fmt(qty)})</span>}
       </button>
       {show && (
         <div className="absolute z-50 top-full left-0 mt-1 min-w-[180px] max-w-[260px] rounded border border-navy/30 bg-cream dark:bg-[#0e2638] shadow-xl px-2 py-1.5 text-[11px] font-mono text-navy dark:text-[#F2F1E6]">
@@ -179,12 +195,28 @@ function ProductChip({
             <span className="text-inky/50 italic">None found</span>
           ) : (
             <div className="flex flex-col gap-0.5">
-              {equiv.map((r) => (
-                <div key={r.product_id} className="flex justify-between gap-3">
-                  <span>{r.product_id}</span>
-                  <span className="font-bold">{fmt(r.on_hand)}</span>
-                </div>
-              ))}
+              {equiv.map((r) => {
+                const already = addedProductIds?.has(r.product_id)
+                return (
+                  <div key={r.product_id} className="flex items-center justify-between gap-3">
+                    <span>{r.product_id}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="font-bold">{fmt(r.on_hand)}</span>
+                      {onAddSibling && (already ? (
+                        <span className="text-[#2ECC71]" title="Already on this shop's recount list">✓</span>
+                      ) : (
+                        <button
+                          onClick={() => onAddSibling(r.product_id)}
+                          title={`Add ${r.product_id} to this shop's recount list`}
+                          className="text-sky hover:text-navy dark:hover:text-[#F2F1E6] font-bold leading-none px-0.5"
+                        >
+                          +
+                        </button>
+                      ))}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
@@ -291,8 +323,22 @@ export function RecountLogicTab() {
   const [hiddenProducts, setHiddenProducts] = useState<Map<string, Set<string>>>(new Map())
   const [excludedShops, setExcludedShops] = useState<Set<string>>(new Set())
   const [flaggedLaterShops, setFlaggedLaterShops] = useState<Set<string>>(new Set())
+  // Products a user manually added to a shop's recount consideration for
+  // this period — a sibling case type from the "equivalent on-hand" hover,
+  // or any product picked from the full catalog via the "+" button. Same
+  // recount_preview_actions table/lifecycle as hidden/excluded/later above,
+  // action 'manual_product' (migration 20260930bf).
+  const [manualProducts, setManualProducts] = useState<Map<string, Set<string>>>(new Map())
+  // Every distinct product id ever seen in product_usage, company-wide —
+  // backs the "+ Add Product" picker's searchable list. Loaded once (not
+  // per-period) via the same lightweight counts RPC ProductUsageTab's own
+  // product-id picker uses, rather than paging the ~300k-row table.
+  const [catalogProducts, setCatalogProducts] = useState<string[]>([])
   const [varianceRedThreshold, setVarianceRedThreshold] = useState('7500')
   const [flaggedLaterExpanded, setFlaggedLaterExpanded] = useState(false)
+  // Shop currently being edited in the "+ Add Product" catalog picker
+  // modal — null when closed.
+  const [addProductModalLocId, setAddProductModalLocId] = useState<string | null>(null)
   const hasLoadedRef = useRef(false)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
@@ -474,18 +520,35 @@ export function RecountLogicTab() {
     const hidden = new Map<string, Set<string>>()
     const excluded = new Set<string>()
     const later = new Set<string>()
+    const manual = new Map<string, Set<string>>()
     for (const r of (data ?? []) as { location_id: string; product_id: string | null; action: string }[]) {
       if (r.action === 'hidden_product' && r.product_id) {
         if (!hidden.has(r.location_id)) hidden.set(r.location_id, new Set())
         hidden.get(r.location_id)!.add(r.product_id)
       } else if (r.action === 'excluded_shop') excluded.add(r.location_id)
       else if (r.action === 'flagged_later') later.add(r.location_id)
+      else if (r.action === 'manual_product' && r.product_id) {
+        if (!manual.has(r.location_id)) manual.set(r.location_id, new Set())
+        manual.get(r.location_id)!.add(r.product_id)
+      }
     }
     setHiddenProducts(hidden)
     setExcludedShops(excluded)
     setFlaggedLaterShops(later)
+    setManualProducts(manual)
   }, [companyId, countMonth])
   useEffect(() => { loadPreviewActions() }, [loadPreviewActions])
+
+  // Product catalog for the "+ Add Product" picker — loaded once per
+  // company, not per period (the same distinct-product-id list regardless
+  // of which month is being reviewed).
+  useEffect(() => {
+    if (!companyId) { setCatalogProducts([]); return }
+    ;(supabase as any).rpc('get_product_usage_product_id_counts').then(({ data, error }: any) => {
+      if (error) { toast.error(`Could not load product catalog (${error.message})`); return }
+      setCatalogProducts(((data ?? []) as { product_id: string }[]).map((r) => r.product_id).sort())
+    })
+  }, [companyId])
 
   // recount_preview_actions' RLS checks `company_id = (SELECT ... WHERE id =
   // auth.uid())` — if the client's access token is momentarily stale (e.g.
@@ -505,7 +568,7 @@ export function RecountLogicTab() {
     return first
   }
 
-  async function addPreviewAction(locationId: string, action: 'hidden_product' | 'excluded_shop' | 'flagged_later', productId: string | null = null) {
+  async function addPreviewAction(locationId: string, action: PreviewActionType, productId: string | null = null) {
     if (!companyId) return
     const { error } = await withRlsRetry(() => (supabase as any).schema('inventory').from('recount_preview_actions')
       .upsert({ company_id: companyId, count_month: countMonth, location_id: locationId, product_id: productId, action, created_by: profile?.id ?? null },
@@ -513,7 +576,7 @@ export function RecountLogicTab() {
     if (error) { toast.error(error.message); return }
     await loadPreviewActions()
   }
-  async function removePreviewAction(locationId: string, action: 'hidden_product' | 'excluded_shop' | 'flagged_later', productId: string | null = null) {
+  async function removePreviewAction(locationId: string, action: PreviewActionType, productId: string | null = null) {
     if (!companyId) return
     const del = () => {
       const sb = (supabase as any).schema('inventory').from('recount_preview_actions')
@@ -528,6 +591,13 @@ export function RecountLogicTab() {
     const isHidden = hiddenProducts.get(locationId)?.has(productId) ?? false
     if (isHidden) removePreviewAction(locationId, 'hidden_product', productId)
     else addPreviewAction(locationId, 'hidden_product', productId)
+  }
+  function addManualProduct(locationId: string, productId: string) {
+    if (manualProducts.get(locationId)?.has(productId)) return
+    addPreviewAction(locationId, 'manual_product', productId)
+  }
+  function removeManualProduct(locationId: string, productId: string) {
+    removePreviewAction(locationId, 'manual_product', productId)
   }
 
   const lookbackN = numOrNull(lookback) ?? DEFAULT_LOOKBACK
@@ -762,10 +832,17 @@ export function RecountLogicTab() {
     const catFlags = effExceptionsByShop.get(e.locationId!) ?? []
     const tankFlags = effTankVarByShop.get(e.locationId!) ?? []
     const oilFlags = effOilFlagsByShop.get(e.locationId!) ?? []
+    // Manually added products (hover "+" on a sibling case type, or the
+    // catalog picker) — excluded here the same way an auto-detected product
+    // already is if it's been hidden, so hiding a manual addition actually
+    // drops it from what gets pushed.
+    const hiddenSet = (e.locationId && hiddenProducts.get(e.locationId)) || new Set<string>()
+    const manualIds = [...((e.locationId && manualProducts.get(e.locationId)) || new Set<string>())].filter((pid) => !hiddenSet.has(pid))
     const productFlags = [
       ...catFlags.map((x) => ({ source: 'category_limit' as const, product_id: x.product_id, category: x.category, basis: x.basis, reason: `${x.on_hand} on hand > ${x.expected_limit} ${x.basis} limit` })),
       ...tankFlags.map((x) => ({ source: 'tank_variance' as const, product_id: x.product_id, category: null, basis: 'tank_variance', reason: `tank ${x.tank_qts.toFixed(1)} qt vs ${x.on_hand.toFixed(1)} on hand (${x.diff > 0 ? '+' : ''}${x.diff.toFixed(1)} qt)` })),
       ...oilFlags.map((x) => ({ source: 'unconfigured_oil' as const, product_id: x.product_id, category: x.category, basis: 'unconfigured_oil', reason: `${x.on_hand} qt on hand, not configured to order at this shop` })),
+      ...manualIds.map((pid) => ({ source: 'manual' as const, product_id: pid, category: null, basis: 'manual', reason: 'Added manually' })),
     ]
     const requestedProducts = productFlags.map((p) => `${p.product_id} (${p.reason})`)
     return {
@@ -1064,8 +1141,11 @@ export function RecountLogicTab() {
                   oilBalanceData={oilBalanceData}
                   inRecountShopIds={inRecountShopIds}
                   categoryBalances={categoryBalances}
+                  manualProducts={manualProducts}
                   varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                   onToggleHide={toggleHideProduct}
+                  onAddManualProduct={addManualProduct}
+                  onOpenAddProduct={setAddProductModalLocId}
                   onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
                   onPushOne={handlePushOne}
                   onToggleLater={(locId) => removePreviewAction(locId, 'flagged_later')}
@@ -1120,8 +1200,11 @@ export function RecountLogicTab() {
                 oilBalanceData={oilBalanceData}
                 inRecountShopIds={inRecountShopIds}
                 categoryBalances={categoryBalances}
+                manualProducts={manualProducts}
                 varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                 onToggleHide={toggleHideProduct}
+                onAddManualProduct={addManualProduct}
+                onOpenAddProduct={setAddProductModalLocId}
                 onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
                 onPushOne={handlePushOne}
                 onToggleLater={(locId) => addPreviewAction(locId, 'flagged_later')}
@@ -1205,6 +1288,37 @@ export function RecountLogicTab() {
           )}
         </CardBody>
       </Card>
+
+      <Modal
+        open={!!addProductModalLocId}
+        onClose={() => setAddProductModalLocId(null)}
+        title={`Add Product${addProductModalLocId ? ` — ${locationLabel(addProductModalLocId, evalData?.locations ?? [])}` : ''}`}
+        size="sm"
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-xs font-mono text-inky/70">
+            Pick any product from the catalog to add it to this shop's recount list for this period.
+          </p>
+          <MultiSelectDropdown
+            options={catalogProducts.map((p) => ({ value: p }))}
+            selected={addProductModalLocId ? [...(manualProducts.get(addProductModalLocId) ?? [])] : []}
+            onChange={(next) => {
+              if (!addProductModalLocId) return
+              const before = manualProducts.get(addProductModalLocId) ?? new Set<string>()
+              const after = new Set(next)
+              for (const pid of after) if (!before.has(pid)) addManualProduct(addProductModalLocId, pid)
+              for (const pid of before) if (!after.has(pid)) removeManualProduct(addProductModalLocId, pid)
+            }}
+            placeholder="Search products…"
+            showAllOption={false}
+            countNoun="products"
+            searchable
+          />
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setAddProductModalLocId(null)}>Done</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -1234,7 +1348,8 @@ function CategoryBalanceStack({ cb }: { cb?: { oil: number; parts: number; addit
 // per-row actions, so a shop looks identical wherever it currently sits.
 function RecountPreviewTable({
   rows, locations, companyId, countMonth, tankVarByShop, exceptionsByShop, oilFlagsByShop, hiddenProducts,
-  oilBalanceData, inRecountShopIds, categoryBalances, varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
+  oilBalanceData, inRecountShopIds, categoryBalances, manualProducts, varianceRedThreshold,
+  onToggleHide, onAddManualProduct, onOpenAddProduct, onExclude, onPushOne, onToggleLater, laterActionLabel,
 }: {
   rows: EvaluatedCount[]
   locations: Location[]
@@ -1257,8 +1372,17 @@ function RecountPreviewTable({
   // own categoryBalances comment. Stacked under the Ending cell's own
   // number rather than 5 new columns, per explicit request.
   categoryBalances: Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>
+  // Products a user manually added to a shop's recount list this period —
+  // see RecountLogicTab's own manualProducts comment.
+  manualProducts: Map<string, Set<string>>
   varianceRedThreshold: number
   onToggleHide: (locationId: string, productId: string) => void
+  onAddManualProduct: (locationId: string, productId: string) => void
+  // Opens the parent's "+ Add Product" catalog picker for this shop — a
+  // Modal rather than an inline dropdown, since this table already sits
+  // inside a scrolling/bordered container (an absolutely-positioned panel
+  // risks getting clipped, the same class of bug Tank Monitors hit before).
+  onOpenAddProduct: (locationId: string) => void
   onExclude: (locationId: string) => void
   onPushOne: (e: EvaluatedCount) => void
   onToggleLater: (locationId: string) => void
@@ -1283,8 +1407,8 @@ function RecountPreviewTable({
         {rows.map((e) => {
           const varVsPrev = e.count?.ending_inventory_cost != null && e.prev != null ? e.count.ending_inventory_cost - e.prev : null
           const isRed = varVsPrev != null && Math.abs(varVsPrev) > varianceRedThreshold
-          const productMap = new Map<string, { qty: number; types: Set<FlagType> }>()
-          const addProduct = (id: string, qty: number, type: FlagType) => {
+          const productMap = new Map<string, { qty: number | null; types: Set<FlagType> }>()
+          const addProduct = (id: string, qty: number | null, type: FlagType) => {
             const cur = productMap.get(id)
             if (cur) cur.types.add(type)
             else productMap.set(id, { qty, types: new Set([type]) })
@@ -1292,6 +1416,7 @@ function RecountPreviewTable({
           ;(exceptionsByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'exception'))
           ;(tankVarByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'tank'))
           ;(oilFlagsByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'oil'))
+          ;(e.locationId && manualProducts.get(e.locationId) || new Set<string>()).forEach((id) => addProduct(id, null, 'manual'))
           const products = [...productMap.entries()].map(([id, v]) => ({ id, qty: v.qty, types: v.types }))
           const hiddenSet = (e.locationId && hiddenProducts.get(e.locationId)) || new Set<string>()
           const inRecounts = !!e.locationId && inRecountShopIds.has(e.locationId)
@@ -1330,23 +1455,30 @@ function RecountPreviewTable({
                 })()}
               </td>
               <td className="px-3 py-2 text-inky">
-                {products.length === 0 ? '—' : (
-                  <div className="flex flex-wrap gap-1">
-                    {products.map((p) => (
-                      <ProductChip
-                        key={p.id}
-                        productId={p.id}
-                        qty={p.qty}
-                        types={p.types}
-                        hidden={hiddenSet.has(p.id)}
-                        locationId={e.locationId}
-                        companyId={companyId}
-                        countMonth={countMonth}
-                        onToggleHide={() => e.locationId && onToggleHide(e.locationId, p.id)}
-                      />
-                    ))}
-                  </div>
-                )}
+                <div className="flex flex-wrap items-center gap-1">
+                  {products.map((p) => (
+                    <ProductChip
+                      key={p.id}
+                      productId={p.id}
+                      qty={p.qty}
+                      types={p.types}
+                      hidden={hiddenSet.has(p.id)}
+                      locationId={e.locationId}
+                      companyId={companyId}
+                      countMonth={countMonth}
+                      onToggleHide={() => e.locationId && onToggleHide(e.locationId, p.id)}
+                      onAddSibling={(pid) => e.locationId && onAddManualProduct(e.locationId, pid)}
+                      addedProductIds={new Set(products.map((x) => x.id))}
+                    />
+                  ))}
+                  <button
+                    onClick={() => e.locationId && onOpenAddProduct(e.locationId)}
+                    title="Add a product to this shop's recount list"
+                    className="rounded px-1.5 py-0.5 border border-navy/20 text-inky/60 hover:text-navy hover:border-navy/40 font-bold leading-none"
+                  >
+                    +
+                  </button>
+                </div>
               </td>
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-2">
