@@ -631,6 +631,11 @@ export interface RecountConfig {
   // Engine-oil products with on-hand this period but no location_order_config
   // row for that shop — see get_unconfigured_oil_on_hand.
   oil_check_enabled?: boolean
+  // Flags a shop whose live current oil on-hand value (see
+  // get_current_oil_on_hand_value) comes in more than this many dollars
+  // below its uploaded expected_oil_balances value for the period. Null =
+  // off, same "blank = off" convention as every other threshold here.
+  oil_balance_threshold?: number | null
   created_at: string
   updated_at: string
 }

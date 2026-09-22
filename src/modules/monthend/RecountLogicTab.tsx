@@ -11,6 +11,7 @@ import {
 } from './recountData'
 import { locationLabel } from './countsShared'
 import { ProductOnHandExceptionsPanel } from './ProductOnHandExceptionsPanel'
+import { ExpectedOilBalanceUpload } from './ExpectedOilBalanceUpload'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import type { RecountConfig, Location } from '@/types'
 import { format, parseISO } from 'date-fns'
@@ -29,6 +30,7 @@ function flagsToReason(flags: string[]): string {
   if (flags.includes('variance_vs_last_month')) return 'Unexpected ending balance'
   if (flags.includes('tank_monitor_variance')) return 'Tank monitor variance'
   if (flags.includes('unconfigured_oil')) return 'Oil on hand, not configured to order'
+  if (flags.includes('oil_balance_below_expected')) return 'Oil balance below expected'
   return flags.join(', ')
 }
 
@@ -223,6 +225,7 @@ export function RecountLogicTab() {
   const [varLastEnabled, setVarLastEnabled] = useState(false)
   const [tankVarEnabled, setTankVarEnabled] = useState(false)
   const [oilCheckEnabled, setOilCheckEnabled] = useState(false)
+  const [oilBalanceEnabled, setOilBalanceEnabled] = useState(false)
   // Master switch: skip Adjustment Count / Oil Adjustment Count / Ending
   // Balance / Variance vs Median / Variance vs Last Month entirely,
   // regardless of each rule's own toggle/thresholds above (kept, not
@@ -239,6 +242,7 @@ export function RecountLogicTab() {
   const [varMed, setVarMed] = useState('')
   const [varLast, setVarLast] = useState('')
   const [tankVarQts, setTankVarQts] = useState('')
+  const [oilBalanceThreshold, setOilBalanceThreshold] = useState('4000')
   const [lookback, setLookback] = useState(String(DEFAULT_LOOKBACK))
 
   // Per-rule threshold types
@@ -253,6 +257,13 @@ export function RecountLogicTab() {
   const [tankCandidates, setTankCandidates] = useState<TankVarianceCandidate[]>([])
   const [productExceptions, setProductExceptions] = useState<ProductExceptionRow[]>([])
   const [oilOnHandRows, setOilOnHandRows] = useState<OilOnHandRow[]>([])
+  // Expected (uploaded) vs live current oil $ value, by shop — fetched
+  // once per period regardless of the rule's own toggle, same as the
+  // exceptions/oil fetches above, so the raw variance is visible in the
+  // preview even for a shop the $4000+ threshold doesn't actually flag
+  // (per explicit request: "still want to see that variance for large
+  // outliers"). oilBalanceEnabled only gates whether it can FLAG a shop.
+  const [oilBalanceData, setOilBalanceData] = useState<Map<string, { expected: number; actual: number | null }>>(new Map())
   const [tankProductMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
   const [tankVariance] = useAppSetting<number>(TANK_VARIANCE_KEY, DEFAULT_TANK_VARIANCE)
   const [unlistedLimit] = useAppSetting<number | null>(UNLISTED_LIMIT_KEY, null)
@@ -288,6 +299,8 @@ export function RecountLogicTab() {
       setTankVarEnabled(c.tank_variance_qts_threshold != null)
       setTankVarQts(c.tank_variance_qts_threshold?.toString() ?? '')
       setOilCheckEnabled(c.oil_check_enabled ?? false)
+      setOilBalanceEnabled(c.oil_balance_threshold != null)
+      setOilBalanceThreshold(c.oil_balance_threshold?.toString() ?? '4000')
       setIgnoreEndingBalance(c.ignore_ending_balance ?? false)
       setLowAdj(c.low_adj_threshold?.toString() ?? '')
       setHighAdj(c.high_adj_threshold?.toString() ?? '')
@@ -322,8 +335,8 @@ export function RecountLogicTab() {
     return () => clearTimeout(autoSaveTimerRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adjEnabled, oilAdjEnabled, balEnabled, varMedEnabled, varLastEnabled, tankVarEnabled,
-      oilCheckEnabled, ignoreEndingBalance,
-      lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, tankVarQts,
+      oilCheckEnabled, oilBalanceEnabled, ignoreEndingBalance,
+      lowAdj, highAdj, lowOilAdj, highOilAdj, lowBal, highBal, varMed, varLast, tankVarQts, oilBalanceThreshold,
       lookback, varMedThresholdType, varLastThresholdType])
 
   // Load period data for the live preview (once per period)
@@ -380,6 +393,29 @@ export function RecountLogicTab() {
     return () => { cancelled = true }
   }, [companyId, countMonth, oilCheckEnabled])
 
+  // Expected Oil Balance data — see oilBalanceData's own comment above.
+  // Pulled out as a callback (not just inline in the effect) so the upload
+  // panel's onChanged can trigger a fresh load after saving new values,
+  // same "loader + effect + external trigger" shape as loadPreviewActions.
+  const loadOilBalanceData = useCallback(async () => {
+    if (!companyId) { setOilBalanceData(new Map()); return }
+    const sb = supabase as any
+    const [{ data: expected, error: expErr }, { data: actual, error: actErr }] = await Promise.all([
+      sb.schema('inventory').from('expected_oil_balances')
+        .select('location_id, expected_balance').eq('company_id', companyId).eq('count_month', countMonth),
+      sb.rpc('get_current_oil_on_hand_value', { p_company_id: companyId, p_count_month: countMonth }),
+    ])
+    if (expErr) { toast.error(`Could not load expected oil balances (${expErr.message})`); return }
+    if (actErr) { toast.error(`Could not load current oil value (${actErr.message})`); return }
+    const actualMap = new Map<string, number>((actual ?? []).map((r: any) => [r.location_id, Number(r.oil_value)]))
+    const m = new Map<string, { expected: number; actual: number | null }>()
+    for (const r of (expected ?? []) as { location_id: string; expected_balance: number }[]) {
+      m.set(r.location_id, { expected: Number(r.expected_balance), actual: actualMap.get(r.location_id) ?? null })
+    }
+    setOilBalanceData(m)
+  }, [companyId, countMonth])
+  useEffect(() => { loadOilBalanceData() }, [loadOilBalanceData])
+
   // Per-period preview workflow state (hidden products, excluded shops,
   // flagged-for-later shops) — persisted so the whole team sees the same
   // state, not just whoever last touched the page.
@@ -431,6 +467,24 @@ export function RecountLogicTab() {
 
   const lookbackN = numOrNull(lookback) ?? DEFAULT_LOOKBACK
   const tankVarThreshold = tankVarEnabled ? numOrNull(tankVarQts) : null
+  const oilBalanceVarThreshold = oilBalanceEnabled ? numOrNull(oilBalanceThreshold) : null
+
+  // Shops whose live oil value is more than the threshold BELOW their
+  // uploaded expected balance — see oilBalanceData's own comment. No
+  // specific product to point at (a shop-level dollar aggregate, not a
+  // single product), so this behaves like the ending-balance-style base
+  // rules: a shop flagged ONLY by this goes to Manual Review (see the
+  // hasProduct check below), never auto-generates a targeted recount.
+  const oilBalanceFlagByShop = useMemo(() => {
+    const s = new Set<string>()
+    if (oilBalanceVarThreshold == null || !evalData) return s
+    for (const [locationId, d] of oilBalanceData) {
+      if (!evalData.eligibleLocationIds.has(locationId)) continue
+      if (d.actual == null) continue
+      if (d.expected - d.actual > oilBalanceVarThreshold) s.add(locationId)
+    }
+    return s
+  }, [oilBalanceData, oilBalanceVarThreshold, evalData])
 
   // Shops with at least one VMI product whose tank reading is off from its
   // counted on-hand by more than the threshold. Gated to eligible shops —
@@ -526,18 +580,24 @@ export function RecountLogicTab() {
     const rawBase = evaluateCounts(evalData.counts, evalData.histByLoc, draftToConfig(draft), lookbackN)
     const base = ignoreEndingBalance ? rawBase.map((e) => ({ ...e, flags: [] as string[] })) : rawBase
 
+    // Same "ignoring" gate as the base dollar/count rules above — this is
+    // itself a dollar-based check, not product-evidenced, so it stops
+    // flagging entirely when ignoreEndingBalance is on.
+    const effOilBalanceFlagByShop = ignoreEndingBalance ? new Set<string>() : oilBalanceFlagByShop
+
     const withFlags = base.map((e) => {
       if (!e.locationId) return e
       const extra: string[] = []
       if (effTankVarByShop.has(e.locationId)) extra.push('tank_monitor_variance')
       if (effOilFlagsByShop.has(e.locationId)) extra.push('unconfigured_oil')
       if (effExceptionsByShop.has(e.locationId)) extra.push('product_range_exception')
+      if (effOilBalanceFlagByShop.has(e.locationId)) extra.push('oil_balance_below_expected')
       return extra.length ? { ...e, flags: [...e.flags, ...extra] } : e
     })
 
     const coveredLocIds = new Set(withFlags.map((e) => e.locationId).filter((id): id is string => !!id))
     const onlyLocIds = new Set(
-      [...effTankVarByShop.keys(), ...effOilFlagsByShop.keys(), ...effExceptionsByShop.keys()]
+      [...effTankVarByShop.keys(), ...effOilFlagsByShop.keys(), ...effExceptionsByShop.keys(), ...effOilBalanceFlagByShop]
         .filter((id) => !coveredLocIds.has(id) && evalData.eligibleLocationIds.has(id))
     )
     const synthetic: EvaluatedCount[] = [...onlyLocIds].map((locId) => {
@@ -545,10 +605,11 @@ export function RecountLogicTab() {
       if (effTankVarByShop.has(locId)) flags.push('tank_monitor_variance')
       if (effOilFlagsByShop.has(locId)) flags.push('unconfigured_oil')
       if (effExceptionsByShop.has(locId)) flags.push('product_range_exception')
+      if (effOilBalanceFlagByShop.has(locId)) flags.push('oil_balance_below_expected')
       return { count: null, locationId: locId, prev: null, median: 0, varVsLastMonth: 0, varVsMedian: 0, flags }
     })
     return [...withFlags, ...synthetic]
-  }, [evalData, draft, lookbackN, effTankVarByShop, effOilFlagsByShop, effExceptionsByShop, ignoreEndingBalance])
+  }, [evalData, draft, lookbackN, effTankVarByShop, effOilFlagsByShop, effExceptionsByShop, oilBalanceFlagByShop, ignoreEndingBalance])
 
   const flagged = evaluated.filter((e) => e.flags.length > 0)
 
@@ -613,13 +674,14 @@ export function RecountLogicTab() {
         .update({
           oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold,
           ignore_ending_balance: ignoreEndingBalance, oil_check_enabled: oilCheckEnabled,
+          oil_balance_threshold: oilBalanceVarThreshold,
         })
         .eq('id', savedId)
         .then(() => {})
     }
     setRecountConfig({
       id: savedId!, ...payload, oil_low_adj_threshold, oil_high_adj_threshold, tank_variance_qts_threshold: tankVarThreshold,
-      ignore_ending_balance: ignoreEndingBalance, oil_check_enabled: oilCheckEnabled,
+      ignore_ending_balance: ignoreEndingBalance, oil_check_enabled: oilCheckEnabled, oil_balance_threshold: oilBalanceVarThreshold,
     } as unknown as RecountConfig)
     return savedId
   }
@@ -841,6 +903,25 @@ export function RecountLogicTab() {
           <p className="text-xs font-mono text-inky/60">Engine oil only. No threshold — any unconfigured oil with on-hand &gt; 0 flags the shop and product.</p>
         </RuleCard>
 
+        <RuleCard
+          title="Expected Oil Balance"
+          enabled={oilBalanceEnabled}
+          onToggle={setOilBalanceEnabled}
+          preview={oilBalanceEnabled && oilBalanceThreshold.trim()
+            ? `Flag shops whose live current oil value comes in more than $${oilBalanceThreshold} below their uploaded Expected Oil Balance for this period.`
+            : 'Disabled — set a dollar amount to enable.'}
+        >
+          <Input label="Below-Expected Threshold ($)" value={oilBalanceThreshold} onChange={(e) => setOilBalanceThreshold(e.target.value)} placeholder="e.g. 4000" />
+          <p className="text-xs font-mono text-inky/60 mt-2">
+            Compares Finance's uploaded expected balance against a LIVE estimate (current on-hand quantities × each
+            product's own vendor cost) — not a precise accounting figure. Spot-checked against real recorded ending
+            values: typically within ~5-25% (occasionally further off for a shop with unusual product mix), so treat a
+            flag here as "worth a look," same as every other rule in this preview. One-directional by design — bills
+            usually lag, so a real balance coming in HIGHER than expected is normal and isn't flagged, but the raw
+            variance (either direction) is always shown in the preview table below.
+          </p>
+        </RuleCard>
+
         <CollapsibleCard
           title="Median Lookback & Ending-Balance Rules"
           borderClassName={ignoreEndingBalance ? 'border-[#E67E22]/50' : ''}
@@ -853,15 +934,24 @@ export function RecountLogicTab() {
             hint={`Median over trailing ${lookbackN} months`}
           />
           <p className="text-xs font-mono text-inky leading-relaxed border-l-2 border-[#00e5ff]/30 pl-2">
-            When "Ignoring" is on, Adjustment Count, Oil Adjustment Count, Ending Balance, Variance vs Median, and
-            Variance vs Last Month stop flagging shops entirely — only Tank Monitor Variance, Oil On Hand, and product
-            range exceptions can still flag a recount. Each rule's own toggle/thresholds are kept, not cleared.
+            When "Ignoring" is on, Adjustment Count, Oil Adjustment Count, Ending Balance, Variance vs Median,
+            Variance vs Last Month, and Expected Oil Balance stop flagging shops entirely — only Tank Monitor
+            Variance, Oil On Hand, and product range exceptions can still flag a recount. Each rule's own
+            toggle/thresholds are kept, not cleared.
           </p>
         </CollapsibleCard>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ProductOnHandExceptionsPanel />
+        {companyId && (
+          <ExpectedOilBalanceUpload
+            companyId={companyId}
+            countMonth={countMonth}
+            uploadedBy={profile?.id ?? null}
+            onChanged={loadOilBalanceData}
+          />
+        )}
       </div>
 
       <Card>
@@ -902,6 +992,7 @@ export function RecountLogicTab() {
                   exceptionsByShop={exceptionsByShop}
                   oilFlagsByShop={oilFlagsByShop}
                   hiddenProducts={hiddenProducts}
+                  oilBalanceData={oilBalanceData}
                   varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                   onToggleHide={toggleHideProduct}
                   onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
@@ -955,6 +1046,7 @@ export function RecountLogicTab() {
                 exceptionsByShop={exceptionsByShop}
                 oilFlagsByShop={oilFlagsByShop}
                 hiddenProducts={hiddenProducts}
+                oilBalanceData={oilBalanceData}
                 varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                 onToggleHide={toggleHideProduct}
                 onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
@@ -997,24 +1089,40 @@ export function RecountLogicTab() {
                     <th className="px-3 py-2 text-right">Ending</th>
                     <th className="px-3 py-2 text-right">Prev</th>
                     <th className="px-3 py-2 text-right">Median</th>
+                    {/* Shown for any shop with expected+actual oil data, not just
+                        the ones the $ threshold above actually flags — per
+                        explicit request to keep the raw variance visible for
+                        large outliers in either direction. */}
+                    <th className="px-3 py-2 text-right">Oil Expected</th>
+                    <th className="px-3 py-2 text-right">Oil Actual (est.)</th>
+                    <th className="px-3 py-2 text-right">Oil Variance</th>
                     <th className="px-3 py-2 text-left">Flags</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {manualReview.map((e) => (
+                  {manualReview.map((e) => {
+                    const ob = e.locationId ? oilBalanceData.get(e.locationId) : undefined
+                    const variance = ob && ob.actual != null ? ob.expected - ob.actual : null
+                    return (
                     <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
                       <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, evalData.locations)}</td>
                       <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
                       <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
+                      <td className="px-3 py-2 text-right text-inky">{ob ? fmt(ob.expected) : '—'}</td>
+                      <td className="px-3 py-2 text-right text-inky">{ob?.actual != null ? fmt(ob.actual) : '—'}</td>
+                      <td className={['px-3 py-2 text-right', variance != null && variance > 0 ? 'text-[#C0392B] font-bold' : 'text-inky'].join(' ')}>
+                        {variance == null ? '—' : `${variance >= 0 ? '−' : '+'}${fmt(Math.abs(variance))}`}
+                      </td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
                           {e.flags.map((f) => <FlagBadge key={f} flag={f} />)}
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1033,7 +1141,7 @@ function fmt(v: number | null | undefined) {
 // per-row actions, so a shop looks identical wherever it currently sits.
 function RecountPreviewTable({
   rows, locations, companyId, countMonth, tankVarByShop, exceptionsByShop, oilFlagsByShop, hiddenProducts,
-  varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
+  oilBalanceData, varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
 }: {
   rows: EvaluatedCount[]
   locations: Location[]
@@ -1043,6 +1151,11 @@ function RecountPreviewTable({
   exceptionsByShop: Map<string, ProductExceptionRow[]>
   oilFlagsByShop: Map<string, OilOnHandRow[]>
   hiddenProducts: Map<string, Set<string>>
+  // Expected/actual oil $ per shop — see RecountLogicTab's own oilBalanceData
+  // comment. Shown as a compact note under Flags, not its own columns, so
+  // this table (already 9 columns) only grows for the shops it actually
+  // applies to, per "still want to see that variance for large outliers."
+  oilBalanceData: Map<string, { expected: number; actual: number | null }>
   varianceRedThreshold: number
   onToggleHide: (locationId: string, productId: string) => void
   onExclude: (locationId: string) => void
@@ -1094,6 +1207,21 @@ function RecountPreviewTable({
                 <div className="flex flex-wrap gap-1">
                   {e.flags.map((f) => <FlagBadge key={f} flag={f} />)}
                 </div>
+                {(() => {
+                  const ob = e.locationId ? oilBalanceData.get(e.locationId) : undefined
+                  if (!ob) return null
+                  const variance = ob.actual != null ? ob.expected - ob.actual : null
+                  return (
+                    <div className="text-[10px] font-mono text-inky/60 mt-0.5">
+                      Oil: exp {fmt(ob.expected)} · act {ob.actual != null ? fmt(ob.actual) : '—'}
+                      {variance != null && (
+                        <span className={variance > 0 ? 'text-[#C0392B] font-bold' : ''}>
+                          {' '}({variance >= 0 ? '−' : '+'}{fmt(Math.abs(variance))})
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
               </td>
               <td className="px-3 py-2 text-inky">
                 {products.length === 0 ? '—' : (

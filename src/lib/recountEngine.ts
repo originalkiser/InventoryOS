@@ -145,6 +145,7 @@ export const RECOUNT_FLAG_LABELS: Record<string, string> = {
   tank_monitor_variance: 'Tank monitor variance',
   unconfigured_oil: 'Not on order config',
   product_range_exception: 'Product range exception',
+  oil_balance_below_expected: 'Oil balance below expected',
 }
 
 /** Full-sentence explanations for flag codes — shown as a hover tooltip next to the short label above. */
@@ -152,4 +153,5 @@ export const RECOUNT_FLAG_DESCRIPTIONS: Record<string, string> = {
   unconfigured_oil: 'Engine oil on hand this period with no location_order_config row — oil being counted but not configured to order.',
   product_range_exception: "A product's on-hand exceeds its configured category or product-specific limit.",
   tank_monitor_variance: "A VMI tank's reading differs from its counted on-hand by more than the configured threshold.",
+  oil_balance_below_expected: "Current oil on-hand value (estimated from live quantities) is below Finance's expected balance by more than the configured amount — a sign the shop may have been billed for oil not reflected in inventory.",
 }

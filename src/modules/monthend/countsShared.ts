@@ -21,6 +21,13 @@ export const SUMMARY_FIELDS: MapField[] = [
   { name: 'ending_inventory_cost', label: 'Ending Inventory Cost', required: true, numeric: true },
 ]
 
+// Expected Oil Balance upload — one row per location for the period,
+// replaces (not additive) — see ExpectedOilBalanceUpload.tsx.
+export const EXPECTED_OIL_FIELDS: MapField[] = [
+  { name: 'location', label: 'Location', required: true },
+  { name: 'expected_balance', label: 'Expected Balance', required: true, numeric: true },
+]
+
 // Product Detail upload — additive; many rows per location.
 export const PRODUCT_FIELDS: MapField[] = [
   { name: 'location', label: 'Location', required: true },
