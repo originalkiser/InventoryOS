@@ -23,6 +23,12 @@ import { imagesToPdf } from '@/lib/imagesToPdf'
 import type { Location, ColumnMapping } from '@/types'
 import menuBoardArt from '@/assets/MenuBoard-01.png'
 import menuBoardArt2 from '@/assets/MenuBoard-02.png'
+// Spanish page-1 art only (added 2026-09-22) — same 2850x4950 dimensions as
+// the English version (confirmed), so every price/quart patch position
+// below applies unchanged regardless of which page-1 image is shown. Page 2
+// (the staff reference sheet) has no Spanish version and always stays
+// English — see BoardViewer's own lang toggle comment.
+import menuBoardArtEs from '@/assets/MenuBoard - Spanish-01.png'
 
 const LAST_LOCATION_KEY = 'menu-board:last-location'
 const money = (v: number | null | undefined) => (v == null ? null : Number(v))
@@ -334,7 +340,7 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
  * updates position live, committed to the DB on release. Reused read-only
  * by the public share page (no editMode, no updatePackage).
  */
-export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1, shareUrl, hidePage2, footerNote }: {
+export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1, shareUrl, hidePage2, footerNote, lang = 'en' }: {
   location: Location | undefined
   packages: MenuBoardPackage[]
   editMode?: boolean
@@ -357,6 +363,10 @@ export function Board({ location, packages, editMode = false, updatePackage, res
    *  TO A SHOP SUPPLY AND/OR DISPOSAL FEE. * * * * *") and draws this text
    *  in its place instead. Omitted/undefined leaves the printed line as-is. */
   footerNote?: string | null
+  /** Which page-1 art to show — 'es' swaps in the Spanish version (same
+   *  dimensions, so every price/quart patch position below still lines up
+   *  unchanged). Page 2 has no Spanish version and always stays English. */
+  lang?: 'en' | 'es'
 }) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<{ id: string; field: 'price' | 'quart' } | null>(null)
@@ -409,7 +419,7 @@ export function Board({ location, packages, editMode = false, updatePackage, res
           onPointerUp={endDrag}
           className="relative w-full select-none"
         >
-          <img src={menuBoardArt} alt="Menu board" className="block w-full" draggable={false} />
+          <img src={lang === 'es' ? menuBoardArtEs : menuBoardArt} alt="Menu board" className="block w-full" draggable={false} />
           {packages.map((p) => {
             const slot = BOARD_SLOTS[p.package_key]
             if (!slot) return null // no known spot on the art (e.g. Dexos)
@@ -590,7 +600,7 @@ function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
   ctx.fillText('PLUS TAX', x + (colW - wPT) / 2, smallBaseline + ptFs + fs * 0.02)
 }
 
-export async function buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2, footerNote }: {
+export async function buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2, footerNote, lang = 'en' }: {
   packages: MenuBoardPackage[]
   location: Location | undefined
   resolveQuart: (locationId: string, packageKey: string) => { pricePerQuart: number | null; includedQuarts: number | null; isCustom: boolean }
@@ -604,13 +614,15 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
    *  in sync with Board's DOM version since this is a separate canvas
    *  render, not a screenshot of it (see this file's own PDF export comment). */
   footerNote?: string | null
+  /** Same 'es' swap as Board's own lang prop — page 2 stays English. */
+  lang?: 'en' | 'es'
 }): Promise<Blob> {
   await Promise.all([
     document.fonts.load('700 100px "Chakra Petch"'),
     document.fonts.load('16px "DM Mono"'),
   ]).catch(() => {})
 
-  const art1 = await loadImage(menuBoardArt)
+  const art1 = await loadImage(lang === 'es' ? menuBoardArtEs : menuBoardArt)
   const scale = PDF_W / BOARD_REF_WIDTH
 
   // ── Page 1: board + priced overlays + address bar (+ QR, if shared) ─
@@ -730,6 +742,11 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, hideDownload, ...pr
     try { return (localStorage.getItem(LAYOUT_KEY) as BoardLayout) || 'single' } catch { return 'single' }
   })
   const [pagePref, setPagePref] = useState<1 | 2>(1)
+  // Page-1 language, admin/public toggle — added 2026-09-22. Not persisted;
+  // always starts English. The toolbar button always shows the language
+  // you'd SWITCH TO ("Español" while English is showing, "English" while
+  // Spanish is showing), not the current one.
+  const [lang, setLang] = useState<'en' | 'es'>('en')
   useEffect(() => { try { localStorage.setItem(LAYOUT_KEY, layoutPref) } catch { /* ignore */ } }, [layoutPref])
   // True right after "Fit to screen" — centers the board and clips (instead
   // of scrolling) the ~5% bezel the width-fit intentionally lets run past
@@ -802,6 +819,7 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, hideDownload, ...pr
         shareUrl,
         hidePage2,
         footerNote: props.footerNote,
+        lang,
       })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -829,7 +847,7 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, hideDownload, ...pr
         className={`pb-1 overflow-y-auto ${fitMode ? 'overflow-x-hidden flex justify-center' : 'overflow-x-auto'}`}
       >
         <div ref={contentRef}>
-          <Board {...props} width={displayW} layout={layout} page={page} shareUrl={shareUrl} hidePage2={hidePage2} />
+          <Board {...props} width={displayW} layout={layout} page={page} shareUrl={shareUrl} hidePage2={hidePage2} lang={lang} />
         </div>
       </div>
 
@@ -861,10 +879,19 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, hideDownload, ...pr
         )}
 
         {!hideDownload && (
-          <button type="button" onClick={downloadPdf} disabled={pdfBusy}
-            className="ml-auto px-3 h-7 rounded bg-sb-sky hover:brightness-95 disabled:opacity-50 text-sb-navy font-mono font-bold text-[11px] uppercase tracking-wide">
-            {pdfBusy ? 'Building…' : 'Download PDF'}
-          </button>
+          <>
+            {/* Shows the language you'd SWITCH TO, not the current one — see
+                lang state's own comment above. */}
+            <button type="button" onClick={() => setLang((l) => (l === 'en' ? 'es' : 'en'))}
+              className="ml-auto px-3 h-7 rounded-full bg-sb-cream/10 hover:bg-sb-cream/20 flex items-center gap-1.5 text-sb-cream font-mono font-bold text-[11px] uppercase tracking-wide">
+              <span aria-hidden="true">{lang === 'en' ? '🇲🇽' : '🇺🇸'}</span>
+              {lang === 'en' ? 'Español' : 'English'}
+            </button>
+            <button type="button" onClick={downloadPdf} disabled={pdfBusy}
+              className="px-3 h-7 rounded bg-sb-sky hover:brightness-95 disabled:opacity-50 text-sb-navy font-mono font-bold text-[11px] uppercase tracking-wide">
+              {pdfBusy ? 'Building…' : 'Download PDF'}
+            </button>
+          </>
         )}
       </div>
     </div>
