@@ -206,18 +206,21 @@ export function RecountsTab() {
 
   const { table, globalFilter, setGlobalFilter } = useTable(filteredRows, columns)
 
+  // Honors the same Products display toggle as the table — was always
+  // exporting full detail (reason + on-hand) regardless of what the toggle
+  // showed on screen, per live report: "I just needed the list of products."
   const exportRows = useMemo(() => filteredRows.map((r) => ({
     location: r.location_label,
     recount_type: r.recount_type ?? '',
     am: r.am_name,
     rdo: (fieldsOf(r) as any).rdo_name ?? '',
     recount_reason: r.recount_reason,
-    products: (r.requested_products ?? []).join(' | '),
+    products: (r.requested_products ?? []).map((p) => (productsIdsOnly ? idOnly(p) : p)).join(' | '),
     request_date: r.request_date ?? '',
     completed_date: r.completed_date ?? '',
     notes: (fieldsOf(r) as any).completion_notes ?? '',
     status: r.status,
-  })), [filteredRows])
+  })), [filteredRows, productsIdsOnly])
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
