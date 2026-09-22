@@ -264,6 +264,13 @@ export function RecountLogicTab() {
   // (per explicit request: "still want to see that variance for large
   // outliers"). oilBalanceEnabled only gates whether it can FLAG a shop.
   const [oilBalanceData, setOilBalanceData] = useState<Map<string, { expected: number; actual: number | null }>>(new Map())
+  // Shops that already have an auto-generated recount for this period —
+  // drives the "In Recounts" callout/highlight in the preview so a shop
+  // that's been pushed doesn't need to be revisited. Loaded once per period
+  // and refreshed after a push/generate succeeds (same shape as
+  // generateForShops' own internal `already` check, just persisted as state
+  // instead of recomputed and discarded inside that one call).
+  const [inRecountShopIds, setInRecountShopIds] = useState<Set<string>>(new Set())
   const [tankProductMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
   const [tankVariance] = useAppSetting<number>(TANK_VARIANCE_KEY, DEFAULT_TANK_VARIANCE)
   const [unlistedLimit] = useAppSetting<number | null>(UNLISTED_LIMIT_KEY, null)
@@ -415,6 +422,19 @@ export function RecountLogicTab() {
     setOilBalanceData(m)
   }, [companyId, countMonth])
   useEffect(() => { loadOilBalanceData() }, [loadOilBalanceData])
+
+  const loadInRecountShopIds = useCallback(async () => {
+    if (!companyId) { setInRecountShopIds(new Set()); return }
+    const sb = supabase as any
+    const { data, error } = await sb.schema('inventory').from('recount_requests')
+      .select('location_id, recount_fields')
+      .eq('company_id', companyId)
+      .filter('recount_fields->>count_month', 'eq', countMonth)
+      .filter('recount_fields->>source', 'eq', 'auto')
+    if (error) { toast.error(`Could not load existing recounts (${error.message})`); return }
+    setInRecountShopIds(new Set((data ?? []).map((r: any) => r.location_id)))
+  }, [companyId, countMonth])
+  useEffect(() => { loadInRecountShopIds() }, [loadInRecountShopIds])
 
   // Per-period preview workflow state (hidden products, excluded shops,
   // flagged-for-later shops) — persisted so the whole team sees the same
@@ -765,6 +785,7 @@ export function RecountLogicTab() {
       const { created } = await generateForShops(flaggedWithProducts)
       if (created === 0) toast('All flagged shops already have recounts for this period', { icon: 'ℹ️' })
       else toast.success(`Generated ${created} recount${created === 1 ? '' : 's'} → see Recounts tab`)
+      if (created > 0) loadInRecountShopIds()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to generate recounts')
     } finally {
@@ -776,7 +797,10 @@ export function RecountLogicTab() {
     try {
       const { created, alreadyHad } = await generateForShops([e])
       if (created === 0) toast(alreadyHad > 0 ? 'This shop already has a recount for this period' : 'Nothing to push', { icon: 'ℹ️' })
-      else toast.success('Recount created → see Recounts tab')
+      else {
+        toast.success('Recount created → see Recounts tab')
+        loadInRecountShopIds()
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create recount')
     }
@@ -993,6 +1017,7 @@ export function RecountLogicTab() {
                   oilFlagsByShop={oilFlagsByShop}
                   hiddenProducts={hiddenProducts}
                   oilBalanceData={oilBalanceData}
+                  inRecountShopIds={inRecountShopIds}
                   varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                   onToggleHide={toggleHideProduct}
                   onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
@@ -1047,6 +1072,7 @@ export function RecountLogicTab() {
                 oilFlagsByShop={oilFlagsByShop}
                 hiddenProducts={hiddenProducts}
                 oilBalanceData={oilBalanceData}
+                inRecountShopIds={inRecountShopIds}
                 varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                 onToggleHide={toggleHideProduct}
                 onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
@@ -1141,7 +1167,7 @@ function fmt(v: number | null | undefined) {
 // per-row actions, so a shop looks identical wherever it currently sits.
 function RecountPreviewTable({
   rows, locations, companyId, countMonth, tankVarByShop, exceptionsByShop, oilFlagsByShop, hiddenProducts,
-  oilBalanceData, varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
+  oilBalanceData, inRecountShopIds, varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
 }: {
   rows: EvaluatedCount[]
   locations: Location[]
@@ -1156,6 +1182,10 @@ function RecountPreviewTable({
   // this table (already 9 columns) only grows for the shops it actually
   // applies to, per "still want to see that variance for large outliers."
   oilBalanceData: Map<string, { expected: number; actual: number | null }>
+  // Shops with an existing auto-generated recount for this period — drives
+  // the green "In Recounts" callout/row tint below, so a pushed shop reads
+  // as handled at a glance instead of needing to be re-checked.
+  inRecountShopIds: Set<string>
   varianceRedThreshold: number
   onToggleHide: (locationId: string, productId: string) => void
   onExclude: (locationId: string) => void
@@ -1193,8 +1223,9 @@ function RecountPreviewTable({
           ;(oilFlagsByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'oil'))
           const products = [...productMap.entries()].map(([id, v]) => ({ id, qty: v.qty, types: v.types }))
           const hiddenSet = (e.locationId && hiddenProducts.get(e.locationId)) || new Set<string>()
+          const inRecounts = !!e.locationId && inRecountShopIds.has(e.locationId)
           return (
-            <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
+            <tr key={e.count?.id ?? e.locationId} className={['border-b border-navy/30/50', inRecounts ? 'bg-[#2ECC71]/10' : ''].join(' ')}>
               <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, locations)}</td>
               <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
               <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
@@ -1205,6 +1236,7 @@ function RecountPreviewTable({
               <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-1">
+                  {inRecounts && <Badge color="green">In Recounts</Badge>}
                   {e.flags.map((f) => <FlagBadge key={f} flag={f} />)}
                 </div>
                 {(() => {
@@ -1245,7 +1277,11 @@ function RecountPreviewTable({
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => e.locationId && onExclude(e.locationId)} className="text-[10px] font-mono text-inky/60 hover:text-[#C0392B] underline">Exclude</button>
-                  <button onClick={() => onPushOne(e)} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">Push to Recounts</button>
+                  {inRecounts ? (
+                    <span className="text-[10px] font-mono text-[#2ECC71] font-bold">✓ Pushed</span>
+                  ) : (
+                    <button onClick={() => onPushOne(e)} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">Push to Recounts</button>
+                  )}
                   <button onClick={() => e.locationId && onToggleLater(e.locationId)} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">{laterActionLabel}</button>
                 </div>
               </td>
