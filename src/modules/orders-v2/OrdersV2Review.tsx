@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { RefreshCw, ChevronRight, ChevronDown, Settings, Plus, Pencil } from 'lucide-react'
+import { RefreshCw, ChevronRight, ChevronDown, ChevronUp, Settings, Plus, Pencil } from 'lucide-react'
 import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
@@ -22,11 +22,53 @@ import {
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty, dShort } from './shared'
-import type { LineFlag, GenerationInput } from './types'
+import type { LineFlag, GenerationInput, OrderType } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+// Main table's column registry — id order here is the DEFAULT order/set;
+// a user's own reorder/hide choices (columnPrefs below) override it. 'shop'
+// can't be hidden (the expand-a-shop interaction lives on it), everything
+// else is optional. Persisted to localStorage only (per-device), same
+// scope as the location list's own "Customize columns" panel.
+const MAIN_COLUMNS: { id: string; label: string }[] = [
+  { id: 'shop', label: 'Shop' },
+  { id: 'product', label: 'Product' },
+  { id: 'uom', label: 'UOM' },
+  { id: 'capacity', label: 'Capacity' },
+  { id: 'on_hand', label: 'On Hand' },
+  { id: 'usage_day', label: 'Usage/day' },
+  { id: 'dos_now', label: 'DOS Now' },
+  { id: 'last_ordered', label: 'Last Ordered' },
+  { id: 'last_delivered', label: 'Last Delivered' },
+  { id: 'qty', label: 'Qty' },
+  { id: 'on_hand_after', label: 'On Hand After' },
+  { id: 'dos_after', label: 'DOS After' },
+  { id: 'dos_at_delivery', label: 'DOS @ Delivery' },
+  { id: 'dollars', label: '$' },
+  { id: 'flags', label: 'Flags' },
+  { id: 'actions', label: '' },
+]
+const DEFAULT_COLUMN_ORDER = MAIN_COLUMNS.map((c) => c.id)
+const COLUMN_PREFS_KEY = 'ov2_review_columns'
+
+function loadColumnPrefs(): { order: string[]; hidden: string[] } {
+  try {
+    const raw = localStorage.getItem(COLUMN_PREFS_KEY)
+    if (!raw) return { order: DEFAULT_COLUMN_ORDER, hidden: [] }
+    const parsed = JSON.parse(raw) as { order?: string[]; hidden?: string[] }
+    // Merge in any column added since a user last saved prefs (e.g. this
+    // release's new on_hand_after) — appended at the end rather than
+    // silently missing from their customized order.
+    const known = new Set(parsed.order ?? [])
+    const order = [...(parsed.order ?? []), ...DEFAULT_COLUMN_ORDER.filter((id) => !known.has(id))]
+    return { order, hidden: (parsed.hidden ?? []).filter((id) => id !== 'shop') }
+  } catch {
+    return { order: DEFAULT_COLUMN_ORDER, hidden: [] }
+  }
+}
 
 const PO_DECISION_FLAGS: LineFlag[] = ['po_decision_override', 'po_decision_exclude', 'po_decision_combine']
 /** Swaps in one of the three mutually-exclusive PO-coverage decision flags,
@@ -128,6 +170,17 @@ export function OrdersV2Review() {
   // annotation are shown back in ounces (the unit that actually guides
   // ordering decisions for them) rather than their quarts-equivalent.
   const [ozProductIds, setOzProductIds] = useState<Set<string>>(new Set())
+  // Main table column customize modal — hide/reorder, see MAIN_COLUMNS.
+  const [columnPrefs, setColumnPrefs] = useState(loadColumnPrefs)
+  const [columnModalOpen, setColumnModalOpen] = useState(false)
+  const visibleColumnIds = useMemo(
+    () => columnPrefs.order.filter((id) => !columnPrefs.hidden.includes(id)),
+    [columnPrefs],
+  )
+  function saveColumnPrefs(next: { order: string[]; hidden: string[] }) {
+    setColumnPrefs(next)
+    try { localStorage.setItem(COLUMN_PREFS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+  }
   const orderDow = draft ? draftOrderDow(draft) : new Date().getDay()
   // Ad hoc drafts bypass the vendor's order-day schedule entirely (see
   // runGeneration below) — the weekday selector/labels further down don't
@@ -383,6 +436,57 @@ export function OrdersV2Review() {
 
   const overrideCount = useMemo(() => lines.filter((l) => l.is_override).length, [lines])
 
+  // Live "does this shop/order-type group still meet its minimum" check —
+  // recomputed from the CURRENT included lines' qty/dollars, not the
+  // engine's own below_minimum flag, which is stamped once at generation
+  // time and goes stale the instant someone edits a qty or adds/removes a
+  // line afterward (found live 2026-09-22: editing an order never updated
+  // whether it still cleared the minimum). Mirrors generateOrder's own
+  // dollars/units_per_order minimum resolution in engine.ts exactly, so
+  // this reads the same threshold the engine itself used. Per-product
+  // minimum types (units_per_product/gallons_per_product) are a floor on
+  // each LINE, not the order total, and are deliberately left alone here —
+  // recomputing those live would mean re-deriving engine.ts's own
+  // applyPerProductMinimum/applyBulkPerProductMinimum logic in the UI.
+  const groupMinimumStatus = useMemo(() => {
+    const m = new Map<string, boolean>()
+    if (!draft) return m
+    const vendorRules = rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name)
+    for (const [key, groupLines] of groups) {
+      const orderType = key.split('|')[1] as OrderType
+      const min = vendorRules.minimums[orderType] ?? {
+        type: orderType === 'bulk' ? settings.bulk_minimum_type : settings.package_minimum_type,
+        dollars: orderType === 'bulk' ? settings.order_minimum_dollars_bulk : settings.order_minimum_dollars_package,
+        qty: orderType === 'bulk' ? settings.bulk_minimum_qty : settings.package_minimum_qty,
+      }
+      const included = groupLines.filter((l) => l.included)
+      let meets = true
+      if (min.type === 'dollars') {
+        meets = included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0) >= min.dollars
+      } else if (min.type === 'units_per_order') {
+        meets = included.reduce((s, l) => s + Number(l.qty), 0) >= (min.qty ?? 0)
+      }
+      m.set(key, meets)
+    }
+    return m
+  }, [groups, draft, settings, rulesFor, vendors])
+
+  // Live per-line flags, replacing the two the engine only ever computed
+  // once at generation time:
+  //  - capacity_capped ("At capacity") used to fire whenever capacity was
+  //    merely the BINDING constraint on the suggested qty — which includes
+  //    landing EXACTLY at capacity, not actually going over it. Recomputed
+  //    here from the line's current on-hand-after vs its real capacity, and
+  //    only shown when genuinely over.
+  //  - below_minimum — see groupMinimumStatus above.
+  const liveFlags = useCallback((l: DraftLineRow): LineFlag[] => {
+    let flags: LineFlag[] = ((l.flags ?? []) as LineFlag[]).filter((f) => f !== 'capacity_capped' && f !== 'below_minimum')
+    const onHandAfter = Number(l.on_hand ?? 0) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
+    if (l.max_capacity_gallons != null && onHandAfter > l.max_capacity_gallons) flags = [...flags, 'capacity_capped']
+    if (l.included && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false) flags = [...flags, 'below_minimum']
+    return flags
+  }, [groupMinimumStatus])
+
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase()
     let out = [...lines]
@@ -494,12 +598,19 @@ export function OrdersV2Review() {
 
   async function addConfiguredProduct(input: GenerationInput, qty: number) {
     if (qty <= 0) return
+    const quartsPerUnit = gallonsPerUnit(input.rule)
     await addLine({
       location_id: input.location_id, product_id: input.product_id, order_type: resolvedOrderType(input.rule),
       uom: input.rule.uom, qty, system_qty: 0,
       unit_cost: input.rule.unit_cost, on_hand: input.on_hand, daily_usage: input.daily_usage,
       dos_before: daysOfSupply(input.on_hand, input.daily_usage),
-      max_capacity_gallons: input.rule.max_capacity_gallons, quarts_per_unit: gallonsPerUnit(input.rule),
+      // Computed here instead of left null — a null dos_after used to only
+      // get filled in the moment someone manually touched the qty box
+      // afterward (via patchQty), so a freshly-added product showed a blank
+      // DOS After until then even though everything needed to compute it
+      // was already known at add time.
+      dos_after: dosAfterForQty({ on_hand: input.on_hand, daily_usage: input.daily_usage, quarts_per_unit: quartsPerUnit }, qty),
+      max_capacity_gallons: input.rule.max_capacity_gallons, quarts_per_unit: quartsPerUnit,
     })
   }
 
@@ -652,10 +763,25 @@ export function OrdersV2Review() {
             </span>
           )}
         </span>
+        <button
+          onClick={() => setColumnModalOpen(true)}
+          title="Show/hide and reorder this table's columns"
+          className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy">
+          <Settings className="w-3 h-3" /> Customize Columns
+        </button>
         <span className="ml-auto text-xs font-mono text-navy">
           Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
         </span>
       </CardBody></Card>
+
+      <ColumnCustomizeModal
+        open={columnModalOpen}
+        onClose={() => setColumnModalOpen(false)}
+        columns={MAIN_COLUMNS}
+        prefs={columnPrefs}
+        onChange={saveColumnPrefs}
+        defaultOrder={DEFAULT_COLUMN_ORDER}
+      />
 
       {generating && (
         <LoadingProgress
@@ -704,21 +830,27 @@ export function OrdersV2Review() {
           <table className="w-full text-xs font-mono">
             <thead className="sticky top-0 z-10">
               <tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-                <Th onClick={() => toggleSort('location')} active={sortKey === 'location'} dir={sortDir}>Shop</Th>
-                <Th onClick={() => toggleSort('product')} active={sortKey === 'product'} dir={sortDir}>Product</Th>
-                <Th>UOM</Th>
-                <Th onClick={() => toggleSort('capacity')} active={sortKey === 'capacity'} dir={sortDir} align="right">Capacity</Th>
-                <Th align="right">On Hand</Th>
-                <Th align="right">Usage/day</Th>
-                <Th align="right">DOS Now</Th>
-                <Th>Last Ordered</Th>
-                <Th>Last Delivered</Th>
-                <Th onClick={() => toggleSort('qty')} active={sortKey === 'qty'} dir={sortDir} align="right">Qty</Th>
-                <Th onClick={() => toggleSort('dos_after')} active={sortKey === 'dos_after'} dir={sortDir} align="right">DOS After</Th>
-                <Th align="right">DOS @ Delivery</Th>
-                <Th onClick={() => toggleSort('dollars')} active={sortKey === 'dollars'} dir={sortDir} align="right">$</Th>
-                <Th>Flags</Th>
-                <Th />
+                {visibleColumnIds.map((id) => {
+                  switch (id) {
+                    case 'shop': return <Th key={id} onClick={() => toggleSort('location')} active={sortKey === 'location'} dir={sortDir}>Shop</Th>
+                    case 'product': return <Th key={id} onClick={() => toggleSort('product')} active={sortKey === 'product'} dir={sortDir}>Product</Th>
+                    case 'uom': return <Th key={id}>UOM</Th>
+                    case 'capacity': return <Th key={id} onClick={() => toggleSort('capacity')} active={sortKey === 'capacity'} dir={sortDir}>Capacity</Th>
+                    case 'on_hand': return <Th key={id}>On Hand</Th>
+                    case 'usage_day': return <Th key={id}>Usage/day</Th>
+                    case 'dos_now': return <Th key={id}>DOS Now</Th>
+                    case 'last_ordered': return <Th key={id}>Last Ordered</Th>
+                    case 'last_delivered': return <Th key={id}>Last Delivered</Th>
+                    case 'qty': return <Th key={id} onClick={() => toggleSort('qty')} active={sortKey === 'qty'} dir={sortDir}>Qty</Th>
+                    case 'on_hand_after': return <Th key={id}>On Hand After</Th>
+                    case 'dos_after': return <Th key={id} onClick={() => toggleSort('dos_after')} active={sortKey === 'dos_after'} dir={sortDir}>DOS After</Th>
+                    case 'dos_at_delivery': return <Th key={id}>DOS @ Delivery</Th>
+                    case 'dollars': return <Th key={id} onClick={() => toggleSort('dollars')} active={sortKey === 'dollars'} dir={sortDir}>$</Th>
+                    case 'flags': return <Th key={id}>Flags</Th>
+                    case 'actions': return <Th key={id} />
+                    default: return null
+                  }
+                })}
               </tr>
             </thead>
             <tbody>
@@ -733,10 +865,12 @@ export function OrdersV2Review() {
                 const isOz = ozProductIds.has(l.product_id)
                 const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
                 const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
-                return (
-                  <Fragment key={l.id}>
-                    <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
-                      <td className="px-2 py-1 text-navy whitespace-nowrap">
+                const belowMin = l.included && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false
+                const onHandAfter = Number(l.on_hand ?? 0) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
+                const cellFor = (id: string): React.ReactNode => {
+                  switch (id) {
+                    case 'shop': return (
+                      <td key={id} className="px-2 py-1 text-navy whitespace-nowrap">
                         <button
                           onClick={() => setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })}
                           title="Show every product configured for this shop"
@@ -745,10 +879,12 @@ export function OrdersV2Review() {
                           {shopLabel(l.location_id)}
                         </button>
                       </td>
-                      <Td>{l.product_id}</Td>
-                      <Td>{l.uom ?? '—'}</Td>
-                      <Td align="right">{num(isOz ? toOz(l.max_capacity_gallons) : l.max_capacity_gallons, 0)}</Td>
-                      <td className="px-2 py-1 text-right text-navy whitespace-nowrap">
+                    )
+                    case 'product': return <Td key={id}>{l.product_id}</Td>
+                    case 'uom': return <Td key={id}>{l.uom ?? '—'}</Td>
+                    case 'capacity': return <Td key={id} align="right">{num(isOz ? toOz(l.max_capacity_gallons) : l.max_capacity_gallons, 0)}</Td>
+                    case 'on_hand': return (
+                      <td key={id} className="px-2 py-1 text-right text-navy whitespace-nowrap">
                         {num(isOz ? toOz(input?.own_on_hand ?? l.on_hand) : (input?.own_on_hand ?? l.on_hand))}
                         {input?.equivalent_products && input.equivalent_products.length > 0 && (
                           <div className="text-[9px] text-inky/50 leading-tight font-normal">
@@ -765,9 +901,11 @@ export function OrdersV2Review() {
                           </div>
                         )}
                       </td>
-                      <Td align="right">{num(isOz ? toOz(l.daily_usage) : l.daily_usage)}</Td>
-                      <Td align="right">{dos(l.dos_before)}</Td>
-                      <td className="px-2 py-1 text-navy whitespace-nowrap">
+                    )
+                    case 'usage_day': return <Td key={id} align="right">{num(isOz ? toOz(l.daily_usage) : l.daily_usage)}</Td>
+                    case 'dos_now': return <Td key={id} align="right">{dos(l.dos_before)}</Td>
+                    case 'last_ordered': return (
+                      <td key={id} className="px-2 py-1 text-navy whitespace-nowrap">
                         {info.lastOrderDate ? (
                           <>
                             <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
@@ -775,12 +913,16 @@ export function OrdersV2Review() {
                           </>
                         ) : '—'}
                       </td>
-                      <td className="px-2 py-1 text-navy whitespace-nowrap">
+                    )
+                    case 'last_delivered': return (
+                      <td key={id} className="px-2 py-1 text-navy whitespace-nowrap">
                         {info.lastDeliveredDate
                           ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
                           : '—'}
                       </td>
-                      <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
+                    )
+                    case 'qty': return (
+                      <td key={id} className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
                         <div className="flex items-start justify-end gap-1">
                           <div>
                             <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
@@ -802,17 +944,22 @@ export function OrdersV2Review() {
                           </button>
                         </div>
                       </td>
-                      <td className={`px-2 py-1 text-right whitespace-nowrap font-bold ${dosAfterColorClass(l.dos_after)}`}>{dos(l.dos_after)}</td>
-                      <Td align="right">{dos(l.dos_after_delivery)}</Td>
-                      <Td align="right">{money(dollars)}</Td>
-                      <td className="px-2 py-1">
-                        <Flags flags={(l.flags ?? []) as LineFlag[]} />
+                    )
+                    case 'on_hand_after': return <Td key={id} align="right">{num(isOz ? toOz(onHandAfter) : onHandAfter)}</Td>
+                    case 'dos_after': return <td key={id} className={`px-2 py-1 text-right whitespace-nowrap font-bold ${dosAfterColorClass(l.dos_after)}`}>{dos(l.dos_after)}</td>
+                    case 'dos_at_delivery': return <Td key={id} align="right">{dos(l.dos_after_delivery)}</Td>
+                    case 'dollars': return <Td key={id} align="right">{money(dollars)}</Td>
+                    case 'flags': return (
+                      <td key={id} className="px-2 py-1">
+                        <Flags flags={liveFlags(l)} />
                         {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
                         {(l.flags ?? []).includes('covered_by_open_po') && (
                           <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
                         )}
                       </td>
-                      <Td>
+                    )
+                    case 'actions': return (
+                      <Td key={id}>
                         <div className="flex items-center gap-1">
                           <button title={l.included ? 'Exclude from order' : 'Include in order'}
                             onClick={() => patchLine(l.id, { included: !l.included })}
@@ -822,10 +969,18 @@ export function OrdersV2Review() {
                           <button title="Remove line" onClick={() => removeLine(l.id)} className="text-inky/40 hover:text-[#C0392B]">✕</button>
                         </div>
                       </Td>
+                    )
+                    default: return null
+                  }
+                }
+                return (
+                  <Fragment key={l.id}>
+                    <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${belowMin ? 'bg-[#C0392B]/10' : bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
+                      {visibleColumnIds.map(cellFor)}
                     </tr>
                     {isLastOfShop && shopOpen && (
                       <tr className="border-b border-navy/15 bg-navy/[0.02]">
-                        <td colSpan={15} className="px-3 py-2">
+                        <td colSpan={visibleColumnIds.length} className="px-3 py-2">
                           <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-1">
                             Every product configured for {shopLabel(l.location_id)}
                           </p>
@@ -913,13 +1068,17 @@ export function OrdersV2Review() {
   )
 }
 
-function Th({ children, onClick, active, dir, align }: {
+function Th({ children, onClick, active, dir }: {
   children?: React.ReactNode; onClick?: () => void; active?: boolean; dir?: 'asc' | 'desc'; align?: 'right'
 }) {
+  // Centered regardless of the data column's own alignment — the previous
+  // left/right split (mirroring each Td's own align) read as random since
+  // header text and data text don't need to match alignment the way a
+  // sortable header benefits from sitting centered over its whole column.
   return (
-    <th className={`px-2 py-2 whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
+    <th className="px-2 py-2 whitespace-nowrap text-center">
       {onClick ? (
-        <button onClick={onClick} className="uppercase tracking-wide hover:text-navy inline-flex items-center gap-0.5">
+        <button onClick={onClick} className="uppercase tracking-wide hover:text-navy inline-flex items-center justify-center gap-0.5 w-full">
           {children}{active && <span>{dir === 'asc' ? '▲' : '▼'}</span>}
         </button>
       ) : children}
@@ -928,6 +1087,65 @@ function Th({ children, onClick, active, dir, align }: {
 }
 function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }) {
   return <td className={`px-2 py-1 text-navy whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</td>
+}
+
+/** Show/hide + reorder the main table's columns — same "pop up modal" shape
+ * as the location list's own column customize panel, adapted for a plain
+ * ordered-list-with-arrows reorder (no drag library) since this table isn't
+ * built on @tanstack/react-table. Persisted to localStorage only, per
+ * device — see MAIN_COLUMNS/loadColumnPrefs' own comments. */
+function ColumnCustomizeModal({ open, onClose, columns, prefs, onChange, defaultOrder }: {
+  open: boolean
+  onClose: () => void
+  columns: { id: string; label: string }[]
+  prefs: { order: string[]; hidden: string[] }
+  onChange: (next: { order: string[]; hidden: string[] }) => void
+  defaultOrder: string[]
+}) {
+  const labelOf = (id: string) => (id === 'actions' ? 'Actions' : columns.find((c) => c.id === id)?.label || id)
+  function move(id: string, dir: -1 | 1) {
+    const idx = prefs.order.indexOf(id)
+    const swap = idx + dir
+    if (idx < 0 || swap < 0 || swap >= prefs.order.length) return
+    const next = [...prefs.order]
+    ;[next[idx], next[swap]] = [next[swap], next[idx]]
+    onChange({ ...prefs, order: next })
+  }
+  function toggle(id: string) {
+    if (id === 'shop') return // always visible — the shop-expand interaction lives on it
+    const hidden = prefs.hidden.includes(id) ? prefs.hidden.filter((h) => h !== id) : [...prefs.hidden, id]
+    onChange({ ...prefs, hidden })
+  }
+  return (
+    <Modal open={open} onClose={onClose} title="Customize Columns" size="sm">
+      <div className="flex flex-col gap-3">
+        <p className="text-xs font-mono text-inky/70">Check to show or hide a column, and use the arrows to reorder them.</p>
+        <div className="flex flex-col gap-0.5 max-h-96 overflow-y-auto">
+          {prefs.order.map((id, i) => (
+            <div key={id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-navy/5">
+              <input type="checkbox" checked={!prefs.hidden.includes(id)} disabled={id === 'shop'}
+                onChange={() => toggle(id)} className="accent-navy w-3.5 h-3.5 flex-shrink-0" />
+              <span className="text-xs font-mono text-navy flex-1">{labelOf(id)}</span>
+              <button onClick={() => move(id, -1)} disabled={i === 0}
+                className="text-inky/50 hover:text-navy disabled:opacity-20 disabled:hover:text-inky/50">
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => move(id, 1)} disabled={i === prefs.order.length - 1}
+                className="text-inky/50 hover:text-navy disabled:opacity-20 disabled:hover:text-inky/50">
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-between items-center pt-2 border-t border-navy/10">
+          <button onClick={() => onChange({ order: defaultOrder, hidden: [] })} className="text-[10px] font-mono text-inky/60 hover:text-navy underline">
+            Reset to default
+          </button>
+          <Button size="sm" onClick={onClose}>Done</Button>
+        </div>
+      </div>
+    </Modal>
+  )
 }
 
 /** Every configured product for one shop — shared by the main table's
@@ -956,23 +1174,33 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductI
 }) {
   const visible = showVmi ? rows : rows.filter((r) =>
     !(r.input?.rule.vmi_keepfill_enabled || r.line?.flags?.includes('vmi_keepfill')))
+  // Its own scrollable region with a sticky header, rather than relying on
+  // the outer Review table's header to stay meaningful while scrolling
+  // through this — found live 2026-09-22: the outer table's own frozen
+  // header (different columns) stayed pinned while this sub-table's own
+  // header scrolled away with it, leaving no correct header visible for a
+  // shop with enough configured products to need scrolling.
   return (
-    <table className="w-full text-[11px] font-mono">
-      <thead><tr className="text-inky/60 uppercase">
-        <td className="py-1">Product</td><td>UOM</td>
-        <td className="text-right">Capacity</td><td className="text-right">On Hand</td>
-        <td className="text-right">Usage/Day</td><td className="text-right">DOS Now</td>
-        <td className="text-right">Qty</td><td className="text-right">DOS After</td>
-        <td className="text-right">$</td><td>Why</td>
-      </tr></thead>
-      <tbody>
-        {visible.map((r) => (
-          <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd}
-            isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')}
-            exceptionFor={exceptionFor} onOpenException={onOpenException} />
-        ))}
-      </tbody>
-    </table>
+    <div className="max-h-72 overflow-auto rounded border border-navy/10">
+      <table className="w-full text-[11px] font-mono">
+        <thead className="sticky top-0 z-10 bg-cream">
+          <tr className="text-inky/60 uppercase">
+            <td className="py-1 text-center">Product</td><td className="text-center">UOM</td>
+            <td className="text-center">Capacity</td><td className="text-center">On Hand</td>
+            <td className="text-center">Usage/Day</td><td className="text-center">DOS Now</td>
+            <td className="text-center">Qty</td><td className="text-center">On Hand After</td><td className="text-center">DOS After</td>
+            <td className="text-center">$</td><td className="text-center">Why</td>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((r) => (
+            <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd}
+              isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')}
+              exceptionFor={exceptionFor} onOpenException={onOpenException} />
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -1007,6 +1235,9 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
   // Display-only — see ozProductIds' own comment on OrdersV2Review.
   const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
   const quartsPerUnit = line?.quarts_per_unit ?? (input ? gallonsPerUnit(input.rule) : null)
+  // A candidate with no line yet hasn't ordered anything, so "after" is
+  // just current on-hand until a qty is typed in.
+  const onHandAfter = line ? Number(onHand ?? 0) + Number(line.qty) * Number(quartsPerUnit ?? 1) : onHand
 
   return (
     <tr className="border-t border-navy/10">
@@ -1053,6 +1284,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
           )}
         </div>
       </td>
+      <td className="text-right text-inky/70">{num(isOz ? toOz(onHandAfter) : onHandAfter)}</td>
       <td className="text-right text-inky/70">{dos(dosAfter)}</td>
       <td className="text-right text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>
       <td className={whyClass}>{why}</td>

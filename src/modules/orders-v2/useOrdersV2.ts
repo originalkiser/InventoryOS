@@ -387,12 +387,22 @@ export function useDraft(draftId: string | null) {
 
   async function addLine(row: Partial<DraftLineRow> & { location_id: string; product_id: string; order_type: OrderType }) {
     if (!companyId || !draftId) return
-    const { error } = await sb().schema('inventory').from('ov2_order_draft_lines').insert({
+    // Appends the new row into local state directly instead of calling
+    // load() — found live 2026-09-22: load() flips the page-level `loading`
+    // flag, which unmounts the whole Review table behind its full-page
+    // spinner and remounts it once the fetch finishes, resetting both the
+    // window's and the table's own scroll position back to the top even
+    // though nothing else on the page actually needed a full reload for one
+    // added line. .select().single() gets the real row (id, defaulted
+    // columns) back from the insert so this stays a genuine server-confirmed
+    // row, not an optimistic guess.
+    const { data, error } = await sb().schema('inventory').from('ov2_order_draft_lines').insert({
       company_id: companyId, draft_id: draftId, is_override: true, included: true,
       system_qty: 0, qty: row.qty ?? 1, flags: [], ...row,
-    })
+    }).select().single()
     if (error) { toast.error(error.message); return }
-    await load(); void touch()
+    setLines((prev) => [...prev, data as DraftLineRow])
+    void touch()
   }
 
   async function removeLine(id: string) {

@@ -52,7 +52,7 @@ export const dTime = (d: string | null | undefined) => {
 /** Short labels + tone for the flags the engine attaches to a line. */
 export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange' | 'sky'; title: string }> = {
   below_minimum: { label: 'Under min', tone: 'red', title: 'Shop is still under its order minimum after smoothing' },
-  capacity_capped: { label: 'At capacity', tone: 'orange', title: 'Quantity limited by the shop\'s max capacity for this product' },
+  capacity_capped: { label: 'Over capacity', tone: 'orange', title: 'This quantity would put on-hand for this product past the shop\'s max capacity' },
   case_minimum_topup: { label: 'Case min', tone: 'sky', title: 'Raised to meet the vendor case-type order minimum' },
   repeat_ordering: { label: 'Repeat ordering', tone: 'red', title: 'A lot of supply has already been ordered for this product recently and it still reads low — on-hand may not be reflecting deliveries' },
   over_dos_max: { label: 'Over DOS max', tone: 'orange', title: 'Pushed past the soft days-of-supply ceiling to reach an order minimum' },
