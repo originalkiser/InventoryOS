@@ -545,7 +545,7 @@ Deno.serve(async (req) => {
       for (;;) {
         const { data: rows, error } = await (admin as any)
           .schema('inventory').from('product_usage')
-          .select('id, location_id, product_id, category, daily_usage, on_hands, supplier')
+          .select('id, location_id, product_id, category, daily_usage, on_hands, supplier, unit_cost')
           .eq('company_id', companyId)
           .in('location_id', chunkLocationIds)
           .order('location_id', { ascending: true })
@@ -641,7 +641,7 @@ Deno.serve(async (req) => {
         }
 
         // Index inventory by product_id (same case-insensitive keying)
-        const invByProduct = new Map<string, { on_hands: number; product_type: string; supplier: string | null }>()
+        const invByProduct = new Map<string, { on_hands: number; product_type: string; supplier: string | null; unit_cost: number | null }>()
         for (const item of inventory) {
           if (!matchesCategory(item.product_type)) continue
           const key = item.product_id.toLowerCase()
@@ -649,6 +649,11 @@ Deno.serve(async (req) => {
             on_hands: parseFloat(item.quantity_on_hand || '0'),
             product_type: item.product_type || '',
             supplier: activeSupplierName(item),
+            // Droptop's own per-item cost (confirmed live via mode:'inspect',
+            // e.g. unit_cost "4.95") — never captured before this. Lets
+            // count_products.ending_value (below) be computed for real
+            // instead of estimated, across every category, not just Oil.
+            unit_cost: item.unit_cost != null && item.unit_cost !== '' ? parseFloat(item.unit_cost) : null,
           })
           if (!displayId.has(key)) displayId.set(key, item.product_id)
         }
@@ -717,6 +722,10 @@ Deno.serve(async (req) => {
             // silently wipes an already-set value on every non-inventory
             // sync run.
             supplier: invData?.supplier ?? existing?.supplier ?? null,
+            // Same pulled-side-wins / carry-over-otherwise rule as supplier
+            // above — a mode:'usage' run never fetches inventory, so invData
+            // is undefined and the existing stored cost must survive.
+            unit_cost: invData?.unit_cost ?? existing?.unit_cost ?? null,
             daily_usage: dailyUsage,
             on_hands: onHands,
             days_of_supply: daysOfSupply,
@@ -901,6 +910,13 @@ Deno.serve(async (req) => {
             product_id: r.product_id,
             category: r.category,
             on_hand: r.on_hands,
+            // Real per-product dollar value from Droptop's own unit_cost,
+            // where known — previously this column only ever got populated
+            // by a manual Product Detail upload, so a Droptop-only period
+            // had no ending_value at all. null (not 0) when unit_cost isn't
+            // known for this product, so a "missing cost" reads as missing
+            // rather than a real $0 balance.
+            ending_value: r.unit_cost != null ? r.on_hands * r.unit_cost : null,
             count_month: countProductsMonth,
           }))
 

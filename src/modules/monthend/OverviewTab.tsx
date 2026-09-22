@@ -60,6 +60,15 @@ export function OverviewTab() {
   // the only place that breakdown exists, and show "—" (not $0) until
   // Finance enters it for this period.
   const [currentCounts, setCurrentCounts] = useState<Map<string, number>>(new Map())
+  // Live per-shop Oil/Parts/Additives/Other breakdown for the CURRENT
+  // period, via get_current_balance_by_category — now possible because
+  // droptop-sync-usage captures Droptop's own per-product unit_cost and
+  // computes count_products.ending_value from it (2026-09-22). Requires
+  // Month End's Daily Pull panel to have run at least once for this period
+  // (writeToCountProducts) — until then this map is empty and the
+  // oil/parts/additives KPIs below fall back to monthly_ending_balances
+  // (still "—" for an open period), same graceful-degradation as before.
+  const [currentCategoryBalances, setCurrentCategoryBalances] = useState<Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>>(new Map())
   const [currentSubmittedIds, setCurrentSubmittedIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -120,6 +129,19 @@ export function OverviewTab() {
       setCurrentCounts(countsMap)
       setCurrentSubmittedIds(submitted)
 
+      const { data: catBalRows, error: catBalErr } = await sb.rpc('get_current_balance_by_category', {
+        p_company_id: companyId, p_count_month: countMonth,
+      })
+      if (catBalErr) throw catBalErr
+      const catBalMap = new Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>()
+      for (const r of (catBalRows ?? []) as { location_id: string; oil: number | null; parts: number | null; additives: number | null; other: number | null; total: number | null }[]) {
+        catBalMap.set(r.location_id, {
+          oil: Number(r.oil ?? 0), parts: Number(r.parts ?? 0), additives: Number(r.additives ?? 0),
+          other: Number(r.other ?? 0), total: Number(r.total ?? 0),
+        })
+      }
+      setCurrentCategoryBalances(catBalMap)
+
       const { data: recounts } = await sb.schema('inventory').from('recount_requests')
         .select('completed_flags').eq('company_id', companyId)
         .filter('recount_fields->>count_month', 'eq', countMonth)
@@ -142,19 +164,33 @@ export function OverviewTab() {
   useEffect(() => { load() }, [load])
 
   // Current-month totals — Total is live (currentCounts, see its own
-  // comment above); the Parts/Oil/Additives breakdown stays on
-  // monthly_ending_balances (the only place it exists) and shows null
-  // ("—", not $0) whenever Finance hasn't entered this period yet.
+  // comment above). Oil/Parts/Additives prefer the live per-category
+  // breakdown (currentCategoryBalances, keyed the same as field_key —
+  // production's own field_definitions rows for this section are literally
+  // 'oil'/'parts'/'additives') whenever it has data for this period, falling
+  // back to monthly_ending_balances (still "—" until Finance enters it)
+  // otherwise — so a still-open period stops showing "—" the moment Month
+  // End's Daily Pull has run once, no month-close wait needed. 'other' has
+  // no Finance-entry equivalent at all, so it's live-only.
   const currentTotals = useMemo(() => {
     const total = [...currentCounts.values()].reduce((s, v) => s + v, 0)
     const rows = balances.filter((b) => b.month === countMonth)
     const hasBalanceRow = rows.length > 0
+    const hasLiveCategoryData = currentCategoryBalances.size > 0
+    const liveSum = (key: 'oil' | 'parts' | 'additives' | 'other') =>
+      [...currentCategoryBalances.values()].reduce((s, v) => s + v[key], 0)
     const cats: Record<string, number | null> = {}
     for (const c of categories) {
-      cats[c.field_key] = hasBalanceRow ? rows.reduce((s, r) => s + Number((r.metadata as any)?.[c.field_key] ?? 0), 0) : null
+      const liveKey = c.field_key as 'oil' | 'parts' | 'additives'
+      if (hasLiveCategoryData && (liveKey === 'oil' || liveKey === 'parts' || liveKey === 'additives')) {
+        cats[c.field_key] = liveSum(liveKey)
+      } else {
+        cats[c.field_key] = hasBalanceRow ? rows.reduce((s, r) => s + Number((r.metadata as any)?.[c.field_key] ?? 0), 0) : null
+      }
     }
-    return { total, cats, shopCount: currentSubmittedIds.size }
-  }, [currentCounts, currentSubmittedIds, balances, categories, countMonth])
+    const other = hasLiveCategoryData ? liveSum('other') : null
+    return { total, cats, other, shopCount: currentSubmittedIds.size }
+  }, [currentCounts, currentSubmittedIds, balances, categories, countMonth, currentCategoryBalances])
 
   const exceptionStats = useMemo(() => {
     const shops = new Set(exceptions.map((e) => e.location_id))
@@ -199,6 +235,7 @@ export function OverviewTab() {
         {categories.map((c) => (
           <Kpi key={c.field_key} label={c.label} value={usd(currentTotals.cats[c.field_key])} />
         ))}
+        {currentTotals.other != null && <Kpi label="Other" value={usd(currentTotals.other)} />}
       </div>
 
       {/* Recount KPIs */}

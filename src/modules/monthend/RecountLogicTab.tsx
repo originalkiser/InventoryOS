@@ -264,6 +264,13 @@ export function RecountLogicTab() {
   // (per explicit request: "still want to see that variance for large
   // outliers"). oilBalanceEnabled only gates whether it can FLAG a shop.
   const [oilBalanceData, setOilBalanceData] = useState<Map<string, { expected: number; actual: number | null }>>(new Map())
+  // Live per-shop Oil/Parts/Additives/Other/Total breakdown for this period
+  // — same get_current_balance_by_category RPC as Month End Overview, keyed
+  // by location_id. Empty until Droptop's per-product unit_cost has been
+  // captured AND Month End's Daily Pull has fed count_products.ending_value
+  // for this period at least once — the "Ending" cell below just shows
+  // nothing extra until then, same graceful-degradation as oilBalanceData.
+  const [categoryBalances, setCategoryBalances] = useState<Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>>(new Map())
   // Shops that already have an auto-generated recount for this period —
   // drives the "In Recounts" callout/highlight in the preview so a shop
   // that's been pushed doesn't need to be revisited. Loaded once per period
@@ -435,6 +442,23 @@ export function RecountLogicTab() {
     setInRecountShopIds(new Set((data ?? []).map((r: any) => r.location_id)))
   }, [companyId, countMonth])
   useEffect(() => { loadInRecountShopIds() }, [loadInRecountShopIds])
+
+  const loadCategoryBalances = useCallback(async () => {
+    if (!companyId) { setCategoryBalances(new Map()); return }
+    const { data, error } = await (supabase as any).rpc('get_current_balance_by_category', {
+      p_company_id: companyId, p_count_month: countMonth,
+    })
+    if (error) { toast.error(`Could not load category balances (${error.message})`); return }
+    const m = new Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>()
+    for (const r of (data ?? []) as { location_id: string; oil: number | null; parts: number | null; additives: number | null; other: number | null; total: number | null }[]) {
+      m.set(r.location_id, {
+        oil: Number(r.oil ?? 0), parts: Number(r.parts ?? 0), additives: Number(r.additives ?? 0),
+        other: Number(r.other ?? 0), total: Number(r.total ?? 0),
+      })
+    }
+    setCategoryBalances(m)
+  }, [companyId, countMonth])
+  useEffect(() => { loadCategoryBalances() }, [loadCategoryBalances])
 
   // Per-period preview workflow state (hidden products, excluded shops,
   // flagged-for-later shops) — persisted so the whole team sees the same
@@ -1039,6 +1063,7 @@ export function RecountLogicTab() {
                   hiddenProducts={hiddenProducts}
                   oilBalanceData={oilBalanceData}
                   inRecountShopIds={inRecountShopIds}
+                  categoryBalances={categoryBalances}
                   varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                   onToggleHide={toggleHideProduct}
                   onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
@@ -1094,6 +1119,7 @@ export function RecountLogicTab() {
                 hiddenProducts={hiddenProducts}
                 oilBalanceData={oilBalanceData}
                 inRecountShopIds={inRecountShopIds}
+                categoryBalances={categoryBalances}
                 varianceRedThreshold={numOrNull(varianceRedThreshold) ?? 7500}
                 onToggleHide={toggleHideProduct}
                 onExclude={(locId) => addPreviewAction(locId, 'excluded_shop')}
@@ -1154,7 +1180,10 @@ export function RecountLogicTab() {
                     <tr key={e.count?.id ?? e.locationId} className="border-b border-navy/30/50">
                       <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, evalData.locations)}</td>
                       <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
-                      <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
+                      <td className="px-3 py-2 text-right text-navy">
+                        {e.count ? fmt(e.count.ending_inventory_cost) : '—'}
+                        <CategoryBalanceStack cb={e.locationId ? categoryBalances.get(e.locationId) : undefined} />
+                      </td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
                       <td className="px-3 py-2 text-right text-inky">{fmt(e.median)}</td>
                       <td className="px-3 py-2 text-right text-inky">{ob ? fmt(ob.expected) : '—'}</td>
@@ -1184,11 +1213,28 @@ function fmt(v: number | null | undefined) {
   return v === null || v === undefined ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 })
 }
 
+// Compact stacked Oil/Parts/Additives/Other/Total breakdown for the Ending
+// cell — stacked in one cell rather than 5 new columns, per explicit
+// request. Renders nothing when this shop has no live category data yet
+// (Droptop cost capture + a Daily Pull haven't both landed for this period).
+function CategoryBalanceStack({ cb }: { cb?: { oil: number; parts: number; additives: number; other: number; total: number } }) {
+  if (!cb) return null
+  return (
+    <div className="text-[10px] font-mono text-inky/60 mt-0.5 leading-tight">
+      <div>Oil {fmt(cb.oil)}</div>
+      <div>Parts {fmt(cb.parts)}</div>
+      <div>Additives {fmt(cb.additives)}</div>
+      <div>Other {fmt(cb.other)}</div>
+      <div className="text-inky/80 font-bold">Total {fmt(cb.total)}</div>
+    </div>
+  )
+}
+
 // Shared by Live Preview and Flagged for Later — same columns, same
 // per-row actions, so a shop looks identical wherever it currently sits.
 function RecountPreviewTable({
   rows, locations, companyId, countMonth, tankVarByShop, exceptionsByShop, oilFlagsByShop, hiddenProducts,
-  oilBalanceData, inRecountShopIds, varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
+  oilBalanceData, inRecountShopIds, categoryBalances, varianceRedThreshold, onToggleHide, onExclude, onPushOne, onToggleLater, laterActionLabel,
 }: {
   rows: EvaluatedCount[]
   locations: Location[]
@@ -1207,6 +1253,10 @@ function RecountPreviewTable({
   // the green "In Recounts" callout/row tint below, so a pushed shop reads
   // as handled at a glance instead of needing to be re-checked.
   inRecountShopIds: Set<string>
+  // Live Oil/Parts/Additives/Other/Total per shop — see RecountLogicTab's
+  // own categoryBalances comment. Stacked under the Ending cell's own
+  // number rather than 5 new columns, per explicit request.
+  categoryBalances: Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>
   varianceRedThreshold: number
   onToggleHide: (locationId: string, productId: string) => void
   onExclude: (locationId: string) => void
@@ -1249,7 +1299,10 @@ function RecountPreviewTable({
             <tr key={e.count?.id ?? e.locationId} className={['border-b border-navy/30/50', inRecounts ? 'bg-[#2ECC71]/10' : ''].join(' ')}>
               <td className="px-3 py-2 text-navy">{locationLabel(e.locationId, locations)}</td>
               <td className="px-3 py-2 text-right text-inky">{e.count?.total_adjustments ?? '—'}</td>
-              <td className="px-3 py-2 text-right text-navy">{e.count ? fmt(e.count.ending_inventory_cost) : '—'}</td>
+              <td className="px-3 py-2 text-right text-navy">
+                {e.count ? fmt(e.count.ending_inventory_cost) : '—'}
+                <CategoryBalanceStack cb={e.locationId ? categoryBalances.get(e.locationId) : undefined} />
+              </td>
               <td className="px-3 py-2 text-right text-inky">{fmt(e.prev)}</td>
               <td className={`px-3 py-2 text-right ${isRed ? 'text-[#C0392B] font-bold' : 'text-inky'}`}>
                 {varVsPrev == null ? '—' : `${varVsPrev >= 0 ? '+' : ''}${fmt(varVsPrev)}`}
