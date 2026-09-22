@@ -195,7 +195,7 @@ export function OrdersV2Landing() {
               <div className="overflow-auto rounded border border-navy/30">
                 <table className="w-full text-xs font-mono">
                   <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-                    <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Order Day</Th><Th>Products</Th><Th>Gallons</Th><Th align="right">Cost</Th><Th>Export</Th><Th>Finalized</Th><Th>By</Th>
+                    <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Order Day</Th><Th>Products</Th><Th>Gallons</Th><Th align="right">Cost</Th><Th>Export</Th><Th>Finalized</Th><Th>By</Th><Th />
                   </tr></thead>
                   <tbody>
                     {visibleOrders.map((o) => (
@@ -215,6 +215,22 @@ export function OrdersV2Landing() {
                         </Td>
                         <Td>{dTime(o.finalized_at)}</Td>
                         <Td>{names.nameOf(o.finalized_by)}</Td>
+                        <Td>
+                          {/* The draft behind a completed order is never
+                              deleted at finalize (see finalizeDraft) — this
+                              jumps straight into its Review/Final/Export
+                              steps (e.g. to reformat and re-download the
+                              export file) instead of only the read-only
+                              history table. stopPropagation so it doesn't
+                              also trigger the row's own history-page click. */}
+                          {o.draft_id && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); navigate(`/orders-v2/draft/${o.draft_id}`) }}
+                              className="text-[11px] font-mono text-inky hover:text-navy hover:underline whitespace-nowrap">
+                              Open in Steps
+                            </button>
+                          )}
+                        </Td>
                       </tr>
                     ))}
                   </tbody>

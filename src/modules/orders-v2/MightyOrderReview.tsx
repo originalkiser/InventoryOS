@@ -98,7 +98,9 @@ export function MightyOrderReview() {
         }
       })
       await replaceLines(generated)
-      await setStatus('review')
+      // Never downgrade an already-finalized draft back to 'review' — see
+      // OrdersV2Review.tsx's runGeneration for the same guard/reasoning.
+      if (draft.status !== 'exported') await setStatus('review')
     } finally {
       setGenerating(false)
     }
@@ -139,7 +141,8 @@ export function MightyOrderReview() {
         </div>
         <Button size="sm" loading={movingToFinal} disabled={lines.length === 0} onClick={async () => {
           setMovingToFinal(true)
-          await setStatus('final_review')
+          // See runGeneration's own guard/comment above.
+          if (draft.status !== 'exported') await setStatus('final_review')
           navigate(`/orders-v2/draft/${draft.id}/final`)
         }}>
           Final Review →

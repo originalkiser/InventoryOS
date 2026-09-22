@@ -243,7 +243,18 @@ export function OrdersV2Export() {
   async function finalize() {
     if (!profile?.company_id || !draft) return
     if (!included.length) { toast.error('Nothing to finalize'); return }
-    if (!confirm('Finalize this order? It moves to Completed and is written to order history.')) return
+    // finalizeDraft always INSERTS a new ov2_order_history row — it never
+    // updates an existing one in place. Re-finalizing an already-completed
+    // draft (reachable again now that a completed order's steps can be
+    // revisited — see OrdersV2Landing.tsx/OrdersV2History.tsx's own "Open
+    // in Steps" links) would silently create a second, duplicate completed
+    // order rather than correcting the first. A distinct, explicit warning
+    // here — not just the generic confirm every finalize already had —
+    // makes that consequence impossible to miss.
+    const msg = draft.status === 'exported'
+      ? 'This order was already finalized once. Finalizing again creates a SEPARATE completed order in history — it does not update the existing one. Continue?'
+      : 'Finalize this order? It moves to Completed and is written to order history.'
+    if (!confirm(msg)) return
     setFinalizing(true)
     const id = await finalizeDraft(profile.company_id, profile.id ?? null, draft, lines, shopNumber)
     setFinalizing(false)

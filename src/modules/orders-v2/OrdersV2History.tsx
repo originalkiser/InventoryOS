@@ -82,6 +82,19 @@ export function OrdersV2History() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* The finalized draft (Review/Final Review/Export lines) is never
+              deleted or cleared by finalizeDraft — only its status flips to
+              'exported' — so it's still fully there to revisit. Lets a
+              completed order's export file be reformatted/re-downloaded (or
+              anything else on those steps) without being stuck on this
+              flat read-only table. Only shown when the draft really is
+              still around (a very old order might predate this, or the
+              draft could since have been deleted separately). */}
+          {order.draft_id && (
+            <Button size="sm" variant="secondary" onClick={() => navigate(`/orders-v2/draft/${order.draft_id}`)}>
+              Open in Steps
+            </Button>
+          )}
           <Button size="sm" variant="secondary" onClick={reExport}>Re-export</Button>
           {unlocked ? (
             <Button size="sm" variant="secondary" onClick={() => setUnlocked(false)}><Lock className="w-3.5 h-3.5 mr-1" /> Lock</Button>

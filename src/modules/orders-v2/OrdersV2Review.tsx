@@ -331,7 +331,13 @@ export function OrdersV2Review() {
           // has to be threaded through explicitly or a regenerate silently
           // reverts an ad hoc draft back to the vendor's regular schedule.
           settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts, __adhoc_location_ids: adHocIds },
-          status: 'review',
+          // Never downgrade an already-finalized draft back to 'review' —
+          // a completed order's own steps are now revisitable (e.g. to
+          // regenerate after adding a global product exception, then
+          // reformat/re-download the export), and this write would
+          // otherwise silently misfile it into the Review tab on the
+          // landing page while it's ALSO still sitting in Completed.
+          status: draft.status === 'exported' ? 'exported' : 'review',
         })
         .eq('id', draft.id)
       await reload()
@@ -545,7 +551,10 @@ export function OrdersV2Review() {
           </Button>
           <Button size="sm" loading={movingToFinal} onClick={async () => {
             setMovingToFinal(true)
-            await setStatus('final_review')
+            // See runGeneration's own comment — a completed order stays
+            // 'exported', it never gets pulled back into the Final Review
+            // tab just because someone stepped through to revisit it.
+            if (draft.status !== 'exported') await setStatus('final_review')
             navigate(`/orders-v2/draft/${draft.id}/final`)
           }}>
             Final Review →
