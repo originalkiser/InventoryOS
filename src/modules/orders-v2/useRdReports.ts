@@ -22,6 +22,25 @@ import {
 const sb = () => supabase as any
 const PAGE = 5000
 
+// Raw uploaded-report row shapes, as actually stored (confirmed against
+// information_schema.columns) — used by RdReportsTab.tsx to browse what's
+// currently in each snapshot table, separate from the reconciliation logic
+// above that also reads them.
+export interface RdOpenOrderRow {
+  id: string; location_id: string | null; sales_order_no: string; customer_po_no: string | null
+  order_date: string | null; order_type: string | null; warehouse_code: string | null
+  ship_to_code: string | null; ship_to_name: string | null; product_code: string; product_desc: string | null
+  qty_ordered: number | null; uploaded_at: string
+}
+export interface RdOpenInvoiceRow {
+  id: string; location_id: string | null; sales_order_no: string; customer_po_no: string | null
+  invoice_no: string | null; order_date: string | null; ship_date: string | null; invoice_date: string | null
+  invoice_due_date: string | null; ship_to_code: string | null; ship_to_name: string | null
+  product_code: string; product_desc: string | null
+  qty_ordered: number | null; qty_shipped: number | null; gallons_ordered: number | null; gallons_shipped: number | null
+  uploaded_at: string
+}
+
 // PostgREST caps an un-ranged select at 1000 rows regardless of a Max Rows
 // setting past 1000 — same fix already applied at PoStatusPage.tsx/
 // LocationLookupPage.tsx for the same reason. Only trust a genuinely empty
@@ -77,6 +96,19 @@ export function useRdReports() {
   const [lastOpenInvoicesAt, setLastOpenInvoicesAt] = useState<string | null>(null)
   const [uploading, setUploading] = useState<'orders' | 'invoices' | null>(null)
   const [reconciling, setReconciling] = useState(false)
+
+  // Browse what's currently in each snapshot table — backs RdReportsTab.tsx.
+  // Both are small (a few thousand rows) relative to fetchAllRows' own
+  // 5,000-row page, but paginated anyway rather than a bare .select('*') so
+  // this keeps working correctly as either report grows.
+  const fetchOpenOrders = useCallback(async (): Promise<RdOpenOrderRow[]> => {
+    if (!companyId) return []
+    return fetchAllRows<RdOpenOrderRow>('inventory', 'rd_open_orders', (q) => q.eq('company_id', companyId))
+  }, [companyId])
+  const fetchOpenInvoices = useCallback(async (): Promise<RdOpenInvoiceRow[]> => {
+    if (!companyId) return []
+    return fetchAllRows<RdOpenInvoiceRow>('inventory', 'rd_open_invoices', (q) => q.eq('company_id', companyId))
+  }, [companyId])
 
   const loadLastUploaded = useCallback(async () => {
     if (!companyId) return
@@ -334,7 +366,7 @@ export function useRdReports() {
 
   return {
     lastOpenOrdersAt, lastOpenInvoicesAt, uploading, reconciling, uploadOpenOrders, uploadOpenInvoices, runReconciliation,
-    fetchRdProductHistory,
+    fetchRdProductHistory, fetchOpenOrders, fetchOpenInvoices,
   }
 }
 

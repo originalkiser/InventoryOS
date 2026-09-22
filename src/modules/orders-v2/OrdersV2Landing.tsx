@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow, type DraftAggregate } from './useOrdersV2'
 import { useOrderHistory } from './useOrderHistory'
 import { useRdReports } from './useRdReports'
+import { RdReportsTab } from './RdReportsTab'
 import { useVendors, useUserNames } from './useLookups'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 
@@ -160,6 +161,7 @@ export function OrdersV2Landing() {
           <TabsTrigger value="final_review">Final Review ({visibleFinalReview.length})</TabsTrigger>
           <TabsTrigger value="cancelled">Cancelled ({visibleCancelled.length})</TabsTrigger>
           <TabsTrigger value="done">Completed ({visibleOrders.length})</TabsTrigger>
+          <TabsTrigger value="rd_reports">RD Reports</TabsTrigger>
         </TabsList>
 
         <TabsContent value="review">
@@ -219,6 +221,10 @@ export function OrdersV2Landing() {
                 </table>
               </div>
             )}
+        </TabsContent>
+
+        <TabsContent value="rd_reports">
+          <RdReportsTab />
         </TabsContent>
       </Tabs>
 
