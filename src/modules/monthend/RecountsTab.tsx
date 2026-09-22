@@ -29,6 +29,18 @@ function fieldsOf(r: RecountRequest): Record<string, any> {
   return (r.recount_fields ?? {}) as Record<string, any>
 }
 
+// This tab's own location display — just the shop_city label ("40-Dorchester"),
+// not locationLabel()'s shared "<name> — <shop_city>" format, which repeats
+// the shop number redundantly in front of a shop_city that already includes
+// it. Kept local to this file rather than changing the shared helper, which
+// every other caller still wants as-is.
+function locationCityLabel(locationId: string | null, locations: Location[]): string {
+  if (!locationId) return '—'
+  const l = locations.find((x) => x.id === locationId)
+  if (!l) return '—'
+  return l.shop_city?.trim() || l.name || '—'
+}
+
 interface RecountRow extends RecountRequest {
   location_label: string
   status: Status
@@ -39,16 +51,24 @@ interface RecountRow extends RecountRequest {
 
 const col = createColumnHelper<RecountRow>()
 
+// Strips a requested_products entry's "(on hand > limit)"-style reason
+// suffix down to the bare product id — entries are built as
+// "PRODUCT_ID (reason text)" (see RecountLogicTab.tsx's buildRecountRow /
+// the slide-over's own "e.g. DSL-0W20BB (430)" convention), so the id is
+// always whatever precedes the first " (".
+const idOnly = (item: string) => item.replace(/\s*\(.*$/, '')
+
 // Wraps instead of truncating to one invisible line, but caps at a single
 // row's height by default — a long product_flags list (each entry carries
 // its "on hand > limit" reason) would otherwise blow the row out to several
 // lines for every recount, not just the ones being looked at. Expand is
 // opt-in per row, never automatic.
-function ProductsCell({ items }: { items: string[] }) {
+function ProductsCell({ items, idsOnly }: { items: string[]; idsOnly: boolean }) {
   const [expanded, setExpanded] = useState(false)
   if (!items.length) return <span className="text-inky/50">—</span>
-  const text = items.join(', ')
-  const needsToggle = items.length > 1 || text.length > 30
+  const display = idsOnly ? items.map(idOnly) : items
+  const text = display.join(', ')
+  const needsToggle = display.length > 1 || text.length > 30
   return (
     <div className="max-w-[260px]">
       <p className={['text-xs whitespace-normal break-words', expanded ? '' : 'line-clamp-1'].join(' ')}>{text}</p>
@@ -78,6 +98,7 @@ export function RecountsTab() {
 
   const [typeFilter, setTypeFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [productsIdsOnly, setProductsIdsOnly] = useState(false)
 
   const loadRequests = useCallback(async () => {
     if (!companyId) return
@@ -125,11 +146,18 @@ export function RecountsTab() {
     const flags = (r.completed_flags ?? []) as boolean[]
     const dates = (r.completed_dates ?? []) as (string | null)[]
     const f = fieldsOf(r)
+    // Auto-generated recounts (RecountLogicTab's "Apply & Generate"/"Push to
+    // Recounts") never stamp am_name into recount_fields — it was never
+    // populated at all, not a display bug. Fall back to the shop's own
+    // area_manager column (a real, populated top-level field on
+    // core.locations, confirmed against production) rather than leaving it
+    // blank for every auto-generated row.
+    const loc = locations.find((x) => x.id === r.location_id)
     return {
       ...r,
-      location_label: locationLabel(r.location_id, locations),
+      location_label: locationCityLabel(r.location_id, locations),
       status: deriveStatus(flags),
-      am_name: f.am_name ?? '',
+      am_name: f.am_name || loc?.area_manager || '',
       recount_reason: f.recount_reason ?? '',
       completed_date: dates[0] ?? null,
     }
@@ -148,7 +176,7 @@ export function RecountsTab() {
     col.accessor('requested_products', {
       header: 'Products',
       enableSorting: false,
-      cell: (i) => <ProductsCell items={(i.getValue() ?? []) as string[]} />,
+      cell: (i) => <ProductsCell items={(i.getValue() ?? []) as string[]} idsOnly={productsIdsOnly} />,
     }),
     col.accessor('request_date', {
       header: 'Requested',
@@ -174,7 +202,7 @@ export function RecountsTab() {
         </button>
       ),
     }),
-  ], [])
+  ], [productsIdsOnly])
 
   const { table, globalFilter, setGlobalFilter } = useTable(filteredRows, columns)
 
@@ -218,6 +246,14 @@ export function RecountsTab() {
               { value: 'open', label: 'Open' },
               { value: 'complete', label: 'Complete' },
             ]}
+          />
+        </div>
+        <div className="pb-1.5">
+          <Toggle
+            checked={productsIdsOnly}
+            onChange={setProductsIdsOnly}
+            size="sm"
+            label={productsIdsOnly ? 'Product IDs only' : 'Full detail'}
           />
         </div>
       </div>

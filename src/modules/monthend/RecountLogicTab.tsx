@@ -845,6 +845,11 @@ export function RecountLogicTab() {
       ...manualIds.map((pid) => ({ source: 'manual' as const, product_id: pid, category: null, basis: 'manual', reason: 'Added manually' })),
     ]
     const requestedProducts = productFlags.map((p) => `${p.product_id} (${p.reason})`)
+    // Stamped at generation time (not left for the Recounts tab to join
+    // live) so it survives even if the shop's own AM later changes — found
+    // live 2026-09-22 that every auto-generated recount showed no AM at
+    // all, since nothing here ever set it.
+    const amName = evalData?.locations.find((l) => l.id === e.locationId)?.area_manager ?? null
     return {
       company_id: companyId,
       location_id: e.locationId,
@@ -857,6 +862,7 @@ export function RecountLogicTab() {
         flags: e.flags,
         recount_reason: flagsToReason(e.flags),
         product_flags: productFlags,
+        am_name: amName,
       },
       completed_flags: [false],
       completed_dates: [null],
