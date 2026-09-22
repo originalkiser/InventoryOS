@@ -361,8 +361,11 @@ export function Board({ location, packages, editMode = false, updatePackage, res
   /** Franchise "fees included in pricing" override — when set, masks over
    *  the printed disclaimer line ("* * * * * ALL OIL CHANGES ARE SUBJECT
    *  TO A SHOP SUPPLY AND/OR DISPOSAL FEE. * * * * *") and draws this text
-   *  in its place instead. Omitted/undefined leaves the printed line as-is. */
-  footerNote?: string | null
+   *  in its place instead. Omitted/undefined leaves the printed line as-is.
+   *  A function form picks the text by the CURRENT lang (below) — needed
+   *  since lang lives inside BoardViewer's own toggle state, not something
+   *  the caller who computes this note otherwise has any way to react to. */
+  footerNote?: string | null | ((lang: 'en' | 'es') => string | null)
   /** Which page-1 art to show — 'es' swaps in the Spanish version (same
    *  dimensions, so every price/quart patch position below still lines up
    *  unchanged). Page 2 has no Spanish version and always stays English. */
@@ -404,6 +407,18 @@ export function Board({ location, packages, editMode = false, updatePackage, res
 
   const showP1 = layout !== 'single' || page === 1
   const showP2 = !hidePage2 && (layout !== 'single' || page === 2)
+  const resolvedFooterNote = typeof footerNote === 'function' ? footerNote(lang) : footerNote
+  // Shrink-to-fit for a translated note that runs longer than the English
+  // original at the same reference size (e.g. the Spanish franchise
+  // fees-included text) — see buildMenuBoardPdf's own matching comment.
+  const footerNoteFs = FOOTER_NOTE_FONT_SIZE_REF * scale
+  const footerNoteMaxW = boardW * (BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT + FOOTER_NOTE_PAD_PCT * 2) / 100
+  const footerNoteFitFs = resolvedFooterNote
+    ? (() => {
+        const raw = textWidthPx(resolvedFooterNote, footerNoteFs)
+        return raw > footerNoteMaxW && raw > 0 ? footerNoteFs * (footerNoteMaxW / raw) : footerNoteFs
+      })()
+    : footerNoteFs
   const boxStyle = { width: width ?? '100%', maxWidth: width ?? BOARD_REF_WIDTH } as const
 
   const page1 = (
@@ -441,7 +456,7 @@ export function Board({ location, packages, editMode = false, updatePackage, res
                   {price == null ? (
                     <span style={{ fontSize: fs, lineHeight: 1 }}>—</span>
                   ) : (
-                    <PriceComposite price={price} fs={fs} />
+                    <PriceComposite price={price} fs={fs} lang={lang} />
                   )}
                 </div>
                 <div
@@ -452,21 +467,21 @@ export function Board({ location, packages, editMode = false, updatePackage, res
                     fontSize: p.quart_font_size * scale,
                   }}
                 >
-                  {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} per extra quart`}
+                  {quart.pricePerQuart == null ? '—' : `$${fmtPrice(quart.pricePerQuart)} ${perExtraQuartLabel(lang)}`}
                 </div>
               </div>
             )
           })}
-          {footerNote && (
+          {resolvedFooterNote && (
             <div
               className="absolute flex items-center justify-center whitespace-nowrap font-heading font-bold leading-none bg-sb-navy text-sb-cream"
               style={{
                 left: `${BOARD_CONTENT_LEFT_PCT - FOOTER_NOTE_PAD_PCT}%`, width: `${BOARD_CONTENT_RIGHT_PCT - BOARD_CONTENT_LEFT_PCT + FOOTER_NOTE_PAD_PCT * 2}%`,
                 top: `${FOOTER_NOTE_TOP_PCT}%`, height: `${FOOTER_NOTE_HEIGHT_PCT}%`,
-                transform: 'translateY(-50%)', fontSize: FOOTER_NOTE_FONT_SIZE_REF * scale,
+                transform: 'translateY(-50%)', fontSize: footerNoteFitFs,
               }}
             >
-              {footerNote}
+              {resolvedFooterNote}
             </div>
           )}
         </div>
@@ -551,9 +566,10 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 /** Draw one "$·big·⁹⁹ / PLUS TAX" composite centred on (cx, cy). */
-function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: number, fs: number, price: number, color: string) {
+function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: number, fs: number, price: number, color: string, lang: 'en' | 'es' = 'en') {
   const whole = String(Math.floor(price))
   const cents = Math.round((price - Math.floor(price)) * 100).toString().padStart(2, '0')
+  const ptLabel = plusTaxLabel(lang)
   const smallFs = fs * 0.46
   const ptFs = fs * 0.115
   const bigFont = `700 ${fs}px "Chakra Petch", sans-serif`
@@ -573,7 +589,7 @@ function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
   const wCents = ctx.measureText(cents).width
   const smallCap = ctx.measureText(cents).actualBoundingBoxAscent || smallFs * 0.72
   ctx.font = ptFont
-  const wPT = ctx.measureText('PLUS TAX').width
+  const wPT = ctx.measureText(ptLabel).width
 
   const gap = fs * 0.04
   const colW = Math.max(wCents, wPT)
@@ -597,7 +613,7 @@ function drawPriceComposite(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
   ctx.font = smallFont
   ctx.fillText(cents, x + (colW - wCents) / 2, smallBaseline)
   ctx.font = ptFont
-  ctx.fillText('PLUS TAX', x + (colW - wPT) / 2, smallBaseline + ptFs + fs * 0.02)
+  ctx.fillText(ptLabel, x + (colW - wPT) / 2, smallBaseline + ptFs + fs * 0.02)
 }
 
 export async function buildMenuBoardPdf({ packages, location, resolveQuart, address, shareUrl, hidePage2, footerNote, lang = 'en' }: {
@@ -612,8 +628,9 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
   /** Same "fees included" override as Board's own footerNote prop — masks
    *  the printed disclaimer and draws this text in its place. Must be kept
    *  in sync with Board's DOM version since this is a separate canvas
-   *  render, not a screenshot of it (see this file's own PDF export comment). */
-  footerNote?: string | null
+   *  render, not a screenshot of it (see this file's own PDF export comment).
+   *  Function form resolved with this same call's own `lang`. */
+  footerNote?: string | null | ((lang: 'en' | 'es') => string | null)
   /** Same 'es' swap as Board's own lang prop — page 2 stays English. */
   lang?: 'en' | 'es'
 }): Promise<Blob> {
@@ -645,7 +662,7 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
     const color = slot.cream ? '#002745' : '#F2F1E6'
     const price = p.price_column ? Number((location as any)?.[p.price_column]) : NaN
     if (Number.isFinite(price)) {
-      drawPriceComposite(ctx1, (p.price_pos_x / 100) * PDF_W, (p.price_pos_y / 100) * h1Art, p.price_font_size * scale, price, color)
+      drawPriceComposite(ctx1, (p.price_pos_x / 100) * PDF_W, (p.price_pos_y / 100) * h1Art, p.price_font_size * scale, price, color, lang)
     }
     const q = resolveQuart(location?.id ?? '', p.package_key)
     if (q.pricePerQuart != null) {
@@ -653,7 +670,7 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
       ctx1.font = `${p.quart_font_size * scale}px "DM Mono", monospace`
       ctx1.textAlign = 'center'
       ctx1.textBaseline = 'middle'
-      ctx1.fillText(`$${q.pricePerQuart.toFixed(2)} per extra quart`, (p.quart_pos_x / 100) * PDF_W, (p.quart_pos_y / 100) * h1Art)
+      ctx1.fillText(`$${q.pricePerQuart.toFixed(2)} ${perExtraQuartLabel(lang)}`, (p.quart_pos_x / 100) * PDF_W, (p.quart_pos_y / 100) * h1Art)
     }
   }
 
@@ -661,7 +678,8 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
   // own DOM version (kept in sync by hand, see this export's own header
   // comment); #002745/#F2F1E6 here match this function's other draw calls
   // below, not new colors.
-  if (footerNote) {
+  const resolvedFooterNote = typeof footerNote === 'function' ? footerNote(lang) : footerNote
+  if (resolvedFooterNote) {
     const noteCenterY = h1Art * (FOOTER_NOTE_TOP_PCT / 100)
     const noteH = h1Art * (FOOTER_NOTE_HEIGHT_PCT / 100)
     const contentX = PDF_W * ((BOARD_CONTENT_LEFT_PCT - FOOTER_NOTE_PAD_PCT) / 100)
@@ -671,10 +689,19 @@ export async function buildMenuBoardPdf({ packages, location, resolveQuart, addr
     ctx1.fillStyle = '#F2F1E6'
     // Same font/size as the DOM version's footerNote (Board, above) — see
     // FOOTER_NOTE_FONT_SIZE_REF's own comment for how this size was solved.
-    ctx1.font = `700 ${FOOTER_NOTE_FONT_SIZE_REF * scale}px "Chakra Petch", sans-serif`
+    // A translated note (e.g. the Spanish franchise fees-included text) can
+    // run notably longer than the English original at the same font size —
+    // shrink to fit this box's real width rather than letting it overflow
+    // past the printed disclaimer's own bounds; a no-op whenever the text
+    // already fits (the English note, by design, already just does).
+    let footerFs = FOOTER_NOTE_FONT_SIZE_REF * scale
+    ctx1.font = `700 ${footerFs}px "Chakra Petch", sans-serif`
+    const rawW = ctx1.measureText(resolvedFooterNote).width
+    if (rawW > contentW) footerFs *= contentW / rawW
+    ctx1.font = `700 ${footerFs}px "Chakra Petch", sans-serif`
     ctx1.textAlign = 'center'
     ctx1.textBaseline = 'middle'
-    ctx1.fillText(footerNote, PDF_W / 2, noteCenterY)
+    ctx1.fillText(resolvedFooterNote, PDF_W / 2, noteCenterY)
   }
 
   ctx1.fillStyle = '#002745'
@@ -898,6 +925,44 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, hideDownload, ...pr
   )
 }
 
+// Spanish "PLUS TAX" replacement (2026-09-22 request) — "MÁS IMPUESTOS" is
+// the full, correct translation, but it's ~60% more characters than "PLUS
+// TAX" and this column's width already drives how far the whole price
+// composite extends from its center point (see drawPriceComposite's own
+// colW) — too wide risks crowding a neighboring package's price patch on a
+// tightly-packed board. Decided by ACTUAL Chakra Petch metrics (an offscreen
+// canvas measurement), not a guess: falls back to the shorter "+ IMPUESTOS"
+// only if the full text would meaningfully exceed "PLUS TAX"'s own width.
+// Computed once and cached — the width RATIO between the two strings is the
+// same at any font size (uniform scaling), so one measurement settles it
+// for every price patch on the board regardless of that package's own
+// price_font_size.
+// Shared offscreen-canvas text measurement — one context reused (not
+// recreated per call) for esPlusTaxLabel below and Board's own footer-note
+// auto-fit.
+let measureCtx: CanvasRenderingContext2D | null = null
+function textWidthPx(text: string, fontPx: number, weight = 700): number {
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d')
+  if (!measureCtx) return 0
+  measureCtx.font = `${weight} ${fontPx}px "Chakra Petch", sans-serif`
+  return measureCtx.measureText(text).width
+}
+
+let esPlusTaxLabelCache: string | null = null
+function esPlusTaxLabel(): string {
+  if (esPlusTaxLabelCache) return esPlusTaxLabelCache
+  try {
+    const wEn = textWidthPx('PLUS TAX', 100)
+    const wEs = textWidthPx('MÁS IMPUESTOS', 100)
+    esPlusTaxLabelCache = wEs <= wEn * 1.2 ? 'MÁS IMPUESTOS' : '+ IMPUESTOS'
+  } catch {
+    esPlusTaxLabelCache = '+ IMPUESTOS'
+  }
+  return esPlusTaxLabelCache
+}
+const plusTaxLabel = (lang: 'en' | 'es') => (lang === 'es' ? esPlusTaxLabel() : 'PLUS TAX')
+const perExtraQuartLabel = (lang: 'en' | 'es') => (lang === 'es' ? 'POR CADA CUARTO ADICIONAL' : 'per extra quart')
+
 /**
  * The printed-board price treatment: a smaller "$", big whole dollars, a
  * cents pair, and "PLUS TAX" tucked directly under the cents. `fs` is the
@@ -908,7 +973,7 @@ export function BoardViewer({ shopName, shareUrl, hidePage2, hideDownload, ...pr
  * the same composite onto a canvas (`drawPriceComposite`) — so the two
  * must be kept visually in sync.
  */
-function PriceComposite({ price, fs }: { price: number; fs: number }) {
+function PriceComposite({ price, fs, lang = 'en' }: { price: number; fs: number; lang?: 'en' | 'es' }) {
   const whole = Math.floor(price)
   const cents = Math.round((price - whole) * 100).toString().padStart(2, '0')
   const SMALL = fs * 0.46
@@ -925,7 +990,7 @@ function PriceComposite({ price, fs }: { price: number; fs: number }) {
         }}
       >
         <span style={{ fontSize: SMALL, display: 'block', lineHeight: 1 }}>{cents}</span>
-        <span style={{ fontSize: fs * 0.115, display: 'block', lineHeight: 1, marginTop: fs * 0.008, letterSpacing: '-0.01em' }}>PLUS TAX</span>
+        <span style={{ fontSize: fs * 0.115, display: 'block', lineHeight: 1, marginTop: fs * 0.008, letterSpacing: '-0.01em' }}>{plusTaxLabel(lang)}</span>
       </span>
     </span>
   )

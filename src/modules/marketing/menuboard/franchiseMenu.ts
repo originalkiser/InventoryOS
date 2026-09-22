@@ -53,3 +53,10 @@ export function effectivePackagePrice(base: number | null, fees: FranchiseFees, 
 // has to look like it belongs on the same board, not like an app-generated
 // callout.
 export const FRANCHISE_FOOTER_NOTE = '* * * * * MENU PRICING INCLUDES A SHOP SUPPLY AND/OR DISPOSAL FEE. * * * * *'
+// Spanish equivalent (2026-09-22 request) — given verbatim, no asterisk
+// bookends (unlike the English version above) since that's exactly the
+// text provided. Runs notably longer than the English note at the same
+// font size; MenuBoardPage's own footerNote rendering (both the DOM Board
+// and the canvas buildMenuBoardPdf) shrinks-to-fit automatically rather
+// than needing a shorter fallback the way "PLUS TAX" needed one.
+export const FRANCHISE_FOOTER_NOTE_ES = 'SE APLICAN CARGOS ADICIONALES - EL PRECIO DEL MENÚ INCLUYE UN CARGO POR INSUMOS DEL TALLER Y/O DISPOSICIÓN DE RESIDUOS.'

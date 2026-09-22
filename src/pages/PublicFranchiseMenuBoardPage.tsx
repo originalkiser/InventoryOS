@@ -12,7 +12,7 @@ import { supabase } from '@/lib/supabase'
 import { SbLoader } from '@/components/ui'
 import type { MenuBoardPackage } from '@/modules/marketing/menuboard/useMenuBoard'
 import { BoardViewer } from '@/modules/marketing/menuboard/MenuBoardPage'
-import { FRANCHISE_FOOTER_NOTE } from '@/modules/marketing/menuboard/franchiseMenu'
+import { FRANCHISE_FOOTER_NOTE, FRANCHISE_FOOTER_NOTE_ES } from '@/modules/marketing/menuboard/franchiseMenu'
 
 const sb = supabase as any
 
@@ -52,7 +52,7 @@ export function PublicFranchiseMenuBoardPage() {
   const [boardLocation, setBoardLocation] = useState<any>(null)
   const [address, setAddress] = useState('')
   const [shopName, setShopName] = useState('')
-  const [footerNote, setFooterNote] = useState<string | null>(null)
+  const [footerNote, setFooterNote] = useState<((lang: 'en' | 'es') => string | null) | null>(null)
 
   useEffect(() => {
     if (!slug) { setStatus('notfound'); return }
@@ -77,7 +77,9 @@ export function PublicFranchiseMenuBoardPage() {
       })
       setAddress(data.address ?? '')
       setShopName(data.shop_city || data.name || '')
-      setFooterNote(feesIncluded ? FRANCHISE_FOOTER_NOTE : null)
+      // Wrapped in an arrow so React's setState doesn't mistake the stored
+      // function for an updater function.
+      setFooterNote(() => (feesIncluded ? (lang: 'en' | 'es') => (lang === 'es' ? FRANCHISE_FOOTER_NOTE_ES : FRANCHISE_FOOTER_NOTE) : null))
       setStatus('ok')
     })
   }, [slug])
