@@ -85,35 +85,31 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
   const totalNotSubmitted = rows.reduce((s, r) => s + r.notSubmitted, 0)
   const totalPct = totalSubmitted + totalNotSubmitted > 0 ? totalSubmitted / (totalSubmitted + totalNotSubmitted) : 0
 
-  // Outstanding-only — AMs/RDs for shops still missing a Monthly count, since
-  // that's who a reminder email would actually go to. Both lists are scoped
-  // to whichever AMs are on the visible table (hiddenAms excluded) — an RD
-  // email used to skip this check on the theory that an RD oversees more
-  // than just one AM's shops, but per direct request both copy buttons now
-  // match the table exactly: a hidden AM's shops contribute to neither list.
-  const outstandingAmEmails = useMemo(() => {
+  // Every AM/RD whose shops are on the VISIBLE table — not scoped to
+  // outstanding (not-yet-submitted) shops any more, per direct request:
+  // these are the full distribution lists, not just reminder targets. A
+  // hidden AM's shops contribute to neither list, matching the table.
+  const visibleAmEmails = useMemo(() => {
     const set = new Set<string>()
     for (const l of locations) {
-      if (monthlySubmittedIds.has(l.id)) continue
       const am = loc.fieldValue(l.id, 'area_manager').trim() || 'Unassigned'
       if (hiddenAms.includes(am)) continue
       const e = loc.fieldValue(l.id, 'am_email').trim()
       if (e) set.add(e)
     }
     return [...set].sort()
-  }, [locations, monthlySubmittedIds, hiddenAms, loc])
+  }, [locations, hiddenAms, loc])
 
-  const outstandingRdEmails = useMemo(() => {
+  const visibleRdEmails = useMemo(() => {
     const set = new Set<string>()
     for (const l of locations) {
-      if (monthlySubmittedIds.has(l.id)) continue
       const am = loc.fieldValue(l.id, 'area_manager').trim() || 'Unassigned'
       if (hiddenAms.includes(am)) continue
       const e = loc.fieldValue(l.id, 'rd_email').trim()
       if (e) set.add(e)
     }
     return [...set].sort()
-  }, [locations, monthlySubmittedIds, hiddenAms, loc])
+  }, [locations, hiddenAms, loc])
 
   function copyEmails(list: string[], label: string) {
     if (!list.length) { toast(`No ${label} emails to copy`, { icon: 'ℹ️' }); return }
@@ -204,11 +200,11 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
                 ))}
               </div>
             )}
-            <Button size="sm" variant="secondary" onClick={() => copyEmails(outstandingAmEmails, 'AM')}>
-              Copy AM Emails ({outstandingAmEmails.length})
+            <Button size="sm" variant="secondary" onClick={() => copyEmails(visibleAmEmails, 'AM')}>
+              Copy AM Emails ({visibleAmEmails.length})
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => copyEmails(outstandingRdEmails, 'RD')}>
-              Copy RD Emails ({outstandingRdEmails.length})
+            <Button size="sm" variant="secondary" onClick={() => copyEmails(visibleRdEmails, 'RD')}>
+              Copy RD Emails ({visibleRdEmails.length})
             </Button>
             <Button size="sm" onClick={copyTable}>Copy Table</Button>
           </div>
