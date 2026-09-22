@@ -86,10 +86,11 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
   const totalPct = totalSubmitted + totalNotSubmitted > 0 ? totalSubmitted / (totalSubmitted + totalNotSubmitted) : 0
 
   // Outstanding-only — AMs/RDs for shops still missing a Monthly count, since
-  // that's who a reminder email would actually go to. Hidden AMs are left out
-  // of the AM list entirely (their email shouldn't go out with this batch);
-  // RD emails aren't scoped to hidden AMs since an RD oversees more than just
-  // that one AM's shops.
+  // that's who a reminder email would actually go to. Both lists are scoped
+  // to whichever AMs are on the visible table (hiddenAms excluded) — an RD
+  // email used to skip this check on the theory that an RD oversees more
+  // than just one AM's shops, but per direct request both copy buttons now
+  // match the table exactly: a hidden AM's shops contribute to neither list.
   const outstandingAmEmails = useMemo(() => {
     const set = new Set<string>()
     for (const l of locations) {
@@ -106,11 +107,13 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
     const set = new Set<string>()
     for (const l of locations) {
       if (monthlySubmittedIds.has(l.id)) continue
+      const am = loc.fieldValue(l.id, 'area_manager').trim() || 'Unassigned'
+      if (hiddenAms.includes(am)) continue
       const e = loc.fieldValue(l.id, 'rd_email').trim()
       if (e) set.add(e)
     }
     return [...set].sort()
-  }, [locations, monthlySubmittedIds, loc])
+  }, [locations, monthlySubmittedIds, hiddenAms, loc])
 
   function copyEmails(list: string[], label: string) {
     if (!list.length) { toast(`No ${label} emails to copy`, { icon: 'ℹ️' }); return }
