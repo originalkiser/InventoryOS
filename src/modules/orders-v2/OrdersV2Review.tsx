@@ -475,12 +475,22 @@ export function OrdersV2Review() {
   // time and goes stale the instant someone edits a qty or adds/removes a
   // line afterward (found live 2026-09-22: editing an order never updated
   // whether it still cleared the minimum). Mirrors generateOrder's own
-  // dollars/units_per_order minimum resolution in engine.ts exactly, so
-  // this reads the same threshold the engine itself used. Per-product
-  // minimum types (units_per_product/gallons_per_product) are a floor on
-  // each LINE, not the order total, and are deliberately left alone here —
-  // recomputing those live would mean re-deriving engine.ts's own
-  // applyPerProductMinimum/applyBulkPerProductMinimum logic in the UI.
+  // dollars/units_per_order/case-type minimum resolution in engine.ts
+  // exactly, so this reads the same threshold the engine itself used.
+  // Per-product minimum types (units_per_product/gallons_per_product) are a
+  // floor on each LINE, not the order total, and are deliberately left
+  // alone here — recomputing those live would mean re-deriving engine.ts's
+  // own applyPerProductMinimum/applyBulkPerProductMinimum logic in the UI.
+  //
+  // Case-type minimums (e.g. "6 bay boxes") were entirely missing from this
+  // check until 2026-09-23 (a real Valvoline report never highlighted red
+  // despite landing under its configured floor) — added below, scoped to
+  // whatever case types actually appear somewhere in this draft's own line
+  // set. A case type with zero lines in the draft at all is left alone
+  // (can't tell live whether the shop has an eligible-but-never-added
+  // product of that type — only generateOrder's own eligibleSpare pool
+  // knows that — so this mirrors the engine's "no eligible product, rule
+  // doesn't apply" exemption using what's actually available client-side).
   const groupMinimumStatus = useMemo(() => {
     const m = new Map<string, boolean>()
     if (!draft) return m
@@ -498,6 +508,14 @@ export function OrdersV2Review() {
         meets = included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0) >= min.dollars
       } else if (min.type === 'units_per_order') {
         meets = included.reduce((s, l) => s + Number(l.qty), 0) >= (min.qty ?? 0)
+      }
+      for (const [caseType, minQtyRaw] of Object.entries(vendorRules.caseTypeMinimums ?? {})) {
+        const minQty = Number(minQtyRaw)
+        if (minQty <= 0) continue
+        const ofType = groupLines.filter((l) => (l.uom ?? '') === caseType)
+        if (!ofType.length) continue
+        const total = ofType.filter((l) => l.included).reduce((s, l) => s + Number(l.qty), 0)
+        if (total < minQty) meets = false
       }
       m.set(key, meets)
     }

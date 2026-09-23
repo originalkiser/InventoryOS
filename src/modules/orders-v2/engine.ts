@@ -460,15 +460,42 @@ function applyBulkPerProductMinimum(
  * type, spread across whichever products are already on it. Deliberately not
  * applied when the order contains none of that case type.
  */
+/**
+ * Vendor case-type minimums ("at least 6 bay boxes on the order") — a floor
+ * on the total units of one specific UOM across the order, regardless of
+ * which product(s) make it up. Distinct from OrderMinimum's per-order/
+ * per-product floors; a vendor can have both at once.
+ *
+ * Returns whether every configured case type with a positive floor actually
+ * met it — the caller ORs this into the group's own below_minimum flag.
+ * Found 2026-09-23 (a real Valvoline report landed under its configured
+ * 6-bay-box floor with no flag at all): this used to (a) skip a case type
+ * entirely whenever NO line of that UOM had already been ordered in Pass 1
+ * — so a shop with zero bay-box products naturally due never even got a
+ * chance to have one pulled in — and (b) return void, so even a genuine,
+ * capacity-blocked shortfall on an already-ordered case type was silently
+ * accepted as fine. Now pulls in eligible spare products of the case type
+ * (same skip_order_if_dos_over guard, and the same "spread the shortfall
+ * instead of loading up one product" principle) when topping up what's
+ * already on the order isn't enough — and actually says so when it still
+ * isn't.
+ */
 function applyCaseTypeMinimums(
   lines: GeneratedLine[], ctx: GenerationContext, inputs: Map<string, GenerationInput>,
-): void {
+  spares: GenerationInput[],
+): boolean {
   const mins = ctx.vendor.caseTypeMinimums ?? {}
+  let allMet = true
   for (const [caseType, minQtyRaw] of Object.entries(mins)) {
     const minQty = n(minQtyRaw)
     if (minQty <= 0) continue
-    const ofType = lines.filter((l) => (l.uom ?? '') === caseType && l.qty > 0)
-    if (!ofType.length) continue                      // none ordered — rule doesn't apply
+    let ofType = lines.filter((l) => (l.uom ?? '') === caseType && l.qty > 0)
+    const sparesOfType = spares.filter((sp) => (sp.rule.uom ?? '') === caseType)
+    // A shop with literally no eligible product of this case type (not
+    // currently ordered AND none available to pull in) has no way to ever
+    // satisfy this floor from this vendor — the rule doesn't apply, same as
+    // before, rather than flagging every such shop below_minimum forever.
+    if (!ofType.length && !sparesOfType.length) continue
     let total = ofType.reduce((s, l) => s + n(l.qty), 0)
     if (total >= minQty) continue
 
@@ -493,7 +520,34 @@ function applyCaseTypeMinimums(
       markOverDosMax(best, ctx)
       total += 1
     }
+
+    // Still short (including "nothing of this case type was ordered at
+    // all") — pull in eligible spare products of the same case type.
+    if (total + 1e-9 < minQty) {
+      const eligible = sparesOfType.filter((sp) => {
+        const d = daysOfSupply(sp.on_hand, sp.daily_usage)
+        return d == null || d <= ctx.settings.skip_order_if_dos_over
+      })
+      for (const sp of eligible) {
+        if (total + 1e-9 >= minQty) break
+        const caps = capsFor(sp, ctx, { respectDosMax: false })
+        if (caps.maxUnits <= 0) continue
+        const need = minQty - total
+        const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_increment, 'up')
+        if (units <= 0) continue
+        const line = buildLine(sp, ctx, units, caps)
+        line.added_by_smoothing = true
+        if (!line.flags.includes('added_for_smoothing')) line.flags.push('added_for_smoothing')
+        if (!line.flags.includes('case_minimum_topup')) line.flags.push('case_minimum_topup')
+        markOverDosMax(line, ctx)
+        lines.push(line)
+        ofType = lines.filter((l) => (l.uom ?? '') === caseType && l.qty > 0)
+        total = ofType.reduce((s, l) => s + n(l.qty), 0)
+      }
+    }
+    if (total + 1e-9 < minQty) allMet = false
   }
+  return allMet
 }
 
 /**
@@ -740,6 +794,30 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       dollars: order_type === 'bulk' ? ctx.settings.order_minimum_dollars_bulk : ctx.settings.order_minimum_dollars_package,
       qty: order_type === 'bulk' ? ctx.settings.bulk_minimum_qty : ctx.settings.package_minimum_qty,
     }
+    // Shared across every branch below — case-type minimums (and the
+    // units_per_order/dollar "pull in spares" steps) all draw from the same
+    // pool of this shop's other configured-but-not-yet-due products.
+    const spares = (eligibleSpare.get(key) ?? []).filter((sp) => resolvedOrderType(sp.rule) === order_type)
+
+    // "units_per_order" is a floor on the whole group's total unit/case
+    // count — same shape as the dollar minimum (smooth to close the gap),
+    // just counted in units. applyOrderUnitMinimum already implements this
+    // correctly (found 2026-09-23: it existed, fully built and tested-in-
+    // spirit, but was never actually wired in here — every non-dollar
+    // minimum type, including this one, was silently falling through to
+    // applyPerProductMinimum below instead, which enforces a floor on EACH
+    // LINE rather than the order's total).
+    if (min.type === 'units_per_order') {
+      const result = applyOrderUnitMinimum(lines, n(min.qty), ctx, inputByKey, ruleOf, spares)
+      const caseTypesMet = applyCaseTypeMinimums(lines, ctx, inputByKey, spares)
+      const met = result.met && caseTypesMet
+      if (!met) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
+      groups.push({
+        location_id, order_type, lines, dollars: groupDollars(lines, ruleOf),
+        minimum: n(min.qty), meetsMinimum: met, smoothingApplied: result.smoothingApplied,
+      })
+      continue
+    }
 
     // A per-product minimum is a floor on each line, so it's handled up front
     // and doesn't involve the dollar-smoothing path at all.
@@ -755,7 +833,8 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       } else {
         met = applyPerProductMinimum(lines, min, ctx, inputByKey)
       }
-      applyCaseTypeMinimums(lines, ctx, inputByKey)
+      const caseTypesMet = applyCaseTypeMinimums(lines, ctx, inputByKey, spares)
+      met = met && caseTypesMet
       if (!met) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
       groups.push({
         location_id, order_type, lines, dollars: groupDollars(lines, ruleOf),
@@ -828,13 +907,11 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
         // skip_order_if_dos_over applies HERE only: a well-stocked product is
         // never dragged onto an order purely to reach a dollar minimum. It
         // never stops a product that is genuinely due from being ordered.
-        const spares = (eligibleSpare.get(key) ?? [])
-          .filter((sp) => resolvedOrderType(sp.rule) === order_type)
-          .filter((sp) => {
-            const d = daysOfSupply(sp.on_hand, sp.daily_usage)
-            return d == null || d <= ctx.settings.skip_order_if_dos_over
-          })
-        for (const sp of spares) {
+        const dollarSpares = spares.filter((sp) => {
+          const d = daysOfSupply(sp.on_hand, sp.daily_usage)
+          return d == null || d <= ctx.settings.skip_order_if_dos_over
+        })
+        for (const sp of dollarSpares) {
           if (dollars >= minimum) break
           const caps = capsFor(sp, ctx, { respectDosMax: false })
           if (caps.maxUnits <= 0) continue
@@ -856,10 +933,10 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     }
 
     // Case-type minimums apply to whatever the order ended up containing.
-    applyCaseTypeMinimums(lines, ctx, inputByKey)
+    const caseTypesMet = applyCaseTypeMinimums(lines, ctx, inputByKey, spares)
     dollars = groupDollars(lines, ruleOf)
 
-    const meetsMinimum = dollars >= minimum
+    const meetsMinimum = dollars >= minimum && caseTypesMet
     if (!meetsMinimum) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
 
     groups.push({ location_id, order_type, lines, dollars, minimum, meetsMinimum, smoothingApplied })

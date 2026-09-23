@@ -230,6 +230,69 @@ describe('vendor case-type minimums', () => {
     expect(res.lines.some((l) => l.qty % 6 !== 0)).toBe(true)
     expect(res.lines.reduce((s, l) => s + l.qty, 0)).toBeGreaterThanOrEqual(6)
   })
+
+  // Found 2026-09-23 from a real Valvoline report: a shop with a configured
+  // 6-bay-box minimum landed under it with no below_minimum flag at all.
+  it('pulls in a spare bay-box product when none was due, and flags the shortfall if it still cannot reach the floor', () => {
+    // A (bay_box) is not due at all in Pass 1 (DOS 20 > the 14-day trigger)
+    // but well within skip_order_if_dos_over (45) — the OLD code never even
+    // tried it, since "no bay_box line already ordered" meant the rule was
+    // skipped outright.
+    const a = input({ product_id: 'A', on_hand: 100, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 2000 } })
+    const b = input({ product_id: 'B', on_hand: 10, daily_usage: 5, rule: { uom: 'drum', unit_cost: 50 } })
+    const c = ctx({
+      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: { bay_box: 6 }, usesOrderDays: false },
+    })
+    const res = generateOrder([a, b], c)
+    const bayBoxTotal = res.lines.filter((l) => l.uom === 'bay_box').reduce((s, l) => s + l.qty, 0)
+    expect(bayBoxTotal).toBe(6)
+    expect(res.groups.find((g) => g.order_type === 'package')?.meetsMinimum).toBe(true)
+  })
+
+  it('flags below_minimum when even every eligible product cannot reach the case-type floor', () => {
+    // Capacity caps A at 2 bay boxes total — can never reach 6 regardless of
+    // how the shortfall is spread.
+    const a = input({ product_id: 'A', on_hand: 0, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 10 } })
+    const c = ctx({
+      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: { bay_box: 6 }, usesOrderDays: false },
+    })
+    const res = generateOrder([a], c)
+    expect(res.groups[0].meetsMinimum).toBe(false)
+    expect(res.lines.every((l) => l.flags.includes('below_minimum'))).toBe(true)
+  })
+})
+
+describe('units_per_order minimum — a floor on the whole order, not each line', () => {
+  const unitsPerOrder = (qty: number) => ({ type: 'units_per_order' as const, dollars: 0, qty })
+
+  // Found 2026-09-23 alongside the case-type-minimum bug: applyOrderUnitMinimum
+  // existed, fully built, but was never actually wired into generateOrder —
+  // every units_per_order vendor silently fell through to the per-product
+  // floor logic instead, which checks each LINE's own qty against the
+  // configured number rather than the order's total.
+  it('smooths the order total up to the configured floor, spreading across products', () => {
+    const a = input({ product_id: 'A', on_hand: 60, daily_usage: 5, rule: { uom: 'case', unit_cost: 50 } })
+    const b = input({ product_id: 'B', on_hand: 60, daily_usage: 5, rule: { uom: 'case', unit_cost: 50 } })
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: { vendor_id: 'V1', minimums: { package: unitsPerOrder(6) }, caseTypeMinimums: {}, usesOrderDays: false },
+    })
+    const res = generateOrder([a, b], c)
+    expect(res.groups[0].meetsMinimum).toBe(true)
+    expect(res.lines.reduce((s, l) => s + l.qty, 0)).toBeGreaterThanOrEqual(6)
+    // Spread, not dumped onto one line.
+    expect(res.lines.every((l) => l.qty < 6)).toBe(true)
+  })
+
+  it('flags below_minimum when capacity blocks reaching the floor', () => {
+    const a = input({ product_id: 'A', on_hand: 0, daily_usage: 5, rule: { uom: 'case', unit_cost: 50, max_capacity_gallons: 10 } })
+    const c = ctx({
+      vendor: { vendor_id: 'V1', minimums: { package: unitsPerOrder(6) }, caseTypeMinimums: {}, usesOrderDays: false },
+    })
+    const res = generateOrder([a], c)
+    expect(res.groups[0].meetsMinimum).toBe(false)
+    expect(res.lines.every((l) => l.flags.includes('below_minimum'))).toBe(true)
+  })
 })
 
 describe('never emits a non-finite quantity', () => {
