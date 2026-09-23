@@ -75,6 +75,13 @@ const STALE_MS = 2 * 86400000
 const isStaleReading = (d: string | null | undefined) => !!d && Date.now() - new Date(d).getTime() > STALE_MS
 
 const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 }))
+// Copy-only — same convention as TankMonitorsPage.tsx's own num1(): a
+// pasted table shouldn't carry a raw on-hand/available/capacity reading's
+// full floating-point tail (e.g. "18.489649999999997", since on_hand/
+// available_capacity are computed as capacity minus a raw sensor reading
+// and are essentially never exactly round). Kept separate from num() above
+// so the on-screen display's own precision is untouched.
+const num1 = (v: number | null | undefined) => (v == null ? '' : v.toLocaleString(undefined, { maximumFractionDigits: 1 }))
 const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy') } catch { return d } }
 const dateTime = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy · h:mm a') } catch { return d } }
 const alignCls = (a: string) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left')
@@ -997,12 +1004,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         case 'product': return t.product_id ?? ''
         case 'internal': return t.internal || t.product_id || ''
         case 'serial': return t.serial_rtu_id ?? ''
-        case 'on_hand': return t.on_hand == null ? '' : String(t.on_hand)
-        case 'available': return t.available_capacity == null ? '' : String(t.available_capacity)
-        case 'total_capacity': return String(tankCapacity(t))
-        case 'uncapped_capacity': return String(uncappedCapacity(t))
-        case 'level_inches': return t.level_inches == null ? '' : String(t.level_inches)
-        case 'height': return t.height == null ? '' : String(t.height)
+        case 'on_hand': return num1(t.on_hand)
+        case 'available': return num1(t.available_capacity)
+        case 'total_capacity': return num1(tankCapacity(t))
+        case 'uncapped_capacity': return num1(uncappedCapacity(t))
+        case 'level_inches': return num1(t.level_inches)
+        case 'height': return num1(t.height)
         case 'keepfill': return t.keep_fill ? 'yes' : ''
         case 'updated': return dateTime(t.inventory_time ?? t.reading_date)
         default: return ''
@@ -1050,12 +1057,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     const cols = ['Product ID', 'On Hand (Qts)', 'Droptop On Hand (Qts)', 'Variance (Qts)', 'Droptop Usage (Qts/day)', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update']
     const text = (r: OnHandRow): string[] => [
       r.productId,
-      num(r.tankOnHandQt),
-      r.droptopOnHand == null ? '—' : num(r.droptopOnHand),
-      r.netVariance == null ? '—' : num(r.netVariance),
-      r.droptopUsage == null ? '—' : num(r.droptopUsage),
-      r.dosMonitor == null ? '—' : num(r.dosMonitor),
-      r.dosDroptop == null ? '—' : num(r.dosDroptop),
+      num1(r.tankOnHandQt),
+      r.droptopOnHand == null ? '—' : num1(r.droptopOnHand),
+      r.netVariance == null ? '—' : num1(r.netVariance),
+      r.droptopUsage == null ? '—' : num1(r.droptopUsage),
+      r.dosMonitor == null ? '—' : num1(r.dosMonitor),
+      r.dosDroptop == null ? '—' : num1(r.dosDroptop),
       dateTime(r.lastUpdate),
     ]
     const title = `${shopLabel(shopId)} — Tank Monitors (On Hand)`
