@@ -5,7 +5,7 @@ import { useMonthEndStore } from '@/stores/monthEndStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { Card, CardBody, Combobox, SbLoader } from '@/components/ui'
+import { Card, CardBody, Combobox, SbLoader, Toggle } from '@/components/ui'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import type { MonthlyEndingBalance } from '@/types'
 import { format, parseISO, subMonths } from 'date-fns'
@@ -69,10 +69,20 @@ export function OverviewTab() {
   // oil/parts/additives KPIs below fall back to monthly_ending_balances
   // (still "—" for an open period), same graceful-degradation as before.
   const [currentCategoryBalances, setCurrentCategoryBalances] = useState<Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>>(new Map())
+  // Same live per-shop breakdown, one period back — needed for a genuine
+  // apples-to-apples "Other" comparison in the new Month-over-Month table
+  // below, since monthly_ending_balances (Finance's own entry) has no
+  // "Other" field at all to fall back to.
+  const [prevCategoryBalances, setPrevCategoryBalances] = useState<Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>>(new Map())
   const [currentSubmittedIds, setCurrentSubmittedIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [shopId, setShopId] = useState('')
+  // "Other" is a broad catch-all (anything not Oil/Parts/Additives) and
+  // usually not what someone means by "the ending balance" — excluded from
+  // the Total tile by default, per explicit request, with a toggle to add
+  // it back in.
+  const [excludeOther, setExcludeOther] = useState(true)
 
   const prevMonth = useMemo(() => format(subMonths(parseISO(countMonth), 1), 'yyyy-MM-01'), [countMonth])
   const lookbackStart = useMemo(() => format(subMonths(parseISO(countMonth), LOOKBACK_MONTHS), 'yyyy-MM-01'), [countMonth])
@@ -142,6 +152,19 @@ export function OverviewTab() {
       }
       setCurrentCategoryBalances(catBalMap)
 
+      const { data: prevCatBalRows, error: prevCatBalErr } = await sb.rpc('get_current_balance_by_category', {
+        p_company_id: companyId, p_count_month: prevMonth,
+      })
+      if (prevCatBalErr) throw prevCatBalErr
+      const prevCatBalMap = new Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>()
+      for (const r of (prevCatBalRows ?? []) as { location_id: string; oil: number | null; parts: number | null; additives: number | null; other: number | null; total: number | null }[]) {
+        prevCatBalMap.set(r.location_id, {
+          oil: Number(r.oil ?? 0), parts: Number(r.parts ?? 0), additives: Number(r.additives ?? 0),
+          other: Number(r.other ?? 0), total: Number(r.total ?? 0),
+        })
+      }
+      setPrevCategoryBalances(prevCatBalMap)
+
       const { data: recounts } = await sb.schema('inventory').from('recount_requests')
         .select('completed_flags').eq('company_id', companyId)
         .filter('recount_fields->>count_month', 'eq', countMonth)
@@ -159,7 +182,7 @@ export function OverviewTab() {
     } finally {
       setLoading(false)
     }
-  }, [companyId, countMonth, lookbackStart, tankVariance, unlistedLimit])
+  }, [companyId, countMonth, prevMonth, lookbackStart, tankVariance, unlistedLimit])
 
   useEffect(() => { load() }, [load])
 
@@ -191,6 +214,81 @@ export function OverviewTab() {
     const other = hasLiveCategoryData ? liveSum('other') : null
     return { total, cats, other, shopCount: currentSubmittedIds.size }
   }, [currentCounts, currentSubmittedIds, balances, categories, countMonth, currentCategoryBalances])
+
+  // Total tile with "Other" pulled back out, when the toggle above is on —
+  // Total itself is independently sourced (currentCounts, a shop's own
+  // self-reported count total) rather than literally built by summing the
+  // category tiles, so this is "total minus whatever we can currently
+  // attribute to Other," not a strict re-derivation. Only has an effect
+  // when Other actually has live data for this period; otherwise there's
+  // nothing to subtract and the toggle is a no-op.
+  const displayedTotal = excludeOther && currentTotals.other != null ? currentTotals.total - currentTotals.other : currentTotals.total
+
+  // Month-over-Month comparison for the KPI row — Total + each configured
+  // category + Other (when it has data), each with the company-wide
+  // current/last/delta AND the average of every individual shop's own
+  // current-minus-last delta (per explicit request — these can differ from
+  // the company-wide delta when the set of shops reporting each month
+  // isn't identical, e.g. a shop submitted this month but not last).
+  // "Total" per shop mirrors shopDetail's own historical source
+  // (monthly_ending_balances.ending_balance for a closed month; currentCounts
+  // for the live current month) rather than summing categories, same
+  // total-vs-categories data-source split as currentTotals above.
+  const companyMoM = useMemo(() => {
+    const curBalRows = balances.filter((b) => b.month === countMonth)
+    const prevBalRows = balances.filter((b) => b.month === prevMonth)
+
+    function shopMap(period: 'current' | 'prev', key: 'total' | 'other' | string): Map<string, number> {
+      if (key === 'total') {
+        if (period === 'current') return currentCounts
+        const m = new Map<string, number>()
+        for (const r of prevBalRows) if (r.location_id) m.set(r.location_id, Number(r.ending_balance ?? 0))
+        return m
+      }
+      const live = period === 'current' ? currentCategoryBalances : prevCategoryBalances
+      if (key === 'other') {
+        const m = new Map<string, number>()
+        for (const [id, v] of live) m.set(id, v.other)
+        return m
+      }
+      if ((key === 'oil' || key === 'parts' || key === 'additives') && live.size > 0) {
+        const m = new Map<string, number>()
+        for (const [id, v] of live) m.set(id, (v as any)[key])
+        return m
+      }
+      const rows = period === 'current' ? curBalRows : prevBalRows
+      const m = new Map<string, number>()
+      for (const r of rows) if (r.location_id) m.set(r.location_id, Number((r.metadata as any)?.[key] ?? 0))
+      return m
+    }
+
+    function rowFor(label: string, key: 'total' | 'other' | string) {
+      let curMap = shopMap('current', key)
+      let prevMap = shopMap('prev', key)
+      // Total follows the same "Other excluded by default" preference as
+      // the KPI tile — subtracted per shop first so avgDeltaPerShop stays
+      // consistent with the displayed current/last/delta, not just the
+      // aggregate.
+      if (key === 'total' && excludeOther) {
+        const curOther = shopMap('current', 'other')
+        const prevOther = shopMap('prev', 'other')
+        curMap = new Map([...curMap].map(([id, v]) => [id, v - (curOther.get(id) ?? 0)]))
+        prevMap = new Map([...prevMap].map(([id, v]) => [id, v - (prevOther.get(id) ?? 0)]))
+      }
+      const current = curMap.size ? [...curMap.values()].reduce((s, v) => s + v, 0) : null
+      const last = prevMap.size ? [...prevMap.values()].reduce((s, v) => s + v, 0) : null
+      const delta = current != null && last != null ? current - last : null
+      const commonIds = [...curMap.keys()].filter((id) => prevMap.has(id))
+      const avgDeltaPerShop = commonIds.length
+        ? commonIds.reduce((s, id) => s + (curMap.get(id)! - prevMap.get(id)!), 0) / commonIds.length
+        : null
+      return { label, current, last, delta, avgDeltaPerShop }
+    }
+
+    const rows = [rowFor('Total', 'total'), ...categories.map((c) => rowFor(c.label, c.field_key))]
+    if (currentTotals.other != null) rows.push(rowFor('Other', 'other'))
+    return rows
+  }, [balances, countMonth, prevMonth, currentCounts, currentCategoryBalances, prevCategoryBalances, categories, excludeOther, currentTotals.other])
 
   const exceptionStats = useMemo(() => {
     const shops = new Set(exceptions.map((e) => e.location_id))
@@ -230,13 +328,59 @@ export function OverviewTab() {
       </div>
 
       {/* Category balance KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Kpi label="Total Ending Balance" value={usd(currentTotals.total)} accent />
-        {categories.map((c) => (
-          <Kpi key={c.field_key} label={c.label} value={usd(currentTotals.cats[c.field_key])} />
-        ))}
-        {currentTotals.other != null && <Kpi label="Other" value={usd(currentTotals.other)} />}
+      <div className="flex flex-col gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Kpi label="Total Ending Balance" value={usd(displayedTotal)} accent />
+          {categories.map((c) => (
+            <Kpi key={c.field_key} label={c.label} value={usd(currentTotals.cats[c.field_key])} />
+          ))}
+          {currentTotals.other != null && <Kpi label="Other" value={usd(currentTotals.other)} />}
+        </div>
+        {currentTotals.other != null && (
+          <label className="flex items-center gap-2 text-[10px] font-mono text-inky/60 uppercase tracking-wide">
+            <Toggle checked={!excludeOther} onChange={(v) => setExcludeOther(!v)} size="sm" color="cyan" />
+            Include Other in Total
+          </label>
+        )}
       </div>
+
+      {/* Month-over-month comparison */}
+      <Card>
+        <CardBody className="flex flex-col gap-3">
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Month over Month</span>
+          <div className="overflow-auto rounded border border-navy/30">
+            <table className="w-full text-xs font-mono">
+              <thead>
+                <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+                  <th className="px-3 py-2 text-left">Category</th>
+                  <th className="px-3 py-2 text-right">Current</th>
+                  <th className="px-3 py-2 text-right">Last Month</th>
+                  <th className="px-3 py-2 text-right">Δ vs Last</th>
+                  <th className="px-3 py-2 text-right">Avg Δ / Shop</th>
+                </tr>
+              </thead>
+              <tbody>
+                {companyMoM.map((r) => (
+                  <tr key={r.label} className="border-b border-navy/20">
+                    <td className="px-3 py-2 text-navy font-bold">{r.label}</td>
+                    <td className="px-3 py-2 text-right text-navy">{usd(r.current)}</td>
+                    <td className="px-3 py-2 text-right text-inky">{usd(r.last)}</td>
+                    <td className={['px-3 py-2 text-right', r.delta == null ? 'text-inky/40' : r.delta >= 0 ? 'text-[#2ECC71]' : 'text-[#C0392B]'].join(' ')}>
+                      {r.delta == null ? '—' : `${r.delta >= 0 ? '▲' : '▼'} ${usd(Math.abs(r.delta))}`}
+                    </td>
+                    <td className={['px-3 py-2 text-right', r.avgDeltaPerShop == null ? 'text-inky/40' : r.avgDeltaPerShop >= 0 ? 'text-[#2ECC71]' : 'text-[#C0392B]'].join(' ')}>
+                      {r.avgDeltaPerShop == null ? '—' : `${r.avgDeltaPerShop >= 0 ? '▲' : '▼'} ${usd(Math.abs(r.avgDeltaPerShop))}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[10px] font-mono text-inky/50">
+            Δ vs Last is the company-wide total's change; Avg Δ / Shop averages each individual shop's own change — they can differ when the shops reporting this month and last month aren't identical.
+          </p>
+        </CardBody>
+      </Card>
 
       {/* Recount KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
