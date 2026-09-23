@@ -274,13 +274,30 @@ export function useRdReports() {
         qty_ordered: r.qty_ordered, uploaded_at: uploadedAt, uploaded_by: profile?.id ?? null,
       }))
       await replaceSnapshot('rd_open_orders', companyId, payload)
-      const ledgerRows = parsed.map((r) => ({
-        company_id: companyId, location_id: r.shop_number ? locationIdByShop.get(r.shop_number) ?? null : null,
-        sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
-        order_date: r.order_date, order_type: r.order_type, ship_to_name: r.ship_to_name,
-        product_desc: r.product_desc, qty_ordered: r.qty_ordered, last_updated_at: uploadedAt,
-      }))
-      await upsertOrderLedger(companyId, ledgerRows)
+      // rd_order_ledger's own unique key is (company_id, sales_order_no,
+      // product_code) — one row per PO+product. The raw report can list the
+      // same PO+product on more than one line (e.g. a split/backordered
+      // quantity), which parsed 1:1 used to hand upsertOrderLedger two rows
+      // targeting the same conflict key in one batch — Postgres refuses
+      // that outright ("ON CONFLICT DO UPDATE command cannot affect row a
+      // second time"), found live 2026-09-23 blocking every Open Sales
+      // Order upload that happened to include a split line. Aggregated here
+      // first (summing qty_ordered, since each line is a real slice of the
+      // same still-open order) so the ledger always gets exactly one row
+      // per key regardless of how many lines the report split it across.
+      const ledgerByKey = new Map<string, { company_id: string; location_id: string | null; sales_order_no: string; product_code: string; customer_po_no: string | null; order_date: string | null; order_type: string | null; ship_to_name: string | null; product_desc: string | null; qty_ordered: number | null; last_updated_at: string }>()
+      for (const r of parsed) {
+        const key = `${r.sales_order_no}|${r.product_code}`
+        const existing = ledgerByKey.get(key)
+        if (existing) { existing.qty_ordered = Number(existing.qty_ordered ?? 0) + Number(r.qty_ordered ?? 0); continue }
+        ledgerByKey.set(key, {
+          company_id: companyId, location_id: r.shop_number ? locationIdByShop.get(r.shop_number) ?? null : null,
+          sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
+          order_date: r.order_date, order_type: r.order_type, ship_to_name: r.ship_to_name,
+          product_desc: r.product_desc, qty_ordered: r.qty_ordered, last_updated_at: uploadedAt,
+        })
+      }
+      await upsertOrderLedger(companyId, [...ledgerByKey.values()])
       setLastOpenOrdersAt(uploadedAt)
       toast.success(`Open Sales Order report uploaded — ${payload.length} lines`)
       await runReconciliation()
@@ -306,14 +323,37 @@ export function useRdReports() {
         uploaded_at: uploadedAt, uploaded_by: profile?.id ?? null,
       }))
       await replaceSnapshot('rd_open_invoices', companyId, payload)
-      const ledgerRows = parsed.map((r) => ({
-        company_id: companyId, location_id: r.shop_number ? locationIdByShop.get(r.shop_number) ?? null : null,
-        sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
-        invoice_no: r.invoice_no, order_date: r.order_date, invoice_date: r.invoice_date,
-        ship_to_name: r.ship_to_name, product_desc: r.product_desc, qty_ordered: r.qty_ordered,
-        qty_shipped: r.qty_shipped, gallons_ordered: r.gallons_ordered, gallons_shipped: r.gallons_shipped,
-      }))
-      await insertDeliveryLedger(companyId, ledgerRows)
+      // Same (company_id, sales_order_no, product_code) conflict key as the
+      // order ledger above, and the same risk if a PO+product is split
+      // across more than one invoice line within this same report — this
+      // path uses ignoreDuplicates (Postgres's ON CONFLICT DO NOTHING)
+      // rather than DO UPDATE, so it never actually THROWS the way
+      // uploadOpenOrders did, but it would have silently kept only the
+      // FIRST such line and dropped the rest of that split shipment's real
+      // qty_shipped/gallons_shipped. Aggregated here first for the same
+      // reason, before ignoreDuplicates does its real job of protecting an
+      // already-recorded shipment from being overwritten by a LATER
+      // re-upload of the same PO+product.
+      const invLedgerByKey = new Map<string, { company_id: string; location_id: string | null; sales_order_no: string; product_code: string; customer_po_no: string | null; invoice_no: string | null; order_date: string | null; invoice_date: string | null; ship_to_name: string | null; product_desc: string | null; qty_ordered: number | null; qty_shipped: number | null; gallons_ordered: number | null; gallons_shipped: number | null }>()
+      for (const r of parsed) {
+        const key = `${r.sales_order_no}|${r.product_code}`
+        const existing = invLedgerByKey.get(key)
+        if (existing) {
+          existing.qty_ordered = Number(existing.qty_ordered ?? 0) + Number(r.qty_ordered ?? 0)
+          existing.qty_shipped = Number(existing.qty_shipped ?? 0) + Number(r.qty_shipped ?? 0)
+          existing.gallons_ordered = Number(existing.gallons_ordered ?? 0) + Number(r.gallons_ordered ?? 0)
+          existing.gallons_shipped = Number(existing.gallons_shipped ?? 0) + Number(r.gallons_shipped ?? 0)
+          continue
+        }
+        invLedgerByKey.set(key, {
+          company_id: companyId, location_id: r.shop_number ? locationIdByShop.get(r.shop_number) ?? null : null,
+          sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
+          invoice_no: r.invoice_no, order_date: r.order_date, invoice_date: r.invoice_date,
+          ship_to_name: r.ship_to_name, product_desc: r.product_desc, qty_ordered: r.qty_ordered,
+          qty_shipped: r.qty_shipped, gallons_ordered: r.gallons_ordered, gallons_shipped: r.gallons_shipped,
+        })
+      }
+      await insertDeliveryLedger(companyId, [...invLedgerByKey.values()])
       setLastOpenInvoicesAt(uploadedAt)
       toast.success(`Open Invoice report uploaded — ${payload.length} lines`)
       await runReconciliation()
