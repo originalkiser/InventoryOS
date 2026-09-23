@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { useVendors } from './useLookups'
-import { weekStartOf } from './engine'
+import { weekStartOf, businessDaysBetween, daysBetween } from './engine'
 import { SCHEDULE_LABELS, type ScheduleType } from './types'
 
 const sb = () => supabase as any
@@ -27,6 +27,24 @@ function parseWeekPhase(raw: string): 'weekly' | 'A' | 'B' | null {
   if (v === 'b' || /week\s*2\b/.test(v)) return 'B'
   return null
 }
+// Local-time YYYY-MM-DD — a date cell parsed via `cellDates`/`new Date(...)`
+// must never round-trip through toISOString() (UTC), which can shift a
+// midnight-local date to the previous day.
+function toIsoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+function median(nums: number[]): number {
+  const s = [...nums].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
+}
+function mode(nums: number[]): number {
+  const counts = new Map<number, number>()
+  for (const v of nums) counts.set(v, (counts.get(v) ?? 0) + 1)
+  let best = nums[0], bestCount = 0
+  for (const [k, c] of counts) if (c > bestCount) { bestCount = c; best = k }
+  return best
+}
 
 interface ScheduleRow {
   id: string; location_id: string; vendor_id: string; schedule_type: ScheduleType
@@ -34,6 +52,13 @@ interface ScheduleRow {
   lead_business_days: number
 }
 interface CalRow { id: string; week_start: string; week_label: 'A' | 'B' }
+interface HistorySuggestion {
+  shopRaw: string
+  locationId: string | null
+  sampleSize: number
+  suggestion: Pick<ScheduleRow, 'schedule_type' | 'delivery_dow' | 'week_a_dow' | 'week_b_dow' | 'lead_business_days'> | null
+  note: string
+}
 
 /**
  * Per-shop delivery schedules for vendors that don't run one weekday for
@@ -48,6 +73,8 @@ export function DeliverySchedulesCard() {
   const [vendorId, setVendorId] = useState('')
   const [rows, setRows] = useState<ScheduleRow[]>([])
   const [cal, setCal] = useState<CalRow[]>([])
+  const [historyAnalysis, setHistoryAnalysis] = useState<HistorySuggestion[] | null>(null)
+  const [applyingAll, setApplyingAll] = useState(false)
 
   // New/edited schedule
   const [locationId, setLocationId] = useState('')
@@ -195,8 +222,7 @@ export function DeliverySchedulesCard() {
       if (!raw || (label !== 'A' && label !== 'B')) continue
       const d = new Date(raw)
       if (Number.isNaN(d.getTime())) continue
-      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      seen.set(weekStartOf(iso), label as 'A' | 'B')
+      seen.set(weekStartOf(toIsoDate(d)), label as 'A' | 'B')
     }
     if (!seen.size) { toast.error('No usable rows found'); return }
     const payload = [...seen.entries()].map(([week_start, week_label]) => ({
@@ -215,6 +241,180 @@ export function DeliverySchedulesCard() {
     if (!confirm('Remove every A/B week for this vendor?')) return
     await sb().schema('inventory').from('ov2_delivery_calendar')
       .delete().eq('company_id', profile.company_id).eq('vendor_id', vendorId)
+    void load()
+  }
+
+  /**
+   * Order history analysis — instead of manually working out each shop's
+   * pattern, infer it from real past orders (built against a real Valvoline
+   * customer-order export: Sales Organization / Ship To Account / PO Number
+   * / PO Date / Request Delivery Date / ... / sboc_shop_number). Produces a
+   * PREVIEW of a suggested schedule per shop — nothing is saved until the
+   * user applies a row (or Apply All), same "review before commit" shape as
+   * every import in this app that can't be perfectly certain of its own
+   * read (Template 4, TABLE_TEMPLATES.md).
+   *
+   * Per shop: dedupe to one (order date, delivery date) pair per real order
+   * (a PO's several line items would otherwise be counted as separate
+   * orders), then:
+   *   - One consistent delivery weekday, ~weekly cadence between orders
+   *     -> 'weekly'.
+   *   - One consistent delivery weekday, ~biweekly cadence -> 'week_ab',
+   *     but only if the ALREADY-uploaded A/B calendar covers every one of
+   *     those delivery dates and they all land in the SAME labelled week —
+   *     otherwise there's no way to know which phase it belongs to, so it's
+   *     reported but left unsuggested rather than guessed at.
+   *   - Two consistent delivery weekdays that line up exactly with the A/B
+   *     calendar (weekday X on every A week, weekday Y on every B week)
+   *     -> 'week_ab' with both phases set.
+   *   - Otherwise, a consistent order-to-delivery business-day gap
+   *     regardless of weekday -> 'plus_business_days'.
+   *   - Anything else is reported as irregular with no suggestion — a human
+   *     call, not a guess.
+   * Lead/turnaround suggestions use the median observed business-day gap.
+   */
+  async function analyzeOrderHistory(parsed: { headers: string[]; rows: Record<string, string>[] }) {
+    if (!profile?.company_id || !vendorId) { toast.error('Pick a vendor first'); return }
+    const shopCol = parsed.headers.find((h) => /sboc.?shop|shop.?num/i.test(h))
+    const poCol = parsed.headers.find((h) => /po\s*number/i.test(h))
+    const orderDateCol = parsed.headers.find((h) => /po.*date/i.test(h))
+    const deliveryDateCol = parsed.headers.find((h) => /deliver.*date/i.test(h))
+    if (!shopCol || !orderDateCol || !deliveryDateCol) {
+      toast.error('Need a shop column, an order/PO date column, and a delivery date column')
+      return
+    }
+
+    const seenKeys = new Set<string>()
+    const byShop = new Map<string, { orderDate: string; deliveryDate: string }[]>()
+    for (const r of parsed.rows) {
+      const shopRaw = (r[shopCol] ?? '').trim()
+      const orderRaw = (r[orderDateCol] ?? '').trim()
+      const deliveryRaw = (r[deliveryDateCol] ?? '').trim()
+      if (!shopRaw || !orderRaw || !deliveryRaw) continue
+      const od = new Date(orderRaw)
+      const dd = new Date(deliveryRaw)
+      if (Number.isNaN(od.getTime()) || Number.isNaN(dd.getTime())) continue
+      const orderDate = toIsoDate(od)
+      const deliveryDate = toIsoDate(dd)
+      // Dedupe by PO number when present — several rows (line items) share
+      // one PO/one real order. Falls back to the date pair itself so a file
+      // with no PO column still dedupes exact repeats.
+      const poRaw = poCol ? (r[poCol] ?? '').trim() : ''
+      const key = `${shopRaw}|${poRaw || `${orderDate}|${deliveryDate}`}`
+      if (seenKeys.has(key)) continue
+      seenKeys.add(key)
+      const list = byShop.get(shopRaw) ?? []
+      list.push({ orderDate, deliveryDate })
+      byShop.set(shopRaw, list)
+    }
+    if (!byShop.size) { toast.error('No usable rows found'); return }
+
+    const calMap = new Map<string, 'A' | 'B'>()
+    for (const c of cal) calMap.set(String(c.week_start).slice(0, 10), c.week_label)
+
+    const results: HistorySuggestion[] = []
+    for (const [shopRaw, pairs] of byShop) {
+      const locationId = loc.resolveId(shopRaw)
+      if (!locationId) { results.push({ shopRaw, locationId: null, sampleSize: pairs.length, suggestion: null, note: 'Shop not matched' }); continue }
+      if (pairs.length < 2) { results.push({ shopRaw, locationId, sampleSize: pairs.length, suggestion: null, note: 'Not enough history (need at least 2 orders)' }); continue }
+
+      const deliveryDows = pairs.map((p) => new Date(p.deliveryDate + 'T00:00:00').getDay())
+      const bizGaps = pairs.map((p) => businessDaysBetween(p.orderDate, p.deliveryDate))
+      const distinctDows = [...new Set(deliveryDows)]
+      const sortedOrderDates = [...pairs.map((p) => p.orderDate)].sort()
+      const orderGaps: number[] = []
+      for (let i = 1; i < sortedOrderDates.length; i++) orderGaps.push(daysBetween(sortedOrderDates[i - 1], sortedOrderDates[i]))
+      const cadence = orderGaps.length ? median(orderGaps) : 7
+      const lead = Math.max(0, Math.round(median(bizGaps)))
+
+      if (distinctDows.length === 1) {
+        const dow = distinctDows[0]
+        if (cadence >= 10 && cadence <= 18) {
+          const labels = pairs.map((p) => calMap.get(weekStartOf(p.deliveryDate)))
+          const fullyLabeled = labels.every((l) => l != null)
+          const distinctLabels = [...new Set(labels)]
+          if (fullyLabeled && distinctLabels.length === 1) {
+            const phase = distinctLabels[0] as 'A' | 'B'
+            results.push({
+              shopRaw, locationId, sampleSize: pairs.length,
+              suggestion: { schedule_type: 'week_ab', delivery_dow: null, week_a_dow: phase === 'A' ? dow : null, week_b_dow: phase === 'B' ? dow : null, lead_business_days: lead },
+              note: `Every ~2 weeks on ${DOW[dow]}, always Week ${phase === 'A' ? '1' : '2'}`,
+            })
+          } else {
+            results.push({ shopRaw, locationId, sampleSize: pairs.length, suggestion: null, note: `Every ~2 weeks on ${DOW[dow]}, but the A/B calendar doesn't fully cover these dates — extend it to confirm the phase` })
+          }
+        } else {
+          results.push({
+            shopRaw, locationId, sampleSize: pairs.length,
+            suggestion: { schedule_type: 'weekly', delivery_dow: dow, week_a_dow: null, week_b_dow: null, lead_business_days: lead },
+            note: `Always ${DOW[dow]}`,
+          })
+        }
+        continue
+      }
+
+      // Multiple delivery weekdays — see if they line up cleanly with the A/B calendar.
+      const byLabel = new Map<'A' | 'B', Set<number>>()
+      let fullyLabeled = true
+      for (const p of pairs) {
+        const label = calMap.get(weekStartOf(p.deliveryDate))
+        if (!label) { fullyLabeled = false; break }
+        if (!byLabel.has(label)) byLabel.set(label, new Set())
+        byLabel.get(label)!.add(new Date(p.deliveryDate + 'T00:00:00').getDay())
+      }
+      const aDows = byLabel.get('A')
+      const bDows = byLabel.get('B')
+      if (fullyLabeled && aDows?.size === 1 && bDows?.size === 1) {
+        const aDow = [...aDows][0], bDow = [...bDows][0]
+        results.push({
+          shopRaw, locationId, sampleSize: pairs.length,
+          suggestion: { schedule_type: 'week_ab', delivery_dow: null, week_a_dow: aDow, week_b_dow: bDow, lead_business_days: lead },
+          note: `Week 1: ${DOW[aDow]} · Week 2: ${DOW[bDow]}`,
+        })
+        continue
+      }
+
+      const gapMode = mode(bizGaps)
+      const consistentGap = bizGaps.filter((g) => Math.abs(g - gapMode) <= 1).length / bizGaps.length >= 0.7
+      if (consistentGap) {
+        results.push({
+          shopRaw, locationId, sampleSize: pairs.length,
+          suggestion: { schedule_type: 'plus_business_days', delivery_dow: null, week_a_dow: null, week_b_dow: null, lead_business_days: gapMode },
+          note: `Delivery lands ~${gapMode} business day${gapMode === 1 ? '' : 's'} after ordering, regardless of weekday`,
+        })
+      } else {
+        results.push({ shopRaw, locationId, sampleSize: pairs.length, suggestion: null, note: `Irregular — saw ${distinctDows.map((d) => DOW[d]).join(', ')}, no clear pattern` })
+      }
+    }
+    setHistoryAnalysis(results.sort((a, b) => a.shopRaw.localeCompare(b.shopRaw, undefined, { numeric: true })))
+  }
+
+  async function applySuggestion(s: HistorySuggestion) {
+    if (!profile?.company_id || !vendorId || !s.suggestion || !s.locationId) return
+    const { error } = await sb().schema('inventory').from('ov2_location_schedules').upsert({
+      company_id: profile.company_id, location_id: s.locationId, vendor_id: vendorId,
+      ...s.suggestion, updated_by: profile.id ?? null, updated_at: new Date().toISOString(),
+    }, { onConflict: 'company_id,location_id,vendor_id' })
+    if (error) { toast.error(error.message); return }
+    toast.success(`Saved schedule for ${shopLabel(s.locationId)}`)
+    setHistoryAnalysis((prev) => prev?.filter((x) => x !== s) ?? null)
+    void load()
+  }
+
+  async function applyAllSuggestions() {
+    if (!profile?.company_id || !vendorId || !historyAnalysis) return
+    const applicable = historyAnalysis.filter((s): s is HistorySuggestion & { locationId: string; suggestion: NonNullable<HistorySuggestion['suggestion']> } => !!s.suggestion && !!s.locationId)
+    if (!applicable.length) return
+    setApplyingAll(true)
+    const payload = applicable.map((s) => ({
+      company_id: profile.company_id, location_id: s.locationId, vendor_id: vendorId,
+      ...s.suggestion, updated_by: profile.id ?? null, updated_at: new Date().toISOString(),
+    }))
+    const { error } = await sb().schema('inventory').from('ov2_location_schedules').upsert(payload, { onConflict: 'company_id,location_id,vendor_id' })
+    setApplyingAll(false)
+    if (error) { toast.error(error.message); return }
+    toast.success(`Applied ${payload.length} suggested schedule${payload.length !== 1 ? 's' : ''}`)
+    setHistoryAnalysis((prev) => prev?.filter((x) => !x.suggestion || !x.locationId) ?? null)
     void load()
   }
 
@@ -353,6 +553,65 @@ export function DeliverySchedulesCard() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+
+          {/* Order history analysis */}
+          <div className="border-t border-navy/10 pt-3 flex flex-col gap-2">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
+              Suggest schedules from order history
+            </span>
+            <p className="text-[11px] font-mono text-inky/60">
+              Upload past orders (a shop column, an order/PO date, and a delivery date — e.g. a Valvoline customer
+              order export) and each shop&apos;s pattern is inferred from when it actually ordered vs. delivered.
+              Nothing is saved until you apply a suggestion below — upload the A/B calendar above first if any shops
+              are on a biweekly pattern, so it can be detected correctly.
+            </p>
+            <FileUploadZone onParsed={(r) => analyzeOrderHistory(r)} label="Drop a CSV / Excel of past orders" />
+            {historyAnalysis && (
+              <div className="flex flex-col gap-2 mt-1">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-[11px] font-mono text-inky/60">
+                    {historyAnalysis.length} shop{historyAnalysis.length !== 1 ? 's' : ''} analyzed
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm" variant="secondary" disabled={applyingAll || !historyAnalysis.some((s) => s.suggestion && s.locationId)}
+                      onClick={applyAllSuggestions}
+                    >
+                      Apply all ({historyAnalysis.filter((s) => s.suggestion && s.locationId).length})
+                    </Button>
+                    <button onClick={() => setHistoryAnalysis(null)} className="text-[10px] font-mono text-inky/50 hover:text-[#C0392B] hover:underline">
+                      dismiss
+                    </button>
+                  </div>
+                </div>
+                <div className="overflow-auto max-h-96 rounded border border-navy/20">
+                  <table className="w-full text-[11px] font-mono">
+                    <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
+                      <th className="text-left px-2 py-1">Shop</th><th className="text-right px-2 py-1">Orders</th>
+                      <th className="text-left px-2 py-1">Suggested Schedule</th><th className="text-left px-2 py-1">Note</th><th />
+                    </tr></thead>
+                    <tbody>
+                      {historyAnalysis.map((s) => (
+                        <tr key={s.shopRaw} className="border-b border-navy/10">
+                          <td className="px-2 py-1 text-navy whitespace-nowrap">{s.locationId ? shopLabel(s.locationId) : s.shopRaw}</td>
+                          <td className="px-2 py-1 text-right text-inky/70">{s.sampleSize}</td>
+                          <td className="px-2 py-1 text-navy">
+                            {s.suggestion ? `${SCHEDULE_LABELS[s.suggestion.schedule_type]} — ${describe({ ...s.suggestion, id: '', location_id: '', vendor_id: '' })}` : '—'}
+                          </td>
+                          <td className="px-2 py-1 text-inky/60">{s.note}</td>
+                          <td className="px-2 py-1 text-right">
+                            {s.suggestion && s.locationId && (
+                              <Button size="sm" variant="secondary" onClick={() => applySuggestion(s)}>Apply</Button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
