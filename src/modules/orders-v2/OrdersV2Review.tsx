@@ -22,7 +22,7 @@ import {
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty, dShort } from './shared'
-import type { LineFlag, GenerationInput, OrderType } from './types'
+import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
@@ -170,6 +170,23 @@ export function OrdersV2Review() {
   // annotation are shown back in ounces (the unit that actually guides
   // ordering decisions for them) rather than their quarts-equivalent.
   const [ozProductIds, setOzProductIds] = useState<Set<string>>(new Set())
+  // Per-shop delivery schedule data, kept in state (not just runGeneration's
+  // own local closure) so the shop-expand sub-table's "DOS after delivery"
+  // calc can resolve a delivery date for ANY shop it's showing — including
+  // one that has no line at all yet, which the generation run's own
+  // per-line delivery lookup never touches. Populated by both
+  // loadCandidatesForDisplay (revisiting an already-generated draft) and
+  // runGeneration (a fresh run) — same fetchInputs() call already fetches
+  // this, it just wasn't kept around before.
+  const [deliveryLookup, setDeliveryLookup] = useState<{
+    schedules: Map<string, DeliverySchedule>; calendar: WeekCalendar; deliveryDow: Map<string, number | null>
+  }>({ schedules: new Map(), calendar: new Map(), deliveryDow: new Map() })
+  const deliveryFor = useCallback((locationId: string | null, fromDate: string): string | null => {
+    const sched = deliveryLookup.schedules.get(locationId ?? '')
+    return sched
+      ? resolveDeliveryDate(fromDate, sched, deliveryLookup.calendar)
+      : nextDeliveryDate(fromDate, deliveryLookup.deliveryDow.get(locationId ?? '') ?? null)
+  }, [deliveryLookup])
   // Main table column customize modal — hide/reorder, see MAIN_COLUMNS.
   const [columnPrefs, setColumnPrefs] = useState(loadColumnPrefs)
   const [columnModalOpen, setColumnModalOpen] = useState(false)
@@ -254,12 +271,13 @@ export function OrdersV2Review() {
   const loadCandidatesForDisplay = useCallback(async () => {
     if (!draft || !profile?.company_id) return
     try {
-      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, exceptions, days } = await fetchInputs(
+      const { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, exceptions, days, schedules, calendar } = await fetchInputs(
         draft.vendor_id, settings.flag_cumulative_days,
       )
       const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
       setAllInputs(inputs)
       setOzProductIds(new Set(globalProducts.filter((g) => isOunceUnit(g.unit_of_measure)).map((g) => g.product_id)))
+      setDeliveryLookup({ schedules, calendar, deliveryDow: new Map(days.map((d) => [d.location_id, d.delivery_dow])) })
       const adHocIds = draftAdHocLocationIds(draft)
       const eligibleIds = adHocIds
         ? new Set(adHocIds)
@@ -293,6 +311,7 @@ export function OrdersV2Review() {
       const inputs = buildGenerationInputs(configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, [], [], tankProductMap, exceptions)
       setAllInputs(inputs)
       setOzProductIds(new Set(globalProducts.filter((g) => isOunceUnit(g.unit_of_measure)).map((g) => g.product_id)))
+      setDeliveryLookup({ schedules, calendar, deliveryDow: new Map(days.map((d) => [d.location_id, d.delivery_dow])) })
       // An ad hoc draft (explicit shop list, set at "Start New Order") wins
       // outright over the vendor's regular order-day schedule — the whole
       // point is to scope to exactly those shops regardless of what day it
@@ -633,6 +652,17 @@ export function OrdersV2Review() {
       return (ra.line?.product_id ?? ra.input?.product_id ?? '').localeCompare(rb.line?.product_id ?? rb.input?.product_id ?? '')
     })
     return rows
+  }
+
+  // Business days until this shop's next delivery for this order date — the
+  // shop-expand sub-table's "DOS after" needs this to project on-hand
+  // forward to the date the order would actually arrive, not just today.
+  // 0 (no decay) when no delivery date is resolvable at all, same fallback
+  // dosAfterDelivery itself uses in engine.ts.
+  function leadDaysFor(locId: string): number {
+    if (!draft) return 0
+    const deliverDate = deliveryFor(locId, draft.order_date)
+    return deliverDate ? Math.max(0, daysBetween(draft.order_date, deliverDate)) : 0
   }
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
@@ -992,6 +1022,7 @@ export function OrdersV2Review() {
                             ozProductIds={ozProductIds}
                             exceptionFor={exceptionFor}
                             onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+                            leadDays={leadDaysFor(locId)}
                           />
                         </td>
                       </tr>
@@ -1043,6 +1074,7 @@ export function OrdersV2Review() {
                           ozProductIds={ozProductIds}
                           exceptionFor={exceptionFor}
                           onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+                          leadDays={leadDaysFor(locId)}
                         />
                       </div>
                     )}
@@ -1153,7 +1185,7 @@ function ColumnCustomizeModal({ open, onClose, columns, prefs, onChange, default
  * "why isn't this shop ordering more" and "why isn't this shop ordering
  * anything" use the exact same product list, columns, and add-a-line
  * behavior. */
-function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException }: {
+function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays }: {
   rows: { input?: GenerationInput; line?: DraftLineRow }[]
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
@@ -1171,6 +1203,11 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductI
   // place a shop's full product list is reviewed.
   exceptionFor: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>['rows'][number] | null
   onOpenException: (locationId: string, productId: string) => void
+  // Business days from the order date to this shop's next delivery — see
+  // OrdersV2Review's own leadDaysFor comment. On Hand After/DOS After
+  // project usage forward to that date before adding whatever's ordered,
+  // rather than just adding the order to TODAY's on-hand.
+  leadDays: number
 }) {
   const visible = showVmi ? rows : rows.filter((r) =>
     !(r.input?.rule.vmi_keepfill_enabled || r.line?.flags?.includes('vmi_keepfill')))
@@ -1196,7 +1233,7 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductI
           {visible.map((r) => (
             <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd}
               isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')}
-              exceptionFor={exceptionFor} onOpenException={onOpenException} />
+              exceptionFor={exceptionFor} onOpenException={onOpenException} leadDays={leadDays} />
           ))}
         </tbody>
       </table>
@@ -1207,13 +1244,14 @@ function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductI
 /** One row in a shop's product list — an existing line (editable in place)
  * or a configured-but-not-ordered candidate (typing a qty adds it). Shared
  * by the smoothing panel and the shop-name expand row below the table. */
-function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenException }: {
+function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenException, leadDays }: {
   input?: GenerationInput; line?: DraftLineRow
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
   isOz: boolean
   exceptionFor: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>['rows'][number] | null
   onOpenException: (locationId: string, productId: string) => void
+  leadDays: number
 }) {
   const productId = line?.product_id ?? input?.product_id ?? ''
   const locationId = line?.location_id ?? input?.location_id ?? ''
@@ -1222,10 +1260,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
   const capacity = line?.max_capacity_gallons ?? input?.rule.max_capacity_gallons ?? null
   const onHand = line?.on_hand ?? input?.on_hand ?? null
   const dailyUsage = line?.daily_usage ?? input?.daily_usage ?? null
-  // A candidate with no line yet hasn't had anything ordered, so "after"
-  // is just "now" until a qty is actually added.
   const dosNow = line?.dos_before ?? daysOfSupply(onHand, dailyUsage)
-  const dosAfter = line?.dos_after ?? dosNow
   const why = line?.triggered_smoothing ? 'triggered smoothing'
     : line?.added_by_smoothing ? 'added to reach minimum'
     : 'not on order'
@@ -1235,16 +1270,25 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
   // Display-only — see ozProductIds' own comment on OrdersV2Review.
   const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
   const quartsPerUnit = line?.quarts_per_unit ?? (input ? gallonsPerUnit(input.rule) : null)
-  // A candidate with no line yet hasn't ordered anything, so "after" is
-  // just current on-hand until a qty is typed in.
-  const onHandAfter = line ? Number(onHand ?? 0) + Number(line.qty) * Number(quartsPerUnit ?? 1) : onHand
+  // On Hand/DOS After now project to the shop's actual DELIVERY date, not
+  // today — usage between now and delivery runs down the shelf first
+  // (floored at 0), THEN whatever's ordered lands. Found live 2026-09-22:
+  // with qty at 0 this used to just echo current on-hand/DOS Now back
+  // unchanged, which reads as "ordering nothing changes nothing" when in
+  // reality the shop keeps selling through it right up to delivery day.
+  // Same lead-time convention as engine.ts's own dosAfterDelivery (0 days
+  // of decay when no delivery date could be resolved at all).
+  const qty = line ? Number(line.qty) : 0
+  const remainingAtDelivery = Math.max(0, Number(onHand ?? 0) - Number(dailyUsage ?? 0) * leadDays)
+  const onHandAfter = remainingAtDelivery + qty * Number(quartsPerUnit ?? 1)
+  const dosAfter = Number(dailyUsage ?? 0) > 0 ? onHandAfter / Number(dailyUsage) : null
 
   return (
-    <tr className="border-t border-navy/10">
+    <tr className="border-t border-navy/10 text-center">
       <td className="py-1 text-navy">{productId}</td>
       <td className="text-inky/70">{uom ?? '—'}</td>
-      <td className="text-right text-inky/70">{num(isOz ? toOz(capacity) : capacity, 0)}</td>
-      <td className="text-right text-inky/70">
+      <td className="text-inky/70">{num(isOz ? toOz(capacity) : capacity, 0)}</td>
+      <td className="text-inky/70">
         {num(isOz ? toOz(input?.own_on_hand ?? onHand) : (input?.own_on_hand ?? onHand))}
         {input?.equivalent_products && input.equivalent_products.length > 0 && (
           <div className="text-[9px] text-inky/50 leading-tight font-normal">
@@ -1255,20 +1299,20 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
           </div>
         )}
       </td>
-      <td className="text-right text-inky/70">{num(isOz ? toOz(dailyUsage) : dailyUsage)}</td>
-      <td className="text-right text-inky/70">{dos(dosNow)}</td>
-      <td className="text-right">
-        <div className="flex items-start justify-end gap-1">
+      <td className="text-inky/70">{num(isOz ? toOz(dailyUsage) : dailyUsage)}</td>
+      <td className="text-inky/70">{dos(dosNow)}</td>
+      <td>
+        <div className="flex items-start justify-center gap-1">
           <div>
             {line ? (
               <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
                 onChange={(e) => onPatch(line, Number(e.target.value) || 0)}
-                className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+                className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-center text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
             ) : input ? (
               <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
                 onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(input, v) }}
                 title="Add this product to the order"
-                className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
+                className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-center text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
             ) : null}
             {isOz && line && quartsPerUnit != null && (
               <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(line.qty) * quartsPerUnit * 32, 0)}oz</div>
@@ -1284,9 +1328,9 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
           )}
         </div>
       </td>
-      <td className="text-right text-inky/70">{num(isOz ? toOz(onHandAfter) : onHandAfter)}</td>
-      <td className="text-right text-inky/70">{dos(dosAfter)}</td>
-      <td className="text-right text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>
+      <td className="text-inky/70">{num(isOz ? toOz(onHandAfter) : onHandAfter)}</td>
+      <td className="text-inky/70">{dos(dosAfter)}</td>
+      <td className="text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>
       <td className={whyClass}>{why}</td>
     </tr>
   )
