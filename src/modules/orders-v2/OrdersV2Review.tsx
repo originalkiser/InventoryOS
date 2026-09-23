@@ -294,12 +294,22 @@ export function OrdersV2Review() {
   }, [draft?.id, profile?.company_id, fetchInputs, settings, rulesFor, vendors])
 
   useEffect(() => {
-    if (draft && !loading && lines.length > 0 && allInputs.length === 0 && !generating) void loadCandidatesForDisplay()
-  }, [draft, loading, lines.length, allInputs.length, generating, loadCandidatesForDisplay])
+    if (draft && !loading && lines.length > 0 && allInputs.length === 0 && !generating && !vendors.loading) void loadCandidatesForDisplay()
+  }, [draft, loading, lines.length, allInputs.length, generating, loadCandidatesForDisplay, vendors.loading])
 
   /** Run the engine and replace the draft's lines with the result. */
   const runGeneration = useCallback(async (dow?: number) => {
     if (!draft || !profile?.company_id) return
+    // Refuses to run ahead of useVendors()'s own fetch — found live
+    // 2026-09-23: rulesFor()'s usesOrderDays depends on
+    // vendors.byId(draft.vendor_id)?.name, which is null/undefined until
+    // that fetch resolves; isReladyne(undefined) reads as false, silently
+    // disabling RelaDyne's whole order-day restriction for whichever run
+    // raced ahead of it (auto-generate-on-open, with no user-interaction
+    // delay, was the reliable trigger). Every caller (auto-generate, the
+    // order-day dropdown, manual Regenerate) goes through this one
+    // function, so guarding here protects all of them at once.
+    if (vendors.loading) { toast.error('Still loading vendor data — try again in a moment'); return }
     const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
     setGenProgress({ loaded: 0, total: 0 })
@@ -436,11 +446,15 @@ export function OrdersV2Review() {
   // 'review') exits the loop through lines.length/status same as before.
   const autoGenAttemptedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!draft || draft.status !== 'generating' || loading || lines.length !== 0 || generating) return
+    // vendors.loading deliberately does NOT set autoGenAttemptedRef below —
+    // this should just wait and re-fire once the fetch resolves (this
+    // effect re-runs on every vendors.loading change since it's a dep),
+    // not count as "already attempted" the way a real generation failure does.
+    if (!draft || draft.status !== 'generating' || loading || lines.length !== 0 || generating || vendors.loading) return
     if (autoGenAttemptedRef.current === draft.id) return
     autoGenAttemptedRef.current = draft.id
     void runGeneration()
-  }, [draft, loading, lines.length, generating, runGeneration])
+  }, [draft, loading, lines.length, generating, runGeneration, vendors.loading])
 
   // ---- grouping + derived numbers -----------------------------------------
   const groups = useMemo(() => {

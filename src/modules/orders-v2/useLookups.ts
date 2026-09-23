@@ -12,12 +12,22 @@ export function useVendors() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const [vendors, setVendors] = useState<VendorLite[]>([])
+  // Starts true (not false) specifically so a caller checking "has this
+  // loaded yet" defaults to "no" before companyId itself is even known —
+  // see OrdersV2Review.tsx's own runGeneration/auto-generate guard, added
+  // 2026-09-23 after byId(vendorId) returning null during this brief
+  // window silently made isReladyne(undefined) => false, which disabled
+  // RelaDyne's order-day restriction entirely for whichever generation run
+  // raced ahead of this fetch (most reliably reproduced by a fresh draft's
+  // auto-generate-on-open, which has no user-interaction delay to let this
+  // resolve first).
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
     sb().schema('inventory').from('vendors').select('id, name, vendor_code').eq('company_id', companyId).order('name')
-      .then(({ data }: any) => { if (!cancelled) setVendors((data ?? []) as VendorLite[]) })
+      .then(({ data }: any) => { if (!cancelled) { setVendors((data ?? []) as VendorLite[]); setLoading(false) } })
     return () => { cancelled = true }
   }, [companyId])
 
@@ -29,7 +39,7 @@ export function useVendors() {
   // rather than name (an admin could rename the display name later).
   const isMighty = useCallback((id: string | null | undefined) => byId(id)?.vendor_code === 'MIGHTY', [byId])
 
-  return { vendors, byId, options, isMighty }
+  return { vendors, byId, options, isMighty, loading }
 }
 
 export function useUserNames() {

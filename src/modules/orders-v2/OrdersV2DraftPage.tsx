@@ -32,6 +32,14 @@ export function OrdersV2DraftPage() {
     return () => { cancelled = true }
   }, [draftId])
 
-  if (vendorId === undefined) return <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
+  // vendors.loading matters here as much as vendorId itself — isMighty()
+  // reads vendors.byId(vendorId)?.vendor_code, which is null/undefined
+  // (so isMighty reads false) until useVendors()'s own fetch resolves.
+  // Found live 2026-09-23 chasing a related race (RelaDyne's order-day
+  // restriction silently disabled the same way, see OrdersV2Review.tsx's
+  // runGeneration) — this is the same bug one level up: routing a genuine
+  // Mighty draft to OrdersV2Review (the wrong engine entirely) instead of
+  // MightyOrderReview for whichever page load raced ahead of this fetch.
+  if (vendorId === undefined || vendors.loading) return <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
   return vendors.isMighty(vendorId) ? <MightyOrderReview /> : <OrdersV2Review />
 }
