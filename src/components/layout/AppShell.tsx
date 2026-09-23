@@ -50,10 +50,10 @@ export function AppShell() {
   const location = useLocation()
 
   // A swipe on the page content itself, but only for navigation through the
-  // Recent Pages widget/hotkeys (lastStackNav lands on this exact path
+  // Recent Pages widget/hotkeys (lastCycleNav lands on this exact path
   // within the last half-second) — an ordinary sidebar click leaves this
   // untouched (no animation), since that was never asked for.
-  const lastStackNav = useRecentPagesStore((s) => s.lastStackNav)
+  const lastCycleNav = useRecentPagesStore((s) => s.lastCycleNav)
   const [pageAnimClass, setPageAnimClass] = useState('')
   // Bumped alongside pageAnimClass so KeepAlivePages' animator restarts the
   // CSS animation even when two navigations in a row resolve to the exact
@@ -64,15 +64,15 @@ export function AppShell() {
   useEffect(() => {
     if (location.pathname === prevPathRef.current) return
     prevPathRef.current = location.pathname
-    const viaWidget = lastStackNav && lastStackNav.path === location.pathname && Date.now() - lastStackNav.at < 800
+    const viaWidget = lastCycleNav && lastCycleNav.path === location.pathname && Date.now() - lastCycleNav.at < 800
     setPageAnimClass(
       !viaWidget ? ''
-        : lastStackNav!.direction === 'back' ? 'animate-[swipeRight_220ms_ease-out]'
-        : lastStackNav!.direction === 'forward' ? 'animate-[swipeLeft_220ms_ease-out]'
+        : lastCycleNav!.direction === 'left' ? 'animate-[swipeRight_220ms_ease-out]'
+        : lastCycleNav!.direction === 'right' ? 'animate-[swipeLeft_220ms_ease-out]'
         : 'animate-[fadeIn_180ms_ease-out]',
     )
     setAnimTick((t) => t + 1)
-  }, [location.pathname, lastStackNav])
+  }, [location.pathname, lastCycleNav])
 
   // Measure TopBar height so panels can stay below it even when it wraps
   useLayoutEffect(() => {

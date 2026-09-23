@@ -664,7 +664,7 @@ export function TopBar({
         onClick={() => setEndDayOpen(true)}
         title="End of day check-in"
         className={[
-          'flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-heading uppercase tracking-wide transition-all',
+          'flex-shrink-0 flex items-center gap-1 h-7 px-2 rounded border text-[10px] font-heading uppercase tracking-wide transition-all',
           eodGlow
             ? 'border-orange-500/70 text-orange-400 shadow-[0_0_10px_2px_rgba(249,115,22,0.45)] animate-pulse'
             : 'border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40',
@@ -680,7 +680,7 @@ export function TopBar({
       <button
         onClick={() => setProfileOpen(true)}
         title="Profile"
-        className="flex-shrink-0 flex items-center gap-1.5 pl-1 pr-2 py-1 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 transition-all"
+        className="flex-shrink-0 flex items-center gap-1.5 h-7 pl-1 pr-2 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 transition-all"
       >
         <span className="w-5 h-5 rounded-full bg-[#4F7489] flex items-center justify-center text-[9px] font-heading text-[#F2F1E6] flex-shrink-0">
           {profileInitials}

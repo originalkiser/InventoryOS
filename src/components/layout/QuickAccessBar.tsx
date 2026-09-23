@@ -22,12 +22,17 @@ export function QuickAccessBar(props: QuickAccessBarProps) {
     // (not hover-only like the floating variant), per the user's own ask.
     return (
       <div className="flex items-center gap-1.5 flex-shrink-0">
-        {props.items.filter((f) => !f.open).map((f) => (
+        {props.items.map((f) => (
           <button
             key={f.key}
             onClick={f.onClick}
-            title={f.label}
-            className="flex items-center gap-1.5 h-7 px-2 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 transition-all flex-shrink-0"
+            title={f.open ? `${f.label} (open — click to close)` : f.label}
+            className={[
+              'flex items-center gap-1.5 h-7 px-2 rounded border transition-all flex-shrink-0',
+              f.open
+                ? 'border-sb-green text-[#F2F1E6] shadow-[0_0_10px_2px_rgba(46,204,113,0.45)]'
+                : 'border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40',
+            ].join(' ')}
           >
             {f.icon}
             <span className="text-[10px] font-heading uppercase tracking-wide whitespace-nowrap">{f.label}</span>
@@ -46,7 +51,7 @@ export function QuickAccessBar(props: QuickAccessBarProps) {
     >
       {/* Buttons stay mounted and slide down/up so collapse/expand animates. */}
       <div className={`flex flex-col ${alignClass} gap-2 origin-bottom transition-all duration-200 ease-out ${collapsed ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
-        {items.filter((f) => !f.open).map((f) => <QuickFab key={f.key} title={f.label} onClick={f.onClick}>{f.icon}</QuickFab>)}
+        {items.map((f) => <QuickFab key={f.key} title={f.label} onClick={f.onClick} active={f.open}>{f.icon}</QuickFab>)}
       </div>
       <button
         onClick={onToggleCollapsed}
@@ -60,10 +65,19 @@ export function QuickAccessBar(props: QuickAccessBarProps) {
   )
 }
 
-function QuickFab({ title, onClick, children }: { title: string; onClick: () => void; children: ReactNode }) {
+function QuickFab({ title, onClick, active, children }: { title: string; onClick: () => void; active?: boolean; children: ReactNode }) {
   return (
-    <button onClick={onClick} title={title} aria-label={title}
-      className="group flex items-center h-10 rounded-full bg-navy text-cream shadow-lg px-2.5 hover:bg-navy/90 transition-colors animate-[fabRise_200ms_ease-out]">
+    <button
+      onClick={onClick}
+      title={active ? `${title} (open — click to close)` : title}
+      aria-label={title}
+      className={[
+        'group flex items-center h-10 rounded-full text-cream px-2.5 transition-colors animate-[fabRise_200ms_ease-out] border-2',
+        active
+          ? 'bg-navy border-sb-green shadow-[0_0_12px_3px_rgba(46,204,113,0.5)]'
+          : 'bg-navy border-transparent hover:bg-navy/90',
+      ].join(' ')}
+    >
       {children}
       <span className="max-w-0 group-hover:max-w-[160px] overflow-hidden whitespace-nowrap text-xs font-heading transition-[max-width,margin] duration-200 group-hover:ml-2">{title}</span>
     </button>

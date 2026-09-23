@@ -614,9 +614,11 @@ function SortableSection({
         </button>
       </div>
 
-      {/* Section items — animated slide */}
+      {/* Section items — animated slide. A gentle shaded panel (vs. the flat
+          sidebar background) reads as "these are nested under the header
+          above them" at a glance, without a hard border. */}
       <div className={['grid transition-[grid-template-rows] duration-500 ease-in-out', collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'].join(' ')}>
-        <div className="overflow-hidden">
+        <div className="overflow-hidden mx-1.5 rounded-md bg-black/10">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}

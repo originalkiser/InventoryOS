@@ -38,6 +38,16 @@ interface DataTableProps<T> {
   bulkDeleteNoun?: string
   /** Rendered in a separate strip *below* the table — for destructive actions */
   dangerZone?: React.ReactNode
+  /**
+   * Opens a detail view (typically a Modal) for the clicked row — Template 3's
+   * "read table + edit/detail modal" shape, wired at the row level instead of
+   * a per-row button when every column is otherwise plain display content.
+   * Never fires for a click on the selection checkbox or any interactive
+   * element inside a cell (a button, link, or input) — TABLE_TEMPLATES.md's
+   * own documented gotcha about a bare `onClick` on the whole `<tr>` eating
+   * clicks meant for something inside it.
+   */
+  onRowClick?: (original: T) => void
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -130,6 +140,7 @@ export function DataTable<T>({
   onBulkDelete,
   bulkDeleteNoun = 'row',
   dangerZone,
+  onRowClick,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -522,8 +533,13 @@ export function DataTable<T>({
                 return (
                   <tr
                     key={row.id}
+                    onClick={onRowClick ? (e) => {
+                      if ((e.target as HTMLElement).closest('input, button, a')) return
+                      onRowClick(row.original)
+                    } : undefined}
                     className={[
                       'border-b border-inky/10 hover:bg-sky/10 transition-colors',
+                      onRowClick ? 'cursor-pointer' : '',
                       selected
                         ? 'bg-sky/15'
                         : i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]',

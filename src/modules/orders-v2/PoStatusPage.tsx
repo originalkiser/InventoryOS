@@ -152,14 +152,14 @@ export function PoStatusPage() {
     // under that, but ~16 items/PO puts the item rows well past it, so most
     // POs' items were getting silently dropped (the exact same bug already
     // root-caused once this session, in LocationLookupPage.tsx — same fix).
-    const fetchAllRows = async <T,>(table: string, apply: (q: any) => any, onPage?: (loadedSoFar: number) => void): Promise<T[]> => {
+    const fetchAllRows = async <T,>(table: string, apply: (q: any) => any, onPage?: (loadedSoFar: number) => void, select = '*'): Promise<T[]> => {
       const out: T[] = []
-      // Raised to 10,000 (2026-09-23, matching this project's real "Max
-      // Rows" API setting) — roughly halves round trips vs the prior 5,000.
-      // The exit condition below only trusts a genuinely empty page.
-      const PAGE = 10000
+      // 8,000 (2026-09-23) — this project's other large fetches use this
+      // size successfully. The exit condition below only trusts a
+      // genuinely empty page.
+      const PAGE = 8000
       for (let from = 0; ; from += PAGE) {
-        const { data, error } = await apply(sb.schema('inventory').from(table).select('*')).range(from, from + PAGE - 1)
+        const { data, error } = await apply(sb.schema('inventory').from(table).select(select)).range(from, from + PAGE - 1)
         if (error) throw error
         const batch = (data ?? []) as T[]
         out.push(...batch)
@@ -172,6 +172,16 @@ export function PoStatusPage() {
       return out
     }
 
+    // Explicit column list — droptop_purchase_orders also carries a
+    // raw_data jsonb column (Droptop's full raw API response per PO, never
+    // read by this page). Confirmed via EXPLAIN ANALYZE (2026-09-23): with
+    // select('*') this query took 2,430ms for 10,000 rows (width 1,206
+    // bytes/row, forcing a heap fetch per row despite the covering index);
+    // with just these columns it's 25ms (width 190 bytes) — a ~98x
+    // difference using the exact same index. This, not row count, was the
+    // real cause of the reported "hangs after loading the first page."
+    const PO_COLUMNS = 'id, location_id, po_id, custom_po_id, supplier_name, po_status, approved_status, delivery_status, delivery_status_updated_timestamp, pay_status, total_cost, note, last_updated_user_name, created_timestamp, closed_timestamp, last_updated_timestamp, to_receive_timestamp'
+
     let poRows: PoRow[]
     try {
       const { count } = await sb.schema('inventory').from('droptop_purchase_orders')
@@ -181,6 +191,7 @@ export function PoStatusPage() {
         'droptop_purchase_orders',
         (q) => q.eq('company_id', companyId).order('created_timestamp', { ascending: false }),
         (loaded) => setLoadProgress((p) => ({ ...p, loaded })),
+        PO_COLUMNS,
       )
     } catch (error: any) {
       toast.error(error.message?.includes('does not exist') ? 'Purchase order tables not found — apply migration 20260829_droptop_purchase_orders.sql' : error.message)
@@ -310,10 +321,14 @@ export function PoStatusPage() {
 
   const onOrderCol = useMemo(() => createColumnHelper<OnOrderRow>(), [])
   const onOrderColumns = useMemo(() => [
-    onOrderCol.accessor((r) => shopLabel(r.locId || null), { id: 'shop', header: 'Shop' }),
-    onOrderCol.accessor('product_id', { header: 'Product' }),
-    onOrderCol.accessor('qty', { header: 'Outstanding Qty', cell: (i) => <div className="text-right">{num(i.getValue())}</div> }),
-    onOrderCol.accessor('poIds', { header: 'PO #' }),
+    onOrderCol.accessor((r) => shopLabel(r.locId || null), { id: 'shop', header: 'Shop', size: 70 }),
+    onOrderCol.accessor('product_id', { header: 'Product', size: 150 }),
+    onOrderCol.accessor('qty', { header: 'Outstanding Qty', size: 130, cell: (i) => <div className="text-right">{num(i.getValue())}</div> }),
+    // Fill column — a comma-joined PO list can run long, and this is the
+    // last column, so it's the one that should absorb any extra width
+    // instead of every column defaulting to an equal 150px each (which is
+    // what left this table looking half-empty until manually resized).
+    onOrderCol.accessor('poIds', { header: 'PO #', meta: { fill: true } }),
   ], [onOrderCol, shopLabel])
 
   const { table: onOrderTable, globalFilter: onOrderSearch, setGlobalFilter: setOnOrderSearch } = useTable(onOrderRows, onOrderColumns, {
@@ -349,16 +364,11 @@ export function PoStatusPage() {
       cell: (i) => `${dTime(i.getValue())}${i.row.original.last_updated_user_name ? ` · ${i.row.original.last_updated_user_name}` : ''}`,
     }),
     poCol.accessor('total_cost', { header: 'Total', cell: (i) => <div className="text-right">{money(i.getValue())}</div> }),
+    // Read-only count — the whole row opens the details modal (onRowClick
+    // below), so this is informational, not a click target.
     poCol.accessor('_itemCount', {
       header: 'Items',
-      cell: (i) => (
-        <button
-          onClick={() => setViewingPo(i.row.original)}
-          className="text-sky hover:text-navy underline underline-offset-2 whitespace-nowrap"
-        >
-          {i.getValue()} item{i.getValue() !== 1 ? 's' : ''}
-        </button>
-      ),
+      cell: (i) => <span className="text-inky/70 whitespace-nowrap">{i.getValue()} item{i.getValue() !== 1 ? 's' : ''}</span>,
     }),
     // Hidden search index — lets the table's own search box match on line
     // item product id/name too, not just this PO's own visible columns.
@@ -437,12 +447,24 @@ export function PoStatusPage() {
           ]}
         />
       ) : (
-        <DataTable table={poTable} globalFilter={poSearch} onGlobalFilterChange={setPoSearch} exportFilename="PO Status" />
+        <DataTable table={poTable} globalFilter={poSearch} onGlobalFilterChange={setPoSearch} exportFilename="PO Status" onRowClick={setViewingPo} />
       )}
 
-      <Modal open={!!viewingPo} onClose={() => setViewingPo(null)} title={`Line items — ${viewingPo ? (viewingPo.custom_po_id || viewingPo.po_id) : ''}`} size="lg">
+      <Modal open={!!viewingPo} onClose={() => setViewingPo(null)} title={`PO Details — ${viewingPo ? (viewingPo.custom_po_id || viewingPo.po_id) : ''}`} size="lg">
         {viewingPo && (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
+            {/* Header details — the row itself already opens this, so it
+                doubles as "PO details" and "line items" in one modal. */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-[11px] font-mono">
+              <div><span className="text-inky/50 uppercase tracking-wide block">Shop</span><span className="text-navy">{shopLabel(viewingPo.location_id)}</span></div>
+              <div><span className="text-inky/50 uppercase tracking-wide block">Supplier</span><span className="text-navy">{viewingPo.supplier_name ?? '—'}</span></div>
+              <div><span className="text-inky/50 uppercase tracking-wide block">Status</span><span className="text-navy capitalize">{viewingPo.po_status ?? '—'}</span></div>
+              <div><span className="text-inky/50 uppercase tracking-wide block">Delivery Status</span><span className="text-navy">{deliveryStatusLabel(viewingPo.delivery_status)}</span></div>
+              <div><span className="text-inky/50 uppercase tracking-wide block">Created</span><span className="text-navy">{dShort(viewingPo.created_timestamp)}</span></div>
+              <div><span className="text-inky/50 uppercase tracking-wide block">Closed</span><span className="text-navy">{dShort(viewingPo.closed_timestamp)}</span></div>
+              <div><span className="text-inky/50 uppercase tracking-wide block">Last Updated</span><span className="text-navy">{dTime(viewingPo.last_updated_timestamp)}{viewingPo.last_updated_user_name ? ` · ${viewingPo.last_updated_user_name}` : ''}</span></div>
+              <div><span className="text-inky/50 uppercase tracking-wide block">Total</span><span className="text-navy">{money(viewingPo.total_cost)}</span></div>
+            </div>
             {viewingPo.note && <p className="text-[11px] font-mono text-inky/60">Note: {viewingPo.note}</p>}
             <div className="overflow-auto max-h-96 rounded border border-navy/20">
               <table className="w-full text-[11px] font-mono">
