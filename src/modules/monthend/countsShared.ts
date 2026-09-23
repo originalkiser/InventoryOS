@@ -28,6 +28,30 @@ export const EXPECTED_OIL_FIELDS: MapField[] = [
   { name: 'expected_balance', label: 'Expected Balance', required: true, numeric: true },
 ]
 
+// Per-count_type rule (Counts → Results → Summary's own "Allowable Types"
+// config, platform.app_settings key below) — the single source of truth for
+// "does a count of this type count toward the period," shared by that
+// table's own row filtering AND (as of 2026-09-23) the Area Manager Rollup/
+// recount eligibility check, which used to hardcode 'monthly' independently
+// and never actually read this setting despite looking like the same
+// control. No rule saved for a type defaults to 'include' — same fallback
+// CountsResultsTable.tsx's own getRule() already used, so wiring this up
+// doesn't change what's already showing as allowed there.
+export type TypeRuleMode = 'include' | 'exclude' | 'allow_if_over'
+export interface TypeRule { mode: TypeRuleMode; threshold: number | null }
+export const ALLOWABLE_TYPE_RULES_KEY = 'monthend.allowableTypeRules'
+
+export function isAllowedCountType(
+  countType: string | null | undefined,
+  totalAdjustments: number | null | undefined,
+  typeRules: Record<string, TypeRule>,
+): boolean {
+  const rule = typeRules[countType ?? '—'] ?? { mode: 'include', threshold: null }
+  if (rule.mode === 'exclude') return false
+  if (rule.mode === 'allow_if_over') return rule.threshold == null || (totalAdjustments ?? 0) > rule.threshold
+  return true
+}
+
 // Product Detail upload — additive; many rows per location.
 export const PRODUCT_FIELDS: MapField[] = [
   { name: 'location', label: 'Location', required: true },

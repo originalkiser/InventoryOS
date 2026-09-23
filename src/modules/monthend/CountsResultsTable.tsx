@@ -5,6 +5,7 @@ import { useTable } from '@/hooks/useTable'
 import { Badge } from '@/components/ui'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { RECOUNT_FLAG_LABELS } from '@/lib/recountEngine'
+import { ALLOWABLE_TYPE_RULES_KEY, isAllowedCountType, type TypeRule } from './countsShared'
 import { format } from 'date-fns'
 
 export interface SummaryResultRow {
@@ -136,9 +137,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   // ---- Summary: allowable type rules (per-type: include / exclude / allow_if_over) ----
   const distinctTypes = useMemo(() => Array.from(new Set(summaryRows.map((r) => r.count_type ?? '—'))).sort(), [summaryRows])
 
-  type TypeRuleMode = 'include' | 'exclude' | 'allow_if_over'
-  interface TypeRule { mode: TypeRuleMode; threshold: number | null }
-  const [typeRules, setTypeRules] = useAppSetting<Record<string, TypeRule>>('monthend.allowableTypeRules', {})
+  const [typeRules, setTypeRules] = useAppSetting<Record<string, TypeRule>>(ALLOWABLE_TYPE_RULES_KEY, {})
   const [overrides, setOverrides] = useState<Record<string, 'include' | 'exclude'>>({})
   const [rulePopover, setRulePopover] = useState<string | null>(null)
   const [thresholdDraft, setThresholdDraft] = useState<Record<string, string>>({})
@@ -156,12 +155,7 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   function included(r: SummaryResultRow): boolean {
     const ov = overrides[rowKey(r)]
     if (ov) return ov === 'include'
-    const rule = getRule(r.count_type ?? '—')
-    if (rule.mode === 'exclude') return false
-    if (rule.mode === 'allow_if_over') {
-      return rule.threshold == null || (r.total_adjustments ?? 0) > rule.threshold
-    }
-    return true
+    return isAllowedCountType(r.count_type, r.total_adjustments, typeRules)
   }
 
   function toggleOverride(r: SummaryResultRow) {

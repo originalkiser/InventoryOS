@@ -4,6 +4,7 @@
 
 import { supabase } from '@/lib/supabase'
 import { computeMedian, evaluateRecountFlags } from '@/lib/recountEngine'
+import { ALLOWABLE_TYPE_RULES_KEY, isAllowedCountType, type TypeRule } from './countsShared'
 import type { Location, MonthlyCount, MonthlyEndingBalance, RecountConfig } from '@/types'
 import { format, subMonths } from 'date-fns'
 
@@ -12,7 +13,7 @@ const HISTORY_WINDOW_MONTHS = 24
 
 export interface PeriodEvalData {
   locations: Location[]
-  counts: MonthlyCount[] // count_type = 'Monthly' only — see eligibleLocationIds
+  counts: MonthlyCount[] // an allowable count_type only — see eligibleLocationIds
   histByLoc: Map<string, number[]> // location_id -> ending balances, most recent first
   // Shops eligible for recount checks this period: submitted a Monthly count,
   // or were manually marked counted (Not Submitted panel's "Mark Counted",
@@ -32,12 +33,18 @@ export async function fetchPeriodEvalData(
   const sb = supabase as any
   const lowerBound = format(subMonths(new Date(countMonth), HISTORY_WINDOW_MONTHS), 'yyyy-MM-dd')
 
-  const [locRes, countRes, balRes, manualRes] = await Promise.all([
+  const [locRes, countRes, balRes, manualRes, typeRuleRes] = await Promise.all([
     sb.schema('core').from('locations').select('*').eq('company_id', companyId).order('name'),
     sb.schema('inventory').from('counts').select('*').eq('company_id', companyId).eq('count_month', countMonth),
     sb.schema('inventory').from('monthly_ending_balances').select('*').eq('company_id', companyId)
       .gte('month', lowerBound).lt('month', countMonth).order('month', { ascending: false }),
     sb.schema('inventory').from('manual_count_entries').select('location_id').eq('company_id', companyId).eq('count_period', countMonth),
+    // Not a hook here (this is a plain fetch function, not a component), so
+    // read the same Allowable Types setting NotSubmittedTab.tsx/
+    // CountsResultsTable.tsx get via useAppSetting directly instead — see
+    // countsShared.ts's own isAllowedCountType comment for why this
+    // replaced a hardcoded 'monthly' check.
+    sb.schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', ALLOWABLE_TYPE_RULES_KEY).maybeSingle(),
   ])
 
   const histByLoc = new Map<string, number[]>()
@@ -48,16 +55,17 @@ export async function fetchPeriodEvalData(
     histByLoc.set(b.location_id, arr)
   }
 
+  const typeRules = (typeRuleRes.data?.value ?? {}) as Record<string, TypeRule>
   const allCounts = (countRes.data ?? []) as MonthlyCount[]
-  const monthlyCounts = allCounts.filter((c) => (c.count_type ?? '').trim().toLowerCase() === 'monthly')
+  const allowedCounts = allCounts.filter((c) => isAllowedCountType(c.count_type, c.total_adjustments, typeRules))
 
   const eligibleLocationIds = new Set<string>()
-  for (const c of monthlyCounts) if (c.location_id) eligibleLocationIds.add(c.location_id)
+  for (const c of allowedCounts) if (c.location_id) eligibleLocationIds.add(c.location_id)
   for (const r of (manualRes.data ?? []) as { location_id: string | null }[]) if (r.location_id) eligibleLocationIds.add(r.location_id)
 
   return {
     locations: (locRes.data ?? []) as Location[],
-    counts: monthlyCounts,
+    counts: allowedCounts,
     histByLoc,
     eligibleLocationIds,
   }

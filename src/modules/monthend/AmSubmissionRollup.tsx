@@ -185,7 +185,7 @@ export function AmSubmissionRollup({ locations, monthlySubmittedIds, periodLabel
           <div>
             <h2 className="text-sm font-bold text-navy uppercase tracking-wide">Area Manager Rollup — Monthly Counts</h2>
             <p className="text-xs text-inky mt-0.5">
-              {totalSubmitted} of {totalSubmitted + totalNotSubmitted} shops submitted for {periodLabel} ({pctStr(totalPct)}). Monthly count type only.
+              {totalSubmitted} of {totalSubmitted + totalNotSubmitted} shops submitted for {periodLabel} ({pctStr(totalPct)}). Allowable count types only (Counts → Results → Summary).
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
