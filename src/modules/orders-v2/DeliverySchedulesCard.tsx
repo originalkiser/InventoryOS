@@ -12,6 +12,21 @@ import { SCHEDULE_LABELS, type ScheduleType } from './types'
 
 const sb = () => supabase as any
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const DOW_LOOKUP: Record<string, number> = Object.fromEntries(DOW.map((d, i) => [d.toLowerCase(), i]))
+function parseWeekday(raw: string): number | null {
+  const v = DOW_LOOKUP[raw.trim().toLowerCase()]
+  return v == null ? null : v
+}
+// "Weekly" vs a Week 1/Week 2 (= this app's existing A/B) label — matches
+// however loosely the source file spells it ("Week 1", "Week1", "A").
+function parseWeekPhase(raw: string): 'weekly' | 'A' | 'B' | null {
+  const v = raw.trim().toLowerCase()
+  if (!v) return null
+  if (v === 'weekly') return 'weekly'
+  if (v === 'a' || /week\s*1\b/.test(v)) return 'A'
+  if (v === 'b' || /week\s*2\b/.test(v)) return 'B'
+  return null
+}
 
 interface ScheduleRow {
   id: string; location_id: string; vendor_id: string; schedule_type: ScheduleType
@@ -77,14 +92,98 @@ export function DeliverySchedulesCard() {
   }
 
   /**
+   * Bulk schedule upload — one row per shop instead of adding each by hand.
+   * Expected shape (see the real Valvoline schedule file this was built
+   * against): Shop #, Order DoW, Delivery DoW, Order Week, Delivery Week,
+   * optionally a Min Lead (business days) column. Only Shop #, Delivery DoW,
+   * and Delivery Week actually drive what gets saved — Order DoW/Order Week
+   * describe the same cycle from the other end but aren't needed here:
+   *   - Delivery Week "Weekly"  -> schedule_type 'weekly', delivery_dow set.
+   *   - Delivery Week "Week 1"/"Week 2" (this app's A/B) -> schedule_type
+   *     'week_ab', with ONLY that phase's day set and the other phase left
+   *     null — resolveDeliveryDate() (engine.ts) already treats a null
+   *     week_a_dow/week_b_dow as "skip this week, don't guess," which is
+   *     exactly biweekly-on-one-phase-only behavior, not a second weekday.
+   *   - Delivery DoW "Order +N" (a literal turnaround, not a weekday name)
+   *     -> schedule_type 'plus_business_days', lead = N.
+   * A Min Lead column is used when present; otherwise defaults to 4 (this
+   * card's own manual-add default) for weekly/week_ab rows.
+   */
+  async function importSchedules(parsed: { headers: string[]; rows: Record<string, string>[] }) {
+    if (!profile?.company_id || !vendorId) { toast.error('Pick a vendor first'); return }
+    const shopCol = parsed.headers.find((h) => /shop|store|location/i.test(h))
+    const deliveryDowCol = parsed.headers.find((h) => /deliver.*d(ay|ow)\b/i.test(h))
+    const deliveryWeekCol = parsed.headers.find((h) => /deliver.*week/i.test(h))
+    const leadCol = parsed.headers.find((h) => /lead/i.test(h))
+    if (!shopCol || !deliveryDowCol) {
+      toast.error('Need a Shop # column and a Delivery DoW column')
+      return
+    }
+
+    const payload: Record<string, unknown>[] = []
+    const unmatchedShops: string[] = []
+    const unreadableRows: string[] = []
+    for (const r of parsed.rows) {
+      const shopRaw = (r[shopCol] ?? '').trim()
+      if (!shopRaw) continue
+      const locationId = loc.resolveId(shopRaw)
+      if (!locationId) { unmatchedShops.push(shopRaw); continue }
+
+      const deliveryRaw = (r[deliveryDowCol] ?? '').trim()
+      const plusMatch = deliveryRaw.match(/order\s*\+?\s*(\d+)/i)
+      const leadRaw = leadCol ? Number(r[leadCol]) : NaN
+      const lead = Number.isFinite(leadRaw) && leadRaw > 0 ? leadRaw : 4
+
+      let row: Pick<ScheduleRow, 'schedule_type' | 'delivery_dow' | 'week_a_dow' | 'week_b_dow' | 'lead_business_days'>
+      if (plusMatch) {
+        row = { schedule_type: 'plus_business_days', delivery_dow: null, week_a_dow: null, week_b_dow: null, lead_business_days: Number(plusMatch[1]) }
+      } else {
+        const deliveryDow = parseWeekday(deliveryRaw)
+        const phase = deliveryWeekCol ? parseWeekPhase(r[deliveryWeekCol] ?? '') : 'weekly'
+        if (deliveryDow == null || phase == null) { unreadableRows.push(shopRaw); continue }
+        row = phase === 'weekly'
+          ? { schedule_type: 'weekly', delivery_dow: deliveryDow, week_a_dow: null, week_b_dow: null, lead_business_days: lead }
+          : { schedule_type: 'week_ab', delivery_dow: null, week_a_dow: phase === 'A' ? deliveryDow : null, week_b_dow: phase === 'B' ? deliveryDow : null, lead_business_days: lead }
+      }
+      payload.push({
+        company_id: profile.company_id, location_id: locationId, vendor_id: vendorId,
+        ...row, updated_by: profile.id ?? null, updated_at: new Date().toISOString(),
+      })
+    }
+    if (!payload.length) { toast.error('No usable rows found'); return }
+    const { error } = await sb().schema('inventory').from('ov2_location_schedules')
+      .upsert(payload, { onConflict: 'company_id,location_id,vendor_id' })
+    if (error) { toast.error(error.message); return }
+    const problems = [
+      unmatchedShops.length ? `${unmatchedShops.length} shop(s) not matched (${unmatchedShops.slice(0, 5).join(', ')}${unmatchedShops.length > 5 ? '…' : ''})` : '',
+      unreadableRows.length ? `${unreadableRows.length} row(s) with an unreadable day/week value` : '',
+    ].filter(Boolean).join(' — ')
+    if (problems) toast(`Loaded ${payload.length} schedule${payload.length !== 1 ? 's' : ''} — ${problems}`, { icon: '⚠️', duration: 10000 })
+    else toast.success(`Loaded ${payload.length} schedule${payload.length !== 1 ? 's' : ''}`)
+    void load()
+  }
+
+  /**
    * Calendar upload: any sheet with a date column and an A/B column. Each row
    * is normalised to the Sunday of its week, so an upload listing delivery
    * dates works as well as one listing week-start dates.
    */
   async function importCalendar(parsed: { headers: string[]; rows: Record<string, string>[] }) {
     if (!profile?.company_id || !vendorId) { toast.error('Pick a vendor first'); return }
-    const dateCol = parsed.headers.find((h) => /date|week/i.test(h))
-    const labelCol = parsed.headers.find((h) => /label|week.?type|a.?b/i.test(h) && h !== dateCol)
+    // A literal "Date"+"Week" header pair (the common real-world shape — see
+    // the sample file this was built against) used to fail outright: the
+    // date matcher's own `date|week` alternation is deliberately broad (also
+    // accepts "Week Start"/"Week Of" as the date column when there's no
+    // literal "Date" header), but that meant a bare "Week" column matched
+    // dateCol first and never got a chance to be tried as the label column.
+    // Prefer a literal "date" header for dateCol; only fall back to a
+    // week-start-ish header when there isn't one. The label matcher then
+    // accepts an exact "Week" header (not just "Week Type"/"A/B") once it's
+    // no longer needed for the date slot.
+    const dateCol =
+      parsed.headers.find((h) => /date/i.test(h)) ??
+      parsed.headers.find((h) => /week/i.test(h) && /start|of/i.test(h))
+    const labelCol = parsed.headers.find((h) => h !== dateCol && /^week$|label|week.?type|a.?\/?.?b/i.test(h))
     if (!dateCol || !labelCol) {
       toast.error('Need a date column and an A/B label column')
       return
@@ -200,6 +299,22 @@ export function DeliverySchedulesCard() {
             Min lead: a delivery day closer than this many business days is skipped and the next occurrence used —
             so an order placed too near the cutoff lands on the following delivery instead.
           </p>
+
+          {/* Bulk schedule upload */}
+          <div className="border-t border-navy/10 pt-3 flex flex-col gap-2">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
+              Bulk upload — one row per shop, instead of adding each above
+            </span>
+            <p className="text-[11px] font-mono text-inky/60">
+              Columns: <span className="text-navy">Shop #</span>, <span className="text-navy">Delivery DoW</span> (a
+              weekday name, or &quot;Order +N&quot; for a flat N-business-day turnaround), and{' '}
+              <span className="text-navy">Delivery Week</span> (&quot;Weekly&quot;, or &quot;Week 1&quot;/&quot;Week 2&quot;
+              for this vendor&apos;s A/B pattern — Week 1 = A, Week 2 = B). An optional{' '}
+              <span className="text-navy">Min Lead</span> column overrides the default of 4 business days.
+              Order DoW / Order Week columns are fine to leave in the file — they aren&apos;t read.
+            </p>
+            <FileUploadZone onParsed={(r) => importSchedules(r)} label="Drop a CSV / Excel with Shop #, Delivery DoW, Delivery Week" />
+          </div>
 
           {/* A/B calendar */}
           <div className="border-t border-navy/10 pt-3 flex flex-col gap-2">
