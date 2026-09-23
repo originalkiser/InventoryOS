@@ -36,15 +36,17 @@ import {
   CheckCircle2, FileText, MapPin, GripVertical, ChevronRight,
   ChevronsLeft, ChevronsRight, Pin, Car, SlidersHorizontal,
 } from 'lucide-react'
+import { BiRuler, BiSpreadsheet, BiAbacus, BiCommentError, BiUserVoice } from 'react-icons/bi'
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 
 export const ICONS: Record<string, JSX.Element> = {
   dashboard: <LayoutDashboard className="w-4 h-4 flex-shrink-0" />,
   'on-hand': <Package className="w-4 h-4 flex-shrink-0" />,
-  monthend: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
+  monthend: <BiAbacus className="w-4 h-4 flex-shrink-0" />,
   weekly: <CalendarDays className="w-4 h-4 flex-shrink-0" />,
   orders: <ClipboardList className="w-4 h-4 flex-shrink-0" />,
+  'orders-v2': <BiSpreadsheet className="w-4 h-4 flex-shrink-0" />,
   config: <Settings className="w-4 h-4 flex-shrink-0" />,
   'global-config': <Database className="w-4 h-4 flex-shrink-0" />,
   outlier: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
@@ -61,11 +63,11 @@ export const ICONS: Record<string, JSX.Element> = {
   locations: <MapPin className="w-4 h-4 flex-shrink-0" />,
   'location-lookup': <MapPin className="w-4 h-4 flex-shrink-0" />,
   'custom-shop-config': <SlidersHorizontal className="w-4 h-4 flex-shrink-0" />,
-  'am-rd-lookup': <Users className="w-4 h-4 flex-shrink-0" />,
-  'tank-monitors': <Database className="w-4 h-4 flex-shrink-0" />,
+  'am-rd-lookup': <BiUserVoice className="w-4 h-4 flex-shrink-0" />,
+  'tank-monitors': <BiRuler className="w-4 h-4 flex-shrink-0" />,
   'procurement-deck': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
   'inventory-alerts': <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
-  'exception-reporting': <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
+  'exception-reporting': <BiCommentError className="w-4 h-4 flex-shrink-0" />,
   'location-comms': <MessageSquare className="w-4 h-4 flex-shrink-0" />,
   'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
   'customer-heatmap': <MapPin className="w-4 h-4 flex-shrink-0" />,
@@ -684,6 +686,9 @@ function UtilityNav({
 
   const shown = expanded ? items : items.filter((i) => pinned.includes(i.key))
   const issuesBadge = useNavBadge('issues')
+  const tasksBadge = useNavBadge('tasks')
+  const calendarBadge = useNavBadge('calendar')
+  const badgeFor = (key: string) => (key === 'issues' ? issuesBadge : key === 'tasks' ? tasksBadge : key === 'calendar' ? calendarBadge : 0)
 
   return (
     <div className="pt-1 pb-1 border-t border-[#F2F1E6]/8">
@@ -722,8 +727,8 @@ function UtilityNav({
             >
               {ICONS[item.key] ?? ICONS.dashboard}
               <span className="truncate flex-1">{item.label}</span>
-              {item.key === 'issues' && issuesBadge > 0 && (
-                <span className={['flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center transition-opacity', expanded ? 'mr-4 group-hover:opacity-0' : ''].join(' ')}>{issuesBadge}</span>
+              {badgeFor(item.key) > 0 && (
+                <span className={['flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center transition-opacity', expanded ? 'mr-4 group-hover:opacity-0' : ''].join(' ')}>{badgeFor(item.key)}</span>
               )}
             </NavLink>
             {expanded && (

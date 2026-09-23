@@ -7,6 +7,16 @@ export interface QuickAccessItem {
   icon: ReactNode
   open: boolean
   onClick: () => void
+  /** Optional "N today"-style count — shown as a small badge, e.g. on Today's Tasks. */
+  badge?: number
+}
+
+function Badge({ count }: { count: number }) {
+  return (
+    <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[9px] font-mono leading-none px-1.5 py-0.5 min-w-[16px] text-center">
+      {count}
+    </span>
+  )
 }
 
 // Shared renderer behind AppShell's floating bottom-corner FABs and TopBar's
@@ -36,6 +46,7 @@ export function QuickAccessBar(props: QuickAccessBarProps) {
           >
             {f.icon}
             <span className="text-[10px] font-heading uppercase tracking-wide whitespace-nowrap">{f.label}</span>
+            {!!f.badge && <Badge count={f.badge} />}
           </button>
         ))}
       </div>
@@ -51,7 +62,7 @@ export function QuickAccessBar(props: QuickAccessBarProps) {
     >
       {/* Buttons stay mounted and slide down/up so collapse/expand animates. */}
       <div className={`flex flex-col ${alignClass} gap-2 origin-bottom transition-all duration-200 ease-out ${collapsed ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
-        {items.map((f) => <QuickFab key={f.key} title={f.label} onClick={f.onClick} active={f.open}>{f.icon}</QuickFab>)}
+        {items.map((f) => <QuickFab key={f.key} title={f.label} onClick={f.onClick} active={f.open} badge={f.badge}>{f.icon}</QuickFab>)}
       </div>
       <button
         onClick={onToggleCollapsed}
@@ -65,7 +76,7 @@ export function QuickAccessBar(props: QuickAccessBarProps) {
   )
 }
 
-function QuickFab({ title, onClick, active, children }: { title: string; onClick: () => void; active?: boolean; children: ReactNode }) {
+function QuickFab({ title, onClick, active, badge, children }: { title: string; onClick: () => void; active?: boolean; badge?: number; children: ReactNode }) {
   return (
     <button
       onClick={onClick}
@@ -79,6 +90,9 @@ function QuickFab({ title, onClick, active, children }: { title: string; onClick
       ].join(' ')}
     >
       {children}
+      {/* Always visible (unlike the label below), since the point of a count
+          is to be seen without needing to hover first. */}
+      {!!badge && <Badge count={badge} />}
       <span className="max-w-0 group-hover:max-w-[160px] overflow-hidden whitespace-nowrap text-xs font-heading transition-[max-width,margin] duration-200 group-hover:ml-2">{title}</span>
     </button>
   )

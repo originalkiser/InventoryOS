@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { BiWindows } from 'react-icons/bi'
+import { BiCarousel } from 'react-icons/bi'
 import { useRecentPagesStore } from '@/stores/recentPagesStore'
 
 // "Jump back to a recent page" row — lives in the TopBar. Clicking the
@@ -117,7 +117,7 @@ export function RecentPagesWidget() {
           open ? 'border-sky text-sky' : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
         ].join(' ')}
       >
-        <BiWindows className="w-4 h-4" />
+        <BiCarousel className="w-4 h-4" />
       </button>
 
       {/* Inline reveal — grows in the TopBar row itself, not a dropdown. At

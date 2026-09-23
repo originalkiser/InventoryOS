@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
+import { format } from 'date-fns'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useInventoryAlertsStore } from './useInventoryAlerts'
@@ -100,9 +101,40 @@ async function computeTankOfflineShops(companyId: string): Promise<number> {
   return shops.size
 }
 
+// "Due today" for the General section's Tasks item — project_tasks +
+// standalone core.tasks, not done/completed, due at or before today (an
+// overdue item still counts, same "always show" convention the Today's
+// Tasks floating panel already uses for its own pill). Calendar events
+// (platform.schedule_events) are deliberately a separate badge, not blended
+// in here — each nav item's badge should reflect only what that item's own
+// destination page shows, so the two counts never overlap/double-count the
+// same schedule_events row.
+async function computeTasksDueToday(companyId: string): Promise<number> {
+  const sb = supabase as any
+  const today = format(new Date(), 'yyyy-MM-dd')
+  const [pt, st] = await Promise.all([
+    sb.schema('inventory').from('project_tasks').select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId).eq('done', false).lte('due_date', today),
+    sb.schema('core').from('tasks').select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId).eq('completed', false).lte('target_date', today).is('deleted_at', null),
+  ])
+  return (pt.count ?? 0) + (st.count ?? 0)
+}
+
+// "Today" for the General section's Calendar item — schedule_events
+// starting today specifically (not "at or before," unlike tasks — a past
+// calendar event isn't overdue, it already happened).
+async function computeCalendarToday(companyId: string): Promise<number> {
+  const sb = supabase as any
+  const today = format(new Date(), 'yyyy-MM-dd')
+  const { count } = await sb.schema('platform').from('schedule_events').select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId).eq('start_date', today)
+  return count ?? 0
+}
+
 async function computeBadges(companyId: string): Promise<Record<string, number>> {
   const sb = supabase as any
-  const [excRes, commRes, issRes, issStatRes, tankOffline, excCfgRaw, commCfgRaw] = await Promise.all([
+  const [excRes, commRes, issRes, issStatRes, tankOffline, excCfgRaw, commCfgRaw, tasksToday, calendarToday] = await Promise.all([
     sb.schema('inventory').from('exception_reports').select('status, date_of_finding, metadata').eq('company_id', companyId),
     sb.schema('inventory').from('location_comms').select('status, comm_date, metadata').eq('company_id', companyId),
     sb.schema('platform').from('issues').select('status_id').eq('company_id', companyId).is('deleted_at', null),
@@ -110,6 +142,8 @@ async function computeBadges(companyId: string): Promise<Record<string, number>>
     computeTankOfflineShops(companyId),
     fetchAppSetting(sb, companyId, 'exception_config'),
     fetchAppSetting(sb, companyId, 'comms_config'),
+    computeTasksDueToday(companyId),
+    computeCalendarToday(companyId),
   ])
   const statusName: Record<string, string> = {}
   for (const s of (issStatRes.data ?? []) as any[]) statusName[s.id] = s.name ?? ''
@@ -123,6 +157,8 @@ async function computeBadges(companyId: string): Promise<Record<string, number>>
     'location-comms': ((commRes.data ?? []) as any[]).filter((r) => isStaleRecord(r.status, r.comm_date, r.metadata, commStaleDays)).length,
     issues: ((issRes.data ?? []) as any[]).filter((r) => !isClosed(statusName[r.status_id] ?? '')).length,
     'tank-monitors': tankOffline,
+    tasks: tasksToday,
+    calendar: calendarToday,
   }
 }
 

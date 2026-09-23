@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { BiGroup } from 'react-icons/bi'
 import { usePresence } from '@/hooks/usePresence'
 import { useJoinMe } from '@/hooks/useJoinMe'
 import { useAuthStore } from '@/stores/authStore'
@@ -49,9 +50,7 @@ export function PresenceWidget() {
         title="Who's online"
         className="flex items-center gap-1 px-2 h-7 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-all"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6 0a4 4 0 10-4-4" />
-        </svg>
+        <BiGroup className="w-4 h-4" />
         {roster.length > 0 && <span className="text-[10px] font-mono text-sky">{roster.length}</span>}
       </button>
 

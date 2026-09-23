@@ -7,6 +7,7 @@ import { QuickAccessBar, type QuickAccessItem } from './QuickAccessBar'
 import { TopBar } from './TopBar'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
+import { useNavBadge } from '@/hooks/useNavBadges'
 import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
 import { InventoryOverlay } from '@/components/inventory/InventoryOverlay'
 import { MeetingOverlay } from '@/modules/meetings/MeetingOverlay'
@@ -37,6 +38,7 @@ export function AppShell() {
   const [meetingWidth, setMeetingWidth] = useState(() => Number(localStorage.getItem(MEETING_WIDTH_KEY)) || 460)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const tasksBadge = useNavBadge('tasks')
   const [fabCollapsed, setFabCollapsedP] = useProfilePref<boolean>('quickfab:collapsed', false)
   const [enabledFabs] = useProfilePref<string[]>('quickfab:enabled', QUICK_FAB_DEFAULT)
   const [fabPosition] = useProfilePref<QuickFabPosition>('quickfab:position', 'bottom-right')
@@ -162,7 +164,7 @@ export function AppShell() {
   // Access Buttons → Position) — built once, rendered by QuickAccessBar
   // either as a floating bottom-corner stack or an inline TopBar row.
   const quickAccessItems: QuickAccessItem[] = [
-    { key: 'tasks', label: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', onClick: toggleTasks },
+    { key: 'tasks', label: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', onClick: toggleTasks, badge: tasksBadge },
     { key: 'lookup', label: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', onClick: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
     { key: 'meeting', label: 'Quick Meeting', icon: <BiCalendarPlus className="w-5 h-5" />, open: meetingMode !== 'hidden', onClick: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
     { key: 'inventory', label: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', onClick: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
