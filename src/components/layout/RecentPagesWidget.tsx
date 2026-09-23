@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
+import { BiWindows } from 'react-icons/bi'
 import { useRecentPagesStore } from '@/stores/recentPagesStore'
 import { shortForLabel } from '@/lib/routeLabels'
 
@@ -152,9 +153,7 @@ export function RecentPagesWidget() {
           open ? 'border-sky text-sky' : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
         ].join(' ')}
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
+        <BiWindows className="w-4 h-4" />
       </button>
 
       {/* Inline reveal — grows in the TopBar row itself, not a dropdown.
@@ -199,6 +198,11 @@ export function RecentPagesWidget() {
                     >
                       {shortForLabel(page.label)}
                     </button>
+                    {/* 1st/2nd/3rd — position in the (now-capped-at-3) recent
+                        pages list, so it's never ambiguous which is which. */}
+                    <span className="absolute -top-1 -left-1 w-3.5 h-3.5 rounded-full bg-navy border border-sky/50 text-sky text-[8px] font-mono flex items-center justify-center pointer-events-none">
+                      {groupIndex * GROUP_SIZE + pi + 1}
+                    </span>
                     {showRightEdge && (
                       <button
                         onClick={(e) => { e.stopPropagation(); pageGroup('forward', Math.min(groups.length - 1, groupIndex + 1)) }}

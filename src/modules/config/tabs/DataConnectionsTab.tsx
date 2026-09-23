@@ -16,18 +16,16 @@ import {
 } from '@/components/ui'
 import { DataHealthTab, CoverageEvaluationNote } from './DataHealthTab'
 import { BackgroundBackfillPanel } from './BackgroundBackfillPanel'
-import { runSkybitzTankSync } from '@/services/skybitzService'
-import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
+import { runDroptopSync, runDroptopOrderSync } from '@/services/droptopService'
 import { runGeocoding } from '@/services/geocodingService'
 import { runAutoVinDecode } from '@/services/vinDecodeService'
 import type { DataConnectionSchedule } from '@/types/integrations'
 import { formatInTz } from '@/lib/tzFormat'
 import {
-  useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
-  DROPTOP_PO_SYNC_TASK_ID, DROPTOP_ORDERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
-  GEOCODE_ORDERS_TASK_ID, HEATMAP_ROLLUP_TASK_ID, VIN_DECODE_TASK_ID, MONDAY_LOCATIONS_TASK_ID,
-  DROPTOP_TIME_CLOCK_TASK_ID,
+  useSyncTasksStore, DROPTOP_USAGE_TASK_ID, DROPTOP_ORDERS_TASK_ID,
+  GEOCODE_ORDERS_TASK_ID, VIN_DECODE_TASK_ID, DROPTOP_TIME_CLOCK_TASK_ID,
 } from '@/stores/syncTasksStore'
+import { CONNECTION_META, CONNECTION_ORDER, statusColor, runDataConnectionNow } from '@/hooks/useDataConnectionRunner'
 import toast from 'react-hot-toast'
 
 // Exact match first, then substring fallback — a plain ilike substring
@@ -53,19 +51,6 @@ async function resolveShopLocation(sb: any, companyId: string, query: string): P
   return matches[0]
 }
 
-const TASK_ID_FOR: Record<string, string> = {
-  skybitz_tanks: SKYBITZ_TANKS_TASK_ID,
-  droptop_on_hand: DROPTOP_ON_HAND_TASK_ID,
-  droptop_usage: DROPTOP_USAGE_TASK_ID,
-  droptop_purchase_orders: DROPTOP_PO_SYNC_TASK_ID,
-  droptop_orders: DROPTOP_ORDERS_TASK_ID,
-  droptop_time_clock: DROPTOP_TIME_CLOCK_TASK_ID,
-  automated_checks: AUTOMATED_CHECKS_TASK_ID,
-  heatmap_rollup_refresh: HEATMAP_ROLLUP_TASK_ID,
-  vin_decode: VIN_DECODE_TASK_ID,
-  monday_locations: MONDAY_LOCATIONS_TASK_ID,
-}
-
 // Exported so DataConnectionUpdatesSection.tsx's sync-log table can display
 // timestamps in this same company-configured timezone rather than the
 // viewer's own browser timezone.
@@ -81,28 +66,11 @@ const TIMEZONE_OPTIONS = [
   { value: 'Pacific/Honolulu', label: 'Hawaii (Honolulu)' },
 ]
 
-const CONNECTION_META: Record<string, { label: string; description: string }> = {
-  skybitz_tanks: { label: 'SkyBitz Tank Monitors', description: 'Pulls tank telemetry (on-hand, level, battery) over SFTP.' },
-  droptop_on_hand: { label: 'Droptop — On Hand', description: 'Pulls current on-hand quantities from Droptop into Product Usage.' },
-  droptop_usage: { label: 'Droptop — Usage', description: 'Pulls sales/adjustment activity from Droptop and logs the daily sold/adjusted ledger.' },
-  droptop_purchase_orders: { label: 'Droptop — Purchase Orders', description: 'Pulls open/recent POs and their line items — feeds the PO Status page and Orders v2\'s "already on order" check.' },
-  droptop_orders: { label: 'Droptop — Orders (Customers)', description: 'Pulls each location\'s orders forward from its last successful sync (yesterday, or a wider catch-up after a missed day) with the placing customer\'s address, and resolves a lat/lng by zip — feeds the Customer Heatmap. Use the Historical Backfill below for a one-time date-ranged pull.' },
-  droptop_time_clock: { label: 'Droptop — Staff Time Clock', description: 'Pulls each location\'s clock-in/clock-out records forward from its last successful sync (yesterday, or a wider catch-up after a missed day) — feeds the Staffing Report (compares headcount against Droptop order volume/timing). Use the Historical Backfill below for a one-time date-ranged, region/market/shop-scoped pull.' },
-  automated_checks: { label: 'Automated Checks', description: 'Scans the movement feed for abnormal adjustments, sales with zero on-hand, and tank-vs-Droptop variance — flags into Exception Reporting. Run this after the Droptop pulls, not before.' },
-  heatmap_rollup_refresh: { label: 'Customer Heatmap — Zip Rollups', description: 'Recomputes the pre-aggregated zip/day rollup table Customer Heatmap reads for period-preset ranges, so those loads skip scanning the full orders table. Run Now right after a large Historical Backfill to skip the ~24h staleness window.' },
-  vin_decode: { label: 'Vehicles — Engine/Trim Decode', description: 'Looks up Trim/Engine for synced vehicles\' VINs via NHTSA\'s free VIN-decode API, caching results so nothing is ever decoded twice. A big backlog (209,614 distinct VINs as of 2026-09-03) is caught up incrementally over multiple runs, not all at once — the Droptop Vehicles page\'s own "Decode Engine/Trim" button still works independently for whatever\'s currently in view.' },
-  monday_locations: { label: 'Monday.com — Locations', description: 'Syncs the "Open Stores List" Monday.com board into Locations — matches by store number to update existing shops, and adds any board item not already in SB Net (including closed/pre-opening ones the file upload never brought in). Never deactivates a location just because it\'s missing from the board.' },
-}
-const CONNECTION_ORDER = ['skybitz_tanks', 'droptop_on_hand', 'droptop_usage', 'droptop_purchase_orders', 'droptop_orders', 'droptop_time_clock', 'automated_checks', 'heatmap_rollup_refresh', 'vin_decode', 'monday_locations']
+// CONNECTION_META / CONNECTION_ORDER / statusColor now live in
+// useDataConnectionRunner.ts (extracted 2026-09-23) so the TopBar's Sync
+// Status widget can share them for its own Recent Performance list.
 
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
-
-function statusColor(status: string | null): 'green' | 'orange' | 'red' | 'gray' {
-  if (status === 'success') return 'green'
-  if (status === 'partial') return 'orange'
-  if (status === 'error') return 'red'
-  return 'gray'
-}
 
 // Error/partial messages here can run to dozens of lines (a chunked sync's
 // per-chunk failures all joined with " | ") — this was clogging the page
@@ -527,120 +495,17 @@ export function DataConnectionsTab() {
     setRows((prev) => prev?.map((r) => (r.id === row.id ? { ...r, ...patch } : r)) ?? prev)
   }
 
+  // Progress is tracked globally (syncTasksStore, shown in the TopBar), not
+  // just this local `running` flag — that's what lets the sync keep
+  // reporting correctly even if you navigate away from this tab while it's
+  // still going. The actual per-connection sync logic lives in
+  // useDataConnectionRunner.ts, shared with the TopBar's Sync Status widget.
   async function runNow(key: string) {
     if (!companyId) return
     setRunning(key)
-    // Progress is tracked globally (syncTasksStore, shown in the TopBar),
-    // not just this local `running` flag — that's what lets the sync keep
-    // reporting correctly even if you navigate away from this tab while
-    // it's still going, since the store isn't tied to this component's
-    // lifecycle the way local state is.
-    const store = useSyncTasksStore.getState()
-    const taskId = TASK_ID_FOR[key] ?? key
-    store.start(taskId, CONNECTION_META[key]?.label ?? key)
-    const onProgress = (p: { batch: number; totalBatches: number }) => store.setProgress(taskId, p.batch, p.totalBatches)
-    let manualStatus: 'success' | 'partial' | 'error' = 'success'
-    let manualMessage: string | null = null
     try {
-      let summary = ''
-      let warnings: string[] | undefined
-      if (key === 'skybitz_tanks') {
-        const r = await runSkybitzTankSync()
-        summary = `SkyBitz: ${r.updated} updated, ${r.inserted} new, ${r.unchanged} unchanged`
-      } else if (key === 'droptop_on_hand') {
-        const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1 }, onProgress)
-        summary = `Droptop on-hand: ${r.operations_synced} shop(s), ${r.products_upserted} products`
-        warnings = r.warnings
-      } else if (key === 'droptop_usage') {
-        const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true }, onProgress)
-        summary = `Droptop usage: ${r.operations_synced} shop(s), ${r.products_upserted} products`
-          + (r.rolling_usage_applied ? ` (${r.rolling_usage_applied} using a rolling 30-day average)` : '')
-        warnings = r.warnings
-      } else if (key === 'droptop_purchase_orders') {
-        const r = await runDroptopPurchaseOrderSync({ daysBack: 180 }, companyId, onProgress)
-        summary = `Droptop POs: ${r.locations_synced} shop(s), ${r.pos_upserted} POs, ${r.items_written} line items`
-        warnings = r.warnings
-      } else if (key === 'droptop_orders') {
-        // Steady-state: each location pulls forward from wherever it last
-        // successfully synced through yesterday (30-day catch-up cap) — see
-        // inventory.droptop_order_sync_state / droptop-sync-orders' header
-        // comment. Use the Historical Backfill controls below for a
-        // one-time date-ranged pull instead.
-        const r = await runDroptopOrderSync(companyId, { incremental: true }, onProgress)
-        summary = `Droptop orders: ${r.locations_synced} shop(s), ${r.orders_upserted} new order(s)`
-          + (r.orders_missing_zip_match ? ` (${r.orders_missing_zip_match} missing a zip match — excluded from the heatmap)` : '')
-        warnings = r.warnings
-      } else if (key === 'droptop_time_clock') {
-        // Steady-state, same shape as droptop_orders above: each location
-        // pulls forward from wherever it last successfully synced through
-        // yesterday. Use the Historical Backfill controls below for a
-        // one-time date-ranged, region/market/shop-scoped pull instead.
-        const { data, error } = await supabase.functions.invoke('droptop-sync-staff-time-clock', { body: { mode: 'incremental' } })
-        if (error) throw new Error(error.message)
-        if (data?.error) throw new Error(data.error)
-        summary = `Staff Time Clock: ${data.locations_synced} shop(s), ${data.records_upserted} record(s)`
-        warnings = data.warnings
-      } else if (key === 'automated_checks') {
-        const { data, error } = await supabase.functions.invoke('run-automated-checks', { body: {} })
-        if (error) throw new Error(error.message)
-        if (data?.error) throw new Error(data.error)
-        summary = `Automated Checks: ${data.created} new exception${data.created === 1 ? '' : 's'} flagged (${data.checked} anomal${data.checked === 1 ? 'y' : 'ies'} found)`
-      } else if (key === 'heatmap_rollup_refresh') {
-        const { data, error } = await supabase.functions.invoke('heatmap-rollup-refresh', { body: {} })
-        if (error) throw new Error(error.message)
-        if (data?.error) throw new Error(data.error)
-        summary = `Zip Rollups: ${data.dates_recomputed} location-day(s) recomputed, ${data.rows_upserted} zip row(s) written`
-      } else if (key === 'vin_decode') {
-        // No `vins` in the body — auto-discover mode (see vin-decode's own
-        // header comment). The Vehicles page's own "Decode Engine/Trim"
-        // button calls the same function with an explicit vins list instead.
-        const { data, error } = await supabase.functions.invoke('vin-decode', { body: {} })
-        if (error) throw new Error(error.message)
-        if (data?.error) throw new Error(data.error)
-        summary = `Engine/Trim Decode: ${data.newly_decoded} decoded (${data.cached_hits} already cached)`
-          + (data.more_remaining ? ' — more remain, click Run Now again or wait for the next scheduled run' : '')
-      } else if (key === 'monday_locations') {
-        const { data, error } = await supabase.functions.invoke('monday-sync-locations', { body: {} })
-        if (error) throw new Error(error.message)
-        if (data?.error) throw new Error(data.error)
-        summary = `Monday.com Locations: ${data.added} added, ${data.updated} updated, ${data.skipped} skipped (of ${data.total_board_items} board items)`
-        warnings = data.warnings
-      }
-      if (warnings?.length) { manualStatus = 'partial'; manualMessage = `${summary} — ${warnings.join(' | ')}` }
-      else manualMessage = summary
-      store.finish(taskId, manualStatus === 'partial' ? 'partial' : 'success', manualMessage)
-      if (manualStatus === 'partial') toast(manualMessage ?? summary, { icon: '⚠️', duration: 10000 })
-      else toast.success(summary)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sync failed'
-      manualStatus = 'error'; manualMessage = message
-      store.finish(taskId, 'error', message)
-      toast.error(message, { duration: 12000 })
+      await runDataConnectionNow(key, { companyId, rows, profileId: profile?.id ?? null })
     } finally {
-      // Best-effort — last_manual_run_* is a newer column set that may not
-      // exist yet in production. A manual "Run Now" previously never wrote
-      // back to this table at all (only the dispatcher's scheduled runs
-      // did), so "Last run" silently only ever reflected the most recent
-      // automated run no matter how many times someone ran it by hand.
-      const row = rows?.find((r) => r.connection_key === key)
-      if (row) {
-        // Awaited (not fire-and-forget) so the load() below is guaranteed to
-        // see this run's own status/timestamp — previously this write and
-        // load() fired concurrently, so load() usually won the race and
-        // reloaded the PREVIOUS run's data, making the card look stale until
-        // a manual page refresh gave the write time to land.
-        try {
-          const sb = supabase as any
-          await sb.schema('inventory').from('data_connection_schedules')
-            .update({
-              last_manual_run_at: new Date().toISOString(),
-              last_manual_run_status: manualStatus,
-              last_manual_run_message: manualMessage,
-              last_manual_run_by: profile?.id ?? null,
-            })
-            .eq('id', row.id)
-        } catch { /* best-effort — column set may not exist yet in production */ }
-      }
       setRunning(null)
       load()
     }

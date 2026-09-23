@@ -17,7 +17,10 @@ export interface RecentPageEntry {
 }
 
 const STORAGE_KEY = 'sbnet:recentPages'
-const MAX_ENTRIES = 10
+// Matches KeepAlivePages.tsx's own MAX_CACHED_PAGES (3) — a page shown here
+// is then guaranteed to still be warm in the keep-alive cache, not a stale
+// slot 10 deep that would need a fresh mount/refetch to actually revisit.
+const MAX_ENTRIES = 3
 
 interface Persisted {
   recentPages: RecentPageEntry[]

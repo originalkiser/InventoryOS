@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, X } from 'lucide-react'
+import { BiData } from 'react-icons/bi'
 import { useSyncTasksStore, type SyncTask } from '@/stores/syncTasksStore'
+import { useAuthStore } from '@/stores/authStore'
+import { useAppSetting } from '@/hooks/useAppSetting'
+import { supabase } from '@/lib/supabase'
+import { isAdminOrDeveloper } from '@/lib/roles'
+import { formatInTz } from '@/lib/tzFormat'
+import { TIMEZONE_KEY, DEFAULT_TIMEZONE } from '@/modules/config/tabs/DataConnectionsTab'
+import { CONNECTION_META, CONNECTION_ORDER, statusColor, runDataConnectionNow } from '@/hooks/useDataConnectionRunner'
+import { SbLoader } from '@/components/ui/SbLoader'
+import type { DataConnectionSchedule } from '@/types/integrations'
 
 // Live progress for in-flight data syncs (Droptop, SkyBitz, Automated
 // Checks, ...) — lives in the TopBar, left of Recent Pages. Reads
@@ -11,10 +21,23 @@ import { useSyncTasksStore, type SyncTask } from '@/stores/syncTasksStore'
 // Recent Pages keep-alive cache) while it's still running — the widget
 // doesn't drive the sync, it just reflects whatever the store says.
 //
-// Seed of a broader task/notification surface later (per the project's own
-// direction) — deliberately generic (label/progress/dismiss) rather than
-// Droptop-specific.
+// Also shows each connection's Recent Performance (last_run_at/status,
+// scheduled or manual, whichever is newer) instead of a bare "nothing
+// running" — and, for admins/developers, a per-connection Run Now that
+// shares the exact same sync logic Data Connections' own Run Now uses (see
+// useDataConnectionRunner.ts).
+const DOT_CLASS: Record<ReturnType<typeof statusColor>, string> = {
+  green: 'bg-sb-green',
+  orange: 'bg-sb-orange',
+  red: 'bg-sb-red',
+  gray: 'bg-[#F2F1E6]/25',
+}
+
 export function SyncStatusWidget() {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const canRunNow = isAdminOrDeveloper(profile?.role)
+  const [timezone] = useAppSetting<string>(TIMEZONE_KEY, DEFAULT_TIMEZONE)
   const tasks = useSyncTasksStore((s) => s.tasks)
   const dismiss = useSyncTasksStore((s) => s.dismiss)
   const [open, setOpen] = useState(false)
@@ -25,6 +48,18 @@ export function SyncStatusWidget() {
   const [pos, setPos] = useState({ top: 0, right: 0 })
   const buttonRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+
+  const [rows, setRows] = useState<DataConnectionSchedule[] | null>(null)
+  const [runningKey, setRunningKey] = useState<string | null>(null)
+
+  const loadRows = useCallback(async () => {
+    if (!companyId) return
+    const sb = supabase as any
+    const { data } = await sb.schema('inventory').from('data_connection_schedules').select('*').eq('company_id', companyId)
+    setRows((data ?? []) as DataConnectionSchedule[])
+  }, [companyId])
+
+  useEffect(() => { if (open) loadRows() }, [open, loadRows])
 
   const running = tasks.filter((t) => t.status === 'running')
   const finished = tasks.filter((t) => t.status !== 'running')
@@ -73,6 +108,17 @@ export function SyncStatusWidget() {
     prevRunningCount.current = running.length
   }, [running.length])
 
+  async function runNow(key: string) {
+    if (!companyId) return
+    setRunningKey(key)
+    try {
+      await runDataConnectionNow(key, { companyId, rows, profileId: profile?.id ?? null })
+    } finally {
+      setRunningKey(null)
+      loadRows()
+    }
+  }
+
   return (
     <div className="relative flex-shrink-0">
       <button
@@ -84,7 +130,7 @@ export function SyncStatusWidget() {
           running.length > 0 ? 'border-sky text-sky' : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
         ].join(' ')}
       >
-        <RefreshCw className={`w-4 h-4 ${running.length > 0 ? 'animate-spin' : ''}`} />
+        {running.length > 0 ? <SbLoader size={16} hideMark /> : <BiData className="w-4 h-4" />}
         {running.length > 1 && <span className="text-[10px] font-mono">{running.length}</span>}
       </button>
 
@@ -92,16 +138,56 @@ export function SyncStatusWidget() {
         <div
           ref={panelRef}
           style={{ top: pos.top, right: pos.right }}
-          className="fixed z-[100] w-72 bg-[#002745] border border-[#F2F1E6]/20 rounded-xl shadow-xl p-3 flex flex-col gap-2 animate-[fadeIn_120ms_ease-out]"
+          className="fixed z-[100] w-80 bg-[#002745] border border-[#F2F1E6]/20 rounded-xl shadow-xl p-3 flex flex-col gap-3 animate-[fadeIn_120ms_ease-out]"
         >
-          <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Data Syncs</span>
-          {tasks.length === 0 ? (
-            <p className="text-xs font-mono text-[#F2F1E6]/40 italic py-2 text-center">Nothing running right now.</p>
-          ) : (
-            <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
-              {[...running, ...finished].map((t) => <TaskRow key={t.id} task={t} onDismiss={() => dismiss(t.id)} />)}
+          {tasks.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Active</span>
+              <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
+                {[...running, ...finished].map((t) => <TaskRow key={t.id} task={t} onDismiss={() => dismiss(t.id)} />)}
+              </div>
             </div>
           )}
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Recent Performance</span>
+            {rows === null ? (
+              <p className="text-xs font-mono text-[#F2F1E6]/40 italic py-2 text-center">Loading…</p>
+            ) : (
+              <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
+                {CONNECTION_ORDER.map((key) => {
+                  const row = rows.find((r) => r.connection_key === key)
+                  const meta = CONNECTION_META[key] ?? { label: key }
+                  // Whichever of the scheduled/manual run actually happened
+                  // most recently — a manual Run Now shouldn't be shadowed
+                  // by an older scheduled-run timestamp, or vice versa.
+                  const scheduledAt = row?.last_run_at ?? null
+                  const manualAt = row?.last_manual_run_at ?? null
+                  const useManual = manualAt && (!scheduledAt || new Date(manualAt) > new Date(scheduledAt))
+                  const lastAt = useManual ? manualAt : scheduledAt
+                  const lastStatus = useManual ? (row?.last_manual_run_status ?? null) : (row?.last_run_status ?? null)
+                  return (
+                    <div key={key} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-[#F2F1E6]/5">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${DOT_CLASS[statusColor(lastStatus)]}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-mono text-[#F2F1E6] truncate">{meta.label}</div>
+                        <div className="text-[10px] font-mono text-[#F2F1E6]/40">{lastAt ? formatInTz(lastAt, timezone) : 'Never run'}</div>
+                      </div>
+                      {canRunNow && (
+                        <button
+                          onClick={() => runNow(key)}
+                          disabled={runningKey === key || running.some((t) => t.label === meta.label)}
+                          className="text-[10px] font-mono uppercase tracking-wide text-sky hover:text-[#F2F1E6] disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+                        >
+                          {runningKey === key ? '…' : 'Run Now'}
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>,
         document.body,
       )}

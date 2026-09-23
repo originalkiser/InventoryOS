@@ -1,7 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { CheckCircle2, MapPin, MessageSquare, Package, ChevronUp, ChevronDown } from 'lucide-react'
-import { Sidebar, SECTION_ITEMS, QUICK_FAB_DEFAULT } from './Sidebar'
+import { CheckCircle2, MapPin, Package } from 'lucide-react'
+import { BiCalendarPlus } from 'react-icons/bi'
+import { Sidebar, SECTION_ITEMS, QUICK_FAB_DEFAULT, type QuickFabPosition } from './Sidebar'
+import { QuickAccessBar, type QuickAccessItem } from './QuickAccessBar'
 import { TopBar } from './TopBar'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
@@ -37,6 +39,7 @@ export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [fabCollapsed, setFabCollapsedP] = useProfilePref<boolean>('quickfab:collapsed', false)
   const [enabledFabs] = useProfilePref<string[]>('quickfab:enabled', QUICK_FAB_DEFAULT)
+  const [fabPosition] = useProfilePref<QuickFabPosition>('quickfab:position', 'bottom-right')
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
   const [navBarHeight, setNavBarHeight] = useState(0)
@@ -155,6 +158,16 @@ export function AppShell() {
   const isInventoryRoute = location.pathname !== '/dashboard' &&
     SECTION_ITEMS.inventory.some((i) => i.to && (location.pathname === i.to || location.pathname.startsWith(`${i.to}/`)))
 
+  // Shared item list behind all 3 Quick Access positions (Profile → Quick
+  // Access Buttons → Position) — built once, rendered by QuickAccessBar
+  // either as a floating bottom-corner stack or an inline TopBar row.
+  const quickAccessItems: QuickAccessItem[] = [
+    { key: 'tasks', label: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', onClick: toggleTasks },
+    { key: 'lookup', label: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', onClick: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
+    { key: 'meeting', label: 'Quick Meeting', icon: <BiCalendarPlus className="w-5 h-5" />, open: meetingMode !== 'hidden', onClick: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
+    { key: 'inventory', label: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', onClick: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
+  ].filter((f) => enabledFabs.includes(f.key))
+
   return (
     <div className="flex h-screen overflow-hidden bg-cream font-body">
       <Sidebar
@@ -178,6 +191,7 @@ export function AppShell() {
             onTasksWidthChange={setTasksWidthP}
             onToggleTasks={toggleTasks}
             onOpenTasks={openTasks}
+            quickAccessSlot={!mobile && fabPosition === 'topbar-left' ? <QuickAccessBar variant="topbar" items={quickAccessItems} /> : null}
           />
         </div>
         {/* Only the scrollable content area shifts right for docked panels —
@@ -196,24 +210,18 @@ export function AppShell() {
       </div>
 
       {/* Quick-access FABs — always available on desktop now that the in-sidebar
-          grid is gone. Bottom-right stack, labels on hover; a button hides while
-          its panel is open; collapses to a nub. */}
-      {!mobile && (
-        <div className="fixed bottom-4 z-30 flex flex-col items-end gap-2" style={{ right: (pushWidth || 0) + 16 }}>
-          {/* Buttons stay mounted and slide down/up so collapse/expand animates. */}
-          <div className={`flex flex-col items-end gap-2 origin-bottom transition-all duration-200 ease-out ${fabCollapsed ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
-            {[
-              { k: 'tasks', t: "Today's Tasks", icon: <CheckCircle2 className="w-5 h-5" />, open: tasksMode !== 'hidden', on: toggleTasks },
-              { k: 'lookup', t: 'Location Lookup', icon: <MapPin className="w-5 h-5" />, open: lookupMode !== 'hidden', on: () => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden') },
-              { k: 'meeting', t: 'Quick Meeting', icon: <MessageSquare className="w-5 h-5" />, open: meetingMode !== 'hidden', on: () => setMeetingModeP(meetingMode === 'hidden' ? lastMeeting.current : 'hidden') },
-              { k: 'inventory', t: 'Inventory', icon: <Package className="w-5 h-5" />, open: invMode !== 'hidden', on: () => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden') },
-            ].filter((f) => !f.open && enabledFabs.includes(f.k)).map((f) => <QuickFab key={f.k} title={f.t} onClick={f.on}>{f.icon}</QuickFab>)}
-          </div>
-          <button onClick={() => setFabCollapsedP(!fabCollapsed)} title={fabCollapsed ? 'Show quick access' : 'Hide quick access'} aria-label={fabCollapsed ? 'Show quick access' : 'Hide quick access'}
-            className="flex items-center justify-center w-10 h-6 rounded-full bg-navy/80 text-cream shadow-lg hover:bg-navy transition-colors">
-            {fabCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
-        </div>
+          grid is gone. Bottom-right (default) or bottom-left, per the position
+          picked in Profile → Quick Access Buttons; "topbar-left" instead
+          renders inline via TopBar's quickAccessSlot above, not here. */}
+      {!mobile && fabPosition !== 'topbar-left' && (
+        <QuickAccessBar
+          variant="floating"
+          anchor={fabPosition === 'bottom-left' ? 'left' : 'right'}
+          offset={fabPosition === 'bottom-left' ? sidebarWidth + 16 : (pushWidth || 0) + 16}
+          items={quickAccessItems}
+          collapsed={fabCollapsed}
+          onToggleCollapsed={() => setFabCollapsedP(!fabCollapsed)}
+        />
       )}
 
       {/* Each floating quick-access panel gets its own boundary — these render
@@ -241,15 +249,5 @@ export function AppShell() {
         />
       </ErrorBoundary>
     </div>
-  )
-}
-
-function QuickFab({ title, onClick, children }: { title: string; onClick: () => void; children: ReactNode }) {
-  return (
-    <button onClick={onClick} title={title} aria-label={title}
-      className="group flex items-center h-10 rounded-full bg-navy text-cream shadow-lg px-2.5 hover:bg-navy/90 transition-colors animate-[fabRise_200ms_ease-out]">
-      {children}
-      <span className="max-w-0 group-hover:max-w-[160px] overflow-hidden whitespace-nowrap text-xs font-heading transition-[max-width,margin] duration-200 group-hover:ml-2">{title}</span>
-    </button>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent,
@@ -16,6 +16,7 @@ import { FloatingPanel, type PanelMode } from '@/components/shared/FloatingPanel
 import { RecentPagesWidget } from './RecentPagesWidget'
 import { PresenceWidget } from './PresenceWidget'
 import { SyncStatusWidget } from './SyncStatusWidget'
+import { ProfilePanel } from './ProfilePanel'
 import { useRecentPagesTracking } from '@/hooks/useRecentPagesTracking'
 import { EndDayModal } from '@/modules/projects/EndDayModal'
 import { format, differenceInDays, endOfWeek, endOfMonth, parseISO } from 'date-fns'
@@ -54,6 +55,13 @@ const PILL_LABELS: Record<PillKey, string> = {
   recount_needed:    'Recounts',
   forms_due:         'Forms Due',
 }
+
+// Pills were an early addition from when this app was inventory-only — the
+// user wants them off now that the app covers far more ground, but kept in
+// code in case they're revived later. Flip this back to true to restore
+// both the pill row and its "Customize Pills" gear/popover with no other
+// changes needed.
+const PILLS_ENABLED = false
 
 const DEFAULT_PILL_ORDER: PillKey[] = [...ALL_PILL_KEYS]
 const DEFAULT_HIDDEN: PillKey[] = []
@@ -113,6 +121,9 @@ interface TopBarProps {
   onTasksWidthChange: (w: number) => void
   onToggleTasks: () => void
   onOpenTasks: () => void
+  // Quick Access buttons, rendered inline here instead of a floating corner
+  // stack when Profile → Quick Access Buttons → Position is "Top bar - left".
+  quickAccessSlot?: ReactNode
 }
 
 type TaskRange = 'today' | 'week' | 'month'
@@ -126,6 +137,7 @@ export function TopBar({
   mobile, onMobileMenuOpen,
   tasksMode, tasksWidth, tasksTopOffset, tasksSidebarWidth,
   onTasksModeChange, onTasksWidthChange, onToggleTasks, onOpenTasks,
+  quickAccessSlot,
 }: TopBarProps) {
   const navigate = useNavigate()
   const { profile } = useAuthStore()
@@ -133,9 +145,15 @@ export function TopBar({
   useRecentPagesTracking() // records route visits + owns the Alt+Left/Right hotkeys
   const { locations } = useLocations()
   const { isExcluded } = useLocationExclusions()
+  // Notification settings UI now lives in the Profile modal (ProfilePanel) —
+  // this hook instance is kept here because TopBar still fires notify()
+  // itself (EOD reminders etc.); its live prefs/permission/setPrefs are
+  // passed down as props so ProfilePanel edits the SAME instance rather than
+  // a second, independently-stale copy.
   const { canNotify, permission, prefs: notifPrefs, setPrefs: setNotifPrefs, requestPermission, notify } = useNotifications()
-  const [notifMenuOpen, setNotifMenuOpen] = useState(false)
-  const notifMenuRef = useRef<HTMLDivElement>(null)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const profileInitials = (profile?.full_name ?? profile?.email ?? '?')
+    .split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()
   const [endDayOpen, setEndDayOpen] = useState(false)
   const [eodGlow, setEodGlow] = useState(false)
   const [stats, setStats] = useState<TopBarStats>({
@@ -317,16 +335,6 @@ export function TopBar({
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [pillConfigOpen])
-
-  // Click-outside to close the notifications menu
-  useEffect(() => {
-    if (!notifMenuOpen) return
-    function onDown(e: MouseEvent) {
-      if (notifMenuRef.current && !notifMenuRef.current.contains(e.target as Node)) setNotifMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [notifMenuOpen])
 
   // One-time launch prompt to enable desktop notifications (requested from the
   // toast's button click — a user gesture, which browsers require).
@@ -621,130 +629,35 @@ export function TopBar({
         </button>
       ) : null}
 
-      {/* Stat pills — scrollable on mobile, centered + wrapping on desktop */}
-      <div className={[
-        'flex items-center gap-2 flex-1 min-w-0',
-        mobile ? 'overflow-x-auto flex-nowrap' : 'flex-wrap justify-center',
-      ].join(' ')}>
-        {visiblePills.map((pill) => (
-          <button
-            key={pill.key}
-            onClick={pill.onClick}
-            title={pill.label}
-            className="flex items-center gap-1 px-2 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all flex-shrink-0 whitespace-nowrap min-w-[100px]"
-          >
-            <span className="text-[#F2F1E6]/60 text-[10px]">{pill.label}:</span>
-            <span className={['font-medium', pill.accent ?? (pill.highlight ? 'text-sky' : 'text-[#F2F1E6]')].join(' ')}>
-              {pill.value}
-            </span>
-          </button>
-        ))}
+      {quickAccessSlot}
 
-      </div>
+      {/* Stat pills — scrollable on mobile, centered + wrapping on desktop */}
+      {PILLS_ENABLED && (
+        <div className={[
+          'flex items-center gap-2 flex-1 min-w-0',
+          mobile ? 'overflow-x-auto flex-nowrap' : 'flex-wrap justify-center',
+        ].join(' ')}>
+          {visiblePills.map((pill) => (
+            <button
+              key={pill.key}
+              onClick={pill.onClick}
+              title={pill.label}
+              className="flex items-center gap-1 px-2 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all flex-shrink-0 whitespace-nowrap min-w-[100px]"
+            >
+              <span className="text-[#F2F1E6]/60 text-[10px]">{pill.label}:</span>
+              <span className={['font-medium', pill.accent ?? (pill.highlight ? 'text-sky' : 'text-[#F2F1E6]')].join(' ')}>
+                {pill.value}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {!PILLS_ENABLED && <div className="flex-1 min-w-0" />}
 
       {/* Sync status, Recent Pages, and who's online + Join Me — next to the pill config gear */}
       <SyncStatusWidget />
       <RecentPagesWidget />
       <PresenceWidget />
-
-      {/* Pill config gear — next to notifications */}
-      <div className="relative flex-shrink-0" ref={pillConfigRef}>
-        <button
-          onClick={() => setPillConfigOpen((v) => !v)}
-          title="Customize pills"
-          className="flex items-center justify-center w-7 h-7 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-all"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </button>
-        {pillConfigOpen && (
-          <div className="absolute right-0 top-full mt-1 z-40 w-52 bg-[#002745] border border-[#F2F1E6]/20 rounded shadow-xl p-2 flex flex-col gap-1">
-            <div className="px-1 pb-1 border-b border-[#F2F1E6]/10 mb-0.5">
-              <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Customize Pills</span>
-            </div>
-            <DndContext sensors={pillDndSensors} collisionDetection={closestCenter} onDragEnd={handlePillDragEnd}>
-              <SortableContext items={pillPrefs.order} strategy={verticalListSortingStrategy}>
-                {pillPrefs.order.filter((k) => ALL_PILL_KEYS.includes(k)).map((key) => (
-                  <SortablePillRow
-                    key={key}
-                    id={key}
-                    label={PILL_LABELS[key]}
-                    visible={!pillPrefs.hidden.includes(key)}
-                    onToggle={() => togglePillHidden(key)}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
-            <div className="border-t border-[#F2F1E6]/10 mt-1 pt-1">
-              <button
-                onClick={resetPillPrefs}
-                className="w-full text-left px-2 py-1 text-[10px] font-mono text-[#F2F1E6]/40 hover:text-[#F2F1E6]/80 transition-colors rounded hover:bg-[#F2F1E6]/5"
-              >
-                Reset to Default
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Notifications */}
-      {canNotify && (
-        <div className="relative flex-shrink-0" ref={notifMenuRef}>
-          <button
-            onClick={() => setNotifMenuOpen((v) => !v)}
-            title="Notifications"
-            className={[
-              'flex items-center justify-center w-7 h-7 rounded border transition-all',
-              permission === 'granted' && notifPrefs.enabled
-                ? 'border-[#F2F1E6]/20 text-sky hover:text-[#F2F1E6]'
-                : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
-            ].join(' ')}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-            </svg>
-          </button>
-          {notifMenuOpen && (
-            <div className="absolute right-0 top-full mt-1 z-40 w-60 bg-[#002745] border border-[#F2F1E6]/20 rounded shadow-xl p-2 flex flex-col gap-1.5">
-              <div className="px-1 pb-1 border-b border-[#F2F1E6]/10">
-                <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Notifications</span>
-              </div>
-              {permission === 'denied' ? (
-                <p className="px-1 py-1 text-[10px] font-mono text-[#F2F1E6]/60 leading-relaxed">
-                  Blocked in your browser. Enable notifications for this site in your browser settings, then reload.
-                </p>
-              ) : permission !== 'granted' ? (
-                <button
-                  onClick={async () => { await requestPermission() }}
-                  className="mx-1 my-0.5 rounded bg-sky/20 border border-sky/40 px-2 py-1.5 text-[11px] font-heading uppercase tracking-wide text-[#F2F1E6] hover:bg-sky/30"
-                >
-                  Enable desktop notifications
-                </button>
-              ) : (
-                <>
-                  <label className="flex items-center gap-2 px-1 py-1 cursor-pointer hover:bg-[#F2F1E6]/5 rounded">
-                    <input type="checkbox" checked={notifPrefs.enabled}
-                      onChange={() => setNotifPrefs({ ...notifPrefs, enabled: !notifPrefs.enabled })}
-                      className="accent-sky w-3.5 h-3.5" />
-                    <span className="text-xs font-mono text-[#F2F1E6]/80">All notifications</span>
-                  </label>
-                  <div className="border-t border-[#F2F1E6]/10 my-0.5" />
-                  {([['eod', 'End of Day'], ['tasks', "Today's Tasks"], ['events', 'Calendar Events']] as [NotifType, string][]).map(([key, label]) => (
-                    <label key={key} className={['flex items-center gap-2 px-1 py-1 rounded', notifPrefs.enabled ? 'cursor-pointer hover:bg-[#F2F1E6]/5' : 'opacity-40'].join(' ')}>
-                      <input type="checkbox" disabled={!notifPrefs.enabled} checked={notifPrefs.types[key]}
-                        onChange={() => setNotifPrefs({ ...notifPrefs, types: { ...notifPrefs.types, [key]: !notifPrefs.types[key] } })}
-                        className="accent-sky w-3.5 h-3.5 ml-3" />
-                      <span className="text-xs font-mono text-[#F2F1E6]/70">{label}</span>
-                    </label>
-                  ))}
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* End Day */}
       <button
@@ -762,6 +675,28 @@ export function TopBar({
         </svg>
         {!mobile && 'End Day'}
       </button>
+
+      {/* Profile — moved here from the sidebar footer */}
+      <button
+        onClick={() => setProfileOpen(true)}
+        title="Profile"
+        className="flex-shrink-0 flex items-center gap-1.5 pl-1 pr-2 py-1 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 transition-all"
+      >
+        <span className="w-5 h-5 rounded-full bg-[#4F7489] flex items-center justify-center text-[9px] font-heading text-[#F2F1E6] flex-shrink-0">
+          {profileInitials}
+        </span>
+        {!mobile && <span className="text-[10px] font-heading uppercase tracking-wide truncate max-w-[100px]">{profile?.full_name ?? profile?.email ?? 'Profile'}</span>}
+      </button>
+      {profileOpen && (
+        <ProfilePanel
+          onClose={() => setProfileOpen(false)}
+          canNotify={canNotify}
+          permission={permission}
+          notifPrefs={notifPrefs}
+          setNotifPrefs={setNotifPrefs}
+          requestPermission={requestPermission}
+        />
+      )}
 
       {/* Tasks — draggable / pinnable floating panel */}
       {checklistOpen && (

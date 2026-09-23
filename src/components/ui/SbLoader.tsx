@@ -5,9 +5,13 @@ import { useDarkMode } from '@/hooks/useDarkMode'
 interface SbLoaderProps {
   sky?: boolean
   size?: number
+  // Suppresses the "SB" mark overlay, leaving just the animated droplet
+  // outline — used where the mark would be too fussy at a small icon size
+  // (e.g. the TopBar's Sync Status button).
+  hideMark?: boolean
 }
 
-export function SbLoader({ sky, size }: SbLoaderProps) {
+export function SbLoader({ sky, size, hideMark }: SbLoaderProps) {
   // Navy-on-dark-background is hard to see — default to the sky variant in
   // dark mode automatically (every existing call site gets this for free,
   // no need to pass sky={true} everywhere) while still honoring an explicit
@@ -34,7 +38,7 @@ export function SbLoader({ sky, size }: SbLoaderProps) {
           strokeDasharray="1 1"
         />
       </svg>
-      <img className="sb-loader__mark" src={useSky ? sbMonoSky : sbMonoNavy} alt="" />
+      {!hideMark && <img className="sb-loader__mark" src={useSky ? sbMonoSky : sbMonoNavy} alt="" />}
     </span>
   )
 }
