@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useContext, createContext } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom'
 import { useInventoryAlerts } from '@/hooks/useInventoryAlerts'
@@ -37,6 +37,7 @@ import {
   ChevronsLeft, ChevronsRight, Pin, Car, SlidersHorizontal,
 } from 'lucide-react'
 import { BiRuler, BiSpreadsheet, BiAbacus, BiCommentError, BiUserVoice } from 'react-icons/bi'
+import { GrDatabase, GrMap } from 'react-icons/gr'
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 
@@ -70,21 +71,21 @@ export const ICONS: Record<string, JSX.Element> = {
   'exception-reporting': <BiCommentError className="w-4 h-4 flex-shrink-0" />,
   'location-comms': <MessageSquare className="w-4 h-4 flex-shrink-0" />,
   'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
-  'customer-heatmap': <MapPin className="w-4 h-4 flex-shrink-0" />,
+  'customer-heatmap': <GrMap className="w-4 h-4 flex-shrink-0" />,
   'droptop-orders': <FileText className="w-4 h-4 flex-shrink-0" />,
   'droptop-vehicles': <Car className="w-4 h-4 flex-shrink-0" />,
   'droptop-packages': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
   'package-mapping': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
   'product-sales-history': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
   'staffing-report': <Users className="w-4 h-4 flex-shrink-0" />,
-  'data-connections': <Database className="w-4 h-4 flex-shrink-0" />,
+  'data-connections': <GrDatabase className="w-4 h-4 flex-shrink-0" />,
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
 
 const SECTION_ICONS: Record<string, JSX.Element> = {
   inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
   droptop: <img src={droptopLogo} alt="" className="w-3.5 h-3.5 flex-shrink-0 object-contain" />,
-  'data-connections': <Database className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
+  'data-connections': <GrDatabase className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
   'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-[#F2F1E6]/70" />,
   operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-[#E67E22]" />,
   finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-[#2ECC71]" />,
@@ -204,18 +205,74 @@ const UTILITY_ITEMS: NavItem[] = [
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
-function StarButton({ active, onClick }: { active: boolean; onClick: (e: React.MouseEvent) => void }) {
-  return (
-    <button
-      onClick={onClick}
-      title={active ? 'Unpin' : 'Pin to top'}
-      className={[
-        'flex-shrink-0 transition-all duration-100 rounded p-0.5',
-        active ? 'text-sky opacity-100' : 'text-[#F2F1E6]/25 opacity-0 group-hover:opacity-100 hover:text-sky',
-      ].join(' ')}
+// Pin/Rearrange now live behind a right-click menu instead of an always-on
+// hover star + drag handle — both were flagged as visually distracting, and
+// the star/outline/handle combo was eating into the row's own width, which
+// is what caused labels like "Product Sales Histo…" to clip. `rearranging`
+// is a single global flag (not per-section) — selecting "Rearrange" from
+// ANY item's context menu turns on drag handles everywhere (every section's
+// own item list, plus Pinned, which previously had no reordering at all)
+// until "Save" is clicked. Defaults are safe no-ops so NavItemLink/
+// SortableNavItem can't crash if ever rendered outside ExpandedSidebar's
+// provider (e.g. reused in a future context with no menu/rearrange UI).
+interface RearrangeCtxValue {
+  rearranging: boolean
+  openMenu: (e: React.MouseEvent, item: NavItem, isFavorite: boolean, onToggleFavorite?: (key: string) => void) => void
+}
+const RearrangeCtx = createContext<RearrangeCtxValue>({ rearranging: false, openMenu: () => {} })
+
+function SidebarContextMenu({
+  x, y, isFavorite, onPin, onRearrange, onClose,
+}: {
+  x: number
+  y: number
+  isFavorite: boolean
+  onPin: () => void
+  onRearrange: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    window.addEventListener('click', onClose)
+    window.addEventListener('contextmenu', onClose)
+    window.addEventListener('scroll', onClose, true)
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', esc)
+    return () => {
+      window.removeEventListener('click', onClose)
+      window.removeEventListener('contextmenu', onClose)
+      window.removeEventListener('scroll', onClose, true)
+      window.removeEventListener('keydown', esc)
+    }
+  }, [onClose])
+
+  // Clamped so a right-click near the bottom/right of the viewport doesn't
+  // render the menu partly off-screen.
+  const top = Math.min(y, window.innerHeight - 90)
+  const left = Math.min(x, window.innerWidth - 168)
+
+  return createPortal(
+    <div
+      style={{ top, left }}
+      className="fixed z-[70] w-40 bg-[#002745] border border-[#F2F1E6]/15 rounded-md shadow-2xl py-1 font-heading animate-[fadeIn_100ms_ease-out]"
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
     >
-      <Pin className="w-3.5 h-3.5" fill={active ? 'currentColor' : 'none'} />
-    </button>
+      <button
+        onClick={onPin}
+        className="w-full flex items-center gap-2 text-left px-3 py-2 text-xs text-[#F2F1E6]/80 hover:bg-[#F2F1E6]/10 hover:text-[#F2F1E6] transition-colors"
+      >
+        <Pin className="w-3.5 h-3.5" fill={isFavorite ? 'currentColor' : 'none'} />
+        {isFavorite ? 'Unpin' : 'Pin to top'}
+      </button>
+      <button
+        onClick={onRearrange}
+        className="w-full flex items-center gap-2 text-left px-3 py-2 text-xs text-[#F2F1E6]/80 hover:bg-[#F2F1E6]/10 hover:text-[#F2F1E6] transition-colors"
+      >
+        <GripVertical className="w-3.5 h-3.5" />
+        Rearrange
+      </button>
+    </div>,
+    document.body,
   )
 }
 
@@ -229,26 +286,27 @@ function NavItemLink({
   dragListeners,
   dragRef,
   dragStyle,
-  outlined,
 }: {
   item: NavItem
   showLabel: boolean
   isFavorite?: boolean
   onToggleFavorite?: (key: string) => void
   onNavClick?: () => void
+  /** True only for a row that's part of an actual sortable list (a real
+   * section's items, or Pinned) — gates whether the drag handle can ever
+   * render at all. Visibility within that is further gated on `rearranging`
+   * below, so the handle only shows once "Rearrange" is picked from the
+   * context menu, not on hover. */
   draggable?: boolean
   dragListeners?: Record<string, unknown>
   dragRef?: (el: HTMLDivElement | null) => void
   dragStyle?: React.CSSProperties
-  /** A light border framing the row — used for section sub-items so they
-   * read as distinct rows against the section's own shaded background,
-   * instead of everything sitting flush together. Skipped on the active
-   * item, which already has its own accent (bg tint + bottom border). */
-  outlined?: boolean
 }) {
+  const { rearranging, openMenu } = useContext(RearrangeCtx)
   const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
   const badge = useNavBadge(item.key)
   const showBadge = badge > 0 && showLabel
+  const showGrip = draggable && rearranging
 
   if (!item.to) {
     return (
@@ -259,22 +317,32 @@ function NavItemLink({
   }
 
   return (
-    <div className="flex items-center gap-1" ref={dragRef} style={dragStyle}>
-      {draggable && (
-        <span {...dragListeners} className="cursor-grab opacity-0 group-hover/row:opacity-100 flex-shrink-0 pl-0.5 hover:text-[#F2F1E6]/50 transition-opacity">
+    <div
+      className="flex items-center gap-1"
+      ref={dragRef}
+      style={dragStyle}
+      onContextMenu={(e) => openMenu(e, item, !!isFavorite, onToggleFavorite)}
+    >
+      {showGrip && (
+        <span {...dragListeners} className="cursor-grab flex-shrink-0 pl-0.5 text-[#F2F1E6]/40 hover:text-[#F2F1E6]/70 transition-colors">
           {ICONS.drag}
         </span>
       )}
       <NavLink
         to={item.to}
-        onClick={onNavClick}
+        onClick={(e) => {
+          // Rearrange mode is a drag-only surface — clicking a row while
+          // it's active shouldn't navigate away mid-reorder.
+          if (rearranging) { e.preventDefault(); return }
+          onNavClick?.()
+        }}
         className={({ isActive }) =>
           [
             base,
             'flex-1 min-w-0',
             isActive
               ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-              : `text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 ${outlined ? 'border border-[#F2F1E6]/10' : ''}`,
+              : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
           ].join(' ')
         }
       >
@@ -283,12 +351,6 @@ function NavItemLink({
         {showLabel && <span className="truncate flex-1">{item.label}</span>}
         {showBadge && (
           <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center">{badge}</span>
-        )}
-        {showLabel && onToggleFavorite && (
-          <StarButton
-            active={!!isFavorite}
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleFavorite(item.key) }}
-          />
         )}
       </NavLink>
     </div>
@@ -327,7 +389,6 @@ function SortableNavItem({
         onNavClick={onNavClick}
         draggable
         dragListeners={listeners as Record<string, unknown>}
-        outlined
       />
     </div>
   )
@@ -338,11 +399,16 @@ function FavoritesSection({
   showLabels,
   onToggleFavorite,
   onNavClick,
+  setFavoritesOrder,
 }: {
   favorites: string[]
   showLabels: boolean
   onToggleFavorite: (key: string) => void
   onNavClick?: () => void
+  /** Previously the Pinned section could only ever grow in pin-order — no
+   * UI ever called this. Now sortable via the same global Rearrange mode
+   * as regular section items (see RearrangeCtx above). */
+  setFavoritesOrder: (v: string[]) => void
 }) {
   const allItems = [...Object.values(SECTION_ITEMS).flat(), ...UTILITY_ITEMS]
   const favItems = favorites
@@ -351,6 +417,18 @@ function FavoritesSection({
 
   if (favItems.length === 0) return null
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIdx = favorites.indexOf(String(active.id))
+    const newIdx = favorites.indexOf(String(over.id))
+    if (oldIdx !== -1 && newIdx !== -1) setFavoritesOrder(arrayMove(favorites, oldIdx, newIdx))
+  }
+
   return (
     <div className="pb-1">
       {showLabels && (
@@ -358,17 +436,20 @@ function FavoritesSection({
           <Pin className="w-3 h-3" fill="currentColor" /> Pinned
         </div>
       )}
-      {favItems.map((item) => (
-        <div key={item.key} className="group/row">
-          <NavItemLink
-            item={item}
-            showLabel={showLabels}
-            isFavorite
-            onToggleFavorite={onToggleFavorite}
-            onNavClick={onNavClick}
-          />
-        </div>
-      ))}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={favItems.map((i) => i.key)} strategy={verticalListSortingStrategy}>
+          {favItems.map((item) => (
+            <SortableNavItem
+              key={item.key}
+              item={item}
+              showLabel={showLabels}
+              isFavorite
+              onToggleFavorite={onToggleFavorite}
+              onNavClick={onNavClick}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
       {showLabels && <div className="mx-3 mt-2 border-t border-[#F2F1E6]/8" />}
     </div>
   )
@@ -387,12 +468,13 @@ function OutlierExpandableItem({
   onToggleFavorite?: (key: string) => void
   onNavClick?: () => void
 }) {
-  const { setNodeRef, transform, transition, isDragging } = useSortable({ id: item.key })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.key })
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
   }
+  const { rearranging, openMenu } = useContext(RearrangeCtx)
   const [expanded, setExpanded] = useState(false)
   const [reports, setReports] = useState<{ id: string; name: string; slug: string }[]>([])
   const prevExpandedRef = useRef(expanded)
@@ -417,29 +499,36 @@ function OutlierExpandableItem({
   const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
 
   return (
-    <div ref={setNodeRef} style={style} className="group/row">
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="group/row"
+      onContextMenu={(e) => openMenu(e, item, !!isFavorite, onToggleFavorite)}
+    >
       <div className="flex items-center gap-1">
+        {rearranging && (
+          <span {...listeners} {...attributes} className="cursor-grab flex-shrink-0 pl-0.5 text-[#F2F1E6]/40 hover:text-[#F2F1E6]/70 transition-colors">
+            {ICONS.drag}
+          </span>
+        )}
         <NavLink
           to={item.to!}
-          onClick={onNavClick}
+          onClick={(e) => {
+            if (rearranging) { e.preventDefault(); return }
+            onNavClick?.()
+          }}
           className={({ isActive }) =>
             [
               base,
               'flex-1 min-w-0',
               isActive
                 ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-                : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 border border-[#F2F1E6]/10',
+                : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
             ].join(' ')
           }
         >
           {ICONS.outlier}
           {showLabel && <span className="truncate flex-1">{item.label}</span>}
-          {showLabel && onToggleFavorite && (
-            <StarButton
-              active={!!isFavorite}
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleFavorite(item.key) }}
-            />
-          )}
         </NavLink>
         {showLabel && reports.length > 0 && (
           <button
@@ -625,9 +714,14 @@ function SortableSection({
 
       {/* Section items — animated slide. A gentle shaded panel (vs. the flat
           sidebar background) reads as "these are nested under the header
-          above them" at a glance, without a hard border. */}
+          above them" at a glance, without a hard border. No side margin of
+          its own — each row's own `mx-1` (NavItemLink's `base`) is the only
+          inset, matching Pinned's spacing exactly. The previous mx-1.5 here
+          stacked on top of that same mx-1, eating ~12px of usable row width
+          for no visual benefit and contributing to labels like "Product
+          Sales Histo…" clipping. */}
       <div className={['grid transition-[grid-template-rows] duration-500 ease-in-out', collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'].join(' ')}>
-        <div className="overflow-hidden mx-1.5 rounded-md bg-black/10">
+        <div className="overflow-hidden rounded-md bg-black/10">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -991,8 +1085,22 @@ function ExpandedSidebar({
     setSectionOrder,
     toggleSection,
     toggleFavorite,
+    setFavoritesOrder,
     setItemOrder,
   } = useSidebarPrefs()
+
+  // Global rearrange mode + the right-click menu that turns it on — see
+  // RearrangeCtx's own comment above for why this is one flag for the whole
+  // sidebar rather than per-section.
+  const [rearranging, setRearranging] = useState(false)
+  const [menu, setMenu] = useState<{
+    x: number; y: number; item: NavItem; isFavorite: boolean; onToggleFavorite?: (key: string) => void
+  } | null>(null)
+  const openMenu = (e: React.MouseEvent, item: NavItem, isFavorite: boolean, onToggleFavorite?: (key: string) => void) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ x: e.clientX, y: e.clientY, item, isFavorite, onToggleFavorite })
+  }
 
   const visibleSectionOrder = useMemo(
     () => sectionOrder.filter((k) => {
@@ -1020,7 +1128,7 @@ function ExpandedSidebar({
   }
 
   return (
-    <>
+    <RearrangeCtx.Provider value={{ rearranging, openMenu }}>
       {/* Header */}
       {showHeader && (
         <div className="flex items-center px-3 h-12 border-b border-[#F2F1E6]/8 flex-shrink-0 overflow-hidden">
@@ -1030,11 +1138,23 @@ function ExpandedSidebar({
 
       {/* Scrollable nav */}
       <div className="flex-1 overflow-y-auto hover-scroll">
+        {rearranging && (
+          <div className="sticky top-0 z-20 flex items-center justify-between gap-2 px-3 py-2 bg-sky/20 border-b border-sky/40 backdrop-blur-sm">
+            <span className="text-[10px] font-heading text-[#F2F1E6] uppercase tracking-wide">Drag items to reorder</span>
+            <button
+              onClick={() => setRearranging(false)}
+              className="flex-shrink-0 px-2.5 py-1 rounded bg-sb-green text-[#002745] text-[10px] font-heading font-bold uppercase tracking-wide hover:brightness-110 transition-all"
+            >
+              Save
+            </button>
+          </div>
+        )}
         <FavoritesSection
           favorites={favorites}
           showLabels
           onToggleFavorite={toggleFavorite}
           onNavClick={onNavClick}
+          setFavoritesOrder={setFavoritesOrder}
         />
 
         <DndContext
@@ -1070,7 +1190,18 @@ function ExpandedSidebar({
         <img src={sbLogo} alt="Strickland Brothers" className="max-w-[80px] opacity-40" />
         <span className="text-xs font-heading text-[#F2F1E6]/50 tracking-widest uppercase">SB Net</span>
       </div>
-    </>
+
+      {menu && (
+        <SidebarContextMenu
+          x={menu.x}
+          y={menu.y}
+          isFavorite={menu.isFavorite}
+          onPin={() => { menu.onToggleFavorite?.(menu.item.key); setMenu(null) }}
+          onRearrange={() => { setRearranging(true); setMenu(null) }}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </RearrangeCtx.Provider>
   )
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, X } from 'lucide-react'
-import { BiData } from 'react-icons/bi'
+import { GrDatabase } from 'react-icons/gr'
 import { useSyncTasksStore, type SyncTask } from '@/stores/syncTasksStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -130,7 +130,7 @@ export function SyncStatusWidget() {
           running.length > 0 ? 'border-sky text-sky' : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
         ].join(' ')}
       >
-        {running.length > 0 ? <SbLoader size={16} hideMark /> : <BiData className="w-4 h-4" />}
+        {running.length > 0 ? <SbLoader size={16} hideMark /> : <GrDatabase className="w-4 h-4" />}
         {running.length > 1 && <span className="text-[10px] font-mono">{running.length}</span>}
       </button>
 
