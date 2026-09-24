@@ -26,12 +26,9 @@ import { useSidebarPrefs } from '@/hooks/useSidebarPrefs'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { isAdminOrDeveloper } from '@/lib/roles'
-import sbLogoCream from '@/assets/logo-cream.png'
-import sbLogoNavy from '@/assets/SBOC-Primary-Navy.png'
-import sbIconCream from '@/assets/SBOC-IconCream.png'
-import sbIconNavy from '@/assets/SBOC-IconNavy.png'
+import sbLogo from '@/assets/logo-cream.png'
+import sbIcon from '@/assets/SBOC-IconCream.png'
 import droptopLogo from '@/assets/droptop-logo.png'
-import { useDarkMode } from '@/hooks/useDarkMode'
 import {
   Package, Settings, Building2, DollarSign, TrendingUp, Megaphone,
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
@@ -1156,8 +1153,6 @@ function ExpandedSidebar({
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
   const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
-  const { dark } = useDarkMode()
-  const sbLogo = dark ? sbLogoCream : sbLogoNavy
 
   const {
     sectionOrder,
@@ -1296,12 +1291,6 @@ function ExpandedSidebar({
 
 export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMobileClose }: SidebarProps) {
   useInventoryAlerts() // load alert counts once for the nav badge
-  // Chrome bg/text already flip automatically via the chrome/chrome-fg CSS
-  // variables (see index.css), but a bitmap logo/icon asset can't — picked
-  // by hand here instead.
-  const { dark } = useDarkMode()
-  const sbLogo = dark ? sbLogoCream : sbLogoNavy
-  const sbIcon = dark ? sbIconCream : sbIconNavy
 
   // A "peek" temporarily shows the full sidebar with one section forced
   // open, entered by clicking that section's launcher icon on the
