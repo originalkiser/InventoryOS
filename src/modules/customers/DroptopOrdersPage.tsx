@@ -82,29 +82,23 @@ interface VehicleRow {
   mileage: number | null
 }
 // One page's worth of orders WITH their package/product/service/vehicle
-// child rows embedded via PostgREST's foreign-table select — a single
-// query per page instead of the header pull followed by a separate
-// per-order-id child-table pull. Every child table has a real `order_id
-// references droptop_orders(id)` FK (confirmed in their migrations), which
-// is what lets PostgREST embed them automatically; each embeds as an array
-// nested on its parent row, so this does NOT change the pagination math —
-// a page of 1,000 orders is still exactly 1,000 top-level rows regardless
-// of how many packages/products/vehicles they carry between them, unlike
-// a flat `.in('order_id', ids)` child-table query (see droptopChildFetch.ts
-// for why THAT needed its own separate pagination).
+// child rows attached — one call per page instead of a header pull
+// followed by a separate per-order-id child-table pull. Was a plain
+// PostgREST foreign-table select (each child embeds as an array nested on
+// its parent row) until 2026-09-24, when that turned out to resolve as a
+// correlated per-row subquery — see get_droptop_orders_embedded's own
+// migration comment (20260930bh) for why it's now an RPC call instead.
+// Shape is identical either way, so this does NOT change the pagination
+// math — a page of 2,000 orders is still exactly 2,000 top-level rows
+// regardless of how many packages/products/vehicles they carry between
+// them, unlike a flat `.in('order_id', ids)` child-table query (see
+// droptopChildFetch.ts for why THAT needed its own separate pagination).
 interface OrderRowEmbedded extends OrderRow {
   droptop_order_packages: Omit<PackageRow, 'order_id'>[]
   droptop_order_products: Omit<ProductRow, 'order_id'>[]
   droptop_order_services: Omit<ServiceRow, 'order_id'>[]
   droptop_order_vehicles: Omit<VehicleRow, 'order_id'>[]
 }
-const ORDER_EMBED_SELECT = `
-  id, location_id, order_id, first_name, last_name, city, region, status, subtotal, final_price, order_finalized_at, fleet_company_name,
-  droptop_order_packages(package_id, name, base_service_price, price_total, price_total_after_discount),
-  droptop_order_products(product_id, product_type, uom, quantity_total),
-  droptop_order_services(package_id, products),
-  droptop_order_vehicles(vin, license_plate, vehicle_name, vin_vehicle_make, vin_vehicle_model, vin_vehicle_year, mileage)
-`
 
 // One column of the Build Your Own Report's order-level detail mode.
 interface TableCol2 { key: string; label: string; get: (o: OrderRow) => string; align?: 'right' }
@@ -258,9 +252,9 @@ export function DroptopOrdersPage() {
       // honored.
       // Raised to 2000 (2026-09-03, Max Rows now 10,000) — kept more
       // conservative than the plain header-only fetches elsewhere in this
-      // app since this query now embeds packages/products/services/
-      // vehicles per order (see ORDER_EMBED_SELECT above), so each page's
-      // payload is heavier per row than a flat header fetch.
+      // app since this query returns packages/products/services/vehicles
+      // per order too (see OrderRowEmbedded above), so each page's payload
+      // is heavier per row than a flat header fetch.
       const PAGE = 2000
       // A full company-wide range used to be 100+ SEQUENTIAL page requests
       // — correct, but every page waited on the previous one's round trip
@@ -273,9 +267,22 @@ export function DroptopOrdersPage() {
       // slicing by date rather than plain OFFSET paging.
       const MAX_PAGE_RETRIES = 2
       let loadedSoFarLocal = 0
-      // Header + every child table in ONE query per page (ORDER_EMBED_SELECT)
-      // instead of a header pull followed by a separate per-order-id child
-      // pull — one network round trip per page does all the work now.
+      // Header + every child table in ONE query per page — was a single
+      // PostgREST resource-embed (ORDER_EMBED_SELECT) until 2026-09-24:
+      // confirmed via EXPLAIN ANALYZE that a one-to-many embed like this
+      // resolves as 4 separate CORRELATED subqueries run once PER OUTER
+      // ROW (2000 executions each per page), most of them hitting disk —
+      // 4.6s for a single 2000-row page, comfortably enough to blow the
+      // `authenticated` role's 30s statement_timeout under this page's own
+      // 6-way concurrent date-slice fetch on a large custom range (real
+      // failure: "canceling statement due to statement timeout — loaded
+      // 122,777 order(s)" on a ~230k-order pull). Replaced with the
+      // get_droptop_orders_embedded RPC (migration 20260930bh), which does
+      // the identical query as a bulk `WHERE order_id IN (...)` join per
+      // child table instead of per-row lookups — confirmed 105ms for the
+      // same page, ~44x faster. Same result shape (empty children read as
+      // null exactly like the old embed), so nothing below this call
+      // needed to change.
       const embedded = await fetchDateRangeConcurrent<OrderRowEmbedded>({
         rangeStart: range.start,
         rangeEnd: range.end,
@@ -289,13 +296,15 @@ export function DroptopOrdersPage() {
           let lastErr: string | null = null
           for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
             if (cancelled) return []
-            let q = applyFilters(sb.schema('inventory').from('droptop_orders')
-              .select(ORDER_EMBED_SELECT))
-              .gte('order_finalized_at', subStartIso).lte('order_finalized_at', subEndIso)
-              .order('order_finalized_at', { ascending: true })
-              .order('id', { ascending: true }).limit(PAGE)
-            if (cursor) q = q.or(`order_finalized_at.gt.${cursor.date},and(order_finalized_at.eq.${cursor.date},id.gt.${cursor.id})`)
-            const { data: pageData, error: err } = await q
+            const { data: pageData, error: err } = await sb.rpc('get_droptop_orders_embedded', {
+              p_company_id: companyId,
+              p_start: subStartIso,
+              p_end: subEndIso,
+              p_location_ids: shopIds.length ? shopIds : null,
+              p_cursor_date: cursor?.date ?? null,
+              p_cursor_id: cursor?.id ?? null,
+              p_limit: PAGE,
+            })
             if (!err) return (pageData ?? []) as OrderRowEmbedded[]
             lastErr = err.message
             if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
