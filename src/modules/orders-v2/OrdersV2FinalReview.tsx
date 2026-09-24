@@ -68,8 +68,15 @@ export function OrdersV2FinalReview() {
   // generation produced, silently going stale the moment someone typed a
   // different number. DOS @ Delivery is unaffected — it's existing on-hand
   // only, independent of qty (see dosAfterForQty's own comment).
+  //
+  // Also flips `included` the same way buildLine() itself decides it for a
+  // freshly-generated line (included = units > 0), except for a genuine
+  // VMI/keep-fill line — see OrdersV2Review.tsx's own patchQty for the full
+  // reasoning (found live 2026-09-24 from Valvoline's new always-list-every-
+  // configured-product qty:0/included:false placeholder rows).
   const patchQty = useCallback((l: DraftLineRow, qty: number) => {
-    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty) })
+    const isVmi = l.flags?.includes('vmi_keepfill')
+    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty), ...(isVmi ? {} : { included: qty > 0 }) })
   }, [patchLine])
 
   const vendorRules = useMemo(() => rulesFor(draft?.vendor_id ?? null, settings, vendors.byId(draft?.vendor_id ?? null)?.name),

@@ -240,8 +240,22 @@ export function OrdersV2Review() {
   // generation produced, silently going stale the moment someone typed a
   // different number. DOS @ Delivery is unaffected — it's existing on-hand
   // only, independent of qty (see dosAfterForQty's own comment).
+  //
+  // Also flips `included` the same way buildLine() itself decides it for a
+  // freshly-generated line (included = units > 0), for every line except a
+  // genuine VMI/keep-fill one — those stay excluded by design until an
+  // explicit Include click, even with a qty typed in, so a quantity can be
+  // previewed without committing to order it. This mattered little before
+  // (VMI was the only case where qty and included could ever disagree) but
+  // became a real point of confusion once Valvoline's "always list every
+  // configured product" (alwaysListConfiguredProducts) started generating
+  // regular, non-VMI qty:0/included:false placeholder rows — found live
+  // 2026-09-24: a shop's not-yet-due product could be typed into (a real
+  // qty) while the row stayed dimmed, since only the explicit Include
+  // toggle used to flip that flag.
   const patchQty = useCallback((l: DraftLineRow, qty: number) => {
-    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty) })
+    const isVmi = l.flags?.includes('vmi_keepfill')
+    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty), ...(isVmi ? {} : { included: qty > 0 }) })
   }, [patchLine])
 
   // DOS After coloring, against this order's own target/max (the card
