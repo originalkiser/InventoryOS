@@ -2,17 +2,19 @@
 // (Customer Heatmap, Droptop Orders page) — same period picker, same
 // remembered-selection behavior, on both. Weeks are Sunday-start (US
 // retail/business convention, matching this app's audience).
-export type DatePeriod = 'wtd' | 'last_week' | 'mtd' | 'last_month' | 'last_3_months' | 'custom'
+export type DatePeriod = 'wtd' | 'last_week' | 'last_7_days' | 'mtd' | 'last_month' | 'last_30_days' | 'last_3_months' | 'custom'
 
 export const PERIOD_LABELS: Record<DatePeriod, string> = {
   wtd: 'Week to Date',
   last_week: 'Last Week',
+  last_7_days: 'Last 7 Days',
   mtd: 'Month to Date',
   last_month: 'Last Month',
+  last_30_days: 'Last 30 Days',
   last_3_months: 'Last 3 Months',
   custom: 'Custom',
 }
-export const PERIOD_ORDER: DatePeriod[] = ['wtd', 'last_week', 'mtd', 'last_month', 'last_3_months', 'custom']
+export const PERIOD_ORDER: DatePeriod[] = ['wtd', 'last_week', 'last_7_days', 'mtd', 'last_month', 'last_30_days', 'last_3_months', 'custom']
 
 const iso = (d: Date) => d.toISOString().slice(0, 10)
 
@@ -69,11 +71,34 @@ export function computeRange(period: DatePeriod, custom?: DateRange): DateRange 
       lastWeekEnd.setDate(lastWeekEnd.getDate() - 1)
       return { start: iso(lastWeekStart), end: iso(lastWeekEnd) }
     }
+    case 'last_7_days': {
+      // Trailing 7 FULL days ending yesterday — deliberately excludes
+      // today, whose data is still partial, matching the same "never
+      // today" convention Staffing Report's Manager Labor tab already uses.
+      const end = new Date(now); end.setDate(end.getDate() - 1)
+      const start = new Date(now); start.setDate(start.getDate() - 7)
+      return { start: iso(start), end: iso(end) }
+    }
     case 'mtd':
       return { start: iso(new Date(now.getFullYear(), now.getMonth(), 1)), end: iso(now) }
     case 'last_month': {
       const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
       const end = new Date(now.getFullYear(), now.getMonth(), 0) // day 0 of this month = last day of prev month
+      return { start: iso(start), end: iso(end) }
+    }
+    case 'last_30_days': {
+      // Rolling 30 days including all of today — end is deliberately
+      // TOMORROW's calendar date, not today's, per an explicit ask: this
+      // page's own query treats a range's end date as inclusive through
+      // 23:59:59.999 UTC (see DroptopOrdersPage.tsx's subEndIso), and the
+      // company runs on a US timezone behind UTC, so a late-evening local
+      // order can already carry a UTC timestamp dated "tomorrow" — the
+      // exact same UTC-boundary gap already found and fixed in
+      // droptop-sync-orders' own incremental fetch (see that function's
+      // "fetches through nowUnix, not yesterdayEndUnix" comment). Ending
+      // the range one calendar day past today closes that same gap here.
+      const end = new Date(now); end.setDate(end.getDate() + 1)
+      const start = new Date(now); start.setDate(start.getDate() - 29)
       return { start: iso(start), end: iso(end) }
     }
     case 'last_3_months': {

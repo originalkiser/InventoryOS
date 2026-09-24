@@ -140,6 +140,34 @@ export function DroptopOrdersPage() {
   // a denominator, `loaded` ticks up per page.
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
 
+  // Fast SQL-side summary (get_droptop_orders_summary_stats, migration
+  // 20260930bl) — powers the stats cards WITHOUT needing the full raw
+  // per-order+package+product+service+vehicle fetch below. Found live
+  // 2026-09-24: a real 30-day/170k-order range took 4 minutes because the
+  // stats cards were computed client-side from that same full raw fetch —
+  // this RPC computes count/revenue/avg-order-value/quarts/M5%/By Package/
+  // By Shop directly in SQL and comes back in ~seconds regardless of range
+  // size, so the raw fetch (needed only for the paginated orders table,
+  // ad-hoc Package/Product/Vehicle/Fleet/Oil-Only/Search filters, and
+  // Build Your Own Report) no longer has to run automatically — see
+  // `detailRequested` below.
+  const [summaryStats, setSummaryStats] = useState<{
+    totals: { count: number; revenue: number; avg_order_value: number; avg_quarts_per_oil_order: number; m5_pct: number | null }
+    by_package: { name: string; count: number; avg_oil_quarts: number }[]
+    by_shop: { location_id: string | null; count: number; avg_quarts: number; m5_pct: number | null }[]
+  } | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+
+  // Whether the user has explicitly asked to load full order-level detail
+  // for the current scope — the slow raw fetch below only runs once this
+  // is true, rather than automatically whenever a shop/date range is
+  // picked. Resets on any scope change (see the effect below, placed after
+  // shopIds is declared), so switching periods/shops always requires a
+  // fresh explicit request rather than silently reusing a detail load that
+  // belongs to a different scope.
+  const [detailRequested, setDetailRequested] = useState(false)
+
   // Package name -> Oil Change / one of 5 M5 sub-categories / None, from the
   // Package Mapping page (inventory.droptop_package_classification) — small
   // (~80-150 rows), loaded once per company rather than per filter/date-
@@ -162,6 +190,7 @@ export function DroptopOrdersPage() {
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
   const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
   const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
+  useEffect(() => { setDetailRequested(false) }, [range.start, range.end, shopIds.join(','), loadAllShops]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Region/Market/AM — same shape as Customer Heatmap's pin filters, but
   // here they narrow the SELECTED shops (whichever the query already
@@ -197,6 +226,36 @@ export function DroptopOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loc.locations, filterRegions, filterMarkets, filterAMs])
 
+  // Fires independently of detailRequested/loading below — this is the
+  // fast path, so it runs as soon as a shop scope is picked (or "Load All
+  // Shops") regardless of whether the user ever asks for full order-level
+  // detail. Not gated behind shopIds.length the way the raw fetch is —
+  // get_droptop_orders_summary_stats aggregates in SQL rather than
+  // shipping rows, so an unscoped company-wide range isn't the slow path
+  // here the way it is for the raw fetch.
+  useEffect(() => {
+    if (!companyId) return
+    if (!shopIds.length && !loadAllShops) { setSummaryStats(null); setSummaryError(null); return }
+    let cancelled = false
+    setSummaryLoading(true)
+    setSummaryError(null)
+    const sb = supabase as any
+    const startIso = `${range.start}T00:00:00.000Z`
+    const endIso = `${range.end}T23:59:59.999Z`
+    sb.rpc('get_droptop_orders_summary_stats', {
+      p_company_id: companyId,
+      p_start: startIso,
+      p_end: endIso,
+      p_location_ids: shopIds.length ? shopIds : null,
+    }).then(({ data, error: err }: any) => {
+      if (cancelled) return
+      if (err) { setSummaryError(err.message); setSummaryStats(null) }
+      else setSummaryStats(data ?? null)
+      setSummaryLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!companyId) return
     // Require at least one shop OR an explicit "load all" opt-in — an
@@ -205,6 +264,18 @@ export function DroptopOrdersPage() {
     // request rather than blocked outright.
     if (!shopIds.length && !loadAllShops) {
       setOrders([]); setPackages([]); setProducts([]); setServices([])
+      setLoading(false); setError(null)
+      return
+    }
+    // The raw per-order+package+product+service+vehicle fetch only runs
+    // once the user explicitly asks for order-level detail (see
+    // detailRequested above and its "Load Order Detail" button below) —
+    // the stats cards above already come from the fast summary RPC
+    // without it. Found live 2026-09-24: a real 170k-order/30-day range
+    // took 4 minutes here specifically because this fetch used to run
+    // automatically just to feed those same stats cards.
+    if (!detailRequested) {
+      setOrders([]); setPackages([]); setProducts([]); setServices([]); setVehicles([])
       setLoading(false); setError(null)
       return
     }
@@ -341,7 +412,7 @@ export function DroptopOrdersPage() {
     }
     run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
-  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops, detailRequested]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const packagesByOrder = useMemo(() => {
     const m = new Map<string, PackageRow[]>()
@@ -630,6 +701,39 @@ export function DroptopOrdersPage() {
       .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredOrders, productsByOrder, servicesByOrder, idToLabel, packagesByOrder, packageClassification])
+
+  // Whichever the stats cards below actually render: the fast SQL summary
+  // until the user asks for full order-level detail (see detailRequested),
+  // then the client-computed totals/packageStats/shopStats above — which
+  // correctly reflect the ad-hoc Package/Product/Vehicle/Fleet/Oil-Only/
+  // Search filters the summary RPC deliberately doesn't replicate (see
+  // that RPC's own migration comment). Once detail has been requested,
+  // stick with the client versions even while still loading, rather than
+  // flashing back to the summary numbers mid-load.
+  const useSummaryStats = !detailRequested
+  const effectiveTotals = useSummaryStats && summaryStats
+    ? {
+        count: summaryStats.totals.count,
+        revenue: summaryStats.totals.revenue,
+        avgOrderValue: summaryStats.totals.avg_order_value,
+        avgQuartsPerOilOrder: summaryStats.totals.avg_quarts_per_oil_order,
+        m5Pct: summaryStats.totals.m5_pct,
+      }
+    : totals
+  const effectivePackageStats = useSummaryStats && summaryStats
+    ? summaryStats.by_package.map((p) => ({ name: p.name, count: p.count, avgOilQuarts: p.avg_oil_quarts }))
+    : packageStats
+  const effectiveShopStats = useSummaryStats && summaryStats
+    ? summaryStats.by_shop
+        .map((s) => ({
+          locationId: s.location_id ?? '—',
+          shopLabel: s.location_id ? (idToLabel.get(s.location_id) ?? s.location_id) : '—',
+          count: s.count,
+          avgQuarts: s.avg_quarts,
+          m5Pct: s.m5_pct,
+        }))
+        .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
+    : shopStats
 
   // ---- Build Your Own Report ------------------------------------------
   // Operates on whatever's already loaded (filteredOrders — respects the
@@ -932,190 +1036,224 @@ export function DroptopOrdersPage() {
             Load All Shops for This Period
           </Button>
         </CardBody></Card>
-      ) : loading ? (
-        <LoadingProgress
-          fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
-          countText={
-            loadProgress.total
-              ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
-              : loadProgress.loaded > 0
-                ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
-                : 'Loading orders…'
-          }
-          messages={[
-            'Pulling orders with packages, products, and vehicles…',
-            'Matching packages to services…',
-            'Tallying up totals…',
-            'Sorting by date…',
-          ]}
-        />
       ) : (
         <>
-          {/* High-level stats */}
-          <div className="flex gap-3 flex-wrap">
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Orders</p>
-              <p className="text-lg font-heading font-bold text-navy">{totals.count.toLocaleString()}</p>
-            </CardBody></Card>
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Revenue</p>
-              <p className="text-lg font-heading font-bold text-navy">{money(totals.revenue)}</p>
-            </CardBody></Card>
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Order Value</p>
-              <p className="text-lg font-heading font-bold text-navy">{money(totals.avgOrderValue)}</p>
-            </CardBody></Card>
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Distinct Packages</p>
-              <p className="text-lg font-heading font-bold text-navy">{packageStats.length}</p>
-            </CardBody></Card>
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Quarts (Oil Change)</p>
-              <p className="text-lg font-heading font-bold text-navy">{totals.avgQuartsPerOilOrder > 0 ? totals.avgQuartsPerOilOrder.toFixed(2) : '—'}</p>
-            </CardBody></Card>
-            <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
-              <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Air Filter, Cabin Air Filter, Wiper Blade Replacement, Additives, Tire Rotation — as a % of Oil Change packages. Classify packages on Package Mapping.">M5%</p>
-              <p className="text-lg font-heading font-bold text-navy">{totals.m5Pct != null ? `${totals.m5Pct.toFixed(1)}%` : '—'}</p>
-            </CardBody></Card>
-          </div>
-
-          {/* Package + Shop summaries, side by side — each half the width
-              this used to take full-width, freeing room for the shop
-              breakdown next to it. */}
-          <div className="flex gap-3 flex-wrap items-start">
-            <Card className="flex-1 min-w-[280px]">
-              <CardBody className="flex flex-col gap-2">
-                <span className="text-xs font-mono text-navy uppercase tracking-wide">By Package</span>
-                {packageStats.length === 0 ? (
-                  <p className="text-xs font-mono text-inky/60">No packages in this filtered set.</p>
-                ) : (
-                  <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
-                    <table className="w-full text-xs font-mono">
-                      <thead className="sticky top-0 bg-cream">
-                        <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                          <th className="px-3 py-2 text-left">Package</th>
-                          <th className="px-3 py-2 text-right">Count</th>
-                          <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {packageStats.map((s) => (
-                          <tr key={s.name} className="border-b border-navy/10">
-                            <td className="px-3 py-1.5 text-navy">{s.name}</td>
-                            <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
-                            <td className="px-3 py-1.5 text-navy text-right">{s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardBody>
-            </Card>
-
-            <Card className="flex-1 min-w-[280px]">
-              <CardBody className="flex flex-col gap-2">
-                <span className="text-xs font-mono text-navy uppercase tracking-wide">By Shop ({shopStats.length})</span>
-                {shopStats.length === 0 ? (
-                  <p className="text-xs font-mono text-inky/60">No shops in this filtered set.</p>
-                ) : (
-                  <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
-                    <table className="w-full text-xs font-mono">
-                      <thead className="sticky top-0 bg-cream">
-                        <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                          <th className="px-3 py-2 text-left">Shop</th>
-                          <th className="px-3 py-2 text-right">Orders</th>
-                          <th className="px-3 py-2 text-right">Avg Quarts / Order</th>
-                          <th className="px-3 py-2 text-right">M5%</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {shopStats.map((s) => (
-                          <tr key={s.locationId} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10"
-                            title={`See ${s.shopLabel}'s orders`}
-                            onClick={() => { setReportShops(s.locationId === '—' ? [] : [s.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setReportOpen(true) }}>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap underline decoration-dotted">{s.shopLabel}</td>
-                            <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
-                            <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
-                            <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardBody>
-            </Card>
-          </div>
-
-          {/* Orders table — paginated client-side; rendering the full
-              filtered set (can be tens of thousands of rows) at once was
-              what made the page laggy after loading, separately from load
-              time itself. */}
-          <Card>
-            <CardBody className="flex flex-col gap-2">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length.toLocaleString()})</span>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button size="sm" variant="secondary" onClick={() => setReportOpen(true)}>Build Report</Button>
-                  <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportOrders('csv')}>Export CSV</Button>
-                  <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportOrders('xlsx')}>Export Excel</Button>
-                  {filteredOrders.length > ORDERS_PAGE_SIZE && (
-                    <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
-                      <Button size="sm" variant="secondary" disabled={ordersPage === 0} onClick={() => setOrdersPage((p) => Math.max(0, p - 1))}>Prev</Button>
-                      <span>Page {ordersPage + 1} of {totalOrderPages}</span>
-                      <Button size="sm" variant="secondary" disabled={ordersPage >= totalOrderPages - 1} onClick={() => setOrdersPage((p) => Math.min(totalOrderPages - 1, p + 1))}>Next</Button>
-                    </div>
-                  )}
-                </div>
+          {/* High-level stats — from the fast SQL summary
+              (get_droptop_orders_summary_stats) until order-level detail is
+              explicitly requested below, then from the client-computed
+              totals/packageStats/shopStats so any ad-hoc Package/Product/
+              Vehicle/Fleet/Oil-Only/Search filter is reflected (the summary
+              RPC deliberately doesn't replicate those — see its own
+              migration comment). Found live 2026-09-24: a real 170k-order/
+              30-day range took 4 minutes here because these numbers used to
+              require the full per-order detail fetch below every time. */}
+          {useSummaryStats && summaryLoading && !summaryStats ? (
+            <LoadingProgress fraction={null} countText="Loading summary…" messages={['Aggregating orders…', 'Tallying packages by shop…']} />
+          ) : useSummaryStats && summaryError && !summaryStats ? (
+            <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{summaryError}</p>
+          ) : (
+            <>
+              <div className="flex gap-3 flex-wrap">
+                <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Orders</p>
+                  <p className="text-lg font-heading font-bold text-navy">{effectiveTotals.count.toLocaleString()}</p>
+                </CardBody></Card>
+                <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Total Revenue</p>
+                  <p className="text-lg font-heading font-bold text-navy">{money(effectiveTotals.revenue)}</p>
+                </CardBody></Card>
+                <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Order Value</p>
+                  <p className="text-lg font-heading font-bold text-navy">{money(effectiveTotals.avgOrderValue)}</p>
+                </CardBody></Card>
+                <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Distinct Packages</p>
+                  <p className="text-lg font-heading font-bold text-navy">{effectivePackageStats.length}</p>
+                </CardBody></Card>
+                <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Quarts (Oil Change)</p>
+                  <p className="text-lg font-heading font-bold text-navy">{effectiveTotals.avgQuartsPerOilOrder > 0 ? effectiveTotals.avgQuartsPerOilOrder.toFixed(2) : '—'}</p>
+                </CardBody></Card>
+                <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
+                  <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Air Filter, Cabin Air Filter, Wiper Blade Replacement, Additives, Tire Rotation — as a % of Oil Change packages. Classify packages on Package Mapping.">M5%</p>
+                  <p className="text-lg font-heading font-bold text-navy">{effectiveTotals.m5Pct != null ? `${effectiveTotals.m5Pct.toFixed(1)}%` : '—'}</p>
+                </CardBody></Card>
               </div>
-              {filteredOrders.length === 0 ? (
-                <p className="text-xs font-mono text-inky/60">No orders match these filters.</p>
-              ) : (
-                <div className="overflow-x-auto rounded border border-navy/30 max-h-[32rem] overflow-y-auto">
-                  <table className="w-full text-xs font-mono">
-                    <thead className="sticky top-0 bg-cream">
-                      <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                        <th className="px-3 py-2 text-left">Order #</th>
-                        <th className="px-3 py-2 text-left">Shop</th>
-                        <th className="px-3 py-2 text-left">Customer</th>
-                        <th className="px-3 py-2 text-left">City</th>
-                        <th className="px-3 py-2 text-left">Status</th>
-                        <th className="px-3 py-2 text-left">Packages</th>
-                        <th className="px-3 py-2 text-left">Products</th>
-                        <th className="px-3 py-2 text-right">Quarts</th>
-                        <th className="px-3 py-2 text-left">Vehicle</th>
-                        <th className="px-3 py-2 text-left">Fleet</th>
-                        <th className="px-3 py-2 text-right">Total</th>
-                        <th className="px-3 py-2 text-left">Finalized</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pagedOrders.map((o) => {
-                        const quarts = quartsFor(o.id)
-                        return (
-                        <tr key={o.id} className="border-b border-navy/10">
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{[o.first_name, o.last_name].filter(Boolean).join(' ') || '—'}</td>
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.city || '—'}</td>
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.status || '—'}</td>
-                          <td className="px-3 py-1.5 text-navy">{(packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—'}</td>
-                          <td className="px-3 py-1.5 text-navy">{productIdsFor(o.id).join(', ') || '—'}</td>
-                          <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{quarts > 0 ? quarts.toFixed(2) : '—'}</td>
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{vehicleLabelFor(o.id)}</td>
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.fleet_company_name || '—'}</td>
-                          <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
-                          <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—'}</td>
-                        </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+
+              {/* Package + Shop summaries, side by side — each half the width
+                  this used to take full-width, freeing room for the shop
+                  breakdown next to it. */}
+              <div className="flex gap-3 flex-wrap items-start">
+                <Card className="flex-1 min-w-[280px]">
+                  <CardBody className="flex flex-col gap-2">
+                    <span className="text-xs font-mono text-navy uppercase tracking-wide">By Package</span>
+                    {effectivePackageStats.length === 0 ? (
+                      <p className="text-xs font-mono text-inky/60">No packages in this filtered set.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
+                        <table className="w-full text-xs font-mono">
+                          <thead className="sticky top-0 bg-cream">
+                            <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                              <th className="px-3 py-2 text-left">Package</th>
+                              <th className="px-3 py-2 text-right">Count</th>
+                              <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {effectivePackageStats.map((s) => (
+                              <tr key={s.name} className="border-b border-navy/10">
+                                <td className="px-3 py-1.5 text-navy">{s.name}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </CardBody>
+                </Card>
+
+                <Card className="flex-1 min-w-[280px]">
+                  <CardBody className="flex flex-col gap-2">
+                    <span className="text-xs font-mono text-navy uppercase tracking-wide">By Shop ({effectiveShopStats.length})</span>
+                    {effectiveShopStats.length === 0 ? (
+                      <p className="text-xs font-mono text-inky/60">No shops in this filtered set.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
+                        <table className="w-full text-xs font-mono">
+                          <thead className="sticky top-0 bg-cream">
+                            <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                              <th className="px-3 py-2 text-left">Shop</th>
+                              <th className="px-3 py-2 text-right">Orders</th>
+                              <th className="px-3 py-2 text-right">Avg Quarts / Order</th>
+                              <th className="px-3 py-2 text-right">M5%</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {effectiveShopStats.map((s) => (
+                              <tr key={s.locationId} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10"
+                                title={`See ${s.shopLabel}'s orders`}
+                                onClick={() => { setReportShops(s.locationId === '—' ? [] : [s.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setDetailRequested(true); setReportOpen(true) }}>
+                                <td className="px-3 py-1.5 text-navy whitespace-nowrap underline decoration-dotted">{s.shopLabel}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </CardBody>
+                </Card>
+              </div>
+            </>
+          )}
+
+          {/* Order-level detail — deferred until explicitly requested: the
+              raw per-order+package+product+service+vehicle fetch this backs
+              (paginated orders table, ad-hoc filters, Build Your Own Report,
+              exports) is the slow part for a large range; the stats above
+              never need it. */}
+          {!detailRequested ? (
+            <Card><CardBody className="flex flex-col gap-2">
+              <p className="text-xs font-mono text-inky/60">
+                The stats above are ready. Load full order-level detail to use the Package/Product/Vehicle/Fleet/Oil
+                Only/Search filters, see individual orders, or use Build Your Own Report — this is the slower step for
+                a large range.
+              </p>
+              <Button size="sm" variant="secondary" className="self-start" onClick={() => setDetailRequested(true)}>
+                Load Order Detail
+              </Button>
+            </CardBody></Card>
+          ) : loading ? (
+            <LoadingProgress
+              fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
+              countText={
+                loadProgress.total
+                  ? `Loading orders — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+                  : loadProgress.loaded > 0
+                    ? `Loading orders — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                    : 'Loading orders…'
+              }
+              messages={[
+                'Pulling orders with packages, products, and vehicles…',
+                'Matching packages to services…',
+                'Tallying up totals…',
+                'Sorting by date…',
+              ]}
+            />
+          ) : (
+            /* Orders table — paginated client-side; rendering the full
+               filtered set (can be tens of thousands of rows) at once was
+               what made the page laggy after loading, separately from load
+               time itself. */
+            <Card>
+              <CardBody className="flex flex-col gap-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length.toLocaleString()})</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" variant="secondary" onClick={() => setReportOpen(true)}>Build Report</Button>
+                    <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportOrders('csv')}>Export CSV</Button>
+                    <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportOrders('xlsx')}>Export Excel</Button>
+                    {filteredOrders.length > ORDERS_PAGE_SIZE && (
+                      <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
+                        <Button size="sm" variant="secondary" disabled={ordersPage === 0} onClick={() => setOrdersPage((p) => Math.max(0, p - 1))}>Prev</Button>
+                        <span>Page {ordersPage + 1} of {totalOrderPages}</span>
+                        <Button size="sm" variant="secondary" disabled={ordersPage >= totalOrderPages - 1} onClick={() => setOrdersPage((p) => Math.min(totalOrderPages - 1, p + 1))}>Next</Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </CardBody>
-          </Card>
+                {filteredOrders.length === 0 ? (
+                  <p className="text-xs font-mono text-inky/60">No orders match these filters.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded border border-navy/30 max-h-[32rem] overflow-y-auto">
+                    <table className="w-full text-xs font-mono">
+                      <thead className="sticky top-0 bg-cream">
+                        <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                          <th className="px-3 py-2 text-left">Order #</th>
+                          <th className="px-3 py-2 text-left">Shop</th>
+                          <th className="px-3 py-2 text-left">Customer</th>
+                          <th className="px-3 py-2 text-left">City</th>
+                          <th className="px-3 py-2 text-left">Status</th>
+                          <th className="px-3 py-2 text-left">Packages</th>
+                          <th className="px-3 py-2 text-left">Products</th>
+                          <th className="px-3 py-2 text-right">Quarts</th>
+                          <th className="px-3 py-2 text-left">Vehicle</th>
+                          <th className="px-3 py-2 text-left">Fleet</th>
+                          <th className="px-3 py-2 text-right">Total</th>
+                          <th className="px-3 py-2 text-left">Finalized</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pagedOrders.map((o) => {
+                          const quarts = quartsFor(o.id)
+                          return (
+                          <tr key={o.id} className="border-b border-navy/10">
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{[o.first_name, o.last_name].filter(Boolean).join(' ') || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.city || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.status || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy">{(packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy">{productIdsFor(o.id).join(', ') || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{quarts > 0 ? quarts.toFixed(2) : '—'}</td>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{vehicleLabelFor(o.id)}</td>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.fleet_company_name || '—'}</td>
+                            <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
+                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—'}</td>
+                          </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          )}
         </>
       )}
 
