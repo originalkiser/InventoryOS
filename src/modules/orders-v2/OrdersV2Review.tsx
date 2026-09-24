@@ -43,6 +43,7 @@ const MAIN_COLUMNS: { id: string; label: string }[] = [
   { id: 'dos_now', label: 'DOS Now' },
   { id: 'last_ordered', label: 'Last Ordered' },
   { id: 'last_delivered', label: 'Last Delivered' },
+  { id: 'delivery_date', label: 'Delivery' },
   { id: 'qty', label: 'Qty' },
   { id: 'on_hand_after', label: 'On Hand After' },
   { id: 'dos_after', label: 'DOS After' },
@@ -186,6 +187,29 @@ export function OrdersV2Review() {
     return sched
       ? resolveDeliveryDate(fromDate, sched, deliveryLookup.calendar)
       : nextDeliveryDate(fromDate, deliveryLookup.deliveryDow.get(locationId ?? '') ?? null)
+  }, [deliveryLookup])
+  // Compact schedule description for the new Delivery column — direct
+  // feedback 2026-09-24 ("show the delivery date and delivery schedule for
+  // the Valvoline orders, this will help us sanity check the math on the on
+  // hand after and the dos after"). Same shape/wording as
+  // DeliverySchedulesCard.tsx's own `describe()` (that one reads a raw DB
+  // row's `schedule_type`/etc.; this reads the parsed DeliverySchedule the
+  // engine/review page already use) — kept as a separate small helper
+  // rather than sharing, since the two operate on different row shapes.
+  const describeSchedule = useCallback((locationId: string | null): string | null => {
+    const sched = deliveryLookup.schedules.get(locationId ?? '')
+    if (sched) {
+      if (sched.type === 'plus_business_days') return `+${sched.lead_business_days} business days`
+      if (sched.type === 'week_ab') {
+        return `A: ${sched.week_a_dow == null ? '—' : DOW[sched.week_a_dow]} · B: ${sched.week_b_dow == null ? '—' : DOW[sched.week_b_dow]} (${sched.lead_business_days}d lead)`
+      }
+      return `${sched.delivery_dow == null ? '—' : DOW[sched.delivery_dow]} weekly (${sched.lead_business_days}d lead)`
+    }
+    // No per-vendor schedule configured (ov2_location_schedules) — falls
+    // back to the RelaDyne weekday straight off the location list, same
+    // source deliveryFor's own else-branch (nextDeliveryDate) uses.
+    const dow = deliveryLookup.deliveryDow.get(locationId ?? '')
+    return dow != null ? `${DOW[dow]} (Reladyne delivery day)` : null
   }, [deliveryLookup])
   // Main table column customize modal — hide/reorder, see MAIN_COLUMNS.
   const [columnPrefs, setColumnPrefs] = useState(loadColumnPrefs)
@@ -917,6 +941,7 @@ export function OrdersV2Review() {
                     case 'dos_now': return <Th key={id}>DOS Now</Th>
                     case 'last_ordered': return <Th key={id}>Last Ordered</Th>
                     case 'last_delivered': return <Th key={id}>Last Delivered</Th>
+                    case 'delivery_date': return <Th key={id}>Delivery</Th>
                     case 'qty': return <Th key={id} onClick={() => toggleSort('qty')} active={sortKey === 'qty'} dir={sortDir}>Qty</Th>
                     case 'on_hand_after': return <Th key={id}>On Hand After</Th>
                     case 'dos_after': return <Th key={id} onClick={() => toggleSort('dos_after')} active={sortKey === 'dos_after'} dir={sortDir}>DOS After</Th>
@@ -997,6 +1022,16 @@ export function OrdersV2Review() {
                           : '—'}
                       </td>
                     )
+                    case 'delivery_date': {
+                      const deliverDate = deliveryFor(l.location_id, draft.order_date)
+                      const schedDesc = describeSchedule(l.location_id)
+                      return (
+                        <td key={id} className="px-2 py-1 text-navy whitespace-nowrap">
+                          <div>{deliverDate ? dShort(deliverDate) : '—'}</div>
+                          {schedDesc && <div className="text-[9px] text-inky/50">{schedDesc}</div>}
+                        </td>
+                      )
+                    }
                     case 'qty': return (
                       <td key={id} className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
                         <div className="flex items-start justify-end gap-1">
@@ -1059,6 +1094,11 @@ export function OrdersV2Review() {
                         <td colSpan={visibleColumnIds.length} className="px-3 py-2">
                           <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-1">
                             Every product configured for {shopLabel(l.location_id)}
+                            {(() => {
+                              const dd = deliveryFor(l.location_id, draft.order_date)
+                              const sd = describeSchedule(l.location_id)
+                              return dd ? <span className="normal-case text-inky/50"> · Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</span> : null
+                            })()}
                           </p>
                           <ShopConfiguredProductsTable
                             rows={shopRows(locId)}
@@ -1112,6 +1152,13 @@ export function OrdersV2Review() {
                     </button>
                     {shopOpen && (
                       <div className="mt-1">
+                        {(() => {
+                          const dd = deliveryFor(locId, draft.order_date)
+                          const sd = describeSchedule(locId)
+                          return dd ? (
+                            <p className="text-[10px] font-mono text-inky/50 mb-1">Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</p>
+                          ) : null
+                        })()}
                         <ShopConfiguredProductsTable
                           rows={shopRows(locId)}
                           onPatch={patchQty}

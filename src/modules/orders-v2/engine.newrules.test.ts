@@ -342,6 +342,59 @@ describe('Valvoline: always list configured products + spread case-type minimum 
   })
 })
 
+// Real live bug, found 2026-09-24 from actual production duplicate rows on a
+// Valvoline draft: dollar-minimum smoothing's "top up existing lines" step
+// (part a) never flipped `included` when it bumped a qty:0
+// alwaysListConfiguredProducts placeholder above zero, and its "pull in
+// other eligible products" step (part b) had no check excluding a spare
+// that ALREADY has a line (unlike spreadCaseTypeMinimum's own existingKeys
+// guard) — so once part (a) topped up a placeholder to its own capacity and
+// the minimum still wasn't met, part (b) pulled the SAME product in again
+// as a second, independent line. Neither half of this was reachable before
+// alwaysListConfiguredProducts existed, since for every other vendor a
+// "spare" (not due) and an "existing line" were always mutually exclusive.
+describe('Valvoline: dollar-minimum smoothing does not duplicate an always-listed placeholder (2026-09-24 live bug)', () => {
+  // Not due (DOS 20, above the 14 trigger) but within skip_order_if_dos_over
+  // (default 45) so it's eligible for smoothing at all; capped at 3 units
+  // ($300) so it gets maxed out by part (a) alone.
+  const spareB = () => input({
+    product_id: 'B', on_hand: 100, daily_usage: 5,
+    rule: { uom: 'case', unit_cost: 100, units_per_uom_gallons: 5, max_capacity_gallons: 115 },
+  })
+
+  it('does not create a second line when part (a) maxes the placeholder out and the minimum is still short', () => {
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: {
+        vendor_id: 'V1', minimums: { package: dollars(1000) }, caseTypeMinimums: {},
+        usesOrderDays: false, alwaysListConfiguredProducts: true,
+      },
+    })
+    const res = generateOrder([spareB()], c)
+    const bLines = res.lines.filter((l) => l.product_id === 'B')
+    expect(bLines).toHaveLength(1)
+    expect(bLines[0].qty).toBe(3) // capped at capacity, not the fictitious 3+3
+    expect(bLines[0].included).toBe(true)
+    expect(res.groups[0].meetsMinimum).toBe(false) // genuinely short — capacity can't reach $1000
+  })
+
+  it('flips included to true when part (a) tops up a placeholder without ever needing part (b)', () => {
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: {
+        vendor_id: 'V1', minimums: { package: dollars(150) }, caseTypeMinimums: {},
+        usesOrderDays: false, alwaysListConfiguredProducts: true,
+      },
+    })
+    const res = generateOrder([spareB()], c)
+    const bLines = res.lines.filter((l) => l.product_id === 'B')
+    expect(bLines).toHaveLength(1)
+    expect(bLines[0].qty).toBe(2) // partial top-up, below its own capacity of 3
+    expect(bLines[0].included).toBe(true)
+    expect(res.groups[0].meetsMinimum).toBe(true)
+  })
+})
+
 describe('units_per_order minimum — a floor on the whole order, not each line', () => {
   const unitsPerOrder = (qty: number) => ({ type: 'units_per_order' as const, dollars: 0, qty })
 

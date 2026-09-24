@@ -1002,6 +1002,18 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
         if (take <= 0) { headroom[i] = 0; continue }
         lines[i].qty = roundQty(lines[i].qty + take, lines[i].uom, ctx.settings.bulk_rounding_increment)
         lines[i].system_qty = lines[i].qty
+        // Real bug found live 2026-09-24, Valvoline: a topped-up line could
+        // still be sitting at its original included:false (a Valvoline
+        // alwaysListConfiguredProducts placeholder starts qty:0/included:
+        // false, same as VMI keep-fill) — this loop bumped qty without ever
+        // touching included, so the row stayed dimmed despite showing a
+        // real, nonzero suggested quantity. Never mattered before this
+        // vendor flag existed, since every OTHER vendor's lines here already
+        // start qty>0/included:true (see pass1's own `units <= 0` guard) —
+        // this is simply the same "included = qty > 0" convention used
+        // everywhere else in this app (patchQty, applySpreadCaseTypeMinimum),
+        // applied here too, and is a no-op for any line already included.
+        lines[i].included = lines[i].qty > 0
         if (!lines[i].flags.includes('smoothing_topped_up')) lines[i].flags.push('smoothing_topped_up')
         headroom[i] -= take
         lines[i].dos_after = daysOfSupply(n(lines[i].on_hand) + lines[i].qty * gallonsPerUnit(inp.rule), lines[i].daily_usage)
@@ -1011,10 +1023,27 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
 
       // (b) still short — pull in other eligible products from the shop's config
       if (dollars < minimum) {
+        // Real bug found live 2026-09-24, Valvoline: `spares` is this shop's
+        // eligibleSpare list, built once up front and never pruned — it
+        // still lists a product even after alwaysListConfiguredProducts (or
+        // part (a) above, which can top up a placeholder that started life
+        // as one of these very spares) has already given it a real line.
+        // This loop had no check for that, unlike applySpreadCaseTypeMinimum
+        // below (which correctly excludes via its own existingKeys), so it
+        // could — and did — push a SECOND, brand-new line for a product that
+        // already had one (confirmed live: duplicate rows for the same shop
+        // + product, one `smoothing_topped_up` from part (a) above, one
+        // `added_for_smoothing` from this loop). Never possible before
+        // alwaysListConfiguredProducts existed, since for every other
+        // vendor a "spare" (not due) and an "existing line" were always
+        // mutually exclusive sets. existingKeys is updated as lines are
+        // pushed below so this loop can't duplicate against itself either.
+        const existingKeys = new Set(lines.map((l) => `${l.location_id}|${l.product_id}`))
         // skip_order_if_dos_over applies HERE only: a well-stocked product is
         // never dragged onto an order purely to reach a dollar minimum. It
         // never stops a product that is genuinely due from being ordered.
         const dollarSpares = spares.filter((sp) => {
+          if (existingKeys.has(`${sp.location_id}|${sp.product_id}`)) return false
           const d = daysOfSupply(sp.on_hand, sp.daily_usage)
           return d == null || d <= ctx.settings.skip_order_if_dos_over
         })
@@ -1033,6 +1062,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
           line.added_by_smoothing = true
           line.flags.push('added_for_smoothing')
           markOverDosMax(line, ctx)
+          existingKeys.add(`${sp.location_id}|${sp.product_id}`)
           lines.push(line)
           dollars = groupDollars(lines, ruleOf)
         }
