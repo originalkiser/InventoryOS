@@ -313,7 +313,7 @@ export function OrdersV2Export() {
       : 'Finalize this order? It moves to Completed and is written to order history.'
     if (!confirm(msg)) return
     setFinalizing(true)
-    const id = await finalizeDraft(profile.company_id, profile.id ?? null, draft, lines, shopNumber)
+    const id = await finalizeDraft(profile.company_id, profile.id ?? null, draft, lines, shopNumber, vendorName)
     setFinalizing(false)
     if (id) { toast.success('Order finalized'); navigate(`/orders-v2/history/${id}`) }
   }

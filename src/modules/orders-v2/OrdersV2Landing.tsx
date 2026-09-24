@@ -9,6 +9,7 @@ import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, t
 import { useOrderHistory } from './useOrderHistory'
 import { useRdReports } from './useRdReports'
 import { RdReportsTab } from './RdReportsTab'
+import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
 import { useVendors, useUserNames } from './useLookups'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 
@@ -162,6 +163,7 @@ export function OrdersV2Landing() {
           <TabsTrigger value="cancelled">Cancelled ({visibleCancelled.length})</TabsTrigger>
           <TabsTrigger value="done">Completed ({visibleOrders.length})</TabsTrigger>
           <TabsTrigger value="rd_reports">RD Reports</TabsTrigger>
+          <TabsTrigger value="valvoline_db">Valvoline Order Database</TabsTrigger>
         </TabsList>
 
         <TabsContent value="review">
@@ -241,6 +243,10 @@ export function OrdersV2Landing() {
 
         <TabsContent value="rd_reports">
           <RdReportsTab />
+        </TabsContent>
+
+        <TabsContent value="valvoline_db">
+          <ValvolineOrderDatabaseTab />
         </TabsContent>
       </Tabs>
 

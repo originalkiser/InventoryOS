@@ -8,6 +8,8 @@ import { useAuthStore } from '@/stores/authStore'
 import toast from 'react-hot-toast'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { poNumber } from './engine'
+import { isValvoline } from './useOrdersV2'
+import { insertValvolineOrderFromFinalize } from './useValvolineOrderDatabase'
 import type { OrderType } from './types'
 
 const sb = () => supabase as any
@@ -173,7 +175,7 @@ export function useAuditTrail(orderId: string | null) {
  */
 export async function finalizeDraft(
   companyId: string, userId: string | null, draft: DraftRow, lines: DraftLineRow[],
-  shopNumberOf: (locationId: string | null) => string,
+  shopNumberOf: (locationId: string | null) => string, vendorName?: string | null,
 ): Promise<string | null> {
   const included = lines.filter((l) => l.included && Number(l.qty) > 0)
   const total = included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0)
@@ -214,6 +216,31 @@ export async function finalizeDraft(
 
   await sb().schema('inventory').from('ov2_order_drafts')
     .update({ status: 'exported', last_edited_by: userId, updated_at: now }).eq('id', draft.id)
+
+  // Valvoline Order Database auto-feed (2026-09-24) — every order this app
+  // finalizes for Valvoline also lands in inventory.valvoline_order_lines
+  // (source: 'sbnet'), so it shows up alongside uploaded/manual Valvoline
+  // history without a separate step. Same shop-grouped, per-shop-reset line
+  // numbering as Orders v2 Export's own "line_number" export field, and the
+  // exact same po_number already computed above — a shop's own SB Net order
+  // and any Valvoline-side export of the same PO land on the same rows.
+  // Best-effort: never lets a database-feed failure undo an already-
+  // successful finalize.
+  if (isValvoline(vendorName)) {
+    const sorted = [...included].sort((a, b) =>
+      shopNumberOf(a.location_id).localeCompare(shopNumberOf(b.location_id), undefined, { numeric: true })
+      || a.product_id.localeCompare(b.product_id))
+    const lineNumberByShop = new Map<string, number>()
+    const feedLines = sorted.map((l) => {
+      const n = (lineNumberByShop.get(l.location_id) ?? 0) + 1
+      lineNumberByShop.set(l.location_id, n)
+      return {
+        location_id: l.location_id, product_id: l.product_id, qty: Number(l.qty), uom: l.uom,
+        po_number: poNumber(shopNumberOf(l.location_id), draft.order_date, l.order_type), line_number: n,
+      }
+    })
+    insertValvolineOrderFromFinalize(companyId, feedLines).catch((e) => console.warn('[ValvolineOrderDatabase] auto-feed failed:', e))
+  }
 
   return head.id as string
 }
