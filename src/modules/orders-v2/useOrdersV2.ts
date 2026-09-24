@@ -8,7 +8,7 @@ import { orderDayFromDelivery, parseWeekday } from '@/lib/orderDay'
 import { ownerBucket } from '@/hooks/useLocationExclusions'
 import toast from 'react-hot-toast'
 import {
-  DEFAULT_ORDER_SETTINGS, orderTypeOf,
+  DEFAULT_ORDER_SETTINGS, orderTypeOf, normalizeConfigUom,
   type DeliverySchedule, type DraftStatus, type GeneratedLine, type MinimumType,
   type OrderMinimum, type OrderSettings, type OrderType, type ProductRule,
   type VendorRules, type WeekCalendar,
@@ -128,6 +128,8 @@ export interface CaseLimitRow { id: string; vendor_id: string; case_type: string
 
 /** Order-day restrictions are RelaDyne-specific today. */
 export const isReladyne = (vendorName: string | null | undefined) => /reladyne/i.test(vendorName ?? '')
+/** A handful of always-list-every-configured-product / spread-smoothing behaviors are Valvoline-specific — see VendorRules. */
+export const isValvoline = (vendorName: string | null | undefined) => /valvoline/i.test(vendorName ?? '')
 
 export function useVendorRules() {
   const { profile } = useAuthStore()
@@ -165,6 +167,8 @@ export function useVendorRules() {
       // Order/delivery weekdays are a RelaDyne arrangement; other vendors can
       // be ordered any day, so the restriction simply doesn't apply to them.
       usesOrderDays: isReladyne(vendorName),
+      alwaysListConfiguredProducts: isValvoline(vendorName),
+      spreadCaseTypeMinimum: isValvoline(vendorName),
     }
   }, [minimums, caseLimits])
 
@@ -536,7 +540,7 @@ export function useGenerationData() {
       // "no non-corporate locations anywhere in the inventory section" rule
       // as every other inventory-surface page (see useLocationExclusions.ts)
       // rather than the exemption that page documents for order generation.
-      step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day, owner, metadata, location_type', companyId)),
+      step(fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day, owner, metadata, location_type, active', companyId)),
     ])
     // Same Corporate/Franchise bucketing as useLocationExclusions.ts's
     // DEFAULT_OWNER_RULE (mode 'only', values ['Corporate']) — a location
@@ -545,8 +549,18 @@ export function useGenerationData() {
     // classified location is excluded here too (migration 20260909d) — same
     // rule as useLocations.ts's isOperationalLocation, applied directly
     // since this fetch bypasses that hook.
+    //
+    // 2026-09-24 fix: this had no `active` check at all, found live from a
+    // real Valvoline draft that generated orders for 4 closed/inactive
+    // shops (including one, 508-Strongsville, whose `owner` column reads
+    // 'Corporate' in our own data despite Monday's own raw payload tagging
+    // it "SBOC -Franchisee" — a data-quality mismatch worth fixing at the
+    // source, but excluding every closed shop here is the more robust fix
+    // regardless of whether `owner` is ever wrong again). Same `l.active`
+    // truthy check useLocations.ts's own `options`/`includedOptions` use.
     const corporateIds = new Set(
       locRows
+        .filter((l: any) => l.active)
         .filter((l: any) => l.location_type !== 'car_wash')
         .filter((l: any) => ownerBucket(String(l.owner ?? l.metadata?.owner ?? '')) === 'Corporate')
         .map((l: any) => l.id),
@@ -907,7 +921,7 @@ export function buildGenerationInputs(
       location_id: c.location_id, product_id: c.product_id,
       // Fall back to the order config's own UOM/VMI metadata when no v2 rule
       // has been set up yet, so a shop is usable before it's fully configured.
-      uom: String(meta.uom ?? '').toLowerCase().replace(/\s+/g, '_') || null,
+      uom: normalizeConfigUom(String(meta.uom ?? '')) || null,
       units_per_uom_gallons: null, unit_cost: null,
       max_capacity_gallons: null,
       vmi_keepfill_enabled: String(meta.vmi ?? '').trim().toLowerCase() === 'yes',

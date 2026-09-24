@@ -15,6 +15,27 @@ export const UOM_LABELS: Record<string, string> = {
 export const isBulkUom = (uom: string | null | undefined) => (uom ?? '').toLowerCase() === 'bulk'
 export const orderTypeOf = (uom: string | null | undefined): OrderType => (isBulkUom(uom) ? 'bulk' : 'package')
 
+// Best-effort canonicalization of a location_order_config's own free-text
+// UOM label (e.g. "Bay. Boxes", "55 Gallon Drums") down to one of this
+// app's own fixed Uom values, so it matches whatever a vendor's own
+// case-type minimum was actually configured against (DISCRETE_UOMS/
+// UOM_OPTIONS — picked from a fixed dropdown, never free text). A plain
+// whitespace-only normalization left punctuation in ("Bay. Boxes" ->
+// "bay._boxes"), which silently never matched the configured "bay_box"
+// minimum key — found live 2026-09-24: a real Valvoline 6-bay-box minimum
+// that never flagged despite genuinely being under it on every shop.
+// Falls back to the old whitespace-only normalization for anything not
+// recognizably one of the 3 discrete types, so bulk/other products
+// already relying on their own raw label are untouched.
+export function normalizeConfigUom(raw: string): string {
+  const v = String(raw ?? '').toLowerCase()
+  if (!v) return ''
+  if (/box/.test(v)) return 'bay_box'
+  if (/drum/.test(v)) return 'drum'
+  if (/\bcase\b/.test(v)) return 'case'
+  return v.replace(/\s+/g, '_')
+}
+
 // How an order minimum is expressed. 'dollars' and 'units_per_order' are
 // both floors on the whole shop/order-type total (smoothed the same way,
 // just counted in different currency — dollars vs. cases/units); the
@@ -195,6 +216,21 @@ export interface VendorRules {
   // Order/delivery weekday restriction applies to this vendor (RelaDyne only
   // today — other vendors can be ordered any day).
   usesOrderDays: boolean
+  // Valvoline-only (see isValvoline in useOrdersV2.ts) — a shop only ever
+  // orders a handful of configured products, so every one of them should be
+  // visible every time (even at qty 0, not yet due) rather than silently
+  // dropped, to make "is something already covered" reviewable at a glance.
+  // Optional (not required) so every existing test/call site building a
+  // VendorRules object literal by hand doesn't need updating — falsy/absent
+  // means "off", matching every vendor before this flag existed.
+  alwaysListConfiguredProducts?: boolean
+  // Valvoline-only — when a case-type minimum (e.g. 6 bay boxes) isn't met,
+  // distribute the shortfall evenly across every configured product of that
+  // type (round-robin) instead of maxing out whichever one line already has
+  // the most headroom. Also checks upfront whether every configured
+  // product's own hard capacity could even reach the minimum; if not, makes
+  // no changes at all rather than forcing a partial, arbitrary-looking bump.
+  spreadCaseTypeMinimum?: boolean
 }
 
 export type LineFlag =
