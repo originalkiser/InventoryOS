@@ -30,7 +30,7 @@ const DOT_CLASS: Record<ReturnType<typeof statusColor>, string> = {
   green: 'bg-sb-green',
   orange: 'bg-sb-orange',
   red: 'bg-sb-red',
-  gray: 'bg-[#F2F1E6]/25',
+  gray: 'bg-chrome-fg/25',
 }
 
 export function SyncStatusWidget() {
@@ -127,7 +127,7 @@ export function SyncStatusWidget() {
         title={running.length > 0 ? `${running.length} sync${running.length !== 1 ? 's' : ''} running` : 'Data sync status'}
         className={[
           'flex items-center gap-1 px-2 h-7 rounded border transition-all',
-          running.length > 0 ? 'border-sky text-sky' : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
+          running.length > 0 ? 'border-sky text-sky' : 'border-chrome-fg/20 text-chrome-fg/60 hover:text-chrome-fg',
         ].join(' ')}
       >
         {running.length > 0 ? <SbLoader size={16} hideMark /> : <GrDatabase className="w-4 h-4" />}
@@ -138,11 +138,11 @@ export function SyncStatusWidget() {
         <div
           ref={panelRef}
           style={{ top: pos.top, right: pos.right }}
-          className="fixed z-[100] w-80 bg-[#002745] border border-[#F2F1E6]/20 rounded-xl shadow-xl p-3 flex flex-col gap-3 animate-[fadeIn_120ms_ease-out]"
+          className="fixed z-[100] w-80 bg-chrome border border-chrome-fg/20 rounded-xl shadow-xl p-3 flex flex-col gap-3 animate-[fadeIn_120ms_ease-out]"
         >
           {tasks.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Active</span>
+              <span className="text-[10px] font-mono text-chrome-fg/40 uppercase tracking-wide">Active</span>
               <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
                 {[...running, ...finished].map((t) => <TaskRow key={t.id} task={t} onDismiss={() => dismiss(t.id)} />)}
               </div>
@@ -150,9 +150,9 @@ export function SyncStatusWidget() {
           )}
 
           <div className="flex flex-col gap-1.5">
-            <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Recent Performance</span>
+            <span className="text-[10px] font-mono text-chrome-fg/40 uppercase tracking-wide">Recent Performance</span>
             {rows === null ? (
-              <p className="text-xs font-mono text-[#F2F1E6]/40 italic py-2 text-center">Loading…</p>
+              <p className="text-xs font-mono text-chrome-fg/40 italic py-2 text-center">Loading…</p>
             ) : (
               <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
                 {CONNECTION_ORDER.map((key) => {
@@ -167,17 +167,17 @@ export function SyncStatusWidget() {
                   const lastAt = useManual ? manualAt : scheduledAt
                   const lastStatus = useManual ? (row?.last_manual_run_status ?? null) : (row?.last_run_status ?? null)
                   return (
-                    <div key={key} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-[#F2F1E6]/5">
+                    <div key={key} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-chrome-fg/5">
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${DOT_CLASS[statusColor(lastStatus)]}`} />
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs font-mono text-[#F2F1E6] truncate">{meta.label}</div>
-                        <div className="text-[10px] font-mono text-[#F2F1E6]/40">{lastAt ? formatInTz(lastAt, timezone) : 'Never run'}</div>
+                        <div className="text-xs font-mono text-chrome-fg truncate">{meta.label}</div>
+                        <div className="text-[10px] font-mono text-chrome-fg/40">{lastAt ? formatInTz(lastAt, timezone) : 'Never run'}</div>
                       </div>
                       {canRunNow && (
                         <button
                           onClick={() => runNow(key)}
                           disabled={runningKey === key || running.some((t) => t.label === meta.label)}
-                          className="text-[10px] font-mono uppercase tracking-wide text-sky hover:text-[#F2F1E6] disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+                          className="text-[10px] font-mono uppercase tracking-wide text-sky hover:text-chrome-fg disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
                         >
                           {runningKey === key ? '…' : 'Run Now'}
                         </button>
@@ -198,24 +198,24 @@ export function SyncStatusWidget() {
 function TaskRow({ task, onDismiss }: { task: SyncTask; onDismiss: () => void }) {
   const pct = task.totalBatches > 0 ? Math.min(100, Math.round((task.currentBatch / task.totalBatches) * 100)) : null
   return (
-    <div className="flex flex-col gap-1 px-1.5 py-1.5 rounded hover:bg-[#F2F1E6]/5">
+    <div className="flex flex-col gap-1 px-1.5 py-1.5 rounded hover:bg-chrome-fg/5">
       <div className="flex items-center gap-2">
         {task.status === 'running' && <RefreshCw className="w-3.5 h-3.5 text-sky animate-spin flex-shrink-0" />}
         {task.status === 'success' && <CheckCircle2 className="w-3.5 h-3.5 text-[#2ECC71] flex-shrink-0" />}
         {task.status === 'partial' && <AlertTriangle className="w-3.5 h-3.5 text-[#E67E22] flex-shrink-0" />}
         {task.status === 'error' && <XCircle className="w-3.5 h-3.5 text-[#C0392B] flex-shrink-0" />}
-        <span className="text-xs font-mono text-[#F2F1E6] flex-1 truncate">{task.label}</span>
+        <span className="text-xs font-mono text-chrome-fg flex-1 truncate">{task.label}</span>
         {task.status === 'running' && task.totalBatches > 0 && (
-          <span className="text-[9px] font-mono text-[#F2F1E6]/50 flex-shrink-0">{task.currentBatch}/{task.totalBatches}</span>
+          <span className="text-[9px] font-mono text-chrome-fg/50 flex-shrink-0">{task.currentBatch}/{task.totalBatches}</span>
         )}
         {task.status !== 'running' && (
-          <button onClick={onDismiss} title="Dismiss" className="text-[#F2F1E6]/30 hover:text-[#F2F1E6] flex-shrink-0">
+          <button onClick={onDismiss} title="Dismiss" className="text-chrome-fg/30 hover:text-chrome-fg flex-shrink-0">
             <X className="w-3 h-3" />
           </button>
         )}
       </div>
       {task.status === 'running' && (
-        <div className="h-1 rounded-full bg-[#F2F1E6]/10 overflow-hidden">
+        <div className="h-1 rounded-full bg-chrome-fg/10 overflow-hidden">
           {pct != null ? (
             <div className="h-full bg-sky rounded-full transition-[width] duration-300" style={{ width: `${pct}%` }} />
           ) : (

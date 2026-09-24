@@ -5,7 +5,6 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { WiSunset } from 'react-icons/wi'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
@@ -88,12 +87,12 @@ function SortablePillRow({ id, label, visible, onToggle }: {
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`flex items-center gap-2 px-2 py-1.5 rounded select-none ${isDragging ? 'opacity-50 bg-[#F2F1E6]/5' : 'hover:bg-[#F2F1E6]/5'}`}
+      className={`flex items-center gap-2 px-2 py-1.5 rounded select-none ${isDragging ? 'opacity-50 bg-chrome-fg/5' : 'hover:bg-chrome-fg/5'}`}
     >
       <span
         {...attributes}
         {...listeners}
-        className="text-[#F2F1E6]/20 hover:text-[#F2F1E6]/50 cursor-grab active:cursor-grabbing flex-shrink-0"
+        className="text-chrome-fg/20 hover:text-chrome-fg/50 cursor-grab active:cursor-grabbing flex-shrink-0"
         title="Drag to reorder"
       >
         <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
@@ -106,7 +105,7 @@ function SortablePillRow({ id, label, visible, onToggle }: {
         onChange={onToggle}
         className="accent-navy w-3.5 h-3.5 rounded flex-shrink-0"
       />
-      <span className="text-xs font-mono text-[#F2F1E6]/80 truncate">{label}</span>
+      <span className="text-xs font-mono text-chrome-fg/80 truncate">{label}</span>
     </div>
   )
 }
@@ -616,12 +615,12 @@ export function TopBar({
     .map((key) => ({ key, ...ALL_PILLS[key] }))
 
   return (
-    <header className="relative min-h-[3rem] bg-[#002745] border-b border-[#002745]/40 flex items-center px-3 gap-2 flex-shrink-0 flex-wrap py-1.5">
+    <header className="relative min-h-[3rem] bg-chrome border-b border-chrome/40 flex items-center px-3 gap-2 flex-shrink-0 flex-wrap py-1.5">
       {/* Mobile hamburger */}
       {mobile ? (
         <button
           onClick={onMobileMenuOpen}
-          className="flex-shrink-0 w-8 h-8 flex items-center justify-center text-[#F2F1E6]/70 hover:text-[#F2F1E6] transition-colors"
+          className="flex-shrink-0 w-8 h-8 flex items-center justify-center text-chrome-fg/70 hover:text-chrome-fg transition-colors"
           aria-label="Open navigation"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -643,10 +642,10 @@ export function TopBar({
               key={pill.key}
               onClick={pill.onClick}
               title={pill.label}
-              className="flex items-center gap-1 px-2 py-1 bg-[#F2F1E6]/10 border border-[#F2F1E6]/20 rounded text-xs font-body hover:bg-[#F2F1E6]/20 hover:border-[#F2F1E6]/40 transition-all flex-shrink-0 whitespace-nowrap min-w-[100px]"
+              className="flex items-center gap-1 px-2 py-1 bg-chrome-fg/10 border border-chrome-fg/20 rounded text-xs font-body hover:bg-chrome-fg/20 hover:border-chrome-fg/40 transition-all flex-shrink-0 whitespace-nowrap min-w-[100px]"
             >
-              <span className="text-[#F2F1E6]/60 text-[10px]">{pill.label}:</span>
-              <span className={['font-medium', pill.accent ?? (pill.highlight ? 'text-sky' : 'text-[#F2F1E6]')].join(' ')}>
+              <span className="text-chrome-fg/60 text-[10px]">{pill.label}:</span>
+              <span className={['font-medium', pill.accent ?? (pill.highlight ? 'text-sky' : 'text-chrome-fg')].join(' ')}>
                 {pill.value}
               </span>
             </button>
@@ -655,10 +654,11 @@ export function TopBar({
       )}
       {!PILLS_ENABLED && <div className="flex-1 min-w-0" />}
 
-      {/* Sync status, Recent Pages, and who's online + Join Me — next to the pill config gear */}
-      <SyncStatusWidget />
+      {/* Recent Pages is the leftmost of this trailing group; Sync Status
+          sits directly next to End Day. */}
       <RecentPagesWidget />
       <PresenceWidget />
+      <SyncStatusWidget />
 
       {/* End Day */}
       <button
@@ -668,20 +668,19 @@ export function TopBar({
           'flex-shrink-0 flex items-center gap-1 h-7 px-2 rounded border text-[10px] font-heading uppercase tracking-wide transition-all',
           eodGlow
             ? 'border-orange-500/70 text-orange-400 shadow-[0_0_10px_2px_rgba(249,115,22,0.45)] animate-pulse'
-            : 'border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40',
+            : 'border-chrome-fg/20 text-chrome-fg/70 hover:text-chrome-fg hover:border-chrome-fg/40',
         ].join(' ')}
       >
-        <WiSunset className="w-3 h-3" />
-        {!mobile && 'End Day'}
+        End Day
       </button>
 
       {/* Profile — moved here from the sidebar footer */}
       <button
         onClick={() => setProfileOpen(true)}
         title="Profile"
-        className="flex-shrink-0 flex items-center gap-1.5 h-7 pl-1 pr-2 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40 transition-all"
+        className="flex-shrink-0 flex items-center gap-1.5 h-7 pl-1 pr-2 rounded border border-chrome-fg/20 text-chrome-fg/70 hover:text-chrome-fg hover:border-chrome-fg/40 transition-all"
       >
-        <span className="w-5 h-5 rounded-full bg-[#4F7489] flex items-center justify-center text-[9px] font-heading text-[#F2F1E6] flex-shrink-0">
+        <span className="w-5 h-5 rounded-full bg-[#4F7489] flex items-center justify-center text-[9px] font-heading text-chrome-fg flex-shrink-0">
           {profileInitials}
         </span>
         {!mobile && <span className="text-[10px] font-heading uppercase tracking-wide truncate max-w-[100px]">{profile?.full_name ?? profile?.email ?? 'Profile'}</span>}
@@ -715,7 +714,7 @@ export function TopBar({
               value={filterUserId}
               onChange={(e) => setFilterUserId(e.target.value)}
               onMouseDown={(e) => e.stopPropagation()}
-              className="text-[10px] font-mono border border-[#F2F1E6]/30 rounded px-1.5 py-0.5 bg-[#1a5c87] text-[#F2F1E6] focus:outline-none focus:border-sky max-w-[110px] truncate"
+              className="text-[10px] font-mono border border-chrome-fg/30 rounded px-1.5 py-0.5 bg-[#1a5c87] text-chrome-fg focus:outline-none focus:border-sky max-w-[110px] truncate"
             >
               <option value="">All</option>
               {orgProfiles.map((p) => (

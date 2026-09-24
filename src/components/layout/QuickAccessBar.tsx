@@ -13,7 +13,7 @@ export interface QuickAccessItem {
 
 function Badge({ count }: { count: number }) {
   return (
-    <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-[#F2F1E6] text-[9px] font-mono leading-none px-1.5 py-0.5 min-w-[16px] text-center">
+    <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-sb-cream text-[9px] font-mono leading-none px-1.5 py-0.5 min-w-[16px] text-center">
       {count}
     </span>
   )
@@ -40,8 +40,8 @@ export function QuickAccessBar(props: QuickAccessBarProps) {
             className={[
               'flex items-center gap-1.5 h-7 px-2 rounded border transition-all flex-shrink-0',
               f.open
-                ? 'border-sb-green text-[#F2F1E6] shadow-[0_0_10px_2px_rgba(46,204,113,0.45)]'
-                : 'border-[#F2F1E6]/20 text-[#F2F1E6]/70 hover:text-[#F2F1E6] hover:border-[#F2F1E6]/40',
+                ? 'border-sb-green text-chrome-fg shadow-[0_0_10px_2px_rgba(46,204,113,0.45)]'
+                : 'border-chrome-fg/20 text-chrome-fg/70 hover:text-chrome-fg hover:border-chrome-fg/40',
             ].join(' ')}
           >
             {f.icon}

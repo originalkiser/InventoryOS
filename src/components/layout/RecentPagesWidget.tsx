@@ -114,7 +114,7 @@ export function RecentPagesWidget() {
         title="Recent pages — Alt+← / Alt+→ / Ctrl+K"
         className={[
           'flex items-center justify-center w-7 h-7 rounded border transition-all flex-shrink-0',
-          open ? 'border-sky text-sky' : 'border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6]',
+          open ? 'border-sky text-sky' : 'border-chrome-fg/20 text-chrome-fg/60 hover:text-chrome-fg',
         ].join(' ')}
       >
         <BiCarousel className="w-4 h-4" />
@@ -134,7 +134,7 @@ export function RecentPagesWidget() {
               className={[
                 'w-8 h-8 rounded-full border-[1.5px] font-heading font-semibold text-xs flex items-center justify-center transition-all flex-shrink-0',
                 page.path === activePath
-                  ? 'border-sky bg-sky text-[#002745]'
+                  ? 'border-sky bg-sky text-sb-navy'
                   : 'border-sky/35 bg-[#0F2138] text-sky hover:border-sky',
                 pulsePath === page.path ? 'row-flash' : '',
               ].join(' ')}
@@ -148,7 +148,7 @@ export function RecentPagesWidget() {
       {open && label && labelPos && createPortal(
         <div
           style={{ top: labelPos.top, left: labelPos.left }}
-          className="fixed -translate-x-1/2 z-[60] bg-[#002745] text-[#F2F1E6] text-xs font-heading px-2.5 py-1 rounded-md shadow-xl border border-[#F2F1E6]/15 pointer-events-none whitespace-nowrap animate-[fadeIn_120ms_ease-out]"
+          className="fixed -translate-x-1/2 z-[60] bg-chrome text-chrome-fg text-xs font-heading px-2.5 py-1 rounded-md shadow-xl border border-chrome-fg/15 pointer-events-none whitespace-nowrap animate-[fadeIn_120ms_ease-out]"
         >
           {label}
         </div>,

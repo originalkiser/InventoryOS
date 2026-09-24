@@ -12,6 +12,11 @@ const config: Config = {
         sky:   'rgb(var(--color-sky)  / <alpha-value>)',
         cream: 'rgb(var(--color-cream) / <alpha-value>)',
         onyx:  '#000000',
+        // App chrome (Sidebar/TopBar) — sky-blue bg/dark text in light mode,
+        // the original always-dark navy bg/cream text under .dark. See
+        // index.css's own comment on --chrome-bg/--chrome-fg.
+        chrome: 'rgb(var(--chrome-bg) / <alpha-value>)',
+        'chrome-fg': 'rgb(var(--chrome-fg) / <alpha-value>)',
         // OutlierOS static color namespace
         sb: {
           navy:   '#002745',

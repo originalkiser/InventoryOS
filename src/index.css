@@ -104,6 +104,12 @@
   --color-inky:  79 116 137;   /* #4F7489 */
   --color-sky:   183 224 222;  /* #B7E0DE */
   --color-cream: 242 241 230;  /* #F2F1E6 */
+  /* App chrome (Sidebar/TopBar) — previously always-dark literal hex
+     (#002745 bg / #F2F1E6 fg, same "OutlierOS static namespace" precedent
+     as sb-navy/sb-cream), now themeable: sky-blue chrome with dark text in
+     light mode, the original always-dark look preserved under .dark below. */
+  --chrome-bg: 183 224 222;  /* #B7E0DE (sky) */
+  --chrome-fg: 0 39 69;      /* #002745 (navy) */
   color-scheme: light;
 }
 
@@ -113,6 +119,8 @@
   --color-cream: 10 24 38;     /* #0A1826 — very dark navy bg */
   --color-inky:  106 154 178;  /* #6A9AB2 — mid-tone for secondary text */
   /* sky stays the same (#B7E0DE) — works as accent on both backgrounds */
+  --chrome-bg: 0 39 69;       /* #002745 — today's always-dark chrome look */
+  --chrome-fg: 242 241 230;   /* #F2F1E6 */
   color-scheme: dark;
 }
 

@@ -48,7 +48,7 @@ export function PresenceWidget() {
         ref={buttonRef}
         onClick={openPanel}
         title="Who's online"
-        className="flex items-center gap-1 px-2 h-7 rounded border border-[#F2F1E6]/20 text-[#F2F1E6]/60 hover:text-[#F2F1E6] transition-all"
+        className="flex items-center gap-1 px-2 h-7 rounded border border-chrome-fg/20 text-chrome-fg/60 hover:text-chrome-fg transition-all"
       >
         <BiGroup className="w-4 h-4" />
         {roster.length > 0 && <span className="text-[10px] font-mono text-sky">{roster.length}</span>}
@@ -58,30 +58,30 @@ export function PresenceWidget() {
         <div
           ref={panelRef}
           style={{ top: pos.top, right: pos.right }}
-          className="fixed z-[100] w-64 bg-[#002745] border border-[#F2F1E6]/20 rounded-xl shadow-xl p-3 flex flex-col gap-2 animate-[fadeIn_120ms_ease-out]"
+          className="fixed z-[100] w-64 bg-chrome border border-chrome-fg/20 rounded-xl shadow-xl p-3 flex flex-col gap-2 animate-[fadeIn_120ms_ease-out]"
         >
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono text-[#F2F1E6]/40 uppercase tracking-wide">Online now</span>
+            <span className="text-[10px] font-mono text-chrome-fg/40 uppercase tracking-wide">Online now</span>
             {hasTeam && (
               <div className="flex gap-1 text-[9px] font-mono">
-                <button onClick={() => setScope('team')} className={`px-1.5 py-0.5 rounded transition-colors ${scope === 'team' ? 'bg-sky text-[#002745]' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'}`}>Team</button>
-                <button onClick={() => setScope('company')} className={`px-1.5 py-0.5 rounded transition-colors ${scope === 'company' ? 'bg-sky text-[#002745]' : 'text-[#F2F1E6]/50 hover:text-[#F2F1E6]'}`}>Company</button>
+                <button onClick={() => setScope('team')} className={`px-1.5 py-0.5 rounded transition-colors ${scope === 'team' ? 'bg-sky text-sb-navy' : 'text-chrome-fg/50 hover:text-chrome-fg'}`}>Team</button>
+                <button onClick={() => setScope('company')} className={`px-1.5 py-0.5 rounded transition-colors ${scope === 'company' ? 'bg-sky text-sb-navy' : 'text-chrome-fg/50 hover:text-chrome-fg'}`}>Company</button>
               </div>
             )}
           </div>
 
           {roster.length === 0 ? (
-            <p className="text-xs font-mono text-[#F2F1E6]/40 italic py-2 text-center">No one else online right now.</p>
+            <p className="text-xs font-mono text-chrome-fg/40 italic py-2 text-center">No one else online right now.</p>
           ) : (
             <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
               {roster.map((u) => (
-                <div key={u.user_id} className="flex items-center gap-2 px-1.5 py-1.5 rounded hover:bg-[#F2F1E6]/5">
+                <div key={u.user_id} className="flex items-center gap-2 px-1.5 py-1.5 rounded hover:bg-chrome-fg/5">
                   <span className="w-6 h-6 rounded-full bg-sky/20 border border-sky/40 text-sky text-[10px] font-heading font-semibold flex items-center justify-center flex-shrink-0">
                     {u.initials}
                   </span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-mono text-[#F2F1E6] truncate">{u.name}</div>
-                    <div className="text-[9px] font-mono text-[#F2F1E6]/45 truncate">on {u.page_label}</div>
+                    <div className="text-xs font-mono text-chrome-fg truncate">{u.name}</div>
+                    <div className="text-[9px] font-mono text-chrome-fg/45 truncate">on {u.page_label}</div>
                   </div>
                   <button
                     onClick={() => sendJoinMe(u.user_id, profile?.full_name ?? 'A teammate')}
