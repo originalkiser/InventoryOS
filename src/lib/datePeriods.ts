@@ -87,18 +87,13 @@ export function computeRange(period: DatePeriod, custom?: DateRange): DateRange 
       return { start: iso(start), end: iso(end) }
     }
     case 'last_30_days': {
-      // Rolling 30 days including all of today — end is deliberately
-      // TOMORROW's calendar date, not today's, per an explicit ask: this
-      // page's own query treats a range's end date as inclusive through
-      // 23:59:59.999 UTC (see DroptopOrdersPage.tsx's subEndIso), and the
-      // company runs on a US timezone behind UTC, so a late-evening local
-      // order can already carry a UTC timestamp dated "tomorrow" — the
-      // exact same UTC-boundary gap already found and fixed in
-      // droptop-sync-orders' own incremental fetch (see that function's
-      // "fetches through nowUnix, not yesterdayEndUnix" comment). Ending
-      // the range one calendar day past today closes that same gap here.
-      const end = new Date(now); end.setDate(end.getDate() + 1)
-      const start = new Date(now); start.setDate(start.getDate() - 29)
+      // Trailing 30 FULL days ending yesterday — same "never today"
+      // convention as last_7_days above (a first version of this ended
+      // TOMORROW instead, reasoning about a UTC-boundary edge case that
+      // turned out not to be what was wanted — corrected 2026-09-24 per
+      // direct feedback: "last 30 days should be up through yesterday").
+      const end = new Date(now); end.setDate(end.getDate() - 1)
+      const start = new Date(now); start.setDate(start.getDate() - 30)
       return { start: iso(start), end: iso(end) }
     }
     case 'last_3_months': {

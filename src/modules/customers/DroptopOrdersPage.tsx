@@ -16,7 +16,7 @@
 // an earlier version only checked the former, which is why product-id
 // search kept coming up empty: most consumed products (oil, filters, etc.)
 // only ever show up inside services, not the flat top-level array.
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
@@ -158,6 +158,19 @@ export function DroptopOrdersPage() {
   } | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
+  // Elapsed-seconds counter for the summary load — found live 2026-09-24:
+  // a real 30-day range took up to 1:30, and a bare indeterminate pulse bar
+  // with no ticking number for that long reads as stuck/broken rather than
+  // "still working." This is the one visible sign of life for a load that
+  // (unlike the raw per-order fetch below) has no real page-count progress
+  // to report — it's a single SQL aggregation, not a paginated pull.
+  const [summaryElapsedSec, setSummaryElapsedSec] = useState(0)
+  useEffect(() => {
+    if (!summaryLoading) { setSummaryElapsedSec(0); return }
+    const startedAt = Date.now()
+    const id = setInterval(() => setSummaryElapsedSec(Math.floor((Date.now() - startedAt) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [summaryLoading])
 
   // Whether the user has explicitly asked to load full order-level detail
   // for the current scope — the slow raw fetch below only runs once this
@@ -226,6 +239,23 @@ export function DroptopOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loc.locations, filterRegions, filterMarkets, filterAMs])
 
+  // The Region/Market/AM filters (allowedLocationIds) AND with whichever
+  // shops are explicitly picked, exactly like filteredOrders below does
+  // for the client-computed stats — the summary RPC needs the same
+  // effective location set so its numbers agree with what the page shows
+  // once order-level detail is loaded, not just whatever shopIds alone
+  // resolves to.
+  const summaryLocationIds = useMemo(() => {
+    if (shopIds.length) return allowedLocationIds ? shopIds.filter((id) => allowedLocationIds.has(id)) : shopIds
+    return allowedLocationIds ? [...allowedLocationIds] : null
+  }, [shopIds, allowedLocationIds])
+  // Only a genuinely unrestricted, named-period request (no shop/region/
+  // market/AM narrowing at all) is eligible for the once-daily cache below
+  // — anything narrower is cheap enough live (see 20260930bl's own timing:
+  // ~14s for a 7-day/40k-order single-shop-scale range) that caching every
+  // possible filter combination isn't worth the unbounded cache-key space.
+  const summaryCacheEligible = loadAllShops && summaryLocationIds === null && period !== 'custom'
+
   // Fires independently of detailRequested/loading below — this is the
   // fast path, so it runs as soon as a shop scope is picked (or "Load All
   // Shops") regardless of whether the user ever asks for full order-level
@@ -242,19 +272,168 @@ export function DroptopOrdersPage() {
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
     const endIso = `${range.end}T23:59:59.999Z`
-    sb.rpc('get_droptop_orders_summary_stats', {
-      p_company_id: companyId,
-      p_start: startIso,
-      p_end: endIso,
-      p_location_ids: shopIds.length ? shopIds : null,
-    }).then(({ data, error: err }: any) => {
+    const call = summaryCacheEligible
+      // Once-daily cache (inventory.droptop_orders_summary_cache, migration
+      // 20260930bm) — direct feedback 2026-09-24: "the pre-filled periods
+      // should boast quicker loading times, can we cache that data daily".
+      // Company-wide only (p_location_ids is always NULL here, matching
+      // summaryCacheEligible's own gate) — a cache hit for today returns
+      // instantly, a miss computes live and stores it for the rest of
+      // today. A period that includes today (Week to Date, Month to Date,
+      // Last 3 Months) will show its count as of whenever it was FIRST
+      // computed today, not update again until tomorrow — accepted as the
+      // literal "cache daily" ask rather than a shorter TTL.
+      ? sb.rpc('get_droptop_orders_summary_stats_cached', {
+          p_company_id: companyId,
+          p_period_key: period,
+          p_start: startIso,
+          p_end: endIso,
+        })
+      : sb.rpc('get_droptop_orders_summary_stats', {
+          p_company_id: companyId,
+          p_start: startIso,
+          p_end: endIso,
+          p_location_ids: summaryLocationIds,
+        })
+    call.then(({ data, error: err }: any) => {
       if (cancelled) return
       if (err) { setSummaryError(err.message); setSummaryStats(null) }
       else setSummaryStats(data ?? null)
       setSummaryLoading(false)
     })
     return () => { cancelled = true }
-  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops, period, summaryCacheEligible, (summaryLocationIds ?? []).join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Extracted out of what used to be the raw-fetch effect's own inline
+  // body so the "Load data for this shop" quick-load (below, from the
+  // report modal) can reuse the exact same fetch shape scoped to one
+  // shop, without duplicating this whole pagination/retry pipeline.
+  // Returns the parsed arrays rather than setting state directly — the
+  // main effect below REPLACES state with them, the quick-load handler
+  // MERGES them into what's already loaded.
+  const fetchOrderDetailForScope = useCallback(async (
+    locationIds: string[] | null,
+    opts: { onProgress?: (loaded: number, total: number | null) => void; isCancelled?: () => boolean } = {},
+  ): Promise<{ orders: OrderRow[]; packages: PackageRow[]; products: ProductRow[]; services: ServiceRow[]; vehicles: VehicleRow[] }> => {
+    const sb = supabase as any
+    const startIso = `${range.start}T00:00:00.000Z`
+    const endIso = `${range.end}T23:59:59.999Z`
+    const cancelled = () => opts.isCancelled?.() ?? false
+
+    function applyFilters(q: any) {
+      q = q.eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
+      if (locationIds?.length) q = q.in('location_id', locationIds)
+      return q
+    }
+
+    // Real progress instead of an indeterminate spinner: a cheap COUNT-only
+    // request (head:true — no rows returned, the count is computed
+    // server-side) using the exact same filters as the real fetch below.
+    // Best-effort — if it fails for any reason the load still proceeds,
+    // just without a percentage.
+    const { count } = await applyFilters(sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true }))
+    if (!cancelled()) opts.onProgress?.(0, count ?? null)
+
+    // Keyset pagination by (order_finalized_at, id), not plain id — a
+    // cursor ordered by id while filtering on order_finalized_at can't use
+    // an index to seek to the matching date range (see
+    // 20260907_droptop_orders_date_index.sql), which is what made a narrow
+    // custom range time out even though a wide one loaded fine.
+    //
+    // PAGE was briefly raised to 3000 to cut round trips, but this
+    // Supabase project's API "Max Rows" setting silently caps EVERY
+    // response at 1000 regardless of what .limit() requests. That alone
+    // was harmless — the real bug was the loop's exit condition
+    // (`batch.length < PAGE`) reading "server gave me fewer than I asked
+    // for" as "that's the last page": with every response capped at 1000
+    // and PAGE=3000, every page looked short, so the loop stopped after
+    // page one and silently dropped everything past the first 1000 orders.
+    // Fixed the exit condition to only stop on a genuinely EMPTY page,
+    // which is correct regardless of whatever the real cap is now or
+    // later, and reverted PAGE to 1000 to match the actual ceiling instead
+    // of requesting more than will ever be honored.
+    // Raised to 2000 (2026-09-03, Max Rows now 10,000) — kept more
+    // conservative than the plain header-only fetches elsewhere in this
+    // app since this query returns packages/products/services/vehicles per
+    // order too (see OrderRowEmbedded above), so each page's payload is
+    // heavier per row than a flat header fetch.
+    const PAGE = 2000
+    // A full company-wide range used to be 100+ SEQUENTIAL page requests —
+    // correct, but every page waited on the previous one's round trip even
+    // though the table can serve several requests at once.
+    // fetchDateRangeConcurrent (src/lib) keeps this exact keyset-
+    // pagination shape (still index-friendly on the date range, still safe
+    // to retry a single page) but runs it across several non-overlapping
+    // day-range slices in parallel instead of one loop covering the whole
+    // range — see that file's own comment for why slicing by date rather
+    // than plain OFFSET paging.
+    const MAX_PAGE_RETRIES = 2
+    let loadedSoFarLocal = 0
+    // Header + every child table in ONE query per page — was a single
+    // PostgREST resource-embed (ORDER_EMBED_SELECT) until 2026-09-24:
+    // confirmed via EXPLAIN ANALYZE that a one-to-many embed like this
+    // resolves as 4 separate CORRELATED subqueries run once PER OUTER ROW
+    // (2000 executions each per page), most of them hitting disk — 4.6s
+    // for a single 2000-row page, comfortably enough to blow the
+    // `authenticated` role's 30s statement_timeout under this page's own
+    // 6-way concurrent date-slice fetch on a large custom range (real
+    // failure: "canceling statement due to statement timeout — loaded
+    // 122,777 order(s)" on a ~230k-order pull). Replaced with the
+    // get_droptop_orders_embedded RPC (migration 20260930bh), which does
+    // the identical query as a bulk `WHERE order_id IN (...)` join per
+    // child table instead of per-row lookups — confirmed 105ms for the
+    // same page, ~44x faster. Same result shape (empty children read as
+    // null exactly like the old embed), so nothing below this call needed
+    // to change.
+    const embedded = await fetchDateRangeConcurrent<OrderRowEmbedded>({
+      rangeStart: range.start,
+      rangeEnd: range.end,
+      totalCount: count ?? null,
+      cursorOf: (row) => ({ date: row.order_finalized_at ?? startIso, id: row.id }),
+      isCancelled: cancelled,
+      onProgress: (loadedSoFar) => { loadedSoFarLocal = loadedSoFar; if (!cancelled()) opts.onProgress?.(loadedSoFar, count ?? null) },
+      fetchPage: async (subStart, subEnd, cursor) => {
+        const subStartIso = `${subStart}T00:00:00.000Z`
+        const subEndIso = `${subEnd}T23:59:59.999Z`
+        let lastErr: string | null = null
+        for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+          if (cancelled()) return []
+          const { data: pageData, error: err } = await sb.rpc('get_droptop_orders_embedded', {
+            p_company_id: companyId,
+            p_start: subStartIso,
+            p_end: subEndIso,
+            p_location_ids: locationIds?.length ? locationIds : null,
+            p_cursor_date: cursor?.date ?? null,
+            p_cursor_id: cursor?.id ?? null,
+            p_limit: PAGE,
+          })
+          if (!err) return (pageData ?? []) as OrderRowEmbedded[]
+          lastErr = err.message
+          if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+        }
+        throw new Error(`${lastErr ?? 'Failed to load orders'} — loaded ${loadedSoFarLocal.toLocaleString()} order(s) before this happened`)
+      },
+    })
+
+    // Split the embedded response back into the flat header/child arrays
+    // the rest of this file already works with (packagesByOrder etc. below
+    // re-derive their own by-order Maps from these) — only the FETCH
+    // strategy changed, not the downstream data shape.
+    const allOrders: OrderRow[] = []
+    const pkgRows: PackageRow[] = []
+    const prodRows: ProductRow[] = []
+    const svcRows: ServiceRow[] = []
+    const vehRows: VehicleRow[] = []
+    for (const o of embedded) {
+      const { droptop_order_packages, droptop_order_products, droptop_order_services, droptop_order_vehicles, ...header } = o
+      allOrders.push(header)
+      for (const p of droptop_order_packages ?? []) pkgRows.push({ order_id: o.id, ...p })
+      for (const p of droptop_order_products ?? []) prodRows.push({ order_id: o.id, ...p })
+      for (const s of droptop_order_services ?? []) svcRows.push({ order_id: o.id, ...s })
+      for (const v of droptop_order_vehicles ?? []) vehRows.push({ order_id: o.id, ...v })
+    }
+    return { orders: allOrders, packages: pkgRows, products: prodRows, services: svcRows, vehicles: vehRows }
+  }, [companyId, range.start, range.end])
 
   useEffect(() => {
     if (!companyId) return
@@ -283,136 +462,49 @@ export function DroptopOrdersPage() {
     setLoading(true)
     setError(null)
     setLoadProgress({ loaded: 0, total: null })
-    const sb = supabase as any
-    const startIso = `${range.start}T00:00:00.000Z`
-    const endIso = `${range.end}T23:59:59.999Z`
-
-    function applyFilters(q: any) {
-      q = q.eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
-      if (shopIds.length) q = q.in('location_id', shopIds)
-      return q
-    }
-
-    async function run() {
-      // Real progress instead of an indeterminate spinner: a cheap
-      // COUNT-only request (head:true — no rows returned, the count is
-      // computed server-side) using the exact same filters as the real
-      // fetch below. Best-effort — if it fails for any reason the load
-      // still proceeds, just without a percentage.
-      const { count } = await applyFilters(sb.schema('inventory').from('droptop_orders').select('id', { count: 'exact', head: true }))
-      if (!cancelled) setLoadProgress({ loaded: 0, total: count ?? null })
-
-      // Keyset pagination by (order_finalized_at, id), not plain id — a
-      // cursor ordered by id while filtering on order_finalized_at can't
-      // use an index to seek to the matching date range (see
-      // 20260907_droptop_orders_date_index.sql), which is what made a
-      // narrow custom range time out even though a wide one loaded fine.
-      //
-      // PAGE was briefly raised to 3000 to cut round trips, but this
-      // Supabase project's API "Max Rows" setting silently caps EVERY
-      // response at 1000 regardless of what .limit() requests. That alone
-      // was harmless — the real bug was the loop's exit condition
-      // (`batch.length < PAGE`) reading "server gave me fewer than I
-      // asked for" as "that's the last page": with every response capped
-      // at 1000 and PAGE=3000, every page looked short, so the loop
-      // stopped after page one and silently dropped everything past the
-      // first 1000 orders. Fixed the exit condition to only stop on a
-      // genuinely EMPTY page, which is correct regardless of whatever the
-      // real cap is now or later, and reverted PAGE to 1000 to match the
-      // actual ceiling instead of requesting more than will ever be
-      // honored.
-      // Raised to 2000 (2026-09-03, Max Rows now 10,000) — kept more
-      // conservative than the plain header-only fetches elsewhere in this
-      // app since this query returns packages/products/services/vehicles
-      // per order too (see OrderRowEmbedded above), so each page's payload
-      // is heavier per row than a flat header fetch.
-      const PAGE = 2000
-      // A full company-wide range used to be 100+ SEQUENTIAL page requests
-      // — correct, but every page waited on the previous one's round trip
-      // even though the table can serve several requests at once.
-      // fetchDateRangeConcurrent (src/lib) keeps this exact keyset-
-      // pagination shape (still index-friendly on the date range, still
-      // safe to retry a single page) but runs it across several non-
-      // overlapping day-range slices in parallel instead of one loop
-      // covering the whole range — see that file's own comment for why
-      // slicing by date rather than plain OFFSET paging.
-      const MAX_PAGE_RETRIES = 2
-      let loadedSoFarLocal = 0
-      // Header + every child table in ONE query per page — was a single
-      // PostgREST resource-embed (ORDER_EMBED_SELECT) until 2026-09-24:
-      // confirmed via EXPLAIN ANALYZE that a one-to-many embed like this
-      // resolves as 4 separate CORRELATED subqueries run once PER OUTER
-      // ROW (2000 executions each per page), most of them hitting disk —
-      // 4.6s for a single 2000-row page, comfortably enough to blow the
-      // `authenticated` role's 30s statement_timeout under this page's own
-      // 6-way concurrent date-slice fetch on a large custom range (real
-      // failure: "canceling statement due to statement timeout — loaded
-      // 122,777 order(s)" on a ~230k-order pull). Replaced with the
-      // get_droptop_orders_embedded RPC (migration 20260930bh), which does
-      // the identical query as a bulk `WHERE order_id IN (...)` join per
-      // child table instead of per-row lookups — confirmed 105ms for the
-      // same page, ~44x faster. Same result shape (empty children read as
-      // null exactly like the old embed), so nothing below this call
-      // needed to change.
-      const embedded = await fetchDateRangeConcurrent<OrderRowEmbedded>({
-        rangeStart: range.start,
-        rangeEnd: range.end,
-        totalCount: count ?? null,
-        cursorOf: (row) => ({ date: row.order_finalized_at ?? startIso, id: row.id }),
-        isCancelled: () => cancelled,
-        onProgress: (loadedSoFar) => { loadedSoFarLocal = loadedSoFar; if (!cancelled) setLoadProgress((p) => ({ ...p, loaded: loadedSoFar })) },
-        fetchPage: async (subStart, subEnd, cursor) => {
-          const subStartIso = `${subStart}T00:00:00.000Z`
-          const subEndIso = `${subEnd}T23:59:59.999Z`
-          let lastErr: string | null = null
-          for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
-            if (cancelled) return []
-            const { data: pageData, error: err } = await sb.rpc('get_droptop_orders_embedded', {
-              p_company_id: companyId,
-              p_start: subStartIso,
-              p_end: subEndIso,
-              p_location_ids: shopIds.length ? shopIds : null,
-              p_cursor_date: cursor?.date ?? null,
-              p_cursor_id: cursor?.id ?? null,
-              p_limit: PAGE,
-            })
-            if (!err) return (pageData ?? []) as OrderRowEmbedded[]
-            lastErr = err.message
-            if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
-          }
-          throw new Error(`${lastErr ?? 'Failed to load orders'} — loaded ${loadedSoFarLocal.toLocaleString()} order(s) before this happened`)
-        },
-      })
+    fetchOrderDetailForScope(shopIds.length ? shopIds : null, {
+      isCancelled: () => cancelled,
+      onProgress: (loaded, total) => { if (!cancelled) setLoadProgress({ loaded, total }) },
+    }).then((result) => {
       if (cancelled) return
-
-      // Split the embedded response back into the flat header/child arrays
-      // the rest of this file already works with (packagesByOrder etc.
-      // below re-derive their own by-order Maps from these) — only the
-      // FETCH strategy changed, not the downstream data shape.
-      const allOrders: OrderRow[] = []
-      const pkgRows: PackageRow[] = []
-      const prodRows: ProductRow[] = []
-      const svcRows: ServiceRow[] = []
-      const vehRows: VehicleRow[] = []
-      for (const o of embedded) {
-        const { droptop_order_packages, droptop_order_products, droptop_order_services, droptop_order_vehicles, ...header } = o
-        allOrders.push(header)
-        for (const p of droptop_order_packages ?? []) pkgRows.push({ order_id: o.id, ...p })
-        for (const p of droptop_order_products ?? []) prodRows.push({ order_id: o.id, ...p })
-        for (const s of droptop_order_services ?? []) svcRows.push({ order_id: o.id, ...s })
-        for (const v of droptop_order_vehicles ?? []) vehRows.push({ order_id: o.id, ...v })
-      }
-
-      setOrders(allOrders)
-      setPackages(pkgRows)
-      setProducts(prodRows)
-      setServices(svcRows)
-      setVehicles(vehRows)
+      setOrders(result.orders)
+      setPackages(result.packages)
+      setProducts(result.products)
+      setServices(result.services)
+      setVehicles(result.vehicles)
       setLoading(false)
-    }
-    run().catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
+    }).catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
     return () => { cancelled = true }
-  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops, detailRequested]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops, detailRequested, fetchOrderDetailForScope])
+
+  // "Load data for this shop" quick-load (Build Your Own Report modal,
+  // direct feedback 2026-09-24: clicking a By Shop row before order-level
+  // detail is loaded opens a report with nothing in it, "which makes
+  // sense... but it would be nice to have a button... to quickly pull the
+  // data for that shop") — a scoped, one-shop fetch that MERGES into
+  // whatever's already loaded rather than requiring the full "Load Order
+  // Detail" pull for the page's entire scope. Reads `orders` from the
+  // closure (not a functional updater) since this is a discrete,
+  // user-triggered one-off action, not a hot render path.
+  const [shopQuickLoading, setShopQuickLoading] = useState<string | null>(null)
+  async function loadShopQuickly(locationId: string) {
+    setShopQuickLoading(locationId)
+    try {
+      const result = await fetchOrderDetailForScope([locationId])
+      const seen = new Set(orders.map((o) => o.id))
+      const newOrders = result.orders.filter((o) => !seen.has(o.id))
+      const newOrderIds = new Set(newOrders.map((o) => o.id))
+      setOrders((prev) => [...prev, ...newOrders])
+      setPackages((prev) => [...prev, ...result.packages.filter((p) => newOrderIds.has(p.order_id))])
+      setProducts((prev) => [...prev, ...result.products.filter((p) => newOrderIds.has(p.order_id))])
+      setServices((prev) => [...prev, ...result.services.filter((s) => newOrderIds.has(s.order_id))])
+      setVehicles((prev) => [...prev, ...result.vehicles.filter((v) => newOrderIds.has(v.order_id))])
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to load data for this shop')
+    } finally {
+      setShopQuickLoading(null)
+    }
+  }
 
   const packagesByOrder = useMemo(() => {
     const m = new Map<string, PackageRow[]>()
@@ -703,14 +795,19 @@ export function DroptopOrdersPage() {
   }, [filteredOrders, productsByOrder, servicesByOrder, idToLabel, packagesByOrder, packageClassification])
 
   // Whichever the stats cards below actually render: the fast SQL summary
-  // until the user asks for full order-level detail (see detailRequested),
-  // then the client-computed totals/packageStats/shopStats above — which
-  // correctly reflect the ad-hoc Package/Product/Vehicle/Fleet/Oil-Only/
-  // Search filters the summary RPC deliberately doesn't replicate (see
-  // that RPC's own migration comment). Once detail has been requested,
-  // stick with the client versions even while still loading, rather than
-  // flashing back to the summary numbers mid-load.
-  const useSummaryStats = !detailRequested
+  // until full order-level detail has actually FINISHED loading, then the
+  // client-computed totals/packageStats/shopStats above — which correctly
+  // reflect the ad-hoc Package/Product/Vehicle/Fleet/Oil-Only/Search
+  // filters the summary RPC deliberately doesn't replicate (see that RPC's
+  // own migration comment). Found live 2026-09-24: clicking "Load Order
+  // Detail"/"Load All Shops" used to switch to the client versions the
+  // instant detailRequested went true, while `orders` was still empty
+  // (freshly reset for the raw fetch) — the whole summary section
+  // visibly zeroed out for the duration of the raw fetch instead of
+  // staying on the already-loaded fast numbers. Keeping `loading` in this
+  // condition means the summary only steps aside once there's real
+  // client-side data to replace it with.
+  const useSummaryStats = !detailRequested || loading
   const effectiveTotals = useSummaryStats && summaryStats
     ? {
         count: summaryStats.totals.count,
@@ -801,6 +898,13 @@ export function DroptopOrdersPage() {
   const [reportPage, setReportPage] = useState(0)
 
   const reportShopLabelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
+  // Powers the "Load Data for This Shop" quick-load button below — only
+  // meaningful in single-shop detail mode (the shape a By Shop row click
+  // opens), and only worth offering when that shop genuinely has no
+  // orders loaded yet (a legitimately zero-order shop would show the
+  // button forever, harmless but not worth special-casing).
+  const singleReportShopId = reportMode === 'detail' && reportShops.length === 1 ? (reportShopLabelToId.get(reportShops[0]) ?? null) : null
+  const singleReportShopHasData = singleReportShopId ? orders.some((o) => o.location_id === singleReportShopId) : true
   const reportOrders = useMemo(() => {
     const reportShopIds = new Set(reportShops.map((l) => reportShopLabelToId.get(l)).filter((v): v is string => !!v))
     return filteredOrders.filter((o) => {
@@ -819,8 +923,8 @@ export function DroptopOrdersPage() {
   interface ShopTotalsRow { shopLabel: string; orders: number; subtotal: number; total: number; quarts: number; packages: number }
   const TOTALS_COLUMNS: { key: string; label: string; get: (r: ShopTotalsRow) => string; align?: 'right' }[] = [
     { key: 'shop', label: 'Shop', get: (r) => r.shopLabel },
-    { key: 'orders', label: 'Orders', get: (r) => String(r.orders), align: 'right' },
-    { key: 'packages', label: 'Packages', get: (r) => String(r.packages), align: 'right' },
+    { key: 'orders', label: 'Orders', get: (r) => r.orders.toLocaleString(), align: 'right' },
+    { key: 'packages', label: 'Packages', get: (r) => r.packages.toLocaleString(), align: 'right' },
     { key: 'quarts', label: 'Quarts', get: (r) => (r.quarts > 0 ? r.quarts.toFixed(2) : '—'), align: 'right' },
     { key: 'subtotal', label: 'Subtotal', get: (r) => money(r.subtotal), align: 'right' },
     { key: 'total', label: 'Total', get: (r) => money(r.total), align: 'right' },
@@ -1048,7 +1152,11 @@ export function DroptopOrdersPage() {
               30-day range took 4 minutes here because these numbers used to
               require the full per-order detail fetch below every time. */}
           {useSummaryStats && summaryLoading && !summaryStats ? (
-            <LoadingProgress fraction={null} countText="Loading summary…" messages={['Aggregating orders…', 'Tallying packages by shop…']} />
+            <LoadingProgress
+              fraction={null}
+              countText={`Loading summary — ${summaryElapsedSec}s elapsed${summaryElapsedSec > 15 ? ' (a large date range can take a minute or more — this runs in the database, not a per-order download)' : ''}`}
+              messages={['Aggregating orders…', 'Tallying packages by shop…']}
+            />
           ) : useSummaryStats && summaryError && !summaryStats ? (
             <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{summaryError}</p>
           ) : (
@@ -1103,7 +1211,7 @@ export function DroptopOrdersPage() {
                             {effectivePackageStats.map((s) => (
                               <tr key={s.name} className="border-b border-navy/10">
                                 <td className="px-3 py-1.5 text-navy">{s.name}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{s.count.toLocaleString()}</td>
                                 <td className="px-3 py-1.5 text-navy text-right">{s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
                               </tr>
                             ))}
@@ -1134,9 +1242,9 @@ export function DroptopOrdersPage() {
                             {effectiveShopStats.map((s) => (
                               <tr key={s.locationId} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10"
                                 title={`See ${s.shopLabel}'s orders`}
-                                onClick={() => { setReportShops(s.locationId === '—' ? [] : [s.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setDetailRequested(true); setReportOpen(true) }}>
+                                onClick={() => { setReportShops(s.locationId === '—' ? [] : [s.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setReportOpen(true) }}>
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap underline decoration-dotted">{s.shopLabel}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{s.count}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{s.count.toLocaleString()}</td>
                                 <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
                                 <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
                               </tr>
@@ -1265,6 +1373,18 @@ export function DroptopOrdersPage() {
             further, they don&apos;t pull in shops or dates outside it. Widen the Shop(s)/date range above first if
             something you need isn&apos;t showing up as an option here.
           </p>
+
+          {singleReportShopId && !singleReportShopHasData && (
+            <div className="flex items-center justify-between gap-2 flex-wrap rounded border border-sky/40 bg-sky/10 px-3 py-2">
+              <p className="text-[11px] font-mono text-navy">
+                Order-level detail for this range hasn&apos;t been loaded for {reportShops[0]} yet.
+              </p>
+              <Button size="sm" variant="secondary" loading={shopQuickLoading === singleReportShopId}
+                onClick={() => void loadShopQuickly(singleReportShopId)}>
+                Load Data for This Shop
+              </Button>
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Mode</span>
