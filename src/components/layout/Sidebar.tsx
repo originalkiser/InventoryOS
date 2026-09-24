@@ -286,6 +286,7 @@ function NavItemLink({
   dragListeners,
   dragRef,
   dragStyle,
+  outlined,
 }: {
   item: NavItem
   showLabel: boolean
@@ -301,6 +302,10 @@ function NavItemLink({
   dragListeners?: Record<string, unknown>
   dragRef?: (el: HTMLDivElement | null) => void
   dragStyle?: React.CSSProperties
+  /** A light border framing the row — used for real section sub-items so
+   * they read as distinct rows against the section's own shaded panel.
+   * Deliberately NOT passed for Pinned items (flush, no panel behind them). */
+  outlined?: boolean
 }) {
   const { rearranging, openMenu } = useContext(RearrangeCtx)
   const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
@@ -342,7 +347,7 @@ function NavItemLink({
             'flex-1 min-w-0',
             isActive
               ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-              : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+              : `text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 ${outlined ? 'border border-[#F2F1E6]/10' : ''}`,
           ].join(' ')
         }
       >
@@ -363,12 +368,14 @@ function SortableNavItem({
   isFavorite,
   onToggleFavorite,
   onNavClick,
+  outlined,
 }: {
   item: NavItem
   showLabel: boolean
   isFavorite?: boolean
   onToggleFavorite?: (key: string) => void
   onNavClick?: () => void
+  outlined?: boolean
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.key })
   const style: React.CSSProperties = {
@@ -389,6 +396,7 @@ function SortableNavItem({
         onNavClick={onNavClick}
         draggable
         dragListeners={listeners as Record<string, unknown>}
+        outlined={outlined}
       />
     </div>
   )
@@ -523,7 +531,7 @@ function OutlierExpandableItem({
               'flex-1 min-w-0',
               isActive
                 ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-                : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 border border-[#F2F1E6]/10',
             ].join(' ')
           }
         >
@@ -749,6 +757,7 @@ function SortableSection({
                       isFavorite={favorites.includes(item.key)}
                       onToggleFavorite={onToggleFavorite}
                       onNavClick={onNavClick}
+                      outlined
                     />
                   )}
                 </div>
@@ -930,15 +939,21 @@ export type QuickFabPosition = 'bottom-right' | 'bottom-left' | 'topbar-left'
 function CollapsedNav({
   onNavClick,
   onToggleCollapsed,
+  onPeekSection,
 }: {
   onNavClick?: () => void
   onToggleCollapsed?: () => void
+  /** Requests a "peek" — temporarily expand the full sidebar with this one
+   * section forced open, so a section that's collapsed in the full view
+   * (and therefore has none of its items shown here at all) still has a
+   * way in from the icon rail. See Sidebar's peekSection state. */
+  onPeekSection?: (key: string) => void
 }) {
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
   const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
-  const { sectionCollapsed, favorites } = useSidebarPrefs()
+  const { sectionOrder, sectionCollapsed, favorites } = useSidebarPrefs()
   // Pinned items stay visible on the collapsed rail too.
   const itemByKey = useMemo(() => { const m = new Map<string, NavItem>(); for (const items of Object.values(SECTION_ITEMS)) for (const it of items) m.set(it.key, it); for (const it of UTILITY_ITEMS) m.set(it.key, it); return m }, [])
   const favItems = favorites.map((k) => itemByKey.get(k)).filter((i): i is NavItem => !!i)
@@ -950,15 +965,17 @@ function CollapsedNav({
   // Hover flyout label — rendered via portal so it escapes the sidebar's clip.
   const [flyout, setFlyout] = useState<{ label: string; top: number } | null>(null)
   const showFlyout = (e: React.MouseEvent, label: string) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setFlyout({ label, top: r.top + r.height / 2 }) }
-  const allItems = Object.entries(SECTION_ITEMS)
-    .filter(([k]) => {
-      if (hiddenSections.includes(k)) return false
-      if (sectionCollapsed[k]) return false // only show items from expanded sections
-      if (k === 'global-config') return isAdmin
-      if (allowedSections !== null) return allowedSections.has(k)
-      return true
-    })
-    .flatMap(([, items]) => items)
+  const visibleSectionKeys = sectionOrder.filter((k) => {
+    if (hiddenSections.includes(k)) return false
+    if (k === 'global-config') return isAdmin
+    if (allowedSections !== null) return allowedSections.has(k)
+    return true
+  })
+  const itemLinkClass = ({ isActive }: { isActive: boolean }) =>
+    [
+      'flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100',
+      isActive ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]' : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+    ].join(' ')
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -972,12 +989,7 @@ function CollapsedNav({
                 onClick={onNavClick}
                 onMouseEnter={(e) => showFlyout(e, item.label)}
                 onMouseLeave={() => setFlyout(null)}
-                className={({ isActive }) =>
-                  [
-                    'flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100',
-                    isActive ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]' : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
-                  ].join(' ')
-                }
+                className={itemLinkClass}
               >
                 {ICONS[item.key] ?? ICONS.dashboard}
               </NavLink>
@@ -985,25 +997,58 @@ function CollapsedNav({
             <div className="mx-2 my-1 border-t border-[#F2F1E6]/10" />
           </>
         )}
-        {allItems.filter((i) => i.to).map((item) => (
-          <NavLink
-            key={item.key}
-            to={item.to!}
-            onClick={onNavClick}
-            onMouseEnter={(e) => showFlyout(e, item.label)}
-            onMouseLeave={() => setFlyout(null)}
-            className={({ isActive }) =>
-              [
-                'flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100',
-                isActive
-                  ? 'bg-[#F2F1E6]/10 text-[#F2F1E6]'
-                  : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
-              ].join(' ')
-            }
-          >
-            {ICONS[item.key] ?? ICONS.dashboard}
-          </NavLink>
-        ))}
+        {visibleSectionKeys.map((k) => {
+          // Data Connections bypasses the collapse mechanism entirely in the
+          // full sidebar too (see SortableSection's own special-case) — always
+          // just a plain link here, never a launcher button.
+          if (k === 'data-connections') {
+            const item = SECTION_ITEMS[k]?.[0]
+            if (!item?.to) return null
+            return (
+              <NavLink
+                key={item.key}
+                to={item.to}
+                onClick={onNavClick}
+                onMouseEnter={(e) => showFlyout(e, item.label)}
+                onMouseLeave={() => setFlyout(null)}
+                className={itemLinkClass}
+              >
+                {ICONS[item.key] ?? ICONS.dashboard}
+              </NavLink>
+            )
+          }
+          // A section collapsed in the full sidebar previously had NONE of
+          // its items shown here at all — now it gets one launcher icon
+          // (the section's own header icon) that peeks the full sidebar
+          // open with just that section expanded, so it's reachable from
+          // the icon rail without permanently expanding everything.
+          if (sectionCollapsed[k]) {
+            return (
+              <button
+                key={`sec-${k}`}
+                onClick={() => onPeekSection?.(k)}
+                onMouseEnter={(e) => showFlyout(e, SECTION_META[k]?.label ?? k)}
+                onMouseLeave={() => setFlyout(null)}
+                title={SECTION_META[k]?.label}
+                className="w-full flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100 text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5"
+              >
+                {SECTION_ICONS[k] ?? ICONS.dashboard}
+              </button>
+            )
+          }
+          return (SECTION_ITEMS[k] ?? []).filter((i) => i.to).map((item) => (
+            <NavLink
+              key={item.key}
+              to={item.to!}
+              onClick={onNavClick}
+              onMouseEnter={(e) => showFlyout(e, item.label)}
+              onMouseLeave={() => setFlyout(null)}
+              className={itemLinkClass}
+            >
+              {ICONS[item.key] ?? ICONS.dashboard}
+            </NavLink>
+          ))
+        })}
       </div>
       {/* Expand/collapse toggle — above quick access */}
       {onToggleCollapsed && (
@@ -1066,10 +1111,17 @@ function ExpandedSidebar({
   onNavClick,
   showHeader,
   onToggleCollapsed,
+  forceExpandSection,
 }: {
   onNavClick?: () => void
   showHeader?: boolean
   onToggleCollapsed?: () => void
+  /** Set while "peeking" out from the collapsed rail into one specific
+   * section (see Sidebar's own peekSection state below) — visually forces
+   * that one section open without touching the user's persisted
+   * sectionCollapsed preference, so it goes back to however they had it
+   * once the peek ends. */
+  forceExpandSection?: string | null
 }) {
   const { profile } = useAuthStore()
   const isAdmin = isAdminOrDeveloper(profile?.role)
@@ -1167,7 +1219,7 @@ function ExpandedSidebar({
               <SortableSection
                 key={sectionKey}
                 sectionKey={sectionKey}
-                collapsed={!!sectionCollapsed[sectionKey]}
+                collapsed={forceExpandSection === sectionKey ? false : !!sectionCollapsed[sectionKey]}
                 showLabels
                 favorites={favorites}
                 onToggleFavorite={toggleFavorite}
@@ -1208,6 +1260,21 @@ function ExpandedSidebar({
 export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMobileClose }: SidebarProps) {
   useInventoryAlerts() // load alert counts once for the nav badge
 
+  // A "peek" temporarily shows the full sidebar with one section forced
+  // open, entered by clicking that section's launcher icon on the
+  // collapsed rail (CollapsedNav's onPeekSection — for a section that's
+  // folded shut in the full view and therefore has none of its own items
+  // shown on the rail at all). Purely local visual state — it never
+  // touches the real collapsed prop or the persisted sectionCollapsed
+  // preference — so picking a page, or explicitly re-collapsing, just
+  // drops back to the icon rail exactly as it was.
+  const [peekSection, setPeekSection] = useState<string | null>(null)
+  const peeking = collapsed && peekSection !== null
+  const handleCollapseToggle = () => {
+    if (peeking) { setPeekSection(null); return }
+    onToggleCollapsed()
+  }
+
   // Mobile: fixed overlay drawer
   if (mobile) {
     if (!mobileOpen) return null
@@ -1241,10 +1308,10 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMo
     <aside
       className={[
         'flex flex-col h-full bg-[#002745] border-r border-[#002745]/40 transition-all duration-200 flex-shrink-0',
-        collapsed ? 'w-14' : 'w-64',
+        collapsed && !peeking ? 'w-14' : 'w-64',
       ].join(' ')}
     >
-      {collapsed ? (
+      {collapsed && !peeking ? (
         <>
           <div className="flex items-center justify-center px-3 h-12 border-b border-[#F2F1E6]/8">
             <button
@@ -1255,10 +1322,15 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMo
               <img src={sbIcon} alt="SB" className="w-6 opacity-70" />
             </button>
           </div>
-          <CollapsedNav onToggleCollapsed={onToggleCollapsed} />
+          <CollapsedNav onToggleCollapsed={onToggleCollapsed} onPeekSection={setPeekSection} />
         </>
       ) : (
-        <ExpandedSidebar showHeader onToggleCollapsed={onToggleCollapsed} />
+        <ExpandedSidebar
+          showHeader
+          onToggleCollapsed={handleCollapseToggle}
+          onNavClick={peeking ? () => setPeekSection(null) : undefined}
+          forceExpandSection={peeking ? peekSection : null}
+        />
       )}
     </aside>
   )
