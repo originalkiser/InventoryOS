@@ -229,6 +229,7 @@ function NavItemLink({
   dragListeners,
   dragRef,
   dragStyle,
+  outlined,
 }: {
   item: NavItem
   showLabel: boolean
@@ -239,6 +240,11 @@ function NavItemLink({
   dragListeners?: Record<string, unknown>
   dragRef?: (el: HTMLDivElement | null) => void
   dragStyle?: React.CSSProperties
+  /** A light border framing the row — used for section sub-items so they
+   * read as distinct rows against the section's own shaded background,
+   * instead of everything sitting flush together. Skipped on the active
+   * item, which already has its own accent (bg tint + bottom border). */
+  outlined?: boolean
 }) {
   const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
   const badge = useNavBadge(item.key)
@@ -268,7 +274,7 @@ function NavItemLink({
             'flex-1 min-w-0',
             isActive
               ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-              : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+              : `text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 ${outlined ? 'border border-[#F2F1E6]/10' : ''}`,
           ].join(' ')
         }
       >
@@ -321,6 +327,7 @@ function SortableNavItem({
         onNavClick={onNavClick}
         draggable
         dragListeners={listeners as Record<string, unknown>}
+        outlined
       />
     </div>
   )
@@ -421,7 +428,7 @@ function OutlierExpandableItem({
               'flex-1 min-w-0',
               isActive
                 ? 'bg-[#F2F1E6]/10 text-[#F2F1E6] border-b-2 border-sky'
-                : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5',
+                : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6] hover:bg-[#F2F1E6]/5 border border-[#F2F1E6]/10',
             ].join(' ')
           }
         >
@@ -630,7 +637,7 @@ function SortableSection({
               {items.map((item, idx) => (
                 <div
                   key={item.key}
-                  className={isOpening ? 'sb-drop-in' : ''}
+                  className={['py-px', isOpening ? 'sb-drop-in' : ''].join(' ')}
                   style={isOpening ? { animationDelay: `${idx * 60}ms` } : undefined}
                 >
                   {item.key === 'outlier' ? (
