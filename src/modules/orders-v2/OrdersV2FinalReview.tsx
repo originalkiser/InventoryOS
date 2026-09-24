@@ -12,11 +12,12 @@ import { useVendors } from './useLookups'
 import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { Flags } from './OrdersV2Review'
 import { OrderStepper } from './OrderStepper'
-import { daysOfSupply, daysBetween, nextDeliveryDate } from './engine'
+import { daysOfSupply, daysBetween, nextDeliveryDate, resolveDeliveryDate } from './engine'
 import { OVERRIDE_CELL, dos, dShort, money, num, copyTableToClipboard, exportTableCsv, dosAfterForQty, type TableCol } from './shared'
-import type { LineFlag, OrderType } from './types'
+import type { LineFlag, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
 const shopSort = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 /**
  * Step 3 — everything across all shops, plus the summaries that decide
@@ -108,16 +109,69 @@ export function OrdersV2FinalReview() {
   const bottom3 = ranked.slice(-3).reverse()
 
   // RelaDyne-only (see OrdersV2Settings.tsx) — a shop with no delivery day
-  // set, or a non-RelaDyne vendor with a real per-shop schedule instead,
-  // has neither an order day nor a computable delivery date here; both
-  // show as '—' rather than a guess. loc.byId already has this — no new
-  // fetch needed, both tables below just weren't reading it yet.
+  // set falls back to '—' rather than a guess. loc.byId already has this —
+  // no new fetch needed for THIS fallback (deliveryFor's own else-branch,
+  // below, uses it too).
   const deliveryDowOf = useCallback((id: string | null) => parseWeekday(loc.byId(id ?? '')?.reladyne_delivery_day as string | undefined), [loc])
   const orderDayOf = useCallback((id: string | null) => orderDayFromDelivery(loc.byId(id ?? '')?.reladyne_delivery_day as string | undefined) || '—', [loc])
 
+  // Per-shop delivery schedules (Valvoline and anything else that isn't a
+  // single company-wide weekday) + the uploaded A/B week calendar — direct
+  // feedback 2026-09-25 ("add the delivery date column to Final Review
+  // too"). Found while wiring this up: this page's own outOfStock/
+  // deliveryDowOf were RelaDyne-only from the start (this page's own prior
+  // comment said so outright — "a non-RelaDyne vendor... has neither an
+  // order day nor a computable delivery date here"), so Out of Stock's own
+  // days-to-delivery/quarts-needed numbers were silently always null for
+  // Valvoline. A small standalone fetch (not the full fetchInputs — this
+  // page already has `lines` via useDraft and doesn't need configs/usage/
+  // etc.) mirrors OrdersV2Review.tsx's own deliveryLookup/deliveryFor/
+  // describeSchedule exactly, so both pages agree.
+  const [scheduleLookup, setScheduleLookup] = useState<{ schedules: Map<string, DeliverySchedule>; calendar: WeekCalendar }>({ schedules: new Map(), calendar: new Map() })
+  useEffect(() => {
+    if (!draft?.vendor_id) { setScheduleLookup({ schedules: new Map(), calendar: new Map() }); return }
+    let cancelled = false
+    const sb = supabase as any
+    Promise.all([
+      sb.schema('inventory').from('ov2_location_schedules').select('*').eq('vendor_id', draft.vendor_id),
+      sb.schema('inventory').from('ov2_delivery_calendar').select('week_start, week_label').eq('vendor_id', draft.vendor_id),
+    ]).then(([{ data: schedRows }, { data: calRows }]: any[]) => {
+      if (cancelled) return
+      const schedules = new Map<string, DeliverySchedule>()
+      for (const r of (schedRows ?? [])) {
+        schedules.set(r.location_id, {
+          type: r.schedule_type, delivery_dow: r.delivery_dow,
+          week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+          lead_business_days: Number(r.lead_business_days ?? 4),
+        })
+      }
+      const calendar: WeekCalendar = new Map((calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']))
+      setScheduleLookup({ schedules, calendar })
+    })
+    return () => { cancelled = true }
+  }, [draft?.vendor_id])
+  const deliveryFor = useCallback((locationId: string | null, fromDate: string): string | null => {
+    const sched = scheduleLookup.schedules.get(locationId ?? '')
+    return sched
+      ? resolveDeliveryDate(fromDate, sched, scheduleLookup.calendar)
+      : nextDeliveryDate(fromDate, deliveryDowOf(locationId))
+  }, [scheduleLookup, deliveryDowOf])
+  const describeSchedule = useCallback((locationId: string | null): string | null => {
+    const sched = scheduleLookup.schedules.get(locationId ?? '')
+    if (sched) {
+      if (sched.type === 'plus_business_days') return `+${sched.lead_business_days} business days`
+      if (sched.type === 'week_ab') {
+        return `A: ${sched.week_a_dow == null ? '—' : DOW[sched.week_a_dow]} · B: ${sched.week_b_dow == null ? '—' : DOW[sched.week_b_dow]} (${sched.lead_business_days}d lead)`
+      }
+      return `${sched.delivery_dow == null ? '—' : DOW[sched.delivery_dow]} weekly (${sched.lead_business_days}d lead)`
+    }
+    const dow = deliveryDowOf(locationId)
+    return dow != null ? `${DOW[dow]} (Reladyne delivery day)` : null
+  }, [scheduleLookup, deliveryDowOf])
+
   const outOfStock = useMemo(() => {
     const rows = lines.filter((l) => (l.flags ?? []).includes('stocked_out' as LineFlag)).map((l) => {
-      const deliver = draft ? nextDeliveryDate(draft.order_date, deliveryDowOf(l.location_id)) : null
+      const deliver = draft ? deliveryFor(l.location_id, draft.order_date) : null
       const daysToDelivery = draft && deliver ? daysBetween(draft.order_date, deliver) : null
       // How many quarts would it take to bridge this shop to its upcoming
       // delivery on current on-hand/usage — on-hand is already ~0 here (the
@@ -129,7 +183,7 @@ export function OrdersV2FinalReview() {
       return { line: l, orderDay: orderDayOf(l.location_id), quartsNeeded }
     })
     return rows.sort((a, b) => shopSort(shopLabel(a.line.location_id), shopLabel(b.line.location_id)))
-  }, [lines, draft, deliveryDowOf, orderDayOf, shopLabel])
+  }, [lines, draft, deliveryFor, orderDayOf, shopLabel])
 
   // Cached at generation time (OrdersV2Review.tsx) from the tank monitor's
   // on-hand — a keep-fill product needing attention regardless of whether
@@ -402,6 +456,7 @@ export function OrdersV2FinalReview() {
             <th className="text-left px-2 py-2">Shop</th><th className="text-left px-2 py-2">Product</th>
             <th className="text-left px-2 py-2">UOM</th>
             <th className="text-left px-2 py-2">Last Ordered</th><th className="text-left px-2 py-2">Last Delivered</th>
+            <th className="text-left px-2 py-2">Delivery</th>
             <th className="text-right px-2 py-2">Qty</th>
             <th className="text-right px-2 py-2">DOS After</th><th className="text-right px-2 py-2">DOS @ Delivery</th>
             <th className="text-right px-2 py-2">$</th><th className="text-left px-2 py-2">Flags</th>
@@ -435,6 +490,18 @@ export function OrdersV2FinalReview() {
                       ⚠ On hand may be off
                     </div>
                   )}
+                </td>
+                <td className="px-2 py-1 text-navy whitespace-nowrap">
+                  {(() => {
+                    const dd = draft ? deliveryFor(l.location_id, draft.order_date) : null
+                    const sd = describeSchedule(l.location_id)
+                    return (
+                      <>
+                        <div>{dd ? dShort(dd) : '—'}</div>
+                        {sd && <div className="text-[9px] text-inky/50">{sd}</div>}
+                      </>
+                    )
+                  })()}
                 </td>
                 <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
                   <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}

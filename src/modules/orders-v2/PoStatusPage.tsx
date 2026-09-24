@@ -4,17 +4,15 @@
 // own routes — "on PO" is operational information people need to check
 // regardless of whether they're mid-way through building a new order.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { Button, Card, CardBody, Combobox, Modal, Select, SbLoader, Toggle } from '@/components/ui'
+import { Card, CardBody, Combobox, Modal, Select, SbLoader, Toggle, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { useTable } from '@/hooks/useTable'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
-import { runDroptopPurchaseOrderSync } from '@/services/droptopService'
-import { useSyncTasksStore, DROPTOP_PO_SYNC_TASK_ID } from '@/stores/syncTasksStore'
+import { usePageRevisit } from '@/hooks/usePageActive'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -64,7 +62,7 @@ interface OnOrderRow {
   locId: string
   product_id: string
   qty: number
-  poIds: string
+  poIds: string[]
 }
 
 const STATUS_OPTIONS = [
@@ -123,7 +121,6 @@ export function PoStatusPage() {
   const [pos, setPos] = useState<PoRow[]>([])
   const [itemsByPo, setItemsByPo] = useState<Record<string, PoItemRow[]>>({})
   const [loading, setLoading] = useState(true)
-  const [inspecting, setInspecting] = useState(false)
   // Real loading progress instead of an indeterminate spinner — a cheap
   // count-only (head:true) request seeds `total` for each phase, then the
   // paginated fetch below reports cumulative rows loaded so far. Two
@@ -131,11 +128,6 @@ export function PoStatusPage() {
   // technique Droptop Orders/Customer Heatmap already use.
   const [loadProgress, setLoadProgress] = useState<{ phase: 'pos' | 'items'; loaded: number; total: number | null }>({ phase: 'pos', loaded: 0, total: null })
   const [viewingPo, setViewingPo] = useState<PoRow | null>(null)
-  // Derived from the global sync tracker (not local state) so the button
-  // correctly reflects "is my sync still running" even if this page got
-  // evicted from the Recent Pages cache and remounted while it was going —
-  // see syncTasksStore.ts.
-  const syncing = useSyncTasksStore((s) => s.tasks.find((t) => t.id === DROPTOP_PO_SYNC_TASK_ID)?.status === 'running')
 
   const [fLocation, setFLocation] = useState('')
   const [fStatus, setFStatus] = useState('')
@@ -220,55 +212,16 @@ export function PoStatusPage() {
   }, [companyId])
 
   useEffect(() => { load() }, [load])
-  // Deliberately no usePageRevisit here (unlike Comms/Alerts/Exceptions) —
-  // this data only changes when a sync runs, not from other users clicking
-  // around, so an automatic refetch every time you switch back to this
-  // browser tab was just a disruptive reload with nothing new to show for
-  // it. Sync Now (and its own load() afterward) is the actual refresh path.
-
-  async function syncNow() {
-    if (syncing) return
-    const store = useSyncTasksStore.getState()
-    store.start(DROPTOP_PO_SYNC_TASK_ID, 'Droptop — Purchase Orders')
-    try {
-      const r = await runDroptopPurchaseOrderSync(
-        { daysBack: 180 }, companyId ?? undefined,
-        (p) => store.setProgress(DROPTOP_PO_SYNC_TASK_ID, p.batch, p.totalBatches),
-      )
-      const summary = `${r.locations_synced} shop${r.locations_synced !== 1 ? 's' : ''}, ${r.pos_upserted} PO${r.pos_upserted !== 1 ? 's' : ''}, ${r.items_written} line item${r.items_written !== 1 ? 's' : ''}`
-      store.finish(DROPTOP_PO_SYNC_TASK_ID, r.warnings?.length ? 'error' : 'success', r.warnings?.length ? r.warnings[0] : summary)
-      if (r.warnings?.length) toast.error(r.warnings[0], { duration: 12000 })
-      else toast.success(summary)
-      await load()
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'Sync failed'
-      store.finish(DROPTOP_PO_SYNC_TASK_ID, 'error', message)
-      toast.error(message, { duration: 12000 })
-    }
-  }
-
-  // Read-only single-location peek at Droptop's raw get-purchase-orders
-  // response — for diagnosing a real sync that completes but writes nothing
-  // (a response-shape mismatch), or a shop with zero synced POs, without
-  // waiting through another full, multi-minute company-wide sync to find
-  // out. Writes nothing.
-  const [inspectResult, setInspectResult] = useState<{ opId: string; raw: unknown; sample: any[] } | null>(null)
-  async function inspectOne() {
-    if (!fLocation) { toast.error('Pick a shop first — Inspect always needs one.'); return }
-    setInspecting(true)
-    try {
-      const { data, error } = await supabase.functions.invoke('droptop-sync-purchase-orders', { body: { mode: 'inspect', locationId: fLocation } })
-      if (error) throw new Error(error.message)
-      if (data?.error) throw new Error(data.error)
-      // eslint-disable-next-line no-console
-      console.log('Droptop PO inspect result:', data)
-      setInspectResult({ opId: data.operation_id, raw: data.raw_response, sample: data.parsed_sample ?? [] })
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Inspect failed')
-    } finally {
-      setInspecting(false)
-    }
-  }
+  // Direct feedback 2026-09-25: removed the page's own Inspect/Sync Now
+  // buttons — Droptop — Purchase Orders is already a registered connection
+  // in useDataConnectionRunner.ts (CONNECTION_ORDER), so Data Connections'
+  // own card already has a Run Now for this, and Inspect was a pure debug
+  // tool. With no local "Sync Now" left to double as this page's own
+  // refresh path (its previous reasoning for skipping usePageRevisit), this
+  // page now catches up automatically when revisited — after triggering a
+  // sync from Data Connections and coming back, or just returning to this
+  // browser tab — same pattern as Comms/Alerts/Exceptions.
+  usePageRevisit(load)
 
   const shopLabel = useCallback((id: string | null) => (id ? (loc.codeOf(id) || loc.labelOf(id)) : '—') || '—', [loc])
 
@@ -314,10 +267,20 @@ export function PoStatusPage() {
   const onOrderRows: OnOrderRow[] = useMemo(() => {
     const out: OnOrderRow[] = []
     for (const [locId, rows] of onOrderByShop.entries()) {
-      for (const r of rows) out.push({ locId, product_id: r.product_id, qty: r.qty, poIds: [...r.poIds].join(', ') })
+      for (const r of rows) out.push({ locId, product_id: r.product_id, qty: r.qty, poIds: [...r.poIds] })
     }
     return out
   }, [onOrderByShop])
+
+  // po_id is only unique per (location, po_id) — see project_droptop_
+  // purchase_orders.md's own cross-shop collision history — so this is
+  // keyed by both, not bare po_id, before it's used to resolve a click in
+  // the Products On Order table back to the exact right PO for that shop.
+  const posByLocAndId = useMemo(() => {
+    const m = new Map<string, PoRow>()
+    for (const p of pos) m.set(`${p.location_id ?? ''}|${p.po_id}`, p)
+    return m
+  }, [pos])
 
   const onOrderCol = useMemo(() => createColumnHelper<OnOrderRow>(), [])
   const onOrderColumns = useMemo(() => [
@@ -328,8 +291,31 @@ export function PoStatusPage() {
     // last column, so it's the one that should absorb any extra width
     // instead of every column defaulting to an equal 150px each (which is
     // what left this table looking half-empty until manually resized).
-    onOrderCol.accessor('poIds', { header: 'PO #', meta: { fill: true } }),
-  ], [onOrderCol, shopLabel])
+    // Direct feedback 2026-09-25: each PO # is now its own clickable button
+    // opening the same PO Details modal the main table's row click already
+    // uses, instead of a plain comma-joined string.
+    onOrderCol.accessor('poIds', {
+      header: 'PO #', meta: { fill: true },
+      cell: (i) => (
+        <div className="flex flex-wrap gap-x-1.5 gap-y-0.5">
+          {i.getValue().map((poId, idx) => {
+            const po = posByLocAndId.get(`${i.row.original.locId}|${poId}`)
+            return (
+              <span key={poId}>
+                {po ? (
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setViewingPo(po) }}
+                    className="text-navy underline decoration-dotted hover:text-sky">
+                    {po.custom_po_id || po.po_id}
+                  </button>
+                ) : poId}
+                {idx < i.getValue().length - 1 ? ',' : ''}
+              </span>
+            )
+          })}
+        </div>
+      ),
+    }),
+  ], [onOrderCol, shopLabel, posByLocAndId])
 
   const { table: onOrderTable, globalFilter: onOrderSearch, setGlobalFilter: setOnOrderSearch } = useTable(onOrderRows, onOrderColumns, {
     persistKey: 'po-status:on-order',
@@ -385,70 +371,72 @@ export function PoStatusPage() {
     <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">PO Status</h1>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Purchase Orders</h1>
           <p className="text-xs text-inky mt-0.5">
             Purchase orders pulled from Droptop — status, line items, and what's still outstanding by shop.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={inspectOne} disabled={inspecting || syncing || !fLocation} loading={inspecting}
-            title={fLocation ? "Read-only peek at the selected shop's raw Droptop response — writes nothing" : 'Pick a shop in the filter below first'}>
-            Inspect
-          </Button>
-          <Button size="sm" variant="secondary" onClick={syncNow} disabled={syncing}>
-            <RefreshCw className={`w-3.5 h-3.5 mr-1 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Syncing… (see status ↑ in top bar)' : 'Sync Now'}
-          </Button>
-        </div>
       </div>
 
-      {/* Product-level rollup — what's on order per shop, regardless of
-          which PO it's spread across. Kept at the top of the page since
-          this is the figure people check most often. */}
-      <Card><CardBody className="flex flex-col gap-2">
-        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Products currently on order, by shop</span>
-        {loading ? (
-          <div className="py-8 flex justify-center"><SbLoader size={28} /></div>
-        ) : onOrderRows.length === 0 ? (
-          <p className="text-xs font-mono text-inky/50 italic py-4">Nothing currently outstanding.</p>
-        ) : (
-          <DataTable table={onOrderTable} globalFilter={onOrderSearch} onGlobalFilterChange={setOnOrderSearch} exportFilename="Products On Order" />
-        )}
-      </CardBody></Card>
+      <Tabs defaultValue="on-order">
+        <TabsList>
+          <TabsTrigger value="on-order">Products On Order</TabsTrigger>
+          <TabsTrigger value="all-pos">All Purchase Orders</TabsTrigger>
+        </TabsList>
 
-      <Card><CardBody className="flex items-end gap-3 flex-wrap py-3">
-        <div className="w-56"><Combobox label="Shop" options={locationOptions} value={fLocation} onChange={setFLocation} /></div>
-        <div className="w-44">
-          <Select label="Status" value={fStatus} onChange={(e) => setFStatus(e.target.value)} options={STATUS_OPTIONS} />
-        </div>
-        {!fStatus && (
-          <label className="flex items-center gap-2 text-xs font-mono text-inky pb-2">
-            <Toggle checked={hideClosed} onChange={setHideClosed} size="sm" color="cyan" />
-            Hide closed/cancelled
-          </label>
-        )}
-        <span className="text-[11px] font-mono text-inky/50 pb-2 ml-auto">{pos.length.toLocaleString()} PO{pos.length !== 1 ? 's' : ''} total</span>
-      </CardBody></Card>
+        <TabsContent value="on-order">
+          {/* Product-level rollup — what's on order per shop, regardless of
+              which PO it's spread across. */}
+          <Card><CardBody className="flex flex-col gap-2">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Products currently on order, by shop</span>
+            {loading ? (
+              <div className="py-8 flex justify-center"><SbLoader size={28} /></div>
+            ) : onOrderRows.length === 0 ? (
+              <p className="text-xs font-mono text-inky/50 italic py-4">Nothing currently outstanding.</p>
+            ) : (
+              <DataTable table={onOrderTable} globalFilter={onOrderSearch} onGlobalFilterChange={setOnOrderSearch} exportFilename="Products On Order" />
+            )}
+          </CardBody></Card>
+        </TabsContent>
 
-      {loading ? (
-        <LoadingProgress
-          fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
-          countText={
-            loadProgress.total
-              ? `Loading ${loadProgress.phase === 'pos' ? 'purchase orders' : 'line items'} — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
-              : loadProgress.loaded > 0
-                ? `Loading ${loadProgress.phase === 'pos' ? 'purchase orders' : 'line items'} — ${loadProgress.loaded.toLocaleString()} loaded so far…`
-                : 'Loading purchase orders…'
-          }
-          messages={[
-            'Pulling purchase orders from Droptop…',
-            'Matching line items to their orders…',
-            'Tallying what’s still outstanding…',
-          ]}
-        />
-      ) : (
-        <DataTable table={poTable} globalFilter={poSearch} onGlobalFilterChange={setPoSearch} exportFilename="PO Status" onRowClick={setViewingPo} />
-      )}
+        <TabsContent value="all-pos">
+          <div className="flex flex-col gap-4">
+            <Card><CardBody className="flex items-end gap-3 flex-wrap py-3">
+              <div className="w-56"><Combobox label="Shop" options={locationOptions} value={fLocation} onChange={setFLocation} /></div>
+              <div className="w-44">
+                <Select label="Status" value={fStatus} onChange={(e) => setFStatus(e.target.value)} options={STATUS_OPTIONS} />
+              </div>
+              {!fStatus && (
+                <label className="flex items-center gap-2 text-xs font-mono text-inky pb-2">
+                  <Toggle checked={hideClosed} onChange={setHideClosed} size="sm" color="cyan" />
+                  Hide closed/cancelled
+                </label>
+              )}
+              <span className="text-[11px] font-mono text-inky/50 pb-2 ml-auto">{pos.length.toLocaleString()} PO{pos.length !== 1 ? 's' : ''} total</span>
+            </CardBody></Card>
+
+            {loading ? (
+              <LoadingProgress
+                fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
+                countText={
+                  loadProgress.total
+                    ? `Loading ${loadProgress.phase === 'pos' ? 'purchase orders' : 'line items'} — ${loadProgress.loaded.toLocaleString()} of ${loadProgress.total.toLocaleString()} (${Math.min(100, Math.round((loadProgress.loaded / loadProgress.total) * 100))}%)`
+                    : loadProgress.loaded > 0
+                      ? `Loading ${loadProgress.phase === 'pos' ? 'purchase orders' : 'line items'} — ${loadProgress.loaded.toLocaleString()} loaded so far…`
+                      : 'Loading purchase orders…'
+                }
+                messages={[
+                  'Pulling purchase orders from Droptop…',
+                  'Matching line items to their orders…',
+                  'Tallying what’s still outstanding…',
+                ]}
+              />
+            ) : (
+              <DataTable table={poTable} globalFilter={poSearch} onGlobalFilterChange={setPoSearch} exportFilename="Purchase Orders" onRowClick={setViewingPo} />
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
 
       <Modal open={!!viewingPo} onClose={() => setViewingPo(null)} title={`PO Details — ${viewingPo ? (viewingPo.custom_po_id || viewingPo.po_id) : ''}`} size="lg">
         {viewingPo && (
@@ -487,44 +475,6 @@ export function PoStatusPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      <Modal open={!!inspectResult} onClose={() => setInspectResult(null)} title={`Inspect — ${shopLabel(fLocation || null)}`} size="lg">
-        {inspectResult && (
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] font-mono text-inky/60">
-              Operation ID <span className="text-navy">{inspectResult.opId}</span> — {inspectResult.sample.length} PO(s) in this raw sample
-              (Droptop's own response, not yet mapped/upserted). Full raw response logged to the browser console (F12) too.
-            </p>
-            {inspectResult.sample.length === 0 ? (
-              <p className="text-xs font-mono text-[#C0392B]">
-                Droptop returned zero purchase orders for this shop's operation ID — a real gap on Droptop's side, not a sync bug.
-              </p>
-            ) : (
-              <div className="overflow-auto max-h-96 rounded border border-navy/20">
-                <table className="w-full text-[11px] font-mono">
-                  <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
-                    <th className="text-left px-2 py-1">po_id</th><th className="text-left px-2 py-1">custom_po_id</th>
-                    <th className="text-left px-2 py-1">po_status</th><th className="text-left px-2 py-1">delivery_status</th>
-                  </tr></thead>
-                  <tbody>
-                    {inspectResult.sample.map((po: any, i: number) => (
-                      <tr key={i} className="border-t border-navy/10">
-                        <td className="px-2 py-1 text-navy">{po.po_id ?? '—'}</td>
-                        <td className="px-2 py-1 text-navy">{po.custom_po_id ?? '—'}</td>
-                        <td className="px-2 py-1 text-inky/70">{po.po_status ?? '—'}</td>
-                        <td className="px-2 py-1 text-inky/70">{po.delivery_status ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="flex justify-end">
-              <Button size="sm" variant="secondary" onClick={() => setInspectResult(null)}>Close</Button>
             </div>
           </div>
         )}

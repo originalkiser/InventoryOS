@@ -3,9 +3,11 @@ import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
+import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
-import { Button, Badge, Select, Input, Combobox, Toggle } from '@/components/ui'
+import { Button, Badge, Select, Input, Combobox, Toggle, Modal } from '@/components/ui'
+import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { locationLabel, locationOptions } from './countsShared'
 import type { Location, RecountRequest } from '@/types'
 import type { ComboboxOption } from '@/components/ui'
@@ -90,6 +92,10 @@ export function RecountsTab() {
   const companyId = profile?.company_id ?? null
   const myName = profile?.full_name ?? 'Someone'
   const countMonth = getCountMonth()
+  // Only for resolveId's shop-name/number matching in the bulk status
+  // upload below — this tab's own display/filtering still uses the plain
+  // `locations` state (loaded directly from core.locations) it already had.
+  const loc = useLocations()
 
   const [locations, setLocations] = useState<Location[]>([])
   const [requests, setRequests] = useState<RecountRequest[]>([])
@@ -222,6 +228,111 @@ export function RecountsTab() {
     status: r.status,
   })), [filteredRows, productsIdsOnly])
 
+  // ---------------------------------------------------------------------
+  // Bulk recount-status upload — direct feedback 2026-09-25: field teams
+  // fill in Complete?/Date Completed/Notes on an exported tracking sheet
+  // (AM, RDO, Recount Type, Products, Request Date, then those 3 columns)
+  // and want to re-upload it to update the matching recount_requests rows,
+  // instead of clicking into each one via the slide-over editor by hand.
+  // Template 4 (Import/Paste Preview, TABLE_TEMPLATES.md) — nothing is
+  // written until Confirm, same as every other bulk import in this app.
+  interface RecountImportRow {
+    shopRaw: string
+    locationId: string | null
+    recountType: string
+    matched: RecountRequest | null
+    ambiguous: boolean
+    hasCompleteInfo: boolean
+    complete: boolean
+    completedDate: string | null
+    notes: string
+  }
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadPreview, setUploadPreview] = useState<RecountImportRow[] | null>(null)
+  const [importing, setImporting] = useState(false)
+
+  function normalizeDate(raw: string | undefined): string | null {
+    const s = (raw ?? '').trim()
+    if (!s) return null
+    const d = new Date(s)
+    return Number.isNaN(d.getTime()) ? null : format(d, 'yyyy-MM-dd')
+  }
+
+  function handleParsedRecountFile(parsed: { headers: string[]; rows: Record<string, string>[] }) {
+    const shopCol = parsed.headers.find((h) => /shop|store|location/i.test(h))
+    const typeCol = parsed.headers.find((h) => /recount.*type/i.test(h))
+    // "Recount Complete?" vs "Recount Date Completed" — the date one always
+    // has "date" in it, the plain complete flag never does.
+    const completeCol = parsed.headers.find((h) => /complet/i.test(h) && !/date/i.test(h))
+    const dateCompletedCol = parsed.headers.find((h) => /date/i.test(h) && /complet/i.test(h))
+    const notesCol = parsed.headers.find((h) => /note/i.test(h))
+    if (!shopCol) { toast.error('Need a Shop/Location column'); return }
+
+    const preview: RecountImportRow[] = []
+    for (const r of parsed.rows) {
+      const shopRaw = (r[shopCol] ?? '').trim()
+      if (!shopRaw) continue
+      const locationId = loc.resolveId(shopRaw)
+      const recountType = typeCol ? (r[typeCol] ?? '').trim() : ''
+      const completeRaw = completeCol ? (r[completeCol] ?? '').trim().toLowerCase() : ''
+      const hasCompleteInfo = completeRaw !== ''
+      const complete = ['yes', 'y', 'true', 'complete', 'done', 'x'].includes(completeRaw)
+      const completedDate = dateCompletedCol ? normalizeDate(r[dateCompletedCol]) : null
+      const notes = notesCol ? (r[notesCol] ?? '').trim() : ''
+
+      const candidates = locationId
+        ? requests.filter((req) => req.location_id === locationId && (!recountType || req.recount_type === recountType))
+        : []
+      preview.push({
+        shopRaw, locationId, recountType,
+        matched: candidates.length === 1 ? candidates[0] : null,
+        ambiguous: candidates.length > 1,
+        hasCompleteInfo, complete, completedDate, notes,
+      })
+    }
+    if (!preview.length) { toast.error('No usable rows found'); return }
+    setUploadPreview(preview)
+  }
+
+  async function confirmRecountImport() {
+    if (!uploadPreview) return
+    // A blank "Recount Complete?" cell means "no status in this upload for
+    // this row," not "mark it incomplete" — re-uploading the same sheet
+    // while it's still being filled in shouldn't be able to revert an
+    // already-recorded completion just because this pass left that cell
+    // blank. An explicit "No" still updates it (hasCompleteInfo=true,
+    // complete=false) — only a genuinely empty cell is skipped.
+    const toApply = uploadPreview.filter((r) => r.matched && r.hasCompleteInfo)
+    if (!toApply.length) { toast.error('No matched rows with a status to apply'); return }
+    setImporting(true)
+    let okCount = 0
+    for (const r of toApply) {
+      const existing = r.matched!
+      const recount_fields = {
+        ...(existing.recount_fields as Record<string, unknown> ?? {}),
+        updated_by_name: myName,
+        // Blank notes in the file leaves whatever's already recorded —
+        // same "don't erase with less information" reasoning as above.
+        completion_notes: r.notes || (existing.recount_fields as any)?.completion_notes || null,
+      }
+      const { error } = await (supabase as any).schema('inventory').from('recount_requests')
+        .update({
+          completed_flags: [r.complete],
+          completed_dates: [r.completedDate],
+          recount_status: r.complete ? 'complete' : 'open',
+          recount_fields,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existing.id)
+      if (!error) okCount++
+    }
+    setImporting(false)
+    toast.success(`Updated ${okCount} of ${toApply.length} recount${toApply.length !== 1 ? 's' : ''}`)
+    setUploadPreview(null)
+    setUploadOpen(false)
+    loadRequests()
+  }
+
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
@@ -268,8 +379,77 @@ export function RecountsTab() {
         exportFilename={`recounts_${countMonth}.csv`}
         exportData={exportRows}
         loading={loading}
-        actions={<Button size="sm" onClick={() => setEditing('new')}>+ Add Recount</Button>}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setUploadOpen(true)}>Upload Recount Status</Button>
+            <Button size="sm" onClick={() => setEditing('new')}>+ Add Recount</Button>
+          </div>
+        }
       />
+
+      <Modal open={uploadOpen} onClose={() => { setUploadOpen(false); setUploadPreview(null) }} title="Upload Recount Status" size="xl">
+        <div className="flex flex-col gap-3">
+          {!uploadPreview ? (
+            <>
+              <p className="text-xs font-mono text-inky/60">
+                A CSV/Excel with a Shop column plus any of Recount Type, Recount Complete?, Recount Date Completed, and
+                Recount Notes — matched back to this month&apos;s existing recount requests by shop (and Recount Type,
+                when present). A blank Complete?/Notes cell leaves that row&apos;s existing status/notes untouched
+                rather than clearing them.
+              </p>
+              <FileUploadZone onParsed={handleParsedRecountFile} label="Drop a CSV / Excel of recount statuses" />
+            </>
+          ) : (
+            <>
+              <div className="overflow-auto rounded border border-navy/30 max-h-96">
+                <table className="w-full text-xs font-mono">
+                  <thead className="sticky top-0 bg-cream">
+                    <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
+                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Shop</th>
+                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Recount Type</th>
+                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Match</th>
+                      <th className="px-2 py-1.5 text-left whitespace-nowrap">New Status</th>
+                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Date Completed</th>
+                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadPreview.map((r, i) => (
+                      <tr key={i} className={i % 2 ? 'bg-navy/[0.02]' : ''}>
+                        <td className="px-2 py-1 text-navy whitespace-nowrap">{r.shopRaw}</td>
+                        <td className="px-2 py-1 text-navy">{r.recountType || '—'}</td>
+                        <td className="px-2 py-1">
+                          {!r.locationId ? (
+                            <span className="text-[#C0392B]">Shop not matched</span>
+                          ) : r.ambiguous ? (
+                            <span className="text-[#E67E22]">Multiple open recounts — add Recount Type to the file</span>
+                          ) : !r.matched ? (
+                            <span className="text-[#C0392B]">No open recount found for this shop/type</span>
+                          ) : (
+                            <span className="text-[#2ECC71]">Matched</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1 text-navy">
+                          {!r.matched ? '—' : r.hasCompleteInfo ? (r.complete ? 'Complete' : 'Open') : <span className="text-inky/50">No change (blank)</span>}
+                        </td>
+                        <td className="px-2 py-1 text-navy">{r.matched && r.hasCompleteInfo ? (r.completedDate ?? '—') : '—'}</td>
+                        <td className="px-2 py-1 text-navy">{r.matched && r.notes ? r.notes : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] font-mono text-inky/60">
+                {uploadPreview.filter((r) => r.matched && r.hasCompleteInfo).length} of {uploadPreview.length} row(s) will be applied.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setUploadPreview(null)}>Back</Button>
+                <Button size="sm" loading={importing} onClick={() => void confirmRecountImport()}>Confirm Import</Button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
 
       {editing && (
         <RecountSlideOver

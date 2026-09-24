@@ -9,7 +9,7 @@ export const ROUTE_LABELS: Record<string, string> = {
   '/weekly': 'Weekly Count',
   '/orders': 'Orders',
   '/orders-v2': 'Orders v2',
-  '/po-status': 'PO Status',
+  '/po-status': 'Purchase Orders',
   '/projects': 'Projects',
   '/config': 'Inventory Config',
   '/global-config': 'Global Config',
