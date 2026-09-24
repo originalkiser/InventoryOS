@@ -17,9 +17,24 @@ import type { OrderType } from './types'
 
 // Fields a source/composite column can reference.
 export const EXPORT_FIELDS = [
-  'po_number', 'shop_number', 'shop_name', 'product_id', 'vendor_part_number', 'vendor_description',
-  'uom', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor', 'weekday',
+  'po_number', 'shop_number', 'shop_name', 'product_id', 'product_base', 'vendor_part_number', 'vendor_description',
+  'uom', 'uom_code', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor', 'weekday',
+  'line_number', 'account_number',
 ] as const
+
+// Portal-friendly UOM codes some vendor upload formats expect instead of
+// this app's own internal uom values — Valvoline's own portal specifically
+// wants "BX" for a bay box and "DR" for a drum. Case/bulk aren't currently
+// asked for explicitly; given a reasonable abbreviation here rather than
+// left blank, adjust if Valvoline's portal expects something else.
+const UOM_CODES: Record<string, string> = { bay_box: 'BX', drum: 'DR', case: 'CS', bulk: 'BLK' }
+
+// Strips a trailing packaging-variant suffix (e.g. "BB" bay box, "D" drum,
+// "C" case — see product_id_mappings' own -D/-C/-BB convention) down to a
+// product's bare base code, e.g. "VRP020BB" -> "VRP020". Some export
+// formats want the product referenced by this base code in a free-text
+// comment cell, not the full case/package-specific id.
+const stripPackagingSuffix = (id: string) => id.replace(/[A-Za-z]+$/, '')
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -57,6 +72,10 @@ export interface ExportTemplate {
   subject_template: string
   use_body_template: boolean
   body_template: string
+  /** Split the export into multiple sequentially-numbered files once the
+   * line count exceeds this many rows — Valvoline's own upload portal
+   * rejects a file over 100 lines. null/0 = never split (default). */
+  max_rows_per_file: number | null
 }
 
 const DEFAULT_TEMPLATE: ExportTemplate = {
@@ -74,6 +93,7 @@ const DEFAULT_TEMPLATE: ExportTemplate = {
   subject_template: '{vendor} Order - {date:MMDDYYYY}',
   use_body_template: false,
   body_template: '',
+  max_rows_per_file: null,
 }
 
 const sb = () => supabase as any
@@ -124,6 +144,7 @@ export function OrdersV2Export() {
           subject_template: data.subject_template ?? DEFAULT_TEMPLATE.subject_template,
           use_body_template: !!data.use_body_template,
           body_template: data.body_template ?? '',
+          max_rows_per_file: data.max_rows_per_file ?? null,
         }
         setTpl(loaded); setSavedTpl(loaded)
       })
@@ -162,6 +183,20 @@ export function OrdersV2Export() {
     .sort((a, b) => shopNumber(a.location_id).localeCompare(shopNumber(b.location_id), undefined, { numeric: true })
       || a.product_id.localeCompare(b.product_id)),
   [lines, shopNumber])
+  // Some vendor portals (Valvoline) want a per-shop line index — 1, 2, 3…
+  // resetting for each new shop — rather than a running count across the
+  // whole file. `included` is already this same shop-grouped order, so a
+  // single pass over it is enough.
+  const lineNumberByLineId = useMemo(() => {
+    const counts = new Map<string, number>()
+    const result = new Map<string, number>()
+    for (const l of included) {
+      const n = (counts.get(l.location_id) ?? 0) + 1
+      counts.set(l.location_id, n)
+      result.set(l.id, n)
+    }
+    return result
+  }, [included])
   const vendorName = vendors.byId(draft?.vendor_id ?? null)?.name ?? ''
   const dirty = savedTpl ? JSON.stringify(savedTpl) !== JSON.stringify(tpl) : true
 
@@ -174,9 +209,11 @@ export function OrdersV2Export() {
       shop_number: shopNumber(l.location_id),
       shop_name: shopName(l.location_id),
       product_id: l.product_id,
+      product_base: stripPackagingSuffix(l.product_id),
       vendor_part_number: vp?.part_number ?? '',
       vendor_description: vp?.description ?? '',
       uom: l.uom ?? '',
+      uom_code: UOM_CODES[(l.uom ?? '').toLowerCase()] ?? (l.uom ?? '').toUpperCase(),
       qty: Number(l.qty),
       unit_cost: Number(l.unit_cost ?? 0),
       line_total: Number(l.qty) * Number(l.unit_cost ?? 0),
@@ -185,8 +222,13 @@ export function OrdersV2Export() {
       order_type_code: orderType === 'bulk' ? 'B' : 'P',
       vendor: vendorName,
       weekday: orderWeekdayName(draft),
+      line_number: lineNumberByLineId.get(l.id) ?? 1,
+      // Only one such account-number column exists on core.locations today
+      // (valvoline_account_num) — named generically here in case another
+      // vendor's own account-number field is added later.
+      account_number: loc.fieldValue(l.location_id, 'valvoline_account_num') || '',
     }
-  }, [draft, shopNumber, shopName, vendorName, vendorPartFor])
+  }, [draft, shopNumber, shopName, vendorName, vendorPartFor, lineNumberByLineId, loc])
 
   const rows = useMemo(() => included.map((l) => {
     const v = valuesFor(l)
@@ -209,24 +251,39 @@ export function OrdersV2Export() {
 
   const fileName = renderTemplate(tpl.file_name_template, headerValues, draft?.order_date) || 'order'
   const sheetName = (renderTemplate(tpl.sheet_name_template, headerValues, draft?.order_date) || 'Order').slice(0, 31)
+  const fileCount = tpl.max_rows_per_file && tpl.max_rows_per_file > 0 ? Math.ceil(rows.length / tpl.max_rows_per_file) : 1
   const subject = renderTemplate(tpl.subject_template, headerValues, draft?.order_date)
   const body = renderTemplate(tpl.body_template, headerValues, draft?.order_date)
 
   function download() {
     if (!included.length) { toast.error('Nothing to export — every line is excluded or zero'); return }
     const headers = tpl.columns.map((c) => c.header)
-    if (tpl.format === 'csv') {
-      const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
-      const csv = [headers, ...rows].map((r) => r.map(esc).join(',')).join('\n')
-      triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileName}.csv`)
-    } else {
-      const wb = XLSX.utils.book_new()
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-      XLSX.utils.book_append_sheet(wb, ws, sheetName)
-      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-      triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileName}.xlsx`)
-    }
-    toast.success('Export downloaded')
+    // Some vendor upload portals (Valvoline) reject a file over a fixed
+    // line count — split into sequentially-numbered files instead of one.
+    // A single file (the common case) keeps its plain, unsuffixed name so
+    // this is a no-op for every template that doesn't set it.
+    const maxRows = tpl.max_rows_per_file && tpl.max_rows_per_file > 0 ? tpl.max_rows_per_file : null
+    const chunks = maxRows
+      ? Array.from({ length: Math.ceil(rows.length / maxRows) }, (_, i) => rows.slice(i * maxRows, (i + 1) * maxRows))
+      : [rows]
+
+    chunks.forEach((chunkRows, i) => {
+      const suffix = chunks.length > 1 ? `-${i + 1}` : ''
+      if (tpl.format === 'csv') {
+        const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+        const csv = [headers, ...chunkRows].map((r) => r.map(esc).join(',')).join('\n')
+        // Staggered so the browser doesn't treat several downloads fired
+        // synchronously from one click as a batch to block/prompt about.
+        setTimeout(() => triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileName}${suffix}.csv`), i * 150)
+      } else {
+        const wb = XLSX.utils.book_new()
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...chunkRows])
+        XLSX.utils.book_append_sheet(wb, ws, sheetName)
+        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+        setTimeout(() => triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileName}${suffix}.xlsx`), i * 150)
+      }
+    })
+    toast.success(chunks.length > 1 ? `${chunks.length} files downloaded` : 'Export downloaded')
   }
 
   async function saveAsDefault() {
@@ -374,6 +431,20 @@ export function OrdersV2Export() {
               <span className="text-[10px] font-mono text-inky/50">→ {sheetName}</span>
             </>
           )}
+          <Input
+            label="Max rows per file (blank = no limit)"
+            type="number"
+            min={0}
+            value={tpl.max_rows_per_file ?? ''}
+            onChange={(e) => setTpl((t) => ({ ...t, max_rows_per_file: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) }))}
+            className="w-56"
+            placeholder="e.g. 100 for Valvoline's portal"
+          />
+          <span className="text-[10px] font-mono text-inky/50">
+            {fileCount > 1
+              ? `→ ${fileCount} files (${fileName}-1.${tpl.format} … ${fileName}-${fileCount}.${tpl.format})`
+              : 'Exports as a single file at the current line count'}
+          </span>
         </CardBody></Card>
 
         <Card><CardBody className="flex flex-col gap-3">
