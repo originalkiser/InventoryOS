@@ -915,11 +915,29 @@ Deno.serve(async (req) => {
           batchId = newBatch.id
         }
 
-        await (admin as any).schema('inventory').from('count_products')
+        // Found live 2026-09-24: this delete's own result was never
+        // checked, so a silent failure (any reason — transient network
+        // blip, a busy table, etc.) let the insert below run anyway,
+        // stacking today's rows on top of yesterday's un-deleted ones
+        // instead of replacing them. Real damage confirmed: some shops had
+        // the SAME product accumulated across 2-4 days under the same
+        // batch id, roughly doubling (or worse) their live on-hand $ value
+        // everywhere that reads "current" count_products (this month's
+        // Overview KPIs and the Expected Oil Balance recount check both
+        // read it directly, with no dedup of their own — since fixed
+        // separately in get_current_balance_by_category/
+        // get_current_oil_on_hand_value, but the write side needing this
+        // to actually work every day is still the real fix). Now aborts
+        // this feed (caught by the existing best-effort try/catch below,
+        // same as an insert failure) rather than inserting on top of
+        // whatever the delete failed to clear — a missed day is far safer
+        // than a silently-growing duplicate.
+        const { error: delErr } = await (admin as any).schema('inventory').from('count_products')
           .delete()
           .eq('company_id', companyId)
           .eq('upload_batch_id', batchId)
           .in('location_id', succeededLocIds)
+        if (delErr) throw new Error(`count_products delete failed: ${delErr.message}`)
 
         const countProductRows = allUpsertRows
           .filter((r: any) => r.on_hands != null && succeededLocIds.includes(r.location_id))
