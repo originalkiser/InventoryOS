@@ -82,15 +82,19 @@ export const ICONS: Record<string, JSX.Element> = {
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-[#F2F1E6]/25" />,
 }
 
+// Deliberately bigger than a subitem's own icon (w-4, see ICONS above) — a
+// section is the parent of everything under it, so its own icon (used both
+// in the full sidebar's section header bar and the collapsed rail's
+// per-section launcher button) should read as a size step up, not smaller.
 const SECTION_ICONS: Record<string, JSX.Element> = {
-  inventory: <Package className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
-  droptop: <img src={droptopLogo} alt="" className="w-3.5 h-3.5 flex-shrink-0 object-contain" />,
-  'data-connections': <GrDatabase className="w-3.5 h-3.5 flex-shrink-0 text-sky" />,
-  'global-config': <Settings className="w-3.5 h-3.5 flex-shrink-0 text-[#F2F1E6]/70" />,
-  operations: <Building2 className="w-3.5 h-3.5 flex-shrink-0 text-[#E67E22]" />,
-  finance: <DollarSign className="w-3.5 h-3.5 flex-shrink-0 text-[#2ECC71]" />,
-  accounting: <TrendingUp className="w-3.5 h-3.5 flex-shrink-0 text-inky" />,
-  marketing: <Megaphone className="w-3.5 h-3.5 flex-shrink-0 text-[#C0392B]" />,
+  inventory: <Package className="w-5 h-5 flex-shrink-0 text-sky" />,
+  droptop: <img src={droptopLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
+  'data-connections': <GrDatabase className="w-5 h-5 flex-shrink-0 text-sky" />,
+  'global-config': <Settings className="w-5 h-5 flex-shrink-0 text-[#F2F1E6]/70" />,
+  operations: <Building2 className="w-5 h-5 flex-shrink-0 text-[#E67E22]" />,
+  finance: <DollarSign className="w-5 h-5 flex-shrink-0 text-[#2ECC71]" />,
+  accounting: <TrendingUp className="w-5 h-5 flex-shrink-0 text-inky" />,
+  marketing: <Megaphone className="w-5 h-5 flex-shrink-0 text-[#C0392B]" />,
 }
 
 // Subtle per-section tint + colored left accent so the section headers stand
@@ -691,8 +695,11 @@ function SortableSection({
 
   return (
     <div ref={setNodeRef} style={style} className="py-0.5">
-      {/* Section header */}
-      <div className={`flex items-center gap-1 px-2 py-1.5 group/section rounded-r ${SECTION_ACCENT[sectionKey] ?? ''}`}>
+      {/* Section header — its own icon (SECTION_ICONS, w-5) and padding are
+          deliberately a size step up from a subitem row's (w-4, py-2 base)
+          so the bar itself reads as the parent container, not a peer of the
+          rows nested under it. */}
+      <div className={`flex items-center gap-1 px-2 py-2 group/section rounded-r ${SECTION_ACCENT[sectionKey] ?? ''}`}>
         {/* Drag handle for the section */}
         <span
           {...listeners}
@@ -979,7 +986,11 @@ function CollapsedNav({
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-      <div className="flex-1 overflow-y-auto hover-scroll py-2">
+      {/* app-scroll (not hover-scroll) — a reserved-but-invisible-until-hover
+          scrollbar gutter is fine on the wide expanded sidebar, but on this
+          56px-wide icon rail its 8px width skews flex-centered icons visibly
+          left of true center. No scrollbar affordance needed here anyway. */}
+      <div className="flex-1 overflow-y-auto app-scroll py-2">
         {favItems.length > 0 && (
           <>
             {favItems.filter((i) => i.to).map((item) => (
