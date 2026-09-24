@@ -64,6 +64,20 @@ export interface ExceptionConfig {
   // the nav badge, unless bumped (deferred bumpDays via the Bump action).
   staleDays: number
   bumpDays: number
+  // Late PO Receipt Alerts (2026-09-25) — a purchase order from an enabled
+  // supplier with no receipt activity poAlertDaysThreshold days past its
+  // expected delivery date gets flagged. Deliberately its own toggle rather
+  // than being on by default — see PoReceiptAlertsTab.tsx's own header
+  // comment for why this lives in a separate table, not exception_reports.
+  poAlertsEnabled: boolean
+  poAlertDaysThreshold: number
+  // supplier_name -> enabled. Only suppliers explicitly turned on here are
+  // ever checked — RelaDyne starts on (the motivating case), everything
+  // else (Valvoline included) starts off until turned on deliberately.
+  // Not a fixed/hardcoded list — the Settings tab populates real supplier
+  // names from get_droptop_po_supplier_names() and a supplier missing from
+  // this map is treated as disabled.
+  poAlertSuppliers: Record<string, boolean>
 }
 export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   types: [...REPORT_TYPES],
@@ -72,6 +86,9 @@ export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   statuses: [...EXCEPTION_STATUSES],
   staleDays: 3,
   bumpDays: 3,
+  poAlertsEnabled: false,
+  poAlertDaysThreshold: 5,
+  poAlertSuppliers: { RelaDyne: true, Valvoline: false },
 }
 
 // Fixed response values (the table renders these as buttons).

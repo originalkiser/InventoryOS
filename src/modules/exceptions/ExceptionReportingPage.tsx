@@ -10,7 +10,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { EditText, EditDate, EditSelect, AutoTextarea, inputCls } from '@/components/shared/InlineCells'
-import { Button, Input, Card, CardBody, Tabs, TabsTrigger, TabsContent, SbLoader } from '@/components/ui'
+import { Button, Input, Card, CardBody, Tabs, TabsTrigger, TabsContent, SbLoader, Toggle } from '@/components/ui'
 import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
@@ -27,6 +27,7 @@ import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
 import { AutomatedChecksPanel } from './AutomatedChecksPanel'
+import { PoReceiptAlertsTab } from './PoReceiptAlertsTab'
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -193,6 +194,7 @@ export function ExceptionReportingPage() {
             <TabsTrigger value="reports">Reports</TabsTrigger>
             <TabsTrigger value="automated">Automated Checks{automatedOpenCount > 0 ? ` (${automatedOpenCount})` : ''}</TabsTrigger>
             <TabsTrigger value="test_auto">Test - AutoExceptions{testAutoOpenCount > 0 ? ` (${testAutoOpenCount})` : ''}</TabsTrigger>
+            {config.poAlertsEnabled && <TabsTrigger value="po_alerts">Late PO Receipts</TabsTrigger>}
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </div>
         </div>
@@ -276,6 +278,12 @@ export function ExceptionReportingPage() {
             </>
           )}
         </TabsContent>
+
+        {config.poAlertsEnabled && (
+          <TabsContent value="po_alerts">
+            <PoReceiptAlertsTab config={config} />
+          </TabsContent>
+        )}
 
         <TabsContent value="settings">
           <SettingsView config={config} saveConfig={saveConfig} onImport={handleImport} importing={importing} clearAll={clearAll} />
@@ -694,9 +702,23 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
   importing: boolean
   clearAll: () => Promise<void>
 }) {
+  const { profile } = useAuthStore()
   const [newType, setNewType] = useState('')
   const [newIssue, setNewIssue] = useState<Record<string, string>>({})
   const [newStatus, setNewStatus] = useState('')
+
+  // Real distinct supplier names on this company's own POs, for the Late PO
+  // Receipt Alerts toggle list below — not hardcoded, since a hardcoded list
+  // would just be the next instance of this doc's own repeated "assumed
+  // schema/list, never verified, went stale" mistake.
+  const [poSuppliers, setPoSuppliers] = useState<string[]>([])
+  useEffect(() => {
+    if (!profile?.company_id) return
+    ;(supabase as any).rpc('get_droptop_po_supplier_names', { p_company_id: profile.company_id })
+      .then(({ data }: any) => setPoSuppliers((data ?? []).map((r: any) => r.supplier_name)))
+  }, [profile?.company_id])
+  const setSupplierEnabled = (name: string, enabled: boolean) =>
+    saveConfig({ ...config, poAlertSuppliers: { ...config.poAlertSuppliers, [name]: enabled } })
 
   const addType = () => { const t = newType.trim(); if (!t || config.types.includes(t)) return; saveConfig({ ...config, types: [...config.types, t], issues: { ...config.issues, [t]: config.issues[t] ?? [] } }); setNewType('') }
   const removeType = (t: string) => saveConfig({ ...config, types: config.types.filter((x) => x !== t) })
@@ -736,6 +758,39 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
             onChange={(e) => saveConfig({ ...config, bumpDays: Math.max(1, Number(e.target.value) || 1) })}
             className={`${inputCls} w-16`} />
           <span className="text-xs font-body text-inky">day(s), then it highlights again.</span>
+        </div>
+      </CardBody></Card>
+
+      <Card><CardBody className="flex flex-col gap-3">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Late PO Receipt Alerts</h3>
+        <p className="text-[11px] font-mono text-inky/60">
+          Flags a purchase order once it's gone this many days past its expected delivery date with no receipt
+          activity at all. Lives in its own "Late PO Receipts" tab (shown only while enabled) and does not count
+          toward the sidebar badge above.
+        </p>
+        <Toggle checked={config.poAlertsEnabled} onChange={(v) => saveConfig({ ...config, poAlertsEnabled: v })}
+          size="sm" color="cyan" label={config.poAlertsEnabled ? 'Enabled' : 'Disabled'} />
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-body text-inky">Flag after</span>
+          <input type="number" min={1} value={config.poAlertDaysThreshold}
+            onChange={(e) => saveConfig({ ...config, poAlertDaysThreshold: Math.max(1, Number(e.target.value) || 1) })}
+            className={`${inputCls} w-16`} />
+          <span className="text-xs font-body text-inky">day(s) past the expected delivery date with no receipt activity.</span>
+        </div>
+        <div>
+          <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest mb-1">Suppliers checked</p>
+          {poSuppliers.length === 0 ? (
+            <p className="text-xs font-mono text-inky/50">No supplier names found on synced purchase orders yet.</p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {poSuppliers.map((s) => (
+                <label key={s} className="flex items-center gap-2 text-xs font-mono text-navy">
+                  <Toggle checked={config.poAlertSuppliers[s] ?? false} onChange={(v) => setSupplierEnabled(s, v)} size="sm" color="cyan" />
+                  {s}
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       </CardBody></Card>
 

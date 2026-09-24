@@ -12,6 +12,9 @@ export function useExceptionConfig() {
     statuses: raw.statuses?.length ? raw.statuses : DEFAULT_EXCEPTION_CONFIG.statuses,
     staleDays: raw.staleDays ?? DEFAULT_EXCEPTION_CONFIG.staleDays,
     bumpDays: raw.bumpDays ?? DEFAULT_EXCEPTION_CONFIG.bumpDays,
+    poAlertsEnabled: raw.poAlertsEnabled ?? DEFAULT_EXCEPTION_CONFIG.poAlertsEnabled,
+    poAlertDaysThreshold: raw.poAlertDaysThreshold ?? DEFAULT_EXCEPTION_CONFIG.poAlertDaysThreshold,
+    poAlertSuppliers: raw.poAlertSuppliers ?? DEFAULT_EXCEPTION_CONFIG.poAlertSuppliers,
   }
   return { config, save: (c: ExceptionConfig) => save(c), loaded }
 }
