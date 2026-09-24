@@ -1,0 +1,25 @@
+-- Droptop Purchase Orders' rotating-cursor sync (data-connection-dispatcher's
+-- runDroptopPurchaseOrders) deliberately throttles itself to 1 location at a
+-- time with a 3s pause between each (2026-09-21 fix for a chunk-size timeout
+-- bug) — a single 100s tick can only ever cover ~20 of a real company's
+-- ~280 locations. still_catching_up (the generic "keep retrying every 5
+-- minutes today" flag every daily connection shares) was being computed
+-- per-TICK ("did THIS tick alone finish the remaining locations") rather
+-- than per-LAP ("has a full rotation completed since today's run began") —
+-- since a single tick structurally can never finish 280 locations by
+-- design, still_catching_up was permanently true, forever, causing this
+-- connection to re-fire on literally every 5-minute tick around the clock
+-- (confirmed live: ~5,500 per-location invocations/24h against ~280
+-- locations, i.e. ~20 full passes/day) instead of completing one lap and
+-- going quiet until tomorrow's scheduled time the way every other daily
+-- connection does.
+--
+-- po_lap_progress tracks how many locations have been successfully synced
+-- since the CURRENT lap started (reset to 0 whenever a fresh daily kickoff
+-- begins, i.e. still_catching_up was false coming into a run). Once it
+-- reaches the total location count, the lap is complete and
+-- still_catching_up is forced back to false — same "go quiet until
+-- tomorrow" behavior droptop_orders/droptop_time_clock already have, now
+-- actually reachable for Purchase Orders too.
+ALTER TABLE inventory.data_connection_schedules
+  ADD COLUMN IF NOT EXISTS po_lap_progress integer NOT NULL DEFAULT 0;

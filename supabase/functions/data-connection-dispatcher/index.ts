@@ -207,6 +207,7 @@ interface Schedule {
   last_run_at: string | null
   still_catching_up: boolean
   po_cursor_location_id: string | null
+  po_lap_progress: number
 }
 
 // Wall-clock hour/minute/date in an IANA timezone, via Intl (no external
@@ -288,7 +289,8 @@ async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ s
 // run to reach the same spot and stall again in the same place.
 async function runDroptopPurchaseOrders(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string, cursorLocationId: string | null,
-): Promise<{ status: string; message: string | null; newCursorLocationId?: string | null; stillCatchingUp?: boolean }> {
+  stillCatchingUpIn: boolean, lapProgressIn: number,
+): Promise<{ status: string; message: string | null; newCursorLocationId?: string | null; stillCatchingUp?: boolean; newLapProgress?: number }> {
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
   const { data: locs, error: locErr } = await (admin as any)
     .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
@@ -339,8 +341,27 @@ async function runDroptopPurchaseOrders(
   // off. A total failure now falls back to the ORIGINAL safe behavior
   // (wait for tomorrow's daily_time); only genuine partial progress
   // (status 'partial', at least one real success) stays same-day-retried.
-  const stillCatchingUp = result.status !== 'error' && lastGoodChunk < chunks.length - 1
-  return { status: result.status, message: result.message, newCursorLocationId, stillCatchingUp }
+  //
+  // 2026-09-24 fix: this connection is deliberately throttled to
+  // concurrency:1/delayMs:3000, so a single 100s tick can only ever
+  // finish ~20 of a real company's ~280 locations — the per-TICK check
+  // above (chunks.length here is just THIS tick's chunk count) can never
+  // be false in one pass, so `still_catching_up` never resolved back to
+  // false and this connection re-fired on every single 5-minute dispatcher
+  // tick around the clock instead of completing one lap/day. po_lap_progress
+  // tracks cumulative successes across ticks since the current lap started
+  // (reset to 0 on a fresh daily kickoff, i.e. stillCatchingUpIn was false
+  // coming into this run); only once the running total reaches the full
+  // location count does the lap complete and still_catching_up resolve to
+  // false, same "go quiet until tomorrow" behavior every other daily
+  // connection already has.
+  const tickSucceeded = lastGoodChunk + 1
+  const priorProgress = stillCatchingUpIn ? lapProgressIn : 0
+  const cumulativeProgress = priorProgress + tickSucceeded
+  const lapComplete = result.status !== 'error' && cumulativeProgress >= ids.length
+  const stillCatchingUp = result.status !== 'error' && !lapComplete
+  const newLapProgress = stillCatchingUp ? cumulativeProgress : 0
+  return { status: result.status, message: result.message, newCursorLocationId, stillCatchingUp, newLapProgress }
 }
 
 // Replaces the earlier runDroptopCustomers (droptop-sync-customers is
@@ -705,7 +726,7 @@ Deno.serve(async (req) => {
       const tz = await timezoneFor(s.company_id)
       if (!isDue(s, now, tz)) return null
 
-      let outcome: { status: string; message: string | null; stillCatchingUp?: boolean; newCursorLocationId?: string | null }
+      let outcome: { status: string; message: string | null; stillCatchingUp?: boolean; newCursorLocationId?: string | null; newLapProgress?: number }
       try {
         if (s.connection_key === 'skybitz_tanks') {
           if (!skybitzSecret) { outcome = { status: 'error', message: 'SKYBITZ_SYNC_SECRET not configured' } }
@@ -719,7 +740,7 @@ Deno.serve(async (req) => {
           )
         } else if (s.connection_key === 'droptop_purchase_orders') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
-          else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id, s.po_cursor_location_id)
+          else outcome = await runDroptopPurchaseOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id, s.po_cursor_location_id, s.still_catching_up, s.po_lap_progress)
         } else if (s.connection_key === 'droptop_orders') {
           if (!droptopSecret) { outcome = { status: 'error', message: 'DROPTOP_SYNC_SECRET not configured' } }
           else outcome = await runDroptopOrders(supabaseUrl, serviceKey, droptopSecret, s.company_id)
@@ -779,6 +800,11 @@ Deno.serve(async (req) => {
           // simply never touched, per Supabase JS's own "only SETs columns
           // present in the payload" behavior.
           ...(outcome.newCursorLocationId !== undefined ? { po_cursor_location_id: outcome.newCursorLocationId } : {}),
+          // Cumulative lap-progress counter for Purchase Orders only (see
+          // runDroptopPurchaseOrders' 2026-09-24 fix comment) — every other
+          // connection never sets this, so it's simply left out of their
+          // payload rather than written as undefined/null.
+          ...(outcome.newLapProgress !== undefined ? { po_lap_progress: outcome.newLapProgress } : {}),
         })
         .eq('id', s.id)
 
