@@ -262,6 +262,86 @@ describe('vendor case-type minimums', () => {
   })
 })
 
+// Valvoline-only flags (VendorRules.alwaysListConfiguredProducts /
+// spreadCaseTypeMinimum) — a real shop only ever orders 3 configured
+// products, so every one of them should stay visible, and a case-type
+// shortfall should spread across them evenly rather than piling onto one.
+describe('Valvoline: always list configured products + spread case-type minimum (2026-09-24)', () => {
+  it('alwaysListConfiguredProducts: lists a not-yet-due product at qty 0 instead of dropping it', () => {
+    // A is due (DOS 12 < trigger 14); B and C are nowhere close (DOS 100).
+    const a = input({ product_id: 'A', on_hand: 60, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50 } })
+    const b = input({ product_id: 'B', on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50 } })
+    const cc = input({ product_id: 'C', on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50 } })
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: {
+        vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {},
+        usesOrderDays: false, alwaysListConfiguredProducts: true,
+      },
+    })
+    const res = generateOrder([a, b, cc], c)
+    expect(res.lines.map((l) => l.product_id).sort()).toEqual(['A', 'B', 'C'])
+    const bLine = res.lines.find((l) => l.product_id === 'B')!
+    expect(bLine.qty).toBe(0)
+    expect(bLine.included).toBe(false)
+  })
+
+  it('does not list anything extra when the flag is off (every other vendor, unchanged)', () => {
+    const a = input({ product_id: 'A', on_hand: 60, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50 } })
+    const b = input({ product_id: 'B', on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50 } })
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: {}, usesOrderDays: false },
+    })
+    const res = generateOrder([a, b], c)
+    expect(res.lines.map((l) => l.product_id)).toEqual(['A'])
+  })
+
+  it('spreadCaseTypeMinimum: distributes a shortfall evenly across all 3, not onto whichever one line is already ordered', () => {
+    // Only A is due (1 box); with alwaysListConfiguredProducts, B and C sit
+    // at qty 0 alongside it, all with plenty of capacity.
+    const a = input({ product_id: 'A', on_hand: 60, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 10000 } })
+    const b = input({ product_id: 'B', on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 10000 } })
+    const cc = input({ product_id: 'C', on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 10000 } })
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: {
+        vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: { bay_box: 6 },
+        usesOrderDays: false, alwaysListConfiguredProducts: true, spreadCaseTypeMinimum: true,
+      },
+    })
+    const res = generateOrder([a, b, cc], c)
+    const total = res.lines.filter((l) => l.uom === 'bay_box').reduce((s, l) => s + l.qty, 0)
+    expect(total).toBeGreaterThanOrEqual(6)
+    // Round-robin over identical capacity/starting point spreads to 2 each,
+    // not 4-1-1 or all 6 piled onto A.
+    for (const l of res.lines) expect(l.qty).toBeLessThanOrEqual(3)
+    expect(res.lines.every((l) => l.included)).toBe(true)
+  })
+
+  it('spreadCaseTypeMinimum: makes no changes at all when the minimum is not reachable, just flags it', () => {
+    // Combined hard capacity across all 3 tops out at 3 — 6 is never reachable.
+    const a = input({ product_id: 'A', on_hand: 60, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 65 } })
+    const b = input({ product_id: 'B', on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 505 } })
+    const cc = input({ product_id: 'C', on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 505 } })
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: {
+        vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: { bay_box: 6 },
+        usesOrderDays: false, alwaysListConfiguredProducts: true, spreadCaseTypeMinimum: true,
+      },
+    })
+    const res = generateOrder([a, b, cc], c)
+    const bLine = res.lines.find((l) => l.product_id === 'B')!
+    const cLine = res.lines.find((l) => l.product_id === 'C')!
+    // Untouched — still the qty-0 visibility placeholders, not forced up.
+    expect(bLine.qty).toBe(0)
+    expect(cLine.qty).toBe(0)
+    expect(res.groups[0].meetsMinimum).toBe(false)
+    expect(res.lines.every((l) => l.flags.includes('below_minimum'))).toBe(true)
+  })
+})
+
 describe('units_per_order minimum — a floor on the whole order, not each line', () => {
   const unitsPerOrder = (qty: number) => ({ type: 'units_per_order' as const, dollars: 0, qty })
 

@@ -480,6 +480,84 @@ function applyBulkPerProductMinimum(
  * already on the order isn't enough — and actually says so when it still
  * isn't.
  */
+/**
+ * Valvoline-only (VendorRules.spreadCaseTypeMinimum) — distributes a
+ * case-type shortfall evenly across every configured product of that type
+ * at the shop (round-robin: always top up whichever candidate currently
+ * holds the FEWEST units), instead of the default behavior's "max out
+ * whichever already-ordered line has the most headroom, then as a last
+ * resort dump the whole remaining gap onto one spare" — which piles units
+ * onto a single product rather than spreading across the shop's other 2.
+ * Checks upfront whether the minimum is even reachable through every
+ * configured product's own hard capacity combined; if not, makes NO
+ * changes at all (the shop's natural DOS-computed quantities are left
+ * exactly as generated) rather than forcing a partial, arbitrary-looking
+ * bump that still falls short — the caller flags it below_minimum either way.
+ */
+function applySpreadCaseTypeMinimum(
+  lines: GeneratedLine[], caseType: string, minQty: number, ctx: GenerationContext,
+  inputs: Map<string, GenerationInput>, spares: GenerationInput[],
+): boolean {
+  interface Candidate { line: GeneratedLine | null; input: GenerationInput }
+  const existing: Candidate[] = lines
+    .filter((l) => (l.uom ?? '') === caseType)
+    .map((l) => ({ line: l, input: inputs.get(`${l.location_id}|${l.product_id}`)! }))
+    .filter((c) => !!c.input)
+  const existingKeys = new Set(existing.map((c) => `${c.input.location_id}|${c.input.product_id}`))
+  const spareCandidates: Candidate[] = spares
+    .filter((sp) => (sp.rule.uom ?? '') === caseType && !existingKeys.has(`${sp.location_id}|${sp.product_id}`))
+    .map((sp) => ({ line: null, input: sp }))
+  const all = [...existing, ...spareCandidates]
+  if (!all.length) return false
+
+  const capOf = (c: Candidate) => capsFor(c.input, ctx, { respectDosMax: false }).maxUnits
+  const currentOf = (c: Candidate) => n(c.line?.qty ?? 0)
+  const totalNow = existing.reduce((s, c) => s + currentOf(c), 0)
+  const totalMax = all.reduce((s, c) => s + Math.max(currentOf(c), capOf(c)), 0)
+  if (totalMax + 1e-9 < minQty) return false // not reachable — leave everything untouched
+
+  const qty = new Map<Candidate, number>(all.map((c) => [c, currentOf(c)]))
+  let total = totalNow
+  let guard = 0
+  while (total + 1e-9 < minQty && guard++ < 10000) {
+    let best: Candidate | null = null
+    let bestQty = Infinity
+    let bestHeadroom = 0
+    for (const c of all) {
+      const q = qty.get(c)!
+      const headroom = capOf(c) - q
+      if (headroom <= 1e-9) continue
+      if (q < bestQty || (q === bestQty && headroom > bestHeadroom)) { best = c; bestQty = q; bestHeadroom = headroom }
+    }
+    if (!best) break
+    qty.set(best, qty.get(best)! + 1)
+    total += 1
+  }
+
+  for (const c of all) {
+    const newQty = qty.get(c)!
+    if (newQty === currentOf(c)) continue
+    if (!c.line) {
+      const caps = capsFor(c.input, ctx, { respectDosMax: false })
+      const line = buildLine(c.input, ctx, newQty, caps)
+      line.added_by_smoothing = true
+      if (!line.flags.includes('added_for_smoothing')) line.flags.push('added_for_smoothing')
+      if (!line.flags.includes('case_minimum_topup')) line.flags.push('case_minimum_topup')
+      markOverDosMax(line, ctx)
+      lines.push(line)
+    } else {
+      c.line.qty = newQty
+      c.line.system_qty = newQty
+      c.line.included = true
+      c.line.dos_after = daysOfSupply(n(c.line.on_hand) + newQty * gallonsPerUnit(c.input.rule), c.line.daily_usage)
+      if (!c.line.flags.includes('case_minimum_topup')) c.line.flags.push('case_minimum_topup')
+      markOverDosMax(c.line, ctx)
+    }
+  }
+
+  return total + 1e-9 >= minQty
+}
+
 function applyCaseTypeMinimums(
   lines: GeneratedLine[], ctx: GenerationContext, inputs: Map<string, GenerationInput>,
   spares: GenerationInput[],
@@ -498,6 +576,11 @@ function applyCaseTypeMinimums(
     if (!ofType.length && !sparesOfType.length) continue
     let total = ofType.reduce((s, l) => s + n(l.qty), 0)
     if (total >= minQty) continue
+
+    if (ctx.vendor.spreadCaseTypeMinimum) {
+      if (!applySpreadCaseTypeMinimum(lines, caseType, minQty, ctx, inputs, spares)) allMet = false
+      continue
+    }
 
     // Spread the shortfall over the lines with the most physical headroom, so
     // one product isn't loaded up while others sit at their configured target.
@@ -773,6 +856,30 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     const line = buildLine(input, ctx, units, caps)
     if (belowCriticalFloor && !line.flags.includes('critical_minimum')) line.flags.push('critical_minimum')
     pass1.push(line)
+  }
+
+  // Valvoline-only (VendorRules.alwaysListConfiguredProducts) — a shop that
+  // ordered nothing this run (or ordered only 1-2 of its 3 configured
+  // products) would otherwise have no visibility at all into its other
+  // products' status. Every configured-but-not-due product gets a qty:0
+  // line here (same buildLine() every genuinely-due product goes through,
+  // so it inherits the exact same included:false/dimmed-row treatment this
+  // app already gives VMI keep-fill lines — visible in Review, excluded
+  // from the order total, and a user can still bump the qty and Include it
+  // manually). Deliberately unconditional on whether anything else at that
+  // shop is due — "not_order_day"-skipped locations never reach
+  // eligibleSpare at all, so this can't resurrect a location genuinely
+  // excluded for a different reason.
+  if (ctx.vendor.alwaysListConfiguredProducts) {
+    const pass1Keys = new Set(pass1.map((l) => `${l.location_id}|${l.product_id}`))
+    for (const spareList of eligibleSpare.values()) {
+      for (const sp of spareList) {
+        const key = `${sp.location_id}|${sp.product_id}`
+        if (pass1Keys.has(key)) continue
+        pass1Keys.add(key)
+        pass1.push(buildLine(sp, ctx, 0, capsFor(sp, ctx, { respectDosMax: false })))
+      }
+    }
   }
 
   // ---- group + Pass 2 ------------------------------------------------------
