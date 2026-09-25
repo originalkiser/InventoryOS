@@ -258,7 +258,19 @@ const LEFT_BOX_IDS = LEFT_BOX_LABELS.map((b) => b.id)
 // above instead). Wraps react-grid-layout's own WidthProvider HOC so the
 // grid measures its own container instead of needing an explicit `width`
 // prop threaded through.
-const ReactGridLayout = RGL.WidthProvider(RGL)
+//
+// `import * as RGL` does NOT give the real GridLayout class here — Vite's
+// esbuild CJS interop (`__toESM`) wraps a `export =` module in a synthetic
+// namespace object (prototype-linked for `instanceof`, properties copied as
+// getters) rather than returning the class itself, so `RGL` is a plain
+// object, not a callable component. It DOES stash the real class at
+// `RGL.default` (the same interop helper's own node-compat fallback) — found
+// live 2026-09-25 as a real crash (blank page, "Element type is invalid")
+// after `tsc`/`vite build` both passed, since neither one actually mounts
+// the component; only a real render exercises this. Confirmed directly by
+// inspecting esbuild's generated `__toESM` output for this exact import.
+const RGLGridLayout = (RGL as unknown as { default: typeof RGL }).default
+const ReactGridLayout = RGL.WidthProvider(RGLGridLayout)
 const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 24
 const GRID_MARGIN: [number, number] = [16, 16]
