@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, X } from 'lucide-react'
 import { GrDatabase } from 'react-icons/gr'
@@ -34,6 +35,7 @@ const DOT_CLASS: Record<ReturnType<typeof statusColor>, string> = {
 }
 
 export function SyncStatusWidget() {
+  const navigate = useNavigate()
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
   const canRunNow = isAdminOrDeveloper(profile?.role)
@@ -166,18 +168,34 @@ export function SyncStatusWidget() {
                   const useManual = manualAt && (!scheduledAt || new Date(manualAt) > new Date(scheduledAt))
                   const lastAt = useManual ? manualAt : scheduledAt
                   const lastStatus = useManual ? (row?.last_manual_run_status ?? null) : (row?.last_run_status ?? null)
+                  const lastMessage = useManual ? (row?.last_manual_run_message ?? null) : (row?.last_run_message ?? null)
                   return (
-                    <div key={key} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-chrome-fg/5">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${DOT_CLASS[statusColor(lastStatus)]}`} />
-                      <div className="flex-1 min-w-0">
+                    <div
+                      key={key}
+                      onClick={() => { setOpen(false); navigate('/data-connections') }}
+                      title="Open Data Connections"
+                      // items-stretch (not items-center) so the Run Now button
+                      // below can fill this row's full height via self-stretch,
+                      // instead of floating as a small text link — direct
+                      // feedback 2026-09-25. The row itself is also clickable
+                      // (opens the full Data Connections table); Run Now's own
+                      // onClick stops propagation so clicking it doesn't ALSO
+                      // navigate away mid-click.
+                      className="flex items-stretch gap-2 px-1.5 py-1 rounded hover:bg-chrome-fg/5 cursor-pointer"
+                    >
+                      <span
+                        title={lastStatus && lastStatus !== 'success' && lastMessage ? lastMessage : undefined}
+                        className={`w-2 h-2 rounded-full flex-shrink-0 self-center ${DOT_CLASS[statusColor(lastStatus)]}`}
+                      />
+                      <div className="flex-1 min-w-0 self-center">
                         <div className="text-xs font-mono text-chrome-fg truncate">{meta.label}</div>
                         <div className="text-[10px] font-mono text-chrome-fg/40">{lastAt ? formatInTz(lastAt, timezone) : 'Never run'}</div>
                       </div>
                       {canRunNow && (
                         <button
-                          onClick={() => runNow(key)}
+                          onClick={(e) => { e.stopPropagation(); runNow(key) }}
                           disabled={runningKey === key || running.some((t) => t.label === meta.label)}
-                          className="text-[10px] font-mono uppercase tracking-wide text-sky hover:text-chrome-fg disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+                          className="flex-shrink-0 self-stretch px-2 flex items-center justify-center rounded text-[10px] font-mono uppercase tracking-wide text-sky hover:text-chrome-fg hover:bg-chrome-fg/10 disabled:opacity-30 disabled:cursor-not-allowed"
                         >
                           {runningKey === key ? '…' : 'Run Now'}
                         </button>
