@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { usePersistedColumnLayout } from '@/hooks/useColumnPrefs'
+import { useCustomFields } from '@/hooks/useCustomFields'
+import { SCHEMA_FIELDS as LOCATION_SCHEMA_FIELDS } from '@/modules/config/tabs/LocationsTab'
 import { ColumnManagerModal, type ColItem } from './ColumnManagerModal'
 import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader, Toggle } from '@/components/ui'
 import { IssueFormModal } from '@/modules/issues/IssueFormModal'
@@ -75,7 +77,7 @@ interface IssueRow {
 // and order-config-column hide/reorder moved to the cross-device,
 // per-user usePersistedColumnLayout below (2026-09-25) — tank monitor
 // columns and the other options here are unchanged and stay device-local.
-interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean }
+interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean; boxesSideBySide?: boolean }
 
 // A tank monitor not reporting in > 2 days reads as offline (⚠ marker,
 // offline-email eligibility, and the On Hand view's per-product callout).
@@ -222,6 +224,30 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
   { id: 'acquisition_date', label: 'Acquisition Date', render: (ctx) => ({ value: locVal(ctx.location, 'acquisition_date'), note: sinceLabel(locVal(ctx.location, 'acquisition_date')) ?? undefined }) },
   { id: 'nc_inspection', label: 'NC Inspection Station', render: (ctx) => (ctx.inNC ? { value: locVal(ctx.location, 'inspection_station_id') } : null) },
 ]
+const SIDEBAR_DEFAULT_IDS = SIDEBAR_FIELDS.map((f) => f.id)
+
+// core.locations columns already covered by one of the hand-crafted
+// "special" fields above (same underlying column, different framing/label —
+// e.g. `director` is already shown as "RDO") — excluded from the generic
+// Locations Global Config field list below so Manage Fields never offers two
+// entries for the same data under different names.
+const SIDEBAR_SPECIAL_COLUMN_KEYS = new Set([
+  'shop_city', 'market', 'area_manager', 'am_phone', 'director',
+  'address', 'store_phone', 'acquisition_date', 'inspection_station_id',
+  'reladyne_delivery_day',
+])
+
+// Left-column boxes (Shop Details + everything under it) — reorderable via
+// "Left Column Layout" under Settings, see leftBoxOrder below.
+const LEFT_BOX_LABELS: ColItem[] = [
+  { id: 'shop_details', label: 'Shop Details' },
+  { id: 'issues', label: 'Issues' },
+  { id: 'exceptions', label: 'Exception Reports' },
+  { id: 'comms', label: 'Location Comms' },
+  { id: 'custom_config', label: 'Custom Shop Config' },
+  { id: 'mentioned', label: 'Mentioned In' },
+]
+const LEFT_BOX_IDS = LEFT_BOX_LABELS.map((b) => b.id)
 
 interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null; tint?: boolean; width?: string }
 
@@ -415,6 +441,22 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const navigate = useNavigate()
   const loc = useLocations()
   const companyId = profile?.company_id ?? null
+  // Every Locations Global Config column (+ custom fields) as optional Shop
+  // Details fields (2026-09-25 ask) — generic, so a new field there needs no
+  // matching change here.
+  const { active: locationCustomFields } = useCustomFields('locations')
+  const extraSidebarFields = useMemo((): SidebarFieldDef[] => {
+    const schemaKeys = new Set(LOCATION_SCHEMA_FIELDS.map((f) => f.name))
+    const cols: SidebarFieldDef[] = LOCATION_SCHEMA_FIELDS
+      .filter((f) => !SIDEBAR_SPECIAL_COLUMN_KEYS.has(f.name))
+      .map((f) => ({ id: f.name, label: f.label, render: (ctx) => ({ value: locVal(ctx.location, f.name) }) }))
+    // A custom field sharing a key with a real column would just re-read the
+    // same column above — skip it rather than list the same data twice.
+    const custom: SidebarFieldDef[] = locationCustomFields
+      .filter((f) => !schemaKeys.has(f.field_key))
+      .map((f) => ({ id: `cf:${f.field_key}`, label: f.label, render: (ctx) => ({ value: locVal(ctx.location, f.field_key) }) }))
+    return [...cols, ...custom]
+  }, [locationCustomFields])
   // Unique per mounted instance, not just per shop — the full-page route
   // (kept mounted in the background by KeepAlivePages) and the "Shop Detail"
   // block in the floating quick-access panel can both be showing the same
@@ -469,8 +511,15 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // TanStack-table page in this app, just under these two table keys.
   const sidebarLayout = usePersistedColumnLayout('location_lookup.sidebar_fields')
   const configLayout = usePersistedColumnLayout('location_lookup.order_config_columns')
+  // Left-column box order (Shop Details/Issues/Exceptions/Comms/Custom
+  // Config/Mentioned In) — same persisted-layout shape, so a shop with a
+  // very tall Shop Details card (now that any Locations Global Config
+  // column can be added to it) can move Issues/Exceptions/Comms above it
+  // instead of always scrolling past it.
+  const leftBoxLayout = usePersistedColumnLayout('location_lookup.left_boxes')
   const [sidebarManagerOpen, setSidebarManagerOpen] = useState(false)
   const [configManagerOpen, setConfigManagerOpen] = useState(false)
+  const [leftBoxManagerOpen, setLeftBoxManagerOpen] = useState(false)
   // Issues modal: list toggle (pending/resolved) + inline editor.
   // editIssue: undefined = editor closed, null = new issue, object = edit existing.
   const [issuesModalOpen, setIssuesModalOpen] = useState(false)
@@ -479,9 +528,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
     try {
       const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}')
-      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false }
+      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false, boxesSideBySide: p.boxesSideBySide ?? false }
     }
-    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false } }
+    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false, boxesSideBySide: false } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
   const toggleTankHidden = (id: string) =>
@@ -1147,12 +1196,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const addressStr = location ? [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') : ''
 
   // Sidebar fields — resolved from the declarative SIDEBAR_FIELDS array
-  // above, then ordered/filtered by the user's own persisted layout (drag
-  // reorder + hide, cross-device — see "Shop Details Fields" under the page's
-  // Settings gear). A field
-  // whose render() returns null (e.g. NC Inspection Station outside NC) is
-  // omitted entirely, same as the old array literal's own conditional spread.
-  const sidebarFieldsAll: ResolvedSidebarField[] = location ? SIDEBAR_FIELDS
+  // above plus every Locations Global Config column/custom field
+  // (extraSidebarFields), then ordered/filtered by the user's own persisted
+  // layout (drag reorder + hide, cross-device — see "Shop Details Fields"
+  // under the page's Settings gear). A field whose render() returns null
+  // (e.g. NC Inspection Station outside NC) is omitted entirely, same as the
+  // old array literal's own conditional spread.
+  const sidebarFieldsAll: ResolvedSidebarField[] = location ? [...SIDEBAR_FIELDS, ...extraSidebarFields]
     .map((f): ResolvedSidebarField | null => {
       const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC, valvolineSchedule })
       return r ? { id: f.id, label: f.label, value: r.value, note: r.note, mapQuery: r.mapQuery } : null
@@ -1161,11 +1211,24 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const sidebarAllIds = sidebarFieldsAll.map((f) => f.id)
   const sidebarKnownOrder = sidebarLayout.order.filter((id) => sidebarAllIds.includes(id))
   const sidebarKnownSet = new Set(sidebarKnownOrder)
-  const sidebarOrderedIds = [...sidebarKnownOrder, ...sidebarAllIds.filter((id) => !sidebarKnownSet.has(id))]
+  // Only the original "special" fields auto-populate for a user who hasn't
+  // customized their layout yet — a Global Config column/custom field must
+  // be explicitly added via Manage Fields, so this list growing to ~100
+  // options never floods an existing (or brand new) shop's Shop Details card
+  // by itself.
+  const sidebarOrderedIds = [...sidebarKnownOrder, ...SIDEBAR_DEFAULT_IDS.filter((id) => !sidebarKnownSet.has(id))]
   const visibleSidebar = sidebarOrderedIds
     .filter((id) => !sidebarLayout.hidden.includes(id))
     .map((id) => sidebarFieldsAll.find((f) => f.id === id))
     .filter((f): f is NonNullable<typeof f> => !!f)
+
+  // Left-column box order/hide — reorder-only in spirit (no default-hidden
+  // concept needed, all 6 boxes exist for every shop), same persisted-layout
+  // shape as sidebar/order-config above.
+  const leftBoxKnownOrder = leftBoxLayout.order.filter((id) => LEFT_BOX_IDS.includes(id))
+  const leftBoxKnownSet = new Set(leftBoxKnownOrder)
+  const leftBoxOrder = [...leftBoxKnownOrder, ...LEFT_BOX_IDS.filter((id) => !leftBoxKnownSet.has(id))]
+    .filter((id) => !leftBoxLayout.hidden.includes(id))
 
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
 
@@ -1216,6 +1279,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   function resetSidebarFields() {
     sidebarLayout.setOrder([])
     sidebarLayout.setHidden([])
+  }
+  function applyLeftBoxShown(shown: string[]) {
+    leftBoxLayout.setOrder(shown)
+    leftBoxLayout.setHidden(LEFT_BOX_IDS.filter((id) => !shown.includes(id)))
+  }
+  function resetLeftBoxes() {
+    leftBoxLayout.setOrder([])
+    leftBoxLayout.setHidden([])
   }
 
   // Copy the (sorted, visible) tank table as a formatted HTML table (with a
@@ -1366,12 +1437,17 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Manage Columns</span>
               <button onClick={() => setSidebarManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Shop Details Fields</button>
               <button onClick={() => setConfigManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Order Config Columns</button>
+              <button onClick={() => setLeftBoxManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Left Column Layout</button>
             </div>
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Options</span>
               <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer">
                 <input type="checkbox" checked={!!prefs.nonVmiOfflineBtn} onChange={() => setPrefs((p) => ({ ...p, nonVmiOfflineBtn: !p.nonVmiOfflineBtn }))} className="accent-sky" />
                 Use non-VMI tanks for offline email button
+              </label>
+              <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms as a row instead of stacked">
+                <input type="checkbox" checked={!!prefs.boxesSideBySide} onChange={() => setPrefs((p) => ({ ...p, boxesSideBySide: !p.boxesSideBySide }))} className="accent-sky" />
+                Issues/Exceptions/Comms side by side
               </label>
             </div>
           </CardBody>
@@ -1386,41 +1462,77 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">{error}</div>
       ) : (
         <div className={`grid grid-cols-1 gap-4 items-start ${embedded ? '' : 'lg:grid-cols-[280px_1fr]'}`}>
-          {/* Left info — frozen while the tables/issues scroll */}
+          {/* Left info — frozen while the tables/issues scroll. Rendered from
+              leftBoxOrder (persisted, drag-reorderable via "Left Column
+              Layout" under Settings) rather than a fixed sequence, so Issues/
+              Exceptions/Comms can be moved above a Shop Details card that's
+              grown tall from added Global Config fields. */}
           <div className={`self-start flex flex-col gap-3 ${embedded ? '' : 'lg:sticky'}`}
             style={!embedded ? { top: 'calc(var(--inv-navbar-h, 0px) + 4.5rem)' } : undefined}>
-            <Card>
-              <CardBody className="flex flex-col gap-2">
-                {!embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />}
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop Details</span>
-                </div>
-                <dl className="flex flex-col gap-1.5">
-                  {visibleSidebar.map((f) => (
-                    <div key={f.id} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
-                      {f.mapQuery && (
-                        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
-                          title="Open in Google Maps" className="absolute top-1.5 right-1.5 inline-flex items-center text-inky hover:text-sky">
-                          <MapPin className="w-4 h-4" />
-                        </a>
-                      )}
-                      <dt className="text-[10px] font-mono font-semibold uppercase tracking-wide text-navy/70">{f.label}</dt>
-                      <dd className="text-xs font-body text-navy break-words">
-                        {f.value || '—'}
-                        {f.note && <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/40 text-navy">{f.note}</span>}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-                <UpdatedCallout date={locUpdated} onOpen={() => navigate('/global-config?tab=locations')} openTitle="Open Locations config" />
-              </CardBody>
-            </Card>
-            <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />
-            <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />
-            <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />
-            <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} />
-            <MentionedBox projects={mentionedProjects} meetings={mentionedMeetings}
-              onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
+            {(() => {
+              const boxContent: Record<string, ReactNode> = {
+                shop_details: (
+                  <Card>
+                    <CardBody className="flex flex-col gap-2">
+                      {!embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />}
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop Details</span>
+                      </div>
+                      <dl className="flex flex-col gap-1.5">
+                        {visibleSidebar.map((f) => (
+                          <div key={f.id} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
+                            {f.mapQuery && (
+                              <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
+                                title="Open in Google Maps" className="absolute top-1.5 right-1.5 inline-flex items-center text-inky hover:text-sky">
+                                <MapPin className="w-4 h-4" />
+                              </a>
+                            )}
+                            <dt className="text-[10px] font-mono font-semibold uppercase tracking-wide text-navy/70">{f.label}</dt>
+                            <dd className="text-xs font-body text-navy break-words">
+                              {f.value || '—'}
+                              {f.note && <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/40 text-navy">{f.note}</span>}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <UpdatedCallout date={locUpdated} onOpen={() => navigate('/global-config?tab=locations')} openTitle="Open Locations config" />
+                    </CardBody>
+                  </Card>
+                ),
+                issues: <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />,
+                exceptions: <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />,
+                comms: <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />,
+                custom_config: <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} />,
+                mentioned: (
+                  <MentionedBox projects={mentionedProjects} meetings={mentionedMeetings}
+                    onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
+                ),
+              }
+              // When "side by side" is on, Issues/Exceptions/Comms render as
+              // one row together at the position of whichever of the three
+              // appears FIRST in the user's own order, rather than each
+              // taking its own slot — so reordering that trio relative to
+              // Shop Details/Custom Config/Mentioned still works as expected.
+              const sideBySideIds = ['issues', 'exceptions', 'comms']
+              const rendered = new Set<string>()
+              const nodes: ReactNode[] = []
+              for (const id of leftBoxOrder) {
+                if (rendered.has(id) || !boxContent[id]) continue
+                if (prefs.boxesSideBySide && sideBySideIds.includes(id)) {
+                  const group = sideBySideIds.filter((gid) => leftBoxOrder.includes(gid) && boxContent[gid])
+                  group.forEach((gid) => rendered.add(gid))
+                  nodes.push(
+                    <div key="side-by-side-group" className="flex gap-3 flex-wrap items-start">
+                      {group.map((gid) => <div key={gid} className="flex-1 min-w-[220px]">{boxContent[gid]}</div>)}
+                    </div>,
+                  )
+                  continue
+                }
+                rendered.add(id)
+                nodes.push(<div key={id}>{boxContent[id]}</div>)
+              }
+              return nodes
+            })()}
           </div>
 
           {/* Main */}
@@ -1693,6 +1805,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         onChange={applyConfigShown}
         onReset={resetConfigColumns}
       />
+      <ColumnManagerModal
+        open={leftBoxManagerOpen}
+        onClose={() => setLeftBoxManagerOpen(false)}
+        all={LEFT_BOX_LABELS}
+        shown={leftBoxOrder}
+        onChange={applyLeftBoxShown}
+        onReset={resetLeftBoxes}
+      />
     </div>
   )
 }
@@ -1961,8 +2081,8 @@ function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig,
           )}
           {showVmiLegend && (
             <span className="inline-flex items-center gap-1.5 text-[10px] font-mono text-inky/70">
-              <span className="w-2.5 h-2.5 rounded-sm bg-sky/40 border border-sky" />
-              Color = VMI ({vmiCount} Product{vmiCount === 1 ? '' : 's'})
+              <span className="w-8 h-3 rounded-sm bg-sky/40 border border-sky" />
+              = VMI ({vmiCount} Product{vmiCount === 1 ? '' : 's'})
             </span>
           )}
         </div>

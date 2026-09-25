@@ -66,7 +66,11 @@ function locFieldValue(loc: any, field: string): string {
 
 // ── Schema field map (upload + import) ───────────────────────────────────────
 
-const SCHEMA_FIELDS = [
+// Exported so Location Lookup's Shop Details section can offer every one of
+// these as an optional sidebar field (2026-09-25 ask) without duplicating
+// this list — this IS the same "columns from the Locations Global Config"
+// set that tab's own upload/edit-form/column-manager already use.
+export const SCHEMA_FIELDS = [
   // identity
   { name: 'name',         label: 'Name (Code)',      required: true },
   { name: 'shop_city',    label: 'Shop # / City',    required: true },
