@@ -36,7 +36,15 @@ function loadPersistedTableState(persistKey: string | undefined): { sorting?: So
   }
 }
 
-export function useTable<T>(data: T[], columns: ColumnDef<T, any>[], options?: { initialSorting?: SortingState; initialVisibility?: VisibilityState; persistKey?: string }) {
+export function useTable<T>(data: T[], columns: ColumnDef<T, any>[], options?: {
+  initialSorting?: SortingState; initialVisibility?: VisibilityState; persistKey?: string
+  // Added 2026-09-25 for Exception Reporting's table redesign — a page-size
+  // default of 25 instead of the app-wide 50, and a default left-pin (kept
+  // out of useColumnPrefs' own restore, which only overrides these once a
+  // user's own saved prefs actually exist).
+  initialPageSize?: number
+  initialColumnPinning?: ColumnPinningState
+}) {
   const persistKey = options?.persistKey
   // Only read once per persistKey (not on every render) — a fresh read here
   // would stomp in-progress edits to the state below with whatever was last
@@ -50,7 +58,7 @@ export function useTable<T>(data: T[], columns: ColumnDef<T, any>[], options?: {
   // Optional ordering/pinning — empty by default, so tables that don't use them
   // are unaffected (no column is pinned/reordered).
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([])
-  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>({ left: [], right: [] })
+  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(options?.initialColumnPinning ?? { left: [], right: [] })
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
 
   // Sort/filter round-trips through localStorage (opt-in via persistKey) so
@@ -80,7 +88,7 @@ export function useTable<T>(data: T[], columns: ColumnDef<T, any>[], options?: {
     getPaginationRowModel: getPaginationRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
-    initialState: { pagination: { pageSize: 50 } },
+    initialState: { pagination: { pageSize: options?.initialPageSize ?? 50 } },
     // Callers often pass a freshly-filtered/mapped array each render (e.g. a new
     // reference even when contents are unchanged). With autoResetPageIndex on
     // (the default), that fires a page-index reset on every render, and any

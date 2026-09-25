@@ -1,39 +1,38 @@
-import { useEffect, useMemo, useState, type ReactNode, type CSSProperties } from 'react'
-import { Pencil, Filter, GripVertical, ChevronUp, ChevronDown, RefreshCw } from 'lucide-react'
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
-import { SortableContext, horizontalListSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
+import { useEffect, useMemo, useState } from 'react'
+import { ChevronUp, ChevronDown, RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useConfigTab, type ImportMode } from '@/modules/config/useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
 import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
-import { EditText, EditDate, EditSelect, AutoTextarea, inputCls } from '@/components/shared/InlineCells'
+import { inputCls } from '@/components/shared/InlineCells'
 import { Button, Input, Card, CardBody, Tabs, TabsTrigger, TabsContent, SbLoader, Toggle } from '@/components/ui'
 import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
 import {
-  RESPONSE_YES, RESPONSE_YES_RD, RESPONSE_NO,
-  parseContacted, isYesResponse, isRdAdded, rdCell, impactedProducts, followUpDate, isExceptionStale,
+  parseContacted, isYesResponse, isRdAdded, rdCell, isExceptionStale,
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
 import { usePageRevisit } from '@/hooks/usePageActive'
-import { ImpactedProductsPicker } from './ImpactedProductsPicker'
 import { QuickResponseModal, type QuickResponseSeed } from './QuickResponseModal'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
-import { bumpedUntilISO, STALE_ROW_BG } from '@/lib/staleness'
 import { ExceptionReportModal } from './ExceptionReportModal'
 import { AutomatedChecksPanel } from './AutomatedChecksPanel'
 import { PoReceiptAlertsTab } from './PoReceiptAlertsTab'
+// Table rewrite 2026-09-25 moved to its own file (ExceptionTable.tsx) — this
+// re-export keeps AutomatedChecksPanel.tsx's existing
+// `import { ExceptionTable } from './ExceptionReportingPage'` working
+// unchanged rather than touching an unrelated file for this move.
+import { ExceptionTable } from './ExceptionTable'
+export { ExceptionTable }
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subMonths, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
 
 const toDate = (v: string) => applyTransforms(v, [{ kind: 'date' }]) || null
 const stripHtml = (s: string | null) => (s ? s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '')
-const dShort = (d: string | null) => { if (!d) return '—'; try { return format(new Date(d + 'T00:00:00'), 'MMM d, yyyy') } catch { return d } }
 
 const UPLOAD_FIELDS = [
   { name: 'shop', label: 'Shop', required: true },
@@ -297,235 +296,6 @@ export function ExceptionReportingPage() {
       <ExceptionReportModal open={modalOpen} onClose={() => setModalOpen(false)} existing={editing}
         onSubmit={async (fields, id) => { if (id) silentUpdate(id, fields); else await insert(fields); refreshNavBadges() }}
         onDelete={(id) => { remove(id); refreshNavBadges() }} />
-    </div>
-  )
-}
-
-// ── Inline-editable table ────────────────────────────────────────────────────
-// Status + Shop stay pinned-left; the rest are reorderable.
-const COL_META: Record<string, { label: string; filter: boolean; wrap?: boolean }> = {
-  finding: { label: 'Finding', filter: true },
-  area_manager: { label: 'Area Manager', filter: true },
-  type: { label: 'Type', filter: true },
-  issue: { label: 'Issue', filter: true },
-  products: { label: 'Impacted Products', filter: false },
-  details: { label: 'Details', filter: true, wrap: true },
-  contacted: { label: 'Contacted', filter: false },
-  follow_up: { label: 'Follow-Up Sent', filter: false },
-  response: { label: 'Response', filter: true },
-  response_date: { label: 'Response Date', filter: false },
-  rd: { label: 'Regional Director', filter: false },
-  response_notes: { label: 'Response Notes', filter: true, wrap: true },
-}
-const DEFAULT_ORDER = Object.keys(COL_META)
-const COL_ORDER_KEY = 'exc:colorder'
-
-function SortableHeaderCell({ id, thBase, children }: { id: string; thBase: string; children: ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
-  const style: CSSProperties = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
-  return (
-    <th ref={setNodeRef} style={style} className={thBase}>
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-1">
-          <button {...attributes} {...listeners} title="Drag to reorder" className="cursor-grab active:cursor-grabbing text-inky/40 hover:text-navy flex-shrink-0"><GripVertical className="w-3 h-3" /></button>
-          <span>{COL_META[id].label}</span>
-        </div>
-        {children}
-      </div>
-    </th>
-  )
-}
-
-export function ExceptionTable({ rows, config, shopLabel, regionalDirector, companyId, onSet, onEdit, onQuick }: {
-  rows: ExceptionReport[]
-  config: ExceptionConfig
-  shopLabel: (id: string | null) => string
-  regionalDirector: (id: string | null) => string
-  companyId: string | null
-  onSet: (r: ExceptionReport, patch: Partial<ExceptionReport>) => void
-  onEdit: (r: ExceptionReport) => void
-  // Fired when an edit suggests the report is wrapping up (response date
-  // entered, or status moved to closed) so the parent can prompt for the rest.
-  onQuick: (r: ExceptionReport, opts: { responseDate?: string | null; status?: string | null }) => void
-}) {
-  const [filtersOn, setFiltersOn] = useState(false)
-  const [filters, setFilters] = useState<Record<string, string>>({})
-  const [order, setOrder] = useState<string[]>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(COL_ORDER_KEY) || 'null')
-      if (Array.isArray(saved)) {
-        const known = saved.filter((id: string) => DEFAULT_ORDER.includes(id))
-        return [...known, ...DEFAULT_ORDER.filter((id) => !known.includes(id))]
-      }
-    } catch { /* ignore */ }
-    return DEFAULT_ORDER
-  })
-  useEffect(() => { localStorage.setItem(COL_ORDER_KEY, JSON.stringify(order)) }, [order])
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
-  function onDragEnd(e: DragEndEvent) {
-    const { active, over } = e
-    if (!over || active.id === over.id) return
-    setOrder((o) => arrayMove(o, o.indexOf(String(active.id)), o.indexOf(String(over.id))))
-  }
-
-  const thBase = 'px-2 py-2 text-left font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30 bg-cream sticky top-0 z-20'
-  const tdBase = 'px-2 py-1 align-top border-b border-navy/15 whitespace-nowrap'
-
-  const cellText = (r: ExceptionReport, col: string): string => {
-    switch (col) {
-      case 'status': return r.status ?? ''
-      case 'shop': return shopLabel(r.location_id)
-      case 'finding': return dShort(r.date_of_finding)
-      case 'area_manager': return r.area_manager ?? ''
-      case 'type': return r.report_type ?? ''
-      case 'issue': return r.issue ?? ''
-      case 'details': return stripHtml(r.details)
-      case 'response': return r.response ?? ''
-      case 'response_notes': return stripHtml(r.response_notes)
-      default: return ''
-    }
-  }
-  const filtered = useMemo(() => rows.filter((r) =>
-    Object.entries(filters).every(([c, val]) => !val || cellText(r, c).toLowerCase().includes(val.toLowerCase()))),
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  [rows, filters, shopLabel])
-
-  if (!rows.length) return <p className="text-xs font-mono text-inky/50 py-8">No exception reports for this filter.</p>
-
-  const filterInput = (id: string) => (
-    <input value={filters[id] ?? ''} onChange={(e) => setFilters((f) => ({ ...f, [id]: e.target.value }))} placeholder="filter…"
-      className="bg-cream border border-navy/30 rounded px-1 py-0.5 text-[10px] font-mono text-navy font-normal normal-case tracking-normal w-full focus:outline-none focus:ring-1 focus:ring-sky" />
-  )
-
-  function renderCell(id: string, r: ExceptionReport): ReactNode {
-    const info = id === 'rd' ? rdCell(r, config.responseDays) : null
-    switch (id) {
-      case 'finding': return <EditDate bare value={r.date_of_finding} onSave={(v) => onSet(r, { date_of_finding: v })} />
-      case 'area_manager': return <EditText value={r.area_manager} onSave={(v) => onSet(r, { area_manager: v })} />
-      case 'type': return <EditSelect bare value={r.report_type} options={config.types} placeholder="—" onSave={(v) => onSet(r, { report_type: v })} />
-      case 'issue': return <EditSelect bare value={r.issue} options={config.issues[r.report_type ?? ''] ?? []} placeholder="—" allowCurrent onSave={(v) => onSet(r, { issue: v })} />
-      case 'products': return <ImpactedProductsPicker compact companyId={companyId} locationId={r.location_id} selected={impactedProducts(r)}
-        onChange={(ids) => onSet(r, { metadata: { ...(r.metadata ?? {}), impacted_products: ids } })} />
-      case 'details': return <AutoTextarea value={stripHtml(r.details)} onSave={(v) => onSet(r, { details: v })} />
-      case 'contacted': return (
-        <div className="flex items-center gap-1">
-          <input type="checkbox" checked={r.contacted} onChange={(e) => onSet(r, { contacted: e.target.checked })} className="accent-sky" />
-          {r.contacted && <EditDate bare value={r.contacted_date} onSave={(v) => onSet(r, { contacted_date: v })} />}
-        </div>
-      )
-      // Date a follow-up was sent. Setting it restarts the response window
-      // (see responseWindowStart), which is what the Regional Director
-      // column counts down from.
-      case 'follow_up': return <EditDate bare value={followUpDate(r)}
-        title="Date a follow-up was sent — restarts the response window"
-        onSave={(v) => onSet(r, { metadata: { ...(r.metadata ?? {}), follow_up_date: v } })} />
-      case 'response': return <ResponseCell value={r.response} onSet={(v) => onSet(r, { response: v })} />
-      case 'response_date': return isYesResponse(r.response)
-        ? <EditDate bare value={r.date_of_shop_action}
-            onSave={(v) => { onSet(r, { date_of_shop_action: v }); if (v) onQuick(r, { responseDate: v }) }} />
-        : <span className="text-inky/30">—</span>
-      case 'rd': return info!.mode === 'left' ? <span className="text-[10px] font-mono text-inky/70">{info!.daysLeft}d left</span>
-        : info!.mode === 'rd' ? <span className="text-navy">{regionalDirector(r.location_id) || '—'}</span>
-        : <span className="text-inky/40">—</span>
-      case 'response_notes': return <AutoTextarea value={stripHtml(r.response_notes)} onSave={(v) => onSet(r, { response_notes: v })} />
-      default: return null
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex justify-end">
-        <button onClick={() => setFiltersOn((o) => !o)}
-          className={['inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border transition-colors', filtersOn ? 'bg-navy text-cream border-navy' : 'bg-cream text-inky border-navy/30 hover:border-navy'].join(' ')}>
-          <Filter className="w-3 h-3" /> {filtersOn ? 'Hide Filters' : 'Filter Columns'}
-        </button>
-      </div>
-      <div className="overflow-auto max-h-[calc(100vh-16rem)] rounded border border-navy/30">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-          <table className="text-xs font-mono border-collapse">
-            <thead>
-              <tr>
-                <th className={`${thBase} left-0 z-30 w-[230px] min-w-[230px]`}>
-                  <div className="flex flex-col gap-1"><span>Status</span>{filtersOn && filterInput('status')}</div>
-                </th>
-                <th className={`${thBase} left-[230px] z-30`}>
-                  <div className="flex flex-col gap-1"><span>Shop</span>{filtersOn && filterInput('shop')}</div>
-                </th>
-                <SortableContext items={order} strategy={horizontalListSortingStrategy}>
-                  {order.map((id) => (
-                    <SortableHeaderCell key={id} id={id} thBase={thBase}>
-                      {filtersOn && COL_META[id].filter ? filterInput(id) : null}
-                    </SortableHeaderCell>
-                  ))}
-                </SortableContext>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 ? (
-                <tr><td colSpan={order.length + 2} className="px-2 py-6 text-center text-inky/50">No rows match the filters.</td></tr>
-              ) : filtered.map((r, idx) => {
-                // Opaque bands so the sticky Status/Shop columns share them
-                // (a translucent band lets scrolled columns bleed through).
-                // Stale (needs-action, unbumped) rows override the band with
-                // a light red flag — this is what drives the nav badge count.
-                const stale = isExceptionStale(r, config.staleDays, config.responseDays)
-                const band = stale ? STALE_ROW_BG : idx % 2 ? 'bg-[#ECEBD8] dark:bg-[#0D2035]' : 'bg-cream'
-                return (
-                  <tr key={r.id} className={band}>
-                    <td className={`${tdBase} sticky left-0 z-10 ${band} w-[230px] min-w-[230px]`}>
-                      {/* Bump stacks under the select (rather than beside it) so the
-                          combined width never exceeds this sticky column's own width —
-                          content that overflowed the column used to get covered by the
-                          next sticky column (Shop) once the row scrolled under it. */}
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => onEdit(r)} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                          <EditSelect bare value={r.status} options={config.statuses} placeholder="—" allowCurrent className="min-w-[180px]"
-                            onSave={(v) => { onSet(r, { status: v }); if ((v ?? '').toLowerCase().includes('closed')) onQuick(r, { status: v }) }} />
-                        </div>
-                        {stale && (
-                          <button onClick={() => onSet(r, { metadata: { ...(r.metadata ?? {}), bumped_until: bumpedUntilISO(config.bumpDays) } })}
-                            title={`Defer ${config.bumpDays} more day(s)`}
-                            className="self-start flex-shrink-0 text-[10px] font-mono text-[#C0392B] border border-[#C0392B]/40 rounded px-1 py-0.5 hover:bg-[#C0392B]/10">
-                            Bump
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    <td className={`${tdBase} sticky left-[230px] z-10 ${band} text-navy`} title={shopLabel(r.location_id)}>{shopLabel(r.location_id)}</td>
-                    {order.map((id) => (
-                      <td key={id} className={COL_META[id].wrap ? `${tdBase} whitespace-normal` : tdBase}>
-                        {/* Cap wrap-column content to roughly the Status column's own
-                            height (1 line + Bump) so a long note doesn't blow the whole
-                            row out — it scrolls internally instead. */}
-                        {COL_META[id].wrap ? <div className="max-h-11 overflow-y-auto">{renderCell(id, r)}</div> : renderCell(id, r)}
-                      </td>
-                    ))}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </DndContext>
-      </div>
-    </div>
-  )
-}
-
-function ResponseCell({ value, onSet }: { value: string | null; onSet: (v: string | null) => void }) {
-  const opts: [string, string][] = [['Yes', RESPONSE_YES], ['+RD', RESPONSE_YES_RD], ['No', RESPONSE_NO]]
-  return (
-    <div className="inline-flex rounded overflow-hidden border border-navy/30">
-      {opts.map(([label, val]) => {
-        const on = value === val
-        const active = val === RESPONSE_NO ? 'bg-[#C0392B] text-cream' : 'bg-[#2ECC71] text-navy'
-        return (
-          <button key={val} title={val} onClick={() => onSet(on ? null : val)}
-            className={['px-1.5 py-0.5 text-[10px] font-mono border-r border-navy/20 last:border-r-0', on ? active : 'bg-transparent text-inky hover:bg-navy/10'].join(' ')}>
-            {label}
-          </button>
-        )
-      })}
     </div>
   )
 }

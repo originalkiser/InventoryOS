@@ -4,6 +4,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { Pin, PinOff } from 'lucide-react'
 import { Modal, Button } from '@/components/ui'
 
 export interface ColItem { id: string; label: string }
@@ -15,9 +16,20 @@ interface Props {
   shown: string[]            // ordered ids of currently-visible columns
   onChange: (shown: string[]) => void
   onReset: () => void
+  // Added 2026-09-25 for Exception Reporting's own table redesign — both
+  // optional, so every existing caller (Locations, Product Usage, Menu
+  // Board, Tank Monitors) is completely unaffected and simply doesn't get
+  // a pin control. `pinned` is left-pinned column ids, in order.
+  pinned?: string[]
+  onPinChange?: (pinned: string[]) => void
 }
 
-function ShownRow({ id, index, label, onRemove }: { id: string; index: number; label: string; onRemove: () => void }) {
+function ShownRow({
+  id, index, label, onRemove, pinned, onTogglePin,
+}: {
+  id: string; index: number; label: string; onRemove: () => void
+  pinned?: boolean; onTogglePin?: () => void
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   return (
     <div
@@ -32,12 +44,17 @@ function ShownRow({ id, index, label, onRemove }: { id: string; index: number; l
       </span>
       <span className="text-[10px] font-mono text-inky/50 w-5 text-right shrink-0">{index + 1}.</span>
       <span className="text-xs font-body text-navy dark:text-[#F2F1E6] flex-1 truncate">{label}</span>
+      {onTogglePin && (
+        <button onClick={onTogglePin} className={`shrink-0 ${pinned ? 'text-sky' : 'text-inky/30 hover:text-inky/70'}`} title={pinned ? 'Unpin column' : 'Pin column (stays fixed on the left while scrolling)'}>
+          {pinned ? <Pin className="w-3.5 h-3.5 fill-current" /> : <PinOff className="w-3.5 h-3.5" />}
+        </button>
+      )}
       <button onClick={onRemove} className="text-inky/40 hover:text-[#C0392B] shrink-0" title="Hide column">✕</button>
     </div>
   )
 }
 
-export function ColumnManagerModal({ open, onClose, all, shown, onChange, onReset }: Props) {
+export function ColumnManagerModal({ open, onClose, all, shown, onChange, onReset, pinned, onPinChange }: Props) {
   const [search, setSearch] = useState('')
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
@@ -84,7 +101,11 @@ export function ColumnManagerModal({ open, onClose, all, shown, onChange, onRese
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                 <SortableContext items={shown} strategy={verticalListSortingStrategy}>
                   {shown.map((id, i) => (
-                    <ShownRow key={id} id={id} index={i} label={labelOf(id)} onRemove={() => onChange(shown.filter((x) => x !== id))} />
+                    <ShownRow key={id} id={id} index={i} label={labelOf(id)} onRemove={() => onChange(shown.filter((x) => x !== id))}
+                      pinned={onPinChange ? (pinned ?? []).includes(id) : undefined}
+                      onTogglePin={onPinChange ? () => onPinChange(
+                        (pinned ?? []).includes(id) ? (pinned ?? []).filter((x) => x !== id) : [...(pinned ?? []), id],
+                      ) : undefined} />
                   ))}
                 </SortableContext>
               </DndContext>

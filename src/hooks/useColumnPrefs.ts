@@ -6,6 +6,17 @@ import { useAuthStore } from '@/stores/authStore'
 export interface ColumnPrefs {
   order: string[]
   hidden: string[]
+  // Added 2026-09-25 for Exception Reporting's own table redesign — read
+  // and written via the table instance's own setColumnSizing/
+  // setColumnPinning/setPageSize methods (TanStack Table exposes these
+  // directly), so every EXISTING caller of this hook (LocationsPage,
+  // ProductUsageTab, MenuBoardPage) gets width/pin/page-size persistence
+  // for free with no call-site change — these fields are simply undefined
+  // (and skipped) until a table's own columns actually support resizing/
+  // pinning/pagination in the first place.
+  sizing?: Record<string, number>
+  pinnedLeft?: string[]
+  pageSize?: number
 }
 
 const STORAGE_PREFIX = 'sbnet:'
@@ -88,14 +99,25 @@ export function useColumnPrefs(
       for (const id of prefs.hidden) vis[id] = false
       table.setColumnVisibility(vis)
     }
+    if (prefs.sizing) table.setColumnSizing(prefs.sizing)
+    if (prefs.pinnedLeft) table.setColumnPinning({ left: prefs.pinnedLeft, right: [] })
+    if (prefs.pageSize) table.setPageSize(prefs.pageSize)
   }
+
+  // Read straight off the table's own state (already reactive — a resize
+  // drag, a pin toggle, or a page-size change all flow through the same
+  // state TanStack Table already re-renders on) rather than requiring
+  // extra props threaded through from the caller.
+  const columnSizing = table.getState().columnSizing
+  const pinnedLeft = table.getState().columnPinning.left ?? []
+  const pageSize = table.getState().pagination.pageSize
 
   // ── Save on change (debounced 800 ms) ────────────────────────────────────
   useEffect(() => {
     const hidden = Object.entries(columnVisibility)
       .filter(([, v]) => v === false)
       .map(([k]) => k)
-    const prefs: ColumnPrefs = { order: columnOrder, hidden }
+    const prefs: ColumnPrefs = { order: columnOrder, hidden, sizing: columnSizing, pinnedLeft, pageSize }
     const str = JSON.stringify(prefs)
     if (str === lastSavedRef.current) return
 
@@ -116,5 +138,5 @@ export function useColumnPrefs(
 
     return () => clearTimeout(saveTimerRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columnVisibility, columnOrder])
+  }, [columnVisibility, columnOrder, columnSizing, pinnedLeft, pageSize])
 }

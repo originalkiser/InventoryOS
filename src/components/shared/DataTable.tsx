@@ -48,6 +48,15 @@ interface DataTableProps<T> {
    * clicks meant for something inside it.
    */
   onRowClick?: (original: T) => void
+  /**
+   * A background-color utility class for a row, computed from its own data
+   * — e.g. Exception Reporting's status color-coding (2026-09-25). Takes
+   * the zebra stripe's place for that row (selection still wins over it);
+   * applied to the row, the pinned-column cells, and the leading checkbox
+   * cell alike, so a pinned column (Status/Shop, by default) still shows
+   * the tint instead of being hidden under its own opaque background.
+   */
+  getRowClassName?: (original: T) => string
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -141,6 +150,7 @@ export function DataTable<T>({
   bulkDeleteNoun = 'row',
   dangerZone,
   onRowClick,
+  getRowClassName,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -530,28 +540,35 @@ export function DataTable<T>({
             ) : (
               table.getRowModel().rows.map((row, i) => {
                 const selected = selectedIds.has(rowKey(row))
+                // A caller-provided tint (e.g. status color-coding) takes the
+                // zebra stripe's place — selection still wins over it, same
+                // as it already won over the plain stripe.
+                const tint = getRowClassName?.(row.original) ?? ''
+                const bandClass = selected ? 'bg-sky/15' : tint || (i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]')
                 return (
                   <tr
                     key={row.id}
                     onClick={onRowClick ? (e) => {
-                      if ((e.target as HTMLElement).closest('input, button, a')) return
+                      // Found live 2026-09-25 building Exception Reporting's
+                      // own row-click-to-edit: this guard only ever excluded
+                      // input/button/a, so a click on a <select> (EditSelect)
+                      // or <textarea> (AutoTextarea/notes) — or the <label>
+                      // wrapping a checkbox+its own text — still fired the
+                      // row click underneath the field the user was actually
+                      // trying to use.
+                      if ((e.target as HTMLElement).closest('input, button, a, select, textarea, label, [contenteditable="true"]')) return
                       onRowClick(row.original)
                     } : undefined}
                     className={[
                       'border-b border-inky/10 hover:bg-sky/10 transition-colors',
                       onRowClick ? 'cursor-pointer' : '',
-                      selected
-                        ? 'bg-sky/15'
-                        : i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]',
+                      bandClass,
                     ].join(' ')}
                   >
                     {/* Row checkbox — frozen to the left like the pinned columns */}
                     <td
                       style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 10 }}
-                      className={[
-                        'px-2 py-2 text-center',
-                        selected || i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]',
-                      ].join(' ')}
+                      className={['px-2 py-2 text-center', bandClass].join(' ')}
                     >
                       <input
                         type="checkbox"
@@ -579,9 +596,7 @@ export function DataTable<T>({
                           className={[
                             'px-3 py-2 text-navy',
                             noClip ? '' : 'whitespace-nowrap',
-                            cell.column.getIsPinned() === 'left'
-                              ? `${selected || i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'} border-r-2 border-r-inky/20`
-                              : '',
+                            cell.column.getIsPinned() === 'left' ? `${bandClass} border-r-2 border-r-inky/20` : '',
                           ].join(' ')}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -614,7 +629,7 @@ export function DataTable<T>({
             }}
             className="border border-navy/40 rounded px-2 py-1 text-xs font-body text-navy bg-cream focus:outline-none focus:border-navy"
           >
-            {[50, 100, 150, 200].map((n) => (
+            {[25, 50, 100, 150, 200].map((n) => (
               <option key={n} value={n}>{n} per page</option>
             ))}
             <option value="all">All</option>
