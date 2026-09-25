@@ -25,6 +25,30 @@
 //                 locations stop right here. daysBack is the outer bound
 //                 for the rare location still chasing a genuinely old
 //                 back-order.
+//   stillOpenMaxAgeDays — a "still open" PO (per OUR OWN records) OLDER
+//                 than this no longer forces a deep walk at all; default
+//                 60. Direct product decision (2026-09-25): real production
+//                 data showed 139 of ~282 locations had at least one
+//                 never-closed PO going back as far as 6 months — a shop
+//                 that simply never marks an old PO "Closed" in Droptop
+//                 even once it's functionally done, which forced a slow
+//                 near-full-history walk for HALF of every location on
+//                 EVERY run, and was the real reason the dispatcher's
+//                 fixed per-tick time budget (see
+//                 data-connection-dispatcher's runDroptopPurchaseOrders)
+//                 only ever got through ~21 of 282 locations before running
+//                 out of time — most of that time was spent re-walking
+//                 ancient stuck-open POs, not real recent activity. At a
+//                 60-day cutoff only 37 locations still need a deep walk
+//                 (confirmed against real production data). Explicit
+//                 accepted trade-off, not an oversight: a status change on
+//                 a PO this old (created_timestamp, not last-updated —
+//                 Droptop's own endpoint has no other date to filter by)
+//                 may not be caught until it naturally falls inside
+//                 recentDaysBack again (which, since it never will if it
+//                 stays "open" forever, means effectively never) — tracking
+//                 genuinely recent PO activity accurately matters more than
+//                 eventually catching a months-old stuck-open PO's status.
 //   locationId  — sync a single location
 //   locationIds — sync a specific batch of locations (client-side chunking,
 //                 same as runDroptopSync in droptopService.ts). Ignored if
@@ -296,6 +320,11 @@ Deno.serve(async (req) => {
     const hardFloorUnix = Math.floor(Date.now() / 1000) - daysBack * 86400
     const recentDaysBack = Math.min(daysBack, Math.max(1, Number(body.recentDaysBack) || 14))
     const recentCutoffUnix = Math.floor(Date.now() / 1000) - recentDaysBack * 86400
+    // See this function's own header comment — a "still open" PO older than
+    // this is dropped from the deep-chase set entirely rather than forcing
+    // a slow walk back to find it.
+    const stillOpenMaxAgeDays = Math.min(daysBack, Math.max(recentDaysBack, Number(body.stillOpenMaxAgeDays) || 60))
+    const stillOpenMaxAgeUnix = Math.floor(Date.now() / 1000) - stillOpenMaxAgeDays * 86400
     const poStatus: string | undefined = typeof body.poStatus === 'string' ? body.poStatus : undefined
     const locationId: string | undefined = body.locationId
     const locationIds: string[] = Array.isArray(body.locationIds) ? body.locationIds : []
@@ -338,12 +367,18 @@ Deno.serve(async (req) => {
     const targetLocationIds = locations.map((l: any) => opToLocation.get(l.droptop_operation_id)).filter(Boolean) as string[]
     const { data: knownRows, error: knownErr } = await (admin as any)
       .schema('inventory').from('droptop_purchase_orders')
-      .select('location_id, po_id, po_status')
+      .select('location_id, po_id, po_status, created_timestamp')
       .eq('company_id', companyId).in('location_id', targetLocationIds)
     if (knownErr) return ok({ error: `Existing PO lookup failed: ${knownErr.message}` })
     const stillOpenByLocation = new Map<string, Set<string>>()
-    for (const row of (knownRows ?? []) as { location_id: string | null; po_id: string; po_status: string | null }[]) {
+    let droppedForAge = 0
+    for (const row of (knownRows ?? []) as { location_id: string | null; po_id: string; po_status: string | null; created_timestamp: string | null }[]) {
       if (!row.location_id || isTerminal(row.po_status)) continue
+      // See stillOpenMaxAgeDays' own header comment — an ancient never-closed
+      // PO no longer forces this location into a deep walk; its last-known
+      // status just stays as-is.
+      const createdUnix = row.created_timestamp ? Math.floor(new Date(row.created_timestamp).getTime() / 1000) : 0
+      if (createdUnix < stillOpenMaxAgeUnix) { droppedForAge++; continue }
       const set = stillOpenByLocation.get(row.location_id) ?? new Set<string>()
       set.add(row.po_id)
       stillOpenByLocation.set(row.location_id, set)
@@ -486,7 +521,10 @@ Deno.serve(async (req) => {
       error_message: warnings.length ? warnings.join(' | ') : null,
     })
 
-    return ok({ success: status !== 'error', locations_synced: locations.length, pos_upserted: posUpserted, items_written: itemsWritten, warnings })
+    return ok({
+      success: status !== 'error', locations_synced: locations.length, pos_upserted: posUpserted, items_written: itemsWritten,
+      still_open_dropped_for_age: droppedForAge, warnings,
+    })
   } catch (err: unknown) {
     return ok({ error: err instanceof Error ? err.message : String(err) })
   }

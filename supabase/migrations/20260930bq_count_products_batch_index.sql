@@ -1,0 +1,24 @@
+-- Droptop's On Hand sync (droptop-sync-usage's "Month End feed" step,
+-- see that function's own 2026-09-24 comment) does a scoped
+-- delete-then-insert into inventory.count_products every day:
+--   DELETE FROM count_products WHERE company_id = ? AND upload_batch_id = ? AND location_id IN (...)
+-- confirmed live 2026-09-25: this table has 812,938 rows (3 months —
+-- July/Aug/Sep 2026 — at ~250-300k rows each, ONE batch per month
+-- confirmed, so this is legitimate row volume, not a duplication bug
+-- resurfacing). There was no index at all containing upload_batch_id — the
+-- only 3 indexes are (company_id, count_month), the bare id PK, and
+-- (company_id, count_month, location_id, product_id, created_at DESC) —
+-- none of which help a query filtering on upload_batch_id without also
+-- filtering on count_month. The delete was forced into a full sequential
+-- scan of the whole table (not just that day's own ~270k-row batch) every
+-- single run, which is exactly why it started hitting
+-- "canceling statement due to statement timeout" once the table grew
+-- across 3 months of history.
+--
+-- CONCURRENTLY (can't run inside a transaction block — same precedent as
+-- this project's own 20260930aw product_usage trigram index, its own
+-- single-purpose file) so this doesn't hold a write lock on an 800k+ row
+-- table while it builds; the daily sync's own writes shouldn't be blocked
+-- by a one-time migration.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_inv_count_products_upload_batch
+  ON inventory.count_products (company_id, upload_batch_id, location_id);
