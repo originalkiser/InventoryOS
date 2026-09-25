@@ -4,6 +4,8 @@ import { MapPin, Settings } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { usePersistedColumnLayout } from '@/hooks/useColumnPrefs'
+import { ColumnManagerModal, type ColItem } from './ColumnManagerModal'
 import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader, Toggle } from '@/components/ui'
 import { IssueFormModal } from '@/modules/issues/IssueFormModal'
 import { ExceptionReportModal } from '@/modules/exceptions/ExceptionReportModal'
@@ -66,8 +68,11 @@ interface IssueRow {
   start_date: string | null; target_resolution_date: string | null; resolved_date: string | null
 }
 
-// Per-device view customization: ids hidden from each section.
-interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean }
+// Per-device view customization: ids hidden from each section. Sidebar-field
+// and order-config-column hide/reorder moved to the cross-device,
+// per-user usePersistedColumnLayout below (2026-09-25) — tank monitor
+// columns and the other options here are unchanged and stay device-local.
+interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean }
 
 // A tank monitor not reporting in > 2 days reads as offline (⚠ marker,
 // offline-email eligibility, and the On Hand view's per-product callout).
@@ -164,6 +169,45 @@ function locVal(loc: Location | undefined, key: string): string {
   const meta = (loc.metadata as any)?.[key]
   return meta == null ? '' : String(meta)
 }
+
+// Sidebar field list — declarative {id, label, render} entries (2026-09-25,
+// replacing the old inline-JSX-only array keyed by label) so a future field
+// (e.g. a planned Valvoline delivery-schedule field, to land between RD
+// Distributor and Address) is a one-line insert here rather than a
+// structural rewrite. `render` returns null to omit a field entirely for
+// this shop (e.g. the NC-only inspection-station field) — everything else
+// always renders, even with an empty value ("—" is shown by the caller).
+// `id` is the STABLE key hide/reorder preferences are keyed by; `label` is
+// just display text and can change freely without affecting a user's saved
+// layout.
+interface SidebarFieldCtx {
+  location: Location | undefined
+  shopId: string
+  shopLabel: (id: string | null) => string
+  rdOrderDay: string
+  rdDeliveryDay: string
+  rdDistributor: string
+  addressStr: string
+  inNC: boolean
+}
+interface SidebarFieldValue { value: string; note?: string; mapQuery?: string }
+interface SidebarFieldDef { id: string; label: string; render: (ctx: SidebarFieldCtx) => SidebarFieldValue | null }
+interface ResolvedSidebarField { id: string; label: string; value: string; note?: string; mapQuery?: string }
+
+const SIDEBAR_FIELDS: SidebarFieldDef[] = [
+  { id: 'location', label: 'Location', render: (ctx) => ({ value: locVal(ctx.location, 'shop_city') || ctx.shopLabel(ctx.shopId) }) },
+  { id: 'market', label: 'Market', render: (ctx) => ({ value: locVal(ctx.location, 'market') }) },
+  { id: 'area_manager', label: 'Area Manager', render: (ctx) => ({ value: locVal(ctx.location, 'area_manager') }) },
+  { id: 'am_phone', label: 'AM Cell', render: (ctx) => ({ value: locVal(ctx.location, 'am_phone') }) },
+  { id: 'rdo', label: 'RDO', render: (ctx) => ({ value: locVal(ctx.location, 'director') }) },
+  { id: 'rd_order_day', label: 'RD Order Day', render: (ctx) => ({ value: ctx.rdOrderDay, note: relativeDay(ctx.rdOrderDay) ?? undefined }) },
+  { id: 'rd_delivery_day', label: 'RD Delivery Day', render: (ctx) => ({ value: ctx.rdDeliveryDay, note: relativeDay(ctx.rdDeliveryDay) ?? undefined }) },
+  { id: 'rd_distributor', label: 'RD Distributor', render: (ctx) => ({ value: ctx.rdDistributor }) },
+  { id: 'address', label: 'Address', render: (ctx) => ({ value: ctx.addressStr, mapQuery: ctx.addressStr || undefined }) },
+  { id: 'store_phone', label: 'Shop Phone', render: (ctx) => ({ value: locVal(ctx.location, 'store_phone') }) },
+  { id: 'acquisition_date', label: 'Acquisition Date', render: (ctx) => ({ value: locVal(ctx.location, 'acquisition_date'), note: sinceLabel(locVal(ctx.location, 'acquisition_date')) ?? undefined }) },
+  { id: 'nc_inspection', label: 'NC Inspection Station', render: (ctx) => (ctx.inNC ? { value: locVal(ctx.location, 'inspection_station_id') } : null) },
+]
 
 interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null; tint?: boolean; width?: string }
 
@@ -309,6 +353,49 @@ const USAGE_COLS: Col<ConfigRow>[] = [
 ]
 const USAGE_TINT = 'bg-[#2ECC71]/10'
 
+// Order-config column resizing (2026-09-25) — default pixel widths, used
+// until a user drags a column to its own saved width. Roughly matches the
+// old fixed Tailwind width classes (w-20/w-28/w-16/w-14/w-24) these columns
+// used before real resizing existed.
+const CONFIG_DEFAULT_WIDTH: Record<string, number> = {
+  part: 150, uom: 90, capacity: 90, exception: 150, max: 80, vmi: 70,
+  on_hand: 90, daily_usage: 100, days_of_supply: 110,
+}
+const CONFIG_META_DEFAULT_WIDTH = 140
+function configColWidth(id: string, sizing: Record<string, number>): number {
+  return sizing[id] ?? CONFIG_DEFAULT_WIDTH[id] ?? CONFIG_META_DEFAULT_WIDTH
+}
+// A column header's own drag-to-resize handle — this table predates the
+// TanStack useTable/DataTable convergence (see TABLE_TEMPLATES.md), so this
+// is a small hand-rolled equivalent of DataTable's own header.getResizeHandler()
+// rather than pulling the whole table onto TanStack for one feature.
+function ResizeHandle({ onResize }: { onResize: (deltaPx: number) => void }) {
+  function onMouseDown(e: React.MouseEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    let lastX = e.clientX
+    function onMove(ev: MouseEvent) {
+      const delta = ev.clientX - lastX
+      lastX = ev.clientX
+      if (delta !== 0) onResize(delta)
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      onClick={(e) => e.stopPropagation()}
+      title="Drag to resize column"
+      className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize select-none touch-none bg-navy/10 hover:bg-sky/60 z-10"
+    />
+  )
+}
+
 export function LocationDetailView({ embedded = false }: { embedded?: boolean }) {
   const { profile } = useAuthStore()
   const navigate = useNavigate()
@@ -356,6 +443,15 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customizeOpen, setCustomizeOpen] = useState(false)
+  // Sidebar field order/hide + order-config column order/hide/width — real,
+  // cross-device, per-user persistence (2026-09-25), replacing the old
+  // localStorage-only ViewPrefs.sidebar/config hide lists. Same
+  // column_prefs jsonb column + shape useColumnPrefs already uses for every
+  // TanStack-table page in this app, just under these two table keys.
+  const sidebarLayout = usePersistedColumnLayout('location_lookup.sidebar_fields')
+  const configLayout = usePersistedColumnLayout('location_lookup.order_config_columns')
+  const [sidebarManagerOpen, setSidebarManagerOpen] = useState(false)
+  const [configManagerOpen, setConfigManagerOpen] = useState(false)
   // Issues modal: list toggle (pending/resolved) + inline editor.
   // editIssue: undefined = editor closed, null = new issue, object = edit existing.
   const [issuesModalOpen, setIssuesModalOpen] = useState(false)
@@ -364,13 +460,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
     try {
       const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}')
-      return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false }
+      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false }
     }
-    catch { return { sidebar: [], tank: [], config: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false } }
+    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
-  const toggleHidden = (group: 'sidebar' | 'tank' | 'config', id: string) =>
-    setPrefs((p) => ({ ...p, [group]: p[group].includes(id) ? p[group].filter((x) => x !== id) : [...p[group], id] }))
+  const toggleTankHidden = (id: string) =>
+    setPrefs((p) => ({ ...p, tank: p.tank.includes(id) ? p.tank.filter((x) => x !== id) : [...p.tank, id] }))
   const tankView = prefs.tankView ?? 'configuration'
   const setTankView = (v: 'configuration' | 'onhand') => setPrefs((p) => ({ ...p, tankView: v }))
   // "Ignore VMI" toggle (2026-09-25 direct ask) — the On Hand view is
@@ -1014,23 +1110,77 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const rdOrderDay = location ? orderDayFromDelivery(location.reladyne_delivery_day) : ''
   const rdDeliveryDay = locVal(location, 'reladyne_delivery_day')
   const addressStr = location ? [locVal(location, 'address'), locVal(location, 'city'), locVal(location, 'state'), locVal(location, 'zip')].filter(Boolean).join(', ') : ''
-  const sidebar: { label: string; value: string; note?: string; mapQuery?: string }[] = location ? [
-    { label: 'Location', value: locVal(location, 'shop_city') || shopLabel(shopId) },
-    { label: 'Market', value: locVal(location, 'market') },
-    { label: 'Area Manager', value: locVal(location, 'area_manager') },
-    { label: 'AM Cell', value: locVal(location, 'am_phone') },
-    { label: 'RDO', value: locVal(location, 'director') },
-    { label: 'RD Order Day', value: rdOrderDay, note: relativeDay(rdOrderDay) ?? undefined },
-    { label: 'RD Delivery Day', value: rdDeliveryDay, note: relativeDay(rdDeliveryDay) ?? undefined },
-    { label: 'RD Distributor', value: rdDistributor },
-    { label: 'Address', value: addressStr, mapQuery: addressStr || undefined },
-    { label: 'Shop Phone', value: locVal(location, 'store_phone') },
-    { label: 'Acquisition Date', value: locVal(location, 'acquisition_date'), note: sinceLabel(locVal(location, 'acquisition_date')) ?? undefined },
-    ...(inNC ? [{ label: 'NC Inspection Station', value: locVal(location, 'inspection_station_id') }] : []),
-  ] : []
 
-  const visibleSidebar = sidebar.filter((f) => !prefs.sidebar.includes(f.label))
+  // Sidebar fields — resolved from the declarative SIDEBAR_FIELDS array
+  // above, then ordered/filtered by the user's own persisted layout (drag
+  // reorder + hide, cross-device — see "Manage Fields" below). A field
+  // whose render() returns null (e.g. NC Inspection Station outside NC) is
+  // omitted entirely, same as the old array literal's own conditional spread.
+  const sidebarFieldsAll: ResolvedSidebarField[] = location ? SIDEBAR_FIELDS
+    .map((f): ResolvedSidebarField | null => {
+      const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC })
+      return r ? { id: f.id, label: f.label, value: r.value, note: r.note, mapQuery: r.mapQuery } : null
+    })
+    .filter((f): f is ResolvedSidebarField => !!f) : []
+  const sidebarAllIds = sidebarFieldsAll.map((f) => f.id)
+  const sidebarKnownOrder = sidebarLayout.order.filter((id) => sidebarAllIds.includes(id))
+  const sidebarKnownSet = new Set(sidebarKnownOrder)
+  const sidebarOrderedIds = [...sidebarKnownOrder, ...sidebarAllIds.filter((id) => !sidebarKnownSet.has(id))]
+  const visibleSidebar = sidebarOrderedIds
+    .filter((id) => !sidebarLayout.hidden.includes(id))
+    .map((id) => sidebarFieldsAll.find((f) => f.id === id))
+    .filter((f): f is NonNullable<typeof f> => !!f)
+
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
+
+  // Order-config columns — same persisted-layout shape as the sidebar
+  // above, keyed separately. CONFIG_FIXED/USAGE_COLS are always in the
+  // universe; meta columns come from allConfigMetaKeys (every metadata key
+  // seen across ALL vendors' rows, computed above) so a column dragged/
+  // hidden here applies consistently across every vendor's own order-config
+  // block, even though a given vendor may only actually have some of them
+  // (OrderConfigBlock filters its own rendered columns down to the ones its
+  // rows actually carry, same as before this feature).
+  const configDefaultOrder = [
+    ...CONFIG_FIXED.filter((c) => c.id !== 'vmi').map((c) => c.id),
+    ...allConfigMetaKeys.map((k) => `meta:${k}`),
+    'vmi',
+    ...USAGE_COLS.map((c) => c.id),
+  ]
+  const configLabelOf = (id: string): string => {
+    const fixed = CONFIG_FIXED.find((c) => c.id === id); if (fixed) return fixed.label
+    const usage = USAGE_COLS.find((c) => c.id === id); if (usage) return usage.label
+    return id.startsWith('meta:') ? metaLabel(id.slice(5)) : id
+  }
+  const configAllColItems: ColItem[] = configDefaultOrder.map((id) => ({ id, label: configLabelOf(id) }))
+  const configKnownOrder = configLayout.order.filter((id) => configDefaultOrder.includes(id))
+  const configKnownSet = new Set(configKnownOrder)
+  const configOrderedIds = [...configKnownOrder, ...configDefaultOrder.filter((id) => !configKnownSet.has(id))]
+  const configShownIds = configOrderedIds.filter((id) => !configLayout.hidden.includes(id))
+
+  function applyConfigShown(shown: string[]) {
+    configLayout.setOrder(shown)
+    configLayout.setHidden(configDefaultOrder.filter((id) => !shown.includes(id)))
+  }
+  function resetConfigColumns() {
+    configLayout.setOrder([])
+    configLayout.setHidden([])
+    configLayout.setSizing({})
+  }
+  function handleConfigResize(id: string, delta: number) {
+    configLayout.setSizing((prev) => {
+      const cur = prev[id] ?? CONFIG_DEFAULT_WIDTH[id] ?? CONFIG_META_DEFAULT_WIDTH
+      return { ...prev, [id]: Math.max(50, cur + delta) }
+    })
+  }
+  function applySidebarShown(shown: string[]) {
+    sidebarLayout.setOrder(shown)
+    sidebarLayout.setHidden(sidebarAllIds.filter((id) => !shown.includes(id)))
+  }
+  function resetSidebarFields() {
+    sidebarLayout.setOrder([])
+    sidebarLayout.setHidden([])
+  }
 
   // Copy the (sorted, visible) tank table as a formatted HTML table (with a
   // plain-text fallback) so it pastes into email with gridlines + banded rows.
@@ -1170,10 +1320,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
 
       {shopId && customizeOpen && (
         <Card>
-          <CardBody className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <CheckGroup title="Left panel fields" items={sidebar.map((f) => ({ id: f.label, label: f.label }))} hidden={prefs.sidebar} onToggle={(id) => toggleHidden('sidebar', id)} />
-            <CheckGroup title="Tank monitor columns" items={TANK_COLS.map((c) => ({ id: c.id, label: c.label }))} hidden={prefs.tank} onToggle={(id) => toggleHidden('tank', id)} />
-            <CheckGroup title="Order config columns" items={[...CONFIG_FIXED.map((c) => ({ id: c.id, label: c.label })), ...allConfigMetaKeys.map((k) => ({ id: `meta:${k}`, label: metaLabel(k) })), ...USAGE_COLS.map((c) => ({ id: c.id, label: c.label }))]} hidden={prefs.config} onToggle={(id) => toggleHidden('config', id)} />
+          <CardBody className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <CheckGroup title="Tank monitor columns" items={TANK_COLS.map((c) => ({ id: c.id, label: c.label }))} hidden={prefs.tank} onToggle={toggleTankHidden} />
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Options</span>
               <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer">
@@ -1199,9 +1347,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             <Card>
               <CardBody className="flex flex-col gap-2">
                 {!embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />}
-                <dl className="flex flex-col gap-1.5 mt-1">
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop Details</span>
+                  <button onClick={() => setSidebarManagerOpen(true)} className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Manage Fields</button>
+                </div>
+                <dl className="flex flex-col gap-1.5">
                   {visibleSidebar.map((f) => (
-                    <div key={f.label} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
+                    <div key={f.id} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
                       {f.mapQuery && (
                         <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
                           title="Open in Google Maps" className="absolute top-1.5 right-1.5 inline-flex items-center text-inky hover:text-sky">
@@ -1351,8 +1503,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
             ) : (
               <div className="flex flex-col gap-4">
+                <div className="flex items-center gap-2 self-start">
+                  <span className="text-xs font-mono text-navy uppercase tracking-wide">Order Configuration</span>
+                  <button onClick={() => setConfigManagerOpen(true)} className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Manage Columns</button>
+                </div>
                 {configsByVendor.map(([vendor, rows]) => (
-                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} hidden={prefs.config}
+                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} order={configShownIds} sizing={configLayout.sizing}
+                    onResize={handleConfigResize}
                     onOpenConfig={() => navigate('/config?tab=order-config')}
                     onExceptionClick={setExceptionModalRow}
                   />
@@ -1469,6 +1626,23 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           onSaved={load}
         />
       )}
+
+      <ColumnManagerModal
+        open={sidebarManagerOpen}
+        onClose={() => setSidebarManagerOpen(false)}
+        all={sidebarFieldsAll.map((f) => ({ id: f.id, label: f.label }))}
+        shown={sidebarOrderedIds.filter((id) => !sidebarLayout.hidden.includes(id))}
+        onChange={applySidebarShown}
+        onReset={resetSidebarFields}
+      />
+      <ColumnManagerModal
+        open={configManagerOpen}
+        onClose={() => setConfigManagerOpen(false)}
+        all={configAllColItems}
+        shown={configShownIds}
+        onChange={applyConfigShown}
+        onReset={resetConfigColumns}
+      />
     </div>
   )
 }
@@ -1679,19 +1853,33 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
   )
 }
 
-function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick }: { vendor: string; rows: ConfigRow[]; hidden: string[]; onOpenConfig: () => void; onExceptionClick: (row: ConfigRow) => void }) {
+function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig, onExceptionClick }: {
+  vendor: string; rows: ConfigRow[]
+  // `order` is the shared, user-customizable, already-hidden-filtered column
+  // id order (see LocationDetailView's configShownIds) — the same order and
+  // hide selections apply across every vendor's own block. `sizing` is the
+  // shared column-width map (px), dragged via each header's ResizeHandle.
+  order: string[]; sizing: Record<string, number>; onResize: (id: string, deltaPx: number) => void
+  onOpenConfig: () => void; onExceptionClick: (row: ConfigRow) => void
+}) {
   const navigate = useNavigate()
   const [sort, setSort] = usePersistedSort(`location-lookup:config-sort:${vendor}`)
   const columns = useMemo(() => {
     const metaKeys = new Set<string>()
     for (const r of rows) for (const k of Object.keys(r.metadata ?? {})) if (!CONFIG_META_EXCLUDE.has(k)) metaKeys.add(k)
     const metaCols: Col<ConfigRow>[] = [...metaKeys].sort().map((k) => ({ id: `meta:${k}`, label: metaLabel(k), align: 'left', render: (r) => String((r.metadata as any)?.[k] ?? '—'), sort: (r) => String((r.metadata as any)?.[k] ?? '') }))
-    // part, uom, capacity, max, [meta…], vmi, [on hand, daily usage, days of
-    // supply] — then drop hidden columns.
-    const vmi = CONFIG_FIXED.find((c) => c.id === 'vmi')!
-    const ordered = [...CONFIG_FIXED.filter((c) => c.id !== 'vmi'), ...metaCols, vmi, ...USAGE_COLS]
-    return ordered.filter((c) => !hidden.includes(c.id))
-  }, [rows, hidden])
+    const byId = new Map<string, Col<ConfigRow>>()
+    for (const c of CONFIG_FIXED) byId.set(c.id, c)
+    for (const c of metaCols) byId.set(c.id, c)
+    for (const c of USAGE_COLS) byId.set(c.id, c)
+    // Render exactly the shared, ordered `order` list — but only the ids
+    // this vendor's own rows actually have (a meta column only exists here
+    // if at least one of THIS vendor's rows carries that metadata key;
+    // fixed/usage columns always apply), same per-vendor filtering as
+    // before this feature, just driven by the shared order instead of a
+    // fixed part/uom/capacity/… sequence.
+    return order.map((id) => byId.get(id)).filter((c): c is Col<ConfigRow> => !!c)
+  }, [rows, order])
 
   const sortedRows = useMemo(() => applySort(rows, columns, sort), [rows, columns, sort])
   const updated = useMemo(() => lastUpdated(rows as any[], ['updated_at']), [rows])
@@ -1717,35 +1905,43 @@ function OrderConfigBlock({ vendor, rows, hidden, onOpenConfig, onExceptionClick
           )}
         </div>
         {columns.length === 0 ? (
-          <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Customize.</p>
+          <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Manage Columns.</p>
         ) : (
           <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
-            <table className="text-xs font-mono">
+            <table className="text-xs font-mono table-fixed">
               <thead>
                 <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                  {columns.map((c) => (
-                    <th key={c.id} className={`px-3 py-2 whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>
-                      <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center">
-                        {c.label}{sortArrow(sort, c.id)}
-                      </button>
-                    </th>
-                  ))}
+                  {columns.map((c) => {
+                    const w = configColWidth(c.id, sizing)
+                    return (
+                      <th key={c.id} style={{ width: w, minWidth: w }} className={`relative px-3 py-2 whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>
+                        <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center max-w-full overflow-hidden text-ellipsis">
+                          {c.label}{sortArrow(sort, c.id)}
+                        </button>
+                        <ResizeHandle onResize={(delta) => onResize(c.id, delta)} />
+                      </th>
+                    )
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {sortedRows.map((r) => (
                   <tr key={r.id} className="border-b border-navy/20">
-                    {columns.map((c) => c.id === 'exception' ? (
-                      <td key={c.id}
-                        className={`px-3 py-1.5 text-navy ${alignCls(c.align)} ${c.width ?? ''} cursor-pointer hover:bg-sky/10 transition-colors`}
-                        title="Click to add or edit a floor/ceiling exception for this product"
-                        onClick={() => onExceptionClick(r)}
-                      >
-                        {c.render(r)}
-                      </td>
-                    ) : (
-                      <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''} ${c.width ?? ''}`}>{c.render(r)}</td>
-                    ))}
+                    {columns.map((c) => {
+                      const w = configColWidth(c.id, sizing)
+                      return c.id === 'exception' ? (
+                        <td key={c.id}
+                          style={{ width: w, minWidth: w, maxWidth: w }}
+                          className={`px-3 py-1.5 text-navy overflow-hidden ${alignCls(c.align)} cursor-pointer hover:bg-sky/10 transition-colors`}
+                          title="Click to add or edit a floor/ceiling exception for this product"
+                          onClick={() => onExceptionClick(r)}
+                        >
+                          {c.render(r)}
+                        </td>
+                      ) : (
+                        <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>{c.render(r)}</td>
+                      )
+                    })}
                   </tr>
                 ))}
               </tbody>

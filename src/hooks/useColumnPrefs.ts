@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Table, VisibilityState } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
@@ -139,4 +139,111 @@ export function useColumnPrefs(
     return () => clearTimeout(saveTimerRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [columnVisibility, columnOrder, columnSizing, pinnedLeft, pageSize])
+}
+
+/**
+ * Same persistence shape/behavior as useColumnPrefs above — localStorage
+ * (instant) + platform.user_profiles.column_prefs (cross-device, 800ms
+ * debounced) — but for a caller that isn't driving a TanStack `Table`
+ * instance. Added 2026-09-25 for LocationLookupPage's hand-rolled
+ * order-config table and its sidebar field list, both of which predate
+ * this app's useTable/DataTable convergence and weren't worth a full
+ * rewrite onto TanStack just to get persisted column order/hidden/width.
+ * Owns order/hidden/sizing as its own React state (rather than reading them
+ * off a table object), so any caller with a plain list of {id, label}
+ * items — table columns or not — gets the same persisted-order/hidden/
+ * width behavior useColumnPrefs gives a real TanStack table, and both
+ * share the exact same `column_prefs` jsonb column/shape (just a different
+ * top-level key per caller), so no new migration is needed.
+ *
+ * Usage:
+ *   const layout = usePersistedColumnLayout('location_lookup.sidebar_fields')
+ *   layout.order / layout.hidden / layout.sizing, plus their setters
+ */
+export function usePersistedColumnLayout(tableKey: string) {
+  const { user } = useAuthStore()
+
+  const [order, setOrder] = useState<string[]>([])
+  const [hidden, setHidden] = useState<string[]>([])
+  const [sizing, setSizing] = useState<Record<string, number>>({})
+
+  const allPrefsRef = useRef<Record<string, unknown>>({})
+  const lastSavedRef = useRef<string | null>(null)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
+
+  // ── Load on mount ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      // 1. localStorage — instant
+      const raw = localStorage.getItem(localKey(tableKey))
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as ColumnPrefs
+          if (parsed.order) setOrder(parsed.order)
+          if (parsed.hidden) setHidden(parsed.hidden)
+          if (parsed.sizing) setSizing(parsed.sizing)
+          lastSavedRef.current = raw
+        } catch { /* ignore */ }
+      }
+
+      // 2. DB — authoritative
+      if (!user) return
+      const { data } = await (supabase as any)
+        .schema('platform')
+        .from('user_profiles')
+        .select('column_prefs')
+        .eq('id', user.id)
+        .maybeSingle()
+
+      if (cancelled) return
+
+      if (data?.column_prefs) {
+        allPrefsRef.current = data.column_prefs as Record<string, unknown>
+      }
+
+      const dbPrefs = data?.column_prefs?.[tableKey]
+      if (dbPrefs && typeof dbPrefs === 'object') {
+        const p = dbPrefs as ColumnPrefs
+        if (p.order) setOrder(p.order)
+        if (p.hidden) setHidden(p.hidden)
+        if (p.sizing) setSizing(p.sizing)
+        const str = JSON.stringify(p)
+        localStorage.setItem(localKey(tableKey), str)
+        lastSavedRef.current = str
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, tableKey])
+
+  // ── Save on change (debounced 800 ms) ────────────────────────────────────
+  useEffect(() => {
+    const prefs: ColumnPrefs = { order, hidden, sizing }
+    const str = JSON.stringify(prefs)
+    if (str === lastSavedRef.current) return
+
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      lastSavedRef.current = str
+      localStorage.setItem(localKey(tableKey), str)
+
+      if (!user) return
+      const merged = { ...allPrefsRef.current, [tableKey]: prefs }
+      allPrefsRef.current = merged
+      await (supabase as any)
+        .schema('platform')
+        .from('user_profiles')
+        .update({ column_prefs: merged })
+        .eq('id', user.id)
+    }, 800)
+
+    return () => clearTimeout(saveTimerRef.current)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableKey, order, hidden, sizing])
+
+  return { order, setOrder, hidden, setHidden, sizing, setSizing }
 }
