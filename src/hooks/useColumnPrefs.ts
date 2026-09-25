@@ -247,3 +247,85 @@ export function usePersistedColumnLayout(tableKey: string) {
 
   return { order, setOrder, hidden, setHidden, sizing, setSizing }
 }
+
+/**
+ * Same persistence shape/behavior as usePersistedColumnLayout above —
+ * localStorage (instant) + platform.user_profiles.column_prefs (cross-device,
+ * 800ms debounced) — but for an arbitrary JSON value rather than the fixed
+ * order/hidden/sizing shape. Added 2026-09-25 for Location Lookup's full-page
+ * drag/resize grid layout (an array of react-grid-layout `{i,x,y,w,h}`
+ * entries), which doesn't fit ColumnPrefs' column-oriented shape at all.
+ *
+ * Usage:
+ *   const [layout, setLayout] = usePersistedJson('location_lookup.page_grid', DEFAULT_LAYOUT)
+ */
+export function usePersistedJson<T>(tableKey: string, defaultValue: T) {
+  const { user } = useAuthStore()
+  const [value, setValue] = useState<T>(defaultValue)
+
+  const allPrefsRef = useRef<Record<string, unknown>>({})
+  const lastSavedRef = useRef<string | null>(null)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const loadedRef = useRef(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      const raw = localStorage.getItem(localKey(tableKey))
+      if (raw) {
+        try { setValue(JSON.parse(raw) as T); lastSavedRef.current = raw } catch { /* ignore */ }
+      }
+
+      if (!user) { loadedRef.current = true; return }
+      const { data } = await (supabase as any)
+        .schema('platform')
+        .from('user_profiles')
+        .select('column_prefs')
+        .eq('id', user.id)
+        .maybeSingle()
+
+      if (cancelled) return
+
+      if (data?.column_prefs) allPrefsRef.current = data.column_prefs as Record<string, unknown>
+
+      const dbVal = data?.column_prefs?.[tableKey]
+      if (dbVal !== undefined) {
+        setValue(dbVal as T)
+        const str = JSON.stringify(dbVal)
+        localStorage.setItem(localKey(tableKey), str)
+        lastSavedRef.current = str
+      }
+      loadedRef.current = true
+    }
+
+    load()
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, tableKey])
+
+  useEffect(() => {
+    const str = JSON.stringify(value)
+    if (str === lastSavedRef.current) return
+
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      lastSavedRef.current = str
+      localStorage.setItem(localKey(tableKey), str)
+
+      if (!user) return
+      const merged = { ...allPrefsRef.current, [tableKey]: value }
+      allPrefsRef.current = merged
+      await (supabase as any)
+        .schema('platform')
+        .from('user_profiles')
+        .update({ column_prefs: merged })
+        .eq('id', user.id)
+    }, 800)
+
+    return () => clearTimeout(saveTimerRef.current)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableKey, value])
+
+  return [value, setValue] as const
+}

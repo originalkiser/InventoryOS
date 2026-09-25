@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { MapPin, Settings } from 'lucide-react'
+import { MapPin, Settings, Grip } from 'lucide-react'
+import * as RGL from 'react-grid-layout'
+import 'react-grid-layout/css/styles.css'
+import 'react-resizable/css/styles.css'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
-import { usePersistedColumnLayout } from '@/hooks/useColumnPrefs'
+import { usePersistedColumnLayout, usePersistedJson } from '@/hooks/useColumnPrefs'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { SCHEMA_FIELDS as LOCATION_SCHEMA_FIELDS } from '@/modules/config/tabs/LocationsTab'
 import { ColumnManagerModal, type ColItem } from './ColumnManagerModal'
@@ -248,6 +251,59 @@ const LEFT_BOX_LABELS: ColItem[] = [
   { id: 'mentioned', label: 'Mentioned In' },
 ]
 const LEFT_BOX_IDS = LEFT_BOX_LABELS.map((b) => b.id)
+
+// Full-page draggable/resizable grid (2026-09-25 ask, non-embedded page
+// only — see the "embedded" floating-panel branch below, which keeps the
+// simpler fixed two-column layout and the leftBoxOrder/side-by-side controls
+// above instead). Wraps react-grid-layout's own WidthProvider HOC so the
+// grid measures its own container instead of needing an explicit `width`
+// prop threaded through.
+const ReactGridLayout = RGL.WidthProvider(RGL)
+const GRID_COLS = 12
+const GRID_ROW_HEIGHT = 24
+const GRID_MARGIN: [number, number] = [16, 16]
+const GRID_WIDGET_LABELS: ColItem[] = [
+  { id: 'shop_details', label: 'Shop Details' },
+  { id: 'tank_monitors', label: 'Tank Monitors' },
+  { id: 'order_config', label: 'Order Configuration' },
+  { id: 'issues', label: 'Issues' },
+  { id: 'exceptions', label: 'Exception Reports' },
+  { id: 'comms', label: 'Location Comms' },
+  { id: 'custom_config', label: 'Custom Shop Config' },
+  { id: 'mentioned', label: 'Mentioned In' },
+]
+const GRID_WIDGET_IDS = GRID_WIDGET_LABELS.map((w) => w.id)
+// Default positions roughly mirror the old fixed layout (narrow info rail on
+// the left, wide tables on the right) — just as a starting point; the whole
+// point of this feature is that a user can drag/resize away from it.
+const DEFAULT_GRID_LAYOUT: RGL.Layout[] = [
+  { i: 'shop_details', x: 0, y: 0, w: 3, h: 18, minW: 2, minH: 4 },
+  { i: 'issues', x: 0, y: 18, w: 3, h: 7, minW: 2, minH: 3 },
+  { i: 'exceptions', x: 0, y: 25, w: 3, h: 7, minW: 2, minH: 3 },
+  { i: 'comms', x: 0, y: 32, w: 3, h: 7, minW: 2, minH: 3 },
+  { i: 'custom_config', x: 0, y: 39, w: 3, h: 7, minW: 2, minH: 3 },
+  { i: 'mentioned', x: 0, y: 46, w: 3, h: 6, minW: 2, minH: 3 },
+  { i: 'tank_monitors', x: 3, y: 0, w: 9, h: 16, minW: 3, minH: 4 },
+  { i: 'order_config', x: 3, y: 16, w: 9, h: 36, minW: 3, minH: 4 },
+]
+
+// Reconciles a persisted layout against the current widget set — a widget
+// that no longer exists is dropped, one that's new (added after a user's
+// layout was already saved) falls back to its own default position instead
+// of being silently omitted from the grid entirely.
+function mergeGridLayout(saved: RGL.Layout[] | undefined, defaults: RGL.Layout[]): RGL.Layout[] {
+  const byId = new Map(defaults.map((d) => [d.i, d]))
+  const result: RGL.Layout[] = []
+  const seen = new Set<string>()
+  for (const item of saved ?? []) {
+    const def = byId.get(item.i)
+    if (!def) continue
+    result.push({ ...def, ...item })
+    seen.add(item.i)
+  }
+  for (const def of defaults) if (!seen.has(def.i)) result.push(def)
+  return result
+}
 
 interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null; tint?: boolean; width?: string }
 
@@ -512,11 +568,16 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const sidebarLayout = usePersistedColumnLayout('location_lookup.sidebar_fields')
   const configLayout = usePersistedColumnLayout('location_lookup.order_config_columns')
   // Left-column box order (Shop Details/Issues/Exceptions/Comms/Custom
-  // Config/Mentioned In) — same persisted-layout shape, so a shop with a
-  // very tall Shop Details card (now that any Locations Global Config
-  // column can be added to it) can move Issues/Exceptions/Comms above it
-  // instead of always scrolling past it.
+  // Config/Mentioned In) — EMBEDDED (floating quick-access panel) only as of
+  // 2026-09-25; the full standalone page below now uses the free-form
+  // pageGridLayout grid instead, which strictly generalizes this (any
+  // position, not just this column's own order).
   const leftBoxLayout = usePersistedColumnLayout('location_lookup.left_boxes')
+  // Full-page drag/resize grid (non-embedded page only) — an array of
+  // react-grid-layout {i,x,y,w,h} entries, one per widget in
+  // GRID_WIDGET_IDS. Edit mode is driven by the same customizeOpen toggle
+  // that already opens the Settings panel (isDraggable/isResizable below).
+  const [pageGridLayout, setPageGridLayout] = usePersistedJson<RGL.Layout[]>('location_lookup.page_grid', DEFAULT_GRID_LAYOUT)
   const [sidebarManagerOpen, setSidebarManagerOpen] = useState(false)
   const [configManagerOpen, setConfigManagerOpen] = useState(false)
   const [leftBoxManagerOpen, setLeftBoxManagerOpen] = useState(false)
@@ -1230,6 +1291,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const leftBoxOrder = [...leftBoxKnownOrder, ...LEFT_BOX_IDS.filter((id) => !leftBoxKnownSet.has(id))]
     .filter((id) => !leftBoxLayout.hidden.includes(id))
 
+  // Reconciled against the current widget set on every render (cheap, 8
+  // items) rather than only on load, so a code change adding/removing a
+  // widget id is picked up immediately rather than waiting for the user's
+  // next drag.
+  const effectiveGridLayout = useMemo(() => mergeGridLayout(pageGridLayout, DEFAULT_GRID_LAYOUT), [pageGridLayout])
+
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
 
   // Order-config columns — same persisted-layout shape as the sidebar
@@ -1401,23 +1468,25 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       )}
       {!embedded && (
         <div className="sticky z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3" style={{ top: 'var(--inv-navbar-h, 0px)' }}>
-          <div>
+          {/* Shop picker replaces the shop-name text here (2026-09-25 ask) —
+              it's now always a live dropdown, not just text, and lives in
+              this sticky header so it's reachable without scrolling back up
+              past a (now potentially very tall) Shop Details card. */}
+          <div className="flex flex-col gap-1 min-w-[220px]">
             <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Inventory Location Lookup</h1>
-            {shopId
-              ? <p className="text-sm font-heading font-bold text-navy mt-0.5">{shopLabel(shopId)}</p>
-              : <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>}
+            <div className="w-64 max-w-full">
+              <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" />
+            </div>
+            {!shopId && <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>}
           </div>
-          {!shopId && (
-            <div className="w-80"><Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" /></div>
-          )}
           {/* Absolute, so it rides along in the header's corner without taking
               part in the flex row — nothing here shifts when it appears.
               -right-1: see InventoryShortcuts.tsx for why plain right-0
               lands 4px left of the quick-access FAB nub below it. */}
           {shopId && (
             <button onClick={() => setCustomizeOpen((o) => !o)}
-              title={customizeOpen ? 'Done customizing' : 'Customize columns'}
-              aria-label={customizeOpen ? 'Done customizing' : 'Customize columns'}
+              title={customizeOpen ? 'Save & exit layout editing' : 'Customize columns / edit page layout'}
+              aria-label={customizeOpen ? 'Save & exit layout editing' : 'Customize columns / edit page layout'}
               className={`absolute top-1 -right-1 flex items-center justify-center rounded-full p-2 shadow-lg transition-colors ${customizeOpen ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
               <Settings className="w-4 h-4" />
             </button>
@@ -1437,7 +1506,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Manage Columns</span>
               <button onClick={() => setSidebarManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Shop Details Fields</button>
               <button onClick={() => setConfigManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Order Config Columns</button>
-              <button onClick={() => setLeftBoxManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Left Column Layout</button>
+              {/* Left Column Layout / side-by-side only apply to the embedded
+                  floating-panel view — the full page below now uses the
+                  free-form drag/resize grid instead, which supersedes both. */}
+              {embedded && (
+                <button onClick={() => setLeftBoxManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Left Column Layout</button>
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Options</span>
@@ -1445,10 +1519,18 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                 <input type="checkbox" checked={!!prefs.nonVmiOfflineBtn} onChange={() => setPrefs((p) => ({ ...p, nonVmiOfflineBtn: !p.nonVmiOfflineBtn }))} className="accent-sky" />
                 Use non-VMI tanks for offline email button
               </label>
-              <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms as a row instead of stacked">
-                <input type="checkbox" checked={!!prefs.boxesSideBySide} onChange={() => setPrefs((p) => ({ ...p, boxesSideBySide: !p.boxesSideBySide }))} className="accent-sky" />
-                Issues/Exceptions/Comms side by side
-              </label>
+              {embedded && (
+                <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms as a row instead of stacked">
+                  <input type="checkbox" checked={!!prefs.boxesSideBySide} onChange={() => setPrefs((p) => ({ ...p, boxesSideBySide: !p.boxesSideBySide }))} className="accent-sky" />
+                  Issues/Exceptions/Comms side by side
+                </label>
+              )}
+              {!embedded && (
+                <p className="text-[10px] font-mono text-inky/60 leading-snug">
+                  Page layout editing is on — drag a widget by its <Grip className="w-2.5 h-2.5 inline -mt-0.5" /> handle to move it,
+                  or drag its bottom-right corner to resize. Click the Settings button again to save and exit.
+                </p>
+              )}
             </div>
           </CardBody>
         </Card>
@@ -1460,85 +1542,50 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
       ) : error ? (
         <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">{error}</div>
-      ) : (
-        <div className={`grid grid-cols-1 gap-4 items-start ${embedded ? '' : 'lg:grid-cols-[280px_1fr]'}`}>
-          {/* Left info — frozen while the tables/issues scroll. Rendered from
-              leftBoxOrder (persisted, drag-reorderable via "Left Column
-              Layout" under Settings) rather than a fixed sequence, so Issues/
-              Exceptions/Comms can be moved above a Shop Details card that's
-              grown tall from added Global Config fields. */}
-          <div className={`self-start flex flex-col gap-3 ${embedded ? '' : 'lg:sticky'}`}
-            style={!embedded ? { top: 'calc(var(--inv-navbar-h, 0px) + 4.5rem)' } : undefined}>
-            {(() => {
-              const boxContent: Record<string, ReactNode> = {
-                shop_details: (
-                  <Card>
-                    <CardBody className="flex flex-col gap-2">
-                      {!embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />}
-                      <div className="flex items-center justify-between mt-1">
-                        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop Details</span>
-                      </div>
-                      <dl className="flex flex-col gap-1.5">
-                        {visibleSidebar.map((f) => (
-                          <div key={f.id} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
-                            {f.mapQuery && (
-                              <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
-                                title="Open in Google Maps" className="absolute top-1.5 right-1.5 inline-flex items-center text-inky hover:text-sky">
-                                <MapPin className="w-4 h-4" />
-                              </a>
-                            )}
-                            <dt className="text-[10px] font-mono font-semibold uppercase tracking-wide text-navy/70">{f.label}</dt>
-                            <dd className="text-xs font-body text-navy break-words">
-                              {f.value || '—'}
-                              {f.note && <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/40 text-navy">{f.note}</span>}
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                      <UpdatedCallout date={locUpdated} onOpen={() => navigate('/global-config?tab=locations')} openTitle="Open Locations config" />
-                    </CardBody>
-                  </Card>
-                ),
-                issues: <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />,
-                exceptions: <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />,
-                comms: <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />,
-                custom_config: <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} />,
-                mentioned: (
-                  <MentionedBox projects={mentionedProjects} meetings={mentionedMeetings}
-                    onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
-                ),
-              }
-              // When "side by side" is on, Issues/Exceptions/Comms render as
-              // one row together at the position of whichever of the three
-              // appears FIRST in the user's own order, rather than each
-              // taking its own slot — so reordering that trio relative to
-              // Shop Details/Custom Config/Mentioned still works as expected.
-              const sideBySideIds = ['issues', 'exceptions', 'comms']
-              const rendered = new Set<string>()
-              const nodes: ReactNode[] = []
-              for (const id of leftBoxOrder) {
-                if (rendered.has(id) || !boxContent[id]) continue
-                if (prefs.boxesSideBySide && sideBySideIds.includes(id)) {
-                  const group = sideBySideIds.filter((gid) => leftBoxOrder.includes(gid) && boxContent[gid])
-                  group.forEach((gid) => rendered.add(gid))
-                  nodes.push(
-                    <div key="side-by-side-group" className="flex gap-3 flex-wrap items-start">
-                      {group.map((gid) => <div key={gid} className="flex-1 min-w-[220px]">{boxContent[gid]}</div>)}
-                    </div>,
-                  )
-                  continue
-                }
-                rendered.add(id)
-                nodes.push(<div key={id}>{boxContent[id]}</div>)
-              }
-              return nodes
-            })()}
-          </div>
-
-          {/* Main */}
-          <div className="flex flex-col gap-4">
-            <Card className="w-fit max-w-full">
-              <CardBody className="flex flex-col gap-2">
+      ) : (() => {
+        // Every widget's actual content, built once and shared by both
+        // render paths below: the embedded floating panel's fixed
+        // two-column stack (unchanged), and the full page's free-form
+        // drag/resize grid (2026-09-25 ask).
+        const widgetContent: Record<string, ReactNode> = {
+          shop_details: (
+            <Card className="h-full flex flex-col">
+              <CardBody className="flex flex-col gap-2 flex-1 min-h-0">
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop Details</span>
+                </div>
+                <dl className="flex flex-col gap-1.5">
+                  {visibleSidebar.map((f) => (
+                    <div key={f.id} className="relative flex flex-col rounded-lg border border-navy/15 bg-navy/[0.03] px-2.5 py-1.5">
+                      {f.mapQuery && (
+                        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.mapQuery)}`} target="_blank" rel="noopener noreferrer"
+                          title="Open in Google Maps" className="absolute top-1.5 right-1.5 inline-flex items-center text-inky hover:text-sky">
+                          <MapPin className="w-4 h-4" />
+                        </a>
+                      )}
+                      <dt className="text-[10px] font-mono font-semibold uppercase tracking-wide text-navy/70">{f.label}</dt>
+                      <dd className="text-xs font-body text-navy break-words">
+                        {f.value || '—'}
+                        {f.note && <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/40 text-navy">{f.note}</span>}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+                <UpdatedCallout date={locUpdated} onOpen={() => navigate('/global-config?tab=locations')} openTitle="Open Locations config" />
+              </CardBody>
+            </Card>
+          ),
+          issues: <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />,
+          exceptions: <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />,
+          comms: <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />,
+          custom_config: <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} />,
+          mentioned: (
+            <MentionedBox projects={mentionedProjects} meetings={mentionedMeetings}
+              onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
+          ),
+          tank_monitors: (
+            <Card className="w-fit max-w-full h-full flex flex-col">
+              <CardBody className="flex flex-col gap-2 flex-1 min-h-0">
                 <div className="flex items-center gap-3 self-start flex-wrap">
                   <span className="text-xs font-mono text-navy uppercase tracking-wide">
                     Tank Monitors ({tanks.length})
@@ -1654,8 +1701,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                 )}
               </CardBody>
             </Card>
-
-            {configsByVendor.length === 0 ? (
+          ),
+          order_config: (
+            configsByVendor.length === 0 ? (
               <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
             ) : (
               <div className="flex flex-col gap-4">
@@ -1677,10 +1725,79 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   ))}
                 </div>
               </div>
-            )}
-          </div>
-        </div>
-      )}
+            )
+          ),
+        }
+
+        if (embedded) {
+          // Fixed two-column stack — unchanged from before this feature.
+          // leftBoxOrder/side-by-side (Settings → "Left Column Layout") still
+          // drive this view; the full page below uses the new grid instead.
+          const sideBySideIds = ['issues', 'exceptions', 'comms']
+          const rendered = new Set<string>()
+          const nodes: ReactNode[] = []
+          for (const id of leftBoxOrder) {
+            if (rendered.has(id) || !widgetContent[id]) continue
+            if (prefs.boxesSideBySide && sideBySideIds.includes(id)) {
+              const group = sideBySideIds.filter((gid) => leftBoxOrder.includes(gid) && widgetContent[gid])
+              group.forEach((gid) => rendered.add(gid))
+              nodes.push(
+                <div key="side-by-side-group" className="flex gap-3 flex-wrap items-start">
+                  {group.map((gid) => <div key={gid} className="flex-1 min-w-[220px]">{widgetContent[gid]}</div>)}
+                </div>,
+              )
+              continue
+            }
+            rendered.add(id)
+            nodes.push(<div key={id}>{widgetContent[id]}</div>)
+          }
+          return (
+            <div className="grid grid-cols-1 gap-4 items-start">
+              <div className="self-start flex flex-col gap-3">{nodes}</div>
+              <div className="flex flex-col gap-4">
+                {widgetContent.tank_monitors}
+                {widgetContent.order_config}
+              </div>
+            </div>
+          )
+        }
+
+        // Full page — free-form drag/resize grid (2026-09-25 ask). Locked
+        // (no drag/resize handles shown) unless the Settings gear's
+        // customizeOpen is on; dragging/resizing writes straight to the
+        // persisted layout (usePersistedJson — cross-device, 800ms
+        // debounced) via onLayoutChange, so clicking Settings again to "exit"
+        // is just turning editing chrome back off, not a separate save step.
+        return (
+          <ReactGridLayout
+            className="layout"
+            layout={effectiveGridLayout}
+            cols={GRID_COLS}
+            rowHeight={GRID_ROW_HEIGHT}
+            margin={GRID_MARGIN}
+            isDraggable={customizeOpen}
+            isResizable={customizeOpen}
+            draggableHandle=".widget-drag-handle"
+            compactType="vertical"
+            onLayoutChange={(l) => { if (customizeOpen) setPageGridLayout(l) }}
+          >
+            {GRID_WIDGET_IDS.map((id) => (
+              <div key={id} className="h-full">
+                <div className={`relative h-full flex flex-col ${customizeOpen ? 'ring-2 ring-sky/60 ring-offset-1 rounded-lg' : ''}`}>
+                  {customizeOpen && (
+                    <div className="widget-drag-handle absolute -top-2 -left-2 z-20 cursor-grab active:cursor-grabbing bg-navy text-cream rounded-full p-1.5 shadow-lg border-2 border-cream" title="Drag to move">
+                      <Grip className="w-3.5 h-3.5" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-h-0 overflow-y-auto rounded-lg">
+                    {widgetContent[id]}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </ReactGridLayout>
+        )
+      })()}
 
       {shopId && embedded && (
         <button onClick={() => setCustomizeOpen((o) => !o)}
