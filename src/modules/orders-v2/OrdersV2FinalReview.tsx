@@ -18,7 +18,7 @@ import { useVendors } from './useLookups'
 import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { Flags } from './OrdersV2Review'
 import { OrderStepper } from './OrderStepper'
-import { daysOfSupply, daysBetween, nextDeliveryDate, resolveDeliveryDate } from './engine'
+import { daysOfSupply, daysBetween, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription } from './engine'
 import { OVERRIDE_CELL, dos, dShort, money, num, copyTableToClipboard, exportTableCsv, dosAfterForQty, type TableCol } from './shared'
 import type { LineFlag, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
@@ -213,6 +213,7 @@ export function OrdersV2FinalReview() {
         schedules.set(r.location_id, {
           type: r.schedule_type, delivery_dow: r.delivery_dow,
           week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+          biweekly_anchor_date: r.biweekly_anchor_date ?? null,
           lead_business_days: Number(r.lead_business_days ?? 4),
         })
       }
@@ -229,13 +230,7 @@ export function OrdersV2FinalReview() {
   }, [scheduleLookup, deliveryDowOf])
   const describeSchedule = useCallback((locationId: string | null): string | null => {
     const sched = scheduleLookup.schedules.get(locationId ?? '')
-    if (sched) {
-      if (sched.type === 'plus_business_days') return `+${sched.lead_business_days} business days`
-      if (sched.type === 'week_ab') {
-        return `A: ${sched.week_a_dow == null ? '—' : DOW[sched.week_a_dow]} · B: ${sched.week_b_dow == null ? '—' : DOW[sched.week_b_dow]} (${sched.lead_business_days}d lead)`
-      }
-      return `${sched.delivery_dow == null ? '—' : DOW[sched.delivery_dow]} weekly (${sched.lead_business_days}d lead)`
-    }
+    if (sched) return resolveScheduleDescription(sched)
     const dow = deliveryDowOf(locationId)
     return dow != null ? `${DOW[dow]} (Reladyne delivery day)` : null
   }, [scheduleLookup, deliveryDowOf])

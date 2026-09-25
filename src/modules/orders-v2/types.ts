@@ -203,11 +203,20 @@ export interface GenerationInput {
 //   weekly             — a fixed weekday every week
 //   week_ab            — alternating weekdays, driven by an uploaded A/B calendar
 //   plus_business_days — a flat turnaround, no weekday involved
-export type ScheduleType = 'weekly' | 'week_ab' | 'plus_business_days'
+//   biweekly           — a fixed weekday every OTHER week, computed from one
+//                        known "on" delivery date (biweekly_anchor_date) —
+//                        no calendar upload needed. Different mechanism from
+//                        week_ab: week_ab is for a real, holiday-driven
+//                        company calendar where two vendor DAYS alternate;
+//                        biweekly is for the simpler "every other Thursday
+//                        starting from this date" case, settable up front
+//                        for a shop with no order history yet.
+export type ScheduleType = 'weekly' | 'week_ab' | 'plus_business_days' | 'biweekly'
 export const SCHEDULE_LABELS: Record<ScheduleType, string> = {
   weekly: 'Same weekday every week',
   week_ab: 'Week A / Week B weekdays',
   plus_business_days: '+N business days after ordering',
+  biweekly: 'Every other week (from an anchor date)',
 }
 
 export interface DeliverySchedule {
@@ -215,14 +224,18 @@ export interface DeliverySchedule {
   delivery_dow: number | null
   week_a_dow: number | null
   week_b_dow: number | null
-  // weekly/week_ab: minimum business days of lead — an order placed closer
-  // than this rolls to the next occurrence.
+  // biweekly only — any real delivery date known to fall on an "on" week.
+  // resolveDeliveryDate() (engine.ts) computes every-other-week parity from
+  // how many weeks a candidate date's own week is from this one's.
+  biweekly_anchor_date: string | null
+  // weekly/week_ab/biweekly: minimum business days of lead — an order
+  // placed closer than this rolls to the next occurrence.
   // plus_business_days: the turnaround itself.
   lead_business_days: number
 }
 
 export const DEFAULT_SCHEDULE: DeliverySchedule = {
-  type: 'weekly', delivery_dow: null, week_a_dow: null, week_b_dow: null, lead_business_days: 4,
+  type: 'weekly', delivery_dow: null, week_a_dow: null, week_b_dow: null, biweekly_anchor_date: null, lead_business_days: 4,
 }
 
 /** week_start (Sunday, YYYY-MM-DD) -> 'A' | 'B'. */

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Modal, Button, Toggle } from '@/components/ui'
+import { Modal, Button, Toggle, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import {
   useCustomShopConfig, VALUE_KIND_LABELS,
   type FieldValueKind,
 } from './useCustomShopConfig'
+import { DeliverySchedulesCard } from '@/modules/orders-v2/DeliverySchedulesCard'
 
 /**
  * Edit one shop's custom config — every admin-defined field it has a
@@ -67,7 +68,14 @@ export function CustomShopConfigModal({ cfg, packageOptions, locationId, locatio
   }
 
   return (
-    <Modal open onClose={onClose} title={`Custom Config — ${locationLabel}`} size="md">
+    <Modal open onClose={onClose} title={`Custom Config — ${locationLabel}`} size="lg">
+      <Tabs defaultValue="pricing">
+        <TabsList>
+          <TabsTrigger value="pricing">Pricing &amp; Fees</TabsTrigger>
+          <TabsTrigger value="schedule">Order / Delivery Schedule</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="pricing">
       <div className="flex flex-col gap-4">
         {packageOptions.length > 0 && (
           <div className="flex flex-col gap-2">
@@ -130,6 +138,21 @@ export function CustomShopConfigModal({ cfg, packageOptions, locationId, locatio
           <Button size="sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
         </div>
       </div>
+        </TabsContent>
+
+        <TabsContent value="schedule">
+          {/* Reuses the real Delivery Schedules editor (Order Settings' own
+              vendor-scoped ov2_location_schedules editor) rather than a
+              second, competing schedule table under Custom Shop Config's own
+              schema — ov2_location_schedules is what Orders v2 generation
+              actually reads, so this stays the single source of truth.
+              Locked to this shop: pick a vendor, then add/edit/remove just
+              this shop's schedule for it — no shop picker, no bulk upload/
+              calendar/history-analysis tools (those are company/vendor-wide
+              operations that don't belong inside a single-shop modal). */}
+          <DeliverySchedulesCard lockedLocationId={locationId} />
+        </TabsContent>
+      </Tabs>
     </Modal>
   )
 }

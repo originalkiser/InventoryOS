@@ -20,7 +20,7 @@ import {
   GLOBAL_EXCEPTION_LOCATION_ID, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
-import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
+import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty, dShort } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
 import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalendar } from './types'
@@ -213,13 +213,7 @@ export function OrdersV2Review() {
   // rather than sharing, since the two operate on different row shapes.
   const describeSchedule = useCallback((locationId: string | null): string | null => {
     const sched = deliveryLookup.schedules.get(locationId ?? '')
-    if (sched) {
-      if (sched.type === 'plus_business_days') return `+${sched.lead_business_days} business days`
-      if (sched.type === 'week_ab') {
-        return `A: ${sched.week_a_dow == null ? '—' : DOW[sched.week_a_dow]} · B: ${sched.week_b_dow == null ? '—' : DOW[sched.week_b_dow]} (${sched.lead_business_days}d lead)`
-      }
-      return `${sched.delivery_dow == null ? '—' : DOW[sched.delivery_dow]} weekly (${sched.lead_business_days}d lead)`
-    }
+    if (sched) return resolveScheduleDescription(sched)
     // No per-vendor schedule configured (ov2_location_schedules) — falls
     // back to the RelaDyne weekday straight off the location list, same
     // source deliveryFor's own else-branch (nextDeliveryDate) uses.

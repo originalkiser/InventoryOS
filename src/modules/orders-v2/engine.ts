@@ -120,6 +120,20 @@ export function weekStartOf(date: string): string {
 }
 
 /**
+ * Whether `candidateDate` falls on the same alternating-week "phase" as
+ * `anchorDate` — the parity check behind the 'biweekly' schedule type.
+ * Weeks are compared by their own Sunday (weekStartOf), not by weekday, so
+ * the anchor doesn't need to land on the same weekday as the schedule's
+ * delivery_dow to work as a phase reference — any real "on" delivery date
+ * is enough. Symmetric around the anchor (a candidate before it resolves
+ * the same way a candidate after it would).
+ */
+export function isBiweeklyOnWeek(anchorDate: string, candidateDate: string): boolean {
+  const weeks = Math.round(daysBetween(weekStartOf(anchorDate), weekStartOf(candidateDate)) / 7)
+  return ((weeks % 2) + 2) % 2 === 0
+}
+
+/**
  * Work out the delivery date for one shop's schedule.
  *
  *   weekly              next occurrence of the weekday with at least
@@ -129,9 +143,14 @@ export function weekStartOf(date: string): string {
  *                       calendar. A week with no label is skipped rather
  *                       than guessed at.
  *   plus_business_days  simply order date + N business days.
+ *   biweekly            same weekday every OTHER week, computed from
+ *                       biweekly_anchor_date via isBiweeklyOnWeek — a week
+ *                       that doesn't match the anchor's phase is skipped,
+ *                       same "don't guess" shape as week_ab's unlabelled week.
  *
- * Returns null when the schedule can't produce a date (no weekday set, or no
- * calendar coverage) — callers show that as unknown rather than inventing one.
+ * Returns null when the schedule can't produce a date (no weekday set, no
+ * anchor date, or no calendar coverage) — callers show that as unknown
+ * rather than inventing one.
  */
 export function resolveDeliveryDate(
   orderDate: string, schedule: DeliverySchedule | null | undefined, calendar?: WeekCalendar,
@@ -157,6 +176,13 @@ export function resolveDeliveryDate(
     let wanted: number | null
     if (schedule.type === 'weekly') {
       wanted = schedule.delivery_dow
+    } else if (schedule.type === 'biweekly') {
+      wanted = schedule.delivery_dow
+      // Right weekday but the wrong phase of the two-week cycle — skip this
+      // occurrence (don't return it) rather than treating it as a match.
+      if (wanted != null && dow === wanted) {
+        if (!schedule.biweekly_anchor_date || !isBiweeklyOnWeek(schedule.biweekly_anchor_date, iso)) continue
+      }
     } else {
       const label = calendar?.get(weekStartOf(iso))
       if (!label) continue                       // unlabelled week — skip, don't guess
@@ -167,6 +193,49 @@ export function resolveDeliveryDate(
     return iso
   }
   return null
+}
+
+// ── Display ─────────────────────────────────────────────────────────────
+
+export const DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+/**
+ * Human-readable schedule description — "delivery day, or delivery day plus
+ * a specific resolved date when the pattern isn't a fixed single weekday
+ * every week" (week_ab / biweekly / plus_business_days). Pure/presentation-
+ * only (no React, no Supabase), so it can be called from anywhere a
+ * schedule needs to be shown — this consolidates what had become several
+ * near-identical copies of the same logic (DeliverySchedulesCard.tsx's own
+ * describe(), OrdersV2Review.tsx's and OrdersV2FinalReview.tsx's own
+ * describeSchedule()).
+ *
+ * Pass `orderDate` (and `calendar`, for week_ab) to also resolve and show
+ * the next concrete delivery date for a non-weekly pattern via
+ * resolveDeliveryDate; without it, only the pattern itself is described.
+ */
+export function resolveScheduleDescription(
+  schedule: DeliverySchedule | null | undefined,
+  opts?: { orderDate?: string; calendar?: WeekCalendar },
+): string {
+  if (!schedule) return 'No schedule set'
+  const dowName = (d: number | null) => (d == null ? '—' : DOW_NAMES[d])
+
+  if (schedule.type === 'plus_business_days') {
+    return `+${schedule.lead_business_days} business day${schedule.lead_business_days === 1 ? '' : 's'} after ordering`
+  }
+  if (schedule.type === 'weekly') {
+    return `${dowName(schedule.delivery_dow)} weekly (${schedule.lead_business_days}d lead)`
+  }
+
+  // week_ab / biweekly — not a fixed single weekday every week, so the day
+  // name alone is ambiguous. Show the pattern, plus the next resolved date
+  // when we have an order date to resolve one from.
+  const pattern = schedule.type === 'week_ab'
+    ? `A: ${dowName(schedule.week_a_dow)} · B: ${dowName(schedule.week_b_dow)} (${schedule.lead_business_days}d lead)`
+    : `${dowName(schedule.delivery_dow)}, every other week (${schedule.lead_business_days}d lead)`
+  if (!opts?.orderDate) return pattern
+  const next = resolveDeliveryDate(opts.orderDate, schedule, opts.calendar)
+  return next ? `${pattern} — next: ${next}` : `${pattern} — next date unknown`
 }
 
 /**

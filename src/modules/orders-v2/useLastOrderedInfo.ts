@@ -98,6 +98,7 @@ export function useLastOrderedInfo(vendorId: string | null, vendorName: string |
         schedMap.set(r.location_id, {
           type: r.schedule_type, delivery_dow: r.delivery_dow,
           week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+          biweekly_anchor_date: r.biweekly_anchor_date ?? null,
           lead_business_days: Number(r.lead_business_days ?? 4),
         })
       }

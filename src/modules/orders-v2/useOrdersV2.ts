@@ -131,6 +131,60 @@ export const isReladyne = (vendorName: string | null | undefined) => /reladyne/i
 /** A handful of always-list-every-configured-product / spread-smoothing behaviors are Valvoline-specific — see VendorRules. */
 export const isValvoline = (vendorName: string | null | undefined) => /valvoline/i.test(vendorName ?? '')
 
+/**
+ * Ensures a shop has an ov2_location_schedules row for a vendor the moment
+ * it's first configured for that vendor, instead of silently having none
+ * until someone thinks to visit Delivery Schedules (Order Settings) or the
+ * new Order/Delivery Schedule tab on Custom Shop Config. RelaDyne is
+ * excluded — it deliberately never uses this table at all, it uses
+ * core.locations.reladyne_delivery_day instead (see
+ * DeliverySchedulesCard.tsx's own header comment) — so calling this for a
+ * RelaDyne vendor is a no-op.
+ *
+ * A default is only ever INSERTed, never upserted over an existing row — a
+ * manual edit (or an earlier prefill) is never silently overwritten. The
+ * default itself is intentionally minimal (type 'weekly', no weekday
+ * guessed, 4-business-day lead matching DeliverySchedulesCard's own
+ * manual-add default) since there's no reliable per-vendor weekday to infer
+ * for a brand-new shop/vendor pairing with no order history yet — but
+ * creating the row at all means the shop immediately shows up in Delivery
+ * Schedules' existing-schedules table needing a weekday picked, rather than
+ * being invisible (indistinguishable from "nothing to configure here") until
+ * someone remembers to add it by hand.
+ *
+ * NOT wired up to any UI yet — this function is standalone precisely so a
+ * later change can call it. The natural call site is
+ * src/modules/config/tabs/OrderConfigTab.tsx, right after it inserts the
+ * FIRST location_order_config row for a (location_id, vendor_id) pair that
+ * didn't already have one (that file is out of scope for this change — see
+ * the task notes on concurrent work there). Call it like:
+ *   await ensureDefaultLocationVendorSchedule(companyId, locationId, vendorId, profile?.id ?? null, vendorName)
+ */
+export async function ensureDefaultLocationVendorSchedule(
+  companyId: string | null | undefined,
+  locationId: string | null | undefined,
+  vendorId: string | null | undefined,
+  updatedBy: string | null,
+  vendorName?: string | null,
+): Promise<void> {
+  if (!companyId || !locationId || !vendorId) return
+  if (isReladyne(vendorName)) return
+  try {
+    const { data: existing } = await sb().schema('inventory').from('ov2_location_schedules')
+      .select('id').eq('company_id', companyId).eq('location_id', locationId).eq('vendor_id', vendorId).maybeSingle()
+    if (existing) return
+    await sb().schema('inventory').from('ov2_location_schedules').insert({
+      company_id: companyId, location_id: locationId, vendor_id: vendorId,
+      schedule_type: 'weekly', delivery_dow: null, week_a_dow: null, week_b_dow: null,
+      biweekly_anchor_date: null, lead_business_days: 4,
+      updated_by: updatedBy, updated_at: new Date().toISOString(),
+    })
+  } catch {
+    // Best-effort — a background convenience row should never block or
+    // surface an error for the caller's own (real) save.
+  }
+}
+
 export function useVendorRules() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -675,6 +729,7 @@ export function useGenerationData() {
       schedules.set(r.location_id, {
         type: r.schedule_type, delivery_dow: r.delivery_dow,
         week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+        biweekly_anchor_date: r.biweekly_anchor_date ?? null,
         lead_business_days: Number(r.lead_business_days ?? 4),
       })
     }

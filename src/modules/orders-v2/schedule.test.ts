@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveDeliveryDate, addBusinessDays, businessDaysBetween, weekStartOf, generateOrder } from './engine'
+import { resolveDeliveryDate, addBusinessDays, businessDaysBetween, weekStartOf, isBiweeklyOnWeek, resolveScheduleDescription, generateOrder } from './engine'
 import { buildGenerationInputs, eligibleLocations, shopsPerOrderDay, draftOrderDow, isOunceUnit } from './useOrdersV2'
 import { DEFAULT_ORDER_SETTINGS, type DeliverySchedule, type GenerationContext, type GenerationInput, type ProductRule, type WeekCalendar } from './types'
 
@@ -7,7 +7,7 @@ import { DEFAULT_ORDER_SETTINGS, type DeliverySchedule, type GenerationContext, 
 const WED = '2026-08-19'
 
 const sched = (over: Partial<DeliverySchedule> = {}): DeliverySchedule => ({
-  type: 'weekly', delivery_dow: null, week_a_dow: null, week_b_dow: null, lead_business_days: 0, ...over,
+  type: 'weekly', delivery_dow: null, week_a_dow: null, week_b_dow: null, biweekly_anchor_date: null, lead_business_days: 0, ...over,
 })
 
 describe('business-day helpers', () => {
@@ -96,6 +96,85 @@ describe('week A / week B schedule', () => {
 
   it('returns null with no calendar at all', () => {
     expect(resolveDeliveryDate(WED, ab, new Map())).toBeNull()
+  })
+})
+
+describe('biweekly schedule (anchor date)', () => {
+  // 2026-08-13 is a Thursday — the "on" reference week for every case below.
+  const anchor = '2026-08-13'
+  const biweekly = sched({ type: 'biweekly', delivery_dow: 4, biweekly_anchor_date: anchor })
+
+  describe('isBiweeklyOnWeek — parity math', () => {
+    it('is on for the anchor\'s own week', () => {
+      expect(isBiweeklyOnWeek(anchor, anchor)).toBe(true)
+    })
+
+    it('is off for the very next week', () => {
+      expect(isBiweeklyOnWeek(anchor, '2026-08-20')).toBe(false)
+    })
+
+    it('is on again two weeks later', () => {
+      expect(isBiweeklyOnWeek(anchor, '2026-08-27')).toBe(true)
+    })
+
+    it('is symmetric going backward — off one week before, on two weeks before', () => {
+      expect(isBiweeklyOnWeek(anchor, '2026-08-06')).toBe(false)
+      expect(isBiweeklyOnWeek(anchor, '2026-07-30')).toBe(true)
+    })
+  })
+
+  it('lands on the anchor week itself when ordering ahead of it', () => {
+    // Mon Aug 10 is in the same calendar week as the anchor (Thu Aug 13).
+    expect(resolveDeliveryDate('2026-08-10', biweekly)).toBe('2026-08-13')
+  })
+
+  it('skips the very next (off) week and lands two weeks after the anchor', () => {
+    // Ordering the day after the anchor's own Thursday: the next Thursday
+    // (Aug 20) is an off week, so it rolls to the following on week.
+    expect(resolveDeliveryDate('2026-08-14', biweekly)).toBe('2026-08-27')
+  })
+
+  it('keeps landing on-cycle further out', () => {
+    expect(resolveDeliveryDate('2026-08-28', biweekly)).toBe('2026-09-10')
+  })
+
+  it('applies the lead requirement the same way weekly does, on top of the parity check', () => {
+    // Wed Aug 12 -> Thu Aug 13 is only 1 business day out, which fails a
+    // 4-day lead even though Aug 13 is an on week. Aug 20 is skipped for
+    // being an off week regardless of lead. Aug 27 clears both.
+    expect(resolveDeliveryDate('2026-08-12', { ...biweekly, lead_business_days: 4 })).toBe('2026-08-27')
+  })
+
+  it('returns null when no anchor date is set', () => {
+    expect(resolveDeliveryDate('2026-08-10', { ...biweekly, biweekly_anchor_date: null })).toBeNull()
+  })
+
+  it('returns null when no weekday is configured', () => {
+    expect(resolveDeliveryDate('2026-08-10', { ...biweekly, delivery_dow: null })).toBeNull()
+  })
+})
+
+describe('resolveScheduleDescription', () => {
+  it('describes a weekly schedule by weekday alone', () => {
+    expect(resolveScheduleDescription(sched({ delivery_dow: 4, lead_business_days: 4 }))).toBe('Thursday weekly (4d lead)')
+  })
+
+  it('describes a +N business days schedule', () => {
+    expect(resolveScheduleDescription(sched({ type: 'plus_business_days', lead_business_days: 5 }))).toBe('+5 business days after ordering')
+  })
+
+  it('describes a biweekly schedule\'s pattern without an order date', () => {
+    expect(resolveScheduleDescription(sched({ type: 'biweekly', delivery_dow: 4, biweekly_anchor_date: '2026-08-13', lead_business_days: 4 })))
+      .toBe('Thursday, every other week (4d lead)')
+  })
+
+  it('includes the next resolved date for a biweekly schedule when an order date is given', () => {
+    const s = sched({ type: 'biweekly', delivery_dow: 4, biweekly_anchor_date: '2026-08-13', lead_business_days: 0 })
+    expect(resolveScheduleDescription(s, { orderDate: '2026-08-10' })).toBe('Thursday, every other week (0d lead) — next: 2026-08-13')
+  })
+
+  it('returns a fallback string for no schedule at all', () => {
+    expect(resolveScheduleDescription(null)).toBe('No schedule set')
   })
 })
 

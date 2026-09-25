@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { useVendors } from './useLookups'
-import { weekStartOf, businessDaysBetween, daysBetween } from './engine'
+import { weekStartOf, businessDaysBetween, daysBetween, resolveScheduleDescription } from './engine'
 import { SCHEDULE_LABELS, type ScheduleType } from './types'
 
 const sb = () => supabase as any
@@ -49,6 +49,11 @@ function mode(nums: number[]): number {
 interface ScheduleRow {
   id: string; location_id: string; vendor_id: string; schedule_type: ScheduleType
   delivery_dow: number | null; week_a_dow: number | null; week_b_dow: number | null
+  // biweekly only. Optional (not on every construction site here — the bulk
+  // upload/history-suggestion paths never produce a 'biweekly' row) rather
+  // than widening every one of those object literals for a field they never
+  // set; describe() only reads it when schedule_type is actually 'biweekly'.
+  biweekly_anchor_date?: string | null
   lead_business_days: number
 }
 interface CalRow { id: string; week_start: string; week_label: 'A' | 'B' }
@@ -64,8 +69,17 @@ interface HistorySuggestion {
  * Per-shop delivery schedules for vendors that don't run one weekday for
  * everyone. RelaDyne isn't configured here — it uses the delivery day on the
  * location list.
+ *
+ * `lockedLocationId` locks the whole card to one shop — used by Custom Shop
+ * Config's "Order/Delivery Schedule" tab, which is already scoped to a
+ * single shop and has no business offering a shop picker or the bulk
+ * upload/calendar/history-analysis tools (all company- or vendor-wide
+ * operations that don't fit inside a single-shop editing context). When
+ * set: the Shop picker is hidden (the manual add/update form always targets
+ * this shop), the existing-schedules list is filtered down to just this
+ * shop's row, and the bulk sections are omitted entirely.
  */
-export function DeliverySchedulesCard() {
+export function DeliverySchedulesCard({ lockedLocationId }: { lockedLocationId?: string } = {}) {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const vendors = useVendors()
@@ -77,12 +91,17 @@ export function DeliverySchedulesCard() {
   const [applyingAll, setApplyingAll] = useState(false)
 
   // New/edited schedule
-  const [locationId, setLocationId] = useState('')
+  const [locationId, setLocationId] = useState(lockedLocationId ?? '')
   const [type, setType] = useState<ScheduleType>('weekly')
   const [dow, setDow] = useState('4')
   const [aDow, setADow] = useState('4')
   const [bDow, setBDow] = useState('1')
+  const [anchorDate, setAnchorDate] = useState('')
   const [lead, setLead] = useState('4')
+
+  useEffect(() => { if (lockedLocationId) setLocationId(lockedLocationId) }, [lockedLocationId])
+
+  const visibleRows = lockedLocationId ? rows.filter((r) => r.location_id === lockedLocationId) : rows
 
   const load = useCallback(async () => {
     if (!profile?.company_id || !vendorId) { setRows([]); setCal([]); return }
@@ -99,17 +118,19 @@ export function DeliverySchedulesCard() {
 
   async function save() {
     if (!profile?.company_id || !vendorId || !locationId) return
+    if (type === 'biweekly' && !anchorDate) { toast.error('Pick an anchor delivery date'); return }
     const { error } = await sb().schema('inventory').from('ov2_location_schedules').upsert({
       company_id: profile.company_id, location_id: locationId, vendor_id: vendorId,
       schedule_type: type,
-      delivery_dow: type === 'weekly' ? Number(dow) : null,
+      delivery_dow: (type === 'weekly' || type === 'biweekly') ? Number(dow) : null,
       week_a_dow: type === 'week_ab' ? Number(aDow) : null,
       week_b_dow: type === 'week_ab' ? Number(bDow) : null,
+      biweekly_anchor_date: type === 'biweekly' ? anchorDate : null,
       lead_business_days: Number(lead) || 0,
       updated_by: profile.id ?? null, updated_at: new Date().toISOString(),
     }, { onConflict: 'company_id,location_id,vendor_id' })
     if (error) { toast.error(error.message); return }
-    toast.success('Schedule saved'); setLocationId(''); void load()
+    toast.success('Schedule saved'); if (!lockedLocationId) setLocationId(''); void load()
   }
 
   async function remove(id: string) {
@@ -419,23 +440,20 @@ export function DeliverySchedulesCard() {
   }
 
   const shopLabel = (id: string) => loc.fieldValue(id, 'shop_city') || loc.codeOf(id) || id
-  const describe = (r: ScheduleRow) => {
-    if (r.schedule_type === 'plus_business_days') return `+${r.lead_business_days} business days`
-    if (r.schedule_type === 'week_ab') {
-      return `A: ${r.week_a_dow == null ? '—' : DOW[r.week_a_dow]} · B: ${r.week_b_dow == null ? '—' : DOW[r.week_b_dow]} (${r.lead_business_days}d lead)`
-    }
-    return `${r.delivery_dow == null ? '—' : DOW[r.delivery_dow]} weekly (${r.lead_business_days}d lead)`
-  }
-  const usesCalendar = rows.some((r) => r.schedule_type === 'week_ab')
+  const describe = (r: ScheduleRow) => resolveScheduleDescription({
+    type: r.schedule_type, delivery_dow: r.delivery_dow, week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+    biweekly_anchor_date: r.biweekly_anchor_date ?? null, lead_business_days: r.lead_business_days,
+  })
+  const usesCalendar = visibleRows.some((r) => r.schedule_type === 'week_ab')
 
   return (
     <Card><CardBody className="flex flex-col gap-4">
       <div>
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Delivery Schedules</h3>
         <p className="text-[11px] font-mono text-inky/60 mt-0.5">
-          For vendors whose shops don&apos;t share one delivery day. Shops are on a fixed weekday, on alternating
-          A/B weekdays, or on a flat business-day turnaround. RelaDyne isn&apos;t set here — it uses the delivery day
-          on the location list.
+          For vendors whose shops don&apos;t share one delivery day. Shops are on a fixed weekday, every other week
+          from an anchor date, on alternating A/B weekdays, or on a flat business-day turnaround. RelaDyne
+          isn&apos;t set here — it uses the delivery day on the location list.
         </p>
       </div>
 
@@ -453,7 +471,7 @@ export function DeliverySchedulesCard() {
                 <th className="text-left px-2 py-1">Schedule</th><th />
               </tr></thead>
               <tbody>
-                {rows.map((r) => (
+                {visibleRows.map((r) => (
                   <tr key={r.id} className="border-b border-navy/10">
                     <td className="px-2 py-1 text-navy">{shopLabel(r.location_id)}</td>
                     <td className="px-2 py-1 text-inky/70">{SCHEDULE_LABELS[r.schedule_type]}</td>
@@ -463,9 +481,9 @@ export function DeliverySchedulesCard() {
                     </td>
                   </tr>
                 ))}
-                {rows.length === 0 && (
+                {visibleRows.length === 0 && (
                   <tr><td colSpan={4} className="px-2 py-4 text-center text-inky/40">
-                    No schedules — these shops fall back to the location list&apos;s delivery day.
+                    No schedule{lockedLocationId ? '' : 's'} — {lockedLocationId ? 'this shop' : 'these shops'} fall{lockedLocationId ? 's' : ''} back to the location list&apos;s delivery day.
                   </td></tr>
                 )}
               </tbody>
@@ -474,14 +492,19 @@ export function DeliverySchedulesCard() {
 
           {/* Add / update */}
           <div className="flex items-end gap-2 flex-wrap border-t border-navy/10 pt-3">
-            <div className="w-56"><Combobox label="Shop" options={loc.includedOptions} value={locationId} onChange={setLocationId} placeholder="Select shop…" /></div>
+            {!lockedLocationId && (
+              <div className="w-56"><Combobox label="Shop" options={loc.includedOptions} value={locationId} onChange={setLocationId} placeholder="Select shop…" /></div>
+            )}
             <div className="w-56">
               <Select label="Pattern" value={type} onChange={(e) => setType(e.target.value as ScheduleType)}
                 options={(Object.keys(SCHEDULE_LABELS) as ScheduleType[]).map((t) => ({ value: t, label: SCHEDULE_LABELS[t] }))} />
             </div>
-            {type === 'weekly' && (
+            {(type === 'weekly' || type === 'biweekly') && (
               <div className="w-36"><Select label="Delivery day" value={dow} onChange={(e) => setDow(e.target.value)}
                 options={DOW.map((d, i) => ({ value: String(i), label: d }))} /></div>
+            )}
+            {type === 'biweekly' && (
+              <Input label="Anchor date (a known delivery date)" type="date" value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} className="w-52" />
             )}
             {type === 'week_ab' && (
               <>
@@ -497,9 +520,12 @@ export function DeliverySchedulesCard() {
           </div>
           <p className="text-[10px] font-mono text-inky/50">
             Min lead: a delivery day closer than this many business days is skipped and the next occurrence used —
-            so an order placed too near the cutoff lands on the following delivery instead.
+            so an order placed too near the cutoff lands on the following delivery instead. Every other week: pick
+            any real delivery date that falls on an &quot;on&quot; week — it doesn&apos;t need to be the very first one.
           </p>
 
+          {!lockedLocationId && (
+          <>
           {/* Bulk schedule upload */}
           <div className="border-t border-navy/10 pt-3 flex flex-col gap-2">
             <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
@@ -615,6 +641,8 @@ export function DeliverySchedulesCard() {
               </div>
             )}
           </div>
+          </>
+          )}
         </>
       )}
     </CardBody></Card>
