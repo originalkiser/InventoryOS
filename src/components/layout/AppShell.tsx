@@ -57,6 +57,11 @@ export function AppShell() {
   // untouched (no animation), since that was never asked for.
   const lastCycleNav = useRecentPagesStore((s) => s.lastCycleNav)
   const [pageAnimClass, setPageAnimClass] = useState('')
+  // Set only for actual arrow-key cycling (not a "jump" via clicking a
+  // Recent Pages button, and not an ordinary sidebar click) — that's what
+  // triggers KeepAlivePages' full dual-page slide transition instead of the
+  // plain single-page fade/offset pageAnimClass otherwise handles.
+  const [slideDirection, setSlideDirection] = useState<'left' | 'right' | null>(null)
   // Bumped alongside pageAnimClass so KeepAlivePages' animator restarts the
   // CSS animation even when two navigations in a row resolve to the exact
   // same class string (e.g. two consecutive "back" hops) — a class
@@ -67,10 +72,11 @@ export function AppShell() {
     if (location.pathname === prevPathRef.current) return
     prevPathRef.current = location.pathname
     const viaWidget = lastCycleNav && lastCycleNav.path === location.pathname && Date.now() - lastCycleNav.at < 800
+    const dir = viaWidget ? lastCycleNav!.direction : null
+    const isArrowCycle = dir === 'left' || dir === 'right'
+    setSlideDirection(isArrowCycle ? dir : null)
     setPageAnimClass(
-      !viaWidget ? ''
-        : lastCycleNav!.direction === 'left' ? 'animate-[swipeRight_220ms_ease-out]'
-        : lastCycleNav!.direction === 'right' ? 'animate-[swipeLeft_220ms_ease-out]'
+      !viaWidget || isArrowCycle ? '' // arrow-key cycles get the full slide instead, below
         : 'animate-[fadeIn_180ms_ease-out]',
     )
     setAnimTick((t) => t + 1)
@@ -204,7 +210,7 @@ export function AppShell() {
         >
           {isInventoryRoute && <InventoryNavBar onHeightChange={setNavBarHeight} />}
           <main className="p-3 sm:p-6">
-            <KeepAlivePages animClass={pageAnimClass} animTick={animTick} />
+            <KeepAlivePages animClass={pageAnimClass} animTick={animTick} slideDirection={slideDirection} />
           </main>
           {/* Spacer so scrolled-to-bottom content clears the FAB row */}
           <div className="h-16" />

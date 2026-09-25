@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Routes, useLocation, type Location } from 'react-router-dom'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { APP_ROUTE_ELEMENTS } from '@/routes/appRoutes'
@@ -39,7 +39,14 @@ interface CachedEntry {
  * from the cache (pushed past the 3rd-most-recent slot) and freshly
  * mounted next time.
  */
-export function KeepAlivePages({ animClass, animTick }: { animClass: string; animTick: number }) {
+export function KeepAlivePages({ animClass, animTick, slideDirection }: {
+  animClass: string
+  animTick: number
+  /** Set only for actual arrow-key Recent Pages cycling (not a plain click
+      or sidebar nav) — triggers the full dual-page push transition below
+      instead of the plain single-page fade/offset `animClass` handles. */
+  slideDirection: 'left' | 'right' | null
+}) {
   const location = useLocation()
   // Query string included: several pages (Location Lookup, Issues, Config,
   // Meeting Notes) read their own state from useSearchParams(), so two
@@ -49,10 +56,16 @@ export function KeepAlivePages({ animClass, animTick }: { animClass: string; ani
 
   const [entries, setEntries] = useState<CachedEntry[]>(() => [{ key: currentKey, location }])
   const lastKeyRef = useRef(currentKey)
+  // The key we're navigating AWAY from — captured the instant currentKey
+  // changes (during render, same reasoning as the entries update below) so
+  // the tick-driven transition effect further down always has the right
+  // "from" side even though it only fires one tick later.
+  const prevKeyRef = useRef(currentKey)
   // Derived during render, not in an effect — an effect runs one tick
   // after this render commits, so the very first paint of a brand-new path
   // would have no matching entry yet and flash a blank content area.
   if (lastKeyRef.current !== currentKey) {
+    prevKeyRef.current = lastKeyRef.current
     lastKeyRef.current = currentKey
     setEntries((prev) => {
       const rest = prev.filter((e) => e.key !== currentKey)
@@ -60,14 +73,62 @@ export function KeepAlivePages({ animClass, animTick }: { animClass: string; ani
     })
   }
 
+  // Full-page "PowerPoint push" (2026-09-26 ask): for the ~220ms the CSS
+  // animation runs, both the outgoing and incoming entry render absolutely
+  // stacked (see the wrapping div below) and slide past each other. Cleared
+  // automatically after the animation finishes, reverting both entries to
+  // their normal display:none/block flow. Keyed off animTick (not
+  // slideDirection, which can repeat two arrow-presses in a row unchanged)
+  // so two consecutive same-direction hops each still re-trigger a fresh run.
+  const TRANSITION_MS = 230
+  const [transition, setTransition] = useState<{ fromKey: string; toKey: string; direction: 'left' | 'right' } | null>(null)
+  const lastTickRef = useRef(animTick)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [transitionHeight, setTransitionHeight] = useState<number | null>(null)
+  useEffect(() => {
+    if (animTick === lastTickRef.current) return
+    lastTickRef.current = animTick
+    if (!slideDirection || prevKeyRef.current === currentKey) { setTransition(null); return }
+    // Height is pinned to the currently-visible viewport below this
+    // container (not the full, possibly-scrolled document) — a real page
+    // transition animates what's on screen, and this also sidesteps having
+    // to measure a not-yet-visible cached page's own natural height.
+    const el = containerRef.current
+    if (el) setTransitionHeight(Math.max(240, window.innerHeight - el.getBoundingClientRect().top))
+    setTransition({ fromKey: prevKeyRef.current, toKey: currentKey, direction: slideDirection })
+    const t = setTimeout(() => setTransition(null), TRANSITION_MS)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animTick])
+
   return (
-    <>
+    <div ref={containerRef} className="relative" style={transition ? { height: transitionHeight ?? undefined, overflow: 'hidden' } : undefined}>
       {entries.map((entry) => {
         const isActive = entry.key === currentKey
+        const isFrom = transition?.fromKey === entry.key
+        const isTo = transition?.toKey === entry.key
+        const inTransition = !!transition && (isFrom || isTo)
+
+        // Structure below (Provider > SwipeAnimator > ErrorBoundary > Routes)
+        // is IDENTICAL whether or not this entry is mid-transition — only the
+        // outer div's style/className and the animClass prop change. Varying
+        // the tree shape between the two would unmount/remount Routes (and
+        // the page underneath it) every time a transition starts or ends,
+        // defeating the entire point of keeping it alive.
+        let style: CSSProperties = { display: isActive || inTransition ? 'block' : 'none' }
+        let slideClass = ''
+        if (inTransition) {
+          style = {}
+          const enterFromRight = transition!.direction === 'right'
+          slideClass = isTo
+            ? (enterFromRight ? 'sb-page-slide-in-right' : 'sb-page-slide-in-left')
+            : (enterFromRight ? 'sb-page-slide-out-left' : 'sb-page-slide-out-right')
+        }
+
         return (
-          <div key={entry.key} style={{ display: isActive ? 'block' : 'none' }}>
+          <div key={entry.key} className={slideClass} style={style}>
             <PageActiveContext.Provider value={isActive}>
-              <SwipeAnimator animTick={animTick} animClass={isActive ? animClass : ''}>
+              <SwipeAnimator animTick={animTick} animClass={!inTransition && isActive ? animClass : ''}>
                 <ErrorBoundary>
                   {/* The active entry uses the live location object (full
                       fidelity — hash/state included); a backgrounded entry
@@ -79,7 +140,7 @@ export function KeepAlivePages({ animClass, animTick }: { animClass: string; ani
           </div>
         )
       })}
-    </>
+    </div>
   )
 }
 
