@@ -14,6 +14,9 @@ import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
+import { isValvoline } from '@/modules/orders-v2/useOrdersV2'
+import { resolveScheduleDescription } from '@/modules/orders-v2/engine'
+import type { DeliverySchedule } from '@/modules/orders-v2/types'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue } from './useCustomShopConfig'
@@ -189,6 +192,11 @@ interface SidebarFieldCtx {
   rdDistributor: string
   addressStr: string
   inNC: boolean
+  // Valvoline's own ov2_location_schedules row for this shop, if any (see
+  // load()'s own fetch) — null both when the shop has no Valvoline vendor
+  // relationship at all and while still loading, so the field simply
+  // doesn't render rather than showing a misleading "—" either way.
+  valvolineSchedule: DeliverySchedule | null
 }
 interface SidebarFieldValue { value: string; note?: string; mapQuery?: string }
 interface SidebarFieldDef { id: string; label: string; render: (ctx: SidebarFieldCtx) => SidebarFieldValue | null }
@@ -203,6 +211,12 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
   { id: 'rd_order_day', label: 'RD Order Day', render: (ctx) => ({ value: ctx.rdOrderDay, note: relativeDay(ctx.rdOrderDay) ?? undefined }) },
   { id: 'rd_delivery_day', label: 'RD Delivery Day', render: (ctx) => ({ value: ctx.rdDeliveryDay, note: relativeDay(ctx.rdDeliveryDay) ?? undefined }) },
   { id: 'rd_distributor', label: 'RD Distributor', render: (ctx) => ({ value: ctx.rdDistributor }) },
+  {
+    id: 'valvoline_schedule', label: 'Valvoline Delivery Schedule',
+    render: (ctx) => (ctx.valvolineSchedule
+      ? { value: resolveScheduleDescription(ctx.valvolineSchedule, { orderDate: format(new Date(), 'yyyy-MM-dd') }) }
+      : null),
+  },
   { id: 'address', label: 'Address', render: (ctx) => ({ value: ctx.addressStr, mapQuery: ctx.addressStr || undefined }) },
   { id: 'store_phone', label: 'Shop Phone', render: (ctx) => ({ value: locVal(ctx.location, 'store_phone') }) },
   { id: 'acquisition_date', label: 'Acquisition Date', render: (ctx) => ({ value: locVal(ctx.location, 'acquisition_date'), note: sinceLabel(locVal(ctx.location, 'acquisition_date')) ?? undefined }) },
@@ -420,6 +434,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [prodMap] = useAppSetting<Record<string, string>>('tank_product_map', {})
   const [configs, setConfigs] = useState<ConfigRow[]>([])
   const [vendorNames, setVendorNames] = useState<Record<string, string>>({})
+  // Valvoline's own ov2_location_schedules row for this shop (2026-09-25
+  // direct ask — surfaced in the sidebar between RD Distributor and
+  // Address, see SIDEBAR_FIELDS). null when there's no Valvoline vendor
+  // relationship for this shop at all, not just "still loading."
+  const [valvolineSchedule, setValvolineSchedule] = useState<DeliverySchedule | null>(null)
   const [issues, setIssues] = useState<IssueRow[]>([])
   const [statusNames, setStatusNames] = useState<Record<string, string>>({})
   const [exceptions, setExceptions] = useState<ExceptionReport[]>([])
@@ -570,7 +589,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // subsumes the old exact-match list rather than needing both.
       const usageFamilies = [...new Set([...usageIdList].map((p) => pkey(baseProductId(p))).filter(Boolean))]
 
-      const [usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes] = await Promise.all([
+      const [usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes, schedRes] = await Promise.all([
         usageFamilies.length === 0 ? Promise.resolve({ data: [] }) : fetchAllRows((from, to) =>
           sb.schema('inventory').from('product_usage')
             .select('product_id, on_hands, daily_usage, updated_at')
@@ -600,6 +619,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // Orders v2's shop+product floor/ceiling overrides — see the
         // Exception column below. Best-effort: newer table.
         sb.schema('inventory').from('ov2_product_exceptions').select('product_id, floor_qty, ceiling_qty, ceiling_unit').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
+        // Valvoline Delivery Schedule sidebar field — best-effort: newer
+        // table, and the vendor_id filter needs vendRes (fetched in this
+        // same batch) resolved first, so this pulls every schedule row for
+        // the shop and the match against Valvoline's own vendor id happens
+        // just below instead.
+        sb.schema('inventory').from('ov2_location_schedules').select('*').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       // Collapse to the newest reading per tank (serial, then system id, then
       // row id) so leftover duplicate readings don't stack or inflate counts.
@@ -717,6 +742,16 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       setIdMappings((mapRes?.data ?? []) as any[])
       setVarianceBaselines((baselineRes?.data ?? []) as any[])
       setVendorNames(Object.fromEntries(((vendRes.data ?? []) as any[]).map((v) => [v.id, v.name])))
+      const valvVendor = ((vendRes.data ?? []) as { id: string; name: string }[]).find((v) => isValvoline(v.name))
+      const valvRow = valvVendor
+        ? ((schedRes?.data ?? []) as any[]).find((r) => r.vendor_id === valvVendor.id)
+        : null
+      setValvolineSchedule(valvRow ? {
+        type: valvRow.schedule_type, delivery_dow: valvRow.delivery_dow,
+        week_a_dow: valvRow.week_a_dow, week_b_dow: valvRow.week_b_dow,
+        biweekly_anchor_date: valvRow.biweekly_anchor_date ?? null,
+        lead_business_days: Number(valvRow.lead_business_days ?? 4),
+      } : null)
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
       setSupplemental((supRes?.data?.data ?? null) as Record<string, string> | null)
@@ -1118,7 +1153,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // omitted entirely, same as the old array literal's own conditional spread.
   const sidebarFieldsAll: ResolvedSidebarField[] = location ? SIDEBAR_FIELDS
     .map((f): ResolvedSidebarField | null => {
-      const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC })
+      const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC, valvolineSchedule })
       return r ? { id: f.id, label: f.label, value: r.value, note: r.note, mapQuery: r.mapQuery } : null
     })
     .filter((f): f is ResolvedSidebarField => !!f) : []
