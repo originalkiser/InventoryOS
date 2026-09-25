@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
 import { useOrderSettings } from './useOrdersV2'
+import { useVendors } from './useLookups'
 import { VendorRulesCard } from './VendorRulesCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
@@ -32,6 +33,7 @@ export function OrdersV2Settings() {
  */
 export function OrdersV2SettingsBody() {
   const { settings, loading, save } = useOrderSettings()
+  const vendors = useVendors()
   const [draft, setDraft] = useState<OrderSettings>(settings)
   useEffect(() => { setDraft(settings) }, [settings])
 
@@ -62,17 +64,37 @@ export function OrdersV2SettingsBody() {
         </p>
         {numField('skip_order_if_dos_over', 'Only smooth in products under this DOS',
           'Smoothing guard only — a product above this is never pulled onto an order just to hit a minimum. It never stops a product that is genuinely due.')}
-        <label className="flex items-center gap-2 text-xs font-mono text-inky">
-          <Toggle checked={draft.allow_exceed_capacity_for_dos_target}
-            onChange={(v) => setDraft((d) => ({ ...d, allow_exceed_capacity_for_dos_target: v }))} size="sm" color="cyan" />
-          Allow ordering over capacity to reach the Target days of supply
-        </label>
-        <p className="text-[10px] font-mono text-inky/50">
-          Off by default. When on, a line whose only obstacle to reaching Target is its configured capacity orders
-          the full amount anyway instead of clamping to capacity — flagged "Over capacity: DOS target" on Review/Final
-          Review so the amount ordered can be verified. Per-product, case-type, and dollar order minimums still never
-          exceed capacity either way.
-        </p>
+        <div className="flex flex-col gap-1.5 pt-1 border-t border-navy/10">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
+            Allow ordering over capacity to reach the Target days of supply
+          </span>
+          <p className="text-[10px] font-mono text-inky/50">
+            Off by default, per vendor — e.g. on for Valvoline but off for RelaDyne. When on for a vendor, a line
+            whose only obstacle to reaching Target is its configured capacity orders the full amount anyway instead
+            of clamping to capacity — flagged "Over capacity: DOS target" on Review/Final Review so the amount
+            ordered can be verified. Per-product, case-type, and dollar order minimums still never exceed capacity
+            either way.
+          </p>
+          {vendors.options.length === 0 ? (
+            <p className="text-xs font-mono text-inky/40 italic">No vendors configured yet.</p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {vendors.options.map((v) => (
+                <label key={v.value} className="flex items-center gap-2 text-xs font-mono text-navy">
+                  <Toggle
+                    checked={draft.allow_exceed_capacity_for_dos_target_vendors[v.value] ?? false}
+                    onChange={(checked) => setDraft((d) => ({
+                      ...d,
+                      allow_exceed_capacity_for_dos_target_vendors: { ...d.allow_exceed_capacity_for_dos_target_vendors, [v.value]: checked },
+                    }))}
+                    size="sm" color="cyan"
+                  />
+                  {v.label}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
       </CardBody></Card>
 
       <Card><CardBody className="flex flex-col gap-3">

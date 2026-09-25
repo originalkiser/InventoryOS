@@ -96,18 +96,26 @@ export interface OrderSettings {
   // are unaffected.
   bulk_round_up_threshold_gal: number
   bulk_urgent_dos_threshold: number
-  // Direct ask (2026-09-24): when a shop's configured physical capacity is
-  // what's holding a line short of days_of_supply_target, order the full
-  // amount needed to reach the target anyway rather than clamping to
-  // capacity (flagged — see 'exceeded_capacity_for_dos_target' in
-  // engine.ts). Off by default — a HUGE amount of this engine's own test
-  // suite (and every downstream minimum/smoothing pass) is built on
-  // capacity being the one truly hard, never-exceeded ceiling, so this is
-  // deliberately an opt-in setting rather than a blanket change to that
-  // guarantee. Only affects Pass 1's own initial sizing toward the DOS
-  // target — per-product/case-type/dollar minimums (Pass 2) still never
-  // exceed capacity, on or off.
-  allow_exceed_capacity_for_dos_target: boolean
+  // Direct ask (2026-09-24, widened to per-vendor 2026-09-25): when a shop's
+  // configured physical capacity is what's holding a line short of
+  // days_of_supply_target, order the full amount needed to reach the target
+  // anyway rather than clamping to capacity (flagged — see
+  // 'exceeded_capacity_for_dos_target' in engine.ts). Off by default per
+  // vendor — a HUGE amount of this engine's own test suite (and every
+  // downstream minimum/smoothing pass) is built on capacity being the one
+  // truly hard, never-exceeded ceiling, so this is deliberately opt-in
+  // rather than a blanket change to that guarantee. Only affects Pass 1's
+  // own initial sizing toward the DOS target — per-product/case-type/dollar
+  // minimums (Pass 2) still never exceed capacity, on or off.
+  //
+  // vendor_id -> enabled. Per-vendor (not one global flag) per direct
+  // feedback: "opt in for Valvoline but leave RelaDyne off" — resolved into
+  // GenerationContext.vendor.allowExceedCapacityForDosTarget (VendorRules
+  // below) by useVendorRules().rulesFor(), the same per-vendor-override
+  // mechanism ov2_vendor_order_minimums already uses, rather than living
+  // directly on the engine's OrderSettings (which has no vendor concept at
+  // all — engine.ts itself never references a vendor_id).
+  allow_exceed_capacity_for_dos_target_vendors: Record<string, boolean>
 }
 
 export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
@@ -127,7 +135,7 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   bulk_rounding_increment: 1,
   bulk_round_up_threshold_gal: 35,
   bulk_urgent_dos_threshold: 15,
-  allow_exceed_capacity_for_dos_target: false,
+  allow_exceed_capacity_for_dos_target_vendors: {},
 }
 
 // Per shop x product ordering rules. Named fields say "gallons" for
@@ -244,6 +252,12 @@ export interface VendorRules {
   // product's own hard capacity could even reach the minimum; if not, makes
   // no changes at all rather than forcing a partial, arbitrary-looking bump.
   spreadCaseTypeMinimum?: boolean
+  // Resolved from OrderSettings.allow_exceed_capacity_for_dos_target_vendors
+  // for this specific vendor_id (2026-09-25, widened from a single global
+  // flag) — see that field's own comment. Optional/falsy-means-off, same
+  // convention as the two flags above, so existing hand-built VendorRules
+  // test literals are unaffected.
+  allowExceedCapacityForDosTarget?: boolean
 }
 
 export type LineFlag =

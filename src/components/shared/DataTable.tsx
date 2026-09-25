@@ -560,15 +560,24 @@ export function DataTable<T>({
                       onRowClick(row.original)
                     } : undefined}
                     className={[
-                      'border-b border-inky/10 hover:bg-sky/10 transition-colors',
+                      'hover:bg-sky/10 transition-colors',
                       onRowClick ? 'cursor-pointer' : '',
                       bandClass,
                     ].join(' ')}
                   >
-                    {/* Row checkbox — frozen to the left like the pinned columns */}
+                    {/* Row checkbox — frozen to the left like the pinned columns.
+                        The row separator line lives on each <td> (below), not the
+                        <tr> — found live 2026-09-25: a <tr>'s own border is ignored
+                        by browsers under the default border-separate table model,
+                        so a border-b here was invisible/inconsistent to begin with;
+                        it also visually darkened wherever it happened to overlap a
+                        cell's own border (e.g. Shop's border-r-2), since two
+                        adjacent border strokes at a corner render as one thicker,
+                        darker line. One border-b per <td>, same color everywhere,
+                        renders consistently and correctly across every column. */}
                     <td
                       style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 10 }}
-                      className={['px-2 py-2 text-center', bandClass].join(' ')}
+                      className={['px-2 py-2 text-center border-b border-inky/10', bandClass].join(' ')}
                     >
                       <input
                         type="checkbox"
@@ -594,7 +603,7 @@ export function DataTable<T>({
                               : {}),
                           }}
                           className={[
-                            'px-3 py-2 text-navy',
+                            'px-3 py-2 text-navy border-b border-inky/10',
                             noClip ? '' : 'whitespace-nowrap',
                             cell.column.getIsPinned() === 'left' ? `${bandClass} border-r-2 border-r-inky/20` : '',
                           ].join(' ')}

@@ -169,6 +169,11 @@ export function useVendorRules() {
       usesOrderDays: isReladyne(vendorName),
       alwaysListConfiguredProducts: isValvoline(vendorName),
       spreadCaseTypeMinimum: isValvoline(vendorName),
+      // Per-vendor opt-in (2026-09-25) — unlike the 3 flags above, this one
+      // isn't a hardcoded vendor-name check; it's a real per-vendor setting
+      // (Order Settings screen), resolved here the same way a vendor's
+      // order-minimum override already is.
+      allowExceedCapacityForDosTarget: vendorId ? (settings.allow_exceed_capacity_for_dos_target_vendors[vendorId] ?? false) : false,
     }
   }, [minimums, caseLimits])
 

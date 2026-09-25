@@ -841,12 +841,15 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     // anyway instead of clamping to capacity. Never silent: flagged (with a
     // note carrying the real numbers) so the amount ordered can be verified
     // on Review/Final Review, per this app's "make exceptions visible" rule.
-    // Gated behind an off-by-default OrderSettings toggle (see that field's
-    // own comment in types.ts) rather than always-on — capacity being the
-    // one truly hard ceiling is otherwise relied on and tested throughout
-    // this file's own Pass 2 (minimums/smoothing).
+    // Gated behind an off-by-default, per-vendor VendorRules flag (see that
+    // field's own comment in types.ts — resolved from OrderSettings'
+    // per-vendor map by useVendorRules().rulesFor()) rather than always-on
+    // or a single global toggle — capacity being the one truly hard ceiling
+    // is otherwise relied on and tested throughout this file's own Pass 2
+    // (minimums/smoothing), and different vendors want this on/off
+    // independently (e.g. Valvoline on, RelaDyne off).
     let exceedsCapacityForTarget = false
-    if (ctx.settings.allow_exceed_capacity_for_dos_target && caps.capacityBound && want > caps.maxUnits) {
+    if (ctx.vendor.allowExceedCapacityForDosTarget && caps.capacityBound && want > caps.maxUnits) {
       exceedsCapacityForTarget = true
       caps = { ...caps, maxUnits: want, capacityBound: false }
     }
