@@ -24,6 +24,18 @@ export interface ImportOptions<T> {
   confirm?: ((summary: ImportSummary) => Promise<boolean>) | false
   // Label shown per new row in the review list. Defaults to keyOf.
   labelOf?: (row: Partial<T>) => string
+  // Merge mode only (2026-09-25, Order Config's own "clean up removed
+  // products" ask). Groups both the incoming rows AND every EXISTING row by
+  // this key (e.g. `${vendor_id}|${location_id}`) — any existing row whose
+  // group appears somewhere in this upload, but whose own natural key
+  // (keyOf) is NOT among the incoming rows, is deleted as part of the same
+  // import. A shop/vendor group that isn't mentioned in this upload AT ALL
+  // is never touched — this is what keeps a RelaDyne file from ever
+  // pruning Valvoline's rows for the same shop, and keeps an upload scoped
+  // to a handful of shops from touching every other shop's config.
+  // Requires keyOf to also be set. Opt-in — omitted, every other importRows
+  // caller (every other config table) behaves exactly as before.
+  pruneScopeKeyOf?: (row: Partial<T>) => string
 }
 
 // ---------------------------------------------------------------------------
@@ -239,10 +251,33 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
       return { ...base, id }
     })
 
+    // Pruning (opt-in, see pruneScopeKeyOf's own comment) — an existing row
+    // whose scope group (e.g. vendor+shop) appears somewhere in this upload,
+    // but whose own natural key isn't among the incoming rows, is stale and
+    // gets removed alongside the add/update. incomingKeys is the SAME
+    // natural-key set matching already used above, not re-derived, so a row
+    // that legitimately matched (and will be upserted) can never also be
+    // flagged for removal.
+    const pruneIds: string[] = []
+    const pruneLabels: string[] = []
+    if (opts.pruneScopeKeyOf && keyOf) {
+      const scopeKeyOf = opts.pruneScopeKeyOf
+      const incomingScopeKeys = new Set(rows.map(scopeKeyOf))
+      const incomingKeys = new Set(rows.map(keyOf))
+      for (const d of data as Array<Partial<T> & { id?: string }>) {
+        if (!d.id) continue
+        if (!incomingScopeKeys.has(scopeKeyOf(d))) continue // shop/vendor not in this upload at all — never touched
+        if (incomingKeys.has(keyOf(d))) continue // still present in the file
+        pruneIds.push(d.id)
+        pruneLabels.push(labelFor(d))
+      }
+    }
+
     if (askConfirm) {
       const ok = await askConfirm({
         mode: 'merge', total: rows.length, updates: matched,
         creates: rows.length - matched, deletes: 0, newRows: newLabels,
+        removedRows: pruneLabels.length ? pruneLabels : undefined,
       })
       if (!ok) return false
     }
@@ -262,9 +297,23 @@ export function useConfigTab<T>(tableName: string, schemaName = 'public') {
         if (delErr) { console.warn('[importRows] dedupe delete failed:', delErr.message); break }
       }
     }
+    // Remove rows the user just confirmed pruning (opt-in, see
+    // pruneScopeKeyOf's own comment) — a real delete, not a soft
+    // deactivation, since this app's data-safety default is to never
+    // silently remove production data; this one is neither silent (the
+    // review modal listed every row by name) nor unprompted (explicit
+    // confirm click).
+    if (pruneIds.length) {
+      const CHUNK = 200
+      for (let i = 0; i < pruneIds.length; i += CHUNK) {
+        const { error: delErr } = await tbl().delete().eq('company_id', profile.company_id).in('id', pruneIds.slice(i, i + CHUNK))
+        if (delErr) { console.warn('[importRows] prune delete failed:', delErr.message); break }
+      }
+    }
     const created = rows.length - matched
     const extra = dupeIds.length ? `, ${dupeIds.length.toLocaleString()} duplicates removed` : ''
-    toast.success(`Imported ${rows.length.toLocaleString()} rows (${matched.toLocaleString()} updated, ${created.toLocaleString()} new${extra})`)
+    const pruned = pruneIds.length ? `, ${pruneIds.length.toLocaleString()} removed` : ''
+    toast.success(`Imported ${rows.length.toLocaleString()} rows (${matched.toLocaleString()} updated, ${created.toLocaleString()} new${extra}${pruned})`)
     invalidate(); load().catch(() => {})
     return true
   }

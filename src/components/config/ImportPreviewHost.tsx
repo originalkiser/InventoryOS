@@ -9,6 +9,13 @@ export interface ImportSummary {
   creates: number
   deletes: number      // replace mode only — rows about to be wiped
   newRows: string[]    // identifiers of the rows that will be created
+  // Existing rows that will be REMOVED because they're no longer present in
+  // this upload (2026-09-25, Order Config's own "clean up removed products"
+  // ask) — scoped to whatever the caller's own pruneScopeKeyOf groups the
+  // upload by (e.g. vendor+shop), so a shop/vendor NOT mentioned in this
+  // file is never touched. Empty/undefined unless the caller opts in via
+  // importRows' own pruneScopeKeyOf option.
+  removedRows?: string[]
 }
 
 // Single mounted host (like react-hot-toast's <Toaster/>) so any import can
@@ -43,6 +50,8 @@ export function ImportPreviewHost() {
   const s = pending?.s
   const listed = s ? s.newRows.slice(0, MAX_LISTED) : []
   const extra = s ? s.newRows.length - listed.length : 0
+  const removedListed = s ? (s.removedRows ?? []).slice(0, MAX_LISTED) : []
+  const removedExtra = s ? (s.removedRows?.length ?? 0) - removedListed.length : 0
   // A merge that creates far more rows than it updates usually means the key
   // column was mapped wrong — the rows get added as duplicates instead of
   // updating the existing ones.
@@ -52,10 +61,11 @@ export function ImportPreviewHost() {
     <Modal open={!!pending} onClose={() => close(false)} title="Review Import" size="lg">
       {s && (
         <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-3 gap-2">
+          <div className={`grid gap-2 ${(s.removedRows?.length ?? 0) > 0 ? 'grid-cols-4' : 'grid-cols-3'}`}>
             <Stat label="Rows in file" value={s.total} />
             <Stat label="Existing rows updated" value={s.updates} />
             <Stat label="New rows added" value={s.creates} tone={s.creates > 0 ? 'warn' : undefined} />
+            {(s.removedRows?.length ?? 0) > 0 && <Stat label="Rows being removed" value={s.removedRows!.length} tone="warn" />}
           </div>
 
           {s.mode === 'replace' && (
@@ -81,10 +91,31 @@ export function ImportPreviewHost() {
             </div>
           )}
 
+          {(s.removedRows?.length ?? 0) > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-[#C0392B]">
+                Products being removed ({s.removedRows!.length.toLocaleString()})
+              </span>
+              <p className="text-[11px] font-mono text-inky/60">
+                No longer in this file — will be deleted from the shop(s)/vendor this upload covers.
+              </p>
+              <div className="max-h-40 overflow-auto rounded border border-[#C0392B]/30 bg-[#C0392B]/5 divide-y divide-[#C0392B]/10">
+                {removedListed.map((label, i) => (
+                  <div key={`${label}-${i}`} className="px-2 py-1 text-xs font-mono text-navy break-all">
+                    {label || <span className="text-inky/40 italic">(blank identifier)</span>}
+                  </div>
+                ))}
+              </div>
+              {removedExtra > 0 && (
+                <span className="text-[10px] font-mono text-inky/50">…and {removedExtra.toLocaleString()} more not listed</span>
+              )}
+            </div>
+          )}
+
           {s.creates > 0 ? (
             <div className="flex flex-col gap-1">
               <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
-                New records being added ({s.creates.toLocaleString()})
+                Products being added ({s.creates.toLocaleString()})
               </span>
               <div className="max-h-60 overflow-auto rounded border border-navy/20 divide-y divide-navy/10">
                 {listed.map((label, i) => (
@@ -106,15 +137,17 @@ export function ImportPreviewHost() {
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => close(false)}>Cancel</Button>
             <Button
-              variant={s.mode === 'replace' ? 'danger' : 'primary'}
+              variant={s.mode === 'replace' || (s.removedRows?.length ?? 0) > 0 ? 'danger' : 'primary'}
               size="sm"
               onClick={() => close(true)}
             >
               {s.mode === 'replace'
                 ? `Replace all ${s.deletes.toLocaleString()} rows`
-                : s.creates > 0
-                  ? `Update ${s.updates.toLocaleString()} · Add ${s.creates.toLocaleString()}`
-                  : `Update ${s.updates.toLocaleString()} rows`}
+                : [
+                    `Update ${s.updates.toLocaleString()}`,
+                    s.creates > 0 ? `Add ${s.creates.toLocaleString()}` : null,
+                    (s.removedRows?.length ?? 0) > 0 ? `Remove ${s.removedRows!.length.toLocaleString()}` : null,
+                  ].filter(Boolean).join(' · ')}
             </Button>
           </div>
         </div>

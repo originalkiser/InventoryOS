@@ -38,6 +38,16 @@ function orderConfigKeyOf(r: Partial<LocationOrderConfig>): string {
   return `${r.vendor_id ?? ''}|${r.location_id ?? ''}|${r.product_id ?? ''}`
 }
 
+// Groups by vendor+shop only (no product) — the unit a re-upload's "clean up
+// removed products" (2026-09-25) is scoped by. An existing row is only ever
+// a removal candidate when its OWN vendor+shop group is somewhere in this
+// upload; a shop/vendor this file never mentions is left alone entirely, so
+// uploading one vendor's file (or a handful of shops) can never prune
+// another vendor's — or an unmentioned shop's — rows.
+function orderConfigScopeKeyOf(r: Partial<LocationOrderConfig>): string {
+  return `${r.vendor_id ?? ''}|${r.location_id ?? ''}`
+}
+
 const col = createColumnHelper<LocationOrderConfig>()
 
 export function OrderConfigTab() {
@@ -214,13 +224,28 @@ export function OrderConfigTab() {
       if (existingByKey.has(orderConfigKeyOf(r))) matched++
       else newLabels.push(friendlyRowLabel(r))
     }
-    return { total: reviewPayload.length, matched, creates: reviewPayload.length - matched, newLabels }
+    // Mirrors importRows' own pruneScopeKeyOf computation exactly (see that
+    // function's own comment) so this preview can never disagree with what
+    // confirmMergeImport actually deletes below.
+    const incomingScopeKeys = new Set(reviewPayload.map(orderConfigScopeKeyOf))
+    const incomingKeys = new Set(reviewPayload.map(orderConfigKeyOf))
+    const removedLabels: string[] = []
+    for (const d of data) {
+      if (!d.id) continue
+      if (!incomingScopeKeys.has(orderConfigScopeKeyOf(d))) continue
+      if (incomingKeys.has(orderConfigKeyOf(d))) continue
+      removedLabels.push(friendlyRowLabel(d))
+    }
+    return { total: reviewPayload.length, matched, creates: reviewPayload.length - matched, newLabels, removedLabels }
   }, [reviewMerge, reviewPayload, data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function confirmMergeImport() {
     if (!reviewMerge || !reviewDiff) return
     setImporting(true)
-    const ok = await importRows(reviewPayload, { mode: 'merge', source: 'upload', keyOf: orderConfigKeyOf, confirm: false })
+    const ok = await importRows(reviewPayload, {
+      mode: 'merge', source: 'upload', keyOf: orderConfigKeyOf, confirm: false,
+      pruneScopeKeyOf: orderConfigScopeKeyOf,
+    })
     setImporting(false)
     if (ok) setReviewMerge(null)
   }
@@ -469,10 +494,11 @@ export function OrderConfigTab() {
               </div>
             )}
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className={`grid gap-2 ${reviewDiff.removedLabels.length > 0 ? 'grid-cols-4' : 'grid-cols-3'}`}>
               <Stat label="Rows in file" value={reviewDiff.total} />
               <Stat label="Existing rows updated" value={reviewDiff.matched} />
               <Stat label="New rows added" value={reviewDiff.creates} tone={reviewDiff.creates > 0 ? 'warn' : undefined} />
+              {reviewDiff.removedLabels.length > 0 && <Stat label="Rows being removed" value={reviewDiff.removedLabels.length} tone="warn" />}
             </div>
 
             {reviewDiff.creates > 0 && reviewDiff.creates >= reviewDiff.matched && (
@@ -485,10 +511,32 @@ export function OrderConfigTab() {
               </div>
             )}
 
+            {reviewDiff.removedLabels.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-[#C0392B]">
+                  Products being removed ({reviewDiff.removedLabels.length.toLocaleString()})
+                </span>
+                <p className="text-[11px] font-mono text-inky/60">
+                  Configured for this vendor at these shop(s), but no longer in the file — will be deleted. A shop or
+                  vendor not in this file at all is never touched.
+                </p>
+                <div className="max-h-40 overflow-auto rounded border border-[#C0392B]/30 bg-[#C0392B]/5 divide-y divide-[#C0392B]/10">
+                  {reviewDiff.removedLabels.slice(0, 200).map((label, i) => (
+                    <div key={i} className="px-2 py-1 text-xs font-mono text-navy break-all">{label}</div>
+                  ))}
+                </div>
+                {reviewDiff.removedLabels.length > 200 && (
+                  <span className="text-[10px] font-mono text-inky/50">
+                    …and {(reviewDiff.removedLabels.length - 200).toLocaleString()} more not listed
+                  </span>
+                )}
+              </div>
+            )}
+
             {reviewDiff.creates > 0 ? (
               <div className="flex flex-col gap-1">
                 <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
-                  New records being added ({reviewDiff.creates.toLocaleString()})
+                  Products being added ({reviewDiff.creates.toLocaleString()})
                 </span>
                 <div className="max-h-60 overflow-auto rounded border border-navy/20 divide-y divide-navy/10">
                   {reviewDiff.newLabels.slice(0, 200).map((label, i) => (
@@ -509,12 +557,14 @@ export function OrderConfigTab() {
 
             <div className="flex justify-end gap-2">
               <Button variant="secondary" size="sm" onClick={() => setReviewMerge(null)}>Cancel</Button>
-              <Button size="sm" onClick={confirmMergeImport} disabled={importing}>
+              <Button variant={reviewDiff.removedLabels.length > 0 ? 'danger' : 'primary'} size="sm" onClick={confirmMergeImport} disabled={importing}>
                 {importing
                   ? 'Importing…'
-                  : reviewDiff.creates > 0
-                    ? `Update ${reviewDiff.matched.toLocaleString()} · Add ${reviewDiff.creates.toLocaleString()}`
-                    : `Update ${reviewDiff.matched.toLocaleString()} rows`}
+                  : [
+                      `Update ${reviewDiff.matched.toLocaleString()}`,
+                      reviewDiff.creates > 0 ? `Add ${reviewDiff.creates.toLocaleString()}` : null,
+                      reviewDiff.removedLabels.length > 0 ? `Remove ${reviewDiff.removedLabels.length.toLocaleString()}` : null,
+                    ].filter(Boolean).join(' · ')}
               </Button>
             </div>
           </div>
