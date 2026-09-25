@@ -181,7 +181,7 @@ export function ExceptionReportingPage() {
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Exception Reporting</h1>
-              <p className="text-xs text-inky mt-0.5 mb-2">Inventory findings (PO match, activity, on-hand). Every cell is editable inline; the pencil opens full detail.</p>
+              <p className="text-xs text-inky mt-0.5 mb-2">Inventory findings (PO match, activity, on-hand). Every cell is editable inline; click anywhere else in a row to open full detail.</p>
             </div>
             <Button size="sm" variant="secondary" onClick={refresh} disabled={loading}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
@@ -572,6 +572,18 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
               ))}
             </div>
           )}
+        </div>
+        <div className="flex flex-col gap-1 pt-1 border-t border-navy/10">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-widest">
+            "Close (No Receipt)" modal instructions
+          </span>
+          <p className="text-[10px] font-mono text-inky/50">
+            Shown in a subtle font below the PO cards — the manual steps a user follows in Droptop itself to actually
+            close a PO there (this app has no write access to Droptop's own purchase orders).
+          </p>
+          <textarea value={config.poAlertCloseInstructions} rows={5}
+            onChange={(e) => saveConfig({ ...config, poAlertCloseInstructions: e.target.value })}
+            className="w-full bg-cream dark:bg-[#0e2638] border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy dark:text-[#F2F1E6] focus:outline-none focus:ring-1 focus:ring-sky resize-y" />
         </div>
       </CardBody></Card>
 

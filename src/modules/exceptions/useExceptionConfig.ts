@@ -16,6 +16,7 @@ export function useExceptionConfig() {
     poAlertDaysThreshold: raw.poAlertDaysThreshold ?? DEFAULT_EXCEPTION_CONFIG.poAlertDaysThreshold,
     poAlertDaysThresholdDefault: raw.poAlertDaysThresholdDefault ?? DEFAULT_EXCEPTION_CONFIG.poAlertDaysThresholdDefault,
     poAlertSuppliers: raw.poAlertSuppliers ?? DEFAULT_EXCEPTION_CONFIG.poAlertSuppliers,
+    poAlertCloseInstructions: raw.poAlertCloseInstructions ?? DEFAULT_EXCEPTION_CONFIG.poAlertCloseInstructions,
   }
   return { config, save: (c: ExceptionConfig) => save(c), loaded }
 }

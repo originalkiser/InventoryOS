@@ -30,15 +30,22 @@ import { useConfigTab } from '@/modules/config/useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { DataTable } from '@/components/shared/DataTable'
+import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { Button, SbLoader, Modal, Input, Toggle } from '@/components/ui'
 import { EditSelect, EditText } from '@/components/shared/InlineCells'
 import { parseWeekday } from '@/lib/orderDay'
 import { nextDeliveryDate, daysBetween } from '@/modules/orders-v2/engine'
 import { EXCEPTION_STATUSES, DEFAULT_STATUS, type ExceptionConfig } from './exceptions'
+import { statusRowClass } from './ExceptionTable'
 import { PoAlertEmailModal } from './PoAlertEmailModal'
+import { PoAlertCloseModal, type PoCloseCandidate } from './PoAlertCloseModal'
 import { PO_ALERT_EMAIL_DEFAULT, PO_ALERT_EMAIL_TOKENS, type PoAlertEmailTemplate } from './poAlertEmail'
 import { format } from 'date-fns'
+
+const TABLE_KEY = 'exceptions.po_receipt_alerts'
+const DEFAULT_PINNED = ['shop']
 
 interface PoReceiptAlert {
   id: string
@@ -78,16 +85,19 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
   // comment for the 4-action-per-alert design and why it differs from that.
   const [emailTpl, saveEmailTpl] = useAppSetting<PoAlertEmailTemplate>('po_alert_email_tpl', PO_ALERT_EMAIL_DEFAULT)
   const [emailModalOpen, setEmailModalOpen] = useState(false)
+  const [emailAll, setEmailAll] = useState(false)
   const [templateModalOpen, setTemplateModalOpen] = useState(false)
+  const [columnManagerOpen, setColumnManagerOpen] = useState(false)
   const [bulkCloseDays, setBulkCloseDays] = useState(60)
-
-  async function bulkCloseOld() {
-    const targets = visibleRows.filter((r) => !r.status.toLowerCase().includes('closed') && (r.days_late ?? 0) >= bulkCloseDays)
-    if (!targets.length) { toast.error(`No open alerts at least ${bulkCloseDays} days late`); return }
-    if (!confirm(`Close ${targets.length} alert(s) at least ${bulkCloseDays} days late as "no receipt", without emailing?`)) return
-    const ok = await bulkPatch(targets.map((r) => ({ id: r.id, status: 'Closed', notes: r.notes || 'Closed — no receipt confirmed (too old to pursue further)' })))
-    if (ok) setClearSelectionToken((t) => t + 1)
-  }
+  // Direct feedback 2026-09-25: the old bulkCloseOld() instantly wrote to
+  // every matching row behind a plain confirm() — replaced by
+  // PoAlertCloseModal, a real review step (one PO at a time, click to
+  // toggle) instead of an all-or-nothing bulk write.
+  const [closeModalOpen, setCloseModalOpen] = useState(false)
+  const closeCandidates = useMemo(
+    () => visibleRows.filter((r) => !r.status.toLowerCase().includes('closed') && (r.days_late ?? 0) >= bulkCloseDays),
+    [visibleRows, bulkCloseDays],
+  )
 
   const shopLabel = (id: string | null) => (id ? (loc.fieldValue(id, 'shop_city') || loc.codeOf(id)) : '') || '—'
 
@@ -225,9 +235,42 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
     col.accessor('created_at', { header: 'Flagged', cell: (i) => dShort(i.getValue()) }),
   ], [col, loc, update])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(visibleRows, columns)
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(visibleRows, columns, {
+    persistKey: TABLE_KEY,
+    initialPageSize: 25,
+    initialColumnPinning: { left: DEFAULT_PINNED, right: [] },
+  })
+  useColumnPrefs(TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
+
+  const allColItems: ColItem[] = useMemo(
+    () => table.getAllLeafColumns().map((c) => ({ id: c.id, label: String(c.columnDef.header ?? c.id) })),
+    [table],
+  )
+  const shownOrder = useMemo(() => {
+    const ids = table.getAllLeafColumns().filter((c) => c.getIsVisible()).map((c) => c.id)
+    if (!columnOrder.length) return ids
+    const known = columnOrder.filter((id) => ids.includes(id))
+    return [...known, ...ids.filter((id) => !known.includes(id))]
+  }, [table, columnOrder])
+  function applyShownColumns(shown: string[]) {
+    setColumnOrder(shown)
+    const vis: Record<string, boolean> = {}
+    for (const c of allColItems) vis[c.id] = shown.includes(c.id)
+    table.setColumnVisibility(vis)
+  }
+  function resetColumns() {
+    setColumnOrder([])
+    table.setColumnVisibility({})
+    table.setColumnSizing({})
+    setColumnPinning({ left: DEFAULT_PINNED, right: [] })
+  }
 
   const selectedAlerts = useMemo(() => data.filter((r) => selectedIds.has(r.id)), [data, selectedIds])
+  // "Email All Open" — direct feedback 2026-09-25: the checkbox-select-then-
+  // Email-Selected flow existed but wasn't a discoverable way to actually
+  // START emailing (nothing was pre-selected on load). This is the default,
+  // always-visible entry point; Email Selected stays for a narrower scope.
+  const openAlerts = useMemo(() => visibleRows.filter((r) => !r.status.toLowerCase().includes('closed')), [visibleRows])
 
   if (!companyId) return null
 
@@ -242,6 +285,9 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <Button size="sm" variant="secondary" onClick={() => setTemplateModalOpen(true)}>Edit Email Template</Button>
+          <Button size="sm" disabled={!openAlerts.length} onClick={() => { setEmailAll(true); setEmailModalOpen(true) }}>
+            Email All Open ({openAlerts.length})
+          </Button>
           <Button size="sm" loading={checking} onClick={() => void checkNow()}>Check Now</Button>
         </div>
       </div>
@@ -258,7 +304,9 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
         <input type="number" min={1} value={bulkCloseDays} onChange={(e) => setBulkCloseDays(Math.max(1, Number(e.target.value) || 1))}
           className="w-14 bg-cream border border-navy/30 rounded px-1 py-0.5 text-center text-[11px] font-mono" />
         <span className="text-[11px] font-mono text-inky/70">+ days late</span>
-        <Button size="sm" variant="secondary" onClick={() => void bulkCloseOld()}>Close (No Receipt)</Button>
+        <Button size="sm" variant="secondary" disabled={!closeCandidates.length} onClick={() => setCloseModalOpen(true)}>
+          Close (No Receipt) ({closeCandidates.length})
+        </Button>
       </div>
 
       {loading ? (
@@ -273,26 +321,53 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
           clearSelectionToken={clearSelectionToken}
           onBulkDelete={removeMany}
           bulkDeleteNoun="alert"
-          actions={selectedIds.size > 0 ? (
+          hideColumnControl
+          getRowClassName={(r) => statusRowClass(r.status)}
+          actions={(
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="secondary" onClick={() => setEmailModalOpen(true)}>Email {selectedIds.size} Selected</Button>
-              <Button size="sm" variant="secondary" onClick={() => void closeSelected()}>Mark {selectedIds.size} Closed</Button>
+              <button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>
+              {selectedIds.size > 0 && (
+                <>
+                  <Button size="sm" variant="secondary" onClick={() => { setEmailAll(false); setEmailModalOpen(true) }}>Email {selectedIds.size} Selected</Button>
+                  <Button size="sm" variant="secondary" onClick={() => void closeSelected()}>Mark {selectedIds.size} Closed</Button>
+                </>
+              )}
             </div>
-          ) : undefined}
+          )}
         />
       )}
 
       <PoAlertEmailModal
         open={emailModalOpen}
         onClose={() => setEmailModalOpen(false)}
-        alerts={selectedAlerts}
+        alerts={emailAll ? openAlerts : selectedAlerts}
         template={emailTpl}
         onChanged={() => { refresh(); setClearSelectionToken((t) => t + 1) }}
+      />
+
+      <PoAlertCloseModal
+        open={closeModalOpen}
+        onClose={() => setCloseModalOpen(false)}
+        alerts={closeCandidates as PoCloseCandidate[]}
+        shopLabel={shopLabel}
+        instructions={config.poAlertCloseInstructions}
+        onChanged={() => refresh()}
       />
 
       <Modal open={templateModalOpen} onClose={() => setTemplateModalOpen(false)} title="Late PO Receipt Email Template" size="lg">
         <PoAlertTemplateEditor tpl={emailTpl} onSave={(t) => { saveEmailTpl(t); toast.success('Template saved') }} />
       </Modal>
+
+      <ColumnManagerModal
+        open={columnManagerOpen}
+        onClose={() => setColumnManagerOpen(false)}
+        all={allColItems.filter((c) => c.id !== 'select')}
+        shown={shownOrder.filter((id) => id !== 'select')}
+        onChange={applyShownColumns}
+        onReset={resetColumns}
+        pinned={columnPinning.left ?? []}
+        onPinChange={(left) => setColumnPinning({ left, right: [] })}
+      />
     </div>
   )
 }

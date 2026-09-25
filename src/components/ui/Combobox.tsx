@@ -15,6 +15,13 @@ interface ComboboxProps {
   allowCreate?: boolean
   onCreateOption?: (label: string) => Promise<ComboboxOption> | ComboboxOption
   error?: string
+  // Added 2026-09-25 for Exception Reporting's Area Manager cell — a
+  // smaller, denser trigger/panel matching this app's other inline table
+  // dropdowns (EditSelect's own text-xs), so more of a long name is
+  // readable in a narrow column instead of this component's normal
+  // text-sm form-field sizing. Purely visual — every existing caller
+  // (form fields elsewhere in the app) is unaffected by omitting it.
+  compact?: boolean
 }
 
 export function Combobox({
@@ -26,6 +33,7 @@ export function Combobox({
   allowCreate = false,
   onCreateOption,
   error,
+  compact = false,
 }: ComboboxProps) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -187,7 +195,8 @@ export function Combobox({
         aria-haspopup="listbox"
         tabIndex={0}
         className={[
-          'w-full bg-cream border rounded px-3 py-2 text-sm font-mono text-navy cursor-pointer flex items-center justify-between',
+          'w-full bg-cream border rounded cursor-pointer flex items-center justify-between',
+          compact ? 'px-1.5 py-1 text-xs font-mono' : 'px-3 py-2 text-sm font-mono',
           error
             ? 'border-red-500'
             : 'border-navy/30 focus-within:border-[#00e5ff]',
@@ -198,7 +207,7 @@ export function Combobox({
         <span className={`min-w-0 truncate ${value ? 'text-navy' : 'text-inky/70'}`}>
           {value ? selectedLabel : placeholder}
         </span>
-        <svg className="w-4 h-4 text-inky" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className={`text-inky flex-shrink-0 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </div>
@@ -227,7 +236,7 @@ export function Combobox({
               onClick={() => selectOption(opt)}
               onMouseEnter={() => setHighlightedIndex(idx)}
               className={[
-                'px-3 py-2 text-sm font-mono cursor-pointer whitespace-nowrap',
+                compact ? 'px-2 py-1.5 text-xs font-mono cursor-pointer whitespace-nowrap' : 'px-3 py-2 text-sm font-mono cursor-pointer whitespace-nowrap',
                 idx === highlightedIndex
                   ? 'bg-[#00e5ff]/10 text-inky'
                   : opt.value === value
