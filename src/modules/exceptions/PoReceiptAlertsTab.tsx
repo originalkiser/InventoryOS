@@ -28,13 +28,16 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useConfigTab } from '@/modules/config/useConfigTab'
 import { useLocations } from '@/hooks/useLocations'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { useTable } from '@/hooks/useTable'
 import { DataTable } from '@/components/shared/DataTable'
-import { Button, SbLoader } from '@/components/ui'
+import { Button, SbLoader, Modal, Input, Toggle } from '@/components/ui'
 import { EditSelect, EditText } from '@/components/shared/InlineCells'
 import { parseWeekday } from '@/lib/orderDay'
 import { nextDeliveryDate, daysBetween } from '@/modules/orders-v2/engine'
 import { EXCEPTION_STATUSES, DEFAULT_STATUS, type ExceptionConfig } from './exceptions'
+import { PoAlertEmailModal } from './PoAlertEmailModal'
+import { PO_ALERT_EMAIL_DEFAULT, PO_ALERT_EMAIL_TOKENS, type PoAlertEmailTemplate } from './poAlertEmail'
 import { format } from 'date-fns'
 
 interface PoReceiptAlert {
@@ -49,6 +52,9 @@ interface PoReceiptAlert {
   days_late: number | null
   status: string
   notes: string | null
+  excluded: boolean
+  exception_report_id: string | null
+  emailed_at: string | null
   created_at: string
   updated_at: string
 }
@@ -64,6 +70,24 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
   const [checking, setChecking] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [clearSelectionToken, setClearSelectionToken] = useState(0)
+  const [showExcluded, setShowExcluded] = useState(false)
+  const visibleRows = useMemo(() => (showExcluded ? data : data.filter((r) => !r.excluded)), [data, showExcluded])
+
+  // Email workflow — direct feedback 2026-09-25: mirrors Tank Monitors' own
+  // offline/low-VMI email flow, see PoAlertEmailModal.tsx's own header
+  // comment for the 4-action-per-alert design and why it differs from that.
+  const [emailTpl, saveEmailTpl] = useAppSetting<PoAlertEmailTemplate>('po_alert_email_tpl', PO_ALERT_EMAIL_DEFAULT)
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
+  const [templateModalOpen, setTemplateModalOpen] = useState(false)
+  const [bulkCloseDays, setBulkCloseDays] = useState(60)
+
+  async function bulkCloseOld() {
+    const targets = visibleRows.filter((r) => !r.status.toLowerCase().includes('closed') && (r.days_late ?? 0) >= bulkCloseDays)
+    if (!targets.length) { toast.error(`No open alerts at least ${bulkCloseDays} days late`); return }
+    if (!confirm(`Close ${targets.length} alert(s) at least ${bulkCloseDays} days late as "no receipt", without emailing?`)) return
+    const ok = await bulkPatch(targets.map((r) => ({ id: r.id, status: 'Closed', notes: r.notes || 'Closed — no receipt confirmed (too old to pursue further)' })))
+    if (ok) setClearSelectionToken((t) => t + 1)
+  }
 
   const shopLabel = (id: string | null) => (id ? (loc.fieldValue(id, 'shop_city') || loc.codeOf(id)) : '') || '—'
 
@@ -141,7 +165,8 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
         if (!expected) { skippedNoDate++; continue } // can't compute — never guess
 
         const daysLate = daysBetween(expected, today)
-        if (daysLate < config.poAlertDaysThreshold) continue
+        const threshold = config.poAlertDaysThreshold[po.supplier_name] ?? config.poAlertDaysThresholdDefault
+        if (daysLate < threshold) continue
 
         newAlerts.push({
           company_id: companyId, location_id: po.location_id, po_id: po.po_id, custom_po_id: po.custom_po_id,
@@ -194,10 +219,15 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
       header: 'Notes',
       cell: (i) => <EditText value={i.getValue()} onSave={(v) => update(i.row.original.id, { notes: v })} placeholder="Add a note…" />,
     }),
+    col.accessor('excluded', {
+      header: 'Excluded', cell: (i) => i.getValue() ? <span className="text-inky/50">Yes</span> : '—',
+    }),
     col.accessor('created_at', { header: 'Flagged', cell: (i) => dShort(i.getValue()) }),
   ], [col, loc, update])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns)
+  const { table, globalFilter, setGlobalFilter } = useTable(visibleRows, columns)
+
+  const selectedAlerts = useMemo(() => data.filter((r) => selectedIds.has(r.id)), [data, selectedIds])
 
   if (!companyId) return null
 
@@ -205,12 +235,30 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs font-body text-inky">
-          Open purchase orders ({enabledSuppliers.length ? enabledSuppliers.join(', ') : 'no supplier enabled'}) with no
-          receipt activity at least {config.poAlertDaysThreshold} day{config.poAlertDaysThreshold !== 1 ? 's' : ''} past
-          their expected delivery date. Turn suppliers on/off and set the day threshold in Settings. These alerts don't
-          count toward the sidebar badge.
+          Open purchase orders ({enabledSuppliers.length ? enabledSuppliers.map((s) => `${s} (${config.poAlertDaysThreshold[s] ?? config.poAlertDaysThresholdDefault}d)`).join(', ') : 'no supplier enabled'})
+          with no receipt activity past their own supplier's day threshold, checked against the expected delivery
+          date. Turn suppliers on/off and set each one's threshold in Settings. These alerts don't count toward the
+          sidebar badge.
         </p>
-        <Button size="sm" loading={checking} onClick={() => void checkNow()}>Check Now</Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant="secondary" onClick={() => setTemplateModalOpen(true)}>Edit Email Template</Button>
+          <Button size="sm" loading={checking} onClick={() => void checkNow()}>Check Now</Button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap rounded border border-navy/15 bg-navy/[0.03] px-2 py-1.5">
+        <label className="flex items-center gap-1.5 text-[11px] font-mono text-navy">
+          <Toggle checked={showExcluded} onChange={setShowExcluded} size="sm" color="cyan" />
+          Show excluded
+        </label>
+        <span className="text-inky/30">|</span>
+        <span className="text-[11px] font-mono text-inky/70">
+          Some old POs aren't worth emailing about — close them out directly:
+        </span>
+        <input type="number" min={1} value={bulkCloseDays} onChange={(e) => setBulkCloseDays(Math.max(1, Number(e.target.value) || 1))}
+          className="w-14 bg-cream border border-navy/30 rounded px-1 py-0.5 text-center text-[11px] font-mono" />
+        <span className="text-[11px] font-mono text-inky/70">+ days late</span>
+        <Button size="sm" variant="secondary" onClick={() => void bulkCloseOld()}>Close (No Receipt)</Button>
       </div>
 
       {loading ? (
@@ -225,9 +273,61 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
           clearSelectionToken={clearSelectionToken}
           onBulkDelete={removeMany}
           bulkDeleteNoun="alert"
-          actions={selectedIds.size > 0 ? <Button size="sm" variant="secondary" onClick={() => void closeSelected()}>Mark {selectedIds.size} Closed</Button> : undefined}
+          actions={selectedIds.size > 0 ? (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="secondary" onClick={() => setEmailModalOpen(true)}>Email {selectedIds.size} Selected</Button>
+              <Button size="sm" variant="secondary" onClick={() => void closeSelected()}>Mark {selectedIds.size} Closed</Button>
+            </div>
+          ) : undefined}
         />
       )}
+
+      <PoAlertEmailModal
+        open={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        alerts={selectedAlerts}
+        template={emailTpl}
+        onChanged={() => { refresh(); setClearSelectionToken((t) => t + 1) }}
+      />
+
+      <Modal open={templateModalOpen} onClose={() => setTemplateModalOpen(false)} title="Late PO Receipt Email Template" size="lg">
+        <PoAlertTemplateEditor tpl={emailTpl} onSave={(t) => { saveEmailTpl(t); toast.success('Template saved') }} />
+      </Modal>
+    </div>
+  )
+}
+
+function PoAlertTemplateEditor({ tpl, onSave }: { tpl: PoAlertEmailTemplate; onSave: (t: PoAlertEmailTemplate) => void }) {
+  const [subject, setSubject] = useState(tpl.subject)
+  const [to, setTo] = useState(tpl.to)
+  const [body, setBody] = useState(tpl.body)
+  const dirty = subject !== tpl.subject || to !== tpl.to || body !== tpl.body
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs font-mono text-inky/60">
+        Insert data fields with the tokens below — they're replaced per shop when a draft is generated.
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {PO_ALERT_EMAIL_TOKENS.map((t) => (
+          <span key={t.token} className="inline-flex items-center gap-1 rounded border border-navy/15 bg-navy/[0.03] px-2 py-0.5 text-[11px] font-mono text-navy" title={t.label}>
+            {`{{${t.token}}}`}
+          </span>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Input label="To" value={to} onChange={(e) => setTo(e.target.value)} />
+        <Input label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+      </div>
+      <div>
+        <label className="text-xs font-heading text-inky uppercase tracking-wide block mb-1">Body</label>
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={10}
+          className="w-full bg-cream dark:bg-[#0e2638] border border-navy/40 rounded px-3 py-2 text-sm font-mono text-navy dark:text-[#F2F1E6] focus:outline-none focus:ring-2 focus:ring-sky resize-y" />
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        {dirty && <span className="text-[10px] font-mono text-[#E67E22]">unsaved</span>}
+        <Button size="sm" disabled={!dirty} onClick={() => onSave({ subject, to, body })}>Save</Button>
+      </div>
     </div>
   )
 }

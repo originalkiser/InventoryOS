@@ -223,6 +223,19 @@ export function useRdReports() {
         today: new Date().toISOString().slice(0, 10),
       })
 
+      // For the not_received (Missing Receipt) case, reconcilePoActivity's
+      // own ReconciliationFinding carries no variances at all (there's
+      // nothing to compare against — the whole PO is unaccounted for), so
+      // Impacted Products below falls back to every product actually
+      // ordered on that PO, from historyLines directly (already in scope
+      // here, no reconciliation.ts change needed) — "not properly
+      // received" is true of the whole order in that case, not one line.
+      const productIdsByPo = new Map<string, string[]>()
+      for (const l of historyLines) {
+        if (!productIdsByPo.has(l.po_number)) productIdsByPo.set(l.po_number, [])
+        productIdsByPo.get(l.po_number)!.push(l.product_id)
+      }
+
       const { data: existingRows } = await sb().schema('inventory').from('exception_reports')
         .select('id, status, metadata').eq('company_id', companyId).eq('report_type', 'PO Match')
         .contains('metadata', { source: 'po_reconciliation_test' })
@@ -238,14 +251,32 @@ export function useRdReports() {
         if (existing && (existing.status ?? '').toLowerCase().includes('closed')) continue // don't reopen a manually-closed finding
         const shop = f.location_id ? loc.locations.find((l) => l.id === f.location_id) : undefined
         const issue = f.status === 'not_received' ? 'Missing Receipt' : 'Receipt <> Invoice'
+        // Direct feedback 2026-09-25: this used to lead with RelaDyne's own
+        // ProductCode (v.product_code) since that's the field the raw
+        // report/invoice rows are actually matched on — but that's not a
+        // product id anyone here recognizes at a glance. Leads with our own
+        // product_id now (always present on a ReconciliationVariance,
+        // unlike product_code which can be null when no vendor_parts match
+        // was found); the RelaDyne code still rides along in parens since
+        // it's genuinely useful for cross-checking against RelaDyne's own
+        // paperwork, just no longer the primary label.
         const details = f.status === 'not_received'
           ? `PO ${f.po_number} (ordered ${f.order_date}) has not been received — no matching invoice line and no Droptop receipt found.`
           : `PO ${f.po_number} (ordered ${f.order_date}) received quantities don't match ${f.source === 'invoice' ? 'the invoice' : 'Droptop receiving'}: ` +
-            f.variances.map((v) => `${v.product_code ?? v.product_id} ordered ${v.ordered.toFixed(1)}${v.unit === 'gal' ? ' gal' : ''}, received ${v.received.toFixed(1)}${v.unit === 'gal' ? ' gal' : ''}`).join('; ')
+            f.variances.map((v) => `${v.product_id}${v.product_code ? ` (RD: ${v.product_code})` : ''} ordered ${v.ordered.toFixed(1)}${v.unit === 'gal' ? ' gal' : ''}, received ${v.received.toFixed(1)}${v.unit === 'gal' ? ' gal' : ''}`).join('; ')
+        // Impacted Products — direct feedback 2026-09-25: this was never
+        // populated at all (metadata had no impacted_products key), so the
+        // column always read "No products" regardless of what the finding
+        // actually affected. Deduped, since more than one variance can name
+        // the same product_id in principle.
+        const impactedProducts = f.variances.length
+          ? [...new Set(f.variances.map((v) => v.product_id))]
+          : [...new Set(productIdsByPo.get(f.po_number) ?? [])]
         const row = {
           company_id: companyId, location_id: f.location_id, area_manager: shop?.area_manager ?? null,
           date_of_finding: new Date().toISOString().slice(0, 10), report_type: 'PO Match', issue, details,
-          status: 'Pending Shop/AM Response', metadata: { source: 'po_reconciliation_test', key, po_number: f.po_number },
+          status: 'Pending Shop/AM Response',
+          metadata: { source: 'po_reconciliation_test', key, po_number: f.po_number, impacted_products: impactedProducts },
         }
         if (existing) {
           await sb().schema('inventory').from('exception_reports').update(row).eq('id', existing.id)

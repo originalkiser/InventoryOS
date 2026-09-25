@@ -764,30 +764,41 @@ function SettingsView({ config, saveConfig, onImport, importing, clearAll }: {
       <Card><CardBody className="flex flex-col gap-3">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Late PO Receipt Alerts</h3>
         <p className="text-[11px] font-mono text-inky/60">
-          Flags a purchase order once it's gone this many days past its expected delivery date with no receipt
-          activity at all. Lives in its own "Late PO Receipts" tab (shown only while enabled) and does not count
-          toward the sidebar badge above.
+          Flags a purchase order once it's gone past its expected delivery date with no receipt activity at all, for
+          however many days that supplier's own threshold below allows. Lives in its own "Late PO Receipts" tab
+          (shown only while enabled) and does not count toward the sidebar badge above.
         </p>
         <Toggle checked={config.poAlertsEnabled} onChange={(v) => saveConfig({ ...config, poAlertsEnabled: v })}
           size="sm" color="cyan" label={config.poAlertsEnabled ? 'Enabled' : 'Disabled'} />
         <div className="flex items-center gap-2">
-          <span className="text-xs font-body text-inky">Flag after</span>
-          <input type="number" min={1} value={config.poAlertDaysThreshold}
-            onChange={(e) => saveConfig({ ...config, poAlertDaysThreshold: Math.max(1, Number(e.target.value) || 1) })}
+          <span className="text-xs font-body text-inky">Default threshold (any supplier not listed below)</span>
+          <input type="number" min={1} value={config.poAlertDaysThresholdDefault}
+            onChange={(e) => saveConfig({ ...config, poAlertDaysThresholdDefault: Math.max(1, Number(e.target.value) || 1) })}
             className={`${inputCls} w-16`} />
-          <span className="text-xs font-body text-inky">day(s) past the expected delivery date with no receipt activity.</span>
+          <span className="text-xs font-body text-inky">day(s).</span>
         </div>
         <div>
           <p className="text-[10px] font-mono text-inky/60 uppercase tracking-widest mb-1">Suppliers checked</p>
           {poSuppliers.length === 0 ? (
             <p className="text-xs font-mono text-inky/50">No supplier names found on synced purchase orders yet.</p>
           ) : (
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1.5">
               {poSuppliers.map((s) => (
-                <label key={s} className="flex items-center gap-2 text-xs font-mono text-navy">
-                  <Toggle checked={config.poAlertSuppliers[s] ?? false} onChange={(v) => setSupplierEnabled(s, v)} size="sm" color="cyan" />
-                  {s}
-                </label>
+                <div key={s} className="flex items-center gap-3 text-xs font-mono text-navy">
+                  <label className="flex items-center gap-2 w-40">
+                    <Toggle checked={config.poAlertSuppliers[s] ?? false} onChange={(v) => setSupplierEnabled(s, v)} size="sm" color="cyan" />
+                    {s}
+                  </label>
+                  <span className="text-inky/60">Flag after</span>
+                  <input type="number" min={1}
+                    value={config.poAlertDaysThreshold[s] ?? config.poAlertDaysThresholdDefault}
+                    onChange={(e) => saveConfig({
+                      ...config,
+                      poAlertDaysThreshold: { ...config.poAlertDaysThreshold, [s]: Math.max(1, Number(e.target.value) || 1) },
+                    })}
+                    className={`${inputCls} w-14`} disabled={!(config.poAlertSuppliers[s] ?? false)} />
+                  <span className="text-inky/60">day(s)</span>
+                </div>
               ))}
             </div>
           )}

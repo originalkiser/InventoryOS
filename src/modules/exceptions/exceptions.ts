@@ -65,12 +65,18 @@ export interface ExceptionConfig {
   staleDays: number
   bumpDays: number
   // Late PO Receipt Alerts (2026-09-25) — a purchase order from an enabled
-  // supplier with no receipt activity poAlertDaysThreshold days past its
-  // expected delivery date gets flagged. Deliberately its own toggle rather
-  // than being on by default — see PoReceiptAlertsTab.tsx's own header
-  // comment for why this lives in a separate table, not exception_reports.
+  // supplier with no receipt activity poAlertDaysThreshold[supplier] days
+  // past its expected delivery date gets flagged. Deliberately its own
+  // toggle rather than being on by default — see PoReceiptAlertsTab.tsx's
+  // own header comment for why this lives in a separate table, not
+  // exception_reports.
   poAlertsEnabled: boolean
-  poAlertDaysThreshold: number
+  // supplier_name -> day threshold — per-supplier, not one global number,
+  // per direct feedback 2026-09-25 (different suppliers have different
+  // real turnaround expectations). A supplier missing from this map falls
+  // back to poAlertDaysThresholdDefault below.
+  poAlertDaysThreshold: Record<string, number>
+  poAlertDaysThresholdDefault: number
   // supplier_name -> enabled. Only suppliers explicitly turned on here are
   // ever checked — RelaDyne starts on (the motivating case), everything
   // else (Valvoline included) starts off until turned on deliberately.
@@ -87,7 +93,8 @@ export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   staleDays: 3,
   bumpDays: 3,
   poAlertsEnabled: false,
-  poAlertDaysThreshold: 5,
+  poAlertDaysThreshold: { RelaDyne: 5 },
+  poAlertDaysThresholdDefault: 5,
   poAlertSuppliers: { RelaDyne: true, Valvoline: false },
 }
 
