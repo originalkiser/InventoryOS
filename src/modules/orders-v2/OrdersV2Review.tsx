@@ -22,7 +22,17 @@ import {
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty, dShort } from './shared'
+import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
 import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalendar } from './types'
+
+// New-table beta toggle (2026-09-25) — per-browser (localStorage), not a
+// company-wide setting: the whole point is testing OrdersV2ReviewTable.tsx
+// against real live orders without changing what anyone else sees, so it
+// defaults OFF and only flips for whoever explicitly turns it on here.
+const NEW_TABLE_KEY = 'ov2_review_new_table'
+function loadNewTablePref(): boolean {
+  try { return localStorage.getItem(NEW_TABLE_KEY) === '1' } catch { return false }
+}
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
@@ -219,6 +229,11 @@ export function OrdersV2Review() {
   // Main table column customize modal — hide/reorder, see MAIN_COLUMNS.
   const [columnPrefs, setColumnPrefs] = useState(loadColumnPrefs)
   const [columnModalOpen, setColumnModalOpen] = useState(false)
+  const [useNewTable, setUseNewTableState] = useState(loadNewTablePref)
+  function setUseNewTable(v: boolean) {
+    setUseNewTableState(v)
+    try { localStorage.setItem(NEW_TABLE_KEY, v ? '1' : '0') } catch { /* ignore */ }
+  }
   const visibleColumnIds = useMemo(
     () => columnPrefs.order.filter((id) => !columnPrefs.hidden.includes(id)),
     [columnPrefs],
@@ -760,6 +775,11 @@ export function OrdersV2Review() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <label className="flex items-center gap-1.5 text-[11px] font-mono text-navy border border-sky/40 bg-sky/10 rounded px-2 py-1"
+            title="Try the new sortable/filterable/resizable table alongside the existing one — off by default, only affects your own browser.">
+            <Toggle checked={useNewTable} onChange={setUseNewTable} size="sm" color="cyan" />
+            New Table (Beta)
+          </label>
           <Button size="sm" variant="secondary" onClick={() => setExceptionsModalOpen(true)}>
             Product Exceptions
           </Button>
@@ -840,7 +860,12 @@ export function OrdersV2Review() {
       )}
 
       <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
-        <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-56" />
+        {/* The new table has its own built-in search + Manage Columns
+            (DataTable's own toolbar) — shown here only for the old table to
+            avoid two redundant search boxes / column controls on screen. */}
+        {!useNewTable && (
+          <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-56" />
+        )}
         <label className="flex items-center gap-2 text-xs font-mono text-inky">
           <Toggle checked={showVmi} onChange={setShowVmi} size="sm" color="cyan" />
           Show VMI / keepfill
@@ -873,12 +898,14 @@ export function OrdersV2Review() {
             </span>
           )}
         </span>
-        <button
-          onClick={() => setColumnModalOpen(true)}
-          title="Show/hide and reorder this table's columns"
-          className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy">
-          <Settings className="w-3 h-3" /> Customize Columns
-        </button>
+        {!useNewTable && (
+          <button
+            onClick={() => setColumnModalOpen(true)}
+            title="Show/hide and reorder this table's columns"
+            className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy">
+            <Settings className="w-3 h-3" /> Customize Columns
+          </button>
+        )}
         <span className="ml-auto text-xs font-mono text-navy">
           Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
         </span>
@@ -935,7 +962,37 @@ export function OrdersV2Review() {
         </div>
       )}
 
-      {lines.length > 0 && (
+      {lines.length > 0 && useNewTable && (
+        <OrdersV2ReviewTable
+          lines={visible}
+          draft={draft}
+          shopLabel={shopLabel}
+          ozProductIds={ozProductIds}
+          lastOrderedInfo={lastOrderedInfo}
+          deliveryFor={deliveryFor}
+          describeSchedule={describeSchedule}
+          liveFlags={liveFlags}
+          dosAfterColorClass={dosAfterColorClass}
+          groupMinimumStatus={groupMinimumStatus}
+          patchQty={patchQty}
+          exceptionFor={exceptionFor}
+          onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+          decidePoOverride={decidePoOverride}
+          decidePoExclude={decidePoExclude}
+          decidePoCombine={decidePoCombine}
+          includeToggle={(l) => patchLine(l.id, { included: !l.included })}
+          onRemoveLine={removeLine}
+          expanded={expanded}
+          onToggleExpand={(locId) => setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })}
+          shopRows={shopRows}
+          onAddConfiguredProduct={addConfiguredProduct}
+          showConfigVmi={showConfigVmi}
+          leadDaysFor={leadDaysFor}
+          inputByLineKey={inputByLineKey}
+        />
+      )}
+
+      {lines.length > 0 && !useNewTable && (
         <div className="overflow-auto rounded border border-navy/30 max-h-[calc(100vh-22rem)]">
           <table className="w-full text-xs font-mono">
             <thead className="sticky top-0 z-10">
@@ -1288,7 +1345,7 @@ function ColumnCustomizeModal({ open, onClose, columns, prefs, onChange, default
  * "why isn't this shop ordering more" and "why isn't this shop ordering
  * anything" use the exact same product list, columns, and add-a-line
  * behavior. */
-function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays }: {
+export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays }: {
   rows: { input?: GenerationInput; line?: DraftLineRow }[]
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
@@ -1461,7 +1518,7 @@ export function Flags({ flags }: { flags: LineFlag[] }) {
  * Combine, whichever's already chosen (if any) highlighted. Never picks a
  * default on its own; the line just sits at its normal suggested qty until
  * someone decides. */
-function PoDecisionButtons({ line, onOverride, onExclude, onCombine }: {
+export function PoDecisionButtons({ line, onOverride, onExclude, onCombine }: {
   line: DraftLineRow
   onOverride: (l: DraftLineRow) => void
   onExclude: (l: DraftLineRow) => void

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { flexRender, type Row, type Table as TTable } from '@tanstack/react-table'
 import { Button, Input, Modal, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
@@ -57,6 +57,17 @@ interface DataTableProps<T> {
    * the tint instead of being hidden under its own opaque background.
    */
   getRowClassName?: (original: T) => string
+  /**
+   * Renders an extra full-width row directly below a given row — a
+   * "click the shop name to see everything configured for it" sub-table,
+   * a detail panel, etc. (Orders v2 Review's own shop-expand row is the
+   * first real use, 2026-09-25.) Return null/undefined for a row that
+   * isn't expanded; DataTable doesn't own expand/collapse state itself —
+   * the caller decides per-row (typically from its own `Set<string>` of
+   * expanded ids) and this just renders whatever comes back, same
+   * "controlled component" shape as everything else here.
+   */
+  expandedRowRender?: (original: T) => React.ReactNode
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -151,6 +162,7 @@ export function DataTable<T>({
   dangerZone,
   onRowClick,
   getRowClassName,
+  expandedRowRender,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -545,9 +557,10 @@ export function DataTable<T>({
                 // as it already won over the plain stripe.
                 const tint = getRowClassName?.(row.original) ?? ''
                 const bandClass = selected ? 'bg-sky/15' : tint || (i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]')
+                const expandedContent = expandedRowRender?.(row.original)
                 return (
+                  <Fragment key={row.id}>
                   <tr
-                    key={row.id}
                     onClick={onRowClick ? (e) => {
                       // Found live 2026-09-25 building Exception Reporting's
                       // own row-click-to-edit: this guard only ever excluded
@@ -613,6 +626,14 @@ export function DataTable<T>({
                       )
                     })}
                   </tr>
+                  {expandedContent && (
+                    <tr>
+                      <td colSpan={table.getVisibleLeafColumns().length + 1} className="p-0 border-b border-inky/10">
+                        {expandedContent}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })
             )}
