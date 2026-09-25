@@ -14,7 +14,7 @@ import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
-import { isValvoline } from '@/modules/orders-v2/useOrdersV2'
+import { isValvoline, isReladyne } from '@/modules/orders-v2/useOrdersV2'
 import { resolveScheduleDescription } from '@/modules/orders-v2/engine'
 import type { DeliverySchedule } from '@/modules/orders-v2/types'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
@@ -293,6 +293,9 @@ function exceptionCellLines(exc: ConfigRow['exception']): string[] {
   return lines
 }
 
+function isVmiRow(r: ConfigRow): boolean {
+  return String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes'
+}
 const CONFIG_FIXED: Col<ConfigRow>[] = [
   // Part/UOM are deliberately left unconstrained (no width, plus the shared
   // whitespace-nowrap in OrderConfigBlock's <td>/<th> below) — a real part
@@ -313,7 +316,7 @@ const CONFIG_FIXED: Col<ConfigRow>[] = [
     sort: (r) => exceptionCellLines(r.exception).join(' ') || null,
   },
   { id: 'max', label: 'Max', align: 'right', width: 'w-16', render: (r) => num(r.order_limit), sort: (r) => r.order_limit },
-  { id: 'vmi', label: 'VMI', align: 'center', width: 'w-14', render: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes' ? 1 : 0) },
+  { id: 'vmi', label: 'VMI', align: 'center', width: 'w-14', render: (r) => (isVmiRow(r) ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (isVmiRow(r) ? 1 : 0) },
 ]
 // Metadata keys that are plumbing, not config attributes — never shown as columns.
 const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', 'vendor_name', 'location_label'])
@@ -1145,7 +1148,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
 
   // Sidebar fields — resolved from the declarative SIDEBAR_FIELDS array
   // above, then ordered/filtered by the user's own persisted layout (drag
-  // reorder + hide, cross-device — see "Manage Fields" below). A field
+  // reorder + hide, cross-device — see "Shop Details Fields" under the page's
+  // Settings gear). A field
   // whose render() returns null (e.g. NC Inspection Station outside NC) is
   // omitted entirely, same as the old array literal's own conditional spread.
   const sidebarFieldsAll: ResolvedSidebarField[] = location ? SIDEBAR_FIELDS
@@ -1352,8 +1356,17 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
 
       {shopId && customizeOpen && (
         <Card>
-          <CardBody className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <CardBody className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <CheckGroup title="Tank monitor columns" items={TANK_COLS.map((c) => ({ id: c.id, label: c.label }))} hidden={prefs.tank} onToggle={toggleTankHidden} />
+            {/* Manage Columns for the other two tables used to be their own
+                buttons next to each table's header — consolidated here so
+                every column/field customization on this page lives behind
+                one Settings entry point. */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Manage Columns</span>
+              <button onClick={() => setSidebarManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Shop Details Fields</button>
+              <button onClick={() => setConfigManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Order Config Columns</button>
+            </div>
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Options</span>
               <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer">
@@ -1381,7 +1394,6 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                 {!embedded && <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Change shop…" />}
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop Details</span>
-                  <button onClick={() => setSidebarManagerOpen(true)} className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Manage Fields</button>
                 </div>
                 <dl className="flex flex-col gap-1.5">
                   {visibleSidebar.map((f) => (
@@ -1535,17 +1547,23 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
             ) : (
               <div className="flex flex-col gap-4">
-                <div className="flex items-center gap-2 self-start">
-                  <span className="text-xs font-mono text-navy uppercase tracking-wide">Order Configuration</span>
-                  <button onClick={() => setConfigManagerOpen(true)} className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Manage Columns</button>
+                <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">Order Configuration</span>
+                {/* w-fit on this wrapper (not each Card) is what makes every
+                    vendor's card share one common width — the widest table's
+                    natural size — instead of each shrinking to its own,
+                    independently-narrower content (RelaDyne vs. Valvoline
+                    used to visibly misalign). Each Card below stretches to
+                    fill this shrink-to-fit container via plain block sizing;
+                    the container itself sizes to the widest child. */}
+                <div className="w-fit max-w-full flex flex-col gap-4">
+                  {configsByVendor.map(([vendor, rows]) => (
+                    <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} order={configShownIds} sizing={configLayout.sizing}
+                      onResize={handleConfigResize}
+                      onOpenConfig={() => navigate('/config?tab=order-config')}
+                      onExceptionClick={setExceptionModalRow}
+                    />
+                  ))}
                 </div>
-                {configsByVendor.map(([vendor, rows]) => (
-                  <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} order={configShownIds} sizing={configLayout.sizing}
-                    onResize={handleConfigResize}
-                    onOpenConfig={() => navigate('/config?tab=order-config')}
-                    onExceptionClick={setExceptionModalRow}
-                  />
-                ))}
               </div>
             )}
           </div>
@@ -1919,9 +1937,15 @@ function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig,
   // as its own callout since it's a different source/cadence than the order
   // config rows themselves.
   const usageUpdated = useMemo(() => lastUpdated(rows.map((r) => r.usage).filter(Boolean) as any[], ['updated_at']), [rows])
+  // VMI row highlight — RelaDyne only for now (explicit ask), so a shop's
+  // VMI status stays visible even if the VMI column itself is hidden via
+  // Manage Columns. Shown as a legend rather than a header label since it's
+  // a row-level cue, not a column.
+  const showVmiLegend = isReladyne(vendor)
+  const vmiCount = useMemo(() => rows.filter(isVmiRow).length, [rows])
 
   return (
-    <Card className="w-fit max-w-full">
+    <Card className="w-full">
       <CardBody className="flex flex-col gap-2">
         <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
           {vendor} Order Config ({rows.length})
@@ -1935,9 +1959,15 @@ function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig,
               <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
             </button>
           )}
+          {showVmiLegend && (
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-mono text-inky/70">
+              <span className="w-2.5 h-2.5 rounded-sm bg-sky/40 border border-sky" />
+              Color = VMI ({vmiCount} Product{vmiCount === 1 ? '' : 's'})
+            </span>
+          )}
         </div>
         {columns.length === 0 ? (
-          <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Manage Columns.</p>
+          <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Settings → Manage Columns.</p>
         ) : (
           <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
             <table className="text-xs font-mono table-fixed">
@@ -1957,8 +1987,10 @@ function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig,
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((r) => (
-                  <tr key={r.id} className="border-b border-navy/20">
+                {sortedRows.map((r) => {
+                  const rowIsVmi = showVmiLegend && isVmiRow(r)
+                  return (
+                  <tr key={r.id} className={`border-b border-navy/20 ${rowIsVmi ? 'bg-sky/10' : ''}`}>
                     {columns.map((c) => {
                       const w = configColWidth(c.id, sizing)
                       return c.id === 'exception' ? (
@@ -1975,7 +2007,8 @@ function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig,
                       )
                     })}
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
