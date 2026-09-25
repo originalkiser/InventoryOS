@@ -329,6 +329,42 @@ export function useDraftAggregates(draftIds: string[]) {
   return aggregates
 }
 
+/**
+ * Insert a batch of generated lines onto a draft (chunked, 500/insert).
+ * Returns an error message on failure, `null` on success. Shared by
+ * useDraft's replaceLines (a fresh generation run, called after deleting
+ * the draft's existing lines) and the Order Config tab's "Start Ad Hoc
+ * Order" modal (which builds a draft's very first lines locally in the
+ * modal, before any draft row exists to load lines from at all).
+ */
+export async function insertGeneratedLines(
+  companyId: string, draftId: string,
+  generated: (GeneratedLine & { dos_after_delivery?: number | null })[],
+): Promise<string | null> {
+  // JSON has no Infinity/NaN — both serialise to null, which then trips the
+  // NOT NULL columns. Numbers are pinned here so a bad figure surfaces as a
+  // zero to fix in review rather than a failed insert.
+  const numOr = (v: unknown, fallback: number | null) =>
+    (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
+
+  const payload = generated.map((l) => ({
+    company_id: companyId, draft_id: draftId,
+    location_id: l.location_id, product_id: l.product_id, order_type: l.order_type, uom: l.uom,
+    system_qty: numOr(l.system_qty, 0), qty: numOr(l.qty, 0), is_override: false, included: l.included,
+    unit_cost: numOr(l.unit_cost, null), on_hand: numOr(l.on_hand, null), daily_usage: numOr(l.daily_usage, null),
+    dos_before: numOr(l.dos_before, null), dos_after: numOr(l.dos_after, null),
+    dos_after_delivery: numOr(l.dos_after_delivery, null),
+    max_capacity_gallons: numOr(l.max_capacity_gallons, null), quarts_per_unit: numOr(l.quarts_per_unit, null), flags: l.flags,
+    added_by_smoothing: l.added_by_smoothing, triggered_smoothing: l.triggered_smoothing, note: l.note ?? null,
+  }))
+  const CHUNK = 500
+  for (let i = 0; i < payload.length; i += CHUNK) {
+    const { error } = await sb().schema('inventory').from('ov2_order_draft_lines').insert(payload.slice(i, i + CHUNK))
+    if (error) return error.message
+  }
+  return null
+}
+
 // ── Single draft (+ lines) ──────────────────────────────────────────────
 
 export function useDraft(draftId: string | null) {
@@ -355,27 +391,8 @@ export function useDraft(draftId: string | null) {
   async function replaceLines(generated: (GeneratedLine & { dos_after_delivery?: number | null })[]) {
     if (!companyId || !draftId) return
     await sb().schema('inventory').from('ov2_order_draft_lines').delete().eq('draft_id', draftId)
-    // JSON has no Infinity/NaN — both serialise to null, which then trips the
-    // NOT NULL columns. Numbers are pinned here so a bad figure surfaces as a
-    // zero to fix in review rather than a failed insert.
-    const numOr = (v: unknown, fallback: number | null) =>
-      (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
-
-    const payload = generated.map((l) => ({
-      company_id: companyId, draft_id: draftId,
-      location_id: l.location_id, product_id: l.product_id, order_type: l.order_type, uom: l.uom,
-      system_qty: numOr(l.system_qty, 0), qty: numOr(l.qty, 0), is_override: false, included: l.included,
-      unit_cost: numOr(l.unit_cost, null), on_hand: numOr(l.on_hand, null), daily_usage: numOr(l.daily_usage, null),
-      dos_before: numOr(l.dos_before, null), dos_after: numOr(l.dos_after, null),
-      dos_after_delivery: numOr(l.dos_after_delivery, null),
-      max_capacity_gallons: numOr(l.max_capacity_gallons, null), quarts_per_unit: numOr(l.quarts_per_unit, null), flags: l.flags,
-      added_by_smoothing: l.added_by_smoothing, triggered_smoothing: l.triggered_smoothing, note: l.note ?? null,
-    }))
-    const CHUNK = 500
-    for (let i = 0; i < payload.length; i += CHUNK) {
-      const { error } = await sb().schema('inventory').from('ov2_order_draft_lines').insert(payload.slice(i, i + CHUNK))
-      if (error) { toast.error(error.message); return }
-    }
+    const err = await insertGeneratedLines(companyId, draftId, generated)
+    if (err) { toast.error(err); return }
     await load()
   }
 

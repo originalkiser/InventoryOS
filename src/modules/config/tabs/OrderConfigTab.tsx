@@ -17,6 +17,7 @@ import { useTable } from '@/hooks/useTable'
 import { mappedValue } from '@/lib/columnTransform'
 import type { LocationOrderConfig, Vendor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
+import { StartAdHocOrderModal } from './StartAdHocOrderModal'
 
 const NUM_FIELDS = ['capacity', 'order_trigger', 'order_limit']
 
@@ -62,6 +63,7 @@ export function OrderConfigTab() {
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
+  const [adHocOpen, setAdHocOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   // "Update changes only" imports pause here for a live-recomputing review —
   // reselecting the vendor updates the match counts immediately, since it's
@@ -346,9 +348,12 @@ export function OrderConfigTab() {
             <Button size="sm" variant="secondary" onClick={openMassEdit}>Mass Edit {selectedIds.size} selected</Button>
           )}
           <Button size="sm" variant="secondary" onClick={() => setColumnsOpen(true)}>Manage Columns</Button>
+          <Button size="sm" variant="secondary" onClick={() => setAdHocOpen(true)}>Start Ad Hoc Order</Button>
           <Button size="sm" onClick={openAdd}>+ Add Config</Button>
         </>}
       />
+
+      <StartAdHocOrderModal open={adHocOpen} onClose={() => setAdHocOpen(false)} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="flex flex-col gap-3">
