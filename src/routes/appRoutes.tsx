@@ -12,6 +12,7 @@
 import { Navigate, Route } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import { SbLoader } from '@/components/ui'
 import { DashboardPage } from '@/pages/Dashboard'
@@ -77,14 +78,22 @@ function SmartRedirect() {
   const { profile } = useAuthStore()
   const allowedSections = useDeptAccess()
   const isDeptUser = (profile?.role as string) === 'department_user'
+  // "Set as Home Page" (right-click a sidebar item, Sidebar.tsx) — checked
+  // before the department-based fallback below, so it wins regardless of
+  // role. Waiting on `homeLoaded` (not just falling through to /dashboard
+  // first) avoids a visible flash-then-redirect on a device that hasn't
+  // cached this pref locally yet.
+  const [homePage, , homeLoaded] = useProfilePref<string | null>('home_page', null)
 
-  if (isDeptUser && allowedSections === null) {
+  if ((isDeptUser && allowedSections === null) || !homeLoaded) {
     return (
       <div className="min-h-screen bg-cream flex items-center justify-center">
         <SbLoader />
       </div>
     )
   }
+
+  if (homePage) return <Navigate to={homePage} replace />
 
   if (isDeptUser && allowedSections) {
     for (const [slug, route] of Object.entries(DEPT_FIRST_ROUTE)) {

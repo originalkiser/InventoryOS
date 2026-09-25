@@ -20,6 +20,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useSidebarPrefs } from '@/hooks/useSidebarPrefs'
@@ -34,7 +35,7 @@ import {
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
   Database, Users, AlertTriangle, MessageSquare, Lightbulb,
   CheckCircle2, FileText, MapPin, GripVertical, ChevronRight,
-  ChevronsLeft, ChevronsRight, Pin, Car, SlidersHorizontal,
+  ChevronsLeft, ChevronsRight, Pin, Car, SlidersHorizontal, Home,
 } from 'lucide-react'
 import { BiRuler, BiSpreadsheet, BiAbacus, BiCommentError, BiUserVoice } from 'react-icons/bi'
 import { GrDatabase, GrMap } from 'react-icons/gr'
@@ -230,13 +231,19 @@ interface RearrangeCtxValue {
 const RearrangeCtx = createContext<RearrangeCtxValue>({ rearranging: false, openMenu: () => {}, openSectionMenu: () => {} })
 
 function SidebarContextMenu({
-  x, y, isFavorite, onPin, onRearrange, onClose,
+  x, y, isFavorite, onPin, isHome, onSetHome, onRearrange, onClose,
 }: {
   x: number
   y: number
   isFavorite?: boolean
   /** Omitted for a section header's menu — Pin isn't offered there. */
   onPin?: () => void
+  /** Whether this item's own route is the current home page — toggles the
+   * button between "Set as Home Page" and "Remove as Home Page". */
+  isHome?: boolean
+  /** Omitted for a section header's menu (and for a pure-label section with
+   * no `to` of its own) — same reasoning as onPin. */
+  onSetHome?: () => void
   onRearrange: () => void
   onClose: () => void
 }) {
@@ -273,6 +280,15 @@ function SidebarContextMenu({
         >
           <Pin className="w-3.5 h-3.5" fill={isFavorite ? 'currentColor' : 'none'} />
           {isFavorite ? 'Unpin' : 'Pin to top'}
+        </button>
+      )}
+      {onSetHome && (
+        <button
+          onClick={onSetHome}
+          className="w-full flex items-center gap-2 text-left px-3 py-2 text-xs text-chrome-fg/80 hover:bg-chrome-fg/10 hover:text-chrome-fg transition-colors"
+        >
+          <Home className="w-3.5 h-3.5" fill={isHome ? 'currentColor' : 'none'} />
+          {isHome ? 'Remove as Home Page' : 'Set as Home Page'}
         </button>
       )}
       <button
@@ -1153,6 +1169,10 @@ function ExpandedSidebar({
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
   const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
+  // "Set as Home Page" (2026-09-25 ask) — read by SmartRedirect (appRoutes.tsx)
+  // on the bare "/" route, so it's the page the app opens to. Same
+  // cross-device profile-prefs mechanism as everything else here.
+  const [homePage, setHomePage] = useProfilePref<string | null>('home_page', null)
 
   const {
     sectionOrder,
@@ -1281,6 +1301,13 @@ function ExpandedSidebar({
           y={menu.y}
           isFavorite={menu.isFavorite}
           onPin={menu.onToggleFavorite ? () => { menu.onToggleFavorite!(menu.item!.key); setMenu(null) } : undefined}
+          isHome={!!menu.item?.to && menu.item.to === homePage}
+          onSetHome={menu.item?.to ? () => {
+            const path = menu.item!.to!
+            if (homePage === path) { setHomePage(null); toast.success('Home page removed') }
+            else { setHomePage(path); toast.success(`"${menu.item!.label}" set as home page`) }
+            setMenu(null)
+          } : undefined}
           onRearrange={() => { setRearranging(true); setMenu(null) }}
           onClose={() => setMenu(null)}
         />
