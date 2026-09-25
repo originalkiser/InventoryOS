@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Card, CardBody, Input, SbLoader, Select } from '@/components/ui'
+import { Button, Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
 import { useOrderSettings } from './useOrdersV2'
 import { VendorRulesCard } from './VendorRulesCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
@@ -57,10 +57,22 @@ export function OrdersV2SettingsBody() {
         </div>
         <p className="text-[11px] font-mono text-inky/60">
           Max is a <strong>soft</strong> ceiling — an order may exceed it when a minimum or the shop's usage demands
-          it, and those lines are flagged rather than blocked. A product's max capacity is the only hard limit.
+          it, and those lines are flagged rather than blocked. A product's max capacity is otherwise the one hard
+          limit — see the toggle below for the one deliberate exception to that.
         </p>
         {numField('skip_order_if_dos_over', 'Only smooth in products under this DOS',
           'Smoothing guard only — a product above this is never pulled onto an order just to hit a minimum. It never stops a product that is genuinely due.')}
+        <label className="flex items-center gap-2 text-xs font-mono text-inky">
+          <Toggle checked={draft.allow_exceed_capacity_for_dos_target}
+            onChange={(v) => setDraft((d) => ({ ...d, allow_exceed_capacity_for_dos_target: v }))} size="sm" color="cyan" />
+          Allow ordering over capacity to reach the Target days of supply
+        </label>
+        <p className="text-[10px] font-mono text-inky/50">
+          Off by default. When on, a line whose only obstacle to reaching Target is its configured capacity orders
+          the full amount anyway instead of clamping to capacity — flagged "Over capacity: DOS target" on Review/Final
+          Review so the amount ordered can be verified. Per-product, case-type, and dollar order minimums still never
+          exceed capacity either way.
+        </p>
       </CardBody></Card>
 
       <Card><CardBody className="flex flex-col gap-3">

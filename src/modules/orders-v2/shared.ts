@@ -68,6 +68,7 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   po_decision_exclude: { label: 'PO: excluded', tone: 'sky', title: 'Decided the open PO already covers this — excluded from the order' },
   po_decision_combine: { label: 'PO: combined', tone: 'sky', title: 'Decided to factor the open PO\'s outstanding quantity into on-hand and re-target the order quantity' },
   rounded_to_bulk_minimum: { label: 'Rounded: bulk min', tone: 'sky', title: 'Raised to the bulk per-product minimum (a full drum) — see the note on this line for the real calculated amount' },
+  exceeded_capacity_for_dos_target: { label: 'Over capacity: DOS target', tone: 'orange', title: 'Ordered past this product\'s configured capacity to reach the target days-of-supply — see the note on this line for the real numbers' },
 }
 
 export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {

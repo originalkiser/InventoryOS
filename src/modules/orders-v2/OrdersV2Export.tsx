@@ -18,7 +18,7 @@ import type { OrderType } from './types'
 // Fields a source/composite column can reference.
 export const EXPORT_FIELDS = [
   'po_number', 'shop_number', 'shop_name', 'product_id', 'product_base', 'vendor_part_number', 'vendor_description',
-  'uom', 'uom_code', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor', 'weekday',
+  'uom', 'uom_code', 'package_type', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor', 'weekday',
   'line_number', 'account_number',
 ] as const
 
@@ -26,7 +26,15 @@ export const EXPORT_FIELDS = [
 // this app's own internal uom values — Valvoline's own portal specifically
 // wants "BX" for a bay box and "DR" for a drum. Case/bulk aren't currently
 // asked for explicitly; given a reasonable abbreviation here rather than
-// left blank, adjust if Valvoline's portal expects something else.
+// left blank, adjust if Valvoline's portal expects something else. Also
+// backs the separate `package_type` export field below (2026-09-24 ask,
+// worded against the real DB column name `vendor_parts`/`global_products`
+// use for this concept, package_type — Orders v2 itself calls the same
+// value `uom` internally) — deliberately its own EXPORT_FIELDS entry
+// rather than changing what the existing `uom`/`uom_code` fields output,
+// since a saved vendor template may already reference either of those and
+// this is purely additive. Display elsewhere (Review, Final Review, config
+// tabs) is untouched — those keep using UOM_LABELS ("Bay Box"/"Drum").
 const UOM_CODES: Record<string, string> = { bay_box: 'BX', drum: 'DR', case: 'CS', bulk: 'BLK' }
 
 // Strips a trailing packaging-variant suffix (e.g. "BB" bay box, "D" drum,
@@ -214,6 +222,7 @@ export function OrdersV2Export() {
       vendor_description: vp?.description ?? '',
       uom: l.uom ?? '',
       uom_code: UOM_CODES[(l.uom ?? '').toLowerCase()] ?? (l.uom ?? '').toUpperCase(),
+      package_type: UOM_CODES[(l.uom ?? '').toLowerCase()] ?? (l.uom ?? '').toUpperCase(),
       qty: Number(l.qty),
       unit_cost: Number(l.unit_cost ?? 0),
       line_total: Number(l.qty) * Number(l.unit_cost ?? 0),
@@ -257,7 +266,6 @@ export function OrdersV2Export() {
 
   function download() {
     if (!included.length) { toast.error('Nothing to export — every line is excluded or zero'); return }
-    const headers = tpl.columns.map((c) => c.header)
     // Some vendor upload portals (Valvoline) reject a file over a fixed
     // line count — split into sequentially-numbered files instead of one.
     // A single file (the common case) keeps its plain, unsuffixed name so
@@ -266,18 +274,26 @@ export function OrdersV2Export() {
     const chunks = maxRows
       ? Array.from({ length: Math.ceil(rows.length / maxRows) }, (_, i) => rows.slice(i * maxRows, (i + 1) * maxRows))
       : [rows]
+    // A row on its own has no way to say which of the N files it landed in
+    // once a template's own row limit actually splits the export — append a
+    // trailing "File #" column carrying the chunk's 1-based file number in
+    // that case. A no-op (no extra column at all) when the export stays one
+    // file, which is the common case and shouldn't gain a pointless column.
+    const splitting = chunks.length > 1
+    const headers = splitting ? [...tpl.columns.map((c) => c.header), 'File #'] : tpl.columns.map((c) => c.header)
 
     chunks.forEach((chunkRows, i) => {
-      const suffix = chunks.length > 1 ? `-${i + 1}` : ''
+      const suffix = splitting ? `-${i + 1}` : ''
+      const outRows = splitting ? chunkRows.map((r) => [...r, i + 1]) : chunkRows
       if (tpl.format === 'csv') {
         const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
-        const csv = [headers, ...chunkRows].map((r) => r.map(esc).join(',')).join('\n')
+        const csv = [headers, ...outRows].map((r) => r.map(esc).join(',')).join('\n')
         // Staggered so the browser doesn't treat several downloads fired
         // synchronously from one click as a batch to block/prompt about.
         setTimeout(() => triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileName}${suffix}.csv`), i * 150)
       } else {
         const wb = XLSX.utils.book_new()
-        const ws = XLSX.utils.aoa_to_sheet([headers, ...chunkRows])
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...outRows])
         XLSX.utils.book_append_sheet(wb, ws, sheetName)
         const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
         setTimeout(() => triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileName}${suffix}.xlsx`), i * 150)
@@ -442,7 +458,7 @@ export function OrdersV2Export() {
           />
           <span className="text-[10px] font-mono text-inky/50">
             {fileCount > 1
-              ? `→ ${fileCount} files (${fileName}-1.${tpl.format} … ${fileName}-${fileCount}.${tpl.format})`
+              ? `→ ${fileCount} files (${fileName}-1.${tpl.format} … ${fileName}-${fileCount}.${tpl.format}), each with a trailing "File #" column`
               : 'Exports as a single file at the current line count'}
           </span>
         </CardBody></Card>

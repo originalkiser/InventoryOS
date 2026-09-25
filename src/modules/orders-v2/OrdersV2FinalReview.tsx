@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Copy, Download } from 'lucide-react'
+import { Copy, Download, Settings } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { Button, Card, CardBody, Input, Modal } from '@/components/ui'
+import { createColumnHelper } from '@tanstack/react-table'
+import { Button, Card, CardBody, Modal, Toggle } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
+import { DataTable } from '@/components/shared/DataTable'
+import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
+import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
+import { useAuthStore } from '@/stores/authStore'
 import { parseWeekday, orderDayFromDelivery } from '@/lib/orderDay'
 import { supabase } from '@/lib/supabase'
 import { useDraft, useOrderSettings, useVendorRules, isOunceUnit, type DraftLineRow } from './useOrdersV2'
@@ -15,6 +21,22 @@ import { OrderStepper } from './OrderStepper'
 import { daysOfSupply, daysBetween, nextDeliveryDate, resolveDeliveryDate } from './engine'
 import { OVERRIDE_CELL, dos, dShort, money, num, copyTableToClipboard, exportTableCsv, dosAfterForQty, type TableCol } from './shared'
 import type { LineFlag, OrderType, DeliverySchedule, WeekCalendar } from './types'
+
+// The 3 simplified rollup buckets this app already uses for Month End's own
+// Oil/Parts/Additives/Other breakdown (CategorySimplificationTab.tsx,
+// inventory.category_simplification — company-scoped raw category -> one of
+// these 3, or blank/unmapped which reads as "Other" here). Duplicated as a
+// tiny local helper rather than importing that tab's own module-private
+// function, since it isn't exported and this is a 4-line normalize.
+const SIMPLE_CATS = ['Parts', 'Oil', 'Additives'] as const
+type SimpleCat = (typeof SIMPLE_CATS)[number]
+function normalizeSimpleCategory(raw: string | null | undefined): SimpleCat | null {
+  const t = (raw ?? '').trim().toLowerCase()
+  if (!t) return null
+  return SIMPLE_CATS.find((c) => c.toLowerCase() === t) ?? null
+}
+const CATEGORY_ORDER = ['Oil', 'Parts', 'Additives', 'Other'] as const
+type OrderCategory = (typeof CATEGORY_ORDER)[number]
 
 const shopSort = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -29,6 +51,7 @@ export function OrdersV2FinalReview() {
   const navigate = useNavigate()
   const loc = useLocations()
   const vendors = useVendors()
+  const { profile } = useAuthStore()
   const { settings } = useOrderSettings()
   const { rulesFor } = useVendorRules()
   const { draft, lines, loading, patchLine, removeLine } = useDraft(draftId || null)
@@ -36,8 +59,56 @@ export function OrdersV2FinalReview() {
   // OrdersV2Review — see that hook's own header comment for scope/design.
   const lastOrderedInfo = useLastOrderedInfo(draft?.vendor_id ?? null, vendors.byId(draft?.vendor_id ?? null)?.name ?? null)
 
-  const [filter, setFilter] = useState('')
   const [openShop, setOpenShop] = useState<{ locationId: string; orderType: OrderType } | null>(null)
+  // Direct ask (2026-09-24) — jump straight to the lines the engine
+  // deliberately ordered past configured capacity to reach the DOS target
+  // (engine.ts's exceedsCapacityForTarget), so the amount can be verified.
+  const [showOnlyOverCapacity, setShowOnlyOverCapacity] = useState(false)
+  const [columnManagerOpen, setColumnManagerOpen] = useState(false)
+
+  // Per-product category (inventory.product_usage.category) -> this app's
+  // own Oil/Parts/Additives simplified bucket (inventory.category_simplification,
+  // see Month End's CategorySimplificationTab.tsx/OverviewTab.tsx — the same
+  // rollup this app already uses elsewhere for an Oil/Parts/Additives/Other
+  // breakdown). Keyed on [lines] rather than a stable product-id list, same
+  // trade-off this file's own pre-existing ozProductIds effect already
+  // accepts (re-fetches on every qty edit, not just when the product set
+  // changes) — kept consistent with that established pattern rather than
+  // introducing a different dependency shape for a second, very similar fetch.
+  const [categoryByProduct, setCategoryByProduct] = useState<Map<string, string>>(new Map())
+  const [simpleByCategory, setSimpleByCategory] = useState<Map<string, SimpleCat>>(new Map())
+  useEffect(() => {
+    if (!profile?.company_id) return
+    const productIds = [...new Set(lines.map((l) => l.product_id))]
+    if (!productIds.length) { setCategoryByProduct(new Map()); setSimpleByCategory(new Map()); return }
+    let cancelled = false
+    const sbi = supabase as any
+    Promise.all([
+      sbi.schema('inventory').from('product_usage').select('product_id, category')
+        .eq('company_id', profile.company_id).in('product_id', productIds),
+      sbi.schema('inventory').from('category_simplification').select('category, simple_category')
+        .eq('company_id', profile.company_id),
+    ]).then(([puRes, csRes]: any[]) => {
+      if (cancelled) return
+      const catMap = new Map<string, string>()
+      for (const r of (puRes.data ?? []) as { product_id: string; category: string | null }[]) {
+        if (r.category && !catMap.has(r.product_id)) catMap.set(r.product_id, r.category)
+      }
+      setCategoryByProduct(catMap)
+      const simpleMap = new Map<string, SimpleCat>()
+      for (const r of (csRes.data ?? []) as { category: string; simple_category: string | null }[]) {
+        const s = normalizeSimpleCategory(r.simple_category)
+        if (s) simpleMap.set(r.category, s)
+      }
+      setSimpleByCategory(simpleMap)
+    })
+    return () => { cancelled = true }
+  }, [profile?.company_id, lines])
+  const simpleCategoryOf = useCallback((productId: string): OrderCategory => {
+    const raw = categoryByProduct.get(productId)
+    const s = raw ? simpleByCategory.get(raw) : undefined
+    return s ?? 'Other'
+  }, [categoryByProduct, simpleByCategory])
 
   // Display-only ounce conversion for a product tracked that way (e.g.
   // HM0806, global_products.unit_of_measure = "Ounces") — same purpose as
@@ -254,25 +325,194 @@ export function OrdersV2FinalReview() {
     [lines],
   )
 
-  const visible = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    const out = q ? lines.filter((l) => `${shopLabel(l.location_id)} ${l.product_id}`.toLowerCase().includes(q)) : lines
-    return [...out].sort((a, b) =>
-      shopLabel(a.location_id).localeCompare(shopLabel(b.location_id), undefined, { numeric: true })
-      || Number(b.max_capacity_gallons ?? 0) - Number(a.max_capacity_gallons ?? 0))
-  }, [lines, filter, shopLabel])
+  // Summary totals by Oil/Parts/Additives/Other (2026-09-24 ask) — cases
+  // (qty), gallons, quarts, and $ ordered, only counting INCLUDED lines
+  // (matches `total`/the group dollars above, which also only ever count
+  // what's actually going on the order). "Cases" here is just each line's
+  // own qty — for a bulk line that reads as gallons/qty-of-the-bulk-unit
+  // rather than a literal case count, since this app doesn't have a
+  // separate "case count" concept for bulk; flagged as an assumption.
+  const categoryTotals = useMemo(() => {
+    const blank = () => ({ cases: 0, gallons: 0, quarts: 0, dollars: 0 })
+    const totals: Record<OrderCategory, { cases: number; gallons: number; quarts: number; dollars: number }> = {
+      Oil: blank(), Parts: blank(), Additives: blank(), Other: blank(),
+    }
+    for (const l of lines) {
+      if (!l.included) continue
+      const t = totals[simpleCategoryOf(l.product_id)]
+      const qty = Number(l.qty) || 0
+      const per = Number(l.quarts_per_unit ?? 0)
+      t.cases += qty
+      t.quarts += qty * per
+      t.gallons += (qty * per) / 4
+      t.dollars += qty * Number(l.unit_cost ?? 0)
+    }
+    return totals
+  }, [lines, simpleCategoryOf])
+  const categoryGrandTotal = useMemo(() => {
+    const g = { cases: 0, gallons: 0, quarts: 0, dollars: 0 }
+    for (const cat of CATEGORY_ORDER) {
+      g.cases += categoryTotals[cat].cases
+      g.gallons += categoryTotals[cat].gallons
+      g.quarts += categoryTotals[cat].quarts
+      g.dollars += categoryTotals[cat].dollars
+    }
+    return g
+  }, [categoryTotals])
 
-  // Alternates per shop (not per row) — see OrdersV2Review.tsx for why.
-  const bandOf = useMemo(() => {
-    const m = new Map<string, boolean>()
+  const dataForTable = useMemo(
+    () => (showOnlyOverCapacity ? lines.filter((l) => (l.flags ?? []).includes('exceeded_capacity_for_dos_target' as LineFlag)) : lines),
+    [lines, showOnlyOverCapacity],
+  )
+
+  const col = useMemo(() => createColumnHelper<DraftLineRow>(), [])
+  const columns = useMemo(() => [
+    col.accessor((l) => shopLabel(l.location_id), {
+      id: 'shop', header: 'Shop', sortingFn: 'alphanumeric',
+      cell: (i) => (
+        <button onClick={() => setOpenShop({ locationId: i.row.original.location_id ?? '', orderType: i.row.original.order_type })}
+          className="text-navy hover:underline">{i.getValue()}</button>
+      ),
+    }),
+    col.accessor('product_id', { id: 'product', header: 'Product' }),
+    col.accessor((l) => l.uom ?? '—', { id: 'uom', header: 'UOM' }),
+    col.display({
+      id: 'last_ordered', header: 'Last Ordered', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
+      cell: (i) => {
+        const l = i.row.original
+        const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
+        return info.lastOrderDate ? (
+          <>
+            <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
+            {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
+          </>
+        ) : '—'
+      },
+    }),
+    col.display({
+      id: 'last_delivered', header: 'Last Delivered', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
+      cell: (i) => {
+        const l = i.row.original
+        const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
+        return (
+          <>
+            {info.lastDeliveredDate
+              ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
+              : '—'}
+            {info.onHandCheck && !info.onHandCheck.withinRange && (
+              <div className="text-[9px] text-[#C0392B] font-bold"
+                title={`Based on the last delivery, on hand was expected to be roughly ${num(info.onHandCheck.expected)} (${num(info.onHandCheck.low)}–${num(info.onHandCheck.high)})`}>
+                ⚠ On hand may be off
+              </div>
+            )}
+          </>
+        )
+      },
+    }),
+    col.display({
+      id: 'delivery_date', header: 'Delivery', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
+      cell: (i) => {
+        const l = i.row.original
+        const dd = draft ? deliveryFor(l.location_id, draft.order_date) : null
+        const sd = describeSchedule(l.location_id)
+        return (
+          <>
+            <div>{dd ? dShort(dd) : '—'}</div>
+            {sd && <div className="text-[9px] text-inky/50">{sd}</div>}
+          </>
+        )
+      },
+    }),
+    col.accessor('qty', {
+      id: 'qty', header: 'Qty', meta: { noClip: true },
+      cell: (i) => {
+        const l = i.row.original
+        return (
+          <div className={l.is_override ? OVERRIDE_CELL : ''}>
+            <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
+              onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
+              className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+            {l.quarts_per_unit != null && (
+              <div className="text-[10px] text-inky/50 mt-0.5">
+                {ozProductIds.has(l.product_id)
+                  ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
+                  : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+              </div>
+            )}
+          </div>
+        )
+      },
+    }),
+    col.accessor('dos_after', { id: 'dos_after', header: 'DOS After', cell: (i) => <span className="text-right block">{dos(i.getValue())}</span> }),
+    col.accessor('dos_after_delivery', { id: 'dos_at_delivery', header: 'DOS @ Delivery', cell: (i) => <span className="text-right block">{dos(i.getValue())}</span> }),
+    col.accessor((l) => Number(l.qty) * Number(l.unit_cost ?? 0), { id: 'dollars', header: '$', cell: (i) => <span className="text-right block">{money(i.getValue())}</span> }),
+    col.display({
+      id: 'flags', header: 'Flags', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
+      cell: (i) => {
+        const l = i.row.original
+        return (
+          <>
+            <Flags flags={(l.flags ?? []) as LineFlag[]} />
+            {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
+          </>
+        )
+      },
+    }),
+  ], [col, shopLabel, lastOrderedInfo, draft, deliveryFor, describeSchedule, patchQty, ozProductIds])
+
+  const TABLE_KEY = 'orders-v2.final-review-lines'
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(dataForTable, columns, {
+    persistKey: TABLE_KEY,
+    initialPageSize: 50,
+    initialSorting: [{ id: 'shop', desc: false }],
+    initialColumnPinning: { left: ['shop'], right: [] },
+  })
+  useColumnPrefs(TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
+
+  const allColItems: ColItem[] = useMemo(
+    () => table.getAllLeafColumns().map((c) => ({ id: c.id, label: String(c.columnDef.header ?? c.id) })),
+    [table],
+  )
+  const shownOrder = useMemo(() => {
+    const ids = table.getAllLeafColumns().filter((c) => c.getIsVisible()).map((c) => c.id)
+    if (!columnOrder.length) return ids
+    const known = columnOrder.filter((id) => ids.includes(id))
+    return [...known, ...ids.filter((id) => !known.includes(id))]
+  }, [table, columnOrder])
+  function applyShownColumns(shown: string[]) {
+    setColumnOrder(shown)
+    const vis: Record<string, boolean> = {}
+    for (const c of allColItems) vis[c.id] = shown.includes(c.id)
+    table.setColumnVisibility(vis)
+  }
+  function resetColumns() {
+    setColumnOrder([])
+    table.setColumnVisibility({})
+    table.setColumnSizing({})
+    setColumnPinning({ left: ['shop'], right: [] })
+  }
+
+  // Alternates per shop (not per row) — makes it obvious at a glance whether
+  // adjacent rows are one shop's multi-product order or a boundary between
+  // two shops. Computed off the table's own current sorted/filtered/
+  // paginated row order (table.getRowModel().rows — exactly what DataTable
+  // is about to render), not a hand-sorted array, since rows are now
+  // genuinely sortable by any column. Grouping is only guaranteed
+  // contiguous under the default Shop sort; re-sorting by another column is
+  // an accepted trade-off of making this table sortable at all — the band
+  // still alternates on every shop change in whatever order is on screen,
+  // it just won't read as a clean "one band per shop" grouping anymore.
+  const pageRows = table.getRowModel().rows
+  const bandOf = new Map<string, boolean>()
+  {
     let prevShop: string | null = null
     let band = false
-    for (const l of visible) {
-      if (l.location_id !== prevShop) { band = !band; prevShop = l.location_id }
-      m.set(l.id, band)
+    for (const r of pageRows) {
+      const shopId = r.original.location_id
+      if (shopId !== prevShop) { band = !band; prevShop = shopId }
+      bandOf.set(r.original.id, band)
     }
-    return m
-  }, [visible])
+  }
 
   if (loading) {
     return (
@@ -351,6 +591,46 @@ export function OrdersV2FinalReview() {
           {bottom3.length === 0 && <span className="text-[11px] font-mono text-inky/40">—</span>}
         </CardBody></Card>
       </div>
+
+      {/* Order totals by category — 2026-09-24 ask. Counts only lines
+          currently included in the order, same convention as `total` above. */}
+      <Card><CardBody className="flex flex-col gap-2">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Order totals by category</span>
+        <div className="overflow-auto rounded border border-navy/20">
+          <table className="w-full text-xs font-mono">
+            <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
+              <th className="text-left px-2 py-1">Category</th>
+              <th className="text-right px-2 py-1">Cases</th>
+              <th className="text-right px-2 py-1">Gallons</th>
+              <th className="text-right px-2 py-1">Quarts</th>
+              <th className="text-right px-2 py-1">$</th>
+            </tr></thead>
+            <tbody>
+              {CATEGORY_ORDER.map((cat) => (
+                <tr key={cat} className="border-b border-navy/10">
+                  <td className="px-2 py-1 text-navy">{cat}</td>
+                  <td className="px-2 py-1 text-right text-navy">{num(categoryTotals[cat].cases)}</td>
+                  <td className="px-2 py-1 text-right text-navy">{num(categoryTotals[cat].gallons, 1)}</td>
+                  <td className="px-2 py-1 text-right text-navy">{num(categoryTotals[cat].quarts, 1)}</td>
+                  <td className="px-2 py-1 text-right text-navy">{money(categoryTotals[cat].dollars)}</td>
+                </tr>
+              ))}
+              <tr className="border-b border-navy/10 bg-navy/[0.04] font-bold">
+                <td className="px-2 py-1 text-navy">Grand Total</td>
+                <td className="px-2 py-1 text-right text-navy">{num(categoryGrandTotal.cases)}</td>
+                <td className="px-2 py-1 text-right text-navy">{num(categoryGrandTotal.gallons, 1)}</td>
+                <td className="px-2 py-1 text-right text-navy">{num(categoryGrandTotal.quarts, 1)}</td>
+                <td className="px-2 py-1 text-right text-navy">{money(categoryGrandTotal.dollars)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-[10px] font-mono text-inky/50">
+          "Other" covers anything not mapped to Oil/Parts/Additives in Config → Category Simplification (Month End),
+          including any product with no usage category recorded at all. "Cases" is each line's own ordered qty —
+          for a bulk line that reads as its own order unit, not a literal case count.
+        </p>
+      </CardBody></Card>
 
       {outOfStock.length > 0 && (
         <Card><CardBody className="flex flex-col gap-2">
@@ -448,86 +728,36 @@ export function OrdersV2FinalReview() {
         </CardBody></Card>
       )}
 
-      <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-64" />
-
-      <div className="overflow-auto rounded border border-navy/30 max-h-[calc(100vh-24rem)]">
-        <table className="w-full text-xs font-mono">
-          <thead className="sticky top-0 z-10"><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-            <th className="text-left px-2 py-2">Shop</th><th className="text-left px-2 py-2">Product</th>
-            <th className="text-left px-2 py-2">UOM</th>
-            <th className="text-left px-2 py-2">Last Ordered</th><th className="text-left px-2 py-2">Last Delivered</th>
-            <th className="text-left px-2 py-2">Delivery</th>
-            <th className="text-right px-2 py-2">Qty</th>
-            <th className="text-right px-2 py-2">DOS After</th><th className="text-right px-2 py-2">DOS @ Delivery</th>
-            <th className="text-right px-2 py-2">$</th><th className="text-left px-2 py-2">Flags</th>
-          </tr></thead>
-          <tbody>
-            {visible.map((l) => {
-              const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
-              return (
-              <tr key={l.id} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
-                <td className="px-2 py-1">
-                  <button onClick={() => setOpenShop({ locationId: l.location_id ?? '', orderType: l.order_type })}
-                    className="text-navy hover:underline">{shopLabel(l.location_id)}</button>
-                </td>
-                <td className="px-2 py-1 text-navy">{l.product_id}</td>
-                <td className="px-2 py-1 text-navy">{l.uom ?? '—'}</td>
-                <td className="px-2 py-1 text-navy whitespace-nowrap">
-                  {info.lastOrderDate ? (
-                    <>
-                      <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
-                      {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
-                    </>
-                  ) : '—'}
-                </td>
-                <td className="px-2 py-1 text-navy whitespace-nowrap">
-                  {info.lastDeliveredDate
-                    ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
-                    : '—'}
-                  {info.onHandCheck && !info.onHandCheck.withinRange && (
-                    <div className="text-[9px] text-[#C0392B] font-bold"
-                      title={`Based on the last delivery, on hand was expected to be roughly ${num(info.onHandCheck.expected)} (${num(info.onHandCheck.low)}–${num(info.onHandCheck.high)})`}>
-                      ⚠ On hand may be off
-                    </div>
-                  )}
-                </td>
-                <td className="px-2 py-1 text-navy whitespace-nowrap">
-                  {(() => {
-                    const dd = draft ? deliveryFor(l.location_id, draft.order_date) : null
-                    const sd = describeSchedule(l.location_id)
-                    return (
-                      <>
-                        <div>{dd ? dShort(dd) : '—'}</div>
-                        {sd && <div className="text-[9px] text-inky/50">{sd}</div>}
-                      </>
-                    )
-                  })()}
-                </td>
-                <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
-                  <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
-                    onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
-                    className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-                  {l.quarts_per_unit != null && (
-                    <div className="text-[10px] text-inky/50 mt-0.5">
-                      {ozProductIds.has(l.product_id)
-                        ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
-                        : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
-                    </div>
-                  )}
-                </td>
-                <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>
-                <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after_delivery)}</td>
-                <td className="px-2 py-1 text-right text-navy">{money(Number(l.qty) * Number(l.unit_cost ?? 0))}</td>
-                <td className="px-2 py-1">
-                  <Flags flags={(l.flags ?? []) as LineFlag[]} />
-                  {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
-                </td>
-              </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        table={table}
+        globalFilter={globalFilter}
+        onGlobalFilterChange={setGlobalFilter}
+        exportFilename={`Final Review - ${vendors.byId(draft.vendor_id)?.name ?? 'order'} ${draft.order_date}`}
+        getRowClassName={(l) => [l.included ? '' : 'opacity-45', bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''].filter(Boolean).join(' ')}
+        hideColumnControl
+        actions={
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-xs font-mono text-inky whitespace-nowrap">
+              <Toggle checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity} size="sm" color="cyan" />
+              Show only over-capacity lines
+            </label>
+            <button onClick={() => setColumnManagerOpen(true)}
+              className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap">
+              <Settings className="w-3 h-3" /> Manage Columns
+            </button>
+          </div>
+        }
+      />
+      <ColumnManagerModal
+        open={columnManagerOpen}
+        onClose={() => setColumnManagerOpen(false)}
+        all={allColItems.filter((c) => c.id !== 'select')}
+        shown={shownOrder.filter((id) => id !== 'select')}
+        onChange={applyShownColumns}
+        onReset={resetColumns}
+        pinned={columnPinning.left ?? []}
+        onPinChange={(left) => setColumnPinning({ left, right: [] })}
+      />
 
       {/* Per-shop editor */}
       <Modal open={!!openShop} onClose={() => setOpenShop(null)}

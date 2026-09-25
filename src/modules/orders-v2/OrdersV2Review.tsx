@@ -136,6 +136,11 @@ export function OrdersV2Review() {
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 })
   const [showVmi, setShowVmi] = useState(false)
+  // Direct ask (2026-09-24) — a way to jump straight to the lines the
+  // engine deliberately ordered past configured capacity to reach the DOS
+  // target (see engine.ts's exceedsCapacityForTarget), so the amount
+  // ordered can be double-checked without scanning every line's flags.
+  const [showOnlyOverCapacity, setShowOnlyOverCapacity] = useState(false)
   // Separate from showVmi above (which controls the main order-lines
   // table) — this one controls every "configured products for this shop"
   // list (the shop-expand row and Shops With No Orders below), which
@@ -580,6 +585,7 @@ export function OrdersV2Review() {
     const q = filter.trim().toLowerCase()
     let out = [...lines]
     if (!showVmi) out = out.filter((l) => !(l.flags ?? []).includes('vmi_keepfill'))
+    if (showOnlyOverCapacity) out = out.filter((l) => (l.flags ?? []).includes('exceeded_capacity_for_dos_target' as LineFlag))
     if (q) out = out.filter((l) => `${shopLabel(l.location_id)} ${l.product_id} ${l.uom ?? ''}`.toLowerCase().includes(q))
     const dir = sortDir === 'asc' ? 1 : -1
     const secondary = (a: DraftLineRow, b: DraftLineRow) => {
@@ -599,7 +605,7 @@ export function OrdersV2Review() {
       const s = shopLabel(a.location_id).localeCompare(shopLabel(b.location_id), undefined, { numeric: true })
       return s !== 0 ? s : secondary(a, b)
     })
-  }, [lines, filter, sortKey, sortDir, shopLabel, showVmi])
+  }, [lines, filter, sortKey, sortDir, shopLabel, showVmi, showOnlyOverCapacity])
 
   function toggleSort(k: SortKey) {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -838,6 +844,10 @@ export function OrdersV2Review() {
         <label className="flex items-center gap-2 text-xs font-mono text-inky">
           <Toggle checked={showVmi} onChange={setShowVmi} size="sm" color="cyan" />
           Show VMI / keepfill
+        </label>
+        <label className="flex items-center gap-2 text-xs font-mono text-inky">
+          <Toggle checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity} size="sm" color="cyan" />
+          Show only over-capacity lines
         </label>
         {usesOrderDays && !isAdHoc && (
           <label className="flex items-center gap-2 text-xs font-mono text-inky">

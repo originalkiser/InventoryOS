@@ -833,6 +833,24 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       caps = capsFor(input, ctx, { respectDosMax: false })
     }
 
+    // Direct ask (2026-09-24): reaching the configured target days-of-supply
+    // matters more than staying within a shop's configured physical
+    // capacity — when capacity is genuinely what's holding this line short
+    // of the target (not the softer days_of_supply_max ceiling, which is
+    // untouched here), order the full amount needed to reach the target
+    // anyway instead of clamping to capacity. Never silent: flagged (with a
+    // note carrying the real numbers) so the amount ordered can be verified
+    // on Review/Final Review, per this app's "make exceptions visible" rule.
+    // Gated behind an off-by-default OrderSettings toggle (see that field's
+    // own comment in types.ts) rather than always-on — capacity being the
+    // one truly hard ceiling is otherwise relied on and tested throughout
+    // this file's own Pass 2 (minimums/smoothing).
+    let exceedsCapacityForTarget = false
+    if (ctx.settings.allow_exceed_capacity_for_dos_target && caps.capacityBound && want > caps.maxUnits) {
+      exceedsCapacityForTarget = true
+      caps = { ...caps, maxUnits: want, capacityBound: false }
+    }
+
     const units = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_increment,
       // Round down when a hard cap binds so the cap is never exceeded;
       // otherwise round UP toward the target rather than to nearest — a
@@ -855,6 +873,14 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     }
     const line = buildLine(input, ctx, units, caps)
     if (belowCriticalFloor && !line.flags.includes('critical_minimum')) line.flags.push('critical_minimum')
+    if (exceedsCapacityForTarget) {
+      const per = gallonsPerUnit(rule)
+      const finalQuarts = n(input.on_hand) + units * per
+      const overBy = rule.max_capacity_gallons != null ? Math.max(0, finalQuarts - rule.max_capacity_gallons) : null
+      if (!line.flags.includes('exceeded_capacity_for_dos_target')) line.flags.push('exceeded_capacity_for_dos_target')
+      line.note = `Ordered ${units} to reach the ${ctx.settings.days_of_supply_target}-day target`
+        + (overBy != null ? ` — exceeds configured capacity by ${Math.round(overBy)} qt` : ' — exceeds configured capacity')
+    }
     pass1.push(line)
   }
 

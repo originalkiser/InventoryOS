@@ -96,6 +96,18 @@ export interface OrderSettings {
   // are unaffected.
   bulk_round_up_threshold_gal: number
   bulk_urgent_dos_threshold: number
+  // Direct ask (2026-09-24): when a shop's configured physical capacity is
+  // what's holding a line short of days_of_supply_target, order the full
+  // amount needed to reach the target anyway rather than clamping to
+  // capacity (flagged — see 'exceeded_capacity_for_dos_target' in
+  // engine.ts). Off by default — a HUGE amount of this engine's own test
+  // suite (and every downstream minimum/smoothing pass) is built on
+  // capacity being the one truly hard, never-exceeded ceiling, so this is
+  // deliberately an opt-in setting rather than a blanket change to that
+  // guarantee. Only affects Pass 1's own initial sizing toward the DOS
+  // target — per-product/case-type/dollar minimums (Pass 2) still never
+  // exceed capacity, on or off.
+  allow_exceed_capacity_for_dos_target: boolean
 }
 
 export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
@@ -115,6 +127,7 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   bulk_rounding_increment: 1,
   bulk_round_up_threshold_gal: 35,
   bulk_urgent_dos_threshold: 15,
+  allow_exceed_capacity_for_dos_target: false,
 }
 
 // Per shop x product ordering rules. Named fields say "gallons" for
@@ -251,6 +264,7 @@ export type LineFlag =
   | 'po_decision_exclude'    // user chose: the open PO covers it, don't order more
   | 'po_decision_combine'    // user chose: factor the open PO's outstanding qty into on-hand and re-target
   | 'rounded_to_bulk_minimum' // bulk per-product minimum: raised to the drum minimum, see GeneratedLine.note for the real calculated amount
+  | 'exceeded_capacity_for_dos_target' // ordered past configured capacity to reach the DOS target after delivery — see GeneratedLine.note for the real numbers
 
 export interface GeneratedLine {
   location_id: string
