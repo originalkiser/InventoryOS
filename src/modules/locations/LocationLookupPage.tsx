@@ -2167,8 +2167,12 @@ function IssuesColumn({ pending, resolved, onManage, framed }: { pending: IssueR
           <button onClick={() => onManage('pending')} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-cream px-2 py-1.5">
             {/* Status pill sits next to the title (not stacked below it) so a
                 widened widget actually gains usable room — truncates with a
-                hover tooltip rather than wrapping/pushing layout around. */}
-            <div className="flex items-center justify-between gap-2">
+                hover tooltip rather than wrapping/pushing layout around.
+                items-start (not -center): the title can still wrap onto
+                multiple lines, and centering the pill across that wrapped
+                block made it visually overlap the 2nd/3rd lines instead of
+                sitting flush with the first — found live 2026-09-26. */}
+            <div className="flex items-start justify-between gap-2">
               <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{top.title}</div>
               {pastDue && <TruncatingBadge color="red">Past due</TruncatingBadge>}
             </div>
@@ -2205,7 +2209,7 @@ function ExceptionsBox({ exceptions, onAdd, onEdit, framed }: { exceptions: Exce
           <span className="text-xs font-body text-inky/50">None</span>
         ) : exceptions.slice(0, 5).map((e) => (
           <button key={e.id} onClick={() => onEdit(e)} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-start justify-between gap-2">
               <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{[e.report_type, e.issue].filter(Boolean).join(' · ') || 'Exception'}</div>
               {e.status && <TruncatingBadge color={isClosed(e.status) ? 'green' : 'amber'}>{e.status}</TruncatingBadge>}
             </div>
@@ -2232,7 +2236,7 @@ function CommsBox({ comms, onAdd, onEdit, framed }: { comms: LocationComm[]; onA
           <span className="text-xs font-body text-inky/50">None</span>
         ) : comms.slice(0, 5).map((c) => (
           <button key={c.id} onClick={() => onEdit(c)} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-start justify-between gap-2">
               <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{[c.comm_type, c.contact_method].filter(Boolean).join(' · ') || 'Communication'}</div>
               {c.status && <TruncatingBadge color={isClosed(c.status) ? 'green' : 'amber'}>{c.status}</TruncatingBadge>}
             </div>
@@ -2307,7 +2311,7 @@ function MentionedBox({ projects, meetings, onOpenProjects, onOpenMeetings, fram
             <span className="text-[10px] font-mono text-inky/50">Projects ({projects.length})</span>
             {projects.slice(0, 5).map((p) => (
               <button key={p.id} onClick={onOpenProjects} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{p.project_name || '(untitled project)'}</div>
                   {p.status && <TruncatingBadge color="cyan">{p.status}</TruncatingBadge>}
                 </div>
