@@ -4,7 +4,7 @@ import { MapPin, Settings } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
-import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader } from '@/components/ui'
+import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader, Toggle } from '@/components/ui'
 import { IssueFormModal } from '@/modules/issues/IssueFormModal'
 import { ExceptionReportModal } from '@/modules/exceptions/ExceptionReportModal'
 import type { ExceptionReport } from '@/modules/exceptions/exceptions'
@@ -56,7 +56,7 @@ interface ConfigRow {
   // 5W30BB) whose own on-hand/usage got folded into this row's own — same
   // combine Orders v2's generation engine already does, so a shop selling or
   // receiving under the "wrong" case type still shows real usage here.
-  usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null; equivalent_products?: string[] } | null
+  usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null; equivalent_products?: { product_id: string; on_hand: number }[] } | null
   // Joined from inventory.ov2_product_exceptions by product_id — Orders v2's
   // shop+product floor/ceiling override, if one's been set for this row.
   exception?: { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null } | null
@@ -67,7 +67,7 @@ interface IssueRow {
 }
 
 // Per-device view customization: ids hidden from each section.
-interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand' }
+interface ViewPrefs { sidebar: string[]; tank: string[]; config: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean }
 
 // A tank monitor not reporting in > 2 days reads as offline (⚠ marker,
 // offline-email eligibility, and the On Hand view's per-product callout).
@@ -268,17 +268,35 @@ const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', '
 // A combined figure (see combinedUsageFor above) shows a small sky-colored
 // "+" with a tooltip naming the sibling case-type(s) folded in, so a number
 // that's bigger than this one exact SKU's own reading doesn't read as a
-// mistake.
-function UsageValue({ value, siblings }: { value: string; siblings?: string[] }) {
+// mistake. Used for Daily Usage — On Hand gets the fuller visible
+// breakdown below (OnHandValue) instead, per direct feedback 2026-09-25.
+function UsageValue({ value, siblings }: { value: string; siblings?: { product_id: string; on_hand: number }[] }) {
   if (!siblings?.length) return <>{value}</>
   return (
-    <span title={`Includes ${siblings.join(', ')}`}>
+    <span title={`Includes ${siblings.map((s) => s.product_id).join(', ')}`}>
       {value}<span className="text-sky font-bold">+</span>
     </span>
   )
 }
+// Visible sibling breakdown under On Hand — same "Combining On Hands" shape
+// Orders v2's own Review/Final Review tables already show, rather than
+// only a hover tooltip naming the siblings with no amounts. Direct
+// feedback 2026-09-25: "have that like-product listed and amount on hand
+// of that product underneath the on hand amount."
+function OnHandValue({ value, siblings }: { value: string; siblings?: { product_id: string; on_hand: number }[] }) {
+  if (!siblings?.length) return <>{value}</>
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <span>{value}</span>
+      <div className="text-[9px] text-inky/50 leading-tight font-normal text-right whitespace-normal">
+        <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
+        {siblings.map((s) => <div key={s.product_id}>{s.product_id}: {num(s.on_hand)}</div>)}
+      </div>
+    </div>
+  )
+}
 const USAGE_COLS: Col<ConfigRow>[] = [
-  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? <UsageValue value={num(r.usage.on_hands)} siblings={r.usage.equivalent_products} /> : '—'), sort: (r) => r.usage?.on_hands ?? null },
+  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? <OnHandValue value={num(r.usage.on_hands)} siblings={r.usage.equivalent_products} /> : '—'), sort: (r) => r.usage?.on_hands ?? null },
   { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? <UsageValue value={num(r.usage.daily_usage)} siblings={r.usage.equivalent_products} /> : '—'), sort: (r) => r.usage?.daily_usage ?? null },
   {
     id: 'days_of_supply', label: 'Days of Supply', align: 'right', width: 'w-24', tint: true,
@@ -346,15 +364,22 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
     try {
       const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}')
-      return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration' }
+      return { sidebar: p.sidebar ?? [], tank: p.tank ?? [], config: p.config ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false }
     }
-    catch { return { sidebar: [], tank: [], config: [], nonVmiOfflineBtn: false, tankView: 'configuration' } }
+    catch { return { sidebar: [], tank: [], config: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
   const toggleHidden = (group: 'sidebar' | 'tank' | 'config', id: string) =>
     setPrefs((p) => ({ ...p, [group]: p[group].includes(id) ? p[group].filter((x) => x !== id) : [...p[group], id] }))
   const tankView = prefs.tankView ?? 'configuration'
   const setTankView = (v: 'configuration' | 'onhand') => setPrefs((p) => ({ ...p, tankView: v }))
+  // "Ignore VMI" toggle (2026-09-25 direct ask) — the On Hand view is
+  // normally VMI/keep-fill-only by design (see onHandRows' own comment:
+  // that's the tank-vs-Droptop reconciliation use case), but deciding
+  // whether a NOT-yet-VMI shop's tanks read closely enough to Droptop to be
+  // worth switching needs the exact same comparison for its non-VMI tanks.
+  const onHandIgnoreVmi = prefs.onHandIgnoreVmi ?? false
+  const setOnHandIgnoreVmi = (v: boolean) => setPrefs((p) => ({ ...p, onHandIgnoreVmi: v }))
 
   // On Hand view: Droptop on-hand/usage (by resolved product id) and any
   // accepted variance baselines for this shop — both loaded in `load()`
@@ -581,7 +606,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         return {
           on_hands: combinedOnHand, daily_usage: combinedUsage,
           updated_at: own?.updated_at ?? null,
-          equivalent_products: siblings.map((s) => s.product_id),
+          equivalent_products: siblings.map((s) => ({ product_id: s.product_id, on_hand: s.on_hands })),
         }
       }
       setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({
@@ -704,7 +729,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const onHandRows = useMemo<OnHandRow[]>(() => {
     const groups = new Map<string, { productId: string; tankOnHandQt: number; totalCapacityQt: number; monitors: TankRow[] }>()
     for (const t of tanks) {
-      if (!t.keep_fill) continue
+      if (!onHandIgnoreVmi && !t.keep_fill) continue
       const key = t.internal || t.product_id || ''
       if (!key) continue
       const qty = toQuarts(t.on_hand, t.unit) ?? 0
@@ -748,7 +773,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           droptopOnHand, droptopUsage, rawVariance, baseline, netVariance, dosMonitor, dosDroptop,
         }
       })
-  }, [tanks, usageByProduct, baselineByProduct, oldToNewMap])
+  }, [tanks, usageByProduct, baselineByProduct, oldToNewMap, onHandIgnoreVmi])
 
   async function saveVarianceBaseline(productId: string, value: number) {
     if (!companyId || !shopId) return
@@ -1224,6 +1249,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   {tankView === 'onhand' && onHandRows.length > 0 && (
                     <button onClick={copyOnHand} title="Copy table for email" className="text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy inline-flex items-center gap-1">Copy</button>
                   )}
+                  {tankView === 'onhand' && (
+                    <label className="flex items-center gap-1.5 text-[10px] font-mono text-inky" title="Show every tank's comparison, not just VMI/keep-fill ones — useful for deciding whether a shop's tanks read close enough to Droptop to be worth switching to VMI.">
+                      <Toggle checked={onHandIgnoreVmi} onChange={setOnHandIgnoreVmi} size="sm" color="cyan" />
+                      Ignore VMI
+                    </label>
+                  )}
                   {showOfflineBtn && (
                     <button onClick={() => { setEmailMonitorOverride(null); setEmailKind('offline') }} title="Draft an email for offline monitors"
                       className={`text-[10px] font-mono border rounded px-1.5 py-0.5 inline-flex items-center gap-1 ${vmiOffline.length > 0 ? 'text-[#C0392B] border-[#C0392B]/40 hover:border-[#C0392B]' : 'text-[#E67E22] border-[#E67E22]/40 hover:border-[#E67E22]'}`}>
@@ -1266,7 +1297,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   )
                 ) : (
                   onHandRows.length === 0 ? (
-                    <p className="text-xs font-mono text-inky/60">No keep-fill/VMI tank monitors for this shop.</p>
+                    <p className="text-xs font-mono text-inky/60">
+                      {onHandIgnoreVmi ? 'No tank monitors for this shop.' : 'No keep-fill/VMI tank monitors for this shop — try "Ignore VMI" to compare every tank.'}
+                    </p>
                   ) : (
                     <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
                       <table className="text-xs font-mono">
