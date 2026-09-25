@@ -119,7 +119,12 @@ export function KeepAlivePages({ animClass, animTick, slideDirection }: {
         let slideClass = ''
         if (inTransition) {
           style = {}
-          const enterFromRight = transition!.direction === 'right'
+          // Flipped from the literal direction name (2026-09-26 user report:
+          // felt backwards) — cycleRecent's own 'right' actually steps to an
+          // OLDER entry in the most-recent-first list (index+1), so the
+          // visually-forward motion users expect from pressing Right is the
+          // opposite of what a literal direction === 'right' mapping gives.
+          const enterFromRight = transition!.direction === 'left'
           slideClass = isTo
             ? (enterFromRight ? 'sb-page-slide-in-right' : 'sb-page-slide-in-left')
             : (enterFromRight ? 'sb-page-slide-out-left' : 'sb-page-slide-out-right')

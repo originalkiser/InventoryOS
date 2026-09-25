@@ -403,8 +403,17 @@ function GridWidgetShell({ editMode, children }: { editMode: boolean; children: 
           <Grip className="w-3.5 h-3.5" />
         </div>
       )}
-      <div className={`flex-1 min-h-0 ${editMode ? 'ring-2 ring-sky/60 ring-offset-1 rounded-lg' : ''}`}>
-        <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-hide rounded-lg">
+      {/* The border/background/rounded-corner FRAME lives here, on the
+          non-scrolling wrapper — found live 2026-09-26: it used to be part
+          of each widget's own content (which scrolls), so scrolling away
+          from the very top/bottom made the border edges scroll out of view
+          too, leaving a mid-scroll box with no visible outline at all. This
+          frame's own box never moves, so its border/rounded corners stay in
+          place regardless of how far the INNER scrollRef div is scrolled —
+          only the content (and each widget's own background TINT, which
+          has no "edges" to lose) scrolls. */}
+      <div className={`flex-1 min-h-0 rounded-lg border border-navy/20 bg-cream overflow-hidden ${editMode ? 'ring-2 ring-sky/60 ring-offset-1' : ''}`}>
+        <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-hide">
           {children}
         </div>
       </div>
@@ -1659,6 +1668,15 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               {embedded && (
                 <button onClick={() => setLeftBoxManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Left Column Layout</button>
               )}
+              {!embedded && (
+                <button
+                  onClick={() => setPageGridLayout(DEFAULT_GRID_LAYOUT)}
+                  title="Puts every widget back to its default position and size"
+                  className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy"
+                >
+                  Reset Page Layout
+                </button>
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Options</span>
@@ -1696,7 +1714,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // drag/resize grid (2026-09-25 ask).
         const widgetContent: Record<string, ReactNode> = {
           shop_details: (
-            <Card>
+            <Card plain={!embedded}>
               <CardBody className="flex flex-col gap-2">
                 {/* Sticky within the widget's own scroll container + half the
                     old top margin (mt-1 dropped, CardBody's own py-4 is
@@ -1727,16 +1745,16 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               </CardBody>
             </Card>
           ),
-          issues: <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} />,
-          exceptions: <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} />,
-          comms: <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} />,
-          custom_config: <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} />,
+          issues: <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} framed={!embedded} />,
+          exceptions: <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} framed={!embedded} />,
+          comms: <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} framed={!embedded} />,
+          custom_config: <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} framed={!embedded} />,
           mentioned: (
             <MentionedBox projects={mentionedProjects} meetings={mentionedMeetings}
-              onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
+              onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} framed={!embedded} />
           ),
           tank_monitors: (
-            <Card className="w-fit max-w-full">
+            <Card className="w-fit max-w-full" plain={!embedded}>
               <CardBody className="flex flex-col gap-2">
                 <div className="sticky top-0 z-10 -mx-5 -mt-4 mb-1 px-5 py-2 bg-cream flex items-center gap-3 flex-wrap">
                   <span className="text-xs font-mono text-navy uppercase tracking-wide">
@@ -2117,18 +2135,27 @@ export function LocationLookupPage() {
   return <LocationDetailView />
 }
 
-function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; resolved: IssueRow[]; onManage: (v: 'pending' | 'resolved') => void }) {
+function IssuesColumn({ pending, resolved, onManage, framed }: { pending: IssueRow[]; resolved: IssueRow[]; onManage: (v: 'pending' | 'resolved') => void; framed?: boolean }) {
   const top = pending[0]
   const start = top?.start_date ? new Date(top.start_date + 'T00:00:00') : null
   const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
   const pastDue = !!top?.target_resolution_date && differenceInCalendarDays(new Date(), new Date(top.target_resolution_date + 'T00:00:00')) > 0
   const bg = pending.length ? 'bg-[#E67E22]/10' : 'bg-cream'
+  // `framed`: this widget sits inside GridWidgetShell's own border/rounded
+  // frame (the full-page grid), which owns the outline instead — drawing a
+  // second one here would either double up or (worse) reintroduce the
+  // exact "border scrolls away with the content" bug this was fixed for,
+  // since a border on the SCROLLING content only ever shows its edges when
+  // scrolled to the very top/bottom. Unset (the embedded floating panel,
+  // which has no such frame) keeps the original self-bordered card look.
+  const outerClass = framed ? 'flex flex-col' : ['rounded-lg border flex flex-col', pending.length ? 'border-[#E67E22]/50' : 'border-navy/20'].join(' ')
+  const headerRoundClass = framed ? '' : 'rounded-t-lg'
   return (
-    <div className={['rounded-lg border flex flex-col', pending.length ? 'border-[#E67E22]/50' : 'border-navy/20', bg].join(' ')}>
+    <div className={[outerClass, bg].join(' ')}>
       {/* Sticky within the widget's own scroll container (see GridWidgetShell)
           — half the vertical padding of the old single-block layout (py-3 ->
           py-1.5) per the 2026-09-25 ask. */}
-      <div className={['sticky top-0 z-10 rounded-t-lg flex items-center justify-between px-4 py-1.5', bg].join(' ')}>
+      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, bg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Issues</span>
         <div className="flex items-center gap-3">
           <span className={['text-sm font-heading font-bold', pending.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pending.length} <span className="text-[10px] font-mono font-normal text-inky/60">open</span></span>
@@ -2161,13 +2188,15 @@ function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; re
   )
 }
 
-function ExceptionsBox({ exceptions, onAdd, onEdit }: { exceptions: ExceptionReport[]; onAdd: () => void; onEdit: (e: ExceptionReport) => void }) {
+function ExceptionsBox({ exceptions, onAdd, onEdit, framed }: { exceptions: ExceptionReport[]; onAdd: () => void; onEdit: (e: ExceptionReport) => void; framed?: boolean }) {
   const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
   const open = exceptions.filter((e) => !isClosed(e.status))
   const bg = open.length ? 'bg-[#C0392B]/5' : 'bg-cream'
+  const outerClass = framed ? 'flex flex-col' : ['rounded-lg border flex flex-col', open.length ? 'border-[#C0392B]/40' : 'border-navy/20'].join(' ')
+  const headerRoundClass = framed ? '' : 'rounded-t-lg'
   return (
-    <div className={['rounded-lg border flex flex-col', open.length ? 'border-[#C0392B]/40' : 'border-navy/20', bg].join(' ')}>
-      <div className={['sticky top-0 z-10 rounded-t-lg flex items-center justify-between px-4 py-1.5', bg].join(' ')}>
+    <div className={[outerClass, bg].join(' ')}>
+      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, bg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Exception Reports</span>
         <span className={['text-lg font-heading font-bold', open.length ? 'text-[#C0392B]' : 'text-navy'].join(' ')}>{open.length}</span>
       </div>
@@ -2189,12 +2218,12 @@ function ExceptionsBox({ exceptions, onAdd, onEdit }: { exceptions: ExceptionRep
   )
 }
 
-function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () => void; onEdit: (c: LocationComm) => void }) {
+function CommsBox({ comms, onAdd, onEdit, framed }: { comms: LocationComm[]; onAdd: () => void; onEdit: (c: LocationComm) => void; framed?: boolean }) {
   const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
   const open = comms.filter((c) => !isClosed(c.status))
   return (
-    <div className="rounded-lg border border-navy/20 bg-cream flex flex-col">
-      <div className="sticky top-0 z-10 rounded-t-lg bg-cream flex items-center justify-between px-4 py-1.5">
+    <div className={framed ? 'flex flex-col bg-cream' : 'rounded-lg border border-navy/20 bg-cream flex flex-col'}>
+      <div className={framed ? 'sticky top-0 z-10 bg-cream flex items-center justify-between px-4 py-1.5' : 'sticky top-0 z-10 rounded-t-lg bg-cream flex items-center justify-between px-4 py-1.5'}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Location Comms</span>
         <span className="text-lg font-heading font-bold text-navy">{open.length}</span>
       </div>
@@ -2216,7 +2245,7 @@ function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () =
   )
 }
 
-function CustomConfigBox({ locationId, locationLabel }: { locationId: string; locationLabel: string }) {
+function CustomConfigBox({ locationId, locationLabel, framed }: { locationId: string; locationLabel: string; framed?: boolean }) {
   const cfg = useCustomShopConfig()
   const packageOptions = useCustomShopConfigPackageOptions()
   const [editing, setEditing] = useState(false)
@@ -2225,10 +2254,12 @@ function CustomConfigBox({ locationId, locationLabel }: { locationId: string; lo
   const hasAny = vals.length > 0 || pkgs.length > 0
   const packageLabel = (key: string) => packageOptions.find((p) => p.package_key === key)?.display_name ?? key
   const bg = hasAny ? 'bg-sky/5' : 'bg-cream'
+  const outerClass = framed ? 'flex flex-col' : ['rounded-lg border flex flex-col', hasAny ? 'border-sky/50' : 'border-navy/20'].join(' ')
+  const headerRoundClass = framed ? '' : 'rounded-t-lg'
 
   return (
-    <div className={['rounded-lg border flex flex-col', hasAny ? 'border-sky/50' : 'border-navy/20', bg].join(' ')}>
-      <div className={['sticky top-0 z-10 rounded-t-lg flex items-center justify-between px-4 py-1.5', bg].join(' ')}>
+    <div className={[outerClass, bg].join(' ')}>
+      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, bg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Custom Config</span>
         {hasAny && <Badge color="sky">Custom</Badge>}
       </div>
@@ -2261,13 +2292,13 @@ function CustomConfigBox({ locationId, locationLabel }: { locationId: string; lo
   )
 }
 
-function MentionedBox({ projects, meetings, onOpenProjects, onOpenMeetings }: {
-  projects: Project[]; meetings: MeetingNote[]; onOpenProjects: () => void; onOpenMeetings: () => void
+function MentionedBox({ projects, meetings, onOpenProjects, onOpenMeetings, framed }: {
+  projects: Project[]; meetings: MeetingNote[]; onOpenProjects: () => void; onOpenMeetings: () => void; framed?: boolean
 }) {
   if (projects.length === 0 && meetings.length === 0) return null
   return (
-    <div className="rounded-lg border border-navy/20 bg-cream flex flex-col">
-      <div className="sticky top-0 z-10 rounded-t-lg bg-cream px-4 py-1.5">
+    <div className={framed ? 'flex flex-col bg-cream' : 'rounded-lg border border-navy/20 bg-cream flex flex-col'}>
+      <div className={framed ? 'sticky top-0 z-10 bg-cream px-4 py-1.5' : 'sticky top-0 z-10 rounded-t-lg bg-cream px-4 py-1.5'}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Mentioned</span>
       </div>
       <div className="flex flex-col gap-2.5 px-4 pb-3">
