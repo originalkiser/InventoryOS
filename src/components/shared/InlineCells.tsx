@@ -2,7 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 // Shared inline-editable table cells (used by Exception Reporting + Location Comms).
 // Transparent bg so row banding shows through.
-const cellBase = 'bg-transparent rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky'
+// Padding widened 2026-09-25 (px-1.5 py-1 → px-2 py-1.5, direct feedback) —
+// a close-but-not-quite click near a small dropdown/button used to land on
+// the row underneath and open the full-edit modal instead of the control
+// the user meant to use; a bigger control gives a bigger safe target.
+const cellBase = 'bg-transparent rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky max-w-full truncate'
 export const inputCls = `${cellBase} border border-navy/30`
 // Borderless variant for constrained fields (date/select) — a subtle border
 // appears on hover so the cell still reads as editable.
@@ -25,6 +29,10 @@ export function EditSelect({ value, options, onSave, placeholder, allowCurrent, 
   value: string | null; options: string[]; onSave: (v: string | null) => void; placeholder?: string; allowCurrent?: boolean; className?: string; bare?: boolean
 }) {
   const opts = allowCurrent && value && !options.includes(value) ? [value, ...options] : options
+  // `truncate` (from cellBase, via inputCls/bareCls) keeps a native <select>'s
+  // own rendered ellipsis fully inside the control's box as a column gets
+  // resized narrow — found live 2026-09-25, a resize near a dropdown could
+  // otherwise show "…" poking out past the control's own right edge.
   return (
     <select value={value ?? ''} onChange={(e) => onSave(e.target.value || null)} className={`${bare ? bareCls : inputCls} ${className}`}>
       <option value="">{placeholder ?? '—'}</option>

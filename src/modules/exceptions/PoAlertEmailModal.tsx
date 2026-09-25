@@ -256,13 +256,32 @@ export function PoAlertEmailModal({ open, onClose, alerts, template, onChanged }
                 {copied === 'body' ? <><Check className="w-3 h-3 text-[#2ECC71]" /> Copied</> : <><Copy className="w-3 h-3" /> Copy body (formatted)</>}
               </button>
             </div>
-            <div className="rounded border border-navy/20 bg-white p-3 max-h-72 overflow-auto text-sm text-[#002745] [&_table]:my-2"
+            {/* dark:invert dark:hue-rotate-180 — this app's dark mode toggle
+                applies the .dark class app-wide, but the raw email HTML here
+                has no idea about it (it's meant to render in Outlook, always
+                light). Rather than hand-writing dark-mode CSS for content
+                whose structure isn't controlled by this component, invert +
+                hue-rotate the whole preview box only on screen — a common
+                "dark-mode an opaque HTML blob" trick. copyBody() below reads
+                draft.bodyHtml directly, never the filtered DOM, so what gets
+                copied is always the un-inverted light-mode version regardless
+                of which mode is showing on screen. */}
+            <div className="rounded border border-navy/20 bg-white p-3 max-h-72 overflow-auto text-sm text-[#002745] [&_table]:my-2 dark:invert dark:hue-rotate-180"
               dangerouslySetInnerHTML={{ __html: draft.bodyHtml }} />
             <span className="text-[10px] font-mono text-inky/50">Copy pastes into Outlook with the table formatted.</span>
           </div>
 
           <div className="flex items-center justify-between gap-2 pt-1 border-t border-navy/10 mt-1">
-            <button onClick={() => { onClose(); setIdx(0); setHandledIds(new Set()) }} className="text-xs font-mono text-inky/60 hover:text-navy hover:underline">Close</button>
+            <div className="flex items-center gap-3">
+              <button onClick={() => { onClose(); setIdx(0); setHandledIds(new Set()) }} className="text-xs font-mono text-inky/60 hover:text-navy hover:underline">Close</button>
+              <button
+                disabled
+                title="*Coming Soon* - send email directly from SB Net to recipients"
+                className="text-xs font-mono text-inky/30 border border-inky/20 rounded px-2 py-0.5 cursor-not-allowed"
+              >
+                Send Email
+              </button>
+            </div>
             <Button variant="secondary" size="sm" onClick={skipShop}>Skip Shop</Button>
           </div>
         </div>

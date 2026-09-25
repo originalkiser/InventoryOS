@@ -34,7 +34,6 @@
 // mechanism every other column can now opt into.
 import { useEffect, useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { Pencil } from 'lucide-react'
 import { Combobox } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
@@ -62,12 +61,21 @@ const dShort = (d: string | null) => { if (!d) return '—'; try { return format
 // orange for two different meanings, so this adds one. Flagged to the
 // user rather than silently decided — swap this hex if a different
 // yellow (or an existing token instead) is preferred.
-function statusRowClass(status: string | null): string {
+//
+// Found live 2026-09-25 (real screenshot: scrolling horizontally showed
+// other columns' text bleeding through the pinned Status/Shop cells):
+// these must be OPAQUE solid colors, not translucent bg-[#hex]/N tints —
+// same documented constraint as STALE_ROW_BG in staleness.ts. A
+// translucent tint lets whatever's scrolled underneath a sticky column
+// show through it. Values below are the same tints pre-blended over this
+// app's cream/navy-dark-mode surfaces as solid hex, light/dark pair each,
+// matching STALE_ROW_BG's own light/dark shape.
+export function statusRowClass(status: string | null): string {
   const s = (status ?? '').toLowerCase()
-  if (s.includes('procurement')) return 'bg-[#F1C40F]/[0.18]'
-  if (s.includes('tentatively closed')) return 'bg-[#2ECC71]/[0.14]'
-  if (s.includes('closed')) return 'bg-[#2ECC71]/[0.28]'
-  if (s) return 'bg-[#E67E22]/[0.14]' // any other non-empty status = pending on someone else
+  if (s.includes('procurement')) return 'bg-[#FBEEC0] dark:bg-[#4A3F14]'
+  if (s.includes('tentatively closed')) return 'bg-[#DFF3E6] dark:bg-[#1D3A28]'
+  if (s.includes('closed')) return 'bg-[#C7ECD6] dark:bg-[#15442C]'
+  if (s) return 'bg-[#F9E0C7] dark:bg-[#4A2F15]' // any other non-empty status = pending on someone else
   return ''
 }
 
@@ -112,6 +120,7 @@ function AreaManagerCell({ value, options, onSave }: { value: string | null; opt
   }, [value, options])
   return (
     <Combobox
+      compact
       value={value ?? ''}
       options={opts}
       onChange={(v) => onSave(v || null)}
@@ -175,11 +184,8 @@ export function ExceptionTable({ rows, config, shopLabel, regionalDirector, comp
         const stale = isExceptionStale(r, config.staleDays, config.responseDays)
         return (
           <div className="flex flex-col gap-1 min-w-[190px]">
-            <div className="flex items-center gap-1">
-              <button onClick={(e) => { e.stopPropagation(); onEdit(r) }} title="Full edit" className="text-inky hover:text-navy flex-shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-              <EditSelect value={r.status} options={config.statuses} placeholder="—" allowCurrent
-                onSave={(v) => { onSet(r, { status: v }); if ((v ?? '').toLowerCase().includes('closed')) onQuick(r, { status: v }) }} />
-            </div>
+            <EditSelect value={r.status} options={config.statuses} placeholder="—" allowCurrent
+              onSave={(v) => { onSet(r, { status: v }); if ((v ?? '').toLowerCase().includes('closed')) onQuick(r, { status: v }) }} />
             {stale && (
               <button onClick={(e) => { e.stopPropagation(); onSet(r, { metadata: { ...(r.metadata ?? {}), bumped_until: bumpedUntilISO(config.bumpDays) } }) }}
                 title={`Defer ${config.bumpDays} more day(s)`}

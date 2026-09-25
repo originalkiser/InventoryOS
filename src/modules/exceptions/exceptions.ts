@@ -84,6 +84,12 @@ export interface ExceptionConfig {
   // names from get_droptop_po_supplier_names() and a supplier missing from
   // this map is treated as disabled.
   poAlertSuppliers: Record<string, boolean>
+  // Editable instructions shown (in a subtle font) at the bottom of the new
+  // "Close (No Receipt)" modal (2026-09-25) — the manual steps a user
+  // follows in Droptop itself to actually close a PO there, since this app
+  // has no write access to Droptop's own purchase orders. Kept editable
+  // here rather than hardcoded since Droptop's own UI can change.
+  poAlertCloseInstructions: string
 }
 export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   types: [...REPORT_TYPES],
@@ -96,6 +102,12 @@ export const DEFAULT_EXCEPTION_CONFIG: ExceptionConfig = {
   poAlertDaysThreshold: { RelaDyne: 5 },
   poAlertDaysThresholdDefault: 5,
   poAlertSuppliers: { RelaDyne: true, Valvoline: false },
+  poAlertCloseInstructions:
+    'Go to the inventory page in Droptop\n' +
+    'Go to Purchase Orders\n' +
+    'Locate the PO(s) above.\n' +
+    'Open the PO and change status to "Closed"\n' +
+    'Save PO',
 }
 
 // Fixed response values (the table renders these as buttons).

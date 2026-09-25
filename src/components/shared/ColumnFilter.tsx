@@ -55,16 +55,22 @@ export function ColumnFilter<T>({ column }: { column: Column<T, unknown> }) {
   const onlyShown = () => column.setFilterValue(shown.length ? shown.map((v) => v.value) : undefined)
 
   return (
-    <div ref={ref} className="relative inline-block">
+    <div ref={ref} className="relative inline-flex items-center">
       <button
         ref={btnRef}
         onClick={openMenu}
-        title="Filter column"
-        className={['ml-1 align-middle', active ? 'text-inky' : 'text-inky/70 hover:text-navy'].join(' ')}
+        title={active ? `Filtered — ${selected.length} selected` : 'Filter column'}
+        // Found live 2026-09-25: the plain filter glyph alone was too small
+        // and too subtle a cue that a column was actively filtered — bumped
+        // the icon size up, tightened the margin so it sits right under the
+        // header label instead of floating in extra blue space, and added a
+        // "(N)" count next to it whenever a filter is actually applied.
+        className={['ml-0.5 inline-flex items-center gap-0.5 align-middle rounded px-0.5', active ? 'text-[#00e5ff]' : 'text-[#F2F1E6]/60 hover:text-[#F2F1E6]'].join(' ')}
       >
-        <svg className="w-3 h-3 inline" fill={active ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-4 h-4" fill={active ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
         </svg>
+        {active && <span className="text-[10px] font-mono normal-case tracking-normal">({selected.length})</span>}
       </button>
 
       {open && (
