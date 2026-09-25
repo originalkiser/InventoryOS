@@ -113,6 +113,20 @@ function outstandingQty(it: PoItemRow): number {
 
 const OPEN_STATUSES = new Set(['draft', 'sent', 'accepted'])
 
+// Module-level cache (2026-09-25 direct feedback: "the data has to reload"
+// after just switching browser tabs for 30 seconds) — same stale-while-
+// revalidate shape useConfigTab.ts/useLocations.ts already use elsewhere in
+// this app. usePageRevisit (below) calls load() on every tab
+// revisit/refocus; without this, that meant re-running the full ~20k-row
+// PO + line-item fetch from scratch every single time, even a few seconds
+// after the last one. A revisit within the TTL now returns instantly with
+// no network call at all; past the TTL it still shows the cached data
+// immediately (no blanked table, no progress bar) while quietly
+// refreshing in the background.
+interface PoStatusCacheEntry { pos: PoRow[]; itemsByPo: Record<string, PoItemRow[]>; ts: number }
+const poStatusCache = new Map<string, PoStatusCacheEntry>()
+const PO_STATUS_CACHE_TTL_MS = 5 * 60 * 1000
+
 export function PoStatusPage() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -135,8 +149,19 @@ export function PoStatusPage() {
 
   const load = useCallback(async () => {
     if (!companyId) return
-    setLoading(true)
-    setLoadProgress({ phase: 'pos', loaded: 0, total: null })
+    const cached = poStatusCache.get(companyId)
+    if (cached) {
+      // Instant, no network — a stale entry still shows immediately (never
+      // blanks the table back to a loading state) and falls through to a
+      // silent background refresh below.
+      setPos(cached.pos)
+      setItemsByPo(cached.itemsByPo)
+      setLoading(false)
+      if (Date.now() - cached.ts < PO_STATUS_CACHE_TTL_MS) return
+    } else {
+      setLoading(true)
+      setLoadProgress({ phase: 'pos', loaded: 0, total: null })
+    }
     const sb = supabase as any
 
     // PostgREST caps an un-ranged select at 1000 rows by default — silently,
@@ -205,8 +230,10 @@ export function PoStatusPage() {
       const grouped: Record<string, PoItemRow[]> = {}
       for (const it of itemRows) (grouped[it.purchase_order_id] ??= []).push(it)
       setItemsByPo(grouped)
+      poStatusCache.set(companyId, { pos: poRows, itemsByPo: grouped, ts: Date.now() })
     } else {
       setItemsByPo({})
+      poStatusCache.set(companyId, { pos: poRows, itemsByPo: {}, ts: Date.now() })
     }
     setLoading(false)
   }, [companyId])
