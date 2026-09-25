@@ -733,7 +733,20 @@ export function OrdersV2FinalReview() {
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         exportFilename={`Final Review - ${vendors.byId(draft.vendor_id)?.name ?? 'order'} ${draft.order_date}`}
-        getRowClassName={(l) => [l.included ? '' : 'opacity-45', bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''].filter(Boolean).join(' ')}
+        // Found reviewing this rebuild 2026-09-25: the pre-existing dimming/
+        // banding treatment (CSS `opacity-45`, translucent `bg-navy/[0.035]`)
+        // is exactly the class of bug already fixed on Exception Reporting's
+        // own table the same day — `getRowClassName` feeds a pinned column's
+        // background too (Shop is pinned left by default here), and BOTH a
+        // translucent background AND the CSS `opacity` property let
+        // horizontally-scrolled content bleed through a sticky cell (opacity
+        // fades the whole rendered layer during compositing, not just this
+        // element's own background-alpha, so even pairing it with an opaque
+        // bg wouldn't help). Replaced with solid, opaque colors — dimmed
+        // rows read via a muted background rather than faded text, a fair
+        // trade-off since many cell renderers set their own explicit
+        // `text-navy`, which a row-level text-opacity class can't reach.
+        getRowClassName={(l) => (!l.included ? 'bg-[#E4E4DC] dark:bg-[#16222E]' : bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : '')}
         hideColumnControl
         actions={
           <div className="flex items-center gap-3">
