@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { MapPin, Settings, Grip } from 'lucide-react'
+import { MapPin, Settings, Grip, ChevronDown } from 'lucide-react'
 import * as RGL from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -21,7 +21,7 @@ import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
 import { isValvoline, isReladyne } from '@/modules/orders-v2/useOrdersV2'
 import { resolveScheduleDescription } from '@/modules/orders-v2/engine'
-import type { DeliverySchedule } from '@/modules/orders-v2/types'
+import type { DeliverySchedule, WeekCalendar } from '@/modules/orders-v2/types'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue } from './useCustomShopConfig'
@@ -202,6 +202,13 @@ interface SidebarFieldCtx {
   // relationship at all and while still loading, so the field simply
   // doesn't render rather than showing a misleading "—" either way.
   valvolineSchedule: DeliverySchedule | null
+  // Valvoline's own A/B week-label calendar (inventory.ov2_delivery_calendar)
+  // — required to resolve an actual next date for a week_ab schedule; found
+  // live 2026-09-25 that this was never being fetched at all, so
+  // resolveDeliveryDate's own calendar?.get(...) was always undefined and
+  // every week got skipped, always landing on "next date unknown" even
+  // though the calendar data genuinely exists.
+  valvolineCalendar: WeekCalendar
 }
 interface SidebarFieldValue { value: string; note?: string; mapQuery?: string }
 interface SidebarFieldDef { id: string; label: string; render: (ctx: SidebarFieldCtx) => SidebarFieldValue | null }
@@ -219,7 +226,7 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
   {
     id: 'valvoline_schedule', label: 'Valvoline Delivery Schedule',
     render: (ctx) => (ctx.valvolineSchedule
-      ? { value: resolveScheduleDescription(ctx.valvolineSchedule, { orderDate: format(new Date(), 'yyyy-MM-dd') }) }
+      ? { value: resolveScheduleDescription(ctx.valvolineSchedule, { orderDate: format(new Date(), 'yyyy-MM-dd'), calendar: ctx.valvolineCalendar }) }
       : null),
   },
   { id: 'address', label: 'Address', render: (ctx) => ({ value: ctx.addressStr, mapQuery: ctx.addressStr || undefined }) },
@@ -288,15 +295,19 @@ const GRID_WIDGET_IDS = GRID_WIDGET_LABELS.map((w) => w.id)
 // Default positions roughly mirror the old fixed layout (narrow info rail on
 // the left, wide tables on the right) — just as a starting point; the whole
 // point of this feature is that a user can drag/resize away from it.
+// Left rail widened from 3/12 to 4/12 columns (2026-09-25 ask) so Issues/
+// Exceptions/Comms have real room for a status pill next to each item's
+// title — minW bumped to match so a resize can't squeeze them back below
+// what a single item's title+pill needs.
 const DEFAULT_GRID_LAYOUT: RGL.Layout[] = [
-  { i: 'shop_details', x: 0, y: 0, w: 3, h: 18, minW: 2, minH: 4 },
-  { i: 'issues', x: 0, y: 18, w: 3, h: 7, minW: 2, minH: 3 },
-  { i: 'exceptions', x: 0, y: 25, w: 3, h: 7, minW: 2, minH: 3 },
-  { i: 'comms', x: 0, y: 32, w: 3, h: 7, minW: 2, minH: 3 },
-  { i: 'custom_config', x: 0, y: 39, w: 3, h: 7, minW: 2, minH: 3 },
-  { i: 'mentioned', x: 0, y: 46, w: 3, h: 6, minW: 2, minH: 3 },
-  { i: 'tank_monitors', x: 3, y: 0, w: 9, h: 16, minW: 3, minH: 4 },
-  { i: 'order_config', x: 3, y: 16, w: 9, h: 36, minW: 3, minH: 4 },
+  { i: 'shop_details', x: 0, y: 0, w: 4, h: 18, minW: 3, minH: 4 },
+  { i: 'issues', x: 0, y: 18, w: 4, h: 7, minW: 3, minH: 3 },
+  { i: 'exceptions', x: 0, y: 25, w: 4, h: 7, minW: 3, minH: 3 },
+  { i: 'comms', x: 0, y: 32, w: 4, h: 7, minW: 3, minH: 3 },
+  { i: 'custom_config', x: 0, y: 39, w: 4, h: 7, minW: 3, minH: 3 },
+  { i: 'mentioned', x: 0, y: 46, w: 4, h: 6, minW: 3, minH: 3 },
+  { i: 'tank_monitors', x: 4, y: 0, w: 8, h: 16, minW: 3, minH: 4 },
+  { i: 'order_config', x: 4, y: 16, w: 8, h: 36, minW: 3, minH: 4 },
 ]
 
 // Reconciles a persisted layout against the current widget set — a widget
@@ -315,6 +326,114 @@ function mergeGridLayout(saved: RGL.Layout[] | undefined, defaults: RGL.Layout[]
   }
   for (const def of defaults) if (!seen.has(def.i)) result.push(def)
   return result
+}
+
+// "Scroll for more" bounce hint (2026-09-25 ask) — a randomized burst of
+// 2-4 bounces, then a pause of a few seconds, then a new random burst,
+// forever. `bounceKey` is bumped every cycle and used as a React `key` so
+// the CSS animation element remounts (guaranteeing a clean restart) rather
+// than trying to reset a running animation in place.
+function useBouncePattern(active: boolean) {
+  const [bounceKey, setBounceKey] = useState(0)
+  const [bounceCount, setBounceCount] = useState(3)
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    function cycle() {
+      const count = 2 + Math.floor(Math.random() * 3) // 2, 3, or 4 bounces
+      setBounceCount(count)
+      setBounceKey((k) => k + 1)
+      const bounceMs = 550
+      const pauseMs = 1800 + Math.random() * 2200 // 1.8s-4s between bursts
+      timer = setTimeout(() => { if (!cancelled) cycle() }, count * bounceMs + pauseMs)
+    }
+    cycle()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [active])
+  return { bounceKey, bounceCount }
+}
+
+// Shared frame for every widget on the full-page grid (2026-09-25 ask):
+// hides its own scrollbar (scroll still works), keeps a bouncing down-arrow
+// hint in the bottom-right corner while there's more to scroll to, and owns
+// the drag handle overlay in edit mode. The actual scrolling happens on the
+// INNER div (`scrollRef`) — the outer `flex-1 min-h-0` div only constrains
+// height; widget content itself renders at its natural height rather than
+// being forced to fill the box, which is what lets the inner div's own
+// overflow correctly clip/scroll it instead of content silently spilling
+// past the box's bottom edge (found live 2026-09-25 as a real visual bug —
+// Shop Details' own content bled through into the widget below it once its
+// Card was forced to `h-full`, since nothing between that fixed-height Card
+// and its taller content actually clipped the overflow).
+function GridWidgetShell({ editMode, children }: { editMode: boolean; children: ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [canScroll, setCanScroll] = useState(false)
+  const [atBottom, setAtBottom] = useState(true)
+
+  const checkOverflow = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    setCanScroll(el.scrollHeight > el.clientHeight + 2)
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 8)
+  }, [])
+
+  useEffect(() => {
+    checkOverflow()
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(checkOverflow)
+    ro.observe(el)
+    // Content can change height without the container itself resizing (a
+    // realtime update adding a row, a tab switch inside a widget, etc.) —
+    // a MutationObserver catches that the same ResizeObserver wouldn't.
+    const mo = new MutationObserver(checkOverflow)
+    mo.observe(el, { childList: true, subtree: true, characterData: true })
+    el.addEventListener('scroll', checkOverflow, { passive: true })
+    return () => { ro.disconnect(); mo.disconnect(); el.removeEventListener('scroll', checkOverflow) }
+  }, [checkOverflow])
+
+  const showHint = canScroll && !atBottom
+  const { bounceKey, bounceCount } = useBouncePattern(showHint)
+
+  return (
+    <div className="relative h-full flex flex-col">
+      {editMode && (
+        <div className="widget-drag-handle absolute -top-2 -left-2 z-20 cursor-grab active:cursor-grabbing bg-navy text-cream rounded-full p-1.5 shadow-lg border-2 border-cream" title="Drag to move">
+          <Grip className="w-3.5 h-3.5" />
+        </div>
+      )}
+      <div className={`flex-1 min-h-0 ${editMode ? 'ring-2 ring-sky/60 ring-offset-1 rounded-lg' : ''}`}>
+        <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-hide rounded-lg">
+          {children}
+        </div>
+      </div>
+      {showHint && (
+        <div
+          key={bounceKey}
+          className="pointer-events-none absolute bottom-1.5 right-2.5 text-navy/25"
+          style={{ animation: `sb-bounce-arrow 0.55s ease-in-out ${bounceCount}` }}
+        >
+          <ChevronDown className="w-4 h-4" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// A status pill that truncates instead of wrapping/overflowing when a list
+// item's title leaves it little room (2026-09-25 ask — Issues/Exceptions/
+// Comms boxes putting the status next to the title instead of on its own
+// line once a widget has real width to spare) — the full text is always in
+// the native `title` tooltip, shown on hover, regardless of truncation.
+function TruncatingBadge({ color, children }: { color: 'red' | 'amber' | 'green' | 'sky' | 'cyan'; children: string }) {
+  return (
+    <span title={children} className="inline-block align-middle max-w-[9rem] shrink-0">
+      <Badge color={color} className="max-w-full">
+        <span className="block truncate min-w-0">{children}</span>
+      </Badge>
+    </span>
+  )
 }
 
 interface Col<T> { id: string; label: string; align: 'left' | 'right' | 'center'; render: (r: T) => ReactNode; sort?: (r: T) => string | number | null; tint?: boolean; width?: string }
@@ -549,6 +668,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // Address, see SIDEBAR_FIELDS). null when there's no Valvoline vendor
   // relationship for this shop at all, not just "still loading."
   const [valvolineSchedule, setValvolineSchedule] = useState<DeliverySchedule | null>(null)
+  // A/B week-label calendar for whichever vendor(s) use week_ab schedules —
+  // Valvoline's own is filtered out of this once vendVendor resolves (see
+  // load()). Without this, resolveDeliveryDate has no way to know which
+  // real calendar week is "A" vs "B" and always reports the next date as
+  // unknown for a week_ab schedule — found live 2026-09-25.
+  const [valvolineCalendar, setValvolineCalendar] = useState<WeekCalendar>(new Map())
   const [issues, setIssues] = useState<IssueRow[]>([])
   const [statusNames, setStatusNames] = useState<Record<string, string>>({})
   const [exceptions, setExceptions] = useState<ExceptionReport[]>([])
@@ -711,7 +836,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // subsumes the old exact-match list rather than needing both.
       const usageFamilies = [...new Set([...usageIdList].map((p) => pkey(baseProductId(p))).filter(Boolean))]
 
-      const [usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes, schedRes] = await Promise.all([
+      const [usageRes, vendRes, issRes, statRes, supRes, excRes, commRes, partsRes, projRes, meetRes, baselineRes, prodExcRes, schedRes, calRes] = await Promise.all([
         usageFamilies.length === 0 ? Promise.resolve({ data: [] }) : fetchAllRows((from, to) =>
           sb.schema('inventory').from('product_usage')
             .select('product_id, on_hands, daily_usage, updated_at')
@@ -747,6 +872,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // the shop and the match against Valvoline's own vendor id happens
         // just below instead.
         sb.schema('inventory').from('ov2_location_schedules').select('*').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
+        // A/B week-label calendar behind the schedule above — company-wide
+        // (not shop-scoped; the table itself is per-vendor, not per-shop),
+        // same "resolve vendor_id after vendRes comes back" reasoning as
+        // schedRes just above.
+        sb.schema('inventory').from('ov2_delivery_calendar').select('week_start, week_label, vendor_id').eq('company_id', companyId).then((r: any) => r).catch(() => ({ data: [] })),
       ])
       // Collapse to the newest reading per tank (serial, then system id, then
       // row id) so leftover duplicate readings don't stack or inflate counts.
@@ -874,6 +1004,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         biweekly_anchor_date: valvRow.biweekly_anchor_date ?? null,
         lead_business_days: Number(valvRow.lead_business_days ?? 4),
       } : null)
+      setValvolineCalendar(valvVendor
+        ? new Map(((calRes?.data ?? []) as any[])
+            .filter((r) => r.vendor_id === valvVendor.id)
+            .map((r) => [String(r.week_start).slice(0, 10), r.week_label as 'A' | 'B']))
+        : new Map())
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
       setSupplemental((supRes?.data?.data ?? null) as Record<string, string> | null)
@@ -1277,7 +1412,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // old array literal's own conditional spread.
   const sidebarFieldsAll: ResolvedSidebarField[] = location ? [...SIDEBAR_FIELDS, ...extraSidebarFields]
     .map((f): ResolvedSidebarField | null => {
-      const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC, valvolineSchedule })
+      const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC, valvolineSchedule, valvolineCalendar })
       return r ? { id: f.id, label: f.label, value: r.value, note: r.note, mapQuery: r.mapQuery } : null
     })
     .filter((f): f is ResolvedSidebarField => !!f) : []
@@ -1561,9 +1696,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // drag/resize grid (2026-09-25 ask).
         const widgetContent: Record<string, ReactNode> = {
           shop_details: (
-            <Card className="h-full flex flex-col">
-              <CardBody className="flex flex-col gap-2 flex-1 min-h-0">
-                <div className="flex items-center justify-between mt-1">
+            <Card>
+              <CardBody className="flex flex-col gap-2">
+                {/* Sticky within the widget's own scroll container + half the
+                    old top margin (mt-1 dropped, CardBody's own py-4 is
+                    cancelled with -mt-4 -mx-5 and reapplied at py-2) — see
+                    GridWidgetShell for the actual scroll container this
+                    sticks against. */}
+                <div className="sticky top-0 z-10 -mx-5 -mt-4 mb-1 px-5 py-2 bg-cream flex items-center justify-between">
                   <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Shop Details</span>
                 </div>
                 <dl className="flex flex-col gap-1.5">
@@ -1596,9 +1736,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               onOpenProjects={() => navigate('/projects')} onOpenMeetings={() => navigate('/meetings')} />
           ),
           tank_monitors: (
-            <Card className="w-fit max-w-full h-full flex flex-col">
-              <CardBody className="flex flex-col gap-2 flex-1 min-h-0">
-                <div className="flex items-center gap-3 self-start flex-wrap">
+            <Card className="w-fit max-w-full">
+              <CardBody className="flex flex-col gap-2">
+                <div className="sticky top-0 z-10 -mx-5 -mt-4 mb-1 px-5 py-2 bg-cream flex items-center gap-3 flex-wrap">
                   <span className="text-xs font-mono text-navy uppercase tracking-wide">
                     Tank Monitors ({tanks.length})
                   </span>
@@ -1795,16 +1935,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           >
             {GRID_WIDGET_IDS.map((id) => (
               <div key={id} className="h-full">
-                <div className={`relative h-full flex flex-col ${customizeOpen ? 'ring-2 ring-sky/60 ring-offset-1 rounded-lg' : ''}`}>
-                  {customizeOpen && (
-                    <div className="widget-drag-handle absolute -top-2 -left-2 z-20 cursor-grab active:cursor-grabbing bg-navy text-cream rounded-full p-1.5 shadow-lg border-2 border-cream" title="Drag to move">
-                      <Grip className="w-3.5 h-3.5" />
-                    </div>
-                  )}
-                  <div className="flex-1 min-h-0 overflow-y-auto rounded-lg">
-                    {widgetContent[id]}
-                  </div>
-                </div>
+                <GridWidgetShell editMode={customizeOpen}>
+                  {widgetContent[id]}
+                </GridWidgetShell>
               </div>
             ))}
           </ReactGridLayout>
@@ -1989,30 +2122,41 @@ function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; re
   const start = top?.start_date ? new Date(top.start_date + 'T00:00:00') : null
   const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
   const pastDue = !!top?.target_resolution_date && differenceInCalendarDays(new Date(), new Date(top.target_resolution_date + 'T00:00:00')) > 0
+  const bg = pending.length ? 'bg-[#E67E22]/10' : 'bg-cream'
   return (
-    <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', pending.length ? 'border-[#E67E22]/50 bg-[#E67E22]/10' : 'border-navy/20 bg-cream'].join(' ')}>
-      <div className="flex items-center justify-between">
+    <div className={['rounded-lg border flex flex-col', pending.length ? 'border-[#E67E22]/50' : 'border-navy/20', bg].join(' ')}>
+      {/* Sticky within the widget's own scroll container (see GridWidgetShell)
+          — half the vertical padding of the old single-block layout (py-3 ->
+          py-1.5) per the 2026-09-25 ask. */}
+      <div className={['sticky top-0 z-10 rounded-t-lg flex items-center justify-between px-4 py-1.5', bg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Issues</span>
         <div className="flex items-center gap-3">
           <span className={['text-sm font-heading font-bold', pending.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pending.length} <span className="text-[10px] font-mono font-normal text-inky/60">open</span></span>
           <span className="text-sm font-heading font-bold text-[#2ECC71]">{resolved.length} <span className="text-[10px] font-mono font-normal text-inky/60">resolved</span></span>
         </div>
       </div>
-      {top ? (
-        <button onClick={() => onManage('pending')} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-cream px-2 py-1.5">
-          <div className="text-xs font-body text-navy break-words">{top.title}</div>
-          {pastDue && <div className="mt-0.5"><Badge color="red">Past due</Badge></div>}
-          <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
-            <span>Start {dateShort(top.start_date)}</span>
-            <span>Target {dateShort(top.target_resolution_date)}</span>
-            {daysOpen != null && <span className={pastDue ? 'text-[#C0392B] font-bold' : ''}>{daysOpen}d open</span>}
-          </div>
-        </button>
-      ) : (
-        <span className="text-xs font-body text-inky/50">No open issues</span>
-      )}
-      {pending.length > 1 && <span className="text-[10px] font-mono text-inky/50">+{pending.length - 1} more open</span>}
-      <button onClick={() => onManage('pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Manage Issues →</button>
+      <div className="flex flex-col gap-2 px-4 pb-3">
+        {top ? (
+          <button onClick={() => onManage('pending')} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-cream px-2 py-1.5">
+            {/* Status pill sits next to the title (not stacked below it) so a
+                widened widget actually gains usable room — truncates with a
+                hover tooltip rather than wrapping/pushing layout around. */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{top.title}</div>
+              {pastDue && <TruncatingBadge color="red">Past due</TruncatingBadge>}
+            </div>
+            <div className="text-[10px] font-mono text-inky/60 flex flex-wrap gap-x-3 mt-0.5">
+              <span>Start {dateShort(top.start_date)}</span>
+              <span>Target {dateShort(top.target_resolution_date)}</span>
+              {daysOpen != null && <span className={pastDue ? 'text-[#C0392B] font-bold' : ''}>{daysOpen}d open</span>}
+            </div>
+          </button>
+        ) : (
+          <span className="text-xs font-body text-inky/50">No open issues</span>
+        )}
+        {pending.length > 1 && <span className="text-[10px] font-mono text-inky/50">+{pending.length - 1} more open</span>}
+        <button onClick={() => onManage('pending')} className="text-[10px] font-mono text-sky text-left hover:underline">Manage Issues →</button>
+      </div>
     </div>
   )
 }
@@ -2020,22 +2164,27 @@ function IssuesColumn({ pending, resolved, onManage }: { pending: IssueRow[]; re
 function ExceptionsBox({ exceptions, onAdd, onEdit }: { exceptions: ExceptionReport[]; onAdd: () => void; onEdit: (e: ExceptionReport) => void }) {
   const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
   const open = exceptions.filter((e) => !isClosed(e.status))
+  const bg = open.length ? 'bg-[#C0392B]/5' : 'bg-cream'
   return (
-    <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', open.length ? 'border-[#C0392B]/40 bg-[#C0392B]/5' : 'border-navy/20 bg-cream'].join(' ')}>
-      <div className="flex items-center justify-between">
+    <div className={['rounded-lg border flex flex-col', open.length ? 'border-[#C0392B]/40' : 'border-navy/20', bg].join(' ')}>
+      <div className={['sticky top-0 z-10 rounded-t-lg flex items-center justify-between px-4 py-1.5', bg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Exception Reports</span>
         <span className={['text-lg font-heading font-bold', open.length ? 'text-[#C0392B]' : 'text-navy'].join(' ')}>{open.length}</span>
       </div>
-      {exceptions.length === 0 ? (
-        <span className="text-xs font-body text-inky/50">None</span>
-      ) : exceptions.slice(0, 5).map((e) => (
-        <button key={e.id} onClick={() => onEdit(e)} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-          <div className="text-xs font-body text-navy break-words">{[e.report_type, e.issue].filter(Boolean).join(' · ') || 'Exception'}</div>
-          {e.status && <div className="mt-0.5"><Badge color={isClosed(e.status) ? 'green' : 'amber'}>{e.status}</Badge></div>}
-          <div className="text-[10px] font-mono text-inky/60 mt-0.5">Found {dateShort(e.date_of_finding)}</div>
-        </button>
-      ))}
-      <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Exception</button>
+      <div className="flex flex-col gap-2 px-4 pb-3">
+        {exceptions.length === 0 ? (
+          <span className="text-xs font-body text-inky/50">None</span>
+        ) : exceptions.slice(0, 5).map((e) => (
+          <button key={e.id} onClick={() => onEdit(e)} className="text-left rounded border border-navy/15 bg-cream/70 hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{[e.report_type, e.issue].filter(Boolean).join(' · ') || 'Exception'}</div>
+              {e.status && <TruncatingBadge color={isClosed(e.status) ? 'green' : 'amber'}>{e.status}</TruncatingBadge>}
+            </div>
+            <div className="text-[10px] font-mono text-inky/60 mt-0.5">Found {dateShort(e.date_of_finding)}</div>
+          </button>
+        ))}
+        <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Exception</button>
+      </div>
     </div>
   )
 }
@@ -2044,21 +2193,25 @@ function CommsBox({ comms, onAdd, onEdit }: { comms: LocationComm[]; onAdd: () =
   const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
   const open = comms.filter((c) => !isClosed(c.status))
   return (
-    <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3 flex flex-col gap-2">
-      <div className="flex items-center justify-between">
+    <div className="rounded-lg border border-navy/20 bg-cream flex flex-col">
+      <div className="sticky top-0 z-10 rounded-t-lg bg-cream flex items-center justify-between px-4 py-1.5">
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Location Comms</span>
         <span className="text-lg font-heading font-bold text-navy">{open.length}</span>
       </div>
-      {comms.length === 0 ? (
-        <span className="text-xs font-body text-inky/50">None</span>
-      ) : comms.slice(0, 5).map((c) => (
-        <button key={c.id} onClick={() => onEdit(c)} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-          <div className="text-xs font-body text-navy break-words">{[c.comm_type, c.contact_method].filter(Boolean).join(' · ') || 'Communication'}</div>
-          {c.status && <div className="mt-0.5"><Badge color={isClosed(c.status) ? 'green' : 'amber'}>{c.status}</Badge></div>}
-          <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(c.comm_date)}{(c.products ?? []).length ? ` · ${(c.products ?? []).length} product(s)` : ''}</div>
-        </button>
-      ))}
-      <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Communication</button>
+      <div className="flex flex-col gap-2 px-4 pb-3">
+        {comms.length === 0 ? (
+          <span className="text-xs font-body text-inky/50">None</span>
+        ) : comms.slice(0, 5).map((c) => (
+          <button key={c.id} onClick={() => onEdit(c)} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{[c.comm_type, c.contact_method].filter(Boolean).join(' · ') || 'Communication'}</div>
+              {c.status && <TruncatingBadge color={isClosed(c.status) ? 'green' : 'amber'}>{c.status}</TruncatingBadge>}
+            </div>
+            <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(c.comm_date)}{(c.products ?? []).length ? ` · ${(c.products ?? []).length} product(s)` : ''}</div>
+          </button>
+        ))}
+        <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Communication</button>
+      </div>
     </div>
   )
 }
@@ -2071,35 +2224,38 @@ function CustomConfigBox({ locationId, locationLabel }: { locationId: string; lo
   const pkgs = cfg.packagesFor(locationId)
   const hasAny = vals.length > 0 || pkgs.length > 0
   const packageLabel = (key: string) => packageOptions.find((p) => p.package_key === key)?.display_name ?? key
+  const bg = hasAny ? 'bg-sky/5' : 'bg-cream'
 
   return (
-    <div className={['rounded-lg border px-4 py-3 flex flex-col gap-2', hasAny ? 'border-sky/50 bg-sky/5' : 'border-navy/20 bg-cream'].join(' ')}>
-      <div className="flex items-center justify-between">
+    <div className={['rounded-lg border flex flex-col', hasAny ? 'border-sky/50' : 'border-navy/20', bg].join(' ')}>
+      <div className={['sticky top-0 z-10 rounded-t-lg flex items-center justify-between px-4 py-1.5', bg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Custom Config</span>
         {hasAny && <Badge color="sky">Custom</Badge>}
       </div>
-      {!hasAny ? (
-        <span className="text-xs font-body text-inky/50">None</span>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {vals.map((v) => {
-            const f = cfg.fields.find((x) => x.id === v.field_id)
-            if (!f) return null
-            return (
-              <div key={v.id} className="text-xs font-body text-navy flex items-center justify-between gap-2">
-                <span>{f.name}{v.package_key ? <span className="text-inky/50"> ({packageLabel(v.package_key)})</span> : null}</span>
-                <span className="font-mono">{formatFieldValue(v.value, f.value_kind)}</span>
-              </div>
-            )
-          })}
-          {pkgs.length > 0 && (
-            <div className="text-[10px] font-mono text-inky/60 mt-0.5">Applies to: {pkgs.map((p) => packageLabel(p.package_key)).join(', ')}</div>
-          )}
-        </div>
-      )}
-      <button onClick={() => setEditing(true)} className="text-[10px] font-mono text-sky text-left hover:underline">
-        {hasAny ? 'Edit Custom Config' : '+ Add Custom Config'}
-      </button>
+      <div className="flex flex-col gap-2 px-4 pb-3">
+        {!hasAny ? (
+          <span className="text-xs font-body text-inky/50">None</span>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {vals.map((v) => {
+              const f = cfg.fields.find((x) => x.id === v.field_id)
+              if (!f) return null
+              return (
+                <div key={v.id} className="text-xs font-body text-navy flex items-center justify-between gap-2">
+                  <span>{f.name}{v.package_key ? <span className="text-inky/50"> ({packageLabel(v.package_key)})</span> : null}</span>
+                  <span className="font-mono">{formatFieldValue(v.value, f.value_kind)}</span>
+                </div>
+              )
+            })}
+            {pkgs.length > 0 && (
+              <div className="text-[10px] font-mono text-inky/60 mt-0.5">Applies to: {pkgs.map((p) => packageLabel(p.package_key)).join(', ')}</div>
+            )}
+          </div>
+        )}
+        <button onClick={() => setEditing(true)} className="text-[10px] font-mono text-sky text-left hover:underline">
+          {hasAny ? 'Edit Custom Config' : '+ Add Custom Config'}
+        </button>
+      </div>
       {editing && <CustomShopConfigModal cfg={cfg} packageOptions={packageOptions} locationId={locationId} locationLabel={locationLabel} onClose={() => setEditing(false)} />}
     </div>
   )
@@ -2110,30 +2266,36 @@ function MentionedBox({ projects, meetings, onOpenProjects, onOpenMeetings }: {
 }) {
   if (projects.length === 0 && meetings.length === 0) return null
   return (
-    <div className="rounded-lg border border-navy/20 bg-cream px-4 py-3 flex flex-col gap-2.5">
-      <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Mentioned</span>
-      {projects.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-mono text-inky/50">Projects ({projects.length})</span>
-          {projects.slice(0, 5).map((p) => (
-            <button key={p.id} onClick={onOpenProjects} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-              <div className="text-xs font-body text-navy break-words">{p.project_name || '(untitled project)'}</div>
-              {p.status && <div className="mt-0.5"><Badge color="cyan">{p.status}</Badge></div>}
-            </button>
-          ))}
-        </div>
-      )}
-      {meetings.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-mono text-inky/50">Meetings ({meetings.length})</span>
-          {meetings.slice(0, 5).map((m) => (
-            <button key={m.id} onClick={onOpenMeetings} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-              <div className="text-xs font-body text-navy break-words">{m.title || '(untitled meeting)'}</div>
-              <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(m.meeting_date)}</div>
-            </button>
-          ))}
-        </div>
-      )}
+    <div className="rounded-lg border border-navy/20 bg-cream flex flex-col">
+      <div className="sticky top-0 z-10 rounded-t-lg bg-cream px-4 py-1.5">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Mentioned</span>
+      </div>
+      <div className="flex flex-col gap-2.5 px-4 pb-3">
+        {projects.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-mono text-inky/50">Projects ({projects.length})</span>
+            {projects.slice(0, 5).map((p) => (
+              <button key={p.id} onClick={onOpenProjects} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-body text-navy break-words min-w-0 flex-1">{p.project_name || '(untitled project)'}</div>
+                  {p.status && <TruncatingBadge color="cyan">{p.status}</TruncatingBadge>}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        {meetings.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-mono text-inky/50">Meetings ({meetings.length})</span>
+            {meetings.slice(0, 5).map((m) => (
+              <button key={m.id} onClick={onOpenMeetings} className="text-left rounded border border-navy/15 bg-navy/[0.03] hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+                <div className="text-xs font-body text-navy break-words">{m.title || '(untitled meeting)'}</div>
+                <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(m.meeting_date)}</div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

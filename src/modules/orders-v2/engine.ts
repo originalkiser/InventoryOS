@@ -229,9 +229,17 @@ export function resolveScheduleDescription(
 
   // week_ab / biweekly — not a fixed single weekday every week, so the day
   // name alone is ambiguous. Show the pattern, plus the next resolved date
-  // when we have an order date to resolve one from.
+  // when we have an order date to resolve one from. A week_ab side left
+  // null means that week genuinely gets no delivery at all — omitted
+  // entirely rather than printed as "—", which read as "unknown" instead of
+  // "none" (found live 2026-09-25, a real Valvoline schedule with no B-week
+  // delivery showing "A: Wednesday · B: —").
+  const weekAbParts = [
+    schedule.week_a_dow != null ? `A: ${dowName(schedule.week_a_dow)}` : null,
+    schedule.week_b_dow != null ? `B: ${dowName(schedule.week_b_dow)}` : null,
+  ].filter((s): s is string => !!s)
   const pattern = schedule.type === 'week_ab'
-    ? `A: ${dowName(schedule.week_a_dow)} · B: ${dowName(schedule.week_b_dow)} (${schedule.lead_business_days}d lead)`
+    ? `${weekAbParts.join(' · ') || 'No delivery day set'} (${schedule.lead_business_days}d lead)`
     : `${dowName(schedule.delivery_dow)}, every other week (${schedule.lead_business_days}d lead)`
   if (!opts?.orderDate) return pattern
   const next = resolveDeliveryDate(opts.orderDate, schedule, opts.calendar)

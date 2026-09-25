@@ -240,6 +240,20 @@ body {
 }
 .shake-x { animation: shake-x 0.4s ease-in-out; }
 
+/* Fully hidden scrollbar (unlike .hover-scroll above, never shown even on
+   hover) — for a box whose own scroll-hint arrow (see sb-bounce-arrow below)
+   is the intended affordance instead of a visible track/thumb. */
+.scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* Location Lookup's grid-widget "scroll for more" hint — a short burst of
+   N bounces (N randomized per cycle by the caller via animation-iteration-
+   count), remounted each cycle so the animation restarts cleanly. */
+@keyframes sb-bounce-arrow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(4px); }
+}
+
 .sticky-table th:first-child,
 .sticky-table td:first-child {
   position: sticky;
