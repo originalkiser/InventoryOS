@@ -737,9 +737,31 @@ export function buildGenerationInputs(
   for (const m of productMappings) {
     if (m.old_product_id && m.new_product_id) oldToNew.set(pkey(m.old_product_id), String(m.new_product_id))
   }
+  // A location that has BOTH the old and new product_id independently
+  // configured in location_order_config is deliberately tracking them as
+  // two separate real SKUs (e.g. a shop that stocks both a drum AND bay
+  // boxes of the same oil) — real bug found live 2026-09-25: shop 29's
+  // EURO-SYN-0W30D (drum) has real POS usage, but product_id_mappings' own
+  // EURO-SYN-0W30D -> EURO-SYN-0W30BB row (added for shops that fully
+  // switched packaging — see project_product_id_mappings_correction
+  // memory) unconditionally redirected it into the bay-box row's usage
+  // entry, leaving the drum config with no usage data at all (which
+  // defaulted it into an unwanted order) while the bay box over-ordered on
+  // usage that was really the drum's own. The redirect is skipped ONLY for
+  // a (location, old_product_id) pair where that same location ALSO
+  // configures new_product_id — every other location (the common case: a
+  // shop that's fully switched packaging and only has the new id
+  // configured) still redirects exactly as before.
+  const configuredKeys = new Set(configs.map((c) => ruleKey(c.location_id, c.product_id)))
+  const resolveMappedProductId = (locationId: string, rawProductId: string): string => {
+    const mapped = oldToNew.get(pkey(rawProductId))
+    if (!mapped) return rawProductId
+    const bothConfigured = configuredKeys.has(ruleKey(locationId, rawProductId)) && configuredKeys.has(ruleKey(locationId, mapped))
+    return bothConfigured ? rawProductId : mapped
+  }
   const usageMap = new Map<string, UsageRow>()
   for (const u of usage) {
-    const resolved = oldToNew.get(pkey(u.product_id)) ?? u.product_id
+    const resolved = resolveMappedProductId(u.location_id, u.product_id)
     const k = ruleKey(u.location_id, resolved)
     const cur = usageMap.get(k)
     const add = (a: number | null | undefined, b: number | null | undefined) =>
@@ -779,7 +801,7 @@ export function buildGenerationInputs(
   for (const t of tankOnHand) {
     if (!t.location_id || !t.product_id || t.on_hand == null) continue
     const tankResolved = resolveTankProductId(t.product_id)
-    const resolved = oldToNew.get(pkey(tankResolved)) ?? tankResolved
+    const resolved = resolveMappedProductId(t.location_id, tankResolved)
     const k = ruleKey(t.location_id, resolved)
     tankOnHandMap.set(k, (tankOnHandMap.get(k) ?? 0) + Number(t.on_hand))
   }

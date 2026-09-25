@@ -503,10 +503,28 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       for (const m of ((mapRes?.data ?? []) as any[])) {
         if (m.old_product_id && m.new_product_id) oldToNew.set(pkey(m.old_product_id), String(m.new_product_id))
       }
+      // A shop with BOTH the old and new product_id independently configured
+      // (location_order_config) is deliberately tracking them as two
+      // separate real SKUs — e.g. a shop stocking both a drum AND bay boxes
+      // of the same oil. Real bug found live 2026-09-25: shop 29's own
+      // EURO-SYN-0W30D (drum) has real POS usage, but an unconditional
+      // redirect here (matching Orders v2's own generation engine, since
+      // fixed the same way — see useOrdersV2.ts's resolveMappedProductId)
+      // folded it entirely into the bay-box row, showing this page's own
+      // "no usage" for the drum too. Skipped only when this SHOP configures
+      // both ids; every other shop (the common case: fully switched
+      // packaging) still redirects exactly as before.
+      const configuredProductKeys = new Set(configProducts.map((c) => pkey(c.product_id)).filter(Boolean))
+      const resolveMapped = (rawId: string): string => {
+        const mapped = oldToNew.get(pkey(rawId))
+        if (!mapped) return rawId
+        const bothConfigured = configuredProductKeys.has(pkey(rawId)) && configuredProductKeys.has(pkey(mapped))
+        return bothConfigured ? rawId : mapped
+      }
       const usageByProduct = new Map<string, { on_hands: number | null; daily_usage: number | null; updated_at: string | null }>()
       for (const u of ((usageRes?.data ?? []) as any[])) {
         if (!u.product_id) continue
-        const resolved = pkey(oldToNew.get(pkey(u.product_id)) ?? u.product_id)
+        const resolved = pkey(resolveMapped(u.product_id))
         const cur = usageByProduct.get(resolved)
         const add = (a: number | null, b: unknown) => (b == null ? a : (a ?? 0) + Number(b))
         usageByProduct.set(resolved, {
@@ -520,7 +538,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // (new ids), so looking a config row up by its raw (possibly still-old)
       // id missed every product a mapping actually applies to, even when the
       // config and usage rows agreed on the same literal id pre-mapping.
-      const resolvedKey = (pid: string) => pkey(oldToNew.get(pkey(pid)) ?? pid)
+      const resolvedKey = (pid: string) => pkey(resolveMapped(pid))
       const exceptionByProduct = new Map<string, { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null }>()
       for (const e of ((prodExcRes?.data ?? []) as any[])) {
         if (!e.product_id) continue
