@@ -61,7 +61,7 @@ interface ConfigRow {
   // 5W30BB) whose own on-hand/usage got folded into this row's own — same
   // combine Orders v2's generation engine already does, so a shop selling or
   // receiving under the "wrong" case type still shows real usage here.
-  usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null; equivalent_products?: { product_id: string; on_hand: number }[] } | null
+  usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null; equivalent_products?: { product_id: string; on_hand: number; daily_usage: number | null }[] } | null
   // Joined from inventory.ov2_product_exceptions by product_id — Orders v2's
   // shop+product floor/ceiling override, if one's been set for this row.
   exception?: { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null } | null
@@ -323,39 +323,36 @@ const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', '
 // rather than the order config row itself. Days of Supply is always
 // computed here (on hand ÷ daily usage), not read from the table's own
 // days_of_supply column, so it stays consistent with what's displayed.
-// A combined figure (see combinedUsageFor above) shows a small sky-colored
-// "+" with a tooltip naming the sibling case-type(s) folded in, so a number
-// that's bigger than this one exact SKU's own reading doesn't read as a
-// mistake. Used for Daily Usage — On Hand gets the fuller visible
-// breakdown below (OnHandValue) instead, per direct feedback 2026-09-25.
-function UsageValue({ value, siblings }: { value: string; siblings?: { product_id: string; on_hand: number }[] }) {
-  if (!siblings?.length) return <>{value}</>
-  return (
-    <span title={`Includes ${siblings.map((s) => s.product_id).join(', ')}`}>
-      {value}<span className="text-sky font-bold">+</span>
-    </span>
-  )
-}
-// Visible sibling breakdown under On Hand — same "Combining On Hands" shape
-// Orders v2's own Review/Final Review tables already show, rather than
-// only a hover tooltip naming the siblings with no amounts. Direct
-// feedback 2026-09-25: "have that like-product listed and amount on hand
-// of that product underneath the on hand amount."
-function OnHandValue({ value, siblings }: { value: string; siblings?: { product_id: string; on_hand: number }[] }) {
+//
+// A combined figure (see combinedUsageFor above) shows a visible sibling
+// breakdown underneath — same "Combining On Hands"/"Combining Usage" shape
+// Orders v2's own Review/Final Review tables already use for on-hand —
+// rather than a bare number or a hover-only tooltip, so a total that's
+// bigger than this one exact SKU's own reading doesn't read as a mistake,
+// and the sibling's own contribution is visible without hovering. Direct
+// feedback 2026-09-25 (first for On Hand, then the same treatment
+// requested for Daily Usage): "have that like-product listed and amount
+// ... underneath."
+function CombinedBreakdownValue({ value, label, siblings, pick }: {
+  value: string
+  label: string
+  siblings?: { product_id: string; on_hand: number; daily_usage: number | null }[]
+  pick: (s: { product_id: string; on_hand: number; daily_usage: number | null }) => number | null
+}) {
   if (!siblings?.length) return <>{value}</>
   return (
     <div className="flex flex-col items-end gap-0.5">
       <span>{value}</span>
       <div className="text-[9px] text-inky/50 leading-tight font-normal text-right whitespace-normal">
-        <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
-        {siblings.map((s) => <div key={s.product_id}>{s.product_id}: {num(s.on_hand)}</div>)}
+        <div className="text-sky font-bold uppercase tracking-wide">{label}</div>
+        {siblings.map((s) => <div key={s.product_id}>{s.product_id}: {num(pick(s))}</div>)}
       </div>
     </div>
   )
 }
 const USAGE_COLS: Col<ConfigRow>[] = [
-  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? <OnHandValue value={num(r.usage.on_hands)} siblings={r.usage.equivalent_products} /> : '—'), sort: (r) => r.usage?.on_hands ?? null },
-  { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? <UsageValue value={num(r.usage.daily_usage)} siblings={r.usage.equivalent_products} /> : '—'), sort: (r) => r.usage?.daily_usage ?? null },
+  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? <CombinedBreakdownValue value={num(r.usage.on_hands)} label="Combining On Hands" siblings={r.usage.equivalent_products} pick={(s) => s.on_hand} /> : '—'), sort: (r) => r.usage?.on_hands ?? null },
+  { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? <CombinedBreakdownValue value={num(r.usage.daily_usage)} label="Combining Usage" siblings={r.usage.equivalent_products} pick={(s) => s.daily_usage} /> : '—'), sort: (r) => r.usage?.daily_usage ?? null },
   {
     id: 'days_of_supply', label: 'Days of Supply', align: 'right', width: 'w-24', tint: true,
     render: (r) => {
@@ -727,7 +724,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         return {
           on_hands: combinedOnHand, daily_usage: combinedUsage,
           updated_at: own?.updated_at ?? null,
-          equivalent_products: siblings.map((s) => ({ product_id: s.product_id, on_hand: s.on_hands })),
+          equivalent_products: siblings.map((s) => ({ product_id: s.product_id, on_hand: s.on_hands, daily_usage: s.daily_usage })),
         }
       }
       setConfigs(((cfgRes.data ?? []) as ConfigRow[]).map((r) => ({
