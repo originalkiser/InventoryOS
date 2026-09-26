@@ -53,10 +53,13 @@
 @keyframes sb-page-slide-in-left { from { transform: translateX(-100%) } to { transform: translateX(0) } }
 @keyframes sb-page-slide-out-left { from { transform: translateX(0) } to { transform: translateX(-100%) } }
 @keyframes sb-page-slide-out-right { from { transform: translateX(0) } to { transform: translateX(100%) } }
-.sb-page-slide-in-right { position: absolute; inset: 0; animation: sb-page-slide-in-right 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-.sb-page-slide-in-left { position: absolute; inset: 0; animation: sb-page-slide-in-left 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-.sb-page-slide-out-left { position: absolute; inset: 0; animation: sb-page-slide-out-left 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-.sb-page-slide-out-right { position: absolute; inset: 0; animation: sb-page-slide-out-right 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* 265ms — 20% slower than the original 220ms (2026-09-26 ask). Keep this in
+   sync with KeepAlivePages.tsx's own TRANSITION_MS, which clears the
+   transition state shortly after this finishes. */
+.sb-page-slide-in-right { position: absolute; inset: 0; animation: sb-page-slide-in-right 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sb-page-slide-in-left { position: absolute; inset: 0; animation: sb-page-slide-in-left 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sb-page-slide-out-left { position: absolute; inset: 0; animation: sb-page-slide-out-left 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sb-page-slide-out-right { position: absolute; inset: 0; animation: sb-page-slide-out-right 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 
 /* LoadingProgress's rotating status line: slides in from the LEFT across
    the full bar width, settles at center for 4s, slides back OUT to the

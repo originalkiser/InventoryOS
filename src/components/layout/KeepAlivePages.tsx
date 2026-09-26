@@ -80,7 +80,11 @@ export function KeepAlivePages({ animClass, animTick, slideDirection }: {
   // their normal display:none/block flow. Keyed off animTick (not
   // slideDirection, which can repeat two arrow-presses in a row unchanged)
   // so two consecutive same-direction hops each still re-trigger a fresh run.
-  const TRANSITION_MS = 230
+  // 20% slower than the original 220ms CSS animation duration (2026-09-26
+  // ask) — kept a few ms above index.css's own 265ms sb-page-slide-* classes
+  // as a buffer so the JS cleanup never fires before the animation visually
+  // finishes.
+  const TRANSITION_MS = 280
   const [transition, setTransition] = useState<{ fromKey: string; toKey: string; direction: 'left' | 'right' } | null>(null)
   const lastTickRef = useRef(animTick)
   const containerRef = useRef<HTMLDivElement>(null)

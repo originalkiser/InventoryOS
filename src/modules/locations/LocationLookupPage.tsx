@@ -7,6 +7,7 @@ import 'react-resizable/css/styles.css'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { usePersistedColumnLayout, usePersistedJson } from '@/hooks/useColumnPrefs'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { SCHEMA_FIELDS as LOCATION_SCHEMA_FIELDS } from '@/modules/config/tabs/LocationsTab'
@@ -637,6 +638,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const navigate = useNavigate()
   const loc = useLocations()
   const companyId = profile?.company_id ?? null
+  // Mobile falls back to the same simple single-column stack the embedded
+  // floating panel already uses (2026-09-26 ask) — the free-form grid's
+  // 12-column layout with per-widget minimum widths just doesn't have room
+  // on a phone-width screen. Same breakpoint AppShell.tsx uses for its own
+  // mobile branch.
+  const isMobile = useMediaQuery('(max-width: 640px)')
   // Every Locations Global Config column (+ custom fields) as optional Shop
   // Details fields (2026-09-25 ask) — generic, so a new field there needs no
   // matching change here.
@@ -1662,13 +1669,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               <span className="text-[10px] font-mono uppercase tracking-widest text-navy/70 font-semibold">Manage Columns</span>
               <button onClick={() => setSidebarManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Shop Details Fields</button>
               <button onClick={() => setConfigManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Order Config Columns</button>
-              {/* Left Column Layout / side-by-side only apply to the embedded
-                  floating-panel view — the full page below now uses the
-                  free-form drag/resize grid instead, which supersedes both. */}
-              {embedded && (
+              {/* Left Column Layout / side-by-side apply to the simple
+                  single-column stack (embedded floating panel, and mobile
+                  widths — both use it) — the free-form drag/resize grid
+                  (desktop, non-embedded) supersedes both instead. */}
+              {(embedded || isMobile) && (
                 <button onClick={() => setLeftBoxManagerOpen(true)} className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy">Left Column Layout</button>
               )}
-              {!embedded && (
+              {!embedded && !isMobile && (
                 <button
                   onClick={() => setPageGridLayout(DEFAULT_GRID_LAYOUT)}
                   title="Puts every widget back to its default position and size"
@@ -1684,13 +1692,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                 <input type="checkbox" checked={!!prefs.nonVmiOfflineBtn} onChange={() => setPrefs((p) => ({ ...p, nonVmiOfflineBtn: !p.nonVmiOfflineBtn }))} className="accent-sky" />
                 Use non-VMI tanks for offline email button
               </label>
-              {embedded && (
+              {(embedded || isMobile) && (
                 <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms as a row instead of stacked">
                   <input type="checkbox" checked={!!prefs.boxesSideBySide} onChange={() => setPrefs((p) => ({ ...p, boxesSideBySide: !p.boxesSideBySide }))} className="accent-sky" />
                   Issues/Exceptions/Comms side by side
                 </label>
               )}
-              {!embedded && (
+              {!embedded && !isMobile && (
                 <p className="text-[10px] font-mono text-inky/60 leading-snug">
                   Page layout editing is on — drag a widget by its <Grip className="w-2.5 h-2.5 inline -mt-0.5" /> handle to move it,
                   or drag its bottom-right corner to resize. Click the Settings button again to save and exit.
@@ -1899,10 +1907,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           ),
         }
 
-        if (embedded) {
-          // Fixed two-column stack — unchanged from before this feature.
-          // leftBoxOrder/side-by-side (Settings → "Left Column Layout") still
-          // drive this view; the full page below uses the new grid instead.
+        if (embedded || isMobile) {
+          // Fixed single-column stack — unchanged from before this feature,
+          // and reused as-is for mobile widths (2026-09-26 ask): the grid's
+          // 12-column layout with per-widget minimum sizes has no room on a
+          // phone screen, so mobile just gets this same simple stack instead
+          // of the free-form grid. leftBoxOrder/side-by-side (Settings →
+          // "Left Column Layout", embedded only) still drive this view.
           const sideBySideIds = ['issues', 'exceptions', 'comms']
           const rendered = new Set<string>()
           const nodes: ReactNode[] = []
@@ -2141,6 +2152,13 @@ function IssuesColumn({ pending, resolved, onManage, framed }: { pending: IssueR
   const daysOpen = start ? differenceInCalendarDays(new Date(), start) : null
   const pastDue = !!top?.target_resolution_date && differenceInCalendarDays(new Date(), new Date(top.target_resolution_date + 'T00:00:00')) > 0
   const bg = pending.length ? 'bg-[#E67E22]/10' : 'bg-cream'
+  // Sticky headers always use the OPAQUE bg-cream, never the body's own
+  // translucent tint — found live 2026-09-26: a low-opacity tint (10%, or
+  // 5% on the Exceptions box below) lets whatever's scrolled underneath
+  // the sticky header show faintly through it, since the "tint" is really
+  // just alpha blending, not a real opaque color. Body content still gets
+  // the real tint; only the (opaque-in-appearance) header needed fixing.
+  const headerBg = 'bg-cream'
   // `framed`: this widget sits inside GridWidgetShell's own border/rounded
   // frame (the full-page grid), which owns the outline instead — drawing a
   // second one here would either double up or (worse) reintroduce the
@@ -2155,7 +2173,7 @@ function IssuesColumn({ pending, resolved, onManage, framed }: { pending: IssueR
       {/* Sticky within the widget's own scroll container (see GridWidgetShell)
           — half the vertical padding of the old single-block layout (py-3 ->
           py-1.5) per the 2026-09-25 ask. */}
-      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, bg].join(' ')}>
+      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, headerBg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Issues</span>
         <div className="flex items-center gap-3">
           <span className={['text-sm font-heading font-bold', pending.length ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{pending.length} <span className="text-[10px] font-mono font-normal text-inky/60">open</span></span>
@@ -2196,11 +2214,12 @@ function ExceptionsBox({ exceptions, onAdd, onEdit, framed }: { exceptions: Exce
   const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
   const open = exceptions.filter((e) => !isClosed(e.status))
   const bg = open.length ? 'bg-[#C0392B]/5' : 'bg-cream'
+  const headerBg = 'bg-cream' // sticky header stays opaque — see IssuesColumn's own note on this
   const outerClass = framed ? 'flex flex-col' : ['rounded-lg border flex flex-col', open.length ? 'border-[#C0392B]/40' : 'border-navy/20'].join(' ')
   const headerRoundClass = framed ? '' : 'rounded-t-lg'
   return (
     <div className={[outerClass, bg].join(' ')}>
-      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, bg].join(' ')}>
+      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, headerBg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Exception Reports</span>
         <span className={['text-lg font-heading font-bold', open.length ? 'text-[#C0392B]' : 'text-navy'].join(' ')}>{open.length}</span>
       </div>
@@ -2258,12 +2277,13 @@ function CustomConfigBox({ locationId, locationLabel, framed }: { locationId: st
   const hasAny = vals.length > 0 || pkgs.length > 0
   const packageLabel = (key: string) => packageOptions.find((p) => p.package_key === key)?.display_name ?? key
   const bg = hasAny ? 'bg-sky/5' : 'bg-cream'
+  const headerBg = 'bg-cream' // sticky header stays opaque — see IssuesColumn's own note on this
   const outerClass = framed ? 'flex flex-col' : ['rounded-lg border flex flex-col', hasAny ? 'border-sky/50' : 'border-navy/20'].join(' ')
   const headerRoundClass = framed ? '' : 'rounded-t-lg'
 
   return (
     <div className={[outerClass, bg].join(' ')}>
-      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, bg].join(' ')}>
+      <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, headerBg].join(' ')}>
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Custom Config</span>
         {hasAny && <Badge color="sky">Custom</Badge>}
       </div>
