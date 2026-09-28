@@ -4,7 +4,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useMonthEndStore } from '@/stores/monthEndStore'
 import { Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
-import { MonthEndPullPanel } from '@/components/integrations/MonthEndPullPanel'
 import { CountsTab } from './CountsTab'
 import { RecountLogicTab } from './RecountLogicTab'
 import { RecountsTab } from './RecountsTab'
@@ -90,8 +89,6 @@ export function MonthEndPage() {
           </div>
         </div>
       </div>
-
-      <MonthEndPullPanel />
 
       <Tabs defaultValue="overview">
         <TabsList>

@@ -299,9 +299,10 @@ export function RecountLogicTab() {
   // Live per-shop Oil/Parts/Additives/Other/Total breakdown for this period
   // — same get_current_balance_by_category RPC as Month End Overview, keyed
   // by location_id. Empty until Droptop's per-product unit_cost has been
-  // captured AND Month End's Daily Pull has fed count_products.ending_value
-  // for this period at least once — the "Ending" cell below just shows
-  // nothing extra until then, same graceful-degradation as oilBalanceData.
+  // captured AND the scheduled daily Droptop on-hand sync has fed
+  // count_products.ending_value for this period at least once — the
+  // "Ending" cell below just shows nothing extra until then, same
+  // graceful-degradation as oilBalanceData.
   const [categoryBalances, setCategoryBalances] = useState<Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>>(new Map())
   // Shops that already have an auto-generated recount for this period —
   // drives the "In Recounts" callout/highlight in the preview so a shop
@@ -1336,7 +1337,8 @@ function fmt(v: number | null | undefined) {
 // Compact stacked Oil/Parts/Additives/Other/Total breakdown for the Ending
 // cell — stacked in one cell rather than 5 new columns, per explicit
 // request. Renders nothing when this shop has no live category data yet
-// (Droptop cost capture + a Daily Pull haven't both landed for this period).
+// (Droptop cost capture + the scheduled daily on-hand sync haven't both
+// landed for this period).
 function CategoryBalanceStack({ cb }: { cb?: { oil: number; parts: number; additives: number; other: number; total: number } }) {
   if (!cb) return null
   return (

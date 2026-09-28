@@ -63,11 +63,17 @@ export function OverviewTab() {
   // Live per-shop Oil/Parts/Additives/Other breakdown for the CURRENT
   // period, via get_current_balance_by_category — now possible because
   // droptop-sync-usage captures Droptop's own per-product unit_cost and
-  // computes count_products.ending_value from it (2026-09-22). Requires
-  // Month End's Daily Pull panel to have run at least once for this period
-  // (writeToCountProducts) — until then this map is empty and the
-  // oil/parts/additives KPIs below fall back to monthly_ending_balances
-  // (still "—" for an open period), same graceful-degradation as before.
+  // computes count_products.ending_value from it (2026-09-22). Requires the
+  // scheduled daily Droptop on-hand sync (data-connection-dispatcher's
+  // droptop_on_hand connection) to have run at least once for this period
+  // (writeToCountProducts, only set once inside the month-end window — see
+  // that dispatcher's own monthEndCountMonthFor()) — 2026-09-28: this used
+  // to require a manual click on a "Daily Pull" panel here, removed once
+  // the routine scheduled sync started doing the same write automatically
+  // every morning. Until that first automated write lands for a period,
+  // this map is empty and the oil/parts/additives KPIs below fall back to
+  // monthly_ending_balances (still "—" for an open period), same
+  // graceful-degradation as before.
   const [currentCategoryBalances, setCurrentCategoryBalances] = useState<Map<string, { oil: number; parts: number; additives: number; other: number; total: number }>>(new Map())
   // Same live per-shop breakdown, one period back — needed for a genuine
   // apples-to-apples "Other" comparison in the new Month-over-Month table
@@ -194,9 +200,9 @@ export function OverviewTab() {
   // production's own field_definitions rows for this section are literally
   // 'oil'/'parts'/'additives') whenever it has data for this period, falling
   // back to monthly_ending_balances (still "—" until Finance enters it)
-  // otherwise — so a still-open period stops showing "—" the moment Month
-  // End's Daily Pull has run once, no month-close wait needed. 'other' has
-  // no Finance-entry equivalent at all, so it's live-only.
+  // otherwise — so a still-open period stops showing "—" the moment the
+  // scheduled daily Droptop on-hand sync has run once, no month-close wait
+  // needed. 'other' has no Finance-entry equivalent at all, so it's live-only.
   const currentTotals = useMemo(() => {
     const total = [...currentCounts.values()].reduce((s, v) => s + v, 0)
     const rows = balances.filter((b) => b.month === countMonth)
