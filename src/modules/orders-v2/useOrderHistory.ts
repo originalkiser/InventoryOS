@@ -107,7 +107,7 @@ export function useHistoryOrder(orderId: string | null) {
           // Rows" setting silently caps every response at 1000 regardless
           // of the requested range, so a full page doesn't mean "last page."
           if (batch.length === 0) break
-          from += PAGE
+          from += batch.length
         }
         return out
       })(),

@@ -118,7 +118,8 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
       const POL_COLUMNS = 'id, location_id, po_id, custom_po_id, supplier_name, created_timestamp, to_receive_timestamp'
       const pos: any[] = []
       const PAGE = 8000
-      for (let from = 0; ; from += PAGE) {
+      let from = 0
+      for (;;) {
         const { data: batch, error } = await sb.schema('inventory').from('droptop_purchase_orders')
           .select(POL_COLUMNS)
           .eq('company_id', companyId)
@@ -128,6 +129,10 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
         if (error) throw error
         pos.push(...(batch ?? []))
         if (!batch || batch.length === 0) break
+        // Advance by the ACTUAL rows returned, not PAGE — found live
+        // 2026-09-28 in PoStatusPage.tsx: a fixed PAGE stride silently
+        // skips rows whenever a response comes back capped below PAGE.
+        from += batch.length
       }
       if (!pos.length) { toast(`No open POs found for ${enabledSuppliers.join(', ')}`, { icon: 'ℹ️' }); return }
 

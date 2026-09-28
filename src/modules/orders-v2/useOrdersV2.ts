@@ -60,10 +60,15 @@ async function fetchAll<T>(schema: string, table: string, select: string, compan
     const batch = (data ?? []) as T[]
     out.push(...batch)
     // Exit only on a genuinely empty page — the project's API "Max Rows"
-    // setting silently caps every response at 1000 regardless of the
+    // setting can silently cap a response below PAGE regardless of the
     // requested range, so a full page here doesn't mean "last page."
     if (batch.length === 0) break
-    from += PAGE
+    // Advance by the ACTUAL rows returned, not the requested PAGE size —
+    // found live 2026-09-28 (PoStatusPage.tsx): advancing by a fixed PAGE
+    // stride silently skips rows whenever a response comes back capped
+    // below PAGE, since the next request starts past them instead of right
+    // after the last row actually received.
+    from += batch.length
   }
   return out
 }

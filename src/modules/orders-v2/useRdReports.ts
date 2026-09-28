@@ -47,12 +47,17 @@ export interface RdOpenInvoiceRow {
 // page as the end.
 async function fetchAllRows<T>(schema: string, table: string, apply: (q: any) => any): Promise<T[]> {
   const out: T[] = []
-  for (let from = 0; ; from += PAGE) {
+  let from = 0
+  for (;;) {
     const { data, error } = await apply(sb().schema(schema).from(table).select('*')).range(from, from + PAGE - 1)
     if (error) throw error
     const batch = (data ?? []) as T[]
     out.push(...batch)
     if (batch.length === 0) break
+    // Advance by the ACTUAL rows returned, not PAGE — found live 2026-09-28
+    // in PoStatusPage.tsx: a fixed PAGE stride silently skips rows whenever
+    // a response comes back capped below PAGE.
+    from += batch.length
   }
   return out
 }

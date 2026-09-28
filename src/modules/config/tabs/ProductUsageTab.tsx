@@ -390,7 +390,10 @@ export function ProductUsageTab() {
       }
       // Exit only on a genuinely empty page — see loadRpc() above for why.
       if (batch.length === 0) break
-      from += PAGE
+      // Advance by the ACTUAL rows returned, not PAGE — found live
+      // 2026-09-28 in PoStatusPage.tsx: a fixed PAGE stride silently skips
+      // rows whenever a response comes back capped below PAGE.
+      from += batch.length
     }
     setCapacityMap(m)
   }, [profile?.company_id])
@@ -420,7 +423,7 @@ export function ProductUsageTab() {
       all.push(...batch)
       // Exit only on a genuinely empty page — see loadRpc() above for why.
       if (batch.length === 0) break
-      from += PAGE
+      from += batch.length
     }
     setVendorParts(all)
   }, [profile?.company_id])

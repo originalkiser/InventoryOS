@@ -94,7 +94,8 @@ export function OverviewTab() {
     try {
       // Paginated (id-tiebreak) fetch of the balance window so >1000 rows aren't truncated.
       const all: MonthlyEndingBalance[] = []
-      for (let from = 0; ; from += PAGE) {
+      let from = 0
+      for (;;) {
         const { data, error } = await sb.schema('inventory').from('monthly_ending_balances')
           .select('*').eq('company_id', companyId)
           .gte('month', lookbackStart).lte('month', countMonth)
@@ -106,6 +107,7 @@ export function OverviewTab() {
         // Rows" setting silently caps every response at 1000 regardless of
         // the requested range, so a full page here doesn't mean "last page."
         if (batch.length === 0) break
+        from += batch.length
       }
       setBalances(all)
 

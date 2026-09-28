@@ -771,7 +771,8 @@ export function CustomerHeatmapPage() {
       const PAGE = 5000
       const all: any[] = []
       let unmappedResult: { count: number | null; error: unknown } | null = null
-      for (let from = 0; ; from += PAGE) {
+      let from = 0
+      for (;;) {
         const [pageRes, unmappedRes] = await Promise.all([
           sb.rpc('get_heatmap_zip_rollup_clusters', { p_start: range.start, p_end: range.end, p_location_ids: locIds }).range(from, from + PAGE - 1),
           from === 0 ? unmappedQ : Promise.resolve(unmappedResult),
@@ -791,6 +792,10 @@ export function CustomerHeatmapPage() {
         const batch = (pageRes.data ?? []) as any[]
         all.push(...batch)
         if (batch.length === 0) break
+        // Advance by the ACTUAL rows returned, not PAGE — found live
+        // 2026-09-28 in PoStatusPage.tsx: a fixed PAGE stride silently
+        // skips rows whenever a response comes back capped below PAGE.
+        from += batch.length
       }
       const built: ZipCluster[] = all.map((r) => ({
         zip: r.zip,

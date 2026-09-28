@@ -949,7 +949,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // there's more to fetch. See CustomerHeatmapPage.tsx/DroptopOrdersPage.tsx
         // for the incident this pattern caused elsewhere.
         if (batch.length === 0) break
-        from += PAGE
+        // Advance by the ACTUAL rows returned, not the requested PAGE size
+        // — found live 2026-09-28 in PoStatusPage.tsx: advancing by a fixed
+        // PAGE stride silently skips rows whenever a response comes back
+        // capped below PAGE, since the next request starts past them
+        // instead of right after the last row actually received.
+        from += batch.length
       }
       return out
     }

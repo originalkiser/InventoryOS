@@ -41,13 +41,22 @@ export interface ValvolineOrderLineRow {
 // LocationLookupPage.tsx/useRdReports.ts for the same reason.
 async function fetchAllRows(companyId: string): Promise<ValvolineOrderLineRow[]> {
   const out: ValvolineOrderLineRow[] = []
-  for (let from = 0; ; from += PAGE) {
+  let from = 0
+  for (;;) {
     const { data, error } = await sb().schema('inventory').from('valvoline_order_lines')
       .select('*').eq('company_id', companyId).order('po_date', { ascending: false }).range(from, from + PAGE - 1)
     if (error) throw error
     const batch = (data ?? []) as ValvolineOrderLineRow[]
     out.push(...batch)
-    if (batch.length < PAGE) break
+    // Exit only on a genuinely empty page — `batch.length < PAGE` is NOT a
+    // safe stopping condition (found live 2026-09-28): the project's own
+    // API "Max Rows" setting can silently cap a response below PAGE
+    // regardless of the requested range, so a short-of-PAGE batch here
+    // doesn't mean "last page" — it used to mean this loop stopped after
+    // its very first page every time the cap kicked in, silently
+    // truncating the whole table down to ~1,000 rows.
+    if (batch.length === 0) break
+    from += batch.length
   }
   return out
 }

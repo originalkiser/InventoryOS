@@ -37,13 +37,20 @@ async function fetchAllPages<T>(
   onPage?: (rowsSoFar: number) => void,
 ): Promise<T[]> {
   const all: T[] = []
-  for (let from = 0; ; from += PAGE) {
+  let from = 0
+  for (;;) {
     const { data, error } = await build(from)
     if (error) throw new Error(error.message)
     const batch = (data ?? []) as T[]
     all.push(...batch)
     onPage?.(all.length)
-    if (batch.length < PAGE) break
+    // Exit only on a genuinely empty page — `batch.length < PAGE` is NOT a
+    // safe stopping condition (found live 2026-09-28, PoStatusPage.tsx): if
+    // the server's own Max Rows cap ever comes in below PAGE, this would
+    // stop after the very first page every time, silently truncating the
+    // whole result set.
+    if (batch.length === 0) break
+    from += batch.length
   }
   return all
 }

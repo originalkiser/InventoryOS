@@ -175,7 +175,8 @@ export function PoStatusPage() {
       // size successfully. The exit condition below only trusts a
       // genuinely empty page.
       const PAGE = 8000
-      for (let from = 0; ; from += PAGE) {
+      let from = 0
+      for (;;) {
         const { data, error } = await apply(sb.schema('inventory').from(table).select(select)).range(from, from + PAGE - 1)
         if (error) throw error
         const batch = (data ?? []) as T[]
@@ -185,6 +186,18 @@ export function PoStatusPage() {
         // Rows" setting silently caps every response at 1000 regardless of
         // the requested range, so a full page here doesn't mean "last page."
         if (batch.length === 0) break
+        // Advance by the ACTUAL rows returned, not the requested PAGE size
+        // (found live 2026-09-28, real bug: this loop used to do
+        // `from += PAGE` unconditionally — since every response is capped
+        // at ~1,000 rows regardless of the 8,000-row range requested, that
+        // skipped rows [1000, 8000) of every window, silently dropping the
+        // vast majority of a 318k-row items table down to just its first
+        // ~1,000 rows in whatever order Postgres happened to return them.
+        // That's exactly why "Products on Order" — which only reads
+        // recently-active open POs, more likely to land in that lucky
+        // first window — looked fine, while the PO Details modal's line
+        // items were blank for most other POs).
+        from += batch.length
       }
       return out
     }
