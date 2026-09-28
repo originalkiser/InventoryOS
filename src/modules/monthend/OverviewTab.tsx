@@ -6,12 +6,14 @@ import { useMonthEndStore } from '@/stores/monthEndStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useAppSetting } from '@/hooks/useAppSetting'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
-import { Card, CardBody, SbLoader, Toggle } from '@/components/ui'
+import { Card, CardBody, SbLoader, Select, Toggle } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import { ShopBalanceModal } from './ShopBalanceModal'
+import { useMonthEndExclusions } from './useMonthEndExclusions'
 import type { MonthlyEndingBalance } from '@/types'
 import { format, parseISO, subMonths } from 'date-fns'
 
@@ -79,6 +81,14 @@ export function OverviewTab() {
   // the Total tile by default, per explicit request, with a toggle to add
   // it back in.
   const [excludeOther, setExcludeOther] = useState(true)
+  // Company-wide, cross-month shop exclusions (2026-09-28 ask) — managed on
+  // the new Exclusions tab. overviewExcludedIds covers both reasons
+  // ('overview_only' and 'everything'), since Overview is included in
+  // "everything" by definition.
+  const { overviewExcludedIds } = useMonthEndExclusions()
+  // How many rows each outlier callout shows — user-configurable (2026-09-28
+  // ask), persisted per-user across sessions/devices.
+  const [outlierN, setOutlierN] = useProfilePref<number>('monthend:outlier-n', 3)
 
   const prevMonth = useMemo(() => format(subMonths(parseISO(countMonth), 1), 'yyyy-MM-01'), [countMonth])
   const lookbackStart = useMemo(() => format(subMonths(parseISO(countMonth), LOOKBACK_MONTHS), 'yyyy-MM-01'), [countMonth])
@@ -174,6 +184,28 @@ export function OverviewTab() {
 
   useEffect(() => { load() }, [load])
 
+  // Excluded shops (2026-09-28 ask) are filtered out ONCE, here — every
+  // downstream total/table/outlier below reads these filtered versions
+  // instead of the raw fetched state, so nothing has to re-implement the
+  // filter itself. balances (monthly_ending_balances) is filtered too,
+  // since it feeds several of the same computations as a fallback source.
+  const filteredBalances = useMemo(
+    () => (overviewExcludedIds.size ? balances.filter((b) => !b.location_id || !overviewExcludedIds.has(b.location_id)) : balances),
+    [balances, overviewExcludedIds],
+  )
+  const filteredCurrentCategoryBalances = useMemo(() => {
+    if (!overviewExcludedIds.size) return currentCategoryBalances
+    const m = new Map(currentCategoryBalances)
+    for (const id of overviewExcludedIds) m.delete(id)
+    return m
+  }, [currentCategoryBalances, overviewExcludedIds])
+  const filteredPrevCategoryBalances = useMemo(() => {
+    if (!overviewExcludedIds.size) return prevCategoryBalances
+    const m = new Map(prevCategoryBalances)
+    for (const id of overviewExcludedIds) m.delete(id)
+    return m
+  }, [prevCategoryBalances, overviewExcludedIds])
+
   // Current-month totals — Total AND Oil/Parts/Additives/Other all come
   // from the same live per-shop breakdown (currentCategoryBalances, via
   // get_current_balance_by_category — real on-hand qty × unit cost from the
@@ -187,11 +219,11 @@ export function OverviewTab() {
   // they're live-only and show "—" until the daily sync has run at least
   // once for this period.
   const currentTotals = useMemo(() => {
-    const rows = balances.filter((b) => b.month === countMonth)
+    const rows = filteredBalances.filter((b) => b.month === countMonth)
     const hasBalanceRow = rows.length > 0
-    const hasLiveCategoryData = currentCategoryBalances.size > 0
+    const hasLiveCategoryData = filteredCurrentCategoryBalances.size > 0
     const liveSum = (key: 'oil' | 'parts' | 'additives' | 'other' | 'total') =>
-      [...currentCategoryBalances.values()].reduce((s, v) => s + v[key], 0)
+      [...filteredCurrentCategoryBalances.values()].reduce((s, v) => s + v[key], 0)
     const cats: Record<string, number | null> = {}
     for (const c of categories) {
       const liveKey = c.field_key as 'oil' | 'parts' | 'additives'
@@ -204,7 +236,7 @@ export function OverviewTab() {
     const other = hasLiveCategoryData ? liveSum('other') : null
     const total = hasLiveCategoryData ? liveSum('total') : null
     return { total, cats, other, shopCount: currentSubmittedIds.size }
-  }, [currentSubmittedIds, balances, categories, countMonth, currentCategoryBalances])
+  }, [currentSubmittedIds, filteredBalances, categories, countMonth, filteredCurrentCategoryBalances])
 
   // Total tile with "Other" pulled back out, when the toggle above is on —
   // now a strict re-derivation (both Total and Other come from the same
@@ -227,21 +259,21 @@ export function OverviewTab() {
   // now the same underlying number either way, since Total and the
   // categories share one live source.
   const companyMoM = useMemo(() => {
-    const curBalRows = balances.filter((b) => b.month === countMonth)
-    const prevBalRows = balances.filter((b) => b.month === prevMonth)
+    const curBalRows = filteredBalances.filter((b) => b.month === countMonth)
+    const prevBalRows = filteredBalances.filter((b) => b.month === prevMonth)
 
     function shopMap(period: 'current' | 'prev', key: 'total' | 'other' | string): Map<string, number> {
       if (key === 'total') {
         if (period === 'current') {
           const m = new Map<string, number>()
-          for (const [id, v] of currentCategoryBalances) m.set(id, v.total)
+          for (const [id, v] of filteredCurrentCategoryBalances) m.set(id, v.total)
           return m
         }
         const m = new Map<string, number>()
         for (const r of prevBalRows) if (r.location_id) m.set(r.location_id, Number(r.ending_balance ?? 0))
         return m
       }
-      const live = period === 'current' ? currentCategoryBalances : prevCategoryBalances
+      const live = period === 'current' ? filteredCurrentCategoryBalances : filteredPrevCategoryBalances
       if (key === 'other') {
         const m = new Map<string, number>()
         for (const [id, v] of live) m.set(id, v.other)
@@ -284,7 +316,7 @@ export function OverviewTab() {
     const rows = [rowFor('Total', 'total'), ...categories.map((c) => rowFor(c.label, c.field_key))]
     if (currentTotals.other != null) rows.push(rowFor('Other', 'other'))
     return rows
-  }, [balances, countMonth, prevMonth, currentCategoryBalances, prevCategoryBalances, categories, excludeOther, currentTotals.other])
+  }, [filteredBalances, countMonth, prevMonth, filteredCurrentCategoryBalances, filteredPrevCategoryBalances, categories, excludeOther, currentTotals.other])
 
   const exceptionStats = useMemo(() => {
     const shops = new Set(exceptions.map((e) => e.location_id))
@@ -300,31 +332,44 @@ export function OverviewTab() {
   interface ShopBalanceRow { location_id: string; shop: string; oil: number; parts: number; additives: number; other: number; total: number }
   const shopBalanceRows: ShopBalanceRow[] = useMemo(() => {
     const rows: ShopBalanceRow[] = []
-    for (const [id, v] of currentCategoryBalances) {
+    for (const [id, v] of filteredCurrentCategoryBalances) {
       rows.push({ location_id: id, shop: loc.labelOf(id), oil: v.oil, parts: v.parts, additives: v.additives, other: v.other, total: v.total })
     }
     return rows
-  }, [currentCategoryBalances, loc])
+  }, [filteredCurrentCategoryBalances, loc])
 
-  // Outlier callouts — top/bottom 3 by current Total $, and top 3 by
+  // Outlier callouts — top/bottom N by current Total $, and top N by
   // absolute MoM % change in a shop's overall Total (not per-category, per
-  // explicit request) among shops with a real, non-zero prior-month total
-  // to compare against.
+  // explicit request) among shops with a real prior-month total to compare
+  // against. N is user-configurable (outlierN below).
+  //
+  // Prior-month total prefers the live currentCategoryBalances-style source
+  // (prevCategoryBalances, from get_current_balance_by_category) but falls
+  // back to monthly_ending_balances.ending_balance when a shop has NO live
+  // entry at all for that month (2026-09-28 ask — found live: August had no
+  // count_products data company-wide, which silently excluded every shop
+  // from this callout since prevCategoryBalances was simply empty for that
+  // month; Finance's own monthly_ending_balances still had real August
+  // entries to fall back to). `.has(id)` is the trigger, not "total === 0"
+  // — a shop can legitimately have a real $0 live balance for a month.
   const outliers = useMemo(() => {
     const byTotalDesc = [...shopBalanceRows].sort((a, b) => b.total - a.total)
-    const topHigh = byTotalDesc.slice(0, 3)
-    const bottomLow = byTotalDesc.length > 3 ? [...byTotalDesc].reverse().slice(0, 3) : []
+    const topHigh = byTotalDesc.slice(0, outlierN)
+    const bottomLow = byTotalDesc.length > outlierN ? [...byTotalDesc].reverse().slice(0, outlierN) : []
+
+    const prevTotalFallback = new Map<string, number>()
+    for (const b of filteredBalances) if (b.month === prevMonth && b.location_id) prevTotalFallback.set(b.location_id, Number(b.ending_balance ?? 0))
 
     const pctChanges: { location_id: string; shop: string; pct: number }[] = []
-    for (const [id, cur] of currentCategoryBalances) {
-      const prev = prevCategoryBalances.get(id)
-      if (!prev || !prev.total) continue
-      pctChanges.push({ location_id: id, shop: loc.labelOf(id), pct: (cur.total - prev.total) / Math.abs(prev.total) })
+    for (const [id, cur] of filteredCurrentCategoryBalances) {
+      const prevTotal = filteredPrevCategoryBalances.has(id) ? filteredPrevCategoryBalances.get(id)!.total : (prevTotalFallback.get(id) ?? null)
+      if (prevTotal == null || !prevTotal) continue
+      pctChanges.push({ location_id: id, shop: loc.labelOf(id), pct: (cur.total - prevTotal) / Math.abs(prevTotal) })
     }
-    const topPctChange = pctChanges.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 3)
+    const topPctChange = pctChanges.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, outlierN)
 
     return { topHigh, bottomLow, topPctChange }
-  }, [shopBalanceRows, currentCategoryBalances, prevCategoryBalances, loc])
+  }, [shopBalanceRows, filteredCurrentCategoryBalances, filteredPrevCategoryBalances, filteredBalances, prevMonth, outlierN, loc])
 
   const shopCol = useMemo(() => createColumnHelper<ShopBalanceRow>(), [])
   const shopColumns = useMemo(() => [
@@ -333,7 +378,12 @@ export function OverviewTab() {
     shopCol.accessor('oil', { header: 'Oil', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
     shopCol.accessor('parts', { header: 'Parts', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
     shopCol.accessor('additives', { header: 'Additives', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
-    shopCol.accessor('other', { header: 'Other', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
+    // fill: true (2026-09-28 ask) — makes this, the last column, absorb the
+    // container's remaining width instead of the table leaving dead space
+    // to the right (DataTable only turns on its own `w-full` when at least
+    // one visible column opts into this, same convention PoStatusPage's
+    // own onOrderColumns PO# column already uses).
+    shopCol.accessor('other', { header: 'Other', meta: { fill: true }, cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
   ], [shopCol])
 
   const SHOP_TABLE_KEY = 'monthend:shop-balances'
@@ -424,16 +474,26 @@ export function OverviewTab() {
       </div>
 
       {/* Outlier callouts — current Total $ high/low, and MoM % swing */}
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Show</span>
+        <div className="w-28">
+          <Select value={String(outlierN)} onChange={(e) => setOutlierN(Number(e.target.value))}
+            options={[{ value: '3', label: 'Top 3' }, { value: '5', label: 'Top 5' }, { value: '10', label: 'Top 10' }]} />
+        </div>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <OutlierCard title="Top 3 — Highest Balance"
-          rows={outliers.topHigh.map((r) => ({ label: r.shop, value: usd(r.total) }))} />
-        <OutlierCard title="Bottom 3 — Lowest Balance"
-          rows={outliers.bottomLow.map((r) => ({ label: r.shop, value: usd(r.total) }))} />
-        <OutlierCard title="Top 3 — MoM % Change (Total)"
+        <OutlierCard title={`Top ${outlierN} — Highest Balance`}
+          rows={outliers.topHigh.map((r) => ({ location_id: r.location_id, label: r.shop, value: usd(r.total) }))}
+          onSelect={(id, label) => setModalShop({ id, label })} />
+        <OutlierCard title={`Bottom ${outlierN} — Lowest Balance`}
+          rows={outliers.bottomLow.map((r) => ({ location_id: r.location_id, label: r.shop, value: usd(r.total) }))}
+          onSelect={(id, label) => setModalShop({ id, label })} />
+        <OutlierCard title={`Top ${outlierN} — MoM % Change (Total)`}
           rows={outliers.topPctChange.map((r) => ({
-            label: r.shop, value: `${r.pct >= 0 ? '▲' : '▼'} ${Math.abs(r.pct * 100).toFixed(1)}%`,
+            location_id: r.location_id, label: r.shop, value: `${r.pct >= 0 ? '▲' : '▼'} ${Math.abs(r.pct * 100).toFixed(1)}%`,
             tone: r.pct >= 0 ? 'up' as const : 'down' as const,
-          }))} />
+          }))}
+          onSelect={(id, label) => setModalShop({ id, label })} />
       </div>
 
       {/* Shop Balances — every shop, current period, by category */}
@@ -464,7 +524,13 @@ export function OverviewTab() {
   )
 }
 
-function OutlierCard({ title, rows }: { title: string; rows: { label: string; value: string; tone?: 'up' | 'down' }[] }) {
+function OutlierCard({ title, rows, onSelect }: {
+  title: string
+  rows: { location_id: string; label: string; value: string; tone?: 'up' | 'down' }[]
+  // Opens the same ShopBalanceModal a Shop Balances table row click does
+  // (2026-09-28 ask) — a shop's name here is just another way to reach it.
+  onSelect: (locationId: string, label: string) => void
+}) {
   return (
     <Card>
       <CardBody className="flex flex-col gap-2">
@@ -474,8 +540,11 @@ function OutlierCard({ title, rows }: { title: string; rows: { label: string; va
         ) : (
           <ol className="flex flex-col gap-1">
             {rows.map((r, i) => (
-              <li key={i} className="flex items-center justify-between gap-2 text-xs font-mono">
-                <span className="text-navy truncate">{i + 1}. {r.label}</span>
+              <li key={r.location_id} className="flex items-center justify-between gap-2 text-xs font-mono">
+                <button type="button" onClick={() => onSelect(r.location_id, r.label)}
+                  className="text-left text-navy truncate hover:underline hover:text-sky transition-colors">
+                  {i + 1}. {r.label}
+                </button>
                 <span className={[
                   'shrink-0',
                   r.tone === 'up' ? 'text-[#2ECC71]' : r.tone === 'down' ? 'text-[#C0392B]' : 'text-navy font-bold',
