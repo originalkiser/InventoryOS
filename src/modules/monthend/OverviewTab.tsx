@@ -7,9 +7,9 @@ import { useLocations } from '@/hooks/useLocations'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
-import { useTable } from '@/hooks/useTable'
+import { useTable, exportTableToCsv } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
-import { Card, CardBody, SbLoader, Select, Toggle } from '@/components/ui'
+import { Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
 import { ShopBalanceModal } from './ShopBalanceModal'
@@ -87,8 +87,16 @@ export function OverviewTab() {
   // "everything" by definition.
   const { overviewExcludedIds } = useMonthEndExclusions()
   // How many rows each outlier callout shows — user-configurable (2026-09-28
-  // ask), persisted per-user across sessions/devices.
+  // ask), persisted per-user across sessions/devices. Three quick presets
+  // plus a free-entry "Custom" number (2026-09-28 follow-up) — showCustomN
+  // is a plain UI toggle (not itself persisted): it flips on either when the
+  // user picks "Custom" from the dropdown, or automatically whenever the
+  // persisted outlierN loads in as a value that isn't one of the presets
+  // (e.g. a custom number saved in an earlier session).
+  const OUTLIER_N_PRESETS = [3, 5, 10]
   const [outlierN, setOutlierN] = useProfilePref<number>('monthend:outlier-n', 3)
+  const [showCustomN, setShowCustomN] = useState(!OUTLIER_N_PRESETS.includes(outlierN))
+  const outlierNIsCustom = showCustomN || !OUTLIER_N_PRESETS.includes(outlierN)
 
   const prevMonth = useMemo(() => format(subMonths(parseISO(countMonth), 1), 'yyyy-MM-01'), [countMonth])
   const lookbackStart = useMemo(() => format(subMonths(parseISO(countMonth), LOOKBACK_MONTHS), 'yyyy-MM-01'), [countMonth])
@@ -371,6 +379,20 @@ export function OverviewTab() {
     return { topHigh, bottomLow, topPctChange }
   }, [shopBalanceRows, filteredCurrentCategoryBalances, filteredPrevCategoryBalances, filteredBalances, prevMonth, outlierN, loc])
 
+  // Export the 3 outlier lists as one flat CSV (2026-09-28 ask) — same
+  // exportTableToCsv helper DataTable's own Export dropdown uses elsewhere,
+  // just called directly since these callouts aren't backed by a DataTable.
+  function exportOutliers() {
+    const rows: { Category: string; Rank: number; Shop: string; Value: string }[] = []
+    outliers.topHigh.forEach((r, i) => rows.push({ Category: `Highest Balance`, Rank: i + 1, Shop: r.shop, Value: usd(r.total) }))
+    outliers.bottomLow.forEach((r, i) => rows.push({ Category: `Lowest Balance`, Rank: i + 1, Shop: r.shop, Value: usd(r.total) }))
+    outliers.topPctChange.forEach((r, i) => rows.push({
+      Category: 'MoM % Change (Total)', Rank: i + 1, Shop: r.shop,
+      Value: `${r.pct >= 0 ? '+' : ''}${(r.pct * 100).toFixed(1)}%`,
+    }))
+    exportTableToCsv(rows, `Month End Outliers - ${format(parseISO(countMonth), 'MMMM yyyy')}.csv`)
+  }
+
   const shopCol = useMemo(() => createColumnHelper<ShopBalanceRow>(), [])
   const shopColumns = useMemo(() => [
     shopCol.accessor('shop', { header: 'Shop' }),
@@ -477,9 +499,25 @@ export function OverviewTab() {
       <div className="flex items-center justify-end gap-2">
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Show</span>
         <div className="w-28">
-          <Select value={String(outlierN)} onChange={(e) => setOutlierN(Number(e.target.value))}
-            options={[{ value: '3', label: 'Top 3' }, { value: '5', label: 'Top 5' }, { value: '10', label: 'Top 10' }]} />
+          <Select
+            value={outlierNIsCustom ? 'custom' : String(outlierN)}
+            onChange={(e) => {
+              if (e.target.value === 'custom') { setShowCustomN(true); return }
+              setShowCustomN(false)
+              setOutlierN(Number(e.target.value))
+            }}
+            options={[...OUTLIER_N_PRESETS.map((n) => ({ value: String(n), label: `Top ${n}` })), { value: 'custom', label: 'Custom…' }]}
+          />
         </div>
+        {outlierNIsCustom && (
+          <Input type="number" min={1} step={1} value={outlierN}
+            onChange={(e) => setOutlierN(Math.max(1, Math.round(Number(e.target.value) || 1)))}
+            className="w-16" />
+        )}
+        <button type="button" onClick={exportOutliers}
+          className="text-[10px] font-mono uppercase tracking-widest text-navy border border-navy/30 rounded px-2 py-1 hover:border-navy transition-colors">
+          Export
+        </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <OutlierCard title={`Top ${outlierN} — Highest Balance`}
