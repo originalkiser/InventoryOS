@@ -1,31 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { useAppSetting } from '@/hooks/useAppSetting'
-import { Card, CardBody, Combobox, SbLoader, Toggle } from '@/components/ui'
+import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
+import { Card, CardBody, SbLoader, Toggle } from '@/components/ui'
+import { DataTable } from '@/components/shared/DataTable'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
+import { ShopBalanceModal } from './ShopBalanceModal'
 import type { MonthlyEndingBalance } from '@/types'
 import { format, parseISO, subMonths } from 'date-fns'
 
-const LOOKBACK_MONTHS = 12
+export const LOOKBACK_MONTHS = 12
 const PAGE = 1000
 
-const usd = (v: number | null | undefined) =>
+export const usd = (v: number | null | undefined) =>
   v == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v)
-
-function median(nums: number[]): number | null {
-  const xs = nums.filter((n) => !isNaN(n)).sort((a, b) => a - b)
-  if (!xs.length) return null
-  const mid = Math.floor(xs.length / 2)
-  return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2
-}
-function mean(nums: number[]): number | null {
-  const xs = nums.filter((n) => !isNaN(n))
-  return xs.length ? xs.reduce((s, n) => s + n, 0) / xs.length : null
-}
 
 interface ExceptionRow { location_id: string | null; product_id: string }
 
@@ -76,7 +70,10 @@ export function OverviewTab() {
   const [currentSubmittedIds, setCurrentSubmittedIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [shopId, setShopId] = useState('')
+  // Shop Balances table row click (2026-09-28 ask) — opens ShopBalanceModal,
+  // which lazy-loads its own 12-month history + on-demand product detail;
+  // replaces the old single-shop Combobox-picker "Shop Detail" panel.
+  const [modalShop, setModalShop] = useState<{ id: string; label: string } | null>(null)
   // "Other" is a broad catch-all (anything not Oil/Parts/Additives) and
   // usually not what someone means by "the ending balance" — excluded from
   // the Total tile by default, per explicit request, with a toggle to add
@@ -294,27 +291,61 @@ export function OverviewTab() {
     return { products: exceptions.length, shops: shops.size, avg: shops.size ? exceptions.length / shops.size : 0 }
   }, [exceptions])
 
-  // Per-shop history for the detail panel. Total's CURRENT value is live
-  // (currentCategoryBalances, 2026-09-28 — see currentSubmittedIds' own
-  // comment above) — everything else (Last Month, category rows, and the
-  // avg/median series, which are always looking at already-closed months)
-  // stays on monthly_ending_balances, same reasoning as currentTotals above.
-  const shopDetail = useMemo(() => {
-    if (!shopId) return null
-    const rows = balances.filter((b) => b.location_id === shopId)
-    const valFor = (r: MonthlyEndingBalance | undefined, key: string | null) =>
-      r == null ? null : key ? Number((r.metadata as any)?.[key] ?? 0) : Number(r.ending_balance ?? 0)
-    const curRow = rows.find((r) => r.month === countMonth)
-    const prevRow = rows.find((r) => r.month === prevMonth)
-    const seriesFor = (key: string | null) => rows.map((r) => valFor(r, key)!).filter((n) => n != null && !isNaN(n))
-    const line = (label: string, key: string | null) => {
-      const current = key === null ? (currentCategoryBalances.get(shopId)?.total ?? null) : valFor(curRow, key)
-      const last = valFor(prevRow, key)
-      return { label, current, last, avg: mean(seriesFor(key)), med: median(seriesFor(key)),
-        delta: current != null && last != null ? current - last : null }
+  // Shop Balances table (2026-09-28 ask) — one row per shop, current-period
+  // Total/Oil/Parts/Additives/Other, all from the same live
+  // currentCategoryBalances source as the KPI tiles above. Replaces the old
+  // single-shop Combobox-picker panel with a browsable, sortable table of
+  // every shop at once — row click opens ShopBalanceModal for the
+  // historical/product-level drill-down instead.
+  interface ShopBalanceRow { location_id: string; shop: string; oil: number; parts: number; additives: number; other: number; total: number }
+  const shopBalanceRows: ShopBalanceRow[] = useMemo(() => {
+    const rows: ShopBalanceRow[] = []
+    for (const [id, v] of currentCategoryBalances) {
+      rows.push({ location_id: id, shop: loc.labelOf(id), oil: v.oil, parts: v.parts, additives: v.additives, other: v.other, total: v.total })
     }
-    return [line('Total', null), ...categories.map((c) => line(c.label, c.field_key))]
-  }, [shopId, balances, categories, countMonth, prevMonth, currentCategoryBalances])
+    return rows
+  }, [currentCategoryBalances, loc])
+
+  // Outlier callouts — top/bottom 3 by current Total $, and top 3 by
+  // absolute MoM % change in a shop's overall Total (not per-category, per
+  // explicit request) among shops with a real, non-zero prior-month total
+  // to compare against.
+  const outliers = useMemo(() => {
+    const byTotalDesc = [...shopBalanceRows].sort((a, b) => b.total - a.total)
+    const topHigh = byTotalDesc.slice(0, 3)
+    const bottomLow = byTotalDesc.length > 3 ? [...byTotalDesc].reverse().slice(0, 3) : []
+
+    const pctChanges: { location_id: string; shop: string; pct: number }[] = []
+    for (const [id, cur] of currentCategoryBalances) {
+      const prev = prevCategoryBalances.get(id)
+      if (!prev || !prev.total) continue
+      pctChanges.push({ location_id: id, shop: loc.labelOf(id), pct: (cur.total - prev.total) / Math.abs(prev.total) })
+    }
+    const topPctChange = pctChanges.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 3)
+
+    return { topHigh, bottomLow, topPctChange }
+  }, [shopBalanceRows, currentCategoryBalances, prevCategoryBalances, loc])
+
+  const shopCol = useMemo(() => createColumnHelper<ShopBalanceRow>(), [])
+  const shopColumns = useMemo(() => [
+    shopCol.accessor('shop', { header: 'Shop' }),
+    shopCol.accessor('total', { header: 'Total', cell: (i) => <div className="text-right font-bold">{usd(i.getValue())}</div> }),
+    shopCol.accessor('oil', { header: 'Oil', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
+    shopCol.accessor('parts', { header: 'Parts', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
+    shopCol.accessor('additives', { header: 'Additives', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
+    shopCol.accessor('other', { header: 'Other', cell: (i) => <div className="text-right">{usd(i.getValue())}</div> }),
+  ], [shopCol])
+
+  const SHOP_TABLE_KEY = 'monthend:shop-balances'
+  const {
+    table: shopTable, globalFilter: shopGlobalFilter, setGlobalFilter: setShopGlobalFilter,
+    columnVisibility: shopColumnVisibility, columnOrder: shopColumnOrder, setColumnOrder: setShopColumnOrder,
+  } = useTable(shopBalanceRows, shopColumns, {
+    persistKey: SHOP_TABLE_KEY,
+    initialPageSize: 50,
+    initialSorting: [{ id: 'total', desc: true }],
+  })
+  useColumnPrefs(SHOP_TABLE_KEY, shopTable, shopColumnVisibility, shopColumnOrder, setShopColumnOrder)
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   if (loading) return <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
@@ -392,50 +423,69 @@ export function OverviewTab() {
         <Kpi label="Complete Recounts" value={completeRecounts.toLocaleString()} />
       </div>
 
-      {/* Shop detail lookup */}
+      {/* Outlier callouts — current Total $ high/low, and MoM % swing */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <OutlierCard title="Top 3 — Highest Balance"
+          rows={outliers.topHigh.map((r) => ({ label: r.shop, value: usd(r.total) }))} />
+        <OutlierCard title="Bottom 3 — Lowest Balance"
+          rows={outliers.bottomLow.map((r) => ({ label: r.shop, value: usd(r.total) }))} />
+        <OutlierCard title="Top 3 — MoM % Change (Total)"
+          rows={outliers.topPctChange.map((r) => ({
+            label: r.shop, value: `${r.pct >= 0 ? '▲' : '▼'} ${Math.abs(r.pct * 100).toFixed(1)}%`,
+            tone: r.pct >= 0 ? 'up' as const : 'down' as const,
+          }))} />
+      </div>
+
+      {/* Shop Balances — every shop, current period, by category */}
       <Card>
         <CardBody className="flex flex-col gap-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <span className="text-xs font-mono text-navy uppercase tracking-wide">Shop Detail</span>
-            <div className="w-72">
-              <Combobox options={loc.options} value={shopId} onChange={setShopId} placeholder="Pick a shop…" />
-            </div>
-          </div>
-          {!shopId ? (
-            <p className="text-xs font-mono text-inky/60">Select a shop to see its balances by category — current, last month, {LOOKBACK_MONTHS}-month average and median.</p>
-          ) : (
-            <div className="overflow-auto rounded border border-navy/30">
-              <table className="w-full text-xs font-mono">
-                <thead>
-                  <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                    <th className="px-3 py-2 text-left">Category</th>
-                    <th className="px-3 py-2 text-right">Current</th>
-                    <th className="px-3 py-2 text-right">Last Month</th>
-                    <th className="px-3 py-2 text-right">Δ vs Last</th>
-                    <th className="px-3 py-2 text-right">Avg ({LOOKBACK_MONTHS}mo)</th>
-                    <th className="px-3 py-2 text-right">Median</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(shopDetail ?? []).map((r) => (
-                    <tr key={r.label} className="border-b border-navy/20">
-                      <td className="px-3 py-2 text-navy font-bold">{r.label}</td>
-                      <td className="px-3 py-2 text-right text-navy">{usd(r.current)}</td>
-                      <td className="px-3 py-2 text-right text-inky">{usd(r.last)}</td>
-                      <td className={['px-3 py-2 text-right', r.delta == null ? 'text-inky/40' : r.delta >= 0 ? 'text-[#2ECC71]' : 'text-[#C0392B]'].join(' ')}>
-                        {r.delta == null ? '—' : `${r.delta >= 0 ? '▲' : '▼'} ${usd(Math.abs(r.delta))}`}
-                      </td>
-                      <td className="px-3 py-2 text-right text-inky">{usd(r.avg)}</td>
-                      <td className="px-3 py-2 text-right text-inky">{usd(r.med)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">Shop Balances — {format(parseISO(countMonth), 'MMMM yyyy')}</span>
+          <DataTable
+            table={shopTable}
+            globalFilter={shopGlobalFilter}
+            onGlobalFilterChange={setShopGlobalFilter}
+            exportFilename="Shop Balances"
+            onRowClick={(r) => setModalShop({ id: r.location_id, label: r.shop })}
+          />
         </CardBody>
       </Card>
+
+      {modalShop && companyId && (
+        <ShopBalanceModal
+          open={!!modalShop}
+          onClose={() => setModalShop(null)}
+          companyId={companyId}
+          locationId={modalShop.id}
+          shopLabel={modalShop.label}
+          countMonth={countMonth}
+        />
+      )}
     </div>
+  )
+}
+
+function OutlierCard({ title, rows }: { title: string; rows: { label: string; value: string; tone?: 'up' | 'down' }[] }) {
+  return (
+    <Card>
+      <CardBody className="flex flex-col gap-2">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">{title}</span>
+        {rows.length === 0 ? (
+          <span className="text-xs font-mono text-inky/40">—</span>
+        ) : (
+          <ol className="flex flex-col gap-1">
+            {rows.map((r, i) => (
+              <li key={i} className="flex items-center justify-between gap-2 text-xs font-mono">
+                <span className="text-navy truncate">{i + 1}. {r.label}</span>
+                <span className={[
+                  'shrink-0',
+                  r.tone === 'up' ? 'text-[#2ECC71]' : r.tone === 'down' ? 'text-[#C0392B]' : 'text-navy font-bold',
+                ].join(' ')}>{r.value}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </CardBody>
+    </Card>
   )
 }
 
