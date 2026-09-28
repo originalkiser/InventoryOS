@@ -21,8 +21,9 @@ import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
 import { isValvoline, isReladyne } from '@/modules/orders-v2/useOrdersV2'
-import { resolveScheduleDescription } from '@/modules/orders-v2/engine'
+import { resolveScheduleDescription, resolveDeliveryDate, daysBetween } from '@/modules/orders-v2/engine'
 import type { DeliverySchedule, WeekCalendar } from '@/modules/orders-v2/types'
+import { useLastOrderedInfo } from '@/modules/orders-v2/useLastOrderedInfo'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue } from './useCustomShopConfig'
@@ -210,6 +211,13 @@ interface SidebarFieldCtx {
   // every week got skipped, always landing on "next date unknown" even
   // though the calendar data genuinely exists.
   valvolineCalendar: WeekCalendar
+  // RelaDyne's own ov2_location_schedules row for this shop (2026-09-28 ask:
+  // a shop with a custom RD delivery schedule, e.g. biweekly, should show
+  // that pattern + resolved next date instead of the plain reladyne_delivery_day
+  // column value) — same null-means-none-or-still-loading convention as
+  // valvolineSchedule above.
+  rdSchedule: DeliverySchedule | null
+  rdCalendar: WeekCalendar
 }
 interface SidebarFieldValue { value: string; note?: string; mapQuery?: string }
 interface SidebarFieldDef { id: string; label: string; render: (ctx: SidebarFieldCtx) => SidebarFieldValue | null }
@@ -222,7 +230,19 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
   { id: 'am_phone', label: 'AM Cell', render: (ctx) => ({ value: locVal(ctx.location, 'am_phone') }) },
   { id: 'rdo', label: 'RDO', render: (ctx) => ({ value: locVal(ctx.location, 'director') }) },
   { id: 'rd_order_day', label: 'RD Order Day', render: (ctx) => ({ value: ctx.rdOrderDay, note: relativeDay(ctx.rdOrderDay) ?? undefined }) },
-  { id: 'rd_delivery_day', label: 'RD Delivery Day', render: (ctx) => ({ value: ctx.rdDeliveryDay, note: relativeDay(ctx.rdDeliveryDay) ?? undefined }) },
+  {
+    id: 'rd_delivery_day', label: 'RD Delivery Day',
+    render: (ctx) => {
+      if (ctx.rdSchedule) {
+        const next = resolveDeliveryDate(format(new Date(), 'yyyy-MM-dd'), ctx.rdSchedule, ctx.rdCalendar)
+        return {
+          value: resolveScheduleDescription(ctx.rdSchedule),
+          note: next ? `next: ${format(new Date(next + 'T00:00:00'), 'M/d/yyyy')}` : 'next date unknown',
+        }
+      }
+      return { value: ctx.rdDeliveryDay, note: relativeDay(ctx.rdDeliveryDay) ?? undefined }
+    },
+  },
   { id: 'rd_distributor', label: 'RD Distributor', render: (ctx) => ({ value: ctx.rdDistributor }) },
   {
     id: 'valvoline_schedule', label: 'Valvoline Delivery Schedule',
@@ -254,7 +274,7 @@ const LEFT_BOX_LABELS: ColItem[] = [
   { id: 'shop_details', label: 'Shop Details' },
   { id: 'issues', label: 'Issues' },
   { id: 'exceptions', label: 'Exception Reports' },
-  { id: 'comms', label: 'Location Comms' },
+  { id: 'comms', label: 'Location Comms / Issues' },
   { id: 'custom_config', label: 'Custom Shop Config' },
   { id: 'mentioned', label: 'Mentioned In' },
 ]
@@ -288,6 +308,25 @@ const GRID_MARGIN: [number, number] = [16, 16]
 // (`order_config:<vendor name>`, computed at render time since the vendor
 // set is per-shop — see orderConfigBlocksByVendor/gridWidgetIds below).
 const FIXED_GRID_WIDGET_IDS = ['shop_details', 'tank_monitors', 'issues', 'exceptions', 'comms', 'custom_config', 'mentioned']
+// Human labels shown on each tile while editing (2026-09-28 ask — a blank
+// widget, e.g. an empty Mentioned In tile, is otherwise unidentifiable in
+// edit mode). Dynamic `order_config:<vendor>` ids (see above) aren't in this
+// map since the vendor name itself is the id's own suffix — widgetLabel()
+// below builds those on the fly instead.
+const GRID_WIDGET_LABELS: Record<string, string> = {
+  shop_details: 'Shop Details',
+  tank_monitors: 'Tank Monitors',
+  issues: 'Issues',
+  exceptions: 'Exception Reports',
+  comms: 'Location Comms / Issues',
+  custom_config: 'Custom Shop Config',
+  mentioned: 'Mentioned In',
+}
+function widgetLabel(id: string): string {
+  if (id === 'order_config:__empty') return 'Order Config'
+  if (id.startsWith('order_config:')) return `${id.slice('order_config:'.length)} Order Config`
+  return GRID_WIDGET_LABELS[id] ?? id
+}
 // Default positions roughly mirror the old fixed layout (narrow info rail on
 // the left, wide tables on the right) — just as a starting point; the whole
 // point of this feature is that a user can drag/resize away from it.
@@ -369,16 +408,43 @@ function useBouncePattern(active: boolean) {
 // Shop Details' own content bled through into the widget below it once its
 // Card was forced to `h-full`, since nothing between that fixed-height Card
 // and its taller content actually clipped the overflow).
-function GridWidgetShell({ editMode, children }: { editMode: boolean; children: ReactNode }) {
+function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleShrink, onContentHeight, children }: {
+  editMode: boolean
+  label: string
+  // "Shrink to Content" (2026-09-28 ask) — only Shop Details/Tank Monitors/
+  // each vendor's Order Config tile ever offer this; every other widget's
+  // content is naturally variable-length already (Issues/Exceptions/Comms/
+  // Custom Config/Mentioned) and wasn't part of the ask. shrinkOn/
+  // onToggleShrink are no-ops when !shrinkEligible.
+  shrinkEligible: boolean
+  shrinkOn: boolean
+  onToggleShrink: () => void
+  // Reports this widget's own natural (unclipped) content height in px on
+  // every change — scrollHeight already gives us this for free regardless
+  // of whether the box is currently tall enough to show it all, so no
+  // separate unclamped measurement pass is needed. The parent grid uses
+  // this to compute a render-time-only "effective h" (never written back to
+  // the persisted layout — see visibleGridLayout/renderGridLayout) that lets
+  // vertical compaction close the gap below a shorter-than-its-max-height
+  // widget instead of leaving empty space.
+  onContentHeight?: (px: number) => void
+  children: ReactNode
+}) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [canScroll, setCanScroll] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
+  // Stored in a ref (not a dependency of checkOverflow) so passing a new
+  // inline arrow function every render doesn't tear down/recreate the
+  // ResizeObserver/MutationObserver below on every render.
+  const onContentHeightRef = useRef(onContentHeight)
+  onContentHeightRef.current = onContentHeight
 
   const checkOverflow = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
     setCanScroll(el.scrollHeight > el.clientHeight + 2)
     setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 8)
+    onContentHeightRef.current?.(el.scrollHeight)
   }, [])
 
   useEffect(() => {
@@ -405,6 +471,26 @@ function GridWidgetShell({ editMode, children }: { editMode: boolean; children: 
         <div className="widget-drag-handle absolute -top-2 -left-2 z-20 cursor-grab active:cursor-grabbing bg-navy text-cream rounded-full p-1.5 shadow-lg border-2 border-cream" title="Drag to move">
           <Grip className="w-3.5 h-3.5" />
         </div>
+      )}
+      {editMode && (
+        // Identifies an otherwise-unlabeled (or currently empty) tile while
+        // rearranging the grid — 2026-09-28 ask, from a real screenshot of a
+        // blank tile the user couldn't identify (turned out to be Mentioned
+        // In with nothing to show).
+        <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-20 bg-navy text-cream rounded-full px-2.5 py-0.5 shadow-lg border-2 border-cream text-[10px] font-mono uppercase tracking-wide whitespace-nowrap pointer-events-none">
+          {label}
+        </div>
+      )}
+      {editMode && shrinkEligible && (
+        <button
+          onClick={onToggleShrink}
+          title={shrinkOn
+            ? 'Shrink to Content is ON — the set height is a max; the box shrinks to fit its table/content. Click to switch to a fixed height.'
+            : 'Fixed height — click to shrink to fit content instead (the set height becomes a max)'}
+          className={`absolute -top-2 -right-2 z-20 rounded-full px-2 py-1 shadow-lg border-2 border-cream text-[9px] font-mono uppercase tracking-wide whitespace-nowrap transition-colors ${shrinkOn ? 'bg-sky text-navy' : 'bg-navy/50 text-cream'}`}
+        >
+          Shrink {shrinkOn ? 'On' : 'Off'}
+        </button>
       )}
       {/* The border/background/rounded-corner FRAME lives here, on the
           non-scrolling wrapper — found live 2026-09-26: it used to be part
@@ -599,7 +685,16 @@ const USAGE_TINT = 'bg-[#2ECC71]/10'
 const CONFIG_DEFAULT_WIDTH: Record<string, number> = {
   part: 150, uom: 90, capacity: 90, exception: 150, max: 80, vmi: 70,
   on_hand: 90, daily_usage: 100, days_of_supply: 110,
+  last_ordered: 150, eta: 150,
 }
+// "Last Ordered"/"ETA" (2026-09-28 ask) — not part of CONFIG_FIXED since
+// their render needs useLastOrderedInfo's infoFor(), a per-vendor hook
+// instance only available inside OrderConfigBlock itself (CONFIG_FIXED's
+// other columns are plain module-level functions of just the row). Declared
+// here only for the shared order/label/width plumbing below; the actual Col
+// defs are built inside OrderConfigBlock's own columns useMemo.
+const LAST_ORDERED_COL_IDS = ['last_ordered', 'eta']
+const LAST_ORDERED_COL_LABELS: Record<string, string> = { last_ordered: 'Last Ordered', eta: 'ETA' }
 const CONFIG_META_DEFAULT_WIDTH = 140
 function configColWidth(id: string, sizing: Record<string, number>): number {
   return sizing[id] ?? CONFIG_DEFAULT_WIDTH[id] ?? CONFIG_META_DEFAULT_WIDTH
@@ -692,6 +787,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // real calendar week is "A" vs "B" and always reports the next date as
   // unknown for a week_ab schedule — found live 2026-09-25.
   const [valvolineCalendar, setValvolineCalendar] = useState<WeekCalendar>(new Map())
+  // RelaDyne's own custom ov2_location_schedules row for this shop (2026-09-28
+  // ask) — same shape/fetch as Valvoline's above, filtered to the RelaDyne
+  // vendor id instead. Only set when a shop has an actual custom RD schedule
+  // (e.g. a biweekly override); the plain reladyne_delivery_day column stays
+  // the fallback everywhere else (see rd_delivery_day in SIDEBAR_FIELDS).
+  const [rdSchedule, setRdSchedule] = useState<DeliverySchedule | null>(null)
+  const [rdCalendar, setRdCalendar] = useState<WeekCalendar>(new Map())
   const [issues, setIssues] = useState<IssueRow[]>([])
   const [statusNames, setStatusNames] = useState<Record<string, string>>({})
   const [exceptions, setExceptions] = useState<ExceptionReport[]>([])
@@ -1029,6 +1131,21 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       setValvolineCalendar(valvVendor
         ? new Map(((calRes?.data ?? []) as any[])
             .filter((r) => r.vendor_id === valvVendor.id)
+            .map((r) => [String(r.week_start).slice(0, 10), r.week_label as 'A' | 'B']))
+        : new Map())
+      const rdVendor = ((vendRes.data ?? []) as { id: string; name: string }[]).find((v) => isReladyne(v.name))
+      const rdRow = rdVendor
+        ? ((schedRes?.data ?? []) as any[]).find((r) => r.vendor_id === rdVendor.id)
+        : null
+      setRdSchedule(rdRow ? {
+        type: rdRow.schedule_type, delivery_dow: rdRow.delivery_dow,
+        week_a_dow: rdRow.week_a_dow, week_b_dow: rdRow.week_b_dow,
+        biweekly_anchor_date: rdRow.biweekly_anchor_date ?? null,
+        lead_business_days: Number(rdRow.lead_business_days ?? 4),
+      } : null)
+      setRdCalendar(rdVendor
+        ? new Map(((calRes?.data ?? []) as any[])
+            .filter((r) => r.vendor_id === rdVendor.id)
             .map((r) => [String(r.week_start).slice(0, 10), r.week_label as 'A' | 'B']))
         : new Map())
       setIssues((issRes.data ?? []) as IssueRow[])
@@ -1434,7 +1551,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // old array literal's own conditional spread.
   const sidebarFieldsAll: ResolvedSidebarField[] = location ? [...SIDEBAR_FIELDS, ...extraSidebarFields]
     .map((f): ResolvedSidebarField | null => {
-      const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC, valvolineSchedule, valvolineCalendar })
+      const r = f.render({ location, shopId, shopLabel, rdOrderDay, rdDeliveryDay, rdDistributor, addressStr, inNC, valvolineSchedule, valvolineCalendar, rdSchedule, rdCalendar })
       return r ? { id: f.id, label: f.label, value: r.value, note: r.note, mapQuery: r.mapQuery } : null
     })
     .filter((f): f is ResolvedSidebarField => !!f) : []
@@ -1474,6 +1591,52 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     [vendorOrderConfigKeys],
   )
   const effectiveGridLayout = useMemo(() => mergeGridLayout(pageGridLayout, defaultGridLayout), [pageGridLayout, defaultGridLayout])
+  // "Hide if Empty" (2026-09-28 ask) — only Mentioned In can ever be
+  // genuinely empty in a way that means "nothing to show" rather than "still
+  // needs attention": Tank Monitors/Order Config always show a real state
+  // (including a missing/needs-review one) so they never hide, and Issues/
+  // Exceptions/Comms stay visible even with zero rows since a user can add
+  // to any of those directly from this page. While editing, it always shows
+  // (with its label, see widgetLabel) so a blank tile can still be found and
+  // repositioned — only hidden during normal (non-edit) viewing. Its own
+  // persisted layout entry (position/size) is untouched either way; this
+  // only filters what's actually rendered.
+  const mentionedIsEmpty = mentionedProjects.length === 0 && mentionedMeetings.length === 0
+  const visibleGridWidgetIds = useMemo(
+    () => gridWidgetIds.filter((id) => !(id === 'mentioned' && mentionedIsEmpty && !customizeOpen)),
+    [gridWidgetIds, mentionedIsEmpty, customizeOpen],
+  )
+  const visibleGridLayout = useMemo(
+    () => effectiveGridLayout.filter((l) => visibleGridWidgetIds.includes(l.i)),
+    [effectiveGridLayout, visibleGridWidgetIds],
+  )
+
+  // "Shrink to Content" (2026-09-28 ask) — Shop Details/Tank Monitors/each
+  // vendor's Order Config tile only; default ON, toggle lives on the tile
+  // itself (see GridWidgetShell) while editing. The user's own set `h`
+  // becomes a MAX height rather than a fixed one: when content measures
+  // shorter, the render-time layout below reports a smaller `h` so vertical
+  // compaction closes the gap; when content is taller, GridWidgetShell's own
+  // scroll container (unaffected by any of this) takes over exactly as
+  // before. Persisted `pageGridLayout` always keeps the real user-set
+  // height — only the LAYOUT OBJECT PASSED TO ReactGridLayout for rendering
+  // is ever shrunk, and only while not editing (onLayoutChange only fires
+  // while customizeOpen, when shrink is bypassed below — so a shrunk render
+  // height can never leak into what actually gets persisted).
+  const [widgetShrink, setWidgetShrink] = usePersistedJson<Record<string, boolean>>('location_lookup.widget_shrink', {})
+  const [contentHeightPx, setContentHeightPx] = useState<Record<string, number>>({})
+  const isShrinkEligible = useCallback((id: string) => id === 'shop_details' || id === 'tank_monitors' || id.startsWith('order_config:'), [])
+  const isShrinkOn = useCallback((id: string) => widgetShrink[id] ?? true, [widgetShrink])
+  const reportContentHeight = useCallback((id: string, px: number) => {
+    setContentHeightPx((m) => (m[id] === px ? m : { ...m, [id]: px }))
+  }, [])
+  const renderGridLayout = useMemo(() => visibleGridLayout.map((l) => {
+    if (customizeOpen || !isShrinkEligible(l.i) || !isShrinkOn(l.i)) return l
+    const px = contentHeightPx[l.i]
+    if (px == null) return l
+    const neededRows = Math.max(l.minH ?? 1, Math.ceil((px + GRID_MARGIN[1]) / (GRID_ROW_HEIGHT + GRID_MARGIN[1])))
+    return neededRows < l.h ? { ...l, h: neededRows } : l
+  }), [visibleGridLayout, contentHeightPx, customizeOpen, isShrinkEligible, isShrinkOn])
 
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
 
@@ -1490,10 +1653,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     ...allConfigMetaKeys.map((k) => `meta:${k}`),
     'vmi',
     ...USAGE_COLS.map((c) => c.id),
+    ...LAST_ORDERED_COL_IDS,
   ]
   const configLabelOf = (id: string): string => {
     const fixed = CONFIG_FIXED.find((c) => c.id === id); if (fixed) return fixed.label
     const usage = USAGE_COLS.find((c) => c.id === id); if (usage) return usage.label
+    if (LAST_ORDERED_COL_LABELS[id]) return LAST_ORDERED_COL_LABELS[id]
     return id.startsWith('meta:') ? metaLabel(id.slice(5)) : id
   }
   const configAllColItems: ColItem[] = configDefaultOrder.map((id) => ({ id, label: configLabelOf(id) }))
@@ -1708,7 +1873,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                 Use non-VMI tanks for offline email button
               </label>
               {(embedded || isMobile) && (
-                <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms as a row instead of stacked">
+                <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms / Issues as a row instead of stacked">
                   <input type="checkbox" checked={!!prefs.boxesSideBySide} onChange={() => setPrefs((p) => ({ ...p, boxesSideBySide: !p.boxesSideBySide }))} className="accent-sky" />
                   Issues/Exceptions/Comms side by side
                 </label>
@@ -1907,7 +2072,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         const emptyOrderConfigCard = <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
         const orderConfigBlocksByVendor: [string, ReactNode][] = configsByVendor.map(([vendor, rows]) => [
           vendor,
-          <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} order={configShownIds} sizing={configLayout.sizing}
+          <OrderConfigBlock key={vendor} vendor={vendor} vendorId={rows[0]?.vendor_id ?? null} shopId={shopId} rows={rows} order={configShownIds} sizing={configLayout.sizing}
             onResize={handleConfigResize}
             onOpenConfig={() => navigate('/config?tab=order-config')}
             onExceptionClick={setExceptionModalRow}
@@ -1976,7 +2141,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         return (
           <ReactGridLayout
             className="layout"
-            layout={effectiveGridLayout}
+            layout={renderGridLayout}
             cols={GRID_COLS}
             rowHeight={GRID_ROW_HEIGHT}
             margin={GRID_MARGIN}
@@ -1986,9 +2151,16 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             compactType="vertical"
             onLayoutChange={(l) => { if (customizeOpen) setPageGridLayout(l) }}
           >
-            {gridWidgetIds.map((id) => (
+            {visibleGridWidgetIds.map((id) => (
               <div key={id} className="h-full">
-                <GridWidgetShell editMode={customizeOpen}>
+                <GridWidgetShell
+                  editMode={customizeOpen}
+                  label={widgetLabel(id)}
+                  shrinkEligible={isShrinkEligible(id)}
+                  shrinkOn={isShrinkOn(id)}
+                  onToggleShrink={() => setWidgetShrink((m) => ({ ...m, [id]: !isShrinkOn(id) }))}
+                  onContentHeight={(px) => reportContentHeight(id, px)}
+                >
                   {widgetContent[id]}
                 </GridWidgetShell>
               </div>
@@ -2271,7 +2443,7 @@ function CommsBox({ comms, onAdd, onEdit, framed }: { comms: LocationComm[]; onA
   return (
     <div className={framed ? 'flex flex-col bg-cream' : 'rounded-lg border border-navy/20 bg-cream flex flex-col'}>
       <div className={framed ? 'sticky top-0 z-10 bg-cream flex items-center justify-between px-4 py-1.5' : 'sticky top-0 z-10 rounded-t-lg bg-cream flex items-center justify-between px-4 py-1.5'}>
-        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Location Comms</span>
+        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Location Comms / Issues</span>
         <span className="text-lg font-heading font-bold text-navy">{open.length}</span>
       </div>
       <div className="flex flex-col gap-2 px-4 pb-3">
@@ -2393,8 +2565,8 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
   )
 }
 
-function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig, onExceptionClick }: {
-  vendor: string; rows: ConfigRow[]
+function OrderConfigBlock({ vendor, vendorId, shopId, rows, order, sizing, onResize, onOpenConfig, onExceptionClick }: {
+  vendor: string; vendorId: string | null; shopId: string; rows: ConfigRow[]
   // `order` is the shared, user-customizable, already-hidden-filtered column
   // id order (see LocationDetailView's configShownIds) — the same order and
   // hide selections apply across every vendor's own block. `sizing` is the
@@ -2404,14 +2576,69 @@ function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig,
 }) {
   const navigate = useNavigate()
   const [sort, setSort] = usePersistedSort(`location-lookup:config-sort:${vendor}`)
+  // "Last Ordered"/"ETA" columns (2026-09-28 ask) — same per-vendor hook
+  // Orders v2 Review/Final Review already use for this exact data, just
+  // rendered as two separate columns here instead of one combined cell.
+  const { infoFor } = useLastOrderedInfo(vendorId, vendor)
   const columns = useMemo(() => {
     const metaKeys = new Set<string>()
     for (const r of rows) for (const k of Object.keys(r.metadata ?? {})) if (!CONFIG_META_EXCLUDE.has(k)) metaKeys.add(k)
     const metaCols: Col<ConfigRow>[] = [...metaKeys].sort().map((k) => ({ id: `meta:${k}`, label: metaLabel(k), align: 'left', render: (r) => String((r.metadata as any)?.[k] ?? '—'), sort: (r) => String((r.metadata as any)?.[k] ?? '') }))
+    const lastOrderedCols: Col<ConfigRow>[] = [
+      {
+        id: 'last_ordered', label: 'Last Ordered', align: 'left', width: 'w-28',
+        render: (r) => {
+          if (!r.product_id) return '—'
+          const info = infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null)
+          if (!info.lastOrderDate) return '—'
+          return (
+            <div className="flex flex-col leading-tight">
+              <span>{dateShort(info.lastOrderDate)}</span>
+              <span className="text-inky/60">{num(info.lastOrderQty)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</span>
+            </div>
+          )
+        },
+        sort: (r) => (r.product_id ? infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null).lastOrderDate : null),
+      },
+      {
+        // Recently delivered (date + amount) when the last order has
+        // already been received; otherwise the pending order's own ETA —
+        // kept visible (flagged overdue) for a few days past that date
+        // rather than disappearing the moment it passes, since "it hasn't
+        // shown up yet" is itself useful information. RelaDyne-only for the
+        // delivered branch (useLastOrderedInfo's own scope, see that file's
+        // header comment) — other vendors always fall through to the ETA
+        // branch, which is vendor-agnostic.
+        id: 'eta', label: 'ETA', align: 'left', width: 'w-28',
+        render: (r) => {
+          if (!r.product_id) return '—'
+          const info = infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null)
+          if (info.lastDeliveredDate) {
+            return (
+              <div className="flex flex-col leading-tight">
+                <span className="text-inky/60">Delivered</span>
+                <span>{dateShort(info.lastDeliveredDate)}{info.lastDeliveredAmount != null ? ` · ${num(info.lastDeliveredAmount)}${info.lastDeliveredUnit ? ` ${info.lastDeliveredUnit}` : ''}` : ''}</span>
+              </div>
+            )
+          }
+          if (!info.eta) return '—'
+          const daysPast = daysBetween(info.eta, format(new Date(), 'yyyy-MM-dd'))
+          if (daysPast > 3) return '—' // past the grace window — unclear what to show, leave blank
+          return (
+            <div className="flex flex-col leading-tight">
+              <span className={daysPast > 0 ? 'text-[#C0392B] font-bold' : ''}>{dateShort(info.eta)}</span>
+              {daysPast > 0 && <span className="text-[9px] text-[#C0392B]/80">overdue</span>}
+            </div>
+          )
+        },
+        sort: (r) => (r.product_id ? (infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null).lastDeliveredDate ?? infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null).eta) : null),
+      },
+    ]
     const byId = new Map<string, Col<ConfigRow>>()
     for (const c of CONFIG_FIXED) byId.set(c.id, c)
     for (const c of metaCols) byId.set(c.id, c)
     for (const c of USAGE_COLS) byId.set(c.id, c)
+    for (const c of lastOrderedCols) byId.set(c.id, c)
     // Render exactly the shared, ordered `order` list — but only the ids
     // this vendor's own rows actually have (a meta column only exists here
     // if at least one of THIS vendor's rows carries that metadata key;
@@ -2419,7 +2646,7 @@ function OrderConfigBlock({ vendor, rows, order, sizing, onResize, onOpenConfig,
     // before this feature, just driven by the shared order instead of a
     // fixed part/uom/capacity/… sequence.
     return order.map((id) => byId.get(id)).filter((c): c is Col<ConfigRow> => !!c)
-  }, [rows, order])
+  }, [rows, order, infoFor, shopId])
 
   const sortedRows = useMemo(() => applySort(rows, columns, sort), [rows, columns, sort])
   const updated = useMemo(() => lastUpdated(rows as any[], ['updated_at']), [rows])
