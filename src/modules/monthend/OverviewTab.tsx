@@ -44,22 +44,15 @@ export function OverviewTab() {
   const [openRecounts, setOpenRecounts] = useState(0)
   const [completeRecounts, setCompleteRecounts] = useState(0)
   const [exceptions, setExceptions] = useState<ExceptionRow[]>([])
-  // Current-period TOTAL ending balance, live from inventory.counts — found
-  // live 2026-09-22: monthly_ending_balances' per-category (Parts/Oil/
-  // Additives) breakdown is a genuinely separate, manual Finance entry
-  // (Global Config -> Ending Balances) with no live source at all — no
-  // data_source_link row exists for it, confirmed directly against
-  // production — so it normally only gets a row once the month is closed
-  // out. That's NOT true of the total: `counts` (this same page's own
-  // "Count Summary" upload) already has real ending_inventory_cost data
-  // the moment a shop's Monthly count is uploaded, no month-end wait
-  // needed (confirmed live: 213 real Monthly rows already sitting there
-  // for the current period while monthly_ending_balances had zero). So the
-  // Total KPI/Shop Detail row reads live from here; the three category
-  // KPIs below it stay on monthly_ending_balances since that's genuinely
-  // the only place that breakdown exists, and show "—" (not $0) until
-  // Finance enters it for this period.
-  const [currentCounts, setCurrentCounts] = useState<Map<string, number>>(new Map())
+  // Which shops have submitted a count for the current period — Monthly
+  // count_type rows in `counts` or a manual_count_entries row, same
+  // definition NotSubmittedTab.tsx already uses. 2026-09-28: this used to
+  // also carry each shop's dollar total (ending_inventory_cost, an uploaded
+  // Count Summary figure) for the Total Ending Balance KPI/Shop Detail row,
+  // but per explicit request that KPI (and the category tiles) must reflect
+  // actual on-hand inventory, not what a shop uploaded — both now read from
+  // currentCategoryBalances below instead (live, Droptop-on-hand-derived).
+  // This set stays purely a submission tracker.
   // Live per-shop Oil/Parts/Additives/Other breakdown for the CURRENT
   // period, via get_current_balance_by_category — now possible because
   // droptop-sync-usage captures Droptop's own per-product unit_cost and
@@ -117,34 +110,24 @@ export function OverviewTab() {
       }
       setBalances(all)
 
-      // Live current-period total — see currentCounts' own comment above.
-      // Same "Monthly" count_type + manual_count_entries definition of
-      // "submitted" NotSubmittedTab.tsx already uses, so this KPI agrees
-      // with that tab rather than introducing a second definition.
+      // Which shops have submitted a count this period — same "Monthly"
+      // count_type + manual_count_entries definition of "submitted"
+      // NotSubmittedTab.tsx already uses, so this agrees with that tab
+      // rather than introducing a second definition. No longer reads
+      // ending_inventory_cost (2026-09-28 — see currentSubmittedIds' own
+      // comment above): this is purely a submission tracker now.
       const [{ data: countsRows }, { data: manualRows }] = await Promise.all([
         sb.schema('inventory').from('counts')
-          .select('location_id, count_type, ending_inventory_cost, uploaded_at, created_at')
+          .select('location_id, count_type')
           .eq('company_id', companyId).eq('count_month', countMonth),
         sb.schema('inventory').from('manual_count_entries')
           .select('location_id').eq('company_id', companyId).eq('count_period', countMonth),
       ])
-      const monthlyRows = ((countsRows ?? []) as {
-        location_id: string | null; count_type: string | null; ending_inventory_cost: number | null
-        uploaded_at: string | null; created_at: string | null
-      }[]).filter((r) => (r.count_type ?? '').trim().toLowerCase() === 'monthly' && r.location_id)
-      // A shop can have more than one Monthly row for the same period (a
-      // corrected re-upload) — keep only the most recently uploaded one per
-      // shop, same "latest wins" precedent as NotSubmittedTab.tsx's own
-      // lastMap dedup.
-      monthlyRows.sort((a, b) => (b.uploaded_at ?? b.created_at ?? '').localeCompare(a.uploaded_at ?? a.created_at ?? ''))
-      const countsMap = new Map<string, number>()
+      const monthlyRows = ((countsRows ?? []) as { location_id: string | null; count_type: string | null }[])
+        .filter((r) => (r.count_type ?? '').trim().toLowerCase() === 'monthly' && r.location_id)
       const submitted = new Set<string>()
-      for (const r of monthlyRows) {
-        submitted.add(r.location_id!)
-        if (!countsMap.has(r.location_id!)) countsMap.set(r.location_id!, Number(r.ending_inventory_cost ?? 0))
-      }
+      for (const r of monthlyRows) submitted.add(r.location_id!)
       for (const m of (manualRows ?? []) as { location_id: string | null }[]) if (m.location_id) submitted.add(m.location_id)
-      setCurrentCounts(countsMap)
       setCurrentSubmittedIds(submitted)
 
       const { data: catBalRows, error: catBalErr } = await sb.rpc('get_current_balance_by_category', {
@@ -194,21 +177,23 @@ export function OverviewTab() {
 
   useEffect(() => { load() }, [load])
 
-  // Current-month totals — Total is live (currentCounts, see its own
-  // comment above). Oil/Parts/Additives prefer the live per-category
-  // breakdown (currentCategoryBalances, keyed the same as field_key —
+  // Current-month totals — Total AND Oil/Parts/Additives/Other all come
+  // from the same live per-shop breakdown (currentCategoryBalances, via
+  // get_current_balance_by_category — real on-hand qty × unit cost from the
+  // daily Droptop sync), not from an uploaded Count Summary (2026-09-28,
+  // explicit request: these must reflect actual on-hand inventory, not what
+  // a shop uploaded). Oil/Parts/Additives (keyed the same as field_key —
   // production's own field_definitions rows for this section are literally
-  // 'oil'/'parts'/'additives') whenever it has data for this period, falling
-  // back to monthly_ending_balances (still "—" until Finance enters it)
-  // otherwise — so a still-open period stops showing "—" the moment the
-  // scheduled daily Droptop on-hand sync has run once, no month-close wait
-  // needed. 'other' has no Finance-entry equivalent at all, so it's live-only.
+  // 'oil'/'parts'/'additives') fall back to monthly_ending_balances (still
+  // "—" until Finance enters it) only when there's no live data at all yet
+  // for this period; Total and 'other' have no Finance-entry equivalent, so
+  // they're live-only and show "—" until the daily sync has run at least
+  // once for this period.
   const currentTotals = useMemo(() => {
-    const total = [...currentCounts.values()].reduce((s, v) => s + v, 0)
     const rows = balances.filter((b) => b.month === countMonth)
     const hasBalanceRow = rows.length > 0
     const hasLiveCategoryData = currentCategoryBalances.size > 0
-    const liveSum = (key: 'oil' | 'parts' | 'additives' | 'other') =>
+    const liveSum = (key: 'oil' | 'parts' | 'additives' | 'other' | 'total') =>
       [...currentCategoryBalances.values()].reduce((s, v) => s + v[key], 0)
     const cats: Record<string, number | null> = {}
     for (const c of categories) {
@@ -220,17 +205,17 @@ export function OverviewTab() {
       }
     }
     const other = hasLiveCategoryData ? liveSum('other') : null
+    const total = hasLiveCategoryData ? liveSum('total') : null
     return { total, cats, other, shopCount: currentSubmittedIds.size }
-  }, [currentCounts, currentSubmittedIds, balances, categories, countMonth, currentCategoryBalances])
+  }, [currentSubmittedIds, balances, categories, countMonth, currentCategoryBalances])
 
   // Total tile with "Other" pulled back out, when the toggle above is on —
-  // Total itself is independently sourced (currentCounts, a shop's own
-  // self-reported count total) rather than literally built by summing the
-  // category tiles, so this is "total minus whatever we can currently
-  // attribute to Other," not a strict re-derivation. Only has an effect
-  // when Other actually has live data for this period; otherwise there's
-  // nothing to subtract and the toggle is a no-op.
-  const displayedTotal = excludeOther && currentTotals.other != null ? currentTotals.total - currentTotals.other : currentTotals.total
+  // now a strict re-derivation (both Total and Other come from the same
+  // live breakdown, and the RPC's own `total` is a plain sum across every
+  // category including Other), unlike before this KPI switched to a live
+  // source. Only has an effect when Other actually has live data for this
+  // period; otherwise there's nothing to subtract and the toggle is a no-op.
+  const displayedTotal = excludeOther && currentTotals.other != null ? (currentTotals.total ?? 0) - currentTotals.other : currentTotals.total
 
   // Month-over-Month comparison for the KPI row — Total + each configured
   // category + Other (when it has data), each with the company-wide
@@ -239,16 +224,22 @@ export function OverviewTab() {
   // the company-wide delta when the set of shops reporting each month
   // isn't identical, e.g. a shop submitted this month but not last).
   // "Total" per shop mirrors shopDetail's own historical source
-  // (monthly_ending_balances.ending_balance for a closed month; currentCounts
-  // for the live current month) rather than summing categories, same
-  // total-vs-categories data-source split as currentTotals above.
+  // (monthly_ending_balances.ending_balance for a closed month; the live
+  // currentCategoryBalances total for the current month, 2026-09-28) rather
+  // than summing categories here — though for the current month those are
+  // now the same underlying number either way, since Total and the
+  // categories share one live source.
   const companyMoM = useMemo(() => {
     const curBalRows = balances.filter((b) => b.month === countMonth)
     const prevBalRows = balances.filter((b) => b.month === prevMonth)
 
     function shopMap(period: 'current' | 'prev', key: 'total' | 'other' | string): Map<string, number> {
       if (key === 'total') {
-        if (period === 'current') return currentCounts
+        if (period === 'current') {
+          const m = new Map<string, number>()
+          for (const [id, v] of currentCategoryBalances) m.set(id, v.total)
+          return m
+        }
         const m = new Map<string, number>()
         for (const r of prevBalRows) if (r.location_id) m.set(r.location_id, Number(r.ending_balance ?? 0))
         return m
@@ -296,7 +287,7 @@ export function OverviewTab() {
     const rows = [rowFor('Total', 'total'), ...categories.map((c) => rowFor(c.label, c.field_key))]
     if (currentTotals.other != null) rows.push(rowFor('Other', 'other'))
     return rows
-  }, [balances, countMonth, prevMonth, currentCounts, currentCategoryBalances, prevCategoryBalances, categories, excludeOther, currentTotals.other])
+  }, [balances, countMonth, prevMonth, currentCategoryBalances, prevCategoryBalances, categories, excludeOther, currentTotals.other])
 
   const exceptionStats = useMemo(() => {
     const shops = new Set(exceptions.map((e) => e.location_id))
@@ -304,7 +295,8 @@ export function OverviewTab() {
   }, [exceptions])
 
   // Per-shop history for the detail panel. Total's CURRENT value is live
-  // (currentCounts) — everything else (Last Month, category rows, and the
+  // (currentCategoryBalances, 2026-09-28 — see currentSubmittedIds' own
+  // comment above) — everything else (Last Month, category rows, and the
   // avg/median series, which are always looking at already-closed months)
   // stays on monthly_ending_balances, same reasoning as currentTotals above.
   const shopDetail = useMemo(() => {
@@ -316,13 +308,13 @@ export function OverviewTab() {
     const prevRow = rows.find((r) => r.month === prevMonth)
     const seriesFor = (key: string | null) => rows.map((r) => valFor(r, key)!).filter((n) => n != null && !isNaN(n))
     const line = (label: string, key: string | null) => {
-      const current = key === null ? (currentCounts.get(shopId) ?? null) : valFor(curRow, key)
+      const current = key === null ? (currentCategoryBalances.get(shopId)?.total ?? null) : valFor(curRow, key)
       const last = valFor(prevRow, key)
       return { label, current, last, avg: mean(seriesFor(key)), med: median(seriesFor(key)),
         delta: current != null && last != null ? current - last : null }
     }
     return [line('Total', null), ...categories.map((c) => line(c.label, c.field_key))]
-  }, [shopId, balances, categories, countMonth, prevMonth, currentCounts])
+  }, [shopId, balances, categories, countMonth, prevMonth, currentCategoryBalances])
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
   if (loading) return <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
