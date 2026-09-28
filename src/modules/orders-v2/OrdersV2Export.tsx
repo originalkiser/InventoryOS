@@ -7,7 +7,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
-import { useDraft, type DraftLineRow } from './useOrdersV2'
+import { useDraft, draftAdHocLocationIds, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { OrderStepper } from './OrderStepper'
 import { finalizeDraft } from './useOrderHistory'
@@ -107,6 +107,20 @@ const DEFAULT_TEMPLATE: ExportTemplate = {
 const sb = () => supabase as any
 const uid = () => Math.random().toString(36).slice(2, 9)
 
+function mapRowToTemplate(data: any): ExportTemplate {
+  return {
+    columns: Array.isArray(data.columns) && data.columns.length ? data.columns : DEFAULT_TEMPLATE.columns,
+    file_name_template: data.file_name_template ?? DEFAULT_TEMPLATE.file_name_template,
+    sheet_name_template: data.sheet_name_template ?? DEFAULT_TEMPLATE.sheet_name_template,
+    format: data.format ?? 'xlsx',
+    include_subject: !!data.include_subject,
+    subject_template: data.subject_template ?? DEFAULT_TEMPLATE.subject_template,
+    use_body_template: !!data.use_body_template,
+    body_template: data.body_template ?? '',
+    max_rows_per_file: data.max_rows_per_file ?? null,
+  }
+}
+
 /**
  * Step 4 — build the vendor's file. The column list, naming and email
  * settings are saved per vendor and reused next time; a one-off tweak here
@@ -122,6 +136,15 @@ export function OrdersV2Export() {
 
   const [tpl, setTpl] = useState<ExportTemplate>(DEFAULT_TEMPLATE)
   const [savedTpl, setSavedTpl] = useState<ExportTemplate | null>(null)
+  // Ad Hoc orders get their own independently-customizable export format
+  // (2026-09-28 ask), saved as a separate inventory.ov2_export_templates row
+  // keyed by (company_id, vendor_id, is_adhoc) instead of overloading the
+  // vendor's regular scheduled-order default. hasAdhocOverride tracks
+  // whether one has actually been saved yet — until it has, the load effect
+  // below falls back to showing the vendor's regular default so an ad hoc
+  // export starts out identical rather than DEFAULT_TEMPLATE's generic shape.
+  const isAdHoc = !!draftAdHocLocationIds(draft ?? {})
+  const [hasAdhocOverride, setHasAdhocOverride] = useState(false)
   // Collapsed by default — the column mappings can run long, and the
   // preview below is what you actually came here to check.
   const [columnsOpen, setColumnsOpen] = useState(false)
@@ -135,29 +158,37 @@ export function OrdersV2Export() {
   }, [loc])
   const shopName = useCallback((id: string | null) => loc.fieldValue(id, 'shop_city') || loc.codeOf(id) || '', [loc])
 
-  // Load this vendor's saved template.
+  // Load this vendor's saved template — the ad-hoc-specific one when this
+  // draft is an ad hoc order, otherwise the regular one. Falls back to the
+  // vendor's regular default when editing an ad hoc export that has no
+  // ad-hoc-specific template saved yet, per the "initial load matches the
+  // vendor default" ask — savedTpl stays null in that case (not the
+  // fallback value) so `dirty` is true until the user explicitly saves an
+  // ad-hoc-specific row, rather than falsely reading as "already saved."
   useEffect(() => {
     if (!profile?.company_id || !draft?.vendor_id) return
     let cancelled = false
-    sb().schema('inventory').from('ov2_export_templates')
-      .select('*').eq('company_id', profile.company_id).eq('vendor_id', draft.vendor_id).maybeSingle()
-      .then(({ data }: any) => {
-        if (cancelled || !data) return
-        const loaded: ExportTemplate = {
-          columns: Array.isArray(data.columns) && data.columns.length ? data.columns : DEFAULT_TEMPLATE.columns,
-          file_name_template: data.file_name_template ?? DEFAULT_TEMPLATE.file_name_template,
-          sheet_name_template: data.sheet_name_template ?? DEFAULT_TEMPLATE.sheet_name_template,
-          format: data.format ?? 'xlsx',
-          include_subject: !!data.include_subject,
-          subject_template: data.subject_template ?? DEFAULT_TEMPLATE.subject_template,
-          use_body_template: !!data.use_body_template,
-          body_template: data.body_template ?? '',
-          max_rows_per_file: data.max_rows_per_file ?? null,
-        }
-        setTpl(loaded); setSavedTpl(loaded)
-      })
+    const companyId = profile.company_id
+    const vendorId = draft.vendor_id
+    ;(async () => {
+      const { data } = await sb().schema('inventory').from('ov2_export_templates')
+        .select('*').eq('company_id', companyId).eq('vendor_id', vendorId).eq('is_adhoc', isAdHoc).maybeSingle()
+      if (cancelled) return
+      if (data) {
+        const loaded = mapRowToTemplate(data)
+        setTpl(loaded); setSavedTpl(loaded); setHasAdhocOverride(true)
+        return
+      }
+      setHasAdhocOverride(false)
+      if (!isAdHoc) { setTpl(DEFAULT_TEMPLATE); setSavedTpl(null); return }
+      const { data: vendorDefault } = await sb().schema('inventory').from('ov2_export_templates')
+        .select('*').eq('company_id', companyId).eq('vendor_id', vendorId).eq('is_adhoc', false).maybeSingle()
+      if (cancelled) return
+      setTpl(vendorDefault ? mapRowToTemplate(vendorDefault) : DEFAULT_TEMPLATE)
+      setSavedTpl(null)
+    })()
     return () => { cancelled = true }
-  }, [profile?.company_id, draft?.vendor_id])
+  }, [profile?.company_id, draft?.vendor_id, isAdHoc])
 
   // Vendor's own part number/description — matched vendor + our_part_number,
   // resolved through product_id_mappings the same way Orders v2 generation
@@ -251,12 +282,23 @@ export function OrdersV2Export() {
     })
   }), [included, tpl.columns, valuesFor, draft?.order_date])
 
-  const headerValues = useMemo(() => ({
-    vendor: vendorName, order_date: draft?.order_date ?? '', weekday: orderWeekdayName(draft),
-    shop_count: new Set(included.map((l) => l.location_id)).size,
-    line_count: included.length,
-    total: included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0).toFixed(2),
-  }), [vendorName, draft, included])
+  // shop/product (2026-09-28 ask, for filenames): the single shop name or
+  // product id when the export covers exactly one, otherwise a count —
+  // there's no single name that reads sensibly in a filename once an export
+  // spans more than one shop or product line.
+  const headerValues = useMemo(() => {
+    const shopIds = new Set(included.map((l) => l.location_id))
+    const productIds = new Set(included.map((l) => l.product_id))
+    return {
+      vendor: vendorName, order_date: draft?.order_date ?? '', weekday: orderWeekdayName(draft),
+      shop_count: shopIds.size,
+      product_count: productIds.size,
+      line_count: included.length,
+      total: included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0).toFixed(2),
+      shop: shopIds.size === 1 ? shopName([...shopIds][0]) : `${shopIds.size} shops`,
+      product: productIds.size === 1 ? [...productIds][0] : `${productIds.size} products`,
+    }
+  }, [vendorName, draft, included, shopName])
 
   const fileName = renderTemplate(tpl.file_name_template, headerValues, draft?.order_date) || 'order'
   const sheetName = (renderTemplate(tpl.sheet_name_template, headerValues, draft?.order_date) || 'Order').slice(0, 31)
@@ -302,15 +344,16 @@ export function OrdersV2Export() {
     toast.success(chunks.length > 1 ? `${chunks.length} files downloaded` : 'Export downloaded')
   }
 
-  async function saveAsDefault() {
+  async function saveTemplate() {
     if (!profile?.company_id || !draft?.vendor_id) { toast.error('Pick a vendor on the draft first'); return }
     const { error } = await sb().schema('inventory').from('ov2_export_templates').upsert({
-      company_id: profile.company_id, vendor_id: draft.vendor_id, ...tpl,
+      company_id: profile.company_id, vendor_id: draft.vendor_id, is_adhoc: isAdHoc, ...tpl,
       updated_by: profile.id ?? null, updated_at: new Date().toISOString(),
-    }, { onConflict: 'company_id,vendor_id' })
+    }, { onConflict: 'company_id,vendor_id,is_adhoc' })
     if (error) { toast.error(error.message); return }
     setSavedTpl(tpl)
-    toast.success('Saved as this vendor\'s default')
+    setHasAdhocOverride(true)
+    toast.success(isAdHoc ? 'Saved as this vendor\'s ad hoc default' : 'Saved as this vendor\'s default')
   }
 
   async function finalize() {
@@ -353,23 +396,32 @@ export function OrdersV2Export() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <Button size="sm" variant="muted" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)} className="mb-1">← Final Review</Button>
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Export</h1>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
+            Export
+            {isAdHoc && <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-sky/40 text-navy">Ad Hoc</span>}
+          </h1>
           <p className="text-xs text-inky mt-0.5">
             {vendorName || 'No vendor'} · {included.length} line{included.length !== 1 ? 's' : ''} · {money(Number(headerValues.total))}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant="secondary" onClick={saveAsDefault} disabled={!dirty}>
-            {dirty ? 'Save as vendor default' : 'Matches saved default'}
+          <Button size="sm" variant="secondary" onClick={saveTemplate} disabled={!dirty}>
+            {dirty ? (isAdHoc ? 'Save as ad hoc default' : 'Save as vendor default') : 'Matches saved default'}
           </Button>
           <Button size="sm" variant="secondary" onClick={download}>Download {tpl.format.toUpperCase()}</Button>
           <Button size="sm" loading={finalizing} onClick={finalize}>Finalize Order</Button>
         </div>
       </div>
 
+      {isAdHoc && !hasAdhocOverride && (
+        <p className="text-[11px] font-mono text-inky/60 bg-sky/10 border border-sky/40 rounded px-2 py-1.5">
+          No ad-hoc-specific export format saved yet for {vendorName || 'this vendor'} — currently showing its
+          regular default. Customize below and press <strong>Save as ad hoc default</strong> to reuse this format for {vendorName || 'this vendor'}'s ad hoc orders going forward.
+        </p>
+      )}
       <p className="text-[11px] font-mono text-inky/60">
-        Changes here apply to this export only. Press <strong>Save as vendor default</strong> to reuse them for this
-        vendor next time.
+        Changes here apply to this export only. Press <strong>{isAdHoc ? 'Save as ad hoc default' : 'Save as vendor default'}</strong> to
+        reuse them for {isAdHoc ? "this vendor's ad hoc orders" : 'this vendor'} next time.
       </p>
 
       {/* Column builder — collapsed by default so the preview below is
@@ -441,6 +493,10 @@ export function OrdersV2Export() {
           </div>
           <Input label="File name" value={tpl.file_name_template} onChange={(e) => setTpl((t) => ({ ...t, file_name_template: e.target.value }))} />
           <span className="text-[10px] font-mono text-inky/50">→ {fileName}.{tpl.format}</span>
+          <p className="text-[10px] font-mono text-inky/50">
+            <code>{'{shop}'}</code> shop name, or "N shops" once more than one is included ·{' '}
+            <code>{'{product}'}</code> product id, or "N products" once more than one is included
+          </p>
           {tpl.format === 'xlsx' && (
             <>
               <Input label="Sheet name" value={tpl.sheet_name_template} onChange={(e) => setTpl((t) => ({ ...t, sheet_name_template: e.target.value }))} />
@@ -496,7 +552,7 @@ export function OrdersV2Export() {
             </>
           )}
           <span className="text-[10px] font-mono text-inky/50">
-            Header fields: vendor, order_date, weekday, shop_count, line_count, total.
+            Header fields: vendor, order_date, weekday, shop_count, shop, product_count, product, line_count, total.
           </span>
         </CardBody></Card>
       </div>
