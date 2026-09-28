@@ -420,22 +420,34 @@ function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleSh
   shrinkOn: boolean
   onToggleShrink: () => void
   // Reports this widget's own natural (unclipped) content height in px on
-  // every change — scrollHeight already gives us this for free regardless
-  // of whether the box is currently tall enough to show it all, so no
-  // separate unclamped measurement pass is needed. The parent grid uses
-  // this to compute a render-time-only "effective h" (never written back to
-  // the persisted layout — see visibleGridLayout/renderGridLayout) that lets
-  // vertical compaction close the gap below a shorter-than-its-max-height
-  // widget instead of leaving empty space.
+  // every change. Measured off a SEPARATE plain wrapper around `children`
+  // (contentRef below), never off scrollRef itself — found live 2026-09-28
+  // (real screenshots: boxes never shrank regardless of content): scrollRef
+  // has an explicit CSS height (h-full, following the grid-assigned box
+  // height), and per the DOM spec an element's own scrollHeight can never
+  // read BELOW its clientHeight — when content is shorter than the box
+  // there's no overflow, so scrollHeight just echoes the box's current
+  // (possibly still-large) height back, never the shorter content height a
+  // shrink calculation needs. contentRef has no height style at all, so it
+  // sizes to its own content's natural flow height regardless of how tall
+  // its scrolling ancestor happens to be — confirmed with a real isolated
+  // DOM test (a 300px-tall overflow:auto box around 50px of content
+  // reported scrollHeight 298, not 50) before landing on this fix. The
+  // parent grid uses the reported height to compute a render-time-only
+  // "effective h" (never written back to the persisted layout — see
+  // visibleGridLayout/renderGridLayout) that lets vertical compaction close
+  // the gap below a shorter-than-its-max-height widget instead of leaving
+  // empty space.
   onContentHeight?: (px: number) => void
   children: ReactNode
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [canScroll, setCanScroll] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
-  // Stored in a ref (not a dependency of checkOverflow) so passing a new
-  // inline arrow function every render doesn't tear down/recreate the
-  // ResizeObserver/MutationObserver below on every render.
+  // Stored in a ref (not a dependency of checkContentHeight) so passing a
+  // new inline arrow function every render doesn't tear down/recreate the
+  // ResizeObserver below on every render.
   const onContentHeightRef = useRef(onContentHeight)
   onContentHeightRef.current = onContentHeight
 
@@ -444,7 +456,11 @@ function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleSh
     if (!el) return
     setCanScroll(el.scrollHeight > el.clientHeight + 2)
     setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 8)
-    onContentHeightRef.current?.(el.scrollHeight)
+  }, [])
+  const checkContentHeight = useCallback(() => {
+    const el = contentRef.current
+    if (!el) return
+    onContentHeightRef.current?.(el.getBoundingClientRect().height)
   }, [])
 
   useEffect(() => {
@@ -461,6 +477,17 @@ function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleSh
     el.addEventListener('scroll', checkOverflow, { passive: true })
     return () => { ro.disconnect(); mo.disconnect(); el.removeEventListener('scroll', checkOverflow) }
   }, [checkOverflow])
+
+  useEffect(() => {
+    checkContentHeight()
+    const el = contentRef.current
+    if (!el) return
+    const ro = new ResizeObserver(checkContentHeight)
+    ro.observe(el)
+    const mo = new MutationObserver(checkContentHeight)
+    mo.observe(el, { childList: true, subtree: true, characterData: true })
+    return () => { ro.disconnect(); mo.disconnect() }
+  }, [checkContentHeight])
 
   const showHint = canScroll && !atBottom
   const { bounceKey, bounceCount } = useBouncePattern(showHint)
@@ -487,7 +514,17 @@ function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleSh
           title={shrinkOn
             ? 'Shrink to Content is ON — the set height is a max; the box shrinks to fit its table/content. Click to switch to a fixed height.'
             : 'Fixed height — click to shrink to fit content instead (the set height becomes a max)'}
-          className={`absolute -top-2 -right-2 z-20 rounded-full px-2 py-1 shadow-lg border-2 border-cream text-[9px] font-mono uppercase tracking-wide whitespace-nowrap transition-colors ${shrinkOn ? 'bg-sky text-navy' : 'bg-navy/50 text-cream'}`}
+          // Static sb-* tokens (never flip with light/dark mode) — 2026-09-28
+          // fix: the dynamic navy/cream/sky tokens this used before could
+          // land on near-invisible text depending on the app's light/dark
+          // setting (found live from a real dark-mode screenshot: both
+          // states' text was unreadable). navy and cream flip together in a
+          // complementary way (used elsewhere in this file, e.g. the drag
+          // handle/label pills), but pairing sky with navy — as the ON state
+          // did — breaks that: sky never flips while navy does, so in dark
+          // mode both the background and the text ended up light. sb-* is
+          // guaranteed readable regardless of theme.
+          className={`absolute -top-2 -right-2 z-20 rounded-full px-2 py-1 shadow-lg border-2 border-cream text-[9px] font-mono uppercase tracking-wide whitespace-nowrap transition-colors ${shrinkOn ? 'bg-sb-sky text-sb-navy' : 'bg-sb-navy text-sb-cream'}`}
         >
           Shrink {shrinkOn ? 'On' : 'Off'}
         </button>
@@ -503,7 +540,10 @@ function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleSh
           has no "edges" to lose) scrolls. */}
       <div className={`flex-1 min-h-0 rounded-lg border border-navy/20 bg-cream overflow-hidden ${editMode ? 'ring-2 ring-sky/60 ring-offset-1' : ''}`}>
         <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-hide">
-          {children}
+          {/* No height style on this wrapper — deliberately, so it sizes to
+              children's own natural content height regardless of scrollRef's
+              forced height above (see checkContentHeight/contentRef). */}
+          <div ref={contentRef}>{children}</div>
         </div>
       </div>
       {showHint && (
