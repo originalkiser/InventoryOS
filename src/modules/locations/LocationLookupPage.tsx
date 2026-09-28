@@ -282,17 +282,12 @@ const ReactGridLayout = RGL.WidthProvider(RGLGridLayout)
 const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 24
 const GRID_MARGIN: [number, number] = [16, 16]
-const GRID_WIDGET_LABELS: ColItem[] = [
-  { id: 'shop_details', label: 'Shop Details' },
-  { id: 'tank_monitors', label: 'Tank Monitors' },
-  { id: 'order_config', label: 'Order Configuration' },
-  { id: 'issues', label: 'Issues' },
-  { id: 'exceptions', label: 'Exception Reports' },
-  { id: 'comms', label: 'Location Comms' },
-  { id: 'custom_config', label: 'Custom Shop Config' },
-  { id: 'mentioned', label: 'Mentioned In' },
-]
-const GRID_WIDGET_IDS = GRID_WIDGET_LABELS.map((w) => w.id)
+// "order_config" is NOT one of these fixed ids (2026-09-28 ask) — each
+// vendor gets its own independent, separately draggable/resizable tile
+// instead of being grouped under one shared "Order Configuration" parent
+// (`order_config:<vendor name>`, computed at render time since the vendor
+// set is per-shop — see orderConfigBlocksByVendor/gridWidgetIds below).
+const FIXED_GRID_WIDGET_IDS = ['shop_details', 'tank_monitors', 'issues', 'exceptions', 'comms', 'custom_config', 'mentioned']
 // Default positions roughly mirror the old fixed layout (narrow info rail on
 // the left, wide tables on the right) — just as a starting point; the whole
 // point of this feature is that a user can drag/resize away from it.
@@ -300,7 +295,7 @@ const GRID_WIDGET_IDS = GRID_WIDGET_LABELS.map((w) => w.id)
 // Exceptions/Comms have real room for a status pill next to each item's
 // title — minW bumped to match so a resize can't squeeze them back below
 // what a single item's title+pill needs.
-const DEFAULT_GRID_LAYOUT: RGL.Layout[] = [
+const FIXED_DEFAULT_GRID_LAYOUT: RGL.Layout[] = [
   { i: 'shop_details', x: 0, y: 0, w: 4, h: 18, minW: 3, minH: 4 },
   { i: 'issues', x: 0, y: 18, w: 4, h: 7, minW: 3, minH: 3 },
   { i: 'exceptions', x: 0, y: 25, w: 4, h: 7, minW: 3, minH: 3 },
@@ -308,8 +303,15 @@ const DEFAULT_GRID_LAYOUT: RGL.Layout[] = [
   { i: 'custom_config', x: 0, y: 39, w: 4, h: 7, minW: 3, minH: 3 },
   { i: 'mentioned', x: 0, y: 46, w: 4, h: 6, minW: 3, minH: 3 },
   { i: 'tank_monitors', x: 4, y: 0, w: 8, h: 16, minW: 3, minH: 4 },
-  { i: 'order_config', x: 4, y: 16, w: 8, h: 36, minW: 3, minH: 4 },
 ]
+// One tile per vendor, stacked vertically starting where the old combined
+// "order_config" tile used to sit — a shop with no order configuration at
+// all gets a single `order_config:__empty` placeholder tile instead of
+// silently having no fallback spot to show that message.
+function defaultOrderConfigTiles(vendorKeys: string[]): RGL.Layout[] {
+  const keys = vendorKeys.length ? vendorKeys : ['__empty']
+  return keys.map((key, i) => ({ i: `order_config:${key}`, x: 4, y: 16 + i * 20, w: 8, h: 20, minW: 3, minH: 4 }))
+}
 
 // Reconciles a persisted layout against the current widget set — a widget
 // that no longer exists is dropped, one that's new (added after a user's
@@ -727,10 +729,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // position, not just this column's own order).
   const leftBoxLayout = usePersistedColumnLayout('location_lookup.left_boxes')
   // Full-page drag/resize grid (non-embedded page only) — an array of
-  // react-grid-layout {i,x,y,w,h} entries, one per widget in
-  // GRID_WIDGET_IDS. Edit mode is driven by the same customizeOpen toggle
-  // that already opens the Settings panel (isDraggable/isResizable below).
-  const [pageGridLayout, setPageGridLayout] = usePersistedJson<RGL.Layout[]>('location_lookup.page_grid', DEFAULT_GRID_LAYOUT)
+  // react-grid-layout {i,x,y,w,h} entries, one per widget in gridWidgetIds
+  // (computed further down, once configsByVendor is known — the vendor
+  // order-config tiles are per-shop). Edit mode is driven by the same
+  // customizeOpen toggle that already opens the Settings panel
+  // (isDraggable/isResizable below). FIXED_DEFAULT_GRID_LAYOUT is just this
+  // hook's initial seed before the real (vendor-aware) default is merged in
+  // via effectiveGridLayout — it doesn't need to be the final answer.
+  const [pageGridLayout, setPageGridLayout] = usePersistedJson<RGL.Layout[]>('location_lookup.page_grid', FIXED_DEFAULT_GRID_LAYOUT)
   const [sidebarManagerOpen, setSidebarManagerOpen] = useState(false)
   const [configManagerOpen, setConfigManagerOpen] = useState(false)
   const [leftBoxManagerOpen, setLeftBoxManagerOpen] = useState(false)
@@ -1458,7 +1464,16 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // items) rather than only on load, so a code change adding/removing a
   // widget id is picked up immediately rather than waiting for the user's
   // next drag.
-  const effectiveGridLayout = useMemo(() => mergeGridLayout(pageGridLayout, DEFAULT_GRID_LAYOUT), [pageGridLayout])
+  const vendorOrderConfigKeys = useMemo(() => configsByVendor.map(([vendor]) => vendor), [configsByVendor])
+  const gridWidgetIds = useMemo(() => [
+    ...FIXED_GRID_WIDGET_IDS,
+    ...(vendorOrderConfigKeys.length ? vendorOrderConfigKeys : ['__empty']).map((key) => `order_config:${key}`),
+  ], [vendorOrderConfigKeys])
+  const defaultGridLayout = useMemo(
+    () => [...FIXED_DEFAULT_GRID_LAYOUT, ...defaultOrderConfigTiles(vendorOrderConfigKeys)],
+    [vendorOrderConfigKeys],
+  )
+  const effectiveGridLayout = useMemo(() => mergeGridLayout(pageGridLayout, defaultGridLayout), [pageGridLayout, defaultGridLayout])
 
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
 
@@ -1678,7 +1693,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               )}
               {!embedded && !isMobile && (
                 <button
-                  onClick={() => setPageGridLayout(DEFAULT_GRID_LAYOUT)}
+                  onClick={() => setPageGridLayout(defaultGridLayout)}
                   title="Puts every widget back to its default position and size"
                   className="self-start text-[10px] font-mono text-inky border border-navy/30 rounded px-1.5 py-0.5 hover:border-navy"
                 >
@@ -1880,31 +1895,40 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               </CardBody>
             </Card>
           ),
-          order_config: (
-            configsByVendor.length === 0 ? (
-              <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
-            ) : (
-              <div className="flex flex-col gap-4">
-                <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">Order Configuration</span>
-                {/* w-fit on this wrapper (not each Card) is what makes every
-                    vendor's card share one common width — the widest table's
-                    natural size — instead of each shrinking to its own,
-                    independently-narrower content (RelaDyne vs. Valvoline
-                    used to visibly misalign). Each Card below stretches to
-                    fill this shrink-to-fit container via plain block sizing;
-                    the container itself sizes to the widest child. */}
-                <div className="w-fit max-w-full flex flex-col gap-4">
-                  {configsByVendor.map(([vendor, rows]) => (
-                    <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} order={configShownIds} sizing={configLayout.sizing}
-                      onResize={handleConfigResize}
-                      onOpenConfig={() => navigate('/config?tab=order-config')}
-                      onExceptionClick={setExceptionModalRow}
-                    />
-                  ))}
-                </div>
-              </div>
-            )
-          ),
+        }
+
+        // RelaDyne/Valvoline (etc.) no longer share one "Order Configuration"
+        // parent group (2026-09-28 ask) — each vendor is its own independent
+        // widget on the grid (order_config:<vendor>, see gridWidgetIds
+        // above). The embedded/mobile single-column stack still lists them
+        // one after another under a shared width-alignment wrapper (so
+        // RelaDyne/Valvoline's tables still line up edge-to-edge there), just
+        // without the removed heading text.
+        const emptyOrderConfigCard = <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
+        const orderConfigBlocksByVendor: [string, ReactNode][] = configsByVendor.map(([vendor, rows]) => [
+          vendor,
+          <OrderConfigBlock key={vendor} vendor={vendor} rows={rows} order={configShownIds} sizing={configLayout.sizing}
+            onResize={handleConfigResize}
+            onOpenConfig={() => navigate('/config?tab=order-config')}
+            onExceptionClick={setExceptionModalRow}
+          />,
+        ])
+        widgetContent.order_config = orderConfigBlocksByVendor.length === 0 ? emptyOrderConfigCard : (
+          // w-fit on this wrapper (not each Card) is what makes every
+          // vendor's card share one common width — the widest table's
+          // natural size — instead of each shrinking to its own,
+          // independently-narrower content (RelaDyne vs. Valvoline used to
+          // visibly misalign). Each Card below stretches to fill this
+          // shrink-to-fit container via plain block sizing; the container
+          // itself sizes to the widest child.
+          <div className="w-fit max-w-full flex flex-col gap-4">
+            {orderConfigBlocksByVendor.map(([vendor, node]) => <div key={vendor}>{node}</div>)}
+          </div>
+        )
+        if (orderConfigBlocksByVendor.length === 0) {
+          widgetContent['order_config:__empty'] = emptyOrderConfigCard
+        } else {
+          for (const [vendor, node] of orderConfigBlocksByVendor) widgetContent[`order_config:${vendor}`] = node
         }
 
         if (embedded || isMobile) {
@@ -1962,7 +1986,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             compactType="vertical"
             onLayoutChange={(l) => { if (customizeOpen) setPageGridLayout(l) }}
           >
-            {GRID_WIDGET_IDS.map((id) => (
+            {gridWidgetIds.map((id) => (
               <div key={id} className="h-full">
                 <GridWidgetShell editMode={customizeOpen}>
                   {widgetContent[id]}
