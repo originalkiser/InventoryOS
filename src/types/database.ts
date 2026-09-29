@@ -114,6 +114,7 @@ export interface TankMonitor {
   low_set_point_pct: number | null
   height: number | null
   total_capacity: number | null
+  raw_capacity: number | null
   source_location: string | null
   updated_by: string | null
   last_change_source: string | null

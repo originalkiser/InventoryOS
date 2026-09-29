@@ -30,6 +30,7 @@ const REQUIRED_FIELDS = [
   { name: 'inventory_time', label: 'Inventory Time (date & time)' },
   { name: 'on_hand', label: 'On Hand (Gross)' },
   { name: 'available_capacity', label: 'Available Capacity' },
+  { name: 'raw_capacity', label: 'Capacity (Uncapped)' },
   { name: 'volume_alarm_status', label: 'Volume Alarm Status' },
   { name: 'key_note', label: 'Key Note' },
   { name: 'battery_pct', label: "Bat' (%)" },
@@ -116,6 +117,7 @@ export function TankMonitorTab() {
     col.accessor('on_hand', { header: 'On Hand (Gross)', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('available_capacity', { header: 'Available Capacity', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('total_capacity', { header: 'Total Capacity', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('raw_capacity', { header: 'Capacity (Uncapped)', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('level_inches', { header: 'Level (in)', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('height', { header: 'Height', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('low_set_point_pct', { header: 'Low Set Point (%)', cell: (i) => i.getValue() ?? '—' }),
@@ -141,6 +143,18 @@ export function TankMonitorTab() {
 
   async function handleImport(rows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
     setImporting(true)
+    // Which target fields this specific upload actually mapped — an infrequent
+    // partial upload (e.g. Serial + Capacity (Uncapped) only, to correct a
+    // SkyBitz feed value, see raw_capacity) must never blow away every other
+    // column on the matched existing row with a hard-coded default. Every
+    // field below is only included in the returned row object when it was
+    // actually mapped in THIS upload; a column left out of an upsert payload
+    // is left untouched by Postgres rather than reset, so an omitted field on
+    // a matched row simply keeps its prior value (a brand-new row falls back
+    // to that column's own DB default instead, e.g. reading_date's
+    // DEFAULT CURRENT_DATE, keep_fill's DEFAULT false — the same values this
+    // code used to set explicitly).
+    const mappedFields = new Set(maps.map((m) => m.fieldName))
     const payload = rows.map((row) => {
       let location_id: string | null = null, source_location: string | null = null, product_id = '', keep_fill = false, inventory_time: string | null = null, reading_date: string | null = null, on_hand: number | null = null, available_capacity: number | null = null
       const extra: Record<string, unknown> = {}
@@ -152,6 +166,7 @@ export function TankMonitorTab() {
         else if (m.fieldName === 'inventory_time') { inventory_time = toIso(v); reading_date = toDate(v) }
         else if (m.fieldName === 'on_hand') on_hand = num(v)
         else if (m.fieldName === 'available_capacity') available_capacity = num(v)
+        else if (m.fieldName === 'raw_capacity') extra.raw_capacity = num(v)
         else if (m.fieldName === 'volume_alarm_status') extra.volume_alarm_status = v.trim() || null
         else if (m.fieldName === 'key_note') extra.key_note = v.trim() || null
         else if (m.fieldName === 'battery_pct') extra.battery_pct = num(v)
@@ -161,10 +176,24 @@ export function TankMonitorTab() {
         else if (m.fieldName === 'low_set_point_pct') extra.low_set_point_pct = num(v)
         else if (m.fieldName === 'height') extra.height = num(v)
       }
-      if (!reading_date) reading_date = today()
-      // Keep unmatched rows too (location_id null) so they can be matched later.
-      return { location_id, source_location, product_id: product_id || null, keep_fill, inventory_time, reading_date, on_hand, available_capacity, ...extra } as Partial<TankMonitor>
-    }).filter((r: any) => r.location_id || r.source_location || r.product_id)
+      // A row carrying a real new reading (inventory_time and/or on_hand
+      // mapped) always gets a reading_date, falling back to today() if
+      // inventory_time failed to parse — same as this code always did.
+      // A capacity-only (or otherwise reading-less) row omits reading_date
+      // entirely so a matched existing row's real last-read date is left
+      // alone instead of being stamped as "read today".
+      const touchesReading = mappedFields.has('inventory_time') || mappedFields.has('on_hand')
+      if (touchesReading && !reading_date) reading_date = today()
+      const out: Partial<TankMonitor> = { ...extra }
+      if (mappedFields.has('location')) { out.location_id = location_id; out.source_location = source_location }
+      if (mappedFields.has('product_id')) out.product_id = product_id || null
+      if (mappedFields.has('keep_fill')) out.keep_fill = keep_fill
+      if (mappedFields.has('inventory_time')) out.inventory_time = inventory_time
+      if (touchesReading) out.reading_date = reading_date as string
+      if (mappedFields.has('on_hand')) out.on_hand = on_hand
+      if (mappedFields.has('available_capacity')) out.available_capacity = available_capacity
+      return out
+    }).filter((r: any) => r.location_id || r.source_location || r.product_id || r.serial_rtu_id || r.system_tank_id)
     // One reading per location (or raw shop) + product + tank + date — the tank
     // id keeps multiple tanks of the same product distinct.
     // Match on serial number (RTU ID) so a re-upload overwrites that tank's
