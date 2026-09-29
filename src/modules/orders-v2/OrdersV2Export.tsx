@@ -527,7 +527,8 @@ export function OrdersV2Export() {
 
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <Button size="sm" variant="muted" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)} className="mb-1">← Final Review</Button>
+          <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)}
+            className="mb-1 rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Final Review</Button>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
             Export
             {isAdHoc && <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-sky/40 text-navy">Ad Hoc</span>}

@@ -5,8 +5,8 @@ import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/compon
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
 import { OrderStepper } from './OrderStepper'
+import { ToggleButton, SegmentedSlider } from './controls'
 import { ExceptionEditModal } from './ExceptionEditModal'
-import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { useProductExceptions } from './useProductExceptions'
 import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { useLocations } from '@/hooks/useLocations'
@@ -136,7 +136,6 @@ export function OrdersV2Review() {
   // directly. A shop-specific exception is deliberately excluded: it only
   // ever affects the one shop/product the user is already looking at right
   // where they added it.
-  const [exceptionsModalOpen, setExceptionsModalOpen] = useState(false)
   const [needsRegenerate, setNeedsRegenerate] = useState(false)
   const onExceptionChanged = useCallback((locationId?: string) => {
     reloadExceptions()
@@ -567,6 +566,11 @@ export function OrdersV2Review() {
   }, [lines])
 
   const overrideCount = useMemo(() => lines.filter((l) => l.is_override).length, [lines])
+  // "N qty ordered"/"N shops" (moved next to Order Total, 2026-09-29 ask) —
+  // included lines only, matching Order Total's own filter.
+  const includedLines = useMemo(() => lines.filter((l) => l.included), [lines])
+  const totalQtyOrdered = useMemo(() => includedLines.reduce((s, l) => s + Number(l.qty), 0), [includedLines])
+  const shopCountOrdered = useMemo(() => new Set(includedLines.map((l) => l.location_id)).size, [includedLines])
 
   // Live "does this shop/order-type group still meet its minimum" check —
   // recomputed from the CURRENT included lines' qty/dollars, not the
@@ -824,29 +828,23 @@ export function OrdersV2Review() {
 
   return (
     <div className="flex flex-col gap-4">
-      <OrderStepper draftId={draft.id} current="review" />
-
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <Button size="sm" variant="muted" onClick={() => navigate('/orders-v2')} className="mb-1">← Orders v2</Button>
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
-          <p className="text-xs text-inky mt-0.5">
-            {vendorName} · {draft.order_date}{isAdHoc ? ' · Ad hoc' : (usesOrderDays ? ` · ${DOW[orderDow]} shops` : '')} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
-          </p>
-        </div>
+      {/* Back button + page-level actions live above the step bar (direct
+          ask 2026-09-29) — the step bar itself is centered below, and the
+          page's own title/subtext moved further down, past the DOS-targets
+          bar, so this row is purely navigation/actions. */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
+          className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
         <div className="flex items-center gap-2 flex-wrap">
           <label className="flex items-center gap-1.5 text-[11px] font-mono text-navy border border-sky/40 bg-sky/10 rounded px-2 py-1"
             title="Try the new sortable/filterable/resizable table alongside the existing one — off by default, only affects your own browser.">
             <Toggle checked={useNewTable} onChange={setUseNewTable} size="sm" color="cyan" />
             New Table (Beta)
           </label>
-          <Button size="sm" variant="secondary" onClick={() => setExceptionsModalOpen(true)}>
-            Product Exceptions
-          </Button>
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
-          <Button size="sm" loading={movingToFinal} onClick={async () => {
+          <Button size="sm" loading={movingToFinal} className="rounded-lg bg-sky text-navy hover:bg-sky/90" onClick={async () => {
             setMovingToFinal(true)
             // See runGeneration's own comment — a completed order stays
             // 'exported', it never gets pulled back into the Final Review
@@ -859,8 +857,12 @@ export function OrdersV2Review() {
         </div>
       </div>
 
+      <OrderStepper draftId={draft.id} current="review" />
+
+      {/* Product Exceptions moved into Order Settings (direct ask
+          2026-09-29) — no longer its own button/modal here. */}
       <Modal open={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} title="Order Settings" size="xl">
-        <OrdersV2SettingsBody />
+        <OrdersV2SettingsBody onExceptionChanged={onExceptionChanged} />
       </Modal>
 
       {exceptionTarget && (
@@ -874,13 +876,9 @@ export function OrdersV2Review() {
         />
       )}
 
-      <Modal open={exceptionsModalOpen} onClose={() => setExceptionsModalOpen(false)} title="Product Exceptions" size="xl">
-        <ProductExceptionsManager onChanged={onExceptionChanged} />
-      </Modal>
-
       {dosOverride && (
         <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">This order&apos;s DOS targets</span>
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">DOS Targets</span>
           <label className="flex flex-col gap-0.5">
             <span className="text-[10px] font-mono text-inky/50">Target</span>
             <input type="number" min={0} value={dosOverride.target}
@@ -899,6 +897,21 @@ export function OrdersV2Review() {
               onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
               className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
           </label>
+          {/* Order day moved in here from its own bar below (direct ask
+              2026-09-29) — a sliding Mon-Fri picker instead of a dropdown. */}
+          {usesOrderDays && !isAdHoc && (
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-mono text-inky/50">Order day</span>
+              <SegmentedSlider
+                value={String(orderDow)}
+                onChange={(v) => void runGeneration(Number(v))}
+                options={[1, 2, 3, 4, 5].map((i) => ({
+                  value: String(i),
+                  label: `${DOW[i].slice(0, 3)}${dayCounts[i] ? ` (${dayCounts[i]})` : ''}`,
+                }))}
+              />
+            </label>
+          )}
           <p className="text-[10px] font-mono text-inky/50 max-w-xs">
             Adjusts this order only — never saved to Order Settings.
             <span className="inline-flex items-center gap-1 ml-1">
@@ -919,45 +932,38 @@ export function OrdersV2Review() {
         </CardBody></Card>
       )}
 
-      <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
+      {/* Title + subtext, moved below the DOS targets/day/regenerate bar
+          per direct ask 2026-09-29. */}
+      <div>
+        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
+        <p className="text-xs text-inky mt-0.5">
+          {vendorName} · {draft.order_date}{isAdHoc ? ' · Ad hoc' : (usesOrderDays ? ` · ${DOW[orderDow]} shops` : '')} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
+        </p>
+      </div>
+
+      {/* Compact toolbar directly over the table — shrunk to just the
+          controls that stayed here once Order Day moved into the DOS-
+          targets bar and VMI/over-capacity became toggle-buttons (direct
+          ask 2026-09-29: fit alongside Search/Export/Manage Columns rather
+          than needing its own wide row). */}
+      <Card><CardBody className="flex items-center gap-2 flex-wrap py-2">
         {/* The new table has its own built-in search + Manage Columns
             (DataTable's own toolbar) — shown here only for the old table to
             avoid two redundant search boxes / column controls on screen. */}
         {!useNewTable && (
-          <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-56" />
+          <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-44" />
         )}
-        <label className="flex items-center gap-2 text-xs font-mono text-inky">
-          <Toggle checked={showVmi} onChange={setShowVmi} size="sm" color="cyan" />
-          Show VMI / keepfill
-        </label>
-        <label className="flex items-center gap-2 text-xs font-mono text-inky">
-          <Toggle checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity} size="sm" color="cyan" />
-          Show only over-capacity lines
-        </label>
-        {usesOrderDays && !isAdHoc && (
-          <label className="flex items-center gap-2 text-xs font-mono text-inky">
-            Order day
-            <select value={String(orderDow)} onChange={(e) => void runGeneration(Number(e.target.value))}
-              className="bg-cream border border-navy/30 rounded px-2 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky">
-              {DOW.map((d, i) => (
-                <option key={d} value={i}>{d}{dayCounts[i] ? ` (${dayCounts[i]})` : ''}</option>
-              ))}
-            </select>
-          </label>
-        )}
+        <ToggleButton checked={showVmi} onChange={setShowVmi}
+          onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+          onTooltip="Click to hide VMI/keep-fill lines" offTooltip="Click to also show VMI/keep-fill lines" />
+        <ToggleButton checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity}
+          onLabel="Showing Over-Capacity Only" offLabel="Showing All Lines"
+          onTooltip="Click to show every line again" offTooltip="Click to show only lines ordered past their configured capacity" />
         {isAdHoc && (
           <span className="rounded px-1.5 py-0.5 bg-sky/20 text-navy border border-sky/40 text-xs font-mono">
             Ad hoc · {eligibleLocationIds?.size ?? 0} shop{(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}
           </span>
         )}
-        <span className="text-xs font-mono text-inky">
-          {lines.length} line{lines.length !== 1 ? 's' : ''}
-          {overrideCount > 0 && (
-            <span className="ml-2 rounded px-1.5 py-0.5 bg-[#E67E22]/15 text-[#E67E22] border border-[#E67E22]/40">
-              {overrideCount} override{overrideCount !== 1 ? 's' : ''}
-            </span>
-          )}
-        </span>
         {!useNewTable && (
           <button
             onClick={() => setColumnModalOpen(true)}
@@ -966,9 +972,21 @@ export function OrdersV2Review() {
             <Settings className="w-3 h-3" /> Customize Columns
           </button>
         )}
-        <span className="ml-auto text-xs font-mono text-navy">
-          Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
-        </span>
+        {/* Shop/line/qty counts moved here next to Order Total (direct ask
+            2026-09-29) — used to sit in this same bar next to Order Day. */}
+        <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy flex-wrap">
+          <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
+          <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
+          <span>{num(totalQtyOrdered, 0)} qty ordered</span>
+          {overrideCount > 0 && (
+            <span className="rounded px-1.5 py-0.5 bg-[#E67E22]/15 text-[#E67E22] border border-[#E67E22]/40">
+              {overrideCount} override{overrideCount !== 1 ? 's' : ''}
+            </span>
+          )}
+          <span className="font-bold">
+            Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
+          </span>
+        </div>
       </CardBody></Card>
 
       <ColumnCustomizeModal

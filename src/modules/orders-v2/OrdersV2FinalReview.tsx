@@ -542,7 +542,8 @@ export function OrdersV2FinalReview() {
 
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <Button size="sm" variant="muted" onClick={() => navigate(`/orders-v2/draft/${draft.id}`)} className="mb-1">← Review</Button>
+          <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}`)}
+            className="mb-1 rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Review</Button>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Final Review</h1>
           <p className="text-xs text-inky mt-0.5">
             {vendors.byId(draft.vendor_id)?.name ?? 'All vendors'} · {groups.length} order{groups.length !== 1 ? 's' : ''} · {money(total)}

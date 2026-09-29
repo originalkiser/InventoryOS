@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { Check } from 'lucide-react'
 
 export type OrderStep = 'review' | 'final' | 'export'
 
@@ -14,42 +15,54 @@ const STEPS: { key: OrderStep; n: number; label: string; path: (id: string) => s
  * stepping forward/back one page at a time. Every step is reachable at any
  * time (a draft's data isn't destroyed by visiting a later or earlier page),
  * so nothing here is disabled or locked — clicking a number just navigates.
+ *
+ * Direct ask 2026-09-29: a step you've already moved PAST (positionally
+ * before the current one — you can freely jump backward too, so this is
+ * "have I been further than this" not "is this literally done forever")
+ * gets a checkmark and a green glow instead of its plain number, and the
+ * whole strip is centered to roughly the middle third of the page instead
+ * of stretching edge to edge.
  */
 export function OrderStepper({ draftId, current }: { draftId: string; current: OrderStep }) {
   const navigate = useNavigate()
   const currentIdx = STEPS.findIndex((s) => s.key === current)
 
   return (
-    <div className="flex items-center gap-2 py-1">
-      {STEPS.map((step, i) => {
-        const isCurrent = step.key === current
-        return (
-          <div key={step.key} className="flex items-center gap-2 flex-1 last:flex-none">
-            <button
-              onClick={() => navigate(step.path(draftId))}
-              className="flex flex-col items-center gap-1 flex-shrink-0 group"
-            >
-              <span className={[
-                'w-7 h-7 rounded-full flex items-center justify-center text-xs font-heading font-bold transition-colors',
-                isCurrent
-                  ? 'border-2 border-sky text-sky bg-sky/10'
-                  : 'border border-navy/30 text-inky/60 group-hover:border-sky/60 group-hover:text-sky',
-              ].join(' ')}>
-                {step.n}
-              </span>
-              <span className={[
-                'text-[10px] font-mono uppercase tracking-wide whitespace-nowrap transition-colors',
-                isCurrent ? 'text-sky font-bold' : 'text-inky/60 group-hover:text-sky',
-              ].join(' ')}>
-                {step.label}
-              </span>
-            </button>
-            {i < STEPS.length - 1 && (
-              <div className={`h-px flex-1 min-w-[24px] ${i < currentIdx ? 'bg-sky/40' : 'bg-navy/15'}`} />
-            )}
-          </div>
-        )
-      })}
+    <div className="flex justify-center">
+      <div className="flex items-center gap-2 py-1 w-full max-w-md">
+        {STEPS.map((step, i) => {
+          const isCurrent = step.key === current
+          const isPassed = i < currentIdx
+          return (
+            <div key={step.key} className="flex items-center gap-2 flex-1 last:flex-none">
+              <button
+                onClick={() => navigate(step.path(draftId))}
+                className="flex flex-col items-center gap-1 flex-shrink-0 group"
+              >
+                <span className={[
+                  'w-7 h-7 rounded-full flex items-center justify-center text-xs font-heading font-bold transition-all',
+                  isPassed
+                    ? 'border-2 border-[#2ECC71] text-[#2ECC71] bg-[#2ECC71]/10 shadow-[0_0_8px_2px_rgba(46,204,113,0.45)]'
+                    : isCurrent
+                    ? 'border-2 border-sky text-sky bg-sky/10'
+                    : 'border border-navy/30 text-inky/60 group-hover:border-sky/60 group-hover:text-sky',
+                ].join(' ')}>
+                  {isPassed ? <Check className="w-3.5 h-3.5" /> : step.n}
+                </span>
+                <span className={[
+                  'text-[10px] font-mono uppercase tracking-wide whitespace-nowrap transition-colors',
+                  isPassed ? 'text-[#2ECC71] font-bold' : isCurrent ? 'text-sky font-bold' : 'text-inky/60 group-hover:text-sky',
+                ].join(' ')}>
+                  {step.label}
+                </span>
+              </button>
+              {i < STEPS.length - 1 && (
+                <div className={`h-px flex-1 min-w-[24px] ${i < currentIdx ? 'bg-[#2ECC71]/50' : 'bg-navy/15'}`} />
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

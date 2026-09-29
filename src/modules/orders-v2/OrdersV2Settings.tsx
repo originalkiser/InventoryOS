@@ -6,6 +6,7 @@ import { useVendors } from './useLookups'
 import { VendorRulesCard } from './VendorRulesCard'
 import { VendorPartRulesCard } from './VendorPartRulesCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
+import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
 
 
@@ -32,7 +33,7 @@ export function OrdersV2Settings() {
  * page above and the "Order Settings" modal opened from Review Order, so
  * the two never drift apart.
  */
-export function OrdersV2SettingsBody() {
+export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChanged?: (locationId?: string) => void } = {}) {
   const { settings, loading, save } = useOrderSettings()
   const vendors = useVendors()
   const [draft, setDraft] = useState<OrderSettings>(settings)
@@ -157,6 +158,7 @@ export function OrdersV2SettingsBody() {
 
       <VendorRulesCard />
       <VendorPartRulesCard />
+      <ProductExceptionsManager onChanged={onExceptionChanged} />
       <OrderDaysCard />
       <DeliverySchedulesCard />
     </div>
