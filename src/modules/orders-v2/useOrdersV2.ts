@@ -105,7 +105,24 @@ export function useOrderSettings() {
     setLoading(true)
     const { data } = await sb().schema('inventory').from('ov2_settings')
       .select('*').eq('company_id', companyId).maybeSingle()
-    if (data) setSettings({ ...DEFAULT_ORDER_SETTINGS, ...data })
+    // A real bug found live 2026-09-29: this used to spread `data` straight
+    // over the defaults (`{...DEFAULT_ORDER_SETTINGS, ...data}`) — fine for
+    // a column the row has never had a value for (it's just absent from
+    // `data`), but a column added to this table AFTER a company's settings
+    // row was first saved comes back as an explicit `null`, which a plain
+    // spread still overwrites the real default with. Found via
+    // bulk_round_up_threshold_gal/bulk_urgent_dos_threshold (added
+    // 2026-09-16) on a settings row last saved 2026-09-15 — both sat at
+    // `null` in production, meaning the EFFECTIVE threshold was `n(null)`
+    // = 0 rather than the documented 35/15 defaults, so
+    // applyBulkPerProductMinimum's "drop a too-small bulk line" branch
+    // never triggered (0 is never greater than a real calculated qty) and
+    // a below-minimum bulk order could reach Review un-rounded and
+    // un-dropped. Only a non-null DB value now overrides its default.
+    if (data) {
+      const real = Object.fromEntries(Object.entries(data).filter(([, v]) => v != null))
+      setSettings({ ...DEFAULT_ORDER_SETTINGS, ...real })
+    }
     setLoading(false)
   }, [companyId])
   useEffect(() => { load() }, [load])

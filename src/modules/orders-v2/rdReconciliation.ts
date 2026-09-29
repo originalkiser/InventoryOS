@@ -14,19 +14,39 @@
 // — rather than re-reading the raw file with the xlsx package directly, so
 // this gets the existing off-main-thread parsing and header-detection for
 // free instead of a second, divergent parse path.
+import { format } from 'date-fns'
+import { parseDateSafe } from '@/lib/transforms'
 
 // ── Excel parsing ────────────────────────────────────────────────────────
 
-// Both reports use Excel's own date-serial numbers (days since
-// 1899-12-30), not real dates — sheet_to_json with raw values leaves them
-// as plain numbers.
+// Real production bug, found 2026-09-29: this used to assume both reports'
+// date columns always arrive as Excel's own bare date-serial numbers (days
+// since 1899-12-30) — true for a raw `sheet_to_json` read, but
+// fileParser.worker.ts/fileParser.ts (what every upload in this app,
+// including this one, actually goes through) reads with `cellDates: true`,
+// which converts a date CELL into a real JS Date before this file ever
+// sees it — so the value arriving here is that Date's own `.toString()`
+// text (e.g. "Mon Sep 22 2026 00:00:00 GMT-0400..."), not a serial number.
+// `Number(that string)` is NaN, so every date column across
+// rd_open_orders/rd_open_invoices/rd_order_ledger/rd_delivery_ledger came
+// back null in production (100% of rows, confirmed via direct SQL) —
+// silently breaking "Last Delivered" and the on-hand-plausibility flag on
+// Orders v2 Review/Final Review and Location Lookup, since both key off
+// invoice_date being present. Rather than changing the shared parser's
+// cellDates setting (a much bigger blast radius touching every other
+// upload flow in the app), this now falls back to parseDateSafe — the
+// same shared, already-correct date parser TankMonitorTab's own upload
+// mapping uses, which already handles both a bare Excel serial AND a
+// genuine Date string.
 export function excelSerialToIso(n: unknown): string | null {
   const num = Number(n)
-  if (!Number.isFinite(num) || num <= 0) return null
-  const ms = Math.round((num - 25569) * 86400 * 1000)
-  const d = new Date(ms)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toISOString().slice(0, 10)
+  if (Number.isFinite(num) && num > 0) {
+    const ms = Math.round((num - 25569) * 86400 * 1000)
+    const d = new Date(ms)
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+  }
+  const d = parseDateSafe(String(n ?? ''))
+  return d ? format(d, 'yyyy-MM-dd') : null
 }
 
 // "STRICKLAND BROTHERS #188" -> "188" — matches core.locations.name (the

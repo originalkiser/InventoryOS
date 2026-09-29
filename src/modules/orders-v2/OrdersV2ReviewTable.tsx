@@ -201,7 +201,13 @@ export function OrdersV2ReviewTable({
     }),
     col.accessor((l) => {
       const isOz = ozProductIds.has(l.product_id)
-      const v = Number(l.on_hand ?? 0) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
+      // Projected to the shop's actual delivery date, not just today — same
+      // fix as the main (non-beta) table's own "On Hand After", see its
+      // onHandAfterAtDelivery comment. Usage runs the shelf down over the
+      // lead time first (floored at 0), THEN whatever's ordered lands.
+      const leadDays = leadDaysFor(l.location_id ?? '')
+      const remainingAtDelivery = Math.max(0, Number(l.on_hand ?? 0) - Number(l.daily_usage ?? 0) * leadDays)
+      const v = remainingAtDelivery + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
       return isOz ? v * 32 : v
     }, { id: 'on_hand_after', header: 'On Hand After', enableSorting: false, cell: (i) => <span className="block text-right">{num(i.getValue())}</span> }),
     col.accessor('dos_after', {

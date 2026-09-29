@@ -584,7 +584,7 @@ export function OrdersV2Review() {
   //  - below_minimum — see groupMinimumStatus above.
   const liveFlags = useCallback((l: DraftLineRow): LineFlag[] => {
     let flags: LineFlag[] = ((l.flags ?? []) as LineFlag[]).filter((f) => f !== 'capacity_capped' && f !== 'below_minimum')
-    const onHandAfter = Number(l.on_hand ?? 0) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
+    const onHandAfter = onHandAfterAtDelivery(l)
     if (l.max_capacity_gallons != null && onHandAfter > l.max_capacity_gallons) flags = [...flags, 'capacity_capped']
     if (l.included && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false) flags = [...flags, 'below_minimum']
     return flags
@@ -748,6 +748,25 @@ export function OrdersV2Review() {
     if (!draft) return 0
     const deliverDate = deliveryFor(locId, draft.order_date)
     return deliverDate ? Math.max(0, daysBetween(draft.order_date, deliverDate)) : 0
+  }
+
+  // The main table's own "On Hand After" used to just add this order's
+  // qty onto TODAY's on-hand (Number(l.on_hand) + qty*quartsPerUnit) —
+  // real-world usage keeps running down the shelf for however many days it
+  // takes this order to actually arrive, so that undercounted how much room
+  // is really available and overstated how much is really sitting there
+  // once the truck lands. SmoothingRow (the shop-expand sub-table further
+  // down this file) already fixed this exact gap for ITS OWN "On Hand
+  // After"/"DOS After" columns on 2026-09-22 — this brings the main
+  // table's identically-named column in line with that, rather than
+  // showing two different numbers under the same label depending on which
+  // view you're looking at. Same formula: usage runs the shelf down first
+  // (floored at 0, matching engine.ts's own dosAfterDelivery), THEN
+  // whatever's ordered lands.
+  function onHandAfterAtDelivery(l: DraftLineRow): number {
+    const leadDays = leadDaysFor(l.location_id ?? '')
+    const remainingAtDelivery = Math.max(0, Number(l.on_hand ?? 0) - Number(l.daily_usage ?? 0) * leadDays)
+    return remainingAtDelivery + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
   }
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
@@ -1028,7 +1047,7 @@ export function OrdersV2Review() {
                 const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
                 const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
                 const belowMin = l.included && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false
-                const onHandAfter = Number(l.on_hand ?? 0) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
+                const onHandAfter = onHandAfterAtDelivery(l)
                 const cellFor = (id: string): React.ReactNode => {
                   switch (id) {
                     case 'shop': return (

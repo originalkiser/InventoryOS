@@ -16,6 +16,9 @@ describe('excelSerialToIso', () => {
     expect(excelSerialToIso('')).toBeNull()
     expect(excelSerialToIso(undefined)).toBeNull()
   })
+  it('handles a genuine Date string — fileParser.worker.ts reads with cellDates: true, so a date cell arrives as Date.toString() text, not a bare serial (real production bug, found 2026-09-29: every date column across all 4 RD tables came back null because of this)', () => {
+    expect(excelSerialToIso('Thu Aug 06 2026 00:00:00 GMT-0400 (Eastern Daylight Time)')).toBe('2026-08-06')
+  })
 })
 
 describe('shopNumberFromShipToName', () => {
