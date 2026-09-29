@@ -340,13 +340,42 @@ export function OrdersV2Review() {
       // allInputs empty with no explanation, reading as "no other products
       // configured" rather than "couldn't load." See fetchAll's own comment
       // in useOrdersV2.ts for the matching runGeneration-side fix.
-      toast.error(e instanceof Error ? e.message : 'Failed to load configured products')
+      const message = e instanceof Error ? e.message : 'Failed to load configured products'
+      toast.error((t) => (
+        <span className="flex items-center gap-3">
+          {message}
+          <button
+            className="underline decoration-dotted flex-shrink-0"
+            onClick={() => { toast.dismiss(t.id); attemptedDraftIdRef.current = null; void loadCandidatesForDisplay() }}
+          >
+            Retry
+          </button>
+        </span>
+      ), { duration: 15000 })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.id, profile?.company_id, fetchInputs, settings, rulesFor, vendors])
 
+  // `loadCandidatesForDisplay` is a fresh function reference basically every
+  // render (useVendors()' own returned object is a new literal each call,
+  // one of this callback's deps) — with no guard beyond "allInputs is still
+  // empty," a genuinely failed fetch (a real timeout, a transient DB blip)
+  // never sets allInputs, so this effect re-fired on every single re-render
+  // forever, launching a fresh full fetchInputs() each time. Found live
+  // 2026-09-29: a real (apparently transient — the same query timed at
+  // ~170ms in isolation right after) failure triggered exactly this,
+  // stacking up many concurrent fetches that likely then contended with
+  // EACH OTHER for the DB and kept failing — a self-inflicted retry storm,
+  // not a sign the query itself is slow. This ref makes the automatic load
+  // attempt-once per draft (success or failure) regardless of how many
+  // times the effect re-fires; the failure toast's own Retry button is the
+  // only way to try again after that.
+  const attemptedDraftIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (draft && !loading && lines.length > 0 && allInputs.length === 0 && !generating && !vendors.loading) void loadCandidatesForDisplay()
+    if (!draft || loading || lines.length === 0 || allInputs.length > 0 || generating || vendors.loading) return
+    if (attemptedDraftIdRef.current === draft.id) return
+    attemptedDraftIdRef.current = draft.id
+    void loadCandidatesForDisplay()
   }, [draft, loading, lines.length, allInputs.length, generating, loadCandidatesForDisplay, vendors.loading])
 
   /** Run the engine and replace the draft's lines with the result. */
