@@ -11,7 +11,7 @@ import toast from 'react-hot-toast'
 import { useDraft, draftAdHocLocationIds, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { OrderStepper } from './OrderStepper'
-import { finalizeDraft } from './useOrderHistory'
+import { markDraftComplete } from './useOrderHistory'
 import { poNumber, renderTemplate } from './engine'
 import { money } from './shared'
 import type { OrderType } from './types'
@@ -280,7 +280,7 @@ export function OrdersV2Export() {
   // Collapsed by default — the column mappings can run long, and the
   // preview below is what you actually came here to check.
   const [columnsOpen, setColumnsOpen] = useState(false)
-  const [finalizing, setFinalizing] = useState(false)
+  const [completing, setCompleting] = useState(false)
   const [vendorParts, setVendorParts] = useState<{ our_part_number: string | null; part_number: string | null; description: string | null }[]>([])
   const [productMappings, setProductMappings] = useState<{ old_product_id: string | null; new_product_id: string | null }[]>([])
 
@@ -474,6 +474,24 @@ export function OrdersV2Export() {
       }
     })
     toast.success(chunks.length > 1 ? `${chunks.length} files downloaded` : 'Export downloaded')
+    void completeOnExport()
+  }
+
+  // Direct ask 2026-09-29: kill the separate "Finalize Order" step —
+  // downloading the file IS what completes the order now, no extra click,
+  // no confirmation dialog, and no navigating away from this page into a
+  // locked read-only view. The draft stays exactly as editable as it always
+  // was; markDraftComplete just upserts the ov2_order_history record
+  // (needed for RD reconciliation/Valvoline auto-feed/reporting — see that
+  // function's own header comment) and flips the draft's status to
+  // 'exported', which statusRoute already treats as "reopen on Export,"
+  // same as any other status. Re-downloading after further edits just
+  // refreshes that record — never creates a second "completed" copy.
+  async function completeOnExport() {
+    if (!profile?.company_id || !draft || !included.length) return
+    setCompleting(true)
+    await markDraftComplete(profile.company_id, profile.id ?? null, draft, lines, shopNumber, vendorName)
+    setCompleting(false)
   }
 
   async function saveTemplate() {
@@ -486,27 +504,6 @@ export function OrdersV2Export() {
     setSavedTpl(tpl)
     setHasAdhocOverride(true)
     toast.success(isAdHoc ? 'Saved as this vendor\'s ad hoc default' : 'Saved as this vendor\'s default')
-  }
-
-  async function finalize() {
-    if (!profile?.company_id || !draft) return
-    if (!included.length) { toast.error('Nothing to finalize'); return }
-    // finalizeDraft always INSERTS a new ov2_order_history row — it never
-    // updates an existing one in place. Re-finalizing an already-completed
-    // draft (reachable again now that a completed order's steps can be
-    // revisited — see OrdersV2Landing.tsx/OrdersV2History.tsx's own "Open
-    // in Steps" links) would silently create a second, duplicate completed
-    // order rather than correcting the first. A distinct, explicit warning
-    // here — not just the generic confirm every finalize already had —
-    // makes that consequence impossible to miss.
-    const msg = draft.status === 'exported'
-      ? 'This order was already finalized once. Finalizing again creates a SEPARATE completed order in history — it does not update the existing one. Continue?'
-      : 'Finalize this order? It moves to Completed and is written to order history.'
-    if (!confirm(msg)) return
-    setFinalizing(true)
-    const id = await finalizeDraft(profile.company_id, profile.id ?? null, draft, lines, shopNumber, vendorName)
-    setFinalizing(false)
-    if (id) { toast.success('Order finalized'); navigate(`/orders-v2/history/${id}`) }
   }
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
@@ -532,6 +529,11 @@ export function OrdersV2Export() {
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
             Export
             {isAdHoc && <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-sky/40 text-navy">Ad Hoc</span>}
+            {draft.status === 'exported' && (
+              <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-[#2ECC71]/15 text-[#2ECC71] border border-[#2ECC71]/40">
+                ✓ Complete
+              </span>
+            )}
           </h1>
           <p className="text-xs text-inky mt-0.5">
             {vendorName || 'No vendor'} · {included.length} line{included.length !== 1 ? 's' : ''} · {money(Number(headerValues.total))}
@@ -541,8 +543,9 @@ export function OrdersV2Export() {
           <Button size="sm" variant="secondary" onClick={saveTemplate} disabled={!dirty}>
             {dirty ? (isAdHoc ? 'Save as ad hoc default' : 'Save as vendor default') : 'Matches saved default'}
           </Button>
-          <Button size="sm" variant="secondary" onClick={download}>Download {tpl.format.toUpperCase()}</Button>
-          <Button size="sm" loading={finalizing} onClick={finalize}>Finalize Order</Button>
+          <Button size="sm" loading={completing} onClick={download}>
+            {draft.status === 'exported' ? `Re-download ${tpl.format.toUpperCase()}` : `Download ${tpl.format.toUpperCase()}`}
+          </Button>
         </div>
       </div>
 

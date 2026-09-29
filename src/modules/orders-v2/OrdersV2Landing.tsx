@@ -1,17 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Trash2, Upload } from 'lucide-react'
-import { Button, Card, CardBody, Combobox, Input, Modal, MultiSelectDropdown, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Droplet, Plus, Trash2, Upload } from 'lucide-react'
+import { createColumnHelper } from '@tanstack/react-table'
+import { Button, Combobox, Input, Modal, MultiSelectDropdown, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { DataTable } from '@/components/shared/DataTable'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
+import { useTable } from '@/hooks/useTable'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
-import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow, type DraftAggregate } from './useOrdersV2'
-import { useOrderHistory } from './useOrderHistory'
+import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow } from './useOrdersV2'
+import { useHistoryIdsByDraft } from './useOrderHistory'
 import { useRdReports } from './useRdReports'
 import { RdReportsTab } from './RdReportsTab'
 import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
 import { useVendors, useUserNames } from './useLookups'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
+import type { DraftStatus } from './types'
 
 // True when an ISO timestamp falls on today's calendar date (local time) —
 // drives the upload buttons' "glow orange, needs a fresh upload" state.
@@ -24,10 +28,27 @@ function isToday(iso: string | null): boolean {
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
+// Distinct color per status for the unified table's pill (direct ask
+// 2026-09-29 — "one tab, color coded by status" replacing a tab per step).
+// 'generating' folds into 'review' visually — it's the instant-transient
+// state before the Review page's own load sets 'review', not a step
+// anyone is ever really parked looking at.
+const STATUS_COLOR: Record<DraftStatus, string> = {
+  generating: 'bg-sky/25 text-navy',
+  review: 'bg-sky/25 text-navy',
+  final_review: 'bg-[#E67E22]/20 text-[#E67E22]',
+  exported: 'bg-[#2ECC71]/20 text-[#2ECC71]',
+  cancelled: 'bg-inky/15 text-inky',
+}
+
 /**
- * Module landing page. Not a wizard entry point — it's the home for both
- * in-progress drafts (visible to everyone, resumable at whatever step they
- * were left on) and completed orders.
+ * Module landing page. Not a wizard entry point — it's the home for every
+ * draft regardless of status, in one sortable, color-coded table (see
+ * STATUS_COLOR above) rather than a separate tab per step. Clicking any row
+ * reopens it exactly where it was left — including a completed order, which
+ * reopens on the Export step fully editable, same as before it was
+ * completed (see statusRoute in shared.ts and useOrderHistory.ts's
+ * markDraftComplete for why nothing about a draft ever locks).
  */
 export function OrdersV2Landing() {
   const navigate = useNavigate()
@@ -35,7 +56,6 @@ export function OrdersV2Landing() {
   const loc = useLocations()
   const { settings } = useOrderSettings()
   const { drafts, loading, createDraft, deleteDraft } = useDrafts()
-  const { orders, loading: histLoading } = useOrderHistory()
   const vendors = useVendors()
   const names = useUserNames()
   const rd = useRdReports()
@@ -69,41 +89,13 @@ export function OrdersV2Landing() {
   const [mightyTargetDays, setMightyTargetDays] = useState(21)
   const [mightyLeadTimeDays, setMightyLeadTimeDays] = useState(3)
 
-  // Shared filters across both lists.
-  const [fVendor, setFVendor] = useState('')
-  const [fFrom, setFFrom] = useState('')
-  const [fTo, setFTo] = useState('')
-  const [fUser, setFUser] = useState('')
-
-  // One tab per DraftStatus value (generating folds into Review — it's the
-  // instant-transient state before the Review page's own load sets 'review',
-  // not a step anyone should be parked on) — every non-exported draft has to
-  // land in exactly one of these tabs by construction, so a status this
-  // grouping doesn't know about can't go silently missing the way a draft
-  // whose status got flipped to 'exported' too early just did.
-  const reviewDrafts = useMemo(() => drafts.filter((d) => d.status === 'generating' || d.status === 'review'), [drafts])
-  const finalReviewDrafts = useMemo(() => drafts.filter((d) => d.status === 'final_review'), [drafts])
-  const cancelledDrafts = useMemo(() => drafts.filter((d) => d.status === 'cancelled'), [drafts])
-
-  const matches = (vendor: string | null, date: string, users: (string | null)[]) =>
-    (!fVendor || vendor === fVendor) &&
-    (!fFrom || date >= fFrom) &&
-    (!fTo || date <= fTo) &&
-    (!fUser || users.includes(fUser))
-
-  const filterDrafts = (rows: DraftRow[]) => rows.filter((d) => matches(d.vendor_id, d.order_date, [d.created_by, d.last_edited_by]))
-  const visibleReview = filterDrafts(reviewDrafts)
-  const visibleFinalReview = filterDrafts(finalReviewDrafts)
-  const visibleCancelled = filterDrafts(cancelledDrafts)
-  const visibleOrders = orders.filter((o) => matches(o.vendor_id, o.order_date, [o.finalized_by]))
-
-  // One aggregate query for every visible draft's products/gallons/cost,
-  // instead of each status tab loading its own lines.
-  const visibleDraftIds = useMemo(
-    () => [...visibleReview, ...visibleFinalReview, ...visibleCancelled].map((d) => d.id),
-    [visibleReview, visibleFinalReview, visibleCancelled],
-  )
-  const aggregates = useDraftAggregates(visibleDraftIds)
+  // One aggregate query for every draft's products/gallons/cost, regardless
+  // of status — completed drafts need this too now that they share the
+  // same table as everything else.
+  const draftIds = useMemo(() => drafts.map((d) => d.id), [drafts])
+  const aggregates = useDraftAggregates(draftIds)
+  const exportedIds = useMemo(() => drafts.filter((d) => d.status === 'exported').map((d) => d.id), [drafts])
+  const historyIds = useHistoryIdsByDraft(exportedIds)
 
   const vendorName = (id: string | null) => vendors.byId(id)?.name ?? '—'
 
@@ -122,6 +114,54 @@ export function OrdersV2Landing() {
     if (id) { setStartOpen(false); navigate(`/orders-v2/draft/${id}`) }
   }
 
+  const col = useMemo(() => createColumnHelper<DraftRow>(), [])
+  const columns = useMemo(() => [
+    col.accessor((d) => vendorName(d.vendor_id), { id: 'vendor', header: 'Vendor' }),
+    col.accessor('order_date', { id: 'order_date', header: 'Order Date', cell: (i) => dShort(i.getValue()) }),
+    col.accessor('status', {
+      id: 'status', header: 'Status',
+      cell: (i) => <span className={`rounded-full px-2 py-0.5 text-[11px] font-heading uppercase tracking-wide ${STATUS_COLOR[i.getValue()]}`}>{STATUS_LABEL[i.getValue()]}</span>,
+    }),
+    col.display({
+      id: 'shops', header: 'Shops', enableSorting: false,
+      cell: (i) => (i.row.original.settings_snapshot as any)?.__shop_count ?? '—',
+    }),
+    col.accessor((d) => orderDayLabel(d.settings_snapshot), { id: 'order_day', header: 'Order Day' }),
+    col.display({ id: 'products', header: 'Products', enableSorting: false, cell: (i) => aggregates[i.row.original.id]?.products ?? '—' }),
+    col.display({ id: 'gallons', header: 'Gallons', enableSorting: false, cell: (i) => gallons(aggregates[i.row.original.id]?.gallons) }),
+    col.display({ id: 'cost', header: 'Cost', enableSorting: false, cell: (i) => <span className="text-right block">{money(aggregates[i.row.original.id]?.cost)}</span> }),
+    col.accessor('updated_at', { id: 'updated_at', header: 'Last Edited', cell: (i) => dTime(i.getValue()) }),
+    col.accessor((d) => names.nameOf(d.last_edited_by ?? d.created_by), { id: 'by', header: 'By' }),
+    col.display({
+      id: 'actions', header: '', enableSorting: false,
+      cell: (i) => {
+        const d = i.row.original
+        const histId = historyIds[d.id]
+        return (
+          <div className="flex items-center justify-end gap-2">
+            {d.status === 'exported' && histId && (
+              <button onClick={(e) => { e.stopPropagation(); navigate(`/orders-v2/history/${histId}`) }}
+                className="text-[11px] font-mono text-inky hover:text-navy hover:underline whitespace-nowrap">
+                Summary
+              </button>
+            )}
+            {d.status !== 'exported' && (
+              <button title="Delete draft"
+                onClick={(e) => { e.stopPropagation(); if (confirm('Delete this draft order? Its lines are removed too.')) deleteDraft(d.id) }}
+                className="text-inky/40 hover:text-[#C0392B]"><Trash2 className="w-3.5 h-3.5" /></button>
+            )}
+          </div>
+        )
+      },
+    }),
+  ], [col, vendors, aggregates, names, historyIds, navigate, deleteDraft])
+
+  const { table, globalFilter, setGlobalFilter } = useTable(drafts, columns, {
+    persistKey: 'orders-v2.landing',
+    initialSorting: [{ id: 'updated_at', desc: true }],
+    initialPageSize: 50,
+  })
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -131,113 +171,57 @@ export function OrdersV2Landing() {
             Generate proposed orders from on-hand and usage, review and adjust, then export per vendor.
           </p>
         </div>
-        <div className="flex items-start gap-2">
-          <RdReportButton label="Open Sales Order Report" lastUploadedAt={rd.lastOpenOrdersAt} onClick={() => setSoOpen(true)} />
-          <RdReportButton label="Open Invoice Report" lastUploadedAt={rd.lastOpenInvoicesAt} onClick={() => setIoOpen(true)} />
-          <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/exceptions')}>Product Exceptions</Button>
-          <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
-          <Button size="sm" onClick={() => setStartOpen(true)}><Plus className="w-3.5 h-3.5 mr-1" /> Start New Order</Button>
-        </div>
+        <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
       </div>
 
-      {/* Filters apply to both lists */}
-      <Card><CardBody className="flex items-end gap-3 flex-wrap py-3">
-        <div className="w-56">
-          <Combobox label="Vendor" options={[{ value: '', label: 'All vendors' }, ...vendors.options]} value={fVendor} onChange={setFVendor} />
+      {/* Direct ask 2026-09-29: Start New Order moves under the header, on
+          the left, with a green line tracing around its edges on hover. Four
+          plain absolutely-positioned strips (no new CSS keyframes needed —
+          each is just a width/height transition, staggered by delay so they
+          fire in sequence) draw a clockwise loop: top, right, bottom, left. */}
+      <div className="group relative inline-block self-start">
+        <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10">
+          <span className="relative inline-flex items-center justify-center w-4 h-4 mr-1.5">
+            <Droplet className="w-4 h-4" />
+            <Plus className="w-2 h-2 absolute" strokeWidth={3} />
+          </span>
+          Start New Order
+        </Button>
+        <span className="pointer-events-none absolute left-0 top-0 h-[2px] w-0 bg-[#2ECC71] transition-all duration-300 group-hover:w-full" />
+        <span className="pointer-events-none absolute right-0 top-0 w-[2px] h-0 bg-[#2ECC71] transition-all duration-300 delay-150 group-hover:h-full" />
+        <span className="pointer-events-none absolute right-0 bottom-0 h-[2px] w-0 bg-[#2ECC71] transition-all duration-300 delay-300 group-hover:w-full" style={{ transitionDelay: '300ms' }} />
+        <span className="pointer-events-none absolute left-0 bottom-0 w-[2px] h-0 bg-[#2ECC71] transition-all duration-300 group-hover:h-full" style={{ transitionDelay: '450ms' }} />
+      </div>
+
+      <Tabs defaultValue="orders">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <TabsList>
+            <TabsTrigger value="orders">Orders ({drafts.length})</TabsTrigger>
+            <TabsTrigger value="rd_reports">RD Reports</TabsTrigger>
+            <TabsTrigger value="valvoline_db">Valvoline Order Database</TabsTrigger>
+          </TabsList>
+          {/* Direct ask 2026-09-29: the RD report upload buttons move onto
+              this same row instead of living inside the RD Reports tab. */}
+          <div className="flex items-start gap-2">
+            <RdReportButton label="Open Sales Order Report" lastUploadedAt={rd.lastOpenOrdersAt} onClick={() => setSoOpen(true)} />
+            <RdReportButton label="Open Invoice Report" lastUploadedAt={rd.lastOpenInvoicesAt} onClick={() => setIoOpen(true)} />
+          </div>
         </div>
-        <Input label="From" type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} />
-        <Input label="To" type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} />
-        <div className="w-56">
-          <Combobox label="User" options={[{ value: '', label: 'Anyone' }, ...names.options]} value={fUser} onChange={setFUser} />
-        </div>
-        {(fVendor || fFrom || fTo || fUser) && (
-          <button onClick={() => { setFVendor(''); setFFrom(''); setFTo(''); setFUser('') }}
-            className="text-[11px] font-mono text-inky/60 hover:text-navy hover:underline pb-2">reset</button>
-        )}
-      </CardBody></Card>
 
-      <Tabs defaultValue="review">
-        <TabsList>
-          <TabsTrigger value="review">Review ({visibleReview.length})</TabsTrigger>
-          <TabsTrigger value="final_review">Final Review ({visibleFinalReview.length})</TabsTrigger>
-          <TabsTrigger value="cancelled">Cancelled ({visibleCancelled.length})</TabsTrigger>
-          <TabsTrigger value="done">Completed ({visibleOrders.length})</TabsTrigger>
-          <TabsTrigger value="rd_reports">RD Reports</TabsTrigger>
-          <TabsTrigger value="valvoline_db">Valvoline Order Database</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="review">
-          <DraftTable
-            rows={visibleReview} loading={loading}
-            emptyMessage={'No orders in progress. "Start New Order" creates one immediately — it\'s saved server-side, so you can leave and pick it back up here.'}
-            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft} aggregates={aggregates}
-          />
-        </TabsContent>
-
-        <TabsContent value="final_review">
-          <DraftTable
-            rows={visibleFinalReview} loading={loading}
-            emptyMessage="Nothing at the final review step right now."
-            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft} aggregates={aggregates}
-          />
-        </TabsContent>
-
-        <TabsContent value="cancelled">
-          <DraftTable
-            rows={visibleCancelled} loading={loading}
-            emptyMessage="No cancelled drafts."
-            navigate={navigate} vendorName={vendorName} loc={loc} names={names} deleteDraft={deleteDraft} aggregates={aggregates}
-          />
-        </TabsContent>
-
-        <TabsContent value="done">
-          {histLoading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
-            : visibleOrders.length === 0 ? <p className="text-xs font-mono text-inky/60 py-8">No completed orders yet.</p>
-            : (
-              <div className="overflow-auto rounded border border-navy/30">
-                <table className="w-full text-xs font-mono">
-                  <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-                    <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Order Day</Th><Th>Products</Th><Th>Gallons</Th><Th align="right">Cost</Th><Th>Export</Th><Th>Finalized</Th><Th>By</Th><Th />
-                  </tr></thead>
-                  <tbody>
-                    {visibleOrders.map((o) => (
-                      <tr key={o.id} className="border-b border-navy/15 hover:bg-sky/10 cursor-pointer"
-                        onClick={() => navigate(`/orders-v2/history/${o.id}`)}>
-                        <Td>{vendorName(o.vendor_id)}</Td>
-                        <Td>{dShort(o.order_date)}</Td>
-                        <Td>{o.location_count}</Td>
-                        <Td>{orderDayLabel(o.settings_snapshot)}</Td>
-                        <Td>{o.line_count}</Td>
-                        <Td>{gallons(o.total_gallons)}</Td>
-                        <Td align="right">{money(o.total_dollars)}</Td>
-                        <Td>
-                          {o.export_status}
-                          {o.export_count > 1 && <span className="text-inky/50"> ×{o.export_count}</span>}
-                          {o.edited_after_finalize && <span className="ml-1 text-[#E67E22]" title="Edited after finalizing">✎</span>}
-                        </Td>
-                        <Td>{dTime(o.finalized_at)}</Td>
-                        <Td>{names.nameOf(o.finalized_by)}</Td>
-                        <Td>
-                          {/* The draft behind a completed order is never
-                              deleted at finalize (see finalizeDraft) — this
-                              jumps straight into its Review/Final/Export
-                              steps (e.g. to reformat and re-download the
-                              export file) instead of only the read-only
-                              history table. stopPropagation so it doesn't
-                              also trigger the row's own history-page click. */}
-                          {o.draft_id && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); navigate(`/orders-v2/draft/${o.draft_id}`) }}
-                              className="text-[11px] font-mono text-inky hover:text-navy hover:underline whitespace-nowrap">
-                              Open in Steps
-                            </button>
-                          )}
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+        <TabsContent value="orders">
+          {loading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
+            : drafts.length === 0 ? (
+              <p className="text-xs font-mono text-inky/60 py-8">
+                No orders yet. "Start New Order" creates one immediately — it's saved server-side, so you can leave
+                and pick it back up here.
+              </p>
+            ) : (
+              <DataTable
+                table={table}
+                globalFilter={globalFilter}
+                onGlobalFilterChange={setGlobalFilter}
+                onRowClick={(d) => navigate(statusRoute(d))}
+              />
             )}
         </TabsContent>
 
@@ -375,72 +359,4 @@ function RdReportButton({ label, lastUploadedAt, onClick }: { label: string; las
       </span>
     </div>
   )
-}
-
-// Shared by every status tab — a draft's status determines both which tab
-// it's in and where clicking it navigates (statusRoute), so there's exactly
-// one place per draft it can be found, by construction.
-function DraftTable({ rows, loading, emptyMessage, navigate, vendorName, loc, names, deleteDraft, aggregates }: {
-  rows: DraftRow[]
-  loading: boolean
-  emptyMessage: string
-  navigate: ReturnType<typeof useNavigate>
-  vendorName: (id: string | null) => string
-  loc: ReturnType<typeof useLocations>
-  names: ReturnType<typeof useUserNames>
-  deleteDraft: (id: string) => void | Promise<void>
-  aggregates: Record<string, DraftAggregate>
-}) {
-  if (loading) return <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
-  if (rows.length === 0) return <p className="text-xs font-mono text-inky/60 py-8">{emptyMessage}</p>
-  return (
-    <div className="overflow-auto rounded border border-navy/30">
-      <table className="w-full text-xs font-mono">
-        <thead><tr className="bg-cream text-inky uppercase tracking-wide border-b border-navy/30">
-          <Th>Vendor</Th><Th>Order Date</Th><Th>Shops</Th><Th>Step</Th><Th>Order Day</Th><Th>Products</Th><Th>Gallons</Th>
-          <Th align="right">Cost</Th><Th>Last Edited</Th><Th>By</Th><Th />
-        </tr></thead>
-        <tbody>
-          {rows.map((d) => {
-            const agg = aggregates[d.id]
-            return (
-              <tr key={d.id} className="border-b border-navy/15 hover:bg-sky/10 cursor-pointer"
-                onClick={() => navigate(statusRoute(d))}>
-                <Td>{vendorName(d.vendor_id)}</Td>
-                <Td>{dShort(d.order_date)}</Td>
-                <Td><ShopCount draft={d} loc={loc} /></Td>
-                <Td><span className="rounded-full bg-sky/25 text-navy px-2 py-0.5">{STATUS_LABEL[d.status]}</span></Td>
-                <Td>{orderDayLabel(d.settings_snapshot)}</Td>
-                <Td>{agg ? agg.products : '—'}</Td>
-                <Td>{agg ? gallons(agg.gallons) : '—'}</Td>
-                <Td align="right">{agg ? money(agg.cost) : '—'}</Td>
-                <Td>{dTime(d.updated_at)}</Td>
-                <Td>{names.nameOf(d.last_edited_by ?? d.created_by)}</Td>
-                <Td>
-                  <button title="Delete draft"
-                    onClick={(e) => { e.stopPropagation(); if (confirm('Delete this draft order? Its lines are removed too.')) deleteDraft(d.id) }}
-                    className="text-inky/40 hover:text-[#C0392B]"><Trash2 className="w-3.5 h-3.5" /></button>
-                </Td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function Th({ children, align }: { children?: React.ReactNode; align?: 'right' }) {
-  return <th className={`px-3 py-2 ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</th>
-}
-function Td({ children, align }: { children?: React.ReactNode; align?: 'right' }) {
-  return <td className={`px-3 py-1.5 text-navy ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</td>
-}
-
-// Shop count comes from the draft's lines; kept cheap by reading the count
-// the header caches rather than loading every line on the landing page.
-function ShopCount({ draft }: { draft: DraftRow; loc: ReturnType<typeof useLocations> }) {
-  const meta = draft.settings_snapshot as any
-  const n = meta?.__shop_count
-  return <>{n == null ? '—' : n}</>
 }

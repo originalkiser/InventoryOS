@@ -63,23 +63,30 @@ export interface HistoryLine {
   edited_at: string | null
 }
 
-export function useOrderHistory() {
-  const { profile } = useAuthStore()
-  const companyId = profile?.company_id ?? null
-  const [orders, setOrders] = useState<HistoryOrder[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const load = useCallback(async () => {
-    if (!companyId) { setLoading(false); return }
-    setLoading(true)
-    const { data } = await sb().schema('inventory').from('ov2_order_history')
-      .select('*').eq('company_id', companyId).order('order_date', { ascending: false })
-    setOrders((data ?? []) as HistoryOrder[])
-    setLoading(false)
-  }, [companyId])
-  useEffect(() => { load() }, [load])
-
-  return { orders, loading, reload: load }
+/**
+ * draft_id -> ov2_order_history.id, for every completed draft in the given
+ * list — the landing page's unified table (2026-09-29 rework) reads drafts
+ * directly for its rows now (see statusRoute, which already reopens an
+ * 'exported' draft on the same editable Export step), so it no longer needs
+ * the full history list. This is just enough to link a completed row to its
+ * read-only Order Summary recap.
+ */
+export function useHistoryIdsByDraft(draftIds: string[]) {
+  const [ids, setIds] = useState<Record<string, string>>({})
+  const key = draftIds.slice().sort().join(',')
+  useEffect(() => {
+    let cancelled = false
+    if (!key) { setIds({}); return }
+    sb().schema('inventory').from('ov2_order_history').select('id, draft_id').in('draft_id', key.split(','))
+      .then(({ data }: any) => {
+        if (cancelled) return
+        const out: Record<string, string> = {}
+        for (const r of (data ?? []) as { id: string; draft_id: string }[]) out[r.draft_id] = r.id
+        setIds(out)
+      })
+    return () => { cancelled = true }
+  }, [key])
+  return ids
 }
 
 export function useHistoryOrder(orderId: string | null) {
@@ -118,32 +125,6 @@ export function useHistoryOrder(orderId: string | null) {
   }, [companyId, orderId])
   useEffect(() => { load() }, [load])
 
-  /**
-   * Editing a finalized order is allowed but never silent: the line is
-   * flagged, and the before/after is written to the audit table with who and
-   * when. Callers gate this behind an explicit confirmation.
-   */
-  async function editLine(line: HistoryLine, patch: Partial<HistoryLine>) {
-    if (!companyId || !orderId) return
-    const now = new Date().toISOString()
-    const body = { ...patch, edited_after_finalize: true, edited_by: profile?.id ?? null, edited_at: now }
-    setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, ...body } as HistoryLine : l)))
-
-    const { error } = await sb().schema('inventory').from('ov2_order_history_lines').update(body).eq('id', line.id)
-    if (error) { toast.error(error.message); return }
-
-    const audits = Object.entries(patch).map(([field, value]) => ({
-      company_id: companyId, order_id: orderId, line_id: line.id, field,
-      old_value: String((line as any)[field] ?? ''), new_value: String(value ?? ''),
-      changed_by: profile?.id ?? null,
-    }))
-    if (audits.length) await sb().schema('inventory').from('ov2_order_history_audit').insert(audits)
-
-    await sb().schema('inventory').from('ov2_order_history')
-      .update({ edited_after_finalize: true, updated_at: now }).eq('id', orderId)
-    await load()
-  }
-
   async function noteReExport() {
     if (!orderId || !order) return
     const now = new Date().toISOString()
@@ -153,27 +134,32 @@ export function useHistoryOrder(orderId: string | null) {
     await load()
   }
 
-  return { order, lines, loading, reload: load, editLine, noteReExport }
-}
-
-export function useAuditTrail(orderId: string | null) {
-  const [rows, setRows] = useState<any[]>([])
-  useEffect(() => {
-    if (!orderId) return
-    let cancelled = false
-    sb().schema('inventory').from('ov2_order_history_audit')
-      .select('*').eq('order_id', orderId).order('changed_at', { ascending: false })
-      .then(({ data }: any) => { if (!cancelled) setRows((data ?? []) as any[]) })
-    return () => { cancelled = true }
-  }, [orderId])
-  return rows
+  return { order, lines, loading, reload: load, noteReExport }
 }
 
 /**
- * Promote a draft into history. The draft keeps its rows (so it can still be
- * inspected) but flips to `exported`, moving it out of the in-progress list.
+ * Mark a draft complete — direct ask 2026-09-29: "kill the finalize step,"
+ * a draft is just considered complete the moment it's exported, and it
+ * never locks. No separate confirmation, no navigating away from the
+ * draft's own Review/Final Review/Export pages, and no distinct
+ * lock/unlock edit mode — the draft stays exactly as editable as it always
+ * was (see statusRoute in shared.ts, which already reopens an 'exported'
+ * draft on the Export step like any other status).
+ *
+ * ov2_order_history/_lines still get written — RD reconciliation
+ * (rdReconciliation.ts) reads ov2_order_history_lines.po_number/qty for its
+ * own matching, and this is also the one place Valvoline's order-database
+ * auto-feed hooks in — but as an UPSERT keyed on draft_id rather than an
+ * always-insert: calling this again after further edits (a re-download)
+ * refreshes the existing history header + fully replaces its lines with
+ * the draft's current state, instead of the old behavior of either
+ * silently going stale or (if re-finalized) creating a second, duplicate
+ * "completed" order for the same draft. finalized_by/finalized_at are only
+ * ever set on the FIRST call — they mean "when this was first completed,"
+ * not "when it was last re-exported" (last_exported_at covers that). The
+ * Valvoline auto-feed likewise only ever fires on that first call.
  */
-export async function finalizeDraft(
+export async function markDraftComplete(
   companyId: string, userId: string | null, draft: DraftRow, lines: DraftLineRow[],
   shopNumberOf: (locationId: string | null) => string, vendorName?: string | null,
 ): Promise<string | null> {
@@ -184,23 +170,42 @@ export async function finalizeDraft(
   const types = new Set(included.map((l) => l.order_type))
   const now = new Date().toISOString()
 
-  const { data: head, error } = await sb().schema('inventory').from('ov2_order_history').insert({
-    company_id: companyId, draft_id: draft.id, vendor_id: draft.vendor_id, order_date: draft.order_date,
-    order_type: types.size === 1 ? [...types][0] : null,
-    location_count: shops.size, line_count: included.length, total_dollars: total,
-    export_status: 'exported', export_count: 1, last_exported_at: now,
-    settings_snapshot: draft.settings_snapshot, finalized_by: userId, finalized_at: now,
-  }).select('id').single()
-  if (error) { toast.error(error.message); return null }
+  const { data: existing } = await sb().schema('inventory').from('ov2_order_history')
+    .select('id, export_count').eq('draft_id', draft.id).maybeSingle()
 
-  // Best-effort: total_gallons is a new column that may not exist in
-  // production yet. Never let it block the core insert above, which is
-  // what actually finalizes the order.
-  sb().schema('inventory').from('ov2_order_history')
-    .update({ total_gallons: totalGallons }).eq('id', head.id).then(() => {})
+  let orderId: string
+  if (existing) {
+    orderId = existing.id
+    const { error } = await sb().schema('inventory').from('ov2_order_history').update({
+      vendor_id: draft.vendor_id, order_date: draft.order_date,
+      order_type: types.size === 1 ? [...types][0] : null,
+      location_count: shops.size, line_count: included.length, total_dollars: total,
+      export_status: 'exported', export_count: (existing.export_count ?? 1) + 1, last_exported_at: now,
+      settings_snapshot: draft.settings_snapshot, updated_at: now,
+    }).eq('id', orderId)
+    if (error) { toast.error(error.message); return null }
+    sb().schema('inventory').from('ov2_order_history').update({ total_gallons: totalGallons }).eq('id', orderId).then(() => {})
+    // Fully replace the line snapshot with the draft's current state — the
+    // draft is the live source of truth, this is just its latest mirror.
+    await sb().schema('inventory').from('ov2_order_history_lines').delete().eq('order_id', orderId)
+  } else {
+    const { data: head, error } = await sb().schema('inventory').from('ov2_order_history').insert({
+      company_id: companyId, draft_id: draft.id, vendor_id: draft.vendor_id, order_date: draft.order_date,
+      order_type: types.size === 1 ? [...types][0] : null,
+      location_count: shops.size, line_count: included.length, total_dollars: total,
+      export_status: 'exported', export_count: 1, last_exported_at: now,
+      settings_snapshot: draft.settings_snapshot, finalized_by: userId, finalized_at: now,
+    }).select('id').single()
+    if (error) { toast.error(error.message); return null }
+    orderId = head.id as string
+    // Best-effort: total_gallons is a new column that may not exist in
+    // production yet. Never let it block the core insert above, which is
+    // what actually marks the order complete.
+    sb().schema('inventory').from('ov2_order_history').update({ total_gallons: totalGallons }).eq('id', orderId).then(() => {})
+  }
 
   const payload = included.map((l) => ({
-    company_id: companyId, order_id: head.id, location_id: l.location_id, product_id: l.product_id,
+    company_id: companyId, order_id: orderId, location_id: l.location_id, product_id: l.product_id,
     order_type: l.order_type, uom: l.uom,
     po_number: poNumber(shopNumberOf(l.location_id), draft.order_date, l.order_type),
     system_qty: l.system_qty, qty: l.qty, is_override: l.is_override, unit_cost: l.unit_cost,
@@ -218,15 +223,17 @@ export async function finalizeDraft(
     .update({ status: 'exported', last_edited_by: userId, updated_at: now }).eq('id', draft.id)
 
   // Valvoline Order Database auto-feed (2026-09-24) — every order this app
-  // finalizes for Valvoline also lands in inventory.valvoline_order_lines
+  // completes for Valvoline also lands in inventory.valvoline_order_lines
   // (source: 'sbnet'), so it shows up alongside uploaded/manual Valvoline
   // history without a separate step. Same shop-grouped, per-shop-reset line
   // numbering as Orders v2 Export's own "line_number" export field, and the
   // exact same po_number already computed above — a shop's own SB Net order
   // and any Valvoline-side export of the same PO land on the same rows.
+  // Only on first completion (existing == null) — a re-export shouldn't
+  // feed a second, duplicate copy of the same order into that database.
   // Best-effort: never lets a database-feed failure undo an already-
-  // successful finalize.
-  if (isValvoline(vendorName)) {
+  // successful completion.
+  if (!existing && isValvoline(vendorName)) {
     const sorted = [...included].sort((a, b) =>
       shopNumberOf(a.location_id).localeCompare(shopNumberOf(b.location_id), undefined, { numeric: true })
       || a.product_id.localeCompare(b.product_id))
@@ -242,5 +249,5 @@ export async function finalizeDraft(
     insertValvolineOrderFromFinalize(companyId, feedLines).catch((e) => console.warn('[ValvolineOrderDatabase] auto-feed failed:', e))
   }
 
-  return head.id as string
+  return orderId
 }

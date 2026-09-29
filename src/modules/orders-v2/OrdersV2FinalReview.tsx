@@ -234,6 +234,18 @@ export function OrdersV2FinalReview() {
       ? resolveDeliveryDate(fromDate, sched, scheduleLookup.calendar)
       : nextDeliveryDate(fromDate, deliveryDowOf(locationId))
   }, [scheduleLookup, deliveryDowOf])
+
+  // Same delivery-projected On Hand After formula as OrdersV2Review.tsx's
+  // own onHandAfterAtDelivery (direct ask 2026-09-29 — the per-shop modal
+  // here only ever showed DOS After, not the actual on-hand numbers behind
+  // it) — usage runs the shelf down to zero-floor over the days until this
+  // line's own delivery date, THEN the ordered qty lands on top of that.
+  const onHandAfterAtDelivery = useCallback((l: DraftLineRow): number => {
+    const deliver = draft ? deliveryFor(l.location_id, draft.order_date) : null
+    const daysToDelivery = draft && deliver ? daysBetween(draft.order_date, deliver) : 0
+    const remainingAtDelivery = Math.max(0, Number(l.on_hand ?? 0) - Number(l.daily_usage ?? 0) * daysToDelivery)
+    return remainingAtDelivery + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
+  }, [draft, deliveryFor])
   const describeSchedule = useCallback((locationId: string | null): string | null => {
     const sched = scheduleLookup.schedules.get(locationId ?? '')
     if (sched) return resolveScheduleDescription(sched)
@@ -784,10 +796,14 @@ export function OrdersV2FinalReview() {
                 <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
                   <th className="text-left px-2 py-1">Product</th><th className="text-right px-2 py-1">Qty</th>
                   <th className="text-right px-2 py-1">Daily Usage</th>
+                  <th className="text-right px-2 py-1">On Hand</th><th className="text-right px-2 py-1">On Hand After</th>
                   <th className="text-right px-2 py-1">$</th><th className="text-right px-2 py-1">DOS After</th><th />
                 </tr></thead>
                 <tbody>
-                  {modalLines.map((l) => (
+                  {modalLines.map((l) => {
+                    const isOz = ozProductIds.has(l.product_id)
+                    const onHandAfter = onHandAfterAtDelivery(l)
+                    return (
                     <tr key={l.id} className={`border-b border-navy/10 ${l.included ? '' : 'opacity-45'}`}>
                       <td className="px-2 py-1 text-navy">{l.product_id}</td>
                       <td className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
@@ -796,13 +812,15 @@ export function OrdersV2FinalReview() {
                           className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
                         {l.quarts_per_unit != null && (
                           <div className="text-[10px] text-inky/50 mt-0.5">
-                            {ozProductIds.has(l.product_id)
+                            {isOz
                               ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
                               : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
                           </div>
                         )}
                       </td>
-                      <td className="px-2 py-1 text-right text-navy">{num(ozProductIds.has(l.product_id) && l.daily_usage != null ? l.daily_usage * 32 : l.daily_usage)}</td>
+                      <td className="px-2 py-1 text-right text-navy">{num(isOz && l.daily_usage != null ? l.daily_usage * 32 : l.daily_usage)}</td>
+                      <td className="px-2 py-1 text-right text-navy">{num(isOz ? Number(l.on_hand ?? 0) * 32 : l.on_hand)}</td>
+                      <td className="px-2 py-1 text-right text-navy">{num(isOz ? onHandAfter * 32 : onHandAfter)}</td>
                       <td className="px-2 py-1 text-right text-navy">{money(Number(l.qty) * Number(l.unit_cost ?? 0))}</td>
                       <td className="px-2 py-1 text-right text-navy">{dos(l.dos_after)}</td>
                       <td className="px-2 py-1 text-right">
@@ -815,7 +833,7 @@ export function OrdersV2FinalReview() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
