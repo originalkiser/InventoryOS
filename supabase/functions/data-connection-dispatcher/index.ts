@@ -287,13 +287,34 @@ async function runSkybitzTanks(supabaseUrl: string, secret: string): Promise<{ s
 // it reaches the end. A location that's starved by one truncated run is
 // first in line on the very next tick instead of waiting for tomorrow's
 // run to reach the same spot and stall again in the same place.
+//
+// 2026-09-29 fix: this cursor's own resume rule ("advance only through the
+// longest UNBROKEN prefix of successes, starting from chunk 0 of THIS
+// tick's rotation") means a single location whose sync call keeps failing
+// can park the cursor right in front of it indefinitely — every later tick
+// starts right where the last one stopped, so that same bad chunk is
+// chunk 0 again, fails again, and the cursor never moves past it (unlike
+// droptop_orders/droptop_time_clock, which re-derive "what's left" from a
+// per-location watermark and so don't get stuck behind one bad location
+// this way). Found live 2026-09-29 investigating a real "stuck at 22/283
+// chunks every night" report: this query had never excluded inactive
+// (closed) shops, unlike almost every other operational query in this
+// app — 3 of 283 "eligible" locations were closed shops that still had a
+// stale droptop_operation_id from before they closed, a plausible source
+// of a permanently-failing chunk for exactly this reason. Real production
+// data showed 280/283 locations WERE actually syncing fine within the
+// last 48 hours (same-day retries via still_catching_up ARE working), so
+// this wasn't a total stall — but a shop with no reason to ever succeed
+// again is exactly the kind of chunk that could re-park the cursor
+// indefinitely the next time rotation happens to land on it first.
 async function runDroptopPurchaseOrders(
   supabaseUrl: string, serviceKey: string, secret: string, companyId: string, cursorLocationId: string | null,
   stillCatchingUpIn: boolean, lapProgressIn: number,
 ): Promise<{ status: string; message: string | null; newCursorLocationId?: string | null; stillCatchingUp?: boolean; newLapProgress?: number }> {
   const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
   const { data: locs, error: locErr } = await (admin as any)
-    .schema('core').from('locations').select('id').eq('company_id', companyId).not('droptop_operation_id', 'is', null)
+    .schema('core').from('locations').select('id')
+    .eq('company_id', companyId).eq('active', true).not('droptop_operation_id', 'is', null)
     .order('id')
   if (locErr) return { status: 'error', message: locErr.message }
   const ids = (locs ?? []).map((l: { id: string }) => l.id)
