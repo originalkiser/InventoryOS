@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { GripVertical, Plus, Trash2 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { Button, Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
+import { usePageRevisit } from '@/hooks/usePageActive'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -21,6 +22,129 @@ export const EXPORT_FIELDS = [
   'uom', 'uom_code', 'package_type', 'qty', 'unit_cost', 'line_total', 'order_date', 'order_type', 'order_type_code', 'vendor', 'weekday',
   'line_number', 'account_number',
 ] as const
+
+// Available in file name/sheet name/subject/body templates — a DIFFERENT,
+// smaller set than EXPORT_FIELDS above, since these describe the whole
+// export (one value), not a per-line column. Must match headerValues'
+// own keys below exactly — this is the literal source of truth the
+// PlaceholderPicker/reference text lists render from, so it can never
+// silently drift out of sync with what actually resolves.
+const HEADER_FIELDS = ['vendor', 'order_date', 'weekday', 'shop_count', 'shop', 'product_count', 'product', 'line_count', 'total'] as const
+// The 3 special date-arithmetic/formatting tokens renderTemplate itself
+// understands, on top of a plain field name — shown ahead of the field
+// list in the picker since they're the ones a user can't just guess from
+// EXPORT_FIELDS/HEADER_FIELDS alone.
+const DATE_TOKENS: { token: string; hint: string }[] = [
+  { token: '{date:MMDDYYYY}', hint: "order date" },
+  { token: '{today:MMDDYYYY}', hint: "today's date" },
+  { token: '{date+1:MMDDYYYY}', hint: 'order date +1 day (any field:offset works, use - for earlier)' },
+]
+
+/**
+ * Small "{ }" button next to a template field — opens a list of every
+ * placeholder valid in THAT field (a composite column's own template only
+ * ever sees EXPORT_FIELDS; file name/sheet name/subject/body only ever see
+ * HEADER_FIELDS, a smaller per-export set) so nobody has to type one out
+ * from memory or guess which set applies where. Clicking an entry inserts
+ * it via the caller's own onInsert (see TemplateInput below for the actual
+ * cursor-position-aware insert).
+ */
+function PlaceholderPicker({ fields, onInsert }: { fields: readonly string[]; onInsert: (token: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative inline-block">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        title="Insert a field"
+        className="text-[10px] font-mono text-sky border border-sky/40 rounded px-1.5 py-0.5 hover:bg-sky/10 flex-shrink-0">
+        {'{ }'} Insert field
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 w-72 max-h-72 overflow-auto rounded border border-navy/30 bg-cream shadow-xl p-1">
+            {DATE_TOKENS.map((d) => (
+              <button key={d.token} type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { onInsert(d.token); setOpen(false) }}
+                className="block w-full text-left px-2 py-1 text-[11px] font-mono text-navy hover:bg-sky/20 rounded">
+                <code>{d.token}</code> <span className="text-inky/50">— {d.hint}</span>
+              </button>
+            ))}
+            <div className="border-t border-navy/10 my-1" />
+            {fields.map((f) => (
+              <button key={f} type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { onInsert(`{${f}}`); setOpen(false) }}
+                className="block w-full text-left px-2 py-1 text-[11px] font-mono text-navy hover:bg-sky/20 rounded">
+                <code>{`{${f}}`}</code>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A template text field (single-line or multiline) with a PlaceholderPicker
+ * next to it — clicking a field inserts it at the cursor's last-known
+ * position (tracked via onSelect/onClick/onKeyUp, since a picker button's
+ * own mousedown would otherwise steal focus and lose the caret position
+ * before its click handler ever runs — onMouseDown={preventDefault} above
+ * on every picker button keeps focus in the field to begin with, and this
+ * still tracks the position independently as a fallback). Falls back to
+ * appending at the end if no position was ever recorded (field never
+ * focused yet).
+ */
+function TemplateInput({ label, value, onChange, fields, multiline, placeholder, className }: {
+  label?: string
+  value: string
+  onChange: (v: string) => void
+  fields: readonly string[]
+  multiline?: boolean
+  placeholder?: string
+  className?: string
+}) {
+  const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
+  const posRef = useRef<number>(value.length)
+  const trackPos = () => { if (ref.current) posRef.current = ref.current.selectionStart ?? value.length }
+  function insert(token: string) {
+    const pos = Math.min(posRef.current, value.length)
+    const next = value.slice(0, pos) + token + value.slice(pos)
+    onChange(next)
+    const newPos = pos + token.length
+    posRef.current = newPos
+    requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(newPos, newPos) })
+  }
+  const fieldEl = multiline ? (
+    <textarea ref={ref} value={value} onChange={(e) => onChange(e.target.value)}
+      onSelect={trackPos} onClick={trackPos} onKeyUp={trackPos} rows={4} placeholder={placeholder}
+      className={`w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy focus:outline-none focus:ring-2 focus:ring-sky ${className ?? ''}`} />
+  ) : (
+    <Input ref={ref} value={value} onChange={(e) => onChange(e.target.value)}
+      onSelect={trackPos} onClick={trackPos} onKeyUp={trackPos} placeholder={placeholder} className={className} />
+  )
+  if (!label && !multiline) {
+    // Dense inline contexts (the per-column composite template row) skip
+    // the label row entirely and put the picker button right after the field.
+    return (
+      <div className="flex items-center gap-1 flex-1 min-w-[16rem]">
+        {fieldEl}
+        <PlaceholderPicker fields={fields} onInsert={insert} />
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-2">
+        {label && <label className="text-xs font-heading text-inky uppercase tracking-wide">{label}</label>}
+        <PlaceholderPicker fields={fields} onInsert={insert} />
+      </div>
+      {fieldEl}
+    </div>
+  )
+}
 
 // Portal-friendly UOM codes some vendor upload formats expect instead of
 // this app's own internal uom values — Valvoline's own portal specifically
@@ -132,7 +256,15 @@ export function OrdersV2Export() {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const vendors = useVendors()
-  const { draft, lines, loading } = useDraft(draftId || null)
+  const { draft, lines, loading, reload } = useDraft(draftId || null)
+  // This page sits behind KeepAlivePages once visited more than once — going
+  // back to Review/Final Review to change a line, then forward to an
+  // already-cached Export, used to keep showing whatever the order looked
+  // like on the FIRST visit here forever (nothing unmounted to re-trigger
+  // useDraft's own load effect, and this page has no other refresh path).
+  // usePageRevisit re-fetches the instant this becomes the visible page
+  // again, so the export always reflects the order's current, real state.
+  usePageRevisit(reload)
 
   const [tpl, setTpl] = useState<ExportTemplate>(DEFAULT_TEMPLATE)
   const [savedTpl, setSavedTpl] = useState<ExportTemplate | null>(null)
@@ -462,7 +594,7 @@ export function OrdersV2Export() {
                 <Input value={c.value ?? ''} onChange={(e) => setCol(c.id, { value: e.target.value })} className="w-48" placeholder="Fixed value" />
               )}
               {c.kind === 'composite' && (
-                <Input value={c.template ?? ''} onChange={(e) => setCol(c.id, { template: e.target.value })} className="flex-1 min-w-[16rem]"
+                <TemplateInput value={c.template ?? ''} onChange={(v) => setCol(c.id, { template: v })} fields={EXPORT_FIELDS}
                   placeholder="{shop_number}-{date:MMDDYYYY}{order_type_code}" />
               )}
               <button onClick={() => setTpl((t) => ({ ...t, columns: t.columns.filter((x) => x.id !== c.id) }))}
@@ -491,7 +623,7 @@ export function OrdersV2Export() {
             <Select label="Format" value={tpl.format} onChange={(e) => setTpl((t) => ({ ...t, format: e.target.value as 'xlsx' | 'csv' }))}
               options={[{ value: 'xlsx', label: 'XLSX' }, { value: 'csv', label: 'CSV' }]} />
           </div>
-          <Input label="File name" value={tpl.file_name_template} onChange={(e) => setTpl((t) => ({ ...t, file_name_template: e.target.value }))} />
+          <TemplateInput label="File name" value={tpl.file_name_template} onChange={(v) => setTpl((t) => ({ ...t, file_name_template: v }))} fields={HEADER_FIELDS} />
           <span className="text-[10px] font-mono text-inky/50">→ {fileName}.{tpl.format}</span>
           <p className="text-[10px] font-mono text-inky/50">
             <code>{'{shop}'}</code> shop name, or "N shops" once more than one is included ·{' '}
@@ -499,7 +631,7 @@ export function OrdersV2Export() {
           </p>
           {tpl.format === 'xlsx' && (
             <>
-              <Input label="Sheet name" value={tpl.sheet_name_template} onChange={(e) => setTpl((t) => ({ ...t, sheet_name_template: e.target.value }))} />
+              <TemplateInput label="Sheet name" value={tpl.sheet_name_template} onChange={(v) => setTpl((t) => ({ ...t, sheet_name_template: v }))} fields={HEADER_FIELDS} />
               <span className="text-[10px] font-mono text-inky/50">→ {sheetName}</span>
             </>
           )}
@@ -527,7 +659,7 @@ export function OrdersV2Export() {
           </label>
           {tpl.include_subject && (
             <>
-              <Input label="Subject" value={tpl.subject_template} onChange={(e) => setTpl((t) => ({ ...t, subject_template: e.target.value }))} />
+              <TemplateInput label="Subject" value={tpl.subject_template} onChange={(v) => setTpl((t) => ({ ...t, subject_template: v }))} fields={HEADER_FIELDS} />
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-mono text-inky/50 flex-1 truncate">→ {subject}</span>
                 <button onClick={() => { navigator.clipboard.writeText(subject); toast.success('Subject copied') }}
@@ -541,8 +673,7 @@ export function OrdersV2Export() {
           </label>
           {tpl.use_body_template && (
             <>
-              <textarea value={tpl.body_template} onChange={(e) => setTpl((t) => ({ ...t, body_template: e.target.value }))} rows={4}
-                className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy focus:outline-none focus:ring-2 focus:ring-sky"
+              <TemplateInput value={tpl.body_template} onChange={(v) => setTpl((t) => ({ ...t, body_template: v }))} fields={HEADER_FIELDS} multiline
                 placeholder="Attached is the {vendor} order for {date:MMDDYYYY} — {shop_count} shops, {line_count} lines, ${total}." />
               <div className="flex items-start gap-2">
                 <span className="text-[10px] font-mono text-inky/50 flex-1 whitespace-pre-wrap">→ {body}</span>

@@ -10,6 +10,7 @@ import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { useProductExceptions } from './useProductExceptions'
 import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { useLocations } from '@/hooks/useLocations'
+import { usePageRevisit } from '@/hooks/usePageActive'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
@@ -102,6 +103,12 @@ export function OrdersV2Review() {
   const { rulesFor } = useVendorRules()
   const { fetchInputs } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
+  // This page sits behind KeepAlivePages once visited more than once (see
+  // its own doc comment) — bouncing here from Final Review/Export after
+  // editing a line there wouldn't otherwise re-fetch, since nothing
+  // unmounted to re-trigger useDraft's own load effect. usePageRevisit
+  // catches it back up the moment it becomes the visible page again.
+  usePageRevisit(reload)
   // Last Ordered/Last Delivered columns + on-hand plausibility flag
   // (2026-09-22 request) — called unconditionally (before the loading/
   // not-found early returns below) per Rules of Hooks; vendors.byId

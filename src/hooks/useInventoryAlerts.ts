@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react'
 import { create } from 'zustand'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { useLocationExclusions } from '@/hooks/useLocationExclusions'
+import { useLocationExclusions, ownerBucket } from '@/hooks/useLocationExclusions'
 import { LOCATION_COLUMNS_SANS_MONDAY_PAYLOAD } from '@/hooks/useLocations'
 import type { Location } from '@/types'
 
@@ -81,12 +81,27 @@ async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; l
   const valLow: AlertShop[] = locations.flatMap((l) => { const n = val.get(l.id)?.size ?? 0; return n < VALVOLINE_MIN ? [{ id: l.id, label: labelOf(l), detail: `${n} configured` }] : [] }).sort(bySortLabel)
   const missingAcct: AlertShop[] = locations.flatMap((l) => valvolineAcct(l) ? [] : [{ id: l.id, label: labelOf(l), detail: 'No Valvoline Account #' }]).sort(bySortLabel)
   const noRdDay: AlertShop[] = locations.flatMap((l) => rdDeliveryDay(l) ? [] : [{ id: l.id, label: labelOf(l), detail: 'No RelaDyne delivery day' }]).sort(bySortLabel)
+  // droptop_operation_id (not droptop_num, the separate "Droptop #" field
+  // also in the Locations grid) is the actual key every Droptop sync
+  // function scopes its own location query by (`.not('droptop_operation_id',
+  // 'is', null)` — confirmed directly in data-connection-dispatcher/index.ts
+  // and every droptop-sync-*/index.ts this session) — a shop with this
+  // blank is fully invisible to every Droptop pull (orders, usage, on-hand,
+  // purchase orders, time clock), not just one connection. Scoped to
+  // Corporate only (matching Orders v2's own corporateIds convention) since
+  // a Franchise shop may legitimately run its own separate POS with no
+  // Droptop integration at all.
+  const missingDroptopOpId: AlertShop[] = locations
+    .filter((l) => ownerBucket(String((l as any).owner ?? (l.metadata as any)?.owner ?? '')) === 'Corporate')
+    .flatMap((l) => String((l as any).droptop_operation_id ?? '').trim() ? [] : [{ id: l.id, label: labelOf(l), detail: 'No Droptop Operation ID' }])
+    .sort(bySortLabel)
 
   const rawGroups: AlertGroup[] = [
     { key: 'reladyne-low', title: `Shops with fewer than ${RELADYNE_MIN} RelaDyne products configured`, hint: 'Configure their RelaDyne order profile in Inventory Config → Order Config.', shops: rdLow },
     { key: 'no-reladyne-delivery-day', title: 'Shops with no RelaDyne delivery day', hint: 'Set the Reladyne Delivery Day in Global Config → Locations.', shops: noRdDay },
     { key: 'valvoline-low', title: `Shops with fewer than ${VALVOLINE_MIN} Valvoline products configured`, hint: 'Add Valvoline products to their order config.', shops: valLow },
     { key: 'missing-valvoline-acct', title: 'Shops missing a Valvoline Account #', hint: 'Set the Valvoline # in Global Config → Locations.', shops: missingAcct },
+    { key: 'missing-droptop-operation-id', title: 'Active corporate shops missing a Droptop Operation ID', hint: 'No Droptop data (orders, usage, on-hand, purchase orders, time clock) can be pulled for this shop at all until this is set — Global Config → Locations → "Droptop Operation ID".', shops: missingDroptopOpId },
   ]
   return { rawGroups, locById, connectionIssueCount }
 }

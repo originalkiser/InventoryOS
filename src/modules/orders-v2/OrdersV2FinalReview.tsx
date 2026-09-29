@@ -10,6 +10,7 @@ import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnMana
 import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
+import { usePageRevisit } from '@/hooks/usePageActive'
 import { useAuthStore } from '@/stores/authStore'
 import { parseWeekday, orderDayFromDelivery } from '@/lib/orderDay'
 import { supabase } from '@/lib/supabase'
@@ -54,7 +55,12 @@ export function OrdersV2FinalReview() {
   const { profile } = useAuthStore()
   const { settings } = useOrderSettings()
   const { rulesFor } = useVendorRules()
-  const { draft, lines, loading, patchLine, removeLine } = useDraft(draftId || null)
+  const { draft, lines, loading, reload, patchLine, removeLine } = useDraft(draftId || null)
+  // This page sits behind KeepAlivePages once visited more than once — a
+  // line edited back on Review after Final Review was already cached here
+  // would otherwise never show up (nothing unmounted to re-trigger
+  // useDraft's own load effect). Same fix as OrdersV2Review/Export.
+  usePageRevisit(reload)
   // Same Last Ordered/Last Delivered + on-hand plausibility flag as
   // OrdersV2Review — see that hook's own header comment for scope/design.
   const lastOrderedInfo = useLastOrderedInfo(draft?.vendor_id ?? null, vendors.byId(draft?.vendor_id ?? null)?.name ?? null)
