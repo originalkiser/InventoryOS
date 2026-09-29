@@ -17,7 +17,8 @@ import { supabase } from '@/lib/supabase'
 import { usd, LOOKBACK_MONTHS } from './OverviewTab'
 
 interface HistoryRow { count_month: string; oil: number; parts: number; additives: number; other: number; total: number }
-interface ProductRow { product_id: string; category: string | null; on_hand: number; ending_value: number }
+interface ProductRow { product_id: string; category: string | null; simple_category: string; on_hand: number; ending_value: number }
+export type SimpleCategory = 'Oil' | 'Parts' | 'Additives' | 'Other'
 
 // Same stacked-bar palette order (oil/parts/additives/other) the rest of
 // this app's Droptop-derived charts use — sky/inky/green/orange, brand
@@ -25,13 +26,18 @@ interface ProductRow { product_id: string; category: string | null; on_hand: num
 const CATEGORY_COLORS = { Oil: '#B7E0DE', Parts: '#4F7489', Additives: '#2ECC71', Other: '#E67E22' }
 const PRODUCT_TABLE_KEY = 'monthend:shop-product-detail'
 
-export function ShopBalanceModal({ open, onClose, companyId, locationId, shopLabel, countMonth }: {
+export function ShopBalanceModal({ open, onClose, companyId, locationId, shopLabel, countMonth, categoryFilter }: {
   open: boolean
   onClose: () => void
   companyId: string
   locationId: string
   shopLabel: string
   countMonth: string
+  // Set when opened from a KPI card's "By Shop" drill-down (2026-09-28 ask)
+  // — auto-loads and pre-filters the product list to just this category
+  // instead of requiring the "View Product Detail" click, since drilling in
+  // from a category is the whole point of that path.
+  categoryFilter?: SimpleCategory
 }) {
   const [history, setHistory] = useState<HistoryRow[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -48,15 +54,43 @@ export function ShopBalanceModal({ open, onClose, companyId, locationId, shopLab
     setHistoryLoading(true); setHistoryError(null)
     let cancelled = false
     const startMonth = format(subMonths(parseISO(countMonth), LOOKBACK_MONTHS), 'yyyy-MM-01')
-    ;(supabase as any).rpc('get_shop_category_balance_history', {
-      p_company_id: companyId, p_location_id: locationId, p_start_month: startMonth, p_end_month: countMonth,
-    }).then(({ data, error }: { data: any[] | null; error: { message: string } | null }) => {
+    const sb = supabase as any
+    Promise.all([
+      sb.rpc('get_shop_category_balance_history', {
+        p_company_id: companyId, p_location_id: locationId, p_start_month: startMonth, p_end_month: countMonth,
+      }),
+      // Fallback source for a month with no live count_products data at all
+      // (2026-09-28 ask, found live: a real shop was missing an August row
+      // it should've had) — same monthly_ending_balances-as-fallback
+      // reasoning already used for the outlier MoM % change on the
+      // Overview page itself. Only fills in months the live RPC didn't
+      // return anything for; never overrides a real live row.
+      sb.schema('inventory').from('monthly_ending_balances')
+        .select('month, ending_balance, metadata')
+        .eq('company_id', companyId).eq('location_id', locationId)
+        .gte('month', startMonth).lte('month', countMonth),
+    ]).then(([{ data, error }, { data: mebRows }]: [{ data: any[] | null; error: { message: string } | null }, { data: any[] | null }]) => {
       if (cancelled) return
       if (error) { setHistoryError(error.message); setHistoryLoading(false); return }
-      setHistory((data ?? []).map((r) => ({
+      const liveMonths = new Set((data ?? []).map((r) => r.count_month))
+      const merged: HistoryRow[] = (data ?? []).map((r) => ({
         count_month: r.count_month, oil: Number(r.oil ?? 0), parts: Number(r.parts ?? 0),
         additives: Number(r.additives ?? 0), other: Number(r.other ?? 0), total: Number(r.total ?? 0),
-      })))
+      }))
+      for (const r of (mebRows ?? []) as { month: string; ending_balance: number | null; metadata: Record<string, unknown> | null }[]) {
+        if (liveMonths.has(r.month)) continue
+        merged.push({
+          count_month: r.month,
+          oil: Number((r.metadata as any)?.oil ?? 0), parts: Number((r.metadata as any)?.parts ?? 0),
+          additives: Number((r.metadata as any)?.additives ?? 0),
+          // No Finance-entered equivalent for "Other" — a fallback month's
+          // bar/row just won't have an Other segment, same graceful
+          // degradation as the Overview page's own KPI tiles.
+          other: 0, total: Number(r.ending_balance ?? 0),
+        })
+      }
+      merged.sort((a, b) => a.count_month.localeCompare(b.count_month))
+      setHistory(merged)
       setHistoryLoading(false)
     })
     return () => { cancelled = true }
@@ -71,11 +105,25 @@ export function ShopBalanceModal({ open, onClose, companyId, locationId, shopLab
     }).then(({ data, error }: { data: any[] | null; error: { message: string } | null }) => {
       if (error) { setProductsError(error.message); setProductsLoading(false); return }
       setProducts((data ?? []).map((r) => ({
-        product_id: r.product_id, category: r.category, on_hand: Number(r.on_hand ?? 0), ending_value: Number(r.ending_value ?? 0),
+        product_id: r.product_id, category: r.category, simple_category: r.simple_category ?? 'Other',
+        on_hand: Number(r.on_hand ?? 0), ending_value: Number(r.ending_value ?? 0),
       })))
       setProductsLoading(false)
     })
   }
+
+  // categoryFilter means the user already drilled in from "Oil — By Shop"
+  // (or Parts/Additives/Other) — skip the "View Product Detail" click and
+  // go straight to that category's product list.
+  useEffect(() => {
+    if (open && categoryFilter) loadProducts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, categoryFilter, locationId])
+
+  const visibleProducts = useMemo(
+    () => (categoryFilter ? (products ?? []).filter((p) => p.simple_category === categoryFilter) : (products ?? [])),
+    [products, categoryFilter],
+  )
 
   const chartData = useMemo(() => history.map((r) => ({
     month: format(parseISO(r.count_month), 'MMM yy'),
@@ -83,17 +131,21 @@ export function ShopBalanceModal({ open, onClose, companyId, locationId, shopLab
   })), [history])
 
   const productCol = useMemo(() => createColumnHelper<ProductRow>(), [])
-  const productColumns = useMemo(() => [
-    productCol.accessor('product_id', { header: 'Product' }),
-    productCol.accessor('category', { header: 'Category', cell: (i) => i.getValue() ?? '—' }),
-    productCol.accessor('on_hand', { header: 'On Hand', cell: (i) => <div className="text-right">{i.getValue().toLocaleString(undefined, { maximumFractionDigits: 2 })}</div> }),
-    productCol.accessor('ending_value', { header: 'Ending Value', cell: (i) => <div className="text-right font-bold">{usd(i.getValue())}</div> }),
-  ], [productCol])
+  const productColumns = useMemo(() => {
+    const cols = [
+      productCol.accessor('product_id', { header: 'Product' }),
+      // Redundant once every visible row is already scoped to one category.
+      ...(categoryFilter ? [] : [productCol.accessor('category', { header: 'Category', cell: (i: any) => i.getValue() ?? '—' })]),
+      productCol.accessor('on_hand', { header: 'On Hand', cell: (i) => <div className="text-right">{i.getValue().toLocaleString(undefined, { maximumFractionDigits: 2 })}</div> }),
+      productCol.accessor('ending_value', { header: 'Ending Value', meta: { fill: true }, cell: (i) => <div className="text-right font-bold">{usd(i.getValue())}</div> }),
+    ]
+    return cols
+  }, [productCol, categoryFilter])
 
   const {
     table: productTable, globalFilter: productGlobalFilter, setGlobalFilter: setProductGlobalFilter,
     columnVisibility: productColumnVisibility, columnOrder: productColumnOrder, setColumnOrder: setProductColumnOrder,
-  } = useTable(products ?? [], productColumns, {
+  } = useTable(visibleProducts, productColumns, {
     persistKey: PRODUCT_TABLE_KEY,
     initialPageSize: 50,
     initialSorting: [{ id: 'ending_value', desc: true }],
@@ -101,7 +153,7 @@ export function ShopBalanceModal({ open, onClose, companyId, locationId, shopLab
   useColumnPrefs(PRODUCT_TABLE_KEY, productTable, productColumnVisibility, productColumnOrder, setProductColumnOrder)
 
   return (
-    <Modal open={open} onClose={onClose} title={`Shop Balance — ${shopLabel}`} size="2xl">
+    <Modal open={open} onClose={onClose} title={`Shop Balance — ${shopLabel}${categoryFilter ? ` · ${categoryFilter}` : ''}`} size="2xl">
       <div className="flex flex-col gap-4">
         {historyLoading ? (
           <div className="py-10 flex justify-center"><SbLoader size={32} /></div>
@@ -171,7 +223,7 @@ export function ShopBalanceModal({ open, onClose, companyId, locationId, shopLab
           ) : (
             <>
               <span className="text-xs font-mono text-navy uppercase tracking-wide">
-                Products On Hand — {format(parseISO(countMonth), 'MMMM yyyy')}
+                {categoryFilter ? `${categoryFilter} Products On Hand` : 'Products On Hand'} — {format(parseISO(countMonth), 'MMMM yyyy')}
               </span>
               <DataTable
                 table={productTable}

@@ -9,16 +9,26 @@ import { useAppSetting } from '@/hooks/useAppSetting'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useTable, exportTableToCsv } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
-import { Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
+import { Card, CardBody, Input, Select, Toggle } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
+import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
-import { ShopBalanceModal } from './ShopBalanceModal'
+import { ShopBalanceModal, type SimpleCategory } from './ShopBalanceModal'
+import { CategoryBreakdownModal } from './CategoryBreakdownModal'
 import { useMonthEndExclusions } from './useMonthEndExclusions'
 import type { MonthlyEndingBalance } from '@/types'
 import { format, parseISO, subMonths } from 'date-fns'
 
 export const LOOKBACK_MONTHS = 12
 const PAGE = 1000
+const LOAD_PHASES = [
+  'Loading balance history…',
+  'Checking submitted counts…',
+  'Loading current on-hand balances…',
+  'Loading prior-month on-hand balances…',
+  'Loading recount activity…',
+  'Checking product exceptions…',
+]
 
 export const usd = (v: number | null | undefined) =>
   v == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v)
@@ -72,10 +82,19 @@ export function OverviewTab() {
   const [currentSubmittedIds, setCurrentSubmittedIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Real step-based progress instead of a bare spinner (2026-09-28 ask) —
+  // load() below has this many genuinely sequential/parallel fetch phases;
+  // loadStep just counts how many have completed so far.
+  const [loadStep, setLoadStep] = useState(0)
   // Shop Balances table row click (2026-09-28 ask) — opens ShopBalanceModal,
   // which lazy-loads its own 12-month history + on-demand product detail;
   // replaces the old single-shop Combobox-picker "Shop Detail" panel.
-  const [modalShop, setModalShop] = useState<{ id: string; label: string } | null>(null)
+  // categoryFilter is set when reached via a KPI card's "By Shop" drill-down
+  // (categoryModal below) instead of a direct table/outlier click.
+  const [modalShop, setModalShop] = useState<{ id: string; label: string; categoryFilter?: SimpleCategory } | null>(null)
+  // KPI card click (2026-09-28 ask) — "By Shop" breakdown for one category
+  // (or Total), built from the already-loaded shopBalanceRows, no fetch.
+  const [categoryModal, setCategoryModal] = useState<{ field: 'total' | 'oil' | 'parts' | 'additives' | 'other'; label: string } | null>(null)
   // "Other" is a broad catch-all (anything not Oil/Parts/Additives) and
   // usually not what someone means by "the ending balance" — excluded from
   // the Total tile by default, per explicit request, with a toggle to add
@@ -103,7 +122,7 @@ export function OverviewTab() {
 
   const load = useCallback(async () => {
     if (!companyId) return
-    setLoading(true); setError(null)
+    setLoading(true); setError(null); setLoadStep(0)
     const sb = supabase as any
     try {
       // Paginated (id-tiebreak) fetch of the balance window so >1000 rows aren't truncated.
@@ -124,6 +143,7 @@ export function OverviewTab() {
         from += batch.length
       }
       setBalances(all)
+      setLoadStep(1)
 
       // Which shops have submitted a count this period — same "Monthly"
       // count_type + manual_count_entries definition of "submitted"
@@ -144,6 +164,7 @@ export function OverviewTab() {
       for (const r of monthlyRows) submitted.add(r.location_id!)
       for (const m of (manualRows ?? []) as { location_id: string | null }[]) if (m.location_id) submitted.add(m.location_id)
       setCurrentSubmittedIds(submitted)
+      setLoadStep(2)
 
       const { data: catBalRows, error: catBalErr } = await sb.rpc('get_current_balance_by_category', {
         p_company_id: companyId, p_count_month: countMonth,
@@ -157,6 +178,7 @@ export function OverviewTab() {
         })
       }
       setCurrentCategoryBalances(catBalMap)
+      setLoadStep(3)
 
       const { data: prevCatBalRows, error: prevCatBalErr } = await sb.rpc('get_current_balance_by_category', {
         p_company_id: companyId, p_count_month: prevMonth,
@@ -170,6 +192,7 @@ export function OverviewTab() {
         })
       }
       setPrevCategoryBalances(prevCatBalMap)
+      setLoadStep(4)
 
       const { data: recounts } = await sb.schema('inventory').from('recount_requests')
         .select('completed_flags').eq('company_id', companyId)
@@ -177,6 +200,7 @@ export function OverviewTab() {
       const rc = (recounts ?? []) as { completed_flags: boolean[] | null }[]
       setCompleteRecounts(rc.filter((r) => (r.completed_flags ?? [])[0]).length)
       setOpenRecounts(rc.filter((r) => !(r.completed_flags ?? [])[0]).length)
+      setLoadStep(5)
 
       const { data: exc } = await sb.rpc('get_product_expectation_exceptions', {
         p_company_id: companyId, p_count_month: countMonth,
@@ -346,6 +370,15 @@ export function OverviewTab() {
     return rows
   }, [filteredCurrentCategoryBalances, loc])
 
+  const CATEGORY_FILTER_MAP: Record<'oil' | 'parts' | 'additives' | 'other', SimpleCategory> = {
+    oil: 'Oil', parts: 'Parts', additives: 'Additives', other: 'Other',
+  }
+  const categoryModalRows = useMemo(() => {
+    if (!categoryModal) return []
+    const field = categoryModal.field
+    return shopBalanceRows.map((r) => ({ location_id: r.location_id, shop: r.shop, value: r[field] }))
+  }, [categoryModal, shopBalanceRows])
+
   // Outlier callouts — top/bottom N by current Total $, and top N by
   // absolute MoM % change in a shop's overall Total (not per-category, per
   // explicit request) among shops with a real prior-month total to compare
@@ -420,7 +453,15 @@ export function OverviewTab() {
   useColumnPrefs(SHOP_TABLE_KEY, shopTable, shopColumnVisibility, shopColumnOrder, setShopColumnOrder)
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
-  if (loading) return <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
+  if (loading) {
+    return (
+      <LoadingProgress
+        fraction={loadStep / LOAD_PHASES.length}
+        countText={LOAD_PHASES[loadStep] ?? 'Finishing up…'}
+        messages={[]}
+      />
+    )
+  }
   if (error) return <div className="text-xs font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded px-3 py-2">{error}</div>
 
   return (
@@ -430,14 +471,22 @@ export function OverviewTab() {
         <p className="text-xs text-inky mt-0.5">Current balances by category and recount activity for the period.</p>
       </div>
 
-      {/* Category balance KPIs */}
+      {/* Category balance KPIs — clicking any tile opens a "By Shop"
+          breakdown for that category (2026-09-28 ask); smaller/denser cards
+          so all 5 (Total + 3 categories + Other) fit on one row instead of
+          Other wrapping to its own row. */}
       <div className="flex flex-col gap-2">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Kpi label="Total Ending Balance" value={usd(displayedTotal)} accent />
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+          <Kpi label="Total Ending Balance" value={usd(displayedTotal)} accent
+            onClick={() => setCategoryModal({ field: 'total', label: 'Total Ending Balance' })} />
           {categories.map((c) => (
-            <Kpi key={c.field_key} label={c.label} value={usd(currentTotals.cats[c.field_key])} />
+            <Kpi key={c.field_key} label={c.label} value={usd(currentTotals.cats[c.field_key])}
+              onClick={() => setCategoryModal({ field: c.field_key as 'oil' | 'parts' | 'additives', label: c.label })} />
           ))}
-          {currentTotals.other != null && <Kpi label="Other" value={usd(currentTotals.other)} />}
+          {currentTotals.other != null && (
+            <Kpi label="Other" value={usd(currentTotals.other)}
+              onClick={() => setCategoryModal({ field: 'other', label: 'Other' })} />
+          )}
         </div>
         {currentTotals.other != null && (
           <label className="flex items-center gap-2 text-[10px] font-mono text-inky/60 uppercase tracking-wide">
@@ -556,6 +605,23 @@ export function OverviewTab() {
           locationId={modalShop.id}
           shopLabel={modalShop.label}
           countMonth={countMonth}
+          categoryFilter={modalShop.categoryFilter}
+        />
+      )}
+
+      {categoryModal && (
+        <CategoryBreakdownModal
+          open={!!categoryModal}
+          onClose={() => setCategoryModal(null)}
+          title={`${categoryModal.label} — By Shop`}
+          rows={categoryModalRows}
+          onSelectShop={(id, label) => {
+            setCategoryModal(null)
+            setModalShop({
+              id, label,
+              categoryFilter: categoryModal.field === 'total' ? undefined : CATEGORY_FILTER_MAP[categoryModal.field],
+            })
+          }}
         />
       )}
     </div>
@@ -596,14 +662,26 @@ function OutlierCard({ title, rows, onSelect }: {
   )
 }
 
-function Kpi({ label, value, accent, highlight }: { label: string; value: string; accent?: boolean; highlight?: boolean }) {
+function Kpi({ label, value, accent, highlight, onClick }: {
+  label: string; value: string; accent?: boolean; highlight?: boolean
+  // 2026-09-28 ask — opens that category's "By Shop" breakdown. Smaller
+  // padding/text than before (also 2026-09-28) so all 5 category tiles fit
+  // on one row instead of a 5th ("Other") wrapping alone.
+  onClick?: () => void
+}) {
+  const Tag = onClick ? 'button' : 'div'
   return (
-    <div className={[
-      'rounded-lg border px-4 py-3 flex flex-col gap-1',
-      accent ? 'border-navy/40 bg-navy/[0.04]' : 'border-navy/20 bg-cream',
-    ].join(' ')}>
-      <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">{label}</span>
-      <span className={['text-lg font-heading font-bold', highlight ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{value}</span>
-    </div>
+    <Tag
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={[
+        'rounded-lg border px-3 py-2 flex flex-col gap-0.5 text-left w-full',
+        accent ? 'border-navy/40 bg-navy/[0.04]' : 'border-navy/20 bg-cream',
+        onClick ? 'hover:border-sky hover:bg-sky/10 transition-colors cursor-pointer' : '',
+      ].join(' ')}
+    >
+      <span className="text-[9px] font-mono uppercase tracking-widest text-inky/60">{label}</span>
+      <span className={['text-base font-heading font-bold', highlight ? 'text-[#E67E22]' : 'text-navy'].join(' ')}>{value}</span>
+    </Tag>
   )
 }
