@@ -57,3 +57,28 @@ export async function lookupSkybitzMonitor(serials: string[]): Promise<SkybitzLo
   }
   return { file_modified_at: data.file_modified_at ?? null, matched: data.matched ?? [] }
 }
+
+export interface SkybitzInspectResult {
+  headers: string[]
+  sample_rows: Record<string, string | null>[]
+}
+
+// Read-only — the live file's own column header list + 3 sample rows, no
+// DB writes. skybitz-tank-sync only ever reads 10 named columns off this
+// header row (2026-09-28: added while investigating a real Tank Capacity
+// mismatch, see TankMonitorsPage.tsx's SkybitzFeedInspector) — this is the
+// direct way to see whether SkyBitz's feed carries any OTHER field (e.g. a
+// true/rated tank size distinct from "Tank Capacity") that the sync
+// currently ignores, without guessing from the code alone.
+export async function inspectSkybitzFeed(): Promise<SkybitzInspectResult> {
+  const { data, error } = await supabase.functions.invoke('skybitz-tank-sync', { body: { mode: 'inspect' } })
+  if (error) throw new Error(error.message)
+  if (data?.error) {
+    throw new Error(
+      data.error === 'credentials_not_configured'
+        ? 'SkyBitz SFTP credentials not configured — add SKYBITZ_SFTP_URL, SKYBITZ_SFTP_USERNAME, and SKYBITZ_SFTP_PASSWORD to Supabase secrets.'
+        : data.error
+    )
+  }
+  return { headers: data.headers ?? [], sample_rows: data.sample_rows ?? [] }
+}

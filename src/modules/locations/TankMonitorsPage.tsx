@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useNavigate } from 'react-router-dom'
 import { Copy, Mail, Columns3, EyeOff, Radio } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { lookupSkybitzMonitor, type SkybitzLookupResult } from '@/services/skybitzService'
+import { lookupSkybitzMonitor, inspectSkybitzFeed, type SkybitzLookupResult, type SkybitzInspectResult } from '@/services/skybitzService'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
@@ -561,6 +561,7 @@ export function TankMonitorsPage() {
               </label>
             </CardBody>
           </Card>
+          <SkybitzFeedInspector />
         </TabsContent>
       </Tabs>
 
@@ -977,5 +978,119 @@ function LowVmiView({ monitors, loc, isExcluded, shopFilterIds, amFilters, ignor
         </div>
       )}
     </div>
+  )
+}
+
+// ── SkyBitz raw feed inspector (2026-09-28) ─────────────────────────────────
+// General-purpose version of Location Check's own per-flagged-row "Check
+// SkyBitz feed" button (this file, LocationCheckPanel) — that one only ever
+// runs for a shop already flagged by the location-mismatch heuristic. Added
+// while investigating a real Tank Capacity discrepancy (shop 49: half its
+// monitors' synced raw_capacity read 400 while SkyBitz's own web portal
+// showed 750 for the same serials, same day) — skybitz-tank-sync only reads
+// 10 named CSV columns (see that function's own header comment), so this
+// lets anyone check ANY serial's live raw row, or the file's full column
+// list, without needing the sync's own shared secret (an interactive call
+// like this is authorized by the logged-in user's own session instead, see
+// skybitzService.ts's own header comment).
+function SkybitzFeedInspector() {
+  const [serialsInput, setSerialsInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [lookupResult, setLookupResult] = useState<SkybitzLookupResult | null>(null)
+  const [inspectResult, setInspectResult] = useState<SkybitzInspectResult | null>(null)
+  const [inspectBusy, setInspectBusy] = useState(false)
+
+  async function checkSerials() {
+    const serials = serialsInput.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)
+    if (!serials.length) { toast.error('Enter at least one serial/RTUID'); return }
+    setBusy(true); setLookupResult(null)
+    try {
+      setLookupResult(await lookupSkybitzMonitor(serials))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'SkyBitz lookup failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function checkHeaders() {
+    setInspectBusy(true); setInspectResult(null)
+    try {
+      setInspectResult(await inspectSkybitzFeed())
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'SkyBitz inspect failed')
+    } finally {
+      setInspectBusy(false)
+    }
+  }
+
+  return (
+    <Card className="max-w-2xl">
+      <CardBody className="flex flex-col gap-3">
+        <div>
+          <span className="text-xs font-mono text-navy uppercase tracking-wide">SkyBitz Feed Inspector</span>
+          <p className="text-[11px] font-mono text-inky/60 mt-1">
+            Pulls the live SkyBitz SFTP file directly (no DB writes) — for checking exactly what a monitor's raw
+            row says right now, or whether the file carries a column this app doesn't currently read (e.g. a true/
+            rated tank capacity distinct from "Tank Capacity", the only capacity field skybitz-tank-sync recognizes today).
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Check specific serial(s) / RTUIDs</span>
+          <div className="flex items-center gap-2">
+            <input
+              value={serialsInput}
+              onChange={(e) => setSerialsInput(e.target.value)}
+              placeholder="905219135, 905219302, …"
+              className="flex-1 bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky"
+            />
+            <Button size="sm" loading={busy} onClick={checkSerials}>Check</Button>
+          </div>
+          {lookupResult && (
+            <div className="flex flex-col gap-2 mt-1">
+              <span className="text-[10px] font-mono text-inky/60">
+                SkyBitz file last modified:{' '}
+                <strong className="text-navy">{lookupResult.file_modified_at ? new Date(lookupResult.file_modified_at).toLocaleString() : 'unknown'}</strong>
+              </span>
+              {lookupResult.matched.length === 0 ? (
+                <span className="text-[11px] font-mono text-[#C0392B]">None of these serials appear in the live file.</span>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {lookupResult.matched.map((row, i) => (
+                    <div key={i} className="text-[11px] font-mono border border-navy/15 rounded px-2 py-1.5 bg-navy/[0.03]">
+                      {Object.entries(row).map(([k, v]) => (
+                        <div key={k} className="flex gap-2"><span className="text-inky/50 w-36 truncate">{k}</span><span className="text-navy">{v ?? '—'}</span></div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-1.5 pt-2 border-t border-navy/10">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Full column list (file headers + 3 sample rows)</span>
+            <Button size="sm" variant="secondary" loading={inspectBusy} onClick={checkHeaders}>Show Headers</Button>
+          </div>
+          {inspectResult && (
+            <div className="flex flex-col gap-2">
+              <span className="text-[11px] font-mono text-navy">{inspectResult.headers.join(', ')}</span>
+              <div className="flex flex-wrap gap-2">
+                {inspectResult.sample_rows.map((row, i) => (
+                  <div key={i} className="text-[11px] font-mono border border-navy/15 rounded px-2 py-1.5 bg-navy/[0.03]">
+                    {Object.entries(row).map(([k, v]) => (
+                      <div key={k} className="flex gap-2"><span className="text-inky/50 w-36 truncate">{k}</span><span className="text-navy">{v ?? '—'}</span></div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </CardBody>
+    </Card>
   )
 }
