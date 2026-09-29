@@ -10,6 +10,7 @@ import {
   type PeriodEvalData, type DraftThresholds, type TankVarianceCandidate, type EvaluatedCount,
 } from './recountData'
 import { locationLabel } from './countsShared'
+import { baseProductId } from '@/lib/productFamily'
 import { ProductOnHandExceptionsPanel } from './ProductOnHandExceptionsPanel'
 import { ExpectedOilBalanceUpload } from './ExpectedOilBalanceUpload'
 import { TANK_VARIANCE_KEY, UNLISTED_LIMIT_KEY, DEFAULT_TANK_VARIANCE } from '@/modules/config/tabs/CategoryExpectationsTab'
@@ -114,20 +115,12 @@ const FLAG_TYPE_TO_FLAG_KEY: Record<FlagType, string> = {
   manual: 'manually_added',
 }
 
-// Same base-product-id convention as get_product_expectation_exceptions'
-// oil case-type inference: a trailing run of letters marks the case type
-// (bulk/drum/package variant), the leading part is the product family.
-function baseProductId(id: string): string {
-  const stripped = id.replace(/[A-Z]+$/i, '')
-  return stripped || id
-}
-
 // Fetches "equivalent" on-hand — other case types of the same product family
 // at the same shop/period — only when actually hovered, scoped to one
 // location via the composite index on count_products, rather than loading
 // every product's siblings up front.
 function ProductChip({
-  productId, qty, types, hidden, locationId, companyId, countMonth, onToggleHide, onAddSibling, addedProductIds,
+  productId, qty, types, hidden, locationId, companyId, countMonth, onToggleHide, onAddSibling, addedProductIds, tankInfo,
 }: {
   productId: string
   qty: number | null
@@ -137,6 +130,10 @@ function ProductChip({
   companyId: string
   countMonth: string
   onToggleHide: () => void
+  // What the tank monitor itself is reading + the signed variance vs. this
+  // product's on-hand (2026-09-28 ask) — only set for a tank-flagged chip;
+  // already computed by fetchTankVarianceCandidates, no new fetch needed.
+  tankInfo?: { tank_qts: number; diff: number }
   // Adds a sibling case type shown in the hover panel to this shop's manual
   // recount product list — undefined for a chip that shouldn't offer this
   // (there isn't one today, but keeps the prop optional rather than forcing
@@ -166,7 +163,14 @@ function ProductChip({
     for (const r of (data ?? []) as { product_id: string; on_hand: number | null }[]) {
       if (!latest.has(r.product_id)) latest.set(r.product_id, r.on_hand ?? 0)
     }
-    latest.delete(productId)
+    // Case-insensitive on purpose (2026-09-28 fix) — belt-and-suspenders
+    // alongside the casing fix in recountData.ts's fetchTankVarianceCandidates:
+    // this dedupe only worked when productId's casing exactly matched
+    // count_products' own canonical casing, which a lowercase productId
+    // (the tank-variance path's own bug, now fixed at the source) would
+    // silently defeat, showing the flagged product's own on-hand a second
+    // time as if it were a distinct sibling.
+    for (const k of [...latest.keys()]) if (k.toLowerCase() === productId.toLowerCase()) latest.delete(k)
     setEquiv([...latest.entries()].map(([product_id, on_hand]) => ({ product_id, on_hand })).sort((a, b) => a.product_id.localeCompare(b.product_id)))
     setLoading(false)
   }
@@ -188,6 +192,14 @@ function ProductChip({
           <div className="text-inky/70 mb-1">
             {hidden ? 'Hidden from this recount' : `Flagged by: ${[...types].map((t) => RECOUNT_FLAG_LABELS[FLAG_TYPE_TO_FLAG_KEY[t]]).join(', ')}`}
           </div>
+          {tankInfo && (
+            <div className="mb-1 pb-1 border-b border-navy/10">
+              Tank reads <span className="font-bold">{fmt(tankInfo.tank_qts)}</span> qt · on hand <span className="font-bold">{fmt(qty)}</span> qt
+              {' '}(<span className={tankInfo.diff >= 0 ? 'text-[#C0392B] font-bold' : 'text-[#2ECC71] font-bold'}>
+                {tankInfo.diff >= 0 ? '+' : ''}{fmt(tankInfo.diff)} qt
+              </span> variance)
+            </div>
+          )}
           <div className="text-inky/50 uppercase tracking-wide text-[9px] mb-1 pt-1 border-t border-navy/10">Other case types on hand</div>
           {loading ? (
             <span className="text-inky/50 italic">Loading…</span>
@@ -1415,17 +1427,17 @@ function RecountPreviewTable({
         {rows.map((e) => {
           const varVsPrev = e.count?.ending_inventory_cost != null && e.prev != null ? e.count.ending_inventory_cost - e.prev : null
           const isRed = varVsPrev != null && Math.abs(varVsPrev) > varianceRedThreshold
-          const productMap = new Map<string, { qty: number | null; types: Set<FlagType> }>()
-          const addProduct = (id: string, qty: number | null, type: FlagType) => {
+          const productMap = new Map<string, { qty: number | null; types: Set<FlagType>; tank?: { tank_qts: number; diff: number } }>()
+          const addProduct = (id: string, qty: number | null, type: FlagType, tank?: { tank_qts: number; diff: number }) => {
             const cur = productMap.get(id)
-            if (cur) cur.types.add(type)
-            else productMap.set(id, { qty, types: new Set([type]) })
+            if (cur) { cur.types.add(type); if (tank) cur.tank = tank }
+            else productMap.set(id, { qty, types: new Set([type]), tank })
           }
           ;(exceptionsByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'exception'))
-          ;(tankVarByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'tank'))
+          ;(tankVarByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'tank', { tank_qts: x.tank_qts, diff: x.diff }))
           ;(oilFlagsByShop.get(e.locationId ?? '') ?? []).forEach((x) => addProduct(x.product_id, x.on_hand, 'oil'))
           ;(e.locationId && manualProducts.get(e.locationId) || new Set<string>()).forEach((id) => addProduct(id, null, 'manual'))
-          const products = [...productMap.entries()].map(([id, v]) => ({ id, qty: v.qty, types: v.types }))
+          const products = [...productMap.entries()].map(([id, v]) => ({ id, qty: v.qty, types: v.types, tank: v.tank }))
           const hiddenSet = (e.locationId && hiddenProducts.get(e.locationId)) || new Set<string>()
           const inRecounts = !!e.locationId && inRecountShopIds.has(e.locationId)
           return (
@@ -1477,6 +1489,7 @@ function RecountPreviewTable({
                       onToggleHide={() => e.locationId && onToggleHide(e.locationId, p.id)}
                       onAddSibling={(pid) => e.locationId && onAddManualProduct(e.locationId, pid)}
                       addedProductIds={new Set(products.map((x) => x.id))}
+                      tankInfo={p.tank}
                     />
                   ))}
                   <button

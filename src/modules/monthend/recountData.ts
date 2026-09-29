@@ -187,20 +187,30 @@ export async function fetchTankVarianceCandidates(
   }
 
   // Latest on-hand per (location, product) for the month — snapshot, not sum.
-  const onHandByKey = new Map<string, { on_hand: number; created_at: string }>()
+  // Keeps the ORIGINAL-cased product_id (2026-09-28 fix, found live: the
+  // recount preview's pill/tooltip was showing a lowercase id like
+  // "syn-5w30" instead of the canonical "SYN-5W30") — the map KEY is
+  // lowercased purely for case-insensitive matching against the tank
+  // reading's own resolved id, but the candidate's own product_id should
+  // always be the real, canonically-cased value count_products stores, the
+  // same one every other consumer of this id (ProductChip's own sibling
+  // lookup, the Add Product picker, etc.) expects.
+  const onHandByKey = new Map<string, { on_hand: number; created_at: string; product_id: string }>()
   for (const c of (cpRes.data ?? []) as any[]) {
     if (!c.location_id) continue
     const key = `${c.location_id}|${String(c.product_id).toLowerCase()}`
     const ex = onHandByKey.get(key)
-    if (!ex || new Date(c.created_at) > new Date(ex.created_at)) onHandByKey.set(key, { on_hand: Number(c.on_hand ?? 0), created_at: c.created_at })
+    if (!ex || new Date(c.created_at) > new Date(ex.created_at)) {
+      onHandByKey.set(key, { on_hand: Number(c.on_hand ?? 0), created_at: c.created_at, product_id: c.product_id })
+    }
   }
 
   const out: TankVarianceCandidate[] = []
   for (const [key, tank] of tankByKey) {
     const oh = onHandByKey.get(key)
     if (!oh) continue
-    const [location_id, product_id] = key.split('|')
-    out.push({ location_id, product_id, tank_qts: tank.qts, on_hand: oh.on_hand, diff: tank.qts - oh.on_hand })
+    const location_id = key.split('|')[0]
+    out.push({ location_id, product_id: oh.product_id, tank_qts: tank.qts, on_hand: oh.on_hand, diff: tank.qts - oh.on_hand })
   }
   return out
 }
