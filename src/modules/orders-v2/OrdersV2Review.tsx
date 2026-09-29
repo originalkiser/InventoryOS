@@ -1076,6 +1076,12 @@ export function OrdersV2Review() {
                 const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
                 const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
                 const belowMin = l.included && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false
+                // Whole-row treatment (not just the small Flags badge) per
+                // direct ask 2026-09-29 — a line the engine let exceed its
+                // configured capacity to reach the DOS target needs to read
+                // as "look at this" at a glance, not just as one badge among
+                // several in a narrow column.
+                const overCapacity = (l.flags ?? []).includes('exceeded_capacity_for_dos_target' as LineFlag)
                 const onHandAfter = onHandAfterAtDelivery(l)
                 const cellFor = (id: string): React.ReactNode => {
                   switch (id) {
@@ -1095,10 +1101,16 @@ export function OrdersV2Review() {
                     case 'capacity': return <Td key={id} align="right">{num(isOz ? toOz(l.max_capacity_gallons) : l.max_capacity_gallons, 0)}</Td>
                     case 'on_hand': return (
                       <td key={id} className="px-2 py-1 text-right text-navy whitespace-nowrap">
-                        {num(isOz ? toOz(input?.own_on_hand ?? l.on_hand) : (input?.own_on_hand ?? l.on_hand))}
+                        {/* l.on_hand is already the combined family total the
+                            engine actually used — showing input.own_on_hand
+                            here instead made a shop reader do the addition
+                            themselves against the "Combining On Hands"
+                            breakdown below to get the real figure. */}
+                        {num(isOz ? toOz(l.on_hand) : l.on_hand)}
                         {input?.equivalent_products && input.equivalent_products.length > 0 && (
                           <div className="text-[9px] text-inky/50 leading-tight font-normal">
                             <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
+                            <div>{l.product_id}: {num(input.own_on_hand)}</div>
                             {input.equivalent_products.map((e) => (
                               <div key={e.product_id}>{e.product_id}: {num(e.on_hand)}</div>
                             ))}
@@ -1195,7 +1207,7 @@ export function OrdersV2Review() {
                 }
                 return (
                   <Fragment key={l.id}>
-                    <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${belowMin ? 'bg-[#C0392B]/10' : bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
+                    <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${belowMin ? 'bg-[#C0392B]/10' : overCapacity ? 'bg-[#E67E22]/15' : bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
                       {visibleColumnIds.map(cellFor)}
                     </tr>
                     {isLastOfShop && shopOpen && (
@@ -1491,10 +1503,14 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
       <td className="text-inky/70">{uom ?? '—'}</td>
       <td className="text-inky/70">{num(isOz ? toOz(capacity) : capacity, 0)}</td>
       <td className="text-inky/70">
-        {num(isOz ? toOz(input?.own_on_hand ?? onHand) : (input?.own_on_hand ?? onHand))}
+        {/* onHand is already the combined family total — see OrdersV2Review's
+            own main-table "on_hand" cell comment on why this shouldn't show
+            own_on_hand as the primary figure. */}
+        {num(isOz ? toOz(onHand) : onHand)}
         {input?.equivalent_products && input.equivalent_products.length > 0 && (
           <div className="text-[9px] text-inky/50 leading-tight font-normal">
             <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
+            <div>{productId}: {num(input.own_on_hand)}</div>
             {input.equivalent_products.map((e) => (
               <div key={e.product_id}>{e.product_id}: {num(e.on_hand)}</div>
             ))}

@@ -113,10 +113,13 @@ export function OrdersV2ReviewTable({
         const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
         return (
           <div className="text-right">
-            {num(isOz ? toOz(input?.own_on_hand ?? l.on_hand) : (input?.own_on_hand ?? l.on_hand))}
+            {/* l.on_hand is already the combined family total — see
+                OrdersV2Review's own "on_hand" cell comment. */}
+            {num(isOz ? toOz(l.on_hand) : l.on_hand)}
             {input?.equivalent_products && input.equivalent_products.length > 0 && (
               <div className="text-[9px] text-inky/50 leading-tight font-normal text-left">
                 <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
+                <div>{l.product_id}: {num(input.own_on_hand)}</div>
                 {input.equivalent_products.map((e) => <div key={e.product_id}>{e.product_id}: {num(e.on_hand)}</div>)}
               </div>
             )}
@@ -316,7 +319,21 @@ export function OrdersV2ReviewTable({
           if (!l.included) return 'bg-[#E4E4DC] dark:bg-[#16222E]'
           const belowMin = groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false
           if (belowMin) return 'bg-[#F4DBD4] dark:bg-[#3A1F1C]'
-          return bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : ''
+          // Whole-row treatment for a line the engine let exceed its
+          // configured capacity to reach the DOS target — see
+          // OrdersV2Review's own `overCapacity` comment, same flag.
+          if ((l.flags ?? []).includes('exceeded_capacity_for_dos_target' as LineFlag)) return 'bg-[#E67E22]/15'
+          // DataTable's own zebra stripe only kicks in when this returns an
+          // EMPTY string (its own default-stripe fallback, meant for a
+          // caller with no opinion on some rows) — this caller always has
+          // an opinion (which shop-group band a row belongs to), so the
+          // "off" band needs its own explicit class too. Returning '' here
+          // used to fall through to DataTable's plain per-ROW alternation
+          // for every "off" shop group, mixing a second, unrelated striping
+          // pattern in on top of the per-shop bands and making a multi-
+          // product shop's own rows look like they were striped row by row
+          // instead of banded as one group.
+          return bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : 'bg-cream'
         }}
         expandedRowRender={(l) => {
           const locId = l.location_id ?? ''
