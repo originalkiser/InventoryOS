@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Droplet, Plus, Trash2, Upload } from 'lucide-react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { Button, Combobox, Input, Modal, MultiSelectDropdown, SbLoader, Select, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
+import { Button, Input, Modal, MultiSelectDropdown, SbLoader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { useTable } from '@/hooks/useTable'
@@ -13,7 +13,9 @@ import { useHistoryIdsByDraft } from './useOrderHistory'
 import { useRdReports } from './useRdReports'
 import { RdReportsTab } from './RdReportsTab'
 import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
+import { ProductsOrderedTab } from './ProductsOrderedTab'
 import { useVendors, useUserNames } from './useLookups'
+import { SegmentedSlider } from './controls'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 import type { DraftStatus } from './types'
 
@@ -64,12 +66,19 @@ export function OrdersV2Landing() {
 
   const [startOpen, setStartOpen] = useState(false)
   const [vendorId, setVendorId] = useState('')
+  // A SegmentedSlider always highlights SOME option (unlike a dropdown, it
+  // has no blank/placeholder state) — defaults to the first vendor rather
+  // than showing a slider with nothing selected. vendorId itself stays ''
+  // until the user actually touches it; every read below goes through this
+  // instead, same "sensible default, not blank" idea as orderDow already
+  // defaulting to today's weekday.
+  const effectiveVendorId = vendorId || vendors.options[0]?.value || ''
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10))
   // Which weekday's shops to pull in. Defaults to the order date's own
   // weekday, but can be pointed elsewhere without moving the order date.
   const [orderDow, setOrderDow] = useState<number>(() => new Date().getDay())
   const [starting, setStarting] = useState(false)
-  const coverage = useOrderDayCoverage(vendors.byId(vendorId || null)?.name)
+  const coverage = useOrderDayCoverage(vendors.byId(effectiveVendorId || null)?.name)
   // Ad hoc: order a vendor for an explicit, manually-picked set of shops
   // instead of the vendor's regular order-day schedule (or "every shop" for
   // a vendor with no schedule at all) — for a one-off run limited to
@@ -85,7 +94,7 @@ export function OrdersV2Landing() {
   // Target Days of Supply / Lead Time replace the per-shop config Mighty
   // shops don't have — set once for the whole order, editable later from
   // the draft itself.
-  const isMighty = vendors.isMighty(vendorId)
+  const isMighty = vendors.isMighty(effectiveVendorId)
   const [mightyTargetDays, setMightyTargetDays] = useState(21)
   const [mightyLeadTimeDays, setMightyLeadTimeDays] = useState(3)
 
@@ -109,7 +118,7 @@ export function OrdersV2Landing() {
     const useAdHoc = adHoc || isMighty
     const adHocIds = useAdHoc ? adHocShops.map((l) => shopLabelToId.get(l)).filter((v): v is string => !!v) : null
     const mightyOptions = isMighty ? { targetDays: mightyTargetDays, leadTimeDays: mightyLeadTimeDays } : null
-    const id = await createDraft(vendorId || null, orderDate, settings, orderDow, adHocIds, mightyOptions)
+    const id = await createDraft(effectiveVendorId || null, orderDate, settings, orderDow, adHocIds, mightyOptions)
     setStarting(false)
     if (id) { setStartOpen(false); navigate(`/orders-v2/draft/${id}`) }
   }
@@ -197,6 +206,7 @@ export function OrdersV2Landing() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <TabsList>
             <TabsTrigger value="orders">Orders ({drafts.length})</TabsTrigger>
+            <TabsTrigger value="products_ordered">Products Ordered</TabsTrigger>
             <TabsTrigger value="rd_reports">RD Reports</TabsTrigger>
             <TabsTrigger value="valvoline_db">Valvoline Order Database</TabsTrigger>
           </TabsList>
@@ -225,6 +235,10 @@ export function OrdersV2Landing() {
             )}
         </TabsContent>
 
+        <TabsContent value="products_ordered">
+          <ProductsOrderedTab />
+        </TabsContent>
+
         <TabsContent value="rd_reports">
           <RdReportsTab />
         </TabsContent>
@@ -234,9 +248,16 @@ export function OrdersV2Landing() {
         </TabsContent>
       </Tabs>
 
-      <Modal open={startOpen} onClose={() => setStartOpen(false)} title="Start New Order" size="sm">
+      <Modal open={startOpen} onClose={() => setStartOpen(false)} title="Start New Order" size="lg">
         <div className="flex flex-col gap-3">
-          <Combobox label="Vendor" options={vendors.options} value={vendorId} onChange={setVendorId} placeholder="Select vendor…" />
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[11px] font-mono text-inky/60">Vendor</span>
+            <SegmentedSlider
+              value={effectiveVendorId}
+              onChange={setVendorId}
+              options={vendors.options.map((o) => ({ value: o.value, label: o.label }))}
+            />
+          </label>
           <Input label="Order Date" type="date" value={orderDate} onChange={(e) => pickDate(e.target.value)} />
 
           {!isMighty && (
@@ -278,9 +299,17 @@ export function OrdersV2Landing() {
             </>
           ) : coverage.applies ? (
             <>
-              <Select label="Order day (which shops to include)" value={String(orderDow)}
-                onChange={(e) => setOrderDow(Number(e.target.value))}
-                options={DOW.map((d, i) => ({ value: String(i), label: `${d} — ${coverage.counts[i]} shop${coverage.counts[i] !== 1 ? 's' : ''}` }))} />
+              {/* Mon-Fri sliding picker, same component/animation as the DOS
+                  Targets box's own order-day slider (Review page) — direct
+                  ask 2026-09-29. Business orders don't run Sun/Sat. */}
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[11px] font-mono text-inky/60">Order day (which shops to include)</span>
+                <SegmentedSlider
+                  value={String(orderDow >= 1 && orderDow <= 5 ? orderDow : 1)}
+                  onChange={(v) => setOrderDow(Number(v))}
+                  options={[1, 2, 3, 4, 5].map((i) => ({ value: String(i), label: `${DOW[i].slice(0, 3)} (${coverage.counts[i]})` }))}
+                />
+              </label>
               {coverage.counts[orderDow] === 0 ? (
                 <p className="text-[11px] font-mono text-[#C0392B]">
                   No shops order on {DOW[orderDow]}. Pick a day with shops on it, or check the Reladyne Delivery Day

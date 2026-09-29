@@ -251,3 +251,74 @@ export async function markDraftComplete(
 
   return orderId
 }
+
+// Advances by the ACTUAL rows returned, not a fixed page size — the
+// project's API "Max Rows" setting can silently cap a response below PAGE
+// regardless of the requested range, which has bitten this exact
+// fetch-every-page shape more than once elsewhere in this module (see
+// useValvolineOrderDatabase.ts's own header comment on the same bug).
+async function fetchAllHistoryRows<T>(table: string, companyId: string, select: string, orderCol: string): Promise<T[]> {
+  const out: T[] = []
+  let from = 0
+  for (;;) {
+    const { data, error } = await sb().schema('inventory').from(table).select(select).eq('company_id', companyId)
+      .order(orderCol, { ascending: false }).range(from, from + PAGE - 1)
+    if (error) throw error
+    const batch = (data ?? []) as T[]
+    out.push(...batch)
+    if (batch.length === 0) break
+    from += batch.length
+  }
+  return out
+}
+
+export interface OrderHistoryLineRow {
+  id: string
+  order_id: string
+  location_id: string | null
+  vendor_id: string | null
+  order_date: string
+  po_number: string | null
+  product_id: string
+  order_type: OrderType
+  uom: string | null
+  qty: number
+  unit_cost: number | null
+  line_total: number | null
+}
+
+/**
+ * Every completed order line across every vendor, flattened — "products
+ * ordered by date and shop" (direct ask 2026-09-29), the general-purpose
+ * counterpart to the Valvoline-only order database. ov2_order_history_lines
+ * itself doesn't carry vendor_id/order_date (those live on the header row),
+ * so this joins them client-side, same convention as useDraftAggregates'
+ * own draft_id -> aggregate map.
+ */
+export function useAllOrderHistoryLines() {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const [rows, setRows] = useState<OrderHistoryLineRow[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    if (!companyId) { setLoading(false); return }
+    setLoading(true)
+    const [headers, lines] = await Promise.all([
+      fetchAllHistoryRows<{ id: string; vendor_id: string | null; order_date: string }>(
+        'ov2_order_history', companyId, 'id, vendor_id, order_date', 'order_date'),
+      fetchAllHistoryRows<Omit<OrderHistoryLineRow, 'vendor_id' | 'order_date'>>(
+        'ov2_order_history_lines', companyId,
+        'id, order_id, location_id, po_number, product_id, order_type, uom, qty, unit_cost, line_total', 'id'),
+    ])
+    const headerById = new Map(headers.map((h) => [h.id, h]))
+    setRows(lines.map((l) => {
+      const h = headerById.get(l.order_id)
+      return { ...l, vendor_id: h?.vendor_id ?? null, order_date: h?.order_date ?? '' }
+    }))
+    setLoading(false)
+  }, [companyId])
+  useEffect(() => { load() }, [load])
+
+  return { rows, loading, reload: load }
+}
