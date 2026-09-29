@@ -4,6 +4,7 @@ import { Button, Card, CardBody, Input, SbLoader, Select, Toggle } from '@/compo
 import { useOrderSettings } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { VendorRulesCard } from './VendorRulesCard'
+import { VendorPartRulesCard } from './VendorPartRulesCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
 
@@ -155,6 +156,7 @@ export function OrdersV2SettingsBody() {
       </div>
 
       <VendorRulesCard />
+      <VendorPartRulesCard />
       <OrderDaysCard />
       <DeliverySchedulesCard />
     </div>

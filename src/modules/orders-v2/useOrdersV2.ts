@@ -544,6 +544,14 @@ export interface VendorPartRow {
   // buildGenerationInputs' min_on_hand_qty resolution). Optional: existing
   // callers/tests that build a VendorPartRow without it still compile.
   min_on_hand_qty?: number | null
+  // "Order alone" exception (see buildGenerationInputs' own comment on this
+  // pair below) — can_ignore_minimum permits this product to skip the
+  // group's $/unit minimum entirely when it's the SOLE line on an order;
+  // default_order_amount_if_alone is the real-world quantity to order in
+  // that case (order units — cases/bay-boxes/drums, same unit as qty, not
+  // quarts), e.g. 2 cases for HM0806.
+  can_ignore_minimum?: boolean | null
+  default_order_amount_if_alone?: number | null
   // description/part_number added for the tank-monitor product-name match
   // below (buildGenerationInputs' tankOnHandMap) — same automatic
   // description/part_number -> our_part_number match LocationLookupPage.tsx
@@ -688,7 +696,7 @@ export function useGenerationData() {
       // already lists every product in practice (populated via the
       // per-vendor file upload), so entering it there doesn't require
       // first creating a global_products row for every product.
-      step(fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata, description, part_number, min_on_hand_qty', companyId)),
+      step(fetchAll<VendorPartRow>('inventory', 'vendor_parts', 'vendor_id, our_part_number, unit_of_measure, metadata, description, part_number, min_on_hand_qty, can_ignore_minimum, default_order_amount_if_alone', companyId)),
       step(fetchAll<UomMappingRow>('inventory', 'uom_mappings', 'vendor_id, from_unit, to_unit, factor, order_type', companyId)),
       // Most products report on-hand/usage in quarts already; a product
       // whose global_products.unit_of_measure says otherwise (e.g. HM0806
@@ -1088,6 +1096,17 @@ export function buildGenerationInputs(
     // individual_minimum on this same table pair.
     if (rule.min_on_hand_qty == null) {
       rule.min_on_hand_qty = vp?.min_on_hand_qty ?? minOnHandMap.get(pkey(c.product_id)) ?? null
+    }
+    // "Order alone" exception (see VendorPartRow's own comment) — only
+    // applied when no real per-shop ov2_product_rules override exists for
+    // this exact (location, product) pair (`r` — that table is currently
+    // empty/unused company-wide, but a future per-shop row should still be
+    // able to win over this company-wide vendor_parts default, including
+    // explicitly opting a specific shop OUT).
+    if (!r && vp?.can_ignore_minimum) {
+      rule.can_ignore_minimum = true
+      rule.ignore_minimum_if_ordered_alone = true
+      if (vp.default_order_amount_if_alone != null) rule.default_order_amount_if_alone = Number(vp.default_order_amount_if_alone)
     }
     if (rule.order_type_override == null && vp) {
       rule.order_type_override = orderTypeForUom(vp.vendor_id ?? c.vendor_id, vp.unit_of_measure)
