@@ -14,7 +14,7 @@
 // conditional formatting keep working" true by construction: the values
 // and classNames it renders are computed by the exact same functions the
 // old table already calls, not a reimplementation.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { ChevronDown, ChevronRight, Pencil, Plus } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
@@ -30,6 +30,45 @@ import type { GenerationInput, LineFlag } from './types'
 
 const TABLE_KEY = 'orders-v2.review-lines'
 const DEFAULT_PINNED = ['shop']
+
+// Real bug found live 2026-09-29: the qty input used to be a plain
+// `value={l.qty}` controlled field rendered inline inside the column's
+// `cell` function — every keystroke's onChange called patchQty, which
+// updates OrdersV2Review's own `lines` state and re-renders this whole
+// table; on THAT re-render `l.qty` (now a plain number, not the exact
+// string just typed) got written straight back into `value`, which can
+// clobber a not-yet-finished edit (e.g. typing "0." → Number("0.") is 0 →
+// value snaps back to "0", eating the trailing decimal) and read as "only
+// one digit sticks, have to click back in" for a table only ever used by
+// beta testers. Same fix this app already uses for the identical class of
+// bug (Procurement Deck's DecimalMiniInput): own local text state that
+// only resyncs from `line.qty` when it changed for a reason OTHER than
+// this input's own last commit, never from the re-render its own onChange
+// just caused. Also gives this cell a genuinely stable component identity
+// at its render position (a real named component, not a value returned
+// from a plain function DataTable calls per cell) — not required for React
+// to preserve the underlying DOM/focus, but the more foolproof shape for
+// exactly this kind of "loses text in this exact spot" report.
+function QtyInput({ line, onPatch }: { line: DraftLineRow; onPatch: (l: DraftLineRow, qty: number) => void }) {
+  const [text, setText] = useState(() => String(line.qty))
+  const lastCommittedRef = useRef<number>(Number(line.qty))
+  useEffect(() => {
+    if (Number(line.qty) !== lastCommittedRef.current) {
+      setText(String(line.qty))
+      lastCommittedRef.current = Number(line.qty)
+    }
+  }, [line.qty])
+  return (
+    <input type="number" min={0} step={line.uom === 'bulk' ? 0.1 : 1} value={text}
+      onChange={(e) => {
+        setText(e.target.value)
+        const n = Number(e.target.value) || 0
+        lastCommittedRef.current = n
+        onPatch(line, n)
+      }}
+      className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+  )
+}
 
 export function OrdersV2ReviewTable({
   lines, draft, shopLabel, ozProductIds, lastOrderedInfo, deliveryFor, describeSchedule,
@@ -175,7 +214,7 @@ export function OrdersV2ReviewTable({
       },
     }),
     col.accessor('qty', {
-      id: 'qty', header: 'Qty', meta: { noClip: true },
+      id: 'qty', header: 'Qty', meta: { noClip: true }, enableSorting: false,
       cell: (i) => {
         const l = i.row.original
         const isOz = ozProductIds.has(l.product_id)
@@ -183,9 +222,7 @@ export function OrdersV2ReviewTable({
           <div className={l.is_override ? OVERRIDE_CELL : ''}>
             <div className="flex items-start justify-end gap-1">
               <div>
-                <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
-                  onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
-                  className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
+                <QtyInput line={l} onPatch={patchQty} />
                 {l.quarts_per_unit != null && (
                   <div className="text-[10px] text-inky/50 mt-0.5">
                     {isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}

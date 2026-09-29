@@ -251,6 +251,17 @@ export function OrdersV2Review() {
   const isAdHoc = draft ? !!draftAdHocLocationIds(draft) : false
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [movingToFinal, setMovingToFinal] = useState(false)
+  // Real bug found live 2026-09-29: this page sits behind KeepAlivePages
+  // (see the usePageRevisit(reload) call above) — clicking "Final Review →"
+  // sets movingToFinal true and navigates away, but since this component
+  // never unmounts (just hidden in the background), that state was NEVER
+  // reset back to false. Coming back to Review later (a cache hit, same
+  // component instance) showed the button permanently stuck in its loading
+  // state, clickable only by using the step circles at the top instead.
+  // Resetting it the moment this page becomes visible again fixes it —
+  // by then the navigation this loading state was ever protecting against
+  // has long since happened, so there's nothing left to guard.
+  usePageRevisit(() => setMovingToFinal(false))
   // Per-order DOS target/trigger/max — seeded from the real company settings
   // once they load, then edited freely without ever writing back to them
   // ("does not automatically update the settings", per request). Only
