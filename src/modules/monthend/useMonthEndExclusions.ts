@@ -38,5 +38,17 @@ export function useMonthEndExclusions() {
     setExclusions(reason ? [...rest, { location_id: locationId, reason }] : rest)
   }, [exclusions, setExclusions])
 
-  return { exclusions, setReason, overviewExcludedIds, everywhereExcludedIds, loaded }
+  // Bulk variant (2026-09-28 ask — filter by AM/region, multi-select, apply
+  // once instead of one-by-one). A real, separate function rather than N
+  // sequential setReason() calls: each of those reads the same `exclusions`
+  // closure and calls save() independently, so rapid-fire calls would each
+  // overwrite the previous one's still-in-flight save with a stale base
+  // array — this does the whole set replacement in one save() call.
+  const setReasonBulk = useCallback((locationIds: string[], reason: MonthEndExclusionReason | null) => {
+    const idSet = new Set(locationIds)
+    const rest = exclusions.filter((e) => !idSet.has(e.location_id))
+    setExclusions(reason ? [...rest, ...locationIds.map((id) => ({ location_id: id, reason }))] : rest)
+  }, [exclusions, setExclusions])
+
+  return { exclusions, setReason, setReasonBulk, overviewExcludedIds, everywhereExcludedIds, loaded }
 }
