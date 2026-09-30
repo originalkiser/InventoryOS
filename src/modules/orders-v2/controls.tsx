@@ -1,6 +1,48 @@
 // Small reusable interactive controls shared across Orders v2's pages —
 // split out from shared.ts (a plain .ts file, no JSX) rather than renaming
 // it, since a .ts and .tsx file can't coexist under the same base name.
+import { useEffect, useRef, useState } from 'react'
+
+/**
+ * Wraps content whose SHAPE changes (a conditional block that swaps which
+ * fields/text are shown, not just a value inside a fixed layout) so a
+ * height change animates smoothly instead of popping instantly — direct ask
+ * 2026-09-30, Start New Order's fields below Order Date jumping abruptly as
+ * the vendor toggle changed which block of fields/text renders below it.
+ *
+ * A ResizeObserver on the inner (real-content) div drives an animated
+ * `height` on the outer (clipping) div — this reacts to ANY height change
+ * of its children, not just a vendor switch, so it also smooths out
+ * secondary changes (e.g. the shop-count message changing length) without
+ * needing a "this is a vendor switch" signal threaded in. The FIRST
+ * measurement (on mount) sets height directly with no transition, so the
+ * modal doesn't animate open from nothing — only later resizes animate.
+ */
+export function AnimatedHeight({ children, className }: { children: React.ReactNode; className?: string }) {
+  const innerRef = useRef<HTMLDivElement>(null)
+  const [height, setHeight] = useState<number | null>(null)
+  const firstMeasure = useRef(true)
+  useEffect(() => {
+    const el = innerRef.current
+    if (!el) return
+    const measure = () => {
+      firstMeasure.current = false
+      setHeight(el.scrollHeight)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return (
+    <div
+      className={className}
+      style={{ height: height ?? undefined, overflow: 'hidden', transition: firstMeasure.current ? undefined : 'height 280ms ease' }}
+    >
+      <div ref={innerRef}>{children}</div>
+    </div>
+  )
+}
 
 /**
  * A toggle that reads as a button, not a switch — the label itself changes

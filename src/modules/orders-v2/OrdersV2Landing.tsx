@@ -16,7 +16,7 @@ import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
 import { ProductsOrderedTab } from './ProductsOrderedTab'
 import { OrderStatsModal } from './OrderStatsModal'
 import { useVendors, useUserNames } from './useLookups'
-import { SegmentedSlider } from './controls'
+import { SegmentedSlider, AnimatedHeight } from './controls'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 import type { DraftStatus } from './types'
 
@@ -280,6 +280,13 @@ export function OrdersV2Landing() {
           </label>
           <Input label="Order Date" type="date" value={orderDate} onChange={(e) => pickDate(e.target.value)} />
 
+          {/* Direct ask 2026-09-30: everything below Order Date pops in
+              abruptly as the vendor toggle changes which fields/text
+              render — AnimatedHeight smooths the resize into a calm slide
+              instead of an instant layout jump, and reacts to ANY height
+              change here (not just a vendor switch), so the shop-count
+              message swapping length etc. is smoothed too. */}
+          <AnimatedHeight className="flex flex-col gap-3">
           {!isMighty && (
             <label className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
               <input type="checkbox" checked={adHoc} onChange={(e) => setAdHoc(e.target.checked)} className="accent-inky" />
@@ -347,6 +354,7 @@ export function OrdersV2Landing() {
               This vendor has no order-day restriction, so every shop with configured products is considered.
             </p>
           )}
+          </AnimatedHeight>
 
           <p className="text-[11px] font-mono text-inky/60">
             The draft is saved immediately, so you can leave and resume it from this page.
