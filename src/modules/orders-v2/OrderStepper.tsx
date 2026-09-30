@@ -29,6 +29,13 @@ export function OrderStepper({ draftId, current }: { draftId: string; current: O
 
   return (
     <div className="flex justify-center">
+      {/* Direct ask 2026-09-30: equal spacing between the connecting lines
+          regardless of label text width — each step used to be a flex-1
+          column sized by its OWN content (so "Final Review" claimed more
+          width than "Export"), which pushed the lines between them
+          unevenly. A fixed width per step (independent of label length)
+          makes the flex-1 lines between them mathematically equal by
+          construction, since the flanking columns are now identical. */}
       <div className="flex items-center gap-2 py-1 w-full max-w-md">
         {STEPS.map((step, i) => {
           const isCurrent = step.key === current
@@ -37,7 +44,7 @@ export function OrderStepper({ draftId, current }: { draftId: string; current: O
             <div key={step.key} className="flex items-center gap-2 flex-1 last:flex-none">
               <button
                 onClick={() => navigate(step.path(draftId))}
-                className="flex flex-col items-center gap-1 flex-shrink-0 group"
+                className="flex flex-col items-center gap-1 w-[72px] flex-shrink-0 group"
               >
                 <span className={[
                   'w-7 h-7 rounded-full flex items-center justify-center text-xs font-heading font-bold transition-all',

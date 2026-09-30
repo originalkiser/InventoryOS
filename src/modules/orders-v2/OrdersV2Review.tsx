@@ -24,7 +24,7 @@ import {
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
-import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty, dShort } from './shared'
+import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
 import { uomDisplayLabel } from './types'
 import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalendar } from './types'
@@ -102,7 +102,7 @@ export function OrdersV2Review() {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const vendors = useVendors()
-  const { settings, loading: settingsLoading } = useOrderSettings()
+  const { settings, loading: settingsLoading, save: saveOrderSettings } = useOrderSettings()
   const { rulesFor } = useVendorRules()
   const { fetchInputs } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
@@ -289,6 +289,27 @@ export function OrdersV2Review() {
     () => (dosOverride ? { ...settings, days_of_supply_target: dosOverride.target, days_of_supply_min_trigger: dosOverride.trigger, days_of_supply_max: dosOverride.max } : settings),
     [settings, dosOverride],
   )
+  // Direct ask 2026-09-30: show the three DOS fields in orange the moment
+  // they diverge from the company's saved Order Settings default, with a
+  // "Save as Default" action that actually persists them back — separate
+  // from Regenerate, which only ever affects THIS order.
+  const dosOverrideIsEdited = !!dosOverride && (
+    dosOverride.target !== settings.days_of_supply_target ||
+    dosOverride.trigger !== settings.days_of_supply_min_trigger ||
+    dosOverride.max !== settings.days_of_supply_max
+  )
+  const [savingDosDefault, setSavingDosDefault] = useState(false)
+  const saveDosAsDefault = useCallback(async () => {
+    if (!dosOverride) return
+    setSavingDosDefault(true)
+    await saveOrderSettings({
+      ...settings,
+      days_of_supply_target: dosOverride.target,
+      days_of_supply_min_trigger: dosOverride.trigger,
+      days_of_supply_max: dosOverride.max,
+    })
+    setSavingDosDefault(false)
+  }, [dosOverride, settings, saveOrderSettings])
 
   const shopLabel = useCallback(
     (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
@@ -833,6 +854,14 @@ export function OrdersV2Review() {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Direct ask 2026-09-30: nav row + step bar stay pinned at the top
+          of the page regardless of scroll position or which step you're
+          on — sticky relative to the page's own scrolling container
+          (AppShell's main content area), not the full browser viewport,
+          so TopBar/Sidebar chrome is unaffected. "← Orders v2" already
+          lived here; Final Review/Export get their own copy of this same
+          block below. */}
+      <div className="sticky top-0 z-20 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
       {/* Back button + page-level actions live above the step bar (direct
           ask 2026-09-29) — the step bar itself is centered below, and the
           page's own title/subtext moved further down, past the DOS-targets
@@ -881,6 +910,7 @@ export function OrdersV2Review() {
       </div>
 
       <OrderStepper draftId={draft.id} current="review" />
+      </div>
 
       {/* Product Exceptions moved into Order Settings (direct ask
           2026-09-29) — no longer its own button/modal here. */}
@@ -914,76 +944,35 @@ export function OrdersV2Review() {
         />
       )}
 
-      {dosOverride && (
-        <Card><CardBody className="flex items-center gap-4 flex-wrap py-3">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">DOS Targets</span>
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-mono text-inky/50">Target</span>
-            <input type="number" min={0} value={dosOverride.target}
-              onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
-              className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-          </label>
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-mono text-inky/50">Min trigger</span>
-            <input type="number" min={0} value={dosOverride.trigger}
-              onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
-              className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-          </label>
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-mono text-inky/50">Max</span>
-            <input type="number" min={0} value={dosOverride.max}
-              onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
-              className="w-20 bg-transparent border border-navy/25 rounded px-1.5 py-1 text-xs font-mono text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-          </label>
-          {/* Order day moved in here from its own bar below (direct ask
-              2026-09-29) — a sliding Mon-Fri picker instead of a dropdown. */}
-          {usesOrderDays && !isAdHoc && (
-            <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-mono text-inky/50">Order day</span>
-              <SegmentedSlider
-                value={String(orderDow)}
-                onChange={(v) => void runGeneration(Number(v))}
-                options={[1, 2, 3, 4, 5].map((i) => ({
-                  value: String(i),
-                  label: `${DOW[i].slice(0, 3)}${dayCounts[i] ? ` (${dayCounts[i]})` : ''}`,
-                }))}
-              />
-            </label>
-          )}
-          <p className="text-[10px] font-mono text-inky/50 max-w-xs">
-            Adjusts this order only — never saved to Order Settings.
-            <span className="inline-flex items-center gap-1 ml-1">
-              <span className="text-[#C0392B]">■</span> under target
-              <span className="text-[#2ECC71]">■</span> at target
-              <span className="text-[#E67E22]">■</span> over max
-            </span>
+      {/* Title + subtext, with Regenerate inline next to the heading
+          (direct ask 2026-09-30 — it used to live inside the DOS Targets
+          card, which is now folded into the toolbar below). */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
+          <p className="text-xs text-inky mt-0.5">
+            {vendorName} · {draft.order_date}{isAdHoc ? ' · Ad hoc' : (usesOrderDays ? ` · ${DOW[orderDow]} shops` : '')} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
           </p>
-          {needsRegenerate && (
-            <p className="text-[10px] font-mono text-[#E67E22] font-bold ml-auto">
-              Changes require regenerating order for accuracy
-            </p>
-          )}
-          <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}
-            className={needsRegenerate ? 'ring-2 ring-[#E67E22] ring-offset-2 ring-offset-cream animate-pulse' : 'ml-auto'}>
-            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
-          </Button>
-        </CardBody></Card>
-      )}
-
-      {/* Title + subtext, moved below the DOS targets/day/regenerate bar
-          per direct ask 2026-09-29. */}
-      <div>
-        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
-        <p className="text-xs text-inky mt-0.5">
-          {vendorName} · {draft.order_date}{isAdHoc ? ' · Ad hoc' : (usesOrderDays ? ` · ${DOW[orderDow]} shops` : '')} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
-        </p>
+        </div>
+        {dosOverride && (
+          <div className="flex items-center gap-2">
+            {needsRegenerate && (
+              <p className="text-[10px] font-mono text-[#E67E22] font-bold">
+                Changes require regenerating order for accuracy
+              </p>
+            )}
+            <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}
+              className={needsRegenerate ? 'ring-2 ring-[#E67E22] ring-offset-2 ring-offset-cream animate-pulse' : ''}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
+            </Button>
+          </div>
+        )}
       </div>
 
-      {/* Compact toolbar directly over the table — shrunk to just the
-          controls that stayed here once Order Day moved into the DOS-
-          targets bar and VMI/over-capacity became toggle-buttons (direct
-          ask 2026-09-29: fit alongside Search/Export/Manage Columns rather
-          than needing its own wide row). */}
+      {/* Compact toolbar directly over the table. DOS targets and the Add
+          Non-Configured Product button now live here too (direct ask
+          2026-09-30), right-aligned alongside Manage/Customize Columns
+          instead of in their own separate rows. */}
       <Card><CardBody className="flex items-center gap-2 flex-wrap py-2">
         {/* The new table has its own built-in search + Manage Columns
             (DataTable's own toolbar) — shown here only for the old table to
@@ -1010,18 +999,66 @@ export function OrdersV2Review() {
             <Settings className="w-3 h-3" /> Customize Columns
           </button>
         )}
-        {/* Shop/line/qty counts moved here next to Order Total (direct ask
-            2026-09-29) — used to sit in this same bar next to Order Day. */}
-        <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy flex-wrap">
+        <div className="ml-auto flex items-center gap-3 flex-wrap">
+          {/* DOS targets box, folded in from its own separate card (direct
+              ask 2026-09-30) — no more title callout, relabeled, and every
+              input goes orange the instant it diverges from the saved
+              Order Settings default, with a Save as Default action that
+              actually persists it (distinct from Regenerate above, which
+              only ever affects this one order). */}
+          {dosOverride && (
+            <div className="flex items-center gap-2 border border-navy/15 rounded px-2 py-1">
+              <label className="flex flex-col gap-0.5">
+                <span className={`text-[9px] font-mono ${dosOverride.target !== settings.days_of_supply_target ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Target</span>
+                <input type="number" min={0} value={dosOverride.target}
+                  onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
+                  className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.target !== settings.days_of_supply_target ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className={`text-[9px] font-mono ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Min Trigger</span>
+                <input type="number" min={0} value={dosOverride.trigger}
+                  onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
+                  className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className={`text-[9px] font-mono ${dosOverride.max !== settings.days_of_supply_max ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Max</span>
+                <input type="number" min={0} value={dosOverride.max}
+                  onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
+                  className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.max !== settings.days_of_supply_max ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+              </label>
+              {usesOrderDays && !isAdHoc && (
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[9px] font-mono text-inky/50">Order day</span>
+                  <SegmentedSlider
+                    value={String(orderDow)}
+                    onChange={(v) => void runGeneration(Number(v))}
+                    options={[1, 2, 3, 4, 5].map((i) => ({
+                      value: String(i),
+                      label: `${DOW[i].slice(0, 3)}${dayCounts[i] ? ` (${dayCounts[i]})` : ''}`,
+                    }))}
+                  />
+                </label>
+              )}
+              {dosOverrideIsEdited && (
+                <Button size="sm" variant="secondary" loading={savingDosDefault} onClick={saveDosAsDefault}
+                  className="!text-[10px] !py-1 !px-2 whitespace-nowrap">
+                  Save as Default
+                </Button>
+              )}
+            </div>
+          )}
           {/* Direct ask 2026-09-30: a shop/product pair with no configured
               order rule at all — distinct from ShopConfiguredProductsTable's
               own per-shop "add" flow, which only offers products already
-              configured for that shop. */}
+              configured for that shop. Moved next to Manage/Customize
+              Columns, right-aligned above the table. */}
           <button
             onClick={() => setAddNonConfiguredOpen(true)}
             className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap">
             <Plus className="w-3 h-3" /> Add Non-Configured Product
           </button>
+        </div>
+        <div className="w-full flex items-center justify-end gap-3 text-xs font-mono text-navy flex-wrap">
           <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
           <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
           <span>{num(totalQtyOrdered, 0)} qty ordered</span>
@@ -1261,7 +1298,7 @@ export function OrdersV2Review() {
                       </td>
                     )
                     case 'on_hand_after': return <Td key={id} align="right">{num(isOz ? toOz(onHandAfter) : onHandAfter)}</Td>
-                    case 'dos_after': return <td key={id} className={`px-2 py-1 text-right whitespace-nowrap font-bold ${dosAfterColorClass(l.dos_after)}`}>{dos(l.dos_after)}</td>
+                    case 'dos_after': return <td key={id} title={DOS_COLOR_LEGEND} className={`px-2 py-1 text-right whitespace-nowrap font-bold ${dosAfterColorClass(l.dos_after)}`}>{dos(l.dos_after)}</td>
                     case 'dos_at_delivery': return <Td key={id} align="right">{dos(l.dos_after_delivery)}</Td>
                     case 'dollars': return <Td key={id} align="right">{money(dollars)}</Td>
                     case 'flags': return (

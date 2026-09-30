@@ -81,6 +81,15 @@ export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'
 
 /**
+ * Hover-only explanation for the DOS-color conditional formatting (direct
+ * ask 2026-09-30: replace the always-visible legend paragraph with a
+ * tooltip on the colored cells themselves) — a plain `title` attribute
+ * rather than a custom popover, matching this app's existing convention for
+ * this kind of one-line explanatory hover text.
+ */
+export const DOS_COLOR_LEGEND = 'Red = under target · Green = at target · Orange = over max'
+
+/**
  * DOS After for a manually-edited qty — same math as the engine's own
  * buildLine (on_hand + qty * quarts_per_unit, over daily_usage), so a hand
  * edit on Review or Final Review shows the same number generation would

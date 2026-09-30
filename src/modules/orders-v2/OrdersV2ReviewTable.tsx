@@ -25,7 +25,7 @@ import type { useLastOrderedInfo } from './useLastOrderedInfo'
 import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { ShopConfiguredProductsTable, PoDecisionButtons, Flags } from './OrdersV2Review'
-import { OVERRIDE_CELL, dos, money, num, dShort } from './shared'
+import { OVERRIDE_CELL, DOS_COLOR_LEGEND, dos, money, num, dShort } from './shared'
 import { uomDisplayLabel } from './types'
 import type { GenerationInput, LineFlag } from './types'
 
@@ -240,7 +240,7 @@ export function OrdersV2ReviewTable({
     }, { id: 'on_hand_after', header: 'On Hand After', enableSorting: false, cell: (i) => <span className="block text-right">{num(i.getValue())}</span> }),
     col.accessor('dos_after', {
       id: 'dos_after', header: 'DOS After',
-      cell: (i) => <span className={`block text-right font-bold ${dosAfterColorClass(i.getValue())}`}>{dos(i.getValue())}</span>,
+      cell: (i) => <span title={DOS_COLOR_LEGEND} className={`block text-right font-bold ${dosAfterColorClass(i.getValue())}`}>{dos(i.getValue())}</span>,
     }),
     col.accessor('dos_after_delivery', { id: 'dos_at_delivery', header: 'DOS @ Delivery', enableSorting: false, cell: (i) => <span className="block text-right">{dos(i.getValue())}</span> }),
     col.accessor((l) => Number(l.qty) * Number(l.unit_cost ?? 0), { id: 'dollars', header: '$', cell: (i) => <span className="block text-right">{money(i.getValue())}</span> }),

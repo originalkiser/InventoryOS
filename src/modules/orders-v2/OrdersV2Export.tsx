@@ -526,12 +526,20 @@ export function OrdersV2Export() {
 
   return (
     <div className="flex flex-col gap-4">
-      <OrderStepper draftId={draft.id} current="export" />
-
+      {/* Direct ask 2026-09-30: nav row above the step bar (matching
+          Review's own order), both pinned at the top of the page
+          regardless of scroll position — see OrdersV2Review.tsx's own
+          identical wrapper for the full reasoning. "← Orders v2" reaches
+          the landing page directly from here too, not just "← Final Review". */}
+      <div className="sticky top-0 z-20 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)}
-            className="mb-1 rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Final Review</Button>
+          <div className="flex items-center gap-2 mb-1">
+            <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
+              className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
+            <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)}
+              className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Final Review</Button>
+          </div>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
             Export
             {isAdHoc && <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-sky/40 text-navy">Ad Hoc</span>}
@@ -560,6 +568,8 @@ export function OrdersV2Export() {
             {draft.status === 'exported' ? `Re-download ${tpl.format.toUpperCase()}` : `Download ${tpl.format.toUpperCase()}`}
           </Button>
         </div>
+      </div>
+      <OrderStepper draftId={draft.id} current="export" />
       </div>
 
       {isAdHoc && !hasAdhocOverride && (
