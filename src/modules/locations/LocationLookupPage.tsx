@@ -97,7 +97,19 @@ const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleStr
 // and are essentially never exactly round). Kept separate from num() above
 // so the on-screen display's own precision is untouched.
 const num1 = (v: number | null | undefined) => (v == null ? '' : v.toLocaleString(undefined, { maximumFractionDigits: 1 }))
-const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy') } catch { return d } }
+// Real bug found live 2026-09-30: a bare "YYYY-MM-DD" date (e.g. from a
+// postgres `date` column like order_date/ETA) parses as UTC MIDNIGHT in
+// plain `new Date(d)`, which date-fns' format() then renders in the
+// browser's own LOCAL timezone — for anyone west of UTC (this company is
+// US Eastern/Central) that reads back as the PREVIOUS calendar day. Shop
+// 271's own real order_date was 2026-09-28 (confirmed against production)
+// and its real computed ETA was 2026-10-01 (Thursday, matching its own
+// RD Delivery Day), but both displayed one day early — "Sep 27"/"Sep 30" —
+// purely from this display-layer parsing, not the underlying date math.
+// Appending a local-time anchor only when the string doesn't already carry
+// one (a genuine timestamp, which this same function is also called with
+// elsewhere in this file) fixes it without needing a second helper.
+const dateShort = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d.includes('T') ? d : `${d}T00:00:00`), 'MMM d, yyyy') } catch { return d } }
 const dateTime = (d: string | null | undefined) => { if (!d) return '—'; try { return format(new Date(d), 'MMM d, yyyy · h:mm a') } catch { return d } }
 const alignCls = (a: string) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left')
 const metaLabel = (k: string) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
