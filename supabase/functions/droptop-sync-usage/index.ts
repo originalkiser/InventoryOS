@@ -848,26 +848,81 @@ Deno.serve(async (req) => {
       }
 
       if (ledgerRows.length) {
-        const agg = new Map<string, { sum: number; minDate: string }>() // key: location_id|lowercased product_id
+        // Real bug found live 2026-09-30: this used to key minDate the same
+        // way as the sum — per (location, product) — so daily_usage came
+        // out as "qty sold ÷ number of days THIS PRODUCT happened to sell
+        // on" instead of a real per-day rate. A product sold on only 2 of
+        // the last 30 days (e.g. 6.2 qt total) divided by ~2 days instead
+        // of 30, reading as ~3.1/day instead of the real ~0.21/day.
+        // Direct ask: divide by 30 (the window), UNLESS this SHOP hasn't
+        // been tracked that long — then divide by however many days we've
+        // actually had data for the shop, not the product. minDate is now
+        // tracked per LOCATION across every product's ledger rows (a shop
+        // with any product activity on day 1 has real data as of day 1,
+        // regardless of which specific product this row is for), while the
+        // qty sum stays per (location, product) since that's a real
+        // per-product quantity.
+        const productSum = new Map<string, number>() // key: location_id|lowercased product_id
+        const locationMinDate = new Map<string, string>() // key: location_id
         for (const r of ledgerRows) {
-          const key = `${r.location_id}|${String(r.product_id).toLowerCase()}`
+          const productKey = `${r.location_id}|${String(r.product_id).toLowerCase()}`
           const sold = Number(r.sold_qty) || 0
-          const entry = agg.get(key)
-          if (!entry) agg.set(key, { sum: sold, minDate: r.activity_date })
-          else {
-            entry.sum += sold
-            if (r.activity_date < entry.minDate) entry.minDate = r.activity_date
-          }
+          productSum.set(productKey, (productSum.get(productKey) ?? 0) + sold)
+          const seenMin = locationMinDate.get(r.location_id)
+          if (!seenMin || r.activity_date < seenMin) locationMinDate.set(r.location_id, r.activity_date)
         }
         const msPerDay = 86_400_000
+        const upsertKeys = new Set(allUpsertRows.map((r) => `${r.location_id}|${String(r.product_id).toLowerCase()}`))
         for (const row of allUpsertRows) {
-          const key = `${row.location_id}|${String(row.product_id).toLowerCase()}`
-          const entry = agg.get(key)
-          if (!entry) continue // no ledger history yet for this product — leave step 5's value as-is
-          const daysTracked = Math.min(30, Math.max(1, Math.round((Date.parse(todayDate) - Date.parse(entry.minDate)) / msPerDay) + 1))
-          const rollingUsage = entry.sum / daysTracked
+          const productKey = `${row.location_id}|${String(row.product_id).toLowerCase()}`
+          const sum = productSum.get(productKey)
+          const minDate = locationMinDate.get(row.location_id)
+          if (sum == null || !minDate) continue // no ledger history yet at this shop — leave step 5's value as-is
+          const daysTracked = Math.min(30, Math.max(1, Math.round((Date.parse(todayDate) - Date.parse(minDate)) / msPerDay) + 1))
+          const rollingUsage = sum / daysTracked
           row.daily_usage = rollingUsage
           row.days_of_supply = rollingUsage > 0 && row.on_hands != null ? (row.on_hands as number) / rollingUsage : null
+          rollingUsageApplied++
+        }
+
+        // Real bug found live 2026-09-30 (part 2): the loop above only ever
+        // revisits rows already in allUpsertRows — which is scoped to
+        // whatever had SOME change event (sale, adjustment, receive — see
+        // touchedKeys above) in THIS call's own daysBack:1 window. A product
+        // that last sold a week ago has real 30-day ledger history and a
+        // real rolling average to report, but never gets touched again
+        // until its next sale/adjustment — its daily_usage silently freezes
+        // at whatever step 5b last computed, un-decaying, for a shop's own
+        // Run Now click to appear to do nothing for it. Every (location,
+        // product) with ledger history in the window gets carried forward
+        // here even when nothing about it changed today, using its already-
+        // loaded existingMap row for the fields step 5 would otherwise fill
+        // in (on_hands/category/etc. — none of which this recompute knows
+        // or should guess at).
+        for (const productKey of productSum.keys()) {
+          if (upsertKeys.has(productKey)) continue // already handled above
+          const locationId = productKey.slice(0, productKey.indexOf('|'))
+          const minDate = locationMinDate.get(locationId)
+          const sum = productSum.get(productKey)
+          if (!minDate || sum == null) continue
+          const existing = existingMap.get(productKey)
+          if (!existing) continue // no product_usage row to carry forward from at all
+          const daysTracked = Math.min(30, Math.max(1, Math.round((Date.parse(todayDate) - Date.parse(minDate)) / msPerDay) + 1))
+          const rollingUsage = sum / daysTracked
+          allUpsertRows.push({
+            id: existing.id,
+            company_id: companyId,
+            location_id: locationId,
+            product_id: existing.product_id,
+            category: existing.category ?? null,
+            supplier: existing.supplier ?? null,
+            unit_cost: existing.unit_cost ?? null,
+            daily_usage: rollingUsage,
+            on_hands: existing.on_hands ?? null,
+            days_of_supply: rollingUsage > 0 && existing.on_hands != null ? existing.on_hands / rollingUsage : null,
+            last_change_source: 'droptop',
+            updated_at: new Date().toISOString(),
+          })
           rollingUsageApplied++
         }
 
