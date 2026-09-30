@@ -19,16 +19,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import toast from 'react-hot-toast'
+import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useDateRangePeriod } from '@/hooks/useDateRangePeriod'
 import { useEarliestOrderDate } from '@/hooks/useEarliestOrderDate'
+import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { DataCompletenessBadge } from '@/components/shared/DataCompletenessBadge'
+import { DataTable } from '@/components/shared/DataTable'
 import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
+import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { isM5, type Classification } from './PackageMappingPage'
 
 interface OrderRow {
@@ -674,18 +679,77 @@ export function DroptopOrdersPage() {
 
   const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
 
-  // Paginated for render — the underlying filtered set can be tens of
-  // thousands of rows (a busy shop over a wide range), and rendering all of
-  // them into the DOM at once is what was making the page laggy after load,
-  // separately from how long the initial query itself took.
-  const ORDERS_PAGE_SIZE = 100
-  const [ordersPage, setOrdersPage] = useState(0)
-  useEffect(() => { setOrdersPage(0) }, [filteredOrders])
-  const totalOrderPages = Math.max(1, Math.ceil(filteredOrders.length / ORDERS_PAGE_SIZE))
-  const pagedOrders = useMemo(
-    () => filteredOrders.slice(ordersPage * ORDERS_PAGE_SIZE, (ordersPage + 1) * ORDERS_PAGE_SIZE),
-    [filteredOrders, ordersPage],
+  // Orders table — converted onto this app's standard useTable/DataTable/
+  // useColumnPrefs/ColumnManagerModal stack (direct ask 2026-09-30, "same
+  // table design as the new Orders v2 beta table... Manage Columns so we
+  // can manage and pin columns as desired") — replaces the previous
+  // hand-rolled <table> + manual Prev/Next pagination. DataTable's own
+  // TanStack pagination already only renders one page's worth of rows at a
+  // time, so this keeps the exact same "don't render tens of thousands of
+  // rows at once" property the old manual pagination existed for.
+  const ORDERS_TABLE_KEY = 'droptop_orders.orders_table'
+  const orderCol = useMemo(() => createColumnHelper<OrderRow>(), [])
+  const orderColumns = useMemo(() => [
+    orderCol.accessor('order_id', { id: 'order_id', header: 'Order #' }),
+    orderCol.accessor((o) => (o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'), { id: 'shop', header: 'Shop' }),
+    orderCol.accessor((o) => [o.first_name, o.last_name].filter(Boolean).join(' ') || '—', { id: 'customer', header: 'Customer' }),
+    orderCol.accessor('city', { id: 'city', header: 'City', cell: (i) => i.getValue() || '—' }),
+    orderCol.accessor('status', { id: 'status', header: 'Status', cell: (i) => i.getValue() || '—' }),
+    orderCol.display({
+      id: 'packages', header: 'Packages', enableSorting: false,
+      cell: (i) => (packagesByOrder.get(i.row.original.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—',
+    }),
+    orderCol.display({
+      id: 'products', header: 'Products', enableSorting: false,
+      cell: (i) => productIdsFor(i.row.original.id).join(', ') || '—',
+    }),
+    orderCol.display({
+      id: 'quarts', header: 'Quarts',
+      cell: (i) => { const q = quartsFor(i.row.original.id); return <span className="block text-right">{q > 0 ? q.toFixed(2) : '—'}</span> },
+    }),
+    orderCol.display({
+      id: 'vehicle', header: 'Vehicle', enableSorting: false,
+      cell: (i) => vehicleLabelFor(i.row.original.id),
+    }),
+    orderCol.accessor('fleet_company_name', { id: 'fleet', header: 'Fleet', cell: (i) => i.getValue() || '—' }),
+    orderCol.accessor('final_price', { id: 'total', header: 'Total', cell: (i) => <span className="block text-right">{money(i.getValue())}</span> }),
+    orderCol.accessor((o) => (o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—'), { id: 'finalized', header: 'Finalized' }),
+  ], [orderCol, idToLabel, packagesByOrder]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const {
+    table: ordersTable, globalFilter: ordersFilter, setGlobalFilter: setOrdersFilter,
+    columnVisibility: ordersColVis, columnOrder: ordersColOrder, setColumnOrder: setOrdersColOrder,
+    columnPinning: ordersColPinning, setColumnPinning: setOrdersColPinning,
+  } = useTable(filteredOrders, orderColumns, {
+    persistKey: ORDERS_TABLE_KEY,
+    initialPageSize: 100,
+    initialSorting: [{ id: 'finalized', desc: true }],
+    initialColumnPinning: { left: ['order_id'], right: [] },
+  })
+  useColumnPrefs(ORDERS_TABLE_KEY, ordersTable, ordersColVis, ordersColOrder, setOrdersColOrder)
+  const [ordersColumnManagerOpen, setOrdersColumnManagerOpen] = useState(false)
+  const ordersAllColItems: ColItem[] = useMemo(
+    () => ordersTable.getAllLeafColumns().map((c) => ({ id: c.id, label: String(c.columnDef.header ?? c.id) })),
+    [ordersTable],
   )
+  const ordersShownOrder = useMemo(() => {
+    const ids = ordersTable.getAllLeafColumns().filter((c) => c.getIsVisible()).map((c) => c.id)
+    if (!ordersColOrder.length) return ids
+    const known = ordersColOrder.filter((id) => ids.includes(id))
+    return [...known, ...ids.filter((id) => !known.includes(id))]
+  }, [ordersTable, ordersColOrder])
+  function applyOrdersShownColumns(shown: string[]) {
+    setOrdersColOrder(shown)
+    const vis: Record<string, boolean> = {}
+    for (const c of ordersAllColItems) vis[c.id] = shown.includes(c.id)
+    ordersTable.setColumnVisibility(vis)
+  }
+  function resetOrdersColumns() {
+    setOrdersColOrder([])
+    ordersTable.setColumnVisibility({})
+    ordersTable.setColumnSizing({})
+    setOrdersColPinning({ left: ['order_id'], right: [] })
+  }
 
   // package_id -> display name, built globally (Droptop's package_id is a
   // stable identifier across every order it appears on, so one lookup
@@ -1013,49 +1077,6 @@ export function DroptopOrdersPage() {
   }
   // ---- end Build Your Own Report ---------------------------------------
 
-  const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
-
-  // Exports the full filtered set (every order matching the current
-  // filters), not just the current page of pagedOrders — pagination is a
-  // rendering concern only, the export should match what "Orders (N)"
-  // above it says, not what's currently scrolled into view.
-  function exportOrders(format: 'csv' | 'xlsx') {
-    if (!filteredOrders.length) { toast.error('Nothing to export for these filters'); return }
-    setExporting(format)
-    try {
-      const headers = ['Order #', 'Shop', 'Customer', 'City', 'Status', 'Packages', 'Products', 'Quarts', 'Vehicle', 'Fleet', 'Total', 'Finalized']
-      const dataRows = filteredOrders.map((o) => [
-        o.order_id,
-        o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—',
-        [o.first_name, o.last_name].filter(Boolean).join(' ') || '—',
-        o.city || '—',
-        o.status || '—',
-        (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—',
-        productIdsFor(o.id).join(', ') || '—',
-        quartsFor(o.id) || 0,
-        vehicleLabelFor(o.id),
-        o.fleet_company_name || '—',
-        o.final_price ?? 0,
-        o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—',
-      ])
-      const fileBase = `droptop-orders-${range.start}-to-${range.end}`
-      if (format === 'csv') {
-        const esc = (s: unknown) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
-        const csv = [headers, ...dataRows].map((r) => r.map(esc).join(',')).join('\n')
-        triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${fileBase}.csv`)
-      } else {
-        const wb = XLSX.utils.book_new()
-        const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
-        XLSX.utils.book_append_sheet(wb, ws, 'Droptop Orders')
-        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-        triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${fileBase}.xlsx`)
-      }
-      toast.success('Export downloaded')
-    } finally {
-      setExporting(null)
-    }
-  }
-
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
 
   return (
@@ -1293,74 +1314,40 @@ export function DroptopOrdersPage() {
               ]}
             />
           ) : (
-            /* Orders table — paginated client-side; rendering the full
-               filtered set (can be tens of thousands of rows) at once was
-               what made the page laggy after loading, separately from load
-               time itself. */
-            <Card>
-              <CardBody className="flex flex-col gap-2">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <span className="text-xs font-mono text-navy uppercase tracking-wide">Orders ({filteredOrders.length.toLocaleString()})</span>
-                  <div className="flex items-center gap-2 flex-wrap">
+            /* Orders table — converted onto the standard DataTable stack
+               (direct ask 2026-09-30, same design as the Orders v2 beta
+               table): built-in search/sort/export plus a Manage Columns
+               modal for show/hide/reorder/pin. DataTable's own pagination
+               still only renders one page's worth of rows at a time, same
+               as the old manual Prev/Next did. */
+            <>
+              <DataTable
+                table={ordersTable}
+                globalFilter={ordersFilter}
+                onGlobalFilterChange={setOrdersFilter}
+                exportFilename={`Droptop Orders - ${range.start} to ${range.end}`}
+                hideColumnControl
+                actions={
+                  <>
                     <Button size="sm" variant="secondary" onClick={() => setReportOpen(true)}>Build Report</Button>
-                    <Button size="sm" variant="secondary" loading={exporting === 'csv'} onClick={() => exportOrders('csv')}>Export CSV</Button>
-                    <Button size="sm" variant="secondary" loading={exporting === 'xlsx'} onClick={() => exportOrders('xlsx')}>Export Excel</Button>
-                    {filteredOrders.length > ORDERS_PAGE_SIZE && (
-                      <div className="flex items-center gap-2 text-[10px] font-mono text-inky/70">
-                        <Button size="sm" variant="secondary" disabled={ordersPage === 0} onClick={() => setOrdersPage((p) => Math.max(0, p - 1))}>Prev</Button>
-                        <span>Page {ordersPage + 1} of {totalOrderPages}</span>
-                        <Button size="sm" variant="secondary" disabled={ordersPage >= totalOrderPages - 1} onClick={() => setOrdersPage((p) => Math.min(totalOrderPages - 1, p + 1))}>Next</Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                {filteredOrders.length === 0 ? (
-                  <p className="text-xs font-mono text-inky/60">No orders match these filters.</p>
-                ) : (
-                  <div className="overflow-x-auto rounded border border-navy/30 max-h-[32rem] overflow-y-auto">
-                    <table className="w-full text-xs font-mono">
-                      <thead className="sticky top-0 bg-cream">
-                        <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                          <th className="px-3 py-2 text-left">Order #</th>
-                          <th className="px-3 py-2 text-left">Shop</th>
-                          <th className="px-3 py-2 text-left">Customer</th>
-                          <th className="px-3 py-2 text-left">City</th>
-                          <th className="px-3 py-2 text-left">Status</th>
-                          <th className="px-3 py-2 text-left">Packages</th>
-                          <th className="px-3 py-2 text-left">Products</th>
-                          <th className="px-3 py-2 text-right">Quarts</th>
-                          <th className="px-3 py-2 text-left">Vehicle</th>
-                          <th className="px-3 py-2 text-left">Fleet</th>
-                          <th className="px-3 py-2 text-right">Total</th>
-                          <th className="px-3 py-2 text-left">Finalized</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pagedOrders.map((o) => {
-                          const quarts = quartsFor(o.id)
-                          return (
-                          <tr key={o.id} className="border-b border-navy/10">
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_id}</td>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'}</td>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{[o.first_name, o.last_name].filter(Boolean).join(' ') || '—'}</td>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.city || '—'}</td>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.status || '—'}</td>
-                            <td className="px-3 py-1.5 text-navy">{(packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—'}</td>
-                            <td className="px-3 py-1.5 text-navy">{productIdsFor(o.id).join(', ') || '—'}</td>
-                            <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{quarts > 0 ? quarts.toFixed(2) : '—'}</td>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{vehicleLabelFor(o.id)}</td>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.fleet_company_name || '—'}</td>
-                            <td className="px-3 py-1.5 text-navy text-right whitespace-nowrap">{money(o.final_price)}</td>
-                            <td className="px-3 py-1.5 text-navy whitespace-nowrap">{o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—'}</td>
-                          </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardBody>
-            </Card>
+                    <button onClick={() => setOrdersColumnManagerOpen(true)}
+                      className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">
+                      Manage Columns
+                    </button>
+                  </>
+                }
+              />
+              <ColumnManagerModal
+                open={ordersColumnManagerOpen}
+                onClose={() => setOrdersColumnManagerOpen(false)}
+                all={ordersAllColItems}
+                shown={ordersShownOrder}
+                onChange={applyOrdersShownColumns}
+                onReset={resetOrdersColumns}
+                pinned={ordersColPinning.left ?? []}
+                onPinChange={(left) => setOrdersColPinning({ left, right: [] })}
+              />
+            </>
           )}
         </>
       )}
