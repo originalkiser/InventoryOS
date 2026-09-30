@@ -192,17 +192,17 @@ export function OrdersV2Landing() {
         <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
       </div>
 
-      {/* Direct ask 2026-09-29, redone 2026-09-30 (twice): a single SVG
-          rounded-rect stroke sharing the button's own corner radius, offset
-          outside it. Now a continuous ambient loop instead of a hover
-          reveal — draws in, wipes away, draws back in — same
-          hold/hold/hold keyframe shape as the sb-loader spinner used
-          elsewhere (see ov2-start-order-trace in index.css). The glow was
-          getting clipped square at the SVG's own edge (an SVG's default
-          overflow is hidden, unlike a plain HTML element) — overflow-visible
-          plus a bigger margin around the rect fixes that regardless of blur
-          radius, rather than removing the glow. */}
-      <div className="relative inline-block self-start">
+      {/* Direct ask 2026-09-29, redone 2026-09-30 (three times): a single
+          SVG rounded-rect stroke sharing the button's own corner radius,
+          offset outside it — hover-gated again per the latest follow-up
+          (a continuous ambient loop was tried in between and reverted; see
+          ov2-start-order-trace in index.css for the actual .group:hover
+          animation trigger). The glow was getting clipped square at the
+          SVG's own edge (an SVG's default overflow is hidden, unlike a
+          plain HTML element) — overflow-visible plus a bigger margin
+          around the rect fixes that regardless of blur radius, rather than
+          removing the glow. */}
+      <div className="group relative inline-block self-start">
         <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10 rounded-lg">
           {/* Drop the "+" overlaid inside the droplet — it's a small
               superscript badge poking out past its top-right edge instead. */}
