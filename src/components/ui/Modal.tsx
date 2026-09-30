@@ -5,7 +5,7 @@ interface ModalProps {
   onClose: () => void
   title?: string
   children: React.ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'wide'
 }
 
 const sizeClasses = {
@@ -14,6 +14,12 @@ const sizeClasses = {
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
   '2xl': 'max-w-6xl',
+  // Direct ask 2026-09-30 — "up to 60% of the available width of the
+  // workspace" (Add Non-Configured Product's own product-list modal, and
+  // any future modal that needs real column room rather than a fixed
+  // max-w-* step): a viewport-relative cap rather than another fixed
+  // breakpoint, since "workspace width" varies by sidebar state/window size.
+  wide: 'max-w-[60vw]',
 }
 
 export function Modal({ open, onClose, title, children, size = 'md' }: ModalProps) {

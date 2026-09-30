@@ -879,6 +879,35 @@ export function OrdersV2Review() {
   const vendorName = vendors.byId(draft.vendor_id)?.name ?? 'All vendors'
   const usesOrderDays = rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays
 
+  // Shared between the old table's own toolbar row (rendered inline below)
+  // and the new/beta table's toolbar (passed through as `toolbarExtra` —
+  // see OrdersV2ReviewTable's own DataTable actions slot) so both tables
+  // show the exact same controls, just via two different real mount points.
+  const toolbarToggles = (
+    <>
+      <ToggleButton checked={showVmi} onChange={setShowVmi}
+        onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+        onTooltip="Click to hide VMI/keep-fill lines" offTooltip="Click to also show VMI/keep-fill lines" />
+      <ToggleButton checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity}
+        onLabel="Showing Over-Capacity Only" offLabel="Showing All Lines"
+        onTooltip="Click to show every line again" offTooltip="Click to show only lines ordered past their configured capacity" />
+      <ToggleButton checked={shopExpandMode === 'popup'} onChange={(v) => setShopExpandMode(v ? 'popup' : 'dropdown')}
+        onLabel="Popup" offLabel="Dropdown"
+        onTooltip="Click to expand a shop's products inline instead" offTooltip="Click to open a shop's products in a popup instead" />
+      {isAdHoc && (
+        <span className="rounded px-1.5 py-0.5 bg-sky/20 text-navy border border-sky/40 text-xs font-mono">
+          Ad hoc · {eligibleLocationIds?.size ?? 0} shop{(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}
+        </span>
+      )}
+      {/* Direct ask 2026-09-30: matches Order Settings' own button style
+          (solid secondary background) instead of the plain bordered-only
+          look every other small toolbar button here uses. */}
+      <Button size="sm" variant="secondary" onClick={() => setAddNonConfiguredOpen(true)}>
+        <Plus className="w-3.5 h-3.5 mr-1" /> Add Non-Configured Product
+      </Button>
+    </>
+  )
+
   return (
     <div className="flex flex-col gap-4">
       {/* Direct ask 2026-09-30: nav row + step bar stay pinned at the top
@@ -947,6 +976,7 @@ export function OrdersV2Review() {
 
       <OrderStatsModal
         draftId={draft.id}
+        vendorId={draft.vendor_id}
         settingsSnapshot={draft.settings_snapshot}
         open={statsModalOpen}
         onClose={() => setStatsModalOpen(false)}
@@ -982,7 +1012,12 @@ export function OrdersV2Review() {
           "+ Add Non-Configured Product" (top right) opens the regular
           AddNonConfiguredProductModal pre-scoped to this shop. */}
       {popupShopId && (
-        <Modal open={!!popupShopId} onClose={() => setPopupShopId(null)} title={shopLabel(popupShopId)} size="xl">
+        // size="wide" (direct ask 2026-09-30, "up to 60% of the available
+        // width of the workspace so we can have comfortable columns in the
+        // modal") — this is the one modal in this feature that actually
+        // shows a multi-column table, unlike Add Non-Configured Product's
+        // plain form.
+        <Modal open={!!popupShopId} onClose={() => setPopupShopId(null)} title={shopLabel(popupShopId)} size="wide">
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
@@ -993,11 +1028,9 @@ export function OrdersV2Review() {
                   return dd ? <span className="normal-case text-inky/50"> · Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</span> : null
                 })()}
               </p>
-              <button
-                onClick={() => setPopupAddNonConfigOpen(true)}
-                className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap flex-shrink-0">
-                <Plus className="w-3 h-3" /> Add Non-Configured Product
-              </button>
+              <Button size="sm" variant="secondary" onClick={() => setPopupAddNonConfigOpen(true)}>
+                <Plus className="w-3.5 h-3.5 mr-1" /> Add Non-Configured Product
+              </Button>
             </div>
             <ShopConfiguredProductsTable
               rows={shopRows(popupShopId)}
@@ -1040,27 +1073,31 @@ export function OrdersV2Review() {
         </div>
         {dosOverride && (
           <div className="flex items-center gap-3 flex-wrap">
-            <label className="flex flex-col gap-0.5">
-              <span className={`text-[9px] font-mono ${dosOverride.target !== settings.days_of_supply_target ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Target</span>
+            {/* Direct ask 2026-09-30: labels centered over their own
+                input/select box (items-center on each flex-col label, text-
+                center on the label text) instead of left-aligned above a
+                narrower input. */}
+            <label className="flex flex-col gap-0.5 items-center">
+              <span className={`text-[9px] font-mono text-center ${dosOverride.target !== settings.days_of_supply_target ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Target</span>
               <input type="number" min={0} value={dosOverride.target}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.target !== settings.days_of_supply_target ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
             </label>
-            <label className="flex flex-col gap-0.5">
-              <span className={`text-[9px] font-mono ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Min Trigger</span>
+            <label className="flex flex-col gap-0.5 items-center">
+              <span className={`text-[9px] font-mono text-center ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Min Trigger</span>
               <input type="number" min={0} value={dosOverride.trigger}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
             </label>
-            <label className="flex flex-col gap-0.5">
-              <span className={`text-[9px] font-mono ${dosOverride.max !== settings.days_of_supply_max ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Max</span>
+            <label className="flex flex-col gap-0.5 items-center">
+              <span className={`text-[9px] font-mono text-center ${dosOverride.max !== settings.days_of_supply_max ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Max</span>
               <input type="number" min={0} value={dosOverride.max}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.max !== settings.days_of_supply_max ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
             </label>
             {usesOrderDays && !isAdHoc && (
-              <label className="flex flex-col gap-0.5">
-                <span className="text-[9px] font-mono text-inky/50">Order day</span>
+              <label className="flex flex-col gap-0.5 items-center">
+                <span className="text-[9px] font-mono text-inky/50 text-center">Order day</span>
                 <SegmentedSlider
                   value={String(orderDow)}
                   onChange={(v) => void runGeneration(Number(v))}
@@ -1082,54 +1119,53 @@ export function OrdersV2Review() {
                 Changes require regenerating order for accuracy
               </p>
             )}
-            <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}
-              className={needsRegenerate ? 'ring-2 ring-[#E67E22] ring-offset-2 ring-offset-cream animate-pulse' : ''}>
-              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
-            </Button>
+            {/* Direct ask 2026-09-30: wrapped in the SAME flex-col-with-a-
+                label-line shape as the DOS/Order day controls beside it
+                (an invisible spacer standing in for a label) so its actual
+                button sits at the same vertical offset as their real
+                inputs/slider — that offset, not button height alone, was
+                what read as "misaligned with the order day selection".
+                py-2 (up from the default sm size's py-1.5) makes it
+                genuinely taller too, per the direct ask. */}
+            <div className="flex flex-col gap-0.5 items-center">
+              <span className="text-[9px] font-mono invisible" aria-hidden="true">Regenerate</span>
+              <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}
+                className={`!py-2 ${needsRegenerate ? 'ring-2 ring-[#E67E22] ring-offset-2 ring-offset-cream animate-pulse' : ''}`}>
+                <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
+              </Button>
+            </div>
           </div>
         )}
       </div>
 
       {/* Compact toolbar directly over the table — plain row, no card/box
-          border (direct ask 2026-09-30). */}
+          border (direct ask 2026-09-30).
+          IMPORTANT (direct ask 2026-09-30 — read before moving anything
+          else here): for the OLD table, everything below (search, the 3
+          toggles, Customize Columns, Add Non-Configured Product) already
+          renders on ONE row together, right above the table. For the NEW
+          table (beta), that's NOT possible to do exactly the same way
+          within THIS row, because the beta table's own search box and
+          "Manage Columns" button aren't rendered here at all — they're
+          rendered by a DIFFERENT component (OrdersV2ReviewTable.tsx's own
+          <DataTable>, which owns its own built-in toolbar UI). So the 3
+          toggles + Add Non-Configured Product are now passed INTO that
+          component as `toolbarExtra` (below) and rendered inside its own
+          DataTable's `actions` slot, right next to Manage Columns — this
+          row only ever renders them for the OLD table now. */}
       <div className="flex items-center gap-2 flex-wrap">
-        {/* The new table has its own built-in search + Manage Columns
-            (DataTable's own toolbar) — shown here only for the old table to
-            avoid two redundant search boxes / column controls on screen. */}
         {!useNewTable && (
-          <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-44" />
+          <>
+            <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-44" />
+            {toolbarToggles}
+            <button
+              onClick={() => setColumnModalOpen(true)}
+              title="Show/hide and reorder this table's columns"
+              className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy">
+              <Settings className="w-3 h-3" /> Customize Columns
+            </button>
+          </>
         )}
-        <ToggleButton checked={showVmi} onChange={setShowVmi}
-          onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
-          onTooltip="Click to hide VMI/keep-fill lines" offTooltip="Click to also show VMI/keep-fill lines" />
-        <ToggleButton checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity}
-          onLabel="Showing Over-Capacity Only" offLabel="Showing All Lines"
-          onTooltip="Click to show every line again" offTooltip="Click to show only lines ordered past their configured capacity" />
-        <ToggleButton checked={shopExpandMode === 'popup'} onChange={(v) => setShopExpandMode(v ? 'popup' : 'dropdown')}
-          onLabel="Popup" offLabel="Dropdown"
-          onTooltip="Click to expand a shop's products inline instead" offTooltip="Click to open a shop's products in a popup instead" />
-        {isAdHoc && (
-          <span className="rounded px-1.5 py-0.5 bg-sky/20 text-navy border border-sky/40 text-xs font-mono">
-            Ad hoc · {eligibleLocationIds?.size ?? 0} shop{(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}
-          </span>
-        )}
-        {!useNewTable && (
-          <button
-            onClick={() => setColumnModalOpen(true)}
-            title="Show/hide and reorder this table's columns"
-            className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy">
-            <Settings className="w-3 h-3" /> Customize Columns
-          </button>
-        )}
-        {/* Direct ask 2026-09-30: a shop/product pair with no configured
-            order rule at all — distinct from ShopConfiguredProductsTable's
-            own per-shop "add" flow, which only offers products already
-            configured for that shop. */}
-        <button
-          onClick={() => setAddNonConfiguredOpen(true)}
-          className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap">
-          <Plus className="w-3 h-3" /> Add Non-Configured Product
-        </button>
         <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy flex-wrap">
           <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
           <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
@@ -1223,6 +1259,7 @@ export function OrdersV2Review() {
           showConfigVmi={showConfigVmi}
           leadDaysFor={leadDaysFor}
           inputByLineKey={inputByLineKey}
+          toolbarExtra={toolbarToggles}
         />
       )}
 

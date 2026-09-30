@@ -76,7 +76,7 @@ export function OrdersV2ReviewTable({
   liveFlags, dosAfterColorClass, groupMinimumStatus, patchQty, exceptionFor, onOpenException,
   decidePoOverride, decidePoExclude, decidePoCombine, includeToggle, onRemoveLine,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
-  inputByLineKey,
+  inputByLineKey, toolbarExtra,
 }: {
   lines: DraftLineRow[]
   draft: DraftRow
@@ -103,6 +103,12 @@ export function OrdersV2ReviewTable({
   showConfigVmi: boolean
   leadDaysFor: (locId: string) => number
   inputByLineKey: Map<string, GenerationInput>
+  // The VMI/over-capacity/Dropdown-Popup toggles + Add Non-Configured
+  // Product button — direct ask 2026-09-30: these need to render right
+  // next to Manage Columns (this component's own DataTable toolbar), not
+  // in OrdersV2Review.tsx's separate row above, since that's a different
+  // mount point than where Manage Columns itself lives.
+  toolbarExtra?: React.ReactNode
 }) {
   const [columnManagerOpen, setColumnManagerOpen] = useState(false)
 
@@ -397,7 +403,12 @@ export function OrdersV2ReviewTable({
             </div>
           )
         }}
-        actions={<button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>}
+        actions={
+          <>
+            {toolbarExtra}
+            <button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>
+          </>
+        }
       />
       <ColumnManagerModal
         open={columnManagerOpen}

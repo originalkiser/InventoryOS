@@ -28,18 +28,21 @@ export function OrderStepper({ draftId, current }: { draftId: string; current: O
   const currentIdx = STEPS.findIndex((s) => s.key === current)
 
   return (
-    <div data-confetti-floor className="flex justify-center">
-      {/* data-confetti-floor: a real surface for the Export page's confetti
-          burst (see src/lib/confetti.ts) to bounce off — direct ask
-          2026-09-30, "hit the order steps and kind of bounce off".
-          Direct ask 2026-09-30: equal spacing between the connecting lines
+    <div className="flex justify-center">
+      {/* Direct ask 2026-09-30: equal spacing between the connecting lines
           regardless of label text width — each step used to be a flex-1
           column sized by its OWN content (so "Final Review" claimed more
           width than "Export"), which pushed the lines between them
           unevenly. A fixed width per step (independent of label length)
           makes the flex-1 lines between them mathematically equal by
           construction, since the flanking columns are now identical. */}
-      <div className="flex items-center gap-2 py-1 w-full max-w-md">
+      {/* data-confetti-floor lives on THIS inner, tightly-sized (max-w-md,
+          centered) div rather than the outer full-width flex row above —
+          found live 2026-09-30: marking the outer row made the "floor"
+          span the ENTIRE page width, so confetti was registering a hit
+          (and resting) far out in empty space to either side of the
+          actual visible circles/lines, not on them. */}
+      <div data-confetti-floor className="flex items-center gap-2 py-1 w-full max-w-md">
         {STEPS.map((step, i) => {
           const isCurrent = step.key === current
           const isPassed = i < currentIdx

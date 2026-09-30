@@ -564,15 +564,18 @@ export function OrdersV2FinalReview() {
           sticky block entirely, further down the page, matching where
           Review's own title sits (see below). */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
+          className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
+        {/* Direct ask 2026-09-30: "← Review" sits next to "Continue to
+            Export" (both right-aligned) instead of grouped with
+            "← Orders v2" on the left. */}
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
-            className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
           <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}`)}
             className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Review</Button>
+          <Button size="sm" onClick={() => navigate(`/orders-v2/draft/${draft.id}/export`)}>
+            Continue to Export →
+          </Button>
         </div>
-        <Button size="sm" onClick={() => navigate(`/orders-v2/draft/${draft.id}/export`)}>
-          Continue to Export →
-        </Button>
       </div>
       <OrderStepper draftId={draft.id} current="final" />
       </div>

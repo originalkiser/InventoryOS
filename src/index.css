@@ -330,6 +330,15 @@ body {
   animation: ov2-start-order-trace 3.25s ease-in-out infinite;
 }
 
+/* Same trace, always running (no hover gate) — direct ask 2026-09-30: the
+   Order Stats modal's "Edit Order" button should draw the eye to its own
+   existence even before anyone hovers it, reusing this exact animation. */
+.ov2-edit-order-trace {
+  stroke-dasharray: 100 100;
+  stroke-dashoffset: 100;
+  animation: ov2-start-order-trace 3.25s ease-in-out infinite;
+}
+
 /* Sidebar section item drop-in animation */
 @keyframes sb-drop-in {
   from { opacity: 0; transform: translateY(-10px); }

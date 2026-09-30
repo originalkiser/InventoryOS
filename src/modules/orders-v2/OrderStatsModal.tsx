@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
-import { Modal, SbLoader } from '@/components/ui'
+import { useNavigate } from 'react-router-dom'
+import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
+import { Button, Modal, SbLoader } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useLocations } from '@/hooks/useLocations'
 import { MINIMUM_TYPE_LABELS, type MinimumType } from './types'
+import { OrderFullSummaryModal } from './OrderFullSummaryModal'
 
 const sb = () => supabase as any
 const PAGE = 1000
@@ -37,16 +39,24 @@ const SETTING_ROWS: { key: string; label: string; fmt?: (v: unknown) => string }
  * new schema — the point is surfacing decisions that are already there but
  * were never summarized anywhere, to help tune settings/logic over time.
  */
-export function OrderStatsModal({ draftId, settingsSnapshot, open, onClose }: {
+export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onClose, editPath, onDelete }: {
   draftId: string
+  vendorId?: string | null
   settingsSnapshot: Record<string, unknown> | null | undefined
   open: boolean
   onClose: () => void
+  // Direct ask 2026-09-30: clicking an order row now opens this modal
+  // instead of navigating straight to the order — editPath/onDelete move
+  // those actions in here instead of a table "actions" column.
+  editPath?: string
+  onDelete?: () => void
 }) {
+  const navigate = useNavigate()
   const loc = useLocations()
   const [lines, setLines] = useState<StatLine[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [fullSummaryOpen, setFullSummaryOpen] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -161,7 +171,40 @@ export function OrderStatsModal({ draftId, settingsSnapshot, open, onClose }: {
             </div>
           </div>
         )}
+
+        <div className="flex items-center justify-between gap-2 pt-2 border-t border-navy/10">
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setFullSummaryOpen(true)}>View Full Summary</Button>
+            {onDelete && (
+              <button onClick={onDelete} title="Delete draft" className="text-inky/40 hover:text-[#C0392B]">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          {editPath && (
+            // Always-on version of "Start New Order"'s own hover-trace glow
+            // (.ov2-edit-order-trace, index.css) — direct ask 2026-09-30:
+            // draw the eye to this button's existence even without the
+            // user hovering it, since it's now the only way to actually
+            // open the order from this table.
+            <div className="relative inline-block">
+              <Button size="sm" onClick={() => navigate(editPath)} className="relative z-10 rounded-lg">
+                Edit Order →
+              </Button>
+              <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
+                <rect
+                  x="12" y="12" rx="11"
+                  style={{ width: 'calc(100% - 24px)', height: 'calc(100% - 24px)' }}
+                  fill="none" stroke="#2ECC71" strokeWidth="3" pathLength={100}
+                  className="ov2-edit-order-trace drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
+                />
+              </svg>
+            </div>
+          )}
+        </div>
       </div>
+
+      <OrderFullSummaryModal draftId={draftId} vendorId={vendorId ?? null} open={fullSummaryOpen} onClose={() => setFullSummaryOpen(false)} />
     </Modal>
   )
 }

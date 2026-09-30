@@ -588,7 +588,12 @@ export function OrdersV2Export() {
       </p>
 
       {/* Column builder — collapsed by default so the preview below is
-          visible without scrolling past every column's mapping first. */}
+          visible without scrolling past every column's mapping first.
+          data-confetti-floor: this card's own top border is the closest
+          real "landing surface" below the step bar on this page (direct
+          ask 2026-09-30 — the Preview table further down was too far to
+          ever actually get hit first). */}
+      <div data-confetti-floor>
       <Card><CardBody className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <button onClick={() => setColumnsOpen((v) => !v)}
@@ -645,6 +650,7 @@ export function OrdersV2Export() {
         </>
         )}
       </CardBody></Card>
+      </div>
 
       {/* Naming + email */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

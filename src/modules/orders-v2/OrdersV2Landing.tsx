@@ -1,15 +1,15 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Droplet, Plus, Trash2, Upload } from 'lucide-react'
+import { Droplet, Plus, Upload } from 'lucide-react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { Button, Input, Modal, MultiSelectDropdown, SbLoader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
 import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow } from './useOrdersV2'
-import { useHistoryIdsByDraft } from './useOrderHistory'
 import { useRdReports } from './useRdReports'
 import { RdReportsTab } from './RdReportsTab'
 import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
@@ -105,8 +105,6 @@ export function OrdersV2Landing() {
   // same table as everything else.
   const draftIds = useMemo(() => drafts.map((d) => d.id), [drafts])
   const aggregates = useDraftAggregates(draftIds)
-  const exportedIds = useMemo(() => drafts.filter((d) => d.status === 'exported').map((d) => d.id), [drafts])
-  const historyIds = useHistoryIdsByDraft(exportedIds)
 
   const vendorName = (id: string | null) => vendors.byId(id)?.name ?? '—'
 
@@ -143,42 +141,21 @@ export function OrdersV2Landing() {
     col.display({ id: 'cost', header: 'Cost', enableSorting: false, cell: (i) => <span className="text-right block">{money(aggregates[i.row.original.id]?.cost)}</span> }),
     col.accessor('updated_at', { id: 'updated_at', header: 'Last Edited', cell: (i) => dTime(i.getValue()) }),
     col.accessor((d) => names.nameOf(d.last_edited_by ?? d.created_by), { id: 'by', header: 'By' }),
-    col.display({
-      id: 'actions', header: '', enableSorting: false,
-      cell: (i) => {
-        const d = i.row.original
-        const histId = historyIds[d.id]
-        return (
-          <div className="flex items-center justify-end gap-2">
-            {/* Direct ask 2026-09-30: a settings/adjustments summary reachable
-                right from this table, not just from inside the order. */}
-            <button title="Settings & adjustments summary"
-              onClick={(e) => { e.stopPropagation(); setStatsDraft(d) }}
-              className="text-[11px] font-mono text-inky hover:text-navy hover:underline whitespace-nowrap">
-              Stats
-            </button>
-            {d.status === 'exported' && histId && (
-              <button onClick={(e) => { e.stopPropagation(); navigate(`/orders-v2/history/${histId}`) }}
-                className="text-[11px] font-mono text-inky hover:text-navy hover:underline whitespace-nowrap">
-                Summary
-              </button>
-            )}
-            {d.status !== 'exported' && (
-              <button title="Delete draft"
-                onClick={(e) => { e.stopPropagation(); if (confirm('Delete this draft order? Its lines are removed too.')) deleteDraft(d.id) }}
-                className="text-inky/40 hover:text-[#C0392B]"><Trash2 className="w-3.5 h-3.5" /></button>
-            )}
-          </div>
-        )
-      },
-    }),
-  ], [col, vendors, aggregates, names, historyIds, navigate, deleteDraft])
+  ], [col, vendors, aggregates, names])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(drafts, columns, {
-    persistKey: 'orders-v2.landing',
+  const ORDERS_V2_LANDING_TABLE_KEY = 'orders-v2.landing'
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(drafts, columns, {
+    persistKey: ORDERS_V2_LANDING_TABLE_KEY,
     initialSorting: [{ id: 'updated_at', desc: true }],
     initialPageSize: 50,
   })
+  // Found live 2026-09-30: column widths (and order/visibility/pinning)
+  // reset on every reload — this table called useTable but never actually
+  // wired useColumnPrefs, the hook that persists that state to localStorage
+  // + platform.user_profiles.column_prefs. Every other DataTable in this
+  // app (Orders v2 Review, Exception Reporting, etc.) calls both together;
+  // this one only ever had the first half.
+  useColumnPrefs(ORDERS_V2_LANDING_TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
 
   return (
     <div className="flex flex-col gap-4">
@@ -250,7 +227,7 @@ export function OrdersV2Landing() {
                 table={table}
                 globalFilter={globalFilter}
                 onGlobalFilterChange={setGlobalFilter}
-                onRowClick={(d) => navigate(statusRoute(d))}
+                onRowClick={(d) => setStatsDraft(d)}
               />
             )}
         </TabsContent>
@@ -393,9 +370,14 @@ export function OrdersV2Landing() {
       {statsDraft && (
         <OrderStatsModal
           draftId={statsDraft.id}
+          vendorId={statsDraft.vendor_id}
           settingsSnapshot={statsDraft.settings_snapshot}
           open={!!statsDraft}
           onClose={() => setStatsDraft(null)}
+          editPath={statusRoute(statsDraft)}
+          onDelete={statsDraft.status !== 'exported' ? () => {
+            if (confirm('Delete this draft order? Its lines are removed too.')) { deleteDraft(statsDraft.id); setStatsDraft(null) }
+          } : undefined}
         />
       )}
     </div>
