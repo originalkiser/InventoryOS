@@ -43,11 +43,35 @@ const FADE_SECONDS = 2 // then fade out over this long
 
 interface Floor { top: number; left: number; right: number }
 
+// Found live 2026-09-30: confetti was landing on an invisible surface near
+// the top of the screen — this app's KeepAlivePages keeps up to 3 recently-
+// visited pages mounted in the background (display:none while inactive),
+// but during its own slide-transition animation a previous page can
+// briefly still be display:block while animating out, which — for the
+// small window that's true — makes ITS OWN OrderStepper (also marked
+// data-confetti-floor) a second, real, non-zero-size element matching the
+// same selector, positioned wherever that other page's own sticky header
+// happened to sit. `checkVisibility()` (baseline-supported in every
+// browser this app targets) is the correct, built-in check for "is this
+// actually on screen right now" — it accounts for display:none,
+// visibility:hidden, and hidden ancestors, which a plain non-zero-size
+// getBoundingClientRect() check does not.
+function isGenuinelyVisible(el: Element): boolean {
+  const anyEl = el as Element & { checkVisibility?: () => boolean }
+  return anyEl.checkVisibility ? anyEl.checkVisibility() : true
+}
+
 function getFloors(): Floor[] {
   const floors: Floor[] = []
   document.querySelectorAll('[data-confetti-floor]').forEach((el) => {
+    if (!isGenuinelyVisible(el)) return
     const r = el.getBoundingClientRect()
-    if (r.width > 0 && r.height > 0) floors.push({ top: r.top, left: r.left, right: r.right })
+    // Also require the surface to actually be within the visible viewport
+    // right now (not scrolled away above/below it) — a second, independent
+    // guard against bouncing off something the user can't see.
+    if (r.width > 0 && r.height > 0 && r.bottom >= 0 && r.top <= window.innerHeight) {
+      floors.push({ top: r.top, left: r.left, right: r.right })
+    }
   })
   // Bottom of the viewport is always the last-resort floor, so a particle
   // that misses every marked surface still lands and rests somewhere
