@@ -5,6 +5,7 @@ import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/compon
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
 import { OrderStatsModal } from './OrderStatsModal'
+import { AddNonConfiguredProductModal } from './AddNonConfiguredProductModal'
 import { OrderStepper } from './OrderStepper'
 import { ToggleButton, SegmentedSlider } from './controls'
 import { ExceptionEditModal } from './ExceptionEditModal'
@@ -252,6 +253,7 @@ export function OrdersV2Review() {
   const isAdHoc = draft ? !!draftAdHocLocationIds(draft) : false
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [statsModalOpen, setStatsModalOpen] = useState(false)
+  const [addNonConfiguredOpen, setAddNonConfiguredOpen] = useState(false)
   const [movingToFinal, setMovingToFinal] = useState(false)
   // Real bug found live 2026-09-29: this page sits behind KeepAlivePages
   // (see the usePageRevisit(reload) call above) — clicking "Final Review →"
@@ -889,6 +891,14 @@ export function OrdersV2Review() {
         onClose={() => setStatsModalOpen(false)}
       />
 
+      <AddNonConfiguredProductModal
+        open={addNonConfiguredOpen}
+        onClose={() => setAddNonConfiguredOpen(false)}
+        vendorId={draft.vendor_id}
+        settings={settings}
+        addLine={addLine}
+      />
+
       {exceptionTarget && (
         <ExceptionEditModal
           open={!!exceptionTarget}
@@ -999,6 +1009,15 @@ export function OrdersV2Review() {
         {/* Shop/line/qty counts moved here next to Order Total (direct ask
             2026-09-29) — used to sit in this same bar next to Order Day. */}
         <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy flex-wrap">
+          {/* Direct ask 2026-09-30: a shop/product pair with no configured
+              order rule at all — distinct from ShopConfiguredProductsTable's
+              own per-shop "add" flow, which only offers products already
+              configured for that shop. */}
+          <button
+            onClick={() => setAddNonConfiguredOpen(true)}
+            className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap">
+            <Plus className="w-3 h-3" /> Add Non-Configured Product
+          </button>
           <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
           <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
           <span>{num(totalQtyOrdered, 0)} qty ordered</span>
