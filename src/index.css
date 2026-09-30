@@ -303,6 +303,26 @@ body {
   94%, 100% { stroke-dashoffset: -1; }
 }
 
+/* Orders v2 "Start New Order" button outline — direct ask 2026-09-30:
+   same hold-draw/hold-erase/hold-draw loop shape as sb-loader-draw above,
+   just on a closed rounded-rect path instead of an open line, so it needs
+   dasharray "100 100" (one full-length dash, one full-length gap, against
+   a pathLength=100 rect) rather than sb-loader's dasharray of 1. Sweeping
+   dashoffset 0 -> 100 -> 200 (a full period) reads as: fully drawn, wipe
+   away to nothing, draw back in — continuous, not hover-gated, same as
+   every other use of this animation style in the app. 1.25s = the original
+   one-shot 500ms hover-reveal, slowed 25% (625ms), doubled for a full
+   draw+erase cycle. */
+@keyframes ov2-start-order-trace {
+  0%,  6%   { stroke-dashoffset: 0; }
+  46%, 54%  { stroke-dashoffset: 100; }
+  94%, 100% { stroke-dashoffset: 200; }
+}
+.ov2-start-order-trace {
+  stroke-dasharray: 100 100;
+  animation: ov2-start-order-trace 1.25s ease-in-out infinite;
+}
+
 /* Sidebar section item drop-in animation */
 @keyframes sb-drop-in {
   from { opacity: 0; transform: translateY(-10px); }

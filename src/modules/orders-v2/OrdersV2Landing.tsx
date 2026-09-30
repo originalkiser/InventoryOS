@@ -192,15 +192,17 @@ export function OrdersV2Landing() {
         <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
       </div>
 
-      {/* Direct ask 2026-09-29, redone 2026-09-30: the original 4-strip trace
-          couldn't share the button's own corner radius (straight bars meet
-          at sharp corners) and read as too thin/faint on hover. A single SVG
-          rounded-rect stroke fixes both — one continuous outline with the
-          same rx as the button, offset outside it via the enlarged svg's own
-          negative inset, animated as ONE trace (stroke-dasharray 0->100 with
-          pathLength=100, so it's independent of the button's real pixel
-          size/perimeter) instead of 4 separately-timed pieces. */}
-      <div className="group relative inline-block self-start">
+      {/* Direct ask 2026-09-29, redone 2026-09-30 (twice): a single SVG
+          rounded-rect stroke sharing the button's own corner radius, offset
+          outside it. Now a continuous ambient loop instead of a hover
+          reveal — draws in, wipes away, draws back in — same
+          hold/hold/hold keyframe shape as the sb-loader spinner used
+          elsewhere (see ov2-start-order-trace in index.css). The glow was
+          getting clipped square at the SVG's own edge (an SVG's default
+          overflow is hidden, unlike a plain HTML element) — overflow-visible
+          plus a bigger margin around the rect fixes that regardless of blur
+          radius, rather than removing the glow. */}
+      <div className="relative inline-block self-start">
         <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10 rounded-lg">
           {/* Drop the "+" overlaid inside the droplet — it's a small
               superscript badge poking out past its top-right edge instead. */}
@@ -210,12 +212,12 @@ export function OrdersV2Landing() {
           </span>
           Start New Order
         </Button>
-        <svg className="pointer-events-none absolute -inset-[5px] w-[calc(100%+10px)] h-[calc(100%+10px)]" aria-hidden="true">
+        <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
           <rect
-            x="2.5" y="2.5" rx="11"
-            style={{ width: 'calc(100% - 5px)', height: 'calc(100% - 5px)' }}
+            x="12" y="12" rx="11"
+            style={{ width: 'calc(100% - 24px)', height: 'calc(100% - 24px)' }}
             fill="none" stroke="#2ECC71" strokeWidth="3" pathLength={100}
-            className="[stroke-dasharray:0_100] transition-[stroke-dasharray] duration-500 ease-out group-hover:[stroke-dasharray:100_0] drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
+            className="ov2-start-order-trace drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
           />
         </svg>
       </div>
