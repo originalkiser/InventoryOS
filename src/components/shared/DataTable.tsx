@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { flexRender, type Row, type Table as TTable } from '@tanstack/react-table'
 import { Button, Input, Modal, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
+import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import * as XLSX from 'xlsx'
@@ -176,6 +177,52 @@ export function DataTable<T>({
     setSelectedIds(new Set())
   }, [clearSelectionToken])
 
+  // ── Manage Columns — direct ask 2026-09-30: replace the plain hover
+  // checkbox dropdown with the same drag-reorder/pin/reset modal Orders v2's
+  // beta table already has, as the DEFAULT for every DataTable caller that
+  // doesn't opt out (hideColumnControl, for the handful of pages that already
+  // wire their own copy of this exact modal — e.g. Locations' floating-panel
+  // column manager — which are untouched). Driven entirely off the `table`
+  // prop's own already-controlled columnOrder/columnPinning/columnVisibility/
+  // columnSizing state (see useTable.ts's onColumnXChange wiring) — no new
+  // props needed from any caller.
+  const [columnManagerOpen, setColumnManagerOpen] = useState(false)
+  // Captured once, on mount, before any user edit — "Reset" restores
+  // whatever this table's own initial state actually was (e.g. a page that
+  // pins its own default columns), rather than a hardcoded blank slate.
+  const initialColumnState = useRef({
+    order: table.getState().columnOrder,
+    visibility: table.getState().columnVisibility,
+    pinning: table.getState().columnPinning,
+  })
+
+  const allColItems: ColItem[] = useMemo(
+    () => table.getAllLeafColumns()
+      .filter((c) => c.id !== 'select' && String(c.columnDef.header ?? '') !== '')
+      .map((c) => ({ id: c.id, label: String(c.columnDef.header ?? c.id) })),
+    [table],
+  )
+  const shownColumnOrder = useMemo(() => {
+    const visibleIds = table.getAllLeafColumns().filter((c) => c.id !== 'select' && c.getIsVisible()).map((c) => c.id)
+    const order = table.getState().columnOrder
+    if (!order.length) return visibleIds
+    const known = order.filter((id) => visibleIds.includes(id))
+    return [...known, ...visibleIds.filter((id) => !known.includes(id))]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table, table.getState().columnOrder, table.getState().columnVisibility])
+  function applyShownColumns(shown: string[]) {
+    table.setColumnOrder(shown)
+    const vis: Record<string, boolean> = {}
+    for (const c of allColItems) vis[c.id] = shown.includes(c.id)
+    table.setColumnVisibility(vis)
+  }
+  function resetColumns() {
+    table.setColumnOrder(initialColumnState.current.order)
+    table.setColumnVisibility(initialColumnState.current.visibility)
+    table.setColumnPinning(initialColumnState.current.pinning)
+    table.setColumnSizing({})
+  }
+
   function rowKey(row: Row<T>): string {
     return String((row.original as any)?.id ?? row.id)
   }
@@ -331,24 +378,10 @@ export function DataTable<T>({
           className="w-full sm:w-52"
         />
 
-        {/* Column visibility — exclude the internal select column */}
+        {/* Manage Columns — drag-reorder/pin/reset modal, same as Orders v2's
+            beta table (2026-09-30, replacing the old plain checkbox dropdown). */}
         {!hideColumnControl && (
-          <div className="relative group">
-            <Button variant="secondary" size="sm">Columns</Button>
-            <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-cream border border-navy/40 rounded shadow-xl z-30 min-w-[160px] py-1">
-              {table.getAllLeafColumns().filter((c) => c.id !== 'select').map((col) => (
-                <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-navy/5">
-                  <input
-                    type="checkbox"
-                    checked={col.getIsVisible()}
-                    onChange={col.getToggleVisibilityHandler()}
-                    className="accent-inky"
-                  />
-                  <span className="text-xs font-body text-navy">{String(col.columnDef.header ?? col.id)}</span>
-                </label>
-              ))}
-            </div>
-          </div>
+          <Button variant="secondary" size="sm" onClick={() => setColumnManagerOpen(true)}>Manage Columns</Button>
         )}
 
         {/* Export button + dropdown */}
@@ -718,6 +751,19 @@ export function DataTable<T>({
           </div>
         </div>
       </Modal>
+
+      {!hideColumnControl && (
+        <ColumnManagerModal
+          open={columnManagerOpen}
+          onClose={() => setColumnManagerOpen(false)}
+          all={allColItems}
+          shown={shownColumnOrder}
+          onChange={applyShownColumns}
+          onReset={resetColumns}
+          pinned={table.getState().columnPinning.left ?? []}
+          onPinChange={(left) => table.setColumnPinning((p) => ({ ...p, left }))}
+        />
+      )}
     </div>
   )
 }
