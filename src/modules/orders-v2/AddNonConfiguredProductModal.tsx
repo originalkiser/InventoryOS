@@ -30,12 +30,17 @@ interface VendorPartOpt {
  * a shop needing several unconfigured products doesn't mean reopening this
  * modal repeatedly.
  */
-export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings, addLine }: {
+export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings, addLine, initialLocationId }: {
   open: boolean
   onClose: () => void
   vendorId: string | null
   settings: OrderSettings
   addLine: (row: Partial<DraftLineRow> & { location_id: string; product_id: string; order_type: OrderType }) => Promise<void>
+  // Pre-selects the shop combobox when opened from a specific shop's own
+  // context (direct ask 2026-09-30, the "popup" shop-expand view's own
+  // "Add Non-Configured Product" button) — still a plain Combobox, not
+  // locked, so it can be changed if needed.
+  initialLocationId?: string
 }) {
   const loc = useLocations()
   const [locationId, setLocationId] = useState('')
@@ -88,7 +93,8 @@ export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings
   // for the "stay open, add another" path).
   useEffect(() => {
     if (!open) return
-    setLocationId(''); setProductId(''); setQty('1'); setUsage(null); setAddedCount(0)
+    setLocationId(initialLocationId ?? ''); setProductId(''); setQty('1'); setUsage(null); setAddedCount(0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const productOptions = useMemo(

@@ -38,6 +38,14 @@ function loadNewTablePref(): boolean {
   try { return localStorage.getItem(NEW_TABLE_KEY) === '1' } catch { return false }
 }
 
+// Shop-expand mode toggle (direct ask 2026-09-30) — same per-browser
+// persistence as the new-table beta toggle above: a personal viewing
+// preference, not something that should change for every other user.
+const SHOP_EXPAND_MODE_KEY = 'ov2_review_shop_expand_mode'
+function loadShopExpandModePref(): 'dropdown' | 'popup' {
+  try { return localStorage.getItem(SHOP_EXPAND_MODE_KEY) === 'popup' ? 'popup' : 'dropdown' } catch { return 'dropdown' }
+}
+
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -236,6 +244,25 @@ export function OrdersV2Review() {
   function setUseNewTable(v: boolean) {
     setUseNewTableState(v)
     try { localStorage.setItem(NEW_TABLE_KEY, v ? '1' : '0') } catch { /* ignore */ }
+  }
+  // Dropdown (inline row expand, existing behavior) vs Popup (a modal) for
+  // "show every product configured for this shop" — direct ask 2026-09-30.
+  // popupShopId is which shop's popup is currently open (null = closed);
+  // popupAddNonConfigOpen is the "Add Non-Configured Product" modal opened
+  // FROM inside the popup, pre-scoped to popupShopId.
+  const [shopExpandMode, setShopExpandModeState] = useState(loadShopExpandModePref)
+  function setShopExpandMode(v: 'dropdown' | 'popup') {
+    setShopExpandModeState(v)
+    try { localStorage.setItem(SHOP_EXPAND_MODE_KEY, v) } catch { /* ignore */ }
+  }
+  const [popupShopId, setPopupShopId] = useState<string | null>(null)
+  const [popupAddNonConfigOpen, setPopupAddNonConfigOpen] = useState(false)
+  // Single handler for every "shop name clicked" spot (old table's own row,
+  // the beta table's onToggleExpand, the no-orders panel) — branches on the
+  // mode so none of those call sites need their own if/else.
+  function handleShopClick(locId: string) {
+    if (shopExpandMode === 'popup') { setPopupShopId(locId); return }
+    setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })
   }
   const visibleColumnIds = useMemo(
     () => columnPrefs.order.filter((id) => !columnPrefs.hidden.includes(id)),
@@ -944,10 +971,67 @@ export function OrdersV2Review() {
         />
       )}
 
-      {/* Title + subtext, with Regenerate inline next to the heading
-          (direct ask 2026-09-30 — it used to live inside the DOS Targets
-          card, which is now folded into the toolbar below). */}
-      <div className="flex items-start justify-between gap-3 flex-wrap">
+      {/* "Popup" shop-expand mode (direct ask 2026-09-30) — the exact same
+          ShopConfiguredProductsTable (with the shop's own full configured
+          product list, live DOS/on-hand recompute, conditional DOS-color
+          treatment, already-on-order rows editable in place) that the
+          "Dropdown" mode renders inline, just inside a Modal instead. A
+          product added here calls the SAME addConfiguredProduct as the
+          inline version — it patches the page's own `lines` state, so the
+          main table below picks it up immediately with no refetch. Its own
+          "+ Add Non-Configured Product" (top right) opens the regular
+          AddNonConfiguredProductModal pre-scoped to this shop. */}
+      {popupShopId && (
+        <Modal open={!!popupShopId} onClose={() => setPopupShopId(null)} title={shopLabel(popupShopId)} size="xl">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
+                Every product configured for this shop
+                {(() => {
+                  const dd = deliveryFor(popupShopId, draft.order_date)
+                  const sd = describeSchedule(popupShopId)
+                  return dd ? <span className="normal-case text-inky/50"> · Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</span> : null
+                })()}
+              </p>
+              <button
+                onClick={() => setPopupAddNonConfigOpen(true)}
+                className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap flex-shrink-0">
+                <Plus className="w-3 h-3" /> Add Non-Configured Product
+              </button>
+            </div>
+            <ShopConfiguredProductsTable
+              rows={shopRows(popupShopId)}
+              onPatch={patchQty}
+              onAdd={addConfiguredProduct}
+              showVmi={showConfigVmi}
+              ozProductIds={ozProductIds}
+              exceptionFor={exceptionFor}
+              onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+              leadDays={leadDaysFor(popupShopId)}
+              dosAfterColorClass={dosAfterColorClass}
+            />
+          </div>
+        </Modal>
+      )}
+
+      <AddNonConfiguredProductModal
+        open={popupAddNonConfigOpen}
+        onClose={() => setPopupAddNonConfigOpen(false)}
+        vendorId={draft.vendor_id}
+        settings={settings}
+        addLine={addLine}
+        initialLocationId={popupShopId ?? undefined}
+      />
+
+      {/* Title + subtext, with Regenerate AND the DOS targets/Order day
+          cluster inline on the same row (direct ask 2026-09-30, revised —
+          these used to live in a separately-bordered card/toolbar). No
+          outer card/box border around this cluster — only the individual
+          inputs/slider/buttons keep their own borders. items-center (not
+          items-start) so the single-line DOS/Regenerate cluster centers
+          vertically against the two-line title block instead of aligning
+          to its top edge. */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
           <p className="text-xs text-inky mt-0.5">
@@ -955,7 +1039,44 @@ export function OrdersV2Review() {
           </p>
         </div>
         {dosOverride && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="flex flex-col gap-0.5">
+              <span className={`text-[9px] font-mono ${dosOverride.target !== settings.days_of_supply_target ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Target</span>
+              <input type="number" min={0} value={dosOverride.target}
+                onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
+                className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.target !== settings.days_of_supply_target ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className={`text-[9px] font-mono ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Min Trigger</span>
+              <input type="number" min={0} value={dosOverride.trigger}
+                onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
+                className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className={`text-[9px] font-mono ${dosOverride.max !== settings.days_of_supply_max ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Max</span>
+              <input type="number" min={0} value={dosOverride.max}
+                onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
+                className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.max !== settings.days_of_supply_max ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+            </label>
+            {usesOrderDays && !isAdHoc && (
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[9px] font-mono text-inky/50">Order day</span>
+                <SegmentedSlider
+                  value={String(orderDow)}
+                  onChange={(v) => void runGeneration(Number(v))}
+                  options={[1, 2, 3, 4, 5].map((i) => ({
+                    value: String(i),
+                    label: `${DOW[i].slice(0, 3)}${dayCounts[i] ? ` (${dayCounts[i]})` : ''}`,
+                  }))}
+                />
+              </label>
+            )}
+            {dosOverrideIsEdited && (
+              <Button size="sm" variant="secondary" loading={savingDosDefault} onClick={saveDosAsDefault}
+                className="!text-[10px] !py-1 !px-2 whitespace-nowrap">
+                Save as Default
+              </Button>
+            )}
             {needsRegenerate && (
               <p className="text-[10px] font-mono text-[#E67E22] font-bold">
                 Changes require regenerating order for accuracy
@@ -969,11 +1090,9 @@ export function OrdersV2Review() {
         )}
       </div>
 
-      {/* Compact toolbar directly over the table. DOS targets and the Add
-          Non-Configured Product button now live here too (direct ask
-          2026-09-30), right-aligned alongside Manage/Customize Columns
-          instead of in their own separate rows. */}
-      <Card><CardBody className="flex items-center gap-2 flex-wrap py-2">
+      {/* Compact toolbar directly over the table — plain row, no card/box
+          border (direct ask 2026-09-30). */}
+      <div className="flex items-center gap-2 flex-wrap">
         {/* The new table has its own built-in search + Manage Columns
             (DataTable's own toolbar) — shown here only for the old table to
             avoid two redundant search boxes / column controls on screen. */}
@@ -986,6 +1105,9 @@ export function OrdersV2Review() {
         <ToggleButton checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity}
           onLabel="Showing Over-Capacity Only" offLabel="Showing All Lines"
           onTooltip="Click to show every line again" offTooltip="Click to show only lines ordered past their configured capacity" />
+        <ToggleButton checked={shopExpandMode === 'popup'} onChange={(v) => setShopExpandMode(v ? 'popup' : 'dropdown')}
+          onLabel="Popup" offLabel="Dropdown"
+          onTooltip="Click to expand a shop's products inline instead" offTooltip="Click to open a shop's products in a popup instead" />
         {isAdHoc && (
           <span className="rounded px-1.5 py-0.5 bg-sky/20 text-navy border border-sky/40 text-xs font-mono">
             Ad hoc · {eligibleLocationIds?.size ?? 0} shop{(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}
@@ -999,66 +1121,16 @@ export function OrdersV2Review() {
             <Settings className="w-3 h-3" /> Customize Columns
           </button>
         )}
-        <div className="ml-auto flex items-center gap-3 flex-wrap">
-          {/* DOS targets box, folded in from its own separate card (direct
-              ask 2026-09-30) — no more title callout, relabeled, and every
-              input goes orange the instant it diverges from the saved
-              Order Settings default, with a Save as Default action that
-              actually persists it (distinct from Regenerate above, which
-              only ever affects this one order). */}
-          {dosOverride && (
-            <div className="flex items-center gap-2 border border-navy/15 rounded px-2 py-1">
-              <label className="flex flex-col gap-0.5">
-                <span className={`text-[9px] font-mono ${dosOverride.target !== settings.days_of_supply_target ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Target</span>
-                <input type="number" min={0} value={dosOverride.target}
-                  onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
-                  className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.target !== settings.days_of_supply_target ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
-              </label>
-              <label className="flex flex-col gap-0.5">
-                <span className={`text-[9px] font-mono ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Min Trigger</span>
-                <input type="number" min={0} value={dosOverride.trigger}
-                  onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
-                  className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
-              </label>
-              <label className="flex flex-col gap-0.5">
-                <span className={`text-[9px] font-mono ${dosOverride.max !== settings.days_of_supply_max ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Max</span>
-                <input type="number" min={0} value={dosOverride.max}
-                  onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
-                  className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.max !== settings.days_of_supply_max ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
-              </label>
-              {usesOrderDays && !isAdHoc && (
-                <label className="flex flex-col gap-0.5">
-                  <span className="text-[9px] font-mono text-inky/50">Order day</span>
-                  <SegmentedSlider
-                    value={String(orderDow)}
-                    onChange={(v) => void runGeneration(Number(v))}
-                    options={[1, 2, 3, 4, 5].map((i) => ({
-                      value: String(i),
-                      label: `${DOW[i].slice(0, 3)}${dayCounts[i] ? ` (${dayCounts[i]})` : ''}`,
-                    }))}
-                  />
-                </label>
-              )}
-              {dosOverrideIsEdited && (
-                <Button size="sm" variant="secondary" loading={savingDosDefault} onClick={saveDosAsDefault}
-                  className="!text-[10px] !py-1 !px-2 whitespace-nowrap">
-                  Save as Default
-                </Button>
-              )}
-            </div>
-          )}
-          {/* Direct ask 2026-09-30: a shop/product pair with no configured
-              order rule at all — distinct from ShopConfiguredProductsTable's
-              own per-shop "add" flow, which only offers products already
-              configured for that shop. Moved next to Manage/Customize
-              Columns, right-aligned above the table. */}
-          <button
-            onClick={() => setAddNonConfiguredOpen(true)}
-            className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap">
-            <Plus className="w-3 h-3" /> Add Non-Configured Product
-          </button>
-        </div>
-        <div className="w-full flex items-center justify-end gap-3 text-xs font-mono text-navy flex-wrap">
+        {/* Direct ask 2026-09-30: a shop/product pair with no configured
+            order rule at all — distinct from ShopConfiguredProductsTable's
+            own per-shop "add" flow, which only offers products already
+            configured for that shop. */}
+        <button
+          onClick={() => setAddNonConfiguredOpen(true)}
+          className="inline-flex items-center gap-1 text-[10px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy hover:text-navy whitespace-nowrap">
+          <Plus className="w-3 h-3" /> Add Non-Configured Product
+        </button>
+        <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy flex-wrap">
           <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
           <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
           <span>{num(totalQtyOrdered, 0)} qty ordered</span>
@@ -1071,7 +1143,7 @@ export function OrdersV2Review() {
             Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
           </span>
         </div>
-      </CardBody></Card>
+      </div>
 
       <ColumnCustomizeModal
         open={columnModalOpen}
@@ -1145,7 +1217,7 @@ export function OrdersV2Review() {
           includeToggle={(l) => patchLine(l.id, { included: !l.included })}
           onRemoveLine={removeLine}
           expanded={expanded}
-          onToggleExpand={(locId) => setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })}
+          onToggleExpand={handleShopClick}
           shopRows={shopRows}
           onAddConfiguredProduct={addConfiguredProduct}
           showConfigVmi={showConfigVmi}
@@ -1208,7 +1280,7 @@ export function OrdersV2Review() {
                     case 'shop': return (
                       <td key={id} className="px-2 py-1 text-navy whitespace-nowrap">
                         <button
-                          onClick={() => setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })}
+                          onClick={() => handleShopClick(locId)}
                           title="Show every product configured for this shop"
                           className="inline-flex items-center gap-1 hover:underline hover:text-sky">
                           {shopOpen ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
@@ -1386,7 +1458,7 @@ export function OrdersV2Review() {
                 return (
                   <div key={locId} className="border-t border-navy/10 pt-1.5">
                     <button
-                      onClick={() => setExpanded((p) => { const n = new Set(p); n.has(locId) ? n.delete(locId) : n.add(locId); return n })}
+                      onClick={() => handleShopClick(locId)}
                       className="inline-flex items-center gap-1 text-xs font-mono text-navy hover:underline hover:text-sky">
                       {shopOpen ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
                       {shopLabel(locId)}
@@ -1519,10 +1591,15 @@ function ColumnCustomizeModal({ open, onClose, columns, prefs, onChange, default
  * "why isn't this shop ordering more" and "why isn't this shop ordering
  * anything" use the exact same product list, columns, and add-a-line
  * behavior. */
-export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays }: {
+export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays, dosAfterColorClass }: {
   rows: { input?: GenerationInput; line?: DraftLineRow }[]
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
+  // Optional — matches the main table's own DOS-After color coding (direct
+  // ask 2026-09-30, for the "popup" shop-expand mode specifically). Omitted
+  // by the two existing inline-expand call sites, which keep their prior
+  // plain (uncolored) DOS After cell unchanged.
+  dosAfterColorClass?: (v: number | null) => string
   // VMI/keep-fill candidates are always in this list (the shop's full
   // configured product set) but are noise for "what am I actually
   // ordering" — hidden by default, shown on request. A row counts as VMI
@@ -1567,7 +1644,8 @@ export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozP
           {visible.map((r) => (
             <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd}
               isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')}
-              exceptionFor={exceptionFor} onOpenException={onOpenException} leadDays={leadDays} />
+              exceptionFor={exceptionFor} onOpenException={onOpenException} leadDays={leadDays}
+              dosAfterColorClass={dosAfterColorClass} />
           ))}
         </tbody>
       </table>
@@ -1578,7 +1656,7 @@ export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozP
 /** One row in a shop's product list — an existing line (editable in place)
  * or a configured-but-not-ordered candidate (typing a qty adds it). Shared
  * by the smoothing panel and the shop-name expand row below the table. */
-function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenException, leadDays }: {
+function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenException, leadDays, dosAfterColorClass }: {
   input?: GenerationInput; line?: DraftLineRow
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
@@ -1586,6 +1664,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
   exceptionFor: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>['rows'][number] | null
   onOpenException: (locationId: string, productId: string) => void
   leadDays: number
+  dosAfterColorClass?: (v: number | null) => string
 }) {
   const productId = line?.product_id ?? input?.product_id ?? ''
   const locationId = line?.location_id ?? input?.location_id ?? ''
@@ -1667,7 +1746,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
         </div>
       </td>
       <td className="text-inky/70">{num(isOz ? toOz(onHandAfter) : onHandAfter)}</td>
-      <td className="text-inky/70">{dos(dosAfter)}</td>
+      <td title={dosAfterColorClass ? DOS_COLOR_LEGEND : undefined} className={dosAfterColorClass ? `font-bold ${dosAfterColorClass(dosAfter)}` : 'text-inky/70'}>{dos(dosAfter)}</td>
       <td className="text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>
       <td className={whyClass}>{why}</td>
     </tr>
