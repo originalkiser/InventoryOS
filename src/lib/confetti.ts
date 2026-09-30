@@ -2,8 +2,8 @@
 // see CLAUDE.md's "no new dependencies without approval" rule) for Orders
 // v2's Export button, gated behind the company-wide "confetti_on_export"
 // app setting (see ProfilePanel.tsx's Dev Settings section, developer-role
-// only). Plain DOM particles animated via the Web Animations API, each
-// self-removing once its own animation finishes.
+// only). Plain DOM particles, each self-removing once its own lifecycle
+// finishes.
 //
 // "Like a confetti cannon went off from the tip of the cursor" — a biased
 // upward/outward angle spread (roughly +-70deg from straight up) rather
@@ -12,14 +12,22 @@
 //
 // Direct ask 2026-09-30: real collision instead of a plain arc-and-fade —
 // particles bounce off whatever real page elements are marked
-// `data-confetti-floor` (OrderStepper's own root, the Export preview
-// table's header row), settle and slide to a stop on whichever one they
+// `data-confetti-floor`, settle and slide to a stop on whichever one they
 // land on (or the bottom of the viewport if they miss every marked
 // surface), rest there for a while, then fade out slowly. The physics is a
-// small manual step simulation (not a closed-form arc like before) since a
-// bounce is a branch, not a formula — built once per particle into a
-// single `el.animate()` keyframe list with real per-segment `offset`s so
-// one call still covers flight + bounce + rest + fade.
+// small manual step simulation (not a closed-form arc) since a bounce is a
+// branch, not a formula.
+//
+// Follow-up same day: once a particle is resting, the cursor can "collide"
+// with it — mousemove pushes any resting particle it passes near a short
+// hop away, settling again nearby. This is why the flight and rest phases
+// are two SEPARATE mechanisms rather than one long precomputed
+// `el.animate()` keyframe list (the original shape, before this follow-up):
+// the flight/bounce/slide portion still plays as one WAAPI animation
+// (nothing needs to react mid-flight), but a WAAPI animation's keyframes
+// are fixed at creation time and can't branch on a live mouse position —
+// once a particle settles, control hands off to plain `style.left/top` +
+// a shared mousemove listener, which CAN react per-event.
 
 const COLORS = ['#2ECC71', '#B7E0DE', '#E67E22', '#C0392B', '#F2F1E6', '#4F7489']
 
@@ -40,6 +48,11 @@ const MAX_SIM_STEPS = 300 // ~6s of simulated flight/bounce/slide — safety cap
 const TIME_SCALE = 1.1
 const REST_HOLD_SECONDS = 15 // direct ask: rest in place this long once landed
 const FADE_SECONDS = 2 // then fade out over this long
+
+// Mouse-collision tuning for the resting phase.
+const CURSOR_COLLIDE_RADIUS = 34 // px — cursor within this of a resting particle's center counts as a hit
+const PUSH_DISTANCE = 55 // px — how far a hit knocks the particle away
+const PUSH_COOLDOWN_MS = 220 // matches the CSS transition below, so a particle can't be re-pushed mid-hop
 
 interface Floor { top: number; left: number; right: number }
 
@@ -78,6 +91,59 @@ function getFloors(): Floor[] {
   // instead of free-falling past MAX_SIM_STEPS with no clean resting point.
   floors.push({ top: window.innerHeight - 2, left: -Infinity, right: Infinity })
   return floors.sort((a, b) => a.top - b.top)
+}
+
+// ── Shared mouse-collision registry for every resting particle from every
+// burst — one listener total, not one per burst, added lazily on the first
+// particle that ever settles and removed once none remain. ─────────────────
+interface RestingParticle {
+  el: HTMLDivElement
+  size: number
+  left: number
+  top: number
+  pushedUntil: number
+}
+const restingParticles = new Set<RestingParticle>()
+let mouseListenerAttached = false
+
+function onMouseMoveForConfetti(e: MouseEvent) {
+  const now = performance.now()
+  for (const p of restingParticles) {
+    if (now < p.pushedUntil) continue
+    const cx = p.left + p.size / 2
+    const cy = p.top + p.size / 2
+    const dx = cx - e.clientX
+    const dy = cy - e.clientY
+    const dist = Math.hypot(dx, dy)
+    if (dist === 0 || dist > CURSOR_COLLIDE_RADIUS) continue
+    // Push directly away from the cursor along the (dx,dy) vector, clamped
+    // to stay on screen so a hit near an edge doesn't fling it offscreen.
+    const nx = dx / dist
+    const ny = dy / dist
+    const newLeft = Math.min(Math.max(0, p.left + nx * PUSH_DISTANCE), window.innerWidth - p.size)
+    const newTop = Math.min(Math.max(0, p.top + ny * PUSH_DISTANCE), window.innerHeight - p.size)
+    p.left = newLeft
+    p.top = newTop
+    p.pushedUntil = now + PUSH_COOLDOWN_MS
+    p.el.style.left = `${newLeft}px`
+    p.el.style.top = `${newTop}px`
+  }
+}
+
+function addRestingParticle(p: RestingParticle) {
+  restingParticles.add(p)
+  if (!mouseListenerAttached) {
+    window.addEventListener('mousemove', onMouseMoveForConfetti)
+    mouseListenerAttached = true
+  }
+}
+
+function removeRestingParticle(p: RestingParticle) {
+  restingParticles.delete(p)
+  if (restingParticles.size === 0 && mouseListenerAttached) {
+    window.removeEventListener('mousemove', onMouseMoveForConfetti)
+    mouseListenerAttached = false
+  }
 }
 
 export function fireConfettiCannon(x: number, y: number, count = 70) {
@@ -120,10 +186,8 @@ export function fireConfettiCannon(x: number, y: number, count = 70) {
       opacity: 1,
     })
     // Raw elapsed-seconds are stashed in `offset` above and converted to
-    // real 0..1 fractions in one pass at the end, once the true total
-    // duration (flight + rest + fade) is known — keyframe offsets can't be
-    // computed correctly mid-simulation since later phases' lengths aren't
-    // known yet.
+    // real 0..1 fractions in one pass below, once the true flight duration
+    // is known.
 
     let steps = 0
     while (!resting && steps < MAX_SIM_STEPS) {
@@ -165,26 +229,41 @@ export function fireConfettiCannon(x: number, y: number, count = 70) {
     }
 
     const flightSeconds = simSeconds * TIME_SCALE
-    const restStartSeconds = flightSeconds
-    const restEndSeconds = restStartSeconds + REST_HOLD_SECONDS
-    const fadeEndSeconds = restEndSeconds + FADE_SECONDS
-    const totalSeconds = fadeEndSeconds
-
-    // Convert every flight/bounce/slide keyframe's stashed elapsed-seconds
-    // (in `offset`) into a real fraction of the total duration, scaled by
-    // TIME_SCALE so the whole throw plays 10% slower without changing its
-    // shape.
     for (const k of keyframes) {
       const raw = k.offset ?? 0
-      k.offset = Math.min(1, (raw * TIME_SCALE) / totalSeconds)
+      k.offset = Math.min(1, (raw * TIME_SCALE) / flightSeconds || 0)
     }
-    // Hold position through the rest window, then fade out in place.
-    const lastTransform = keyframes[keyframes.length - 1].transform
-    keyframes.push({ offset: restEndSeconds / totalSeconds, transform: lastTransform, opacity: 1 })
-    keyframes.push({ offset: 1, transform: lastTransform, opacity: 0 })
 
-    el.animate(keyframes, { duration: totalSeconds * 1000, easing: 'linear', fill: 'forwards' })
+    const finalLeft = x + px
+    const finalTop = y + py
+    const anim = el.animate(keyframes, { duration: flightSeconds * 1000, easing: 'linear', fill: 'forwards' })
+
+    anim.finished.then(() => {
+      // Hand off from the WAAPI flight animation to plain left/top styling
+      // for the interactive resting phase — a CSS transition (triggered by
+      // the mousemove handler changing left/top directly) reacts to a live
+      // cursor position; a fixed WAAPI keyframe list can't. cancel() first:
+      // a fill:'forwards' animation keeps its own computed end-state style
+      // in effect (winning over a plain inline style for the same
+      // property) until the Animation itself is released.
+      anim.cancel()
+      el.style.transform = 'none'
+      el.style.left = `${finalLeft}px`
+      el.style.top = `${finalTop}px`
+      el.style.transition = `left ${PUSH_COOLDOWN_MS}ms ease-out, top ${PUSH_COOLDOWN_MS}ms ease-out`
+
+      const particle: RestingParticle = { el, size, left: finalLeft, top: finalTop, pushedUntil: 0 }
+      addRestingParticle(particle)
+
+      setTimeout(() => {
+        removeRestingParticle(particle)
+        el.style.transition = `opacity ${FADE_SECONDS}s linear`
+        el.style.opacity = '0'
+        setTimeout(() => el.remove(), FADE_SECONDS * 1000)
+      }, REST_HOLD_SECONDS * 1000)
+    }).catch(() => { el.remove() }) // animation was cancelled (e.g. page nav mid-flight) — just clean up
+
   }
 
-  setTimeout(() => container.remove(), (REST_HOLD_SECONDS + FADE_SECONDS + 6) * 1000)
+  setTimeout(() => container.remove(), (MAX_SIM_STEPS * SIM_DT * TIME_SCALE + REST_HOLD_SECONDS + FADE_SECONDS + 3) * 1000)
 }
