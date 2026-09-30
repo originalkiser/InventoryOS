@@ -5,7 +5,8 @@ import { useAuthStore } from '@/stores/authStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
-import { isAdminOrDeveloper, getRoleLabel } from '@/lib/roles'
+import { useAppSetting } from '@/hooks/useAppSetting'
+import { isAdminOrDeveloper, isDeveloper, getRoleLabel } from '@/lib/roles'
 import { normalizeBlockedDays, formatBlockedDayLabel, upsertBlockedDay, removeBlockedDay } from '@/utils/blockedDays'
 import { LocationExclusionsConfig } from './LocationExclusionsConfig'
 import { ICONS, SECTION_ITEMS, QUICK_FAB_META, QUICK_FAB_DEFAULT, type QuickFabPosition } from './Sidebar'
@@ -51,7 +52,15 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { profile, setProfile } = useAuthStore()
   const { dark, toggle } = useDarkMode()
   const isAdmin = isAdminOrDeveloper(profile?.role)
+  const isDev = isDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
+  // Direct ask 2026-09-30: a company-wide (not per-user) toggle — everyone's
+  // Export button behavior follows this ONE value — but only a developer
+  // can see or change it. useAppSetting (platform.app_settings) is already
+  // the "one value, whole company" mechanism this app uses elsewhere
+  // (exception_config, comms_config, etc.), unlike useProfilePref above,
+  // which is per-user and wouldn't apply "for the full site."
+  const [confettiOnExport, setConfettiOnExport] = useAppSetting<boolean>('confetti_on_export', false)
   const [enabledFabs, setEnabledFabs] = useProfilePref<string[]>('quickfab:enabled', QUICK_FAB_DEFAULT)
   const [fabPosition, setFabPosition] = useProfilePref<QuickFabPosition>('quickfab:position', 'bottom-right')
   const [hiddenSections, setHiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
@@ -474,6 +483,31 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
             </button>
           </div>
         </div>
+
+        {/* Dev Settings — direct ask 2026-09-30. Developer-role only (not
+            Administrator — see isDeveloper vs isAdminOrDeveloper): the
+            toggle itself controls a single company-wide app_settings value
+            that changes EVERY user's Export button behavior, but only a
+            developer should be able to see or touch it. */}
+        {isDev && (
+          <div className="border-t border-navy/10 dark:border-[#F2F1E6]/10 px-4 py-4">
+            <div className="text-[10px] font-heading text-navy/60 dark:text-[#F2F1E6]/90 uppercase tracking-widest mb-3">
+              Dev Settings
+            </div>
+            <div className="flex items-center justify-between max-w-sm">
+              <div>
+                <div className="text-sm font-body text-navy dark:text-[#F2F1E6]">Confetti on Export</div>
+                <div className="text-[10px] font-mono text-inky dark:text-[#F2F1E6]/70 mt-0.5 leading-relaxed">
+                  Applies site-wide, for every user — Orders v2's Export button fires a confetti burst from the cursor on click.
+                </div>
+              </div>
+              <button onClick={() => setConfettiOnExport(!confettiOnExport)}
+                className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0', confettiOnExport ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', confettiOnExport ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
+              </button>
+            </div>
+          </div>
+        )}
         </div>
       </div>
     </div>

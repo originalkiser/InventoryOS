@@ -5,8 +5,10 @@ import * as XLSX from 'xlsx'
 import { Button, Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
 import { useLocations } from '@/hooks/useLocations'
 import { usePageRevisit } from '@/hooks/usePageActive'
+import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
+import { fireConfettiCannon } from '@/lib/confetti'
 import toast from 'react-hot-toast'
 import { useDraft, draftAdHocLocationIds, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
@@ -256,6 +258,10 @@ export function OrdersV2Export() {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const vendors = useVendors()
+  // Company-wide, developer-controlled (see ProfilePanel.tsx's Dev
+  // Settings section) — every user's own read of this same value, no
+  // permission check needed here since only the write side is gated.
+  const [confettiOnExport] = useAppSetting<boolean>('confetti_on_export', false)
   const { draft, lines, loading, reload } = useDraft(draftId || null)
   // This page sits behind KeepAlivePages once visited more than once — going
   // back to Review/Final Review to change a line, then forward to an
@@ -543,7 +549,14 @@ export function OrdersV2Export() {
           <Button size="sm" variant="secondary" onClick={saveTemplate} disabled={!dirty}>
             {dirty ? (isAdHoc ? 'Save as ad hoc default' : 'Save as vendor default') : 'Matches saved default'}
           </Button>
-          <Button size="sm" loading={completing} onClick={download}>
+          <Button size="sm" loading={completing} onClick={(e) => {
+            // Direct ask 2026-09-30: "like a confetti cannon went off from
+            // the tip of the cursor" — the click event's own coordinates,
+            // not the button's center, so it genuinely originates from
+            // wherever the user actually clicked.
+            if (confettiOnExport) fireConfettiCannon(e.clientX, e.clientY)
+            download()
+          }}>
             {draft.status === 'exported' ? `Re-download ${tpl.format.toUpperCase()}` : `Download ${tpl.format.toUpperCase()}`}
           </Button>
         </div>
