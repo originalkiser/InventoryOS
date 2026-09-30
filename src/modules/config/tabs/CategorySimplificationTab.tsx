@@ -6,6 +6,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { Button, Input, Modal, Select } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import type { ColumnMapping } from '@/types'
 import { format } from 'date-fns'
@@ -95,7 +96,8 @@ export function CategorySimplificationTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [update])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:category-simplification' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:category-simplification' })
+  useColumnPrefs('config:category-simplification', table, columnVisibility, columnOrder, setColumnOrder)
 
   const uploadFields = [
     { name: 'category', label: 'Category', required: true },

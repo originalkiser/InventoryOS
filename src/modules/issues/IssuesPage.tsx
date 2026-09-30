@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useIssueColumns } from '@/hooks/useIssueColumns'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { Button, Badge, Modal, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
@@ -789,8 +790,11 @@ export function IssuesPage() {
     profile?.company_id, hiddenCols, builtinOrder, deptMap])
 
   const allTable = useTable(issues, columns)
+  useColumnPrefs('issues.all', allTable.table, allTable.columnVisibility, allTable.columnOrder, allTable.setColumnOrder)
   const pendingTable = useTable(issues.filter(i => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('pending') || s.includes('open') }), columns)
+  useColumnPrefs('issues.pending', pendingTable.table, pendingTable.columnVisibility, pendingTable.columnOrder, pendingTable.setColumnOrder)
   const resolvedTable = useTable(issues.filter(i => { const s = i.status_name?.toLowerCase() ?? ''; return s.includes('resolved') || s.includes('closed') }), columns)
+  useColumnPrefs('issues.resolved', resolvedTable.table, resolvedTable.columnVisibility, resolvedTable.columnOrder, resolvedTable.setColumnOrder)
   // Everything the sidebar badge counts: any issue whose status doesn't read
   // as closed/resolved. Deliberately not the same as "Pending" — a status
   // like "In Progress" counts toward the badge but matches neither the
@@ -800,6 +804,7 @@ export function IssuesPage() {
     [issues],
   )
   const alertTable = useTable(alertIssues, columns)
+  useColumnPrefs('issues.alert', alertTable.table, alertTable.columnVisibility, alertTable.columnOrder, alertTable.setColumnOrder)
 
   const pinnedIds = useMemo(() => customColumns.filter(c => c.pinned).map(c => `cf_${c.id}`), [customColumns])
   const { setColumnPinning: setAllPin } = allTable

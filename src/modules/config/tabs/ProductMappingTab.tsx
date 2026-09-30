@@ -7,6 +7,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import type { ProductIdMapping, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
@@ -34,7 +35,8 @@ export function ProductMappingTab() {
     col.accessor('updated_at', { header: 'Last Updated', cell: (i) => { const r = i.row.original as any; const s = r.last_change_source ? ` (${r.last_change_source})` : ''; return i.getValue() ? `${format(new Date(i.getValue()), 'MMM d, yyyy')}${s}` : '—' } }),
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as ProductIdMapping)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ]
-  const { table, globalFilter, setGlobalFilter } = useTable(data, COLUMNS, { persistKey: 'config:product-mapping' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, COLUMNS, { persistKey: 'config:product-mapping' })
+  useColumnPrefs('config:product-mapping', table, columnVisibility, columnOrder, setColumnOrder)
 
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: ProductIdMapping) {

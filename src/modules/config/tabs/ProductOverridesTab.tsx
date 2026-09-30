@@ -6,6 +6,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { Button, Input, Modal } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import type { ColumnMapping } from '@/types'
 import { format } from 'date-fns'
@@ -59,7 +60,8 @@ export function ProductOverridesTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:product-overrides' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:product-overrides' })
+  useColumnPrefs('config:product-overrides', table, columnVisibility, columnOrder, setColumnOrder)
 
   const uploadFields = [
     { name: 'product_id', label: 'Product ID', required: true },

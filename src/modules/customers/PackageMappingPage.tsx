@@ -21,6 +21,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { SbLoader, Toggle, Modal, Combobox } from '@/components/ui'
 import { FRANCHISE_PACKAGE_KEYS, FRANCHISE_PACKAGE_LABELS } from '@/modules/marketing/menuboard/franchiseMenu'
 
@@ -171,7 +172,8 @@ export function PackageMappingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [col])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(visibleRows, columns, { persistKey: 'package-mapping' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(visibleRows, columns, { persistKey: 'package-mapping' })
+  useColumnPrefs('package-mapping', table, columnVisibility, columnOrder, setColumnOrder)
   const classificationByName = useMemo(() => new Map((rows ?? []).map((r) => [r.name, r])), [rows])
 
   if (!companyId) return <div className="text-xs font-mono text-inky py-8">No workspace loaded.</div>
@@ -376,7 +378,8 @@ function PriceAuditSection({ oilChangeOnly, classificationByName }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [col, loc.locations])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(visible, columns, { persistKey: 'package-price-audit' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(visible, columns, { persistKey: 'package-price-audit' })
+  useColumnPrefs('package-price-audit', table, columnVisibility, columnOrder, setColumnOrder)
 
   return (
     <div className="flex flex-col gap-3 border-t border-navy/10 pt-4 mt-2">

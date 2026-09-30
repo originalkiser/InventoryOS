@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useOrderStore } from '@/stores/orderStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { Button, Badge, Select, Modal, Input } from '@/components/ui'
 import { exportTableToCsv } from '@/hooks/useTable'
 import { buildExport, DEFAULT_EXPORT_COLUMNS, type GeneratedLineItem } from '@/lib/orderEngine'
@@ -106,7 +107,9 @@ export function OrderHistoryTab() {
     }),
   ], [myName, load])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(filtered, columns)
+  const ORDER_HISTORY_TABLE_KEY = 'orders.history_table'
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(filtered, columns)
+  useColumnPrefs(ORDER_HISTORY_TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
 
   const exportRows = useMemo(() => filtered.map((r) => ({
     name: r.name ?? '', created: r.created_at, locations: r.location_count, lines: r.line_count,

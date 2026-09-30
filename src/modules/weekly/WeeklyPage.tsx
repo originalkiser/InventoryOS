@@ -6,6 +6,7 @@ import { useWeeklyStore } from '@/stores/weeklyStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { NotSubmittedPanel } from '@/components/shared/NotSubmittedPanel'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { Button, Modal, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { CountSummaryUpload } from '@/modules/monthend/CountSummaryUpload'
@@ -474,7 +475,9 @@ function WeeklyCountsTab({
     }),
   ], [])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(rows, columns)
+  const WEEKLY_RESULTS_TABLE_KEY = 'weekly.results_table'
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(rows, columns)
+  useColumnPrefs(WEEKLY_RESULTS_TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
 
   const exportRows = useMemo(() => rows.map((r) => ({
     location: r.location_label,

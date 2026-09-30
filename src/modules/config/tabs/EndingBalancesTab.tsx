@@ -12,6 +12,7 @@ import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { Button, Input, Modal, Combobox, Select } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import type { MonthlyEndingBalance, ColumnMapping } from '@/types'
 import { parseAllSheets, type ParseResult, type SheetParseResult } from '@/lib/fileParser'
@@ -147,7 +148,8 @@ export function EndingBalancesTab() {
     return cols
   }, [categories, loc])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:ending-balances' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:ending-balances' })
+  useColumnPrefs('config:ending-balances', table, columnVisibility, columnOrder, setColumnOrder)
 
   const uploadFields = [
     { name: 'location', label: 'Location', required: true },

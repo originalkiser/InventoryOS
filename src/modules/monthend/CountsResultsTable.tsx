@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { Badge } from '@/components/ui'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { RECOUNT_FLAG_LABELS } from '@/lib/recountEngine'
@@ -247,7 +248,9 @@ export function CountsResultsTable({ summaryRows, productRows, lookbackN, loadin
   ], [])
 
   const summaryTbl = useTable(filteredSummary, summaryColumns)
+  useColumnPrefs('monthend.counts_results_summary', summaryTbl.table, summaryTbl.columnVisibility, summaryTbl.columnOrder, summaryTbl.setColumnOrder)
   const productTbl = useTable(filteredProducts, productColumns)
+  useColumnPrefs('monthend.counts_results_products', productTbl.table, productTbl.columnVisibility, productTbl.columnOrder, productTbl.setColumnOrder)
 
   // ---- CSV exports ----
   const summaryExport = useMemo(() => filteredSummary.map((r) => ({

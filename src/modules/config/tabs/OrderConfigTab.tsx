@@ -14,6 +14,7 @@ import { Stat } from '@/components/config/ImportPreviewHost'
 import { Button, Input, Modal, Combobox, Toggle } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import type { LocationOrderConfig, Vendor, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
@@ -136,7 +137,8 @@ export function OrderConfigTab() {
     return cols
   }, [customFields, loc, vendors])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:order-config' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:order-config' })
+  useColumnPrefs('config:order-config', table, columnVisibility, columnOrder, setColumnOrder)
 
   // All uploaded products are treated as active; set Order Limit to 0 to make a
   // product inactive. UoM is captured (used by UoM conversions).

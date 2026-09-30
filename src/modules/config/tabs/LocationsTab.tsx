@@ -12,6 +12,7 @@ import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Toggle } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import { orderDayFromDelivery } from '@/lib/orderDay'
 import type { Location, ColumnMapping } from '@/types'
@@ -692,10 +693,11 @@ export function LocationsTab() {
     return vals.size >= 2
   })
 
-  const { table, globalFilter, setGlobalFilter } = useTable(filteredData, columns, {
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(filteredData, columns, {
     initialSorting: [{ id: 'name', desc: false }],
     persistKey: 'config:locations',
   })
+  useColumnPrefs('config:locations', table, columnVisibility, columnOrder, setColumnOrder)
 
   // ── Save helpers ────────────────────────────────────────────────────────────
 

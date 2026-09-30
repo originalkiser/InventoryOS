@@ -7,6 +7,7 @@ import { ConfigUpload } from '@/components/config/ConfigUpload'
 import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { Button, Input, Modal, Toggle, Card, CardBody } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import type { ColumnMapping } from '@/types'
 import { format } from 'date-fns'
@@ -79,7 +80,8 @@ export function CategoryExpectationsTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:category-expectations' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:category-expectations' })
+  useColumnPrefs('config:category-expectations', table, columnVisibility, columnOrder, setColumnOrder)
 
   const uploadFields = [
     { name: 'category', label: 'Category', required: true },

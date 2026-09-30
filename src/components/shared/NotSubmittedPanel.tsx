@@ -3,6 +3,7 @@ import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { Button } from '@/components/ui'
 import type { Location } from '@/types'
 import { differenceInDays, format } from 'date-fns'
@@ -123,7 +124,8 @@ export function NotSubmittedPanel({
     return cols
   }, [lastSubmittedFormat, metaColumns, marking])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(rows, columns)
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(rows, columns)
+  useColumnPrefs(`not_submitted.${exportPrefix}`, table, columnVisibility, columnOrder, setColumnOrder)
 
   function copyList() {
     const pending = missing.filter((l) => !confirmed.has(l.id))

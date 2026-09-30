@@ -6,6 +6,7 @@ import { useMonthEndStore } from '@/stores/monthEndStore'
 import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { Button, Badge, Select, Input, Combobox, Toggle, Modal } from '@/components/ui'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { locationLabel, locationOptions } from './countsShared'
@@ -219,7 +220,9 @@ export function RecountsTab() {
     }),
   ], [productsIdsOnly])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(filteredRows, columns)
+  const RECOUNTS_TABLE_KEY = 'monthend.recounts_table'
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(filteredRows, columns)
+  useColumnPrefs(RECOUNTS_TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
 
   // Honors the same Products display toggle as the table — was always
   // exporting full detail (reason + on-hand) regardless of what the toggle

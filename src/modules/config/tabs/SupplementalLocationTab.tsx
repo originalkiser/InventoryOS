@@ -6,6 +6,7 @@ import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { Button, Select } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { reprocessRows, type ParseResult } from '@/lib/fileParser'
 import { format } from 'date-fns'
 
@@ -51,7 +52,8 @@ export function SupplementalLocationTab() {
     },
   ], [dataKeys, loc, remove])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:supplemental-location' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:supplemental-location' })
+  useColumnPrefs('config:supplemental-location', table, columnVisibility, columnOrder, setColumnOrder)
 
   async function doImport(mode: ImportMode) {
     if (!parsed || !locCol) return

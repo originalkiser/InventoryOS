@@ -8,6 +8,7 @@ import { ClearTableButton } from '@/components/config/ClearTableButton'
 import { DataSourceLinker } from '@/components/upload/DataSourceLinker'
 import { Button, Input, Modal, Combobox, Badge } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
 import type { PosLocationMap, ColumnMapping } from '@/types'
@@ -35,7 +36,8 @@ export function PosLocationMapTab() {
     { id: 'edit', header: '', enableColumnFilter: false, enableSorting: false, cell: (i: any) => <button onClick={() => openEdit(i.row.original as PosLocationMap)} className="text-xs font-mono text-inky hover:underline">Edit</button> },
   ], [loc])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:pos-location-map' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:pos-location-map' })
+  useColumnPrefs('config:pos-location-map', table, columnVisibility, columnOrder, setColumnOrder)
 
   function openAdd() { setEditId(null); setForm({ ...EMPTY }); setAddOpen(true) }
   function openEdit(r: PosLocationMap) { setEditId(r.id); setForm({ pos_string: r.pos_string ?? '', locationId: r.location_id ?? '' }); setAddOpen(true) }

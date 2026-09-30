@@ -37,6 +37,7 @@ import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import type { ParseResult } from '@/lib/fileParser'
 import {
@@ -1324,8 +1325,9 @@ export function StaffingReportPage() {
     fcCol.accessor('totalForecast', { header: 'Total Forecast', cell: (i) => fmtNum(i.getValue()) }),
     fcCol.accessor('totalPct', { header: 'Total %', cell: (i) => pct(i.getValue()) }),
   ], [fcCol])
-  const { table: forecastTable, globalFilter: forecastGlobalFilter, setGlobalFilter: setForecastGlobalFilter } =
+  const { table: forecastTable, globalFilter: forecastGlobalFilter, setGlobalFilter: setForecastGlobalFilter, columnVisibility: forecastColumnVisibility, columnOrder: forecastColumnOrder, setColumnOrder: setForecastColumnOrder } =
     useTable(forecastCompareRows, forecastColumns, { persistKey: 'staffing-forecast-compare' })
+  useColumnPrefs('staffing-forecast-compare', forecastTable, forecastColumnVisibility, forecastColumnOrder, setForecastColumnOrder)
 
   // ---- Alerts tab --------------------------------------------------------
   // Evaluated by a scheduled backend job (staffing-alerts-refresh, same

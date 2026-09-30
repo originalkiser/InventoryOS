@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react'
 import { Button, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
 import { supabase } from '@/lib/supabase'
 import { parseWeekday } from '@/lib/orderDay'
@@ -173,14 +174,17 @@ export function RdReportsTab() {
     persistKey: 'orders-v2:rd-open-orders',
     initialVisibility: { warehouse_code: false, ship_to_code: false },
   })
+  useColumnPrefs('orders-v2:rd-open-orders', ordersTable.table, ordersTable.columnVisibility, ordersTable.columnOrder, ordersTable.setColumnOrder)
   const invoicesTable = useTable(invoices, invoiceColumns, {
     persistKey: 'orders-v2:rd-open-invoices',
     initialVisibility: { ship_date: false, invoice_due_date: false },
   })
+  useColumnPrefs('orders-v2:rd-open-invoices', invoicesTable.table, invoicesTable.columnVisibility, invoicesTable.columnOrder, invoicesTable.setColumnOrder)
   const ledgerTable = useTable(ledger, ledgerColumns, {
     persistKey: 'orders-v2:rd-order-ledger',
     initialSorting: [{ id: 'last_updated_at', desc: true }],
   })
+  useColumnPrefs('orders-v2:rd-order-ledger', ledgerTable.table, ledgerTable.columnVisibility, ledgerTable.columnOrder, ledgerTable.setColumnOrder)
 
   return (
     <div className="flex flex-col gap-3">

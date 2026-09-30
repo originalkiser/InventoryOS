@@ -12,6 +12,7 @@ import { CustomFieldsEditor } from '@/components/config/CustomFieldsEditor'
 import { Button, Input, Modal, Combobox } from '@/components/ui'
 import type { ComboboxOption } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { mappedValue } from '@/lib/columnTransform'
 import type { VendorPart, Vendor, VendorPartPriceHistory, ColumnMapping } from '@/types'
 import { format } from 'date-fns'
@@ -118,7 +119,8 @@ export function VendorPartsTab() {
     return cols
   }, [customFields, vendorMap])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(data, columns, { persistKey: 'config:vendor-parts' })
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(data, columns, { persistKey: 'config:vendor-parts' })
+  useColumnPrefs('config:vendor-parts', table, columnVisibility, columnOrder, setColumnOrder)
 
   const uploadFields = [
     { name: 'part_number', label: 'Vendor Part #', required: true },

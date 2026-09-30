@@ -8,6 +8,7 @@ import { type VisibilityValue } from '@/components/shared/VisibilitySelector'
 import { RichTextDisplay } from '@/components/shared/RichTextEditor'
 import { Button } from '@/components/ui'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { MeetingModal } from './MeetingModal'
 import type { MeetingNote } from '@/types'
 import { format } from 'date-fns'
@@ -174,7 +175,9 @@ export function MeetingNotesPage() {
     col.accessor('notes', { header: 'Notes', size: 200, meta: { noClip: true, fill: true }, cell: (i) => <ExpandableDisplay value={i.getValue() ?? null} clamp={2} isHtml /> }),
   ], [openEdit])
 
-  const { table, globalFilter, setGlobalFilter } = useTable(visibleMeetings, columns)
+  const MEETING_NOTES_TABLE_KEY = 'meetings.notes_table'
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder } = useTable(visibleMeetings, columns)
+  useColumnPrefs(MEETING_NOTES_TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
 
   return (
     <div className="flex flex-col gap-6 p-6">

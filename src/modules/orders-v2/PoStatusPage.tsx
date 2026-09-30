@@ -9,6 +9,7 @@ import { Card, CardBody, Combobox, Modal, Select, SbLoader, Toggle, Tabs, TabsLi
 import { DataTable } from '@/components/shared/DataTable'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
@@ -357,10 +358,11 @@ export function PoStatusPage() {
     }),
   ], [onOrderCol, shopLabel, posByLocAndId])
 
-  const { table: onOrderTable, globalFilter: onOrderSearch, setGlobalFilter: setOnOrderSearch } = useTable(onOrderRows, onOrderColumns, {
+  const { table: onOrderTable, globalFilter: onOrderSearch, setGlobalFilter: setOnOrderSearch, columnVisibility: onOrderColumnVisibility, columnOrder: onOrderColumnOrder, setColumnOrder: setOnOrderColumnOrder } = useTable(onOrderRows, onOrderColumns, {
     persistKey: 'po-status:on-order',
     initialSorting: [{ id: 'qty', desc: true }],
   })
+  useColumnPrefs('po-status:on-order', onOrderTable, onOrderColumnVisibility, onOrderColumnOrder, setOnOrderColumnOrder)
 
   // ── Main PO list — Template 1 (DataTable) ─────────────────────────────────
   const tableRows: PoTableRow[] = useMemo(() => visible.map((p) => {
@@ -401,11 +403,12 @@ export function PoStatusPage() {
     poCol.accessor('_searchText', { header: '', cell: () => null, enableSorting: false }),
   ], [poCol, shopLabel])
 
-  const { table: poTable, globalFilter: poSearch, setGlobalFilter: setPoSearch } = useTable(tableRows, poColumns, {
+  const { table: poTable, globalFilter: poSearch, setGlobalFilter: setPoSearch, columnVisibility: poColumnVisibility, columnOrder: poColumnOrder, setColumnOrder: setPoColumnOrder } = useTable(tableRows, poColumns, {
     persistKey: 'po-status:pos',
     initialSorting: [{ id: 'created_timestamp', desc: true }],
     initialVisibility: { _searchText: false },
   })
+  useColumnPrefs('po-status:pos', poTable, poColumnVisibility, poColumnOrder, setPoColumnOrder)
 
   return (
     <div className="flex flex-col gap-4">

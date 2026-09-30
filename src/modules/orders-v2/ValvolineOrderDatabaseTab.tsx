@@ -5,6 +5,7 @@ import { Button, Modal } from '@/components/ui'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
 import { useValvolineOrderDatabase, type ValvolineOrderLineRow } from './useValvolineOrderDatabase'
 import { dShort } from './shared'
@@ -69,6 +70,7 @@ export function ValvolineOrderDatabaseTab() {
     persistKey: 'orders-v2:valvoline-order-database',
     initialVisibility: { ship_to_account_number: false, material_code: false },
   })
+  useColumnPrefs('orders-v2:valvoline-order-database', table.table, table.columnVisibility, table.columnOrder, table.setColumnOrder)
 
   return (
     <div className="flex flex-col gap-3">

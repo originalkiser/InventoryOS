@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
+import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
 import { useAllOrderHistoryLines, type OrderHistoryLineRow } from './useOrderHistory'
 import { useVendors } from './useLookups'
@@ -47,6 +48,7 @@ export function ProductsOrderedTab() {
     persistKey: 'orders-v2:products-ordered',
     initialSorting: [{ id: 'order_date', desc: true }],
   })
+  useColumnPrefs('orders-v2:products-ordered', table.table, table.columnVisibility, table.columnOrder, table.setColumnOrder)
 
   return (
     <div className="flex flex-col gap-3">
