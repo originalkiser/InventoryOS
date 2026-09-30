@@ -28,8 +28,11 @@ export function OrderStepper({ draftId, current }: { draftId: string; current: O
   const currentIdx = STEPS.findIndex((s) => s.key === current)
 
   return (
-    <div className="flex justify-center">
-      {/* Direct ask 2026-09-30: equal spacing between the connecting lines
+    <div data-confetti-floor className="flex justify-center">
+      {/* data-confetti-floor: a real surface for the Export page's confetti
+          burst (see src/lib/confetti.ts) to bounce off — direct ask
+          2026-09-30, "hit the order steps and kind of bounce off".
+          Direct ask 2026-09-30: equal spacing between the connecting lines
           regardless of label text width — each step used to be a flex-1
           column sized by its OWN content (so "Final Review" claimed more
           width than "Export"), which pushed the lines between them

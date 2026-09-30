@@ -557,24 +557,31 @@ export function OrdersV2FinalReview() {
           identical wrapper for the full reasoning. "← Orders v2" reaches
           the landing page directly from here too, not just "← Review". */}
       <div className="sticky top-0 z-20 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
-              className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
-            <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}`)}
-              className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Review</Button>
-          </div>
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Final Review</h1>
-          <p className="text-xs text-inky mt-0.5">
-            {vendors.byId(draft.vendor_id)?.name ?? 'All vendors'} · {groups.length} order{groups.length !== 1 ? 's' : ''} · {money(total)}
-          </p>
+      {/* Direct ask 2026-09-30 (revised): back buttons share a row with
+          the next-step action (Continue to Export), and the stepper sits
+          directly below that with nothing between — same arrangement as
+          Review's own sticky block. Title/subtext moved back OUT of the
+          sticky block entirely, further down the page, matching where
+          Review's own title sits (see below). */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
+            className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
+          <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}`)}
+            className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Review</Button>
         </div>
         <Button size="sm" onClick={() => navigate(`/orders-v2/draft/${draft.id}/export`)}>
           Continue to Export →
         </Button>
       </div>
       <OrderStepper draftId={draft.id} current="final" />
+      </div>
+
+      <div>
+        <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Final Review</h1>
+        <p className="text-xs text-inky mt-0.5">
+          {vendors.byId(draft.vendor_id)?.name ?? 'All vendors'} · {groups.length} order{groups.length !== 1 ? 's' : ''} · {money(total)}
+        </p>
       </div>
 
       {/* Summaries */}

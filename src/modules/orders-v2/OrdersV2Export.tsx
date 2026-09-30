@@ -532,28 +532,17 @@ export function OrdersV2Export() {
           identical wrapper for the full reasoning. "← Orders v2" reaches
           the landing page directly from here too, not just "← Final Review". */}
       <div className="sticky top-0 z-20 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
-              className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
-            <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)}
-              className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Final Review</Button>
-          </div>
-          <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
-            Export
-            {isAdHoc && <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-sky/40 text-navy">Ad Hoc</span>}
-            {draft.status === 'exported' && (
-              <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-[#2ECC71]/15 text-[#2ECC71] border border-[#2ECC71]/40">
-                ✓ Complete
-              </span>
-            )}
-          </h1>
-          <p className="text-xs text-inky mt-0.5">
-            {vendorName || 'No vendor'} · {included.length} line{included.length !== 1 ? 's' : ''} · {money(Number(headerValues.total))}
-          </p>
-        </div>
+      {/* Direct ask 2026-09-30 (revised): back button shares a row with
+          the primary actions, and the stepper sits directly below with
+          nothing between — matching Review's own sticky block. Title/
+          subtext moved back OUT of the sticky block entirely, further
+          down the page, matching where Review's own title sits. */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
+          className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant="ghost" onClick={() => navigate(`/orders-v2/draft/${draft.id}/final`)}
+            className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Final Review</Button>
           <Button size="sm" variant="secondary" onClick={saveTemplate} disabled={!dirty}>
             {dirty ? (isAdHoc ? 'Save as ad hoc default' : 'Save as vendor default') : 'Matches saved default'}
           </Button>
@@ -570,6 +559,21 @@ export function OrdersV2Export() {
         </div>
       </div>
       <OrderStepper draftId={draft.id} current="export" />
+      </div>
+
+      <div>
+        <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
+          Export
+          {isAdHoc && <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-sky/40 text-navy">Ad Hoc</span>}
+          {draft.status === 'exported' && (
+            <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-[#2ECC71]/15 text-[#2ECC71] border border-[#2ECC71]/40">
+              ✓ Complete
+            </span>
+          )}
+        </h1>
+        <p className="text-xs text-inky mt-0.5">
+          {vendorName || 'No vendor'} · {included.length} line{included.length !== 1 ? 's' : ''} · {money(Number(headerValues.total))}
+        </p>
       </div>
 
       {isAdHoc && !hasAdhocOverride && (
@@ -720,7 +724,10 @@ export function OrdersV2Export() {
         <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Preview (first 10 of {rows.length})</span>
         <div className="overflow-auto rounded border border-navy/20 max-h-72">
           <table className="text-[11px] font-mono">
-            <thead><tr className="bg-cream text-inky uppercase border-b border-navy/20">
+            {/* data-confetti-floor: a real surface for the confetti burst
+                (see src/lib/confetti.ts) to land on/rest against — direct
+                ask 2026-09-30, "rest on top of the columns border". */}
+            <thead><tr data-confetti-floor className="bg-cream text-inky uppercase border-b border-navy/20">
               {tpl.columns.map((c) => <th key={c.id} className="text-left px-2 py-1 whitespace-nowrap">{c.header}</th>)}
             </tr></thead>
             <tbody>
