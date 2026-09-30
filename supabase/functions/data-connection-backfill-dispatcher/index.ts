@@ -350,11 +350,31 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
   if (result.status === 'error') throw new Error(result.message ?? 'All chunks failed')
 
   // A chunk that failed or was never attempted this tick goes back into
-  // the pending queue (ahead of ids not yet tried at all this month) so
-  // it gets retried on a later tick instead of being silently skipped for
-  // the rest of the month — see runChunksConcurrently's own header
-  // comment on the real production bug this fixes.
-  const newPending = [...result.unresolvedIds, ...remainingAfterTick]
+  // the pending queue so it gets retried on a later tick instead of being
+  // silently skipped for the rest of the month — see runChunksConcurrently's
+  // own header comment on the real production bug this fixes.
+  //
+  // Found live 2026-09-30: this used to put unresolvedIds at the FRONT of
+  // the queue (ahead of ids never tried yet this month). thisTickIds is
+  // always pendingIds.slice(0, MAX_IDS_PER_TICK), so a shop whose full-
+  // month pull genuinely can't finish inside FETCH_TIMEOUT_MS (150s) —
+  // "The signal has been aborted" — gets requeued right back to position 0
+  // and is the FIRST thing retried next tick too. With concurrency:1 for
+  // orders (deliberate, see chunkOpts above) that one slow shop's abort
+  // alone eats most of a 100s tick budget before a second chunk is even
+  // attempted, so almost nothing behind it in the queue ever got a turn.
+  // Real production damage: the droptop_orders backfill job created
+  // 2026-09-20 was still stuck at cursor_month 2026-05-01 with
+  // months_pulled: 0 ten days later, its error_message permanently reading
+  // "Chunk 1/60: The signal has been aborted" — every tick re-tried the
+  // same front-of-queue shop(s) first and made near-zero net progress into
+  // the other ~160 pending shops. Putting unresolvedIds at the BACK instead
+  // means each tick advances through genuinely untried shops first, and a
+  // shop that failed only gets retried once the rest of the month's list
+  // has had its turn — by which point a transient timeout/rate-limit is
+  // more likely to have cleared, and a single chronically slow shop can no
+  // longer block the other 159 indefinitely.
+  const newPending = [...remainingAfterTick, ...result.unresolvedIds]
   const succeededCount = thisTickIds.length - result.unresolvedIds.length
   const monthDone = newPending.length === 0
   const prevMonth = monthBefore(cursor)
