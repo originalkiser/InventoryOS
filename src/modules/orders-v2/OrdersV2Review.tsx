@@ -26,6 +26,7 @@ import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
+import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { uomDisplayLabel } from './types'
 import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
@@ -1032,17 +1033,31 @@ export function OrdersV2Review() {
                 <Plus className="w-3.5 h-3.5 mr-1" /> Add Non-Configured Product
               </Button>
             </div>
-            <ShopConfiguredProductsTable
-              rows={shopRows(popupShopId)}
-              onPatch={patchQty}
-              onAdd={addConfiguredProduct}
-              showVmi={showConfigVmi}
-              ozProductIds={ozProductIds}
-              exceptionFor={exceptionFor}
-              onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
-              leadDays={leadDaysFor(popupShopId)}
-              dosAfterColorClass={dosAfterColorClass}
-            />
+            {useNewTable ? (
+              <ShopConfiguredProductsDataTable
+                rows={shopRows(popupShopId)}
+                onPatch={patchQty}
+                onAdd={addConfiguredProduct}
+                showVmi={showConfigVmi}
+                ozProductIds={ozProductIds}
+                exceptionFor={exceptionFor}
+                onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+                leadDays={leadDaysFor(popupShopId)}
+                dosAfterColorClass={dosAfterColorClass}
+              />
+            ) : (
+              <ShopConfiguredProductsTable
+                rows={shopRows(popupShopId)}
+                onPatch={patchQty}
+                onAdd={addConfiguredProduct}
+                showVmi={showConfigVmi}
+                ozProductIds={ozProductIds}
+                exceptionFor={exceptionFor}
+                onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+                leadDays={leadDaysFor(popupShopId)}
+                dosAfterColorClass={dosAfterColorClass}
+              />
+            )}
           </div>
         </Modal>
       )}
@@ -1450,6 +1465,10 @@ export function OrdersV2Review() {
                               return dd ? <span className="normal-case text-inky/50"> · Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</span> : null
                             })()}
                           </p>
+                          {/* This whole row-expand only ever renders inside
+                              the !useNewTable-gated old table below, so
+                              useNewTable is always false here — no ternary
+                              needed, unlike the other 3 call sites. */}
                           <ShopConfiguredProductsTable
                             rows={shopRows(locId)}
                             onPatch={patchQty}
@@ -1509,16 +1528,29 @@ export function OrdersV2Review() {
                             <p className="text-[10px] font-mono text-inky/50 mb-1">Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</p>
                           ) : null
                         })()}
-                        <ShopConfiguredProductsTable
-                          rows={shopRows(locId)}
-                          onPatch={patchQty}
-                          onAdd={addConfiguredProduct}
-                          showVmi={showConfigVmi}
-                          ozProductIds={ozProductIds}
-                          exceptionFor={exceptionFor}
-                          onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
-                          leadDays={leadDaysFor(locId)}
-                        />
+                        {useNewTable ? (
+                          <ShopConfiguredProductsDataTable
+                            rows={shopRows(locId)}
+                            onPatch={patchQty}
+                            onAdd={addConfiguredProduct}
+                            showVmi={showConfigVmi}
+                            ozProductIds={ozProductIds}
+                            exceptionFor={exceptionFor}
+                            onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+                            leadDays={leadDaysFor(locId)}
+                          />
+                        ) : (
+                          <ShopConfiguredProductsTable
+                            rows={shopRows(locId)}
+                            onPatch={patchQty}
+                            onAdd={addConfiguredProduct}
+                            showVmi={showConfigVmi}
+                            ozProductIds={ozProductIds}
+                            exceptionFor={exceptionFor}
+                            onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+                            leadDays={leadDaysFor(locId)}
+                          />
+                        )}
                       </div>
                     )}
                   </div>

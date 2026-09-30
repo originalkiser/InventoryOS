@@ -24,7 +24,8 @@ import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import type { useLastOrderedInfo } from './useLastOrderedInfo'
 import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
-import { ShopConfiguredProductsTable, PoDecisionButtons, Flags } from './OrdersV2Review'
+import { PoDecisionButtons, Flags } from './OrdersV2Review'
+import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { OVERRIDE_CELL, DOS_COLOR_LEGEND, dos, money, num, dShort } from './shared'
 import { uomDisplayLabel } from './types'
 import type { GenerationInput, LineFlag } from './types'
@@ -390,7 +391,7 @@ export function OrdersV2ReviewTable({
                   return dd ? <span className="normal-case text-inky/50"> · Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</span> : null
                 })()}
               </p>
-              <ShopConfiguredProductsTable
+              <ShopConfiguredProductsDataTable
                 rows={shopRows(locId)}
                 onPatch={patchQty}
                 onAdd={onAddConfiguredProduct}
