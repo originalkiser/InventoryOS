@@ -14,6 +14,15 @@ import type { ComboboxOption } from '@/components/ui'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
+// request_date/completed_date are bare 'yyyy-MM-dd' strings (no time
+// component) — `new Date(d)` parses that as UTC midnight, and date-fns'
+// format() then renders in the browser's LOCAL timezone, shifting the
+// displayed date back one day for any US timezone. Same fix already
+// established elsewhere in this app (orders-v2/shared.ts's dShort,
+// LocationLookupPage.tsx's dateShort): anchor a bare date to local
+// midnight before formatting, leave a full timestamp alone.
+const dShort = (d: string) => format(new Date(d.length <= 10 ? `${d}T00:00:00` : d), 'MMM d, yyyy')
+
 type Status = 'open' | 'complete'
 
 const RECOUNT_TYPE_OPTIONS: ComboboxOption[] = [
@@ -186,13 +195,13 @@ export function RecountsTab() {
     }),
     col.accessor('request_date', {
       header: 'Requested',
-      cell: (i) => (i.getValue() ? format(new Date(i.getValue()!), 'MMM d, yyyy') : '—'),
+      cell: (i) => (i.getValue() ? dShort(i.getValue()!) : '—'),
     }),
     col.accessor('completed_date', {
       header: 'Completed',
       cell: (i) => {
         const d = i.getValue()
-        return d ? format(new Date(d), 'MMM d, yyyy') : <span className="text-inky/50">Pending</span>
+        return d ? dShort(d) : <span className="text-inky/50">Pending</span>
       },
     }),
     col.accessor('status', {
