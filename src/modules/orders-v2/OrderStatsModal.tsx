@@ -1,0 +1,167 @@
+import { useEffect, useMemo, useState } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import { Modal, SbLoader } from '@/components/ui'
+import { supabase } from '@/lib/supabase'
+import { useLocations } from '@/hooks/useLocations'
+import { MINIMUM_TYPE_LABELS, type MinimumType } from './types'
+
+const sb = () => supabase as any
+const PAGE = 1000
+
+interface StatLine { id: string; location_id: string | null; product_id: string; system_qty: number; qty: number; included: boolean }
+
+// Curated subset of settings_snapshot worth showing — the full blob also
+// carries internal bookkeeping keys (__order_dow, __adhoc_location_ids,
+// __shop_count, __keepfill_alerts) that mean nothing to a reader trying to
+// understand "what was this order generated with."
+const SETTING_ROWS: { key: string; label: string; fmt?: (v: unknown) => string }[] = [
+  { key: 'days_of_supply_target', label: 'DOS Target' },
+  { key: 'days_of_supply_min_trigger', label: 'DOS Min Trigger' },
+  { key: 'days_of_supply_max', label: 'DOS Max' },
+  { key: 'bulk_rounding_increment', label: 'Bulk Rounding Increment (gal)' },
+  { key: 'order_minimum_dollars_package', label: 'Package Minimum ($)', fmt: (v) => `$${Number(v ?? 0).toLocaleString()}` },
+  { key: 'package_minimum_type', label: 'Package Minimum Type', fmt: (v) => MINIMUM_TYPE_LABELS[v as MinimumType] ?? String(v ?? '—') },
+  { key: 'order_minimum_dollars_bulk', label: 'Bulk Minimum ($)', fmt: (v) => `$${Number(v ?? 0).toLocaleString()}` },
+  { key: 'bulk_minimum_type', label: 'Bulk Minimum Type', fmt: (v) => MINIMUM_TYPE_LABELS[v as MinimumType] ?? String(v ?? '—') },
+  { key: 'bulk_round_up_threshold_gal', label: 'Bulk Round-Up Threshold (gal)' },
+  { key: 'bulk_urgent_dos_threshold', label: 'Bulk Urgent DOS Threshold' },
+  { key: 'skip_order_if_dos_over', label: 'Skip Order If DOS Over' },
+]
+
+/**
+ * "Settings summary" — direct ask 2026-09-30: what this order was generated
+ * WITH (settings_snapshot, already stored per draft), and how far the final
+ * lines actually drifted from what the engine originally suggested —
+ * adjusted up/down, removed, added. All four categories are derived from
+ * fields the engine already computes (system_qty vs qty vs included), no
+ * new schema — the point is surfacing decisions that are already there but
+ * were never summarized anywhere, to help tune settings/logic over time.
+ */
+export function OrderStatsModal({ draftId, settingsSnapshot, open, onClose }: {
+  draftId: string
+  settingsSnapshot: Record<string, unknown> | null | undefined
+  open: boolean
+  onClose: () => void
+}) {
+  const loc = useLocations()
+  const [lines, setLines] = useState<StatLine[]>([])
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoading(true)
+    setExpanded(null)
+    ;(async () => {
+      const out: StatLine[] = []
+      let from = 0
+      for (;;) {
+        const { data, error } = await sb().schema('inventory').from('ov2_order_draft_lines')
+          .select('id, location_id, product_id, system_qty, qty, included').eq('draft_id', draftId)
+          .order('id', { ascending: true }).range(from, from + PAGE - 1)
+        if (error || cancelled) break
+        const batch = (data ?? []) as StatLine[]
+        out.push(...batch)
+        if (batch.length === 0) break
+        from += batch.length
+      }
+      if (!cancelled) { setLines(out); setLoading(false) }
+    })()
+    return () => { cancelled = true }
+  }, [open, draftId])
+
+  const shopLabel = (id: string | null) => (id ? (loc.fieldValue(id, 'shop_city') || loc.codeOf(id)) : null) ?? '—'
+
+  // Epsilon guards against a line's own qty being rounded to something
+  // technically off from system_qty by a fraction of a unit (bulk's own
+  // fractional-gallon rounding) without that reading as a real adjustment.
+  const buckets = useMemo(() => {
+    const EPS = 0.001
+    const up = lines.filter((l) => l.included && l.qty > l.system_qty + EPS)
+    const down = lines.filter((l) => l.included && l.qty < l.system_qty - EPS)
+    const removed = lines.filter((l) => !l.included && l.system_qty > EPS)
+    const added = lines.filter((l) => l.included && l.system_qty <= EPS && l.qty > EPS)
+    return { up, down, removed, added }
+  }, [lines])
+
+  const TILES: { key: keyof typeof buckets; label: string; color: string }[] = [
+    { key: 'up', label: 'Adjusted Up', color: 'text-[#2ECC71]' },
+    { key: 'down', label: 'Adjusted Down', color: 'text-[#E67E22]' },
+    { key: 'removed', label: 'Removed', color: 'text-[#C0392B]' },
+    { key: 'added', label: 'Added', color: 'text-sky' },
+  ]
+
+  return (
+    <Modal open={open} onClose={onClose} title="Order Settings & Adjustments" size="lg">
+      <div className="flex flex-col gap-4">
+        {settingsSnapshot && (
+          <div>
+            <h3 className="text-[11px] font-mono uppercase tracking-wide text-inky/60 mb-1.5">Settings used</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {SETTING_ROWS.filter((r) => settingsSnapshot[r.key] !== undefined).map((r) => (
+                <div key={r.key} className="rounded border border-navy/15 px-2 py-1.5">
+                  <div className="text-[9px] font-mono uppercase tracking-wide text-inky/50">{r.label}</div>
+                  <div className="text-xs font-mono text-navy font-bold">
+                    {r.fmt ? r.fmt(settingsSnapshot[r.key]) : String(settingsSnapshot[r.key])}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="py-8 flex justify-center"><SbLoader size={28} /></div>
+        ) : (
+          <div>
+            <h3 className="text-[11px] font-mono uppercase tracking-wide text-inky/60 mb-1.5">
+              How the final order differs from what was originally suggested
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {TILES.map((t) => {
+                const rows = buckets[t.key]
+                const isOpen = expanded === t.key
+                return (
+                  <div key={t.key} className="rounded border border-navy/20">
+                    <button
+                      onClick={() => setExpanded(isOpen ? null : t.key)}
+                      disabled={rows.length === 0}
+                      className="w-full flex items-center justify-between gap-1 px-2 py-2 text-left disabled:cursor-default"
+                    >
+                      <div>
+                        <div className="text-[9px] font-mono uppercase tracking-widest text-inky/50">{t.label}</div>
+                        <div className={`text-xl font-heading font-bold ${t.color}`}>{rows.length}</div>
+                      </div>
+                      {rows.length > 0 && (isOpen ? <ChevronDown className="w-3.5 h-3.5 text-inky/50" /> : <ChevronRight className="w-3.5 h-3.5 text-inky/50" />)}
+                    </button>
+                    {isOpen && (
+                      <div className="border-t border-navy/15 max-h-40 overflow-auto">
+                        <table className="w-full text-[10px] font-mono">
+                          <thead><tr className="bg-cream text-inky uppercase border-b border-navy/10">
+                            <th className="text-left px-1.5 py-1">Shop</th><th className="text-left px-1.5 py-1">Product</th>
+                            <th className="text-right px-1.5 py-1">Suggested</th><th className="text-right px-1.5 py-1">Actual</th>
+                          </tr></thead>
+                          <tbody>
+                            {rows.map((l) => (
+                              <tr key={l.id} className="border-b border-navy/5">
+                                <td className="px-1.5 py-1 text-navy">{shopLabel(l.location_id)}</td>
+                                <td className="px-1.5 py-1 text-navy">{l.product_id}</td>
+                                <td className="px-1.5 py-1 text-right text-inky/60">{l.system_qty}</td>
+                                <td className="px-1.5 py-1 text-right text-navy">{l.qty}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}

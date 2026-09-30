@@ -4,6 +4,7 @@ import { RefreshCw, ChevronRight, ChevronDown, ChevronUp, Settings, Plus, Pencil
 import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
+import { OrderStatsModal } from './OrderStatsModal'
 import { OrderStepper } from './OrderStepper'
 import { ToggleButton, SegmentedSlider } from './controls'
 import { ExceptionEditModal } from './ExceptionEditModal'
@@ -250,6 +251,7 @@ export function OrdersV2Review() {
   // that isn't happening), so they're suppressed wherever this is true.
   const isAdHoc = draft ? !!draftAdHocLocationIds(draft) : false
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
+  const [statsModalOpen, setStatsModalOpen] = useState(false)
   const [movingToFinal, setMovingToFinal] = useState(false)
   // Real bug found live 2026-09-29: this page sits behind KeepAlivePages
   // (see the usePageRevisit(reload) call above) — clicking "Final Review →"
@@ -845,6 +847,12 @@ export function OrdersV2Review() {
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
+          {/* Direct ask 2026-09-30: settings used + adjustment counts,
+              reachable from inside the order too (not just the landing
+              table's own "Stats" link). */}
+          <Button size="sm" variant="secondary" onClick={() => setStatsModalOpen(true)}>
+            Stats
+          </Button>
           {/* Bug found live 2026-09-30: Button's default 'primary' variant
               already sets bg-inky/text-cream, and Tailwind's generated
               stylesheet order (not class-attribute order) decides which of
@@ -873,6 +881,13 @@ export function OrdersV2Review() {
       <Modal open={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} title="Order Settings" size="xl">
         <OrdersV2SettingsBody onExceptionChanged={onExceptionChanged} />
       </Modal>
+
+      <OrderStatsModal
+        draftId={draft.id}
+        settingsSnapshot={draft.settings_snapshot}
+        open={statsModalOpen}
+        onClose={() => setStatsModalOpen(false)}
+      />
 
       {exceptionTarget && (
         <ExceptionEditModal

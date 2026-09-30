@@ -14,6 +14,7 @@ import { useRdReports } from './useRdReports'
 import { RdReportsTab } from './RdReportsTab'
 import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
 import { ProductsOrderedTab } from './ProductsOrderedTab'
+import { OrderStatsModal } from './OrderStatsModal'
 import { useVendors, useUserNames } from './useLookups'
 import { SegmentedSlider } from './controls'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
@@ -61,6 +62,7 @@ export function OrdersV2Landing() {
   const vendors = useVendors()
   const names = useUserNames()
   const rd = useRdReports()
+  const [statsDraft, setStatsDraft] = useState<DraftRow | null>(null)
   const [soOpen, setSoOpen] = useState(false)
   const [ioOpen, setIoOpen] = useState(false)
 
@@ -72,7 +74,7 @@ export function OrdersV2Landing() {
   // until the user actually touches it; every read below goes through this
   // instead, same "sensible default, not blank" idea as orderDow already
   // defaulting to today's weekday.
-  const effectiveVendorId = vendorId || vendors.options[0]?.value || ''
+  const effectiveVendorId = vendorId || vendors.orderableOptions[0]?.value || ''
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10))
   // Which weekday's shops to pull in. Defaults to the order date's own
   // weekday, but can be pointed elsewhere without moving the order date.
@@ -148,6 +150,13 @@ export function OrdersV2Landing() {
         const histId = historyIds[d.id]
         return (
           <div className="flex items-center justify-end gap-2">
+            {/* Direct ask 2026-09-30: a settings/adjustments summary reachable
+                right from this table, not just from inside the order. */}
+            <button title="Settings & adjustments summary"
+              onClick={(e) => { e.stopPropagation(); setStatsDraft(d) }}
+              className="text-[11px] font-mono text-inky hover:text-navy hover:underline whitespace-nowrap">
+              Stats
+            </button>
             {d.status === 'exported' && histId && (
               <button onClick={(e) => { e.stopPropagation(); navigate(`/orders-v2/history/${histId}`) }}
                 className="text-[11px] font-mono text-inky hover:text-navy hover:underline whitespace-nowrap">
@@ -260,7 +269,7 @@ export function OrdersV2Landing() {
             <SegmentedSlider
               value={effectiveVendorId}
               onChange={setVendorId}
-              options={vendors.options.map((o) => ({ value: o.value, label: o.label }))}
+              options={vendors.orderableOptions.map((o) => ({ value: o.value, label: o.label }))}
             />
           </label>
           <Input label="Order Date" type="date" value={orderDate} onChange={(e) => pickDate(e.target.value)} />
@@ -366,6 +375,15 @@ export function OrdersV2Landing() {
           {rd.uploading === 'invoices' && <div className="flex justify-center py-2"><SbLoader size={24} /></div>}
         </div>
       </Modal>
+
+      {statsDraft && (
+        <OrderStatsModal
+          draftId={statsDraft.id}
+          settingsSnapshot={statsDraft.settings_snapshot}
+          open={!!statsDraft}
+          onClose={() => setStatsDraft(null)}
+        />
+      )}
     </div>
   )
 }

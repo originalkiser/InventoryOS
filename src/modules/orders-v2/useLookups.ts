@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 
 const sb = () => supabase as any
 
-export interface VendorLite { id: string; name: string; vendor_code: string | null }
+export interface VendorLite { id: string; name: string; vendor_code: string | null; show_in_order_selection: boolean }
 
 export function useVendors() {
   const { profile } = useAuthStore()
@@ -23,23 +23,34 @@ export function useVendors() {
   // resolve first).
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!companyId) return
-    let cancelled = false
-    sb().schema('inventory').from('vendors').select('id, name, vendor_code').eq('company_id', companyId).order('name')
-      .then(({ data }: any) => { if (!cancelled) { setVendors((data ?? []) as VendorLite[]); setLoading(false) } })
-    return () => { cancelled = true }
+    const { data } = await sb().schema('inventory').from('vendors').select('id, name, vendor_code, show_in_order_selection').eq('company_id', companyId).order('name')
+    setVendors((data ?? []) as VendorLite[])
+    setLoading(false)
   }, [companyId])
+  useEffect(() => { load() }, [load])
 
   const byIdMap = useMemo(() => new Map(vendors.map((v) => [v.id, v])), [vendors])
   const byId = useCallback((id: string | null | undefined) => (id ? byIdMap.get(id) ?? null : null), [byIdMap])
   const options = useMemo(() => vendors.map((v) => ({ value: v.id, label: v.name })), [vendors])
+  // Direct ask 2026-09-30: a vendor can be hidden from the "Start New
+  // Order" picker without affecting anything else (filters, history,
+  // config screens all keep reading the full, unfiltered `vendors`/
+  // `options` above — this is purely about which vendors are offered when
+  // starting a NEW order). `show_in_order_selection` defaults true, so a
+  // row from before this column existed still shows up unless explicitly
+  // hidden later from Order Settings' Vendor Visibility card.
+  const orderableOptions = useMemo(
+    () => vendors.filter((v) => v.show_in_order_selection !== false).map((v) => ({ value: v.id, label: v.name })),
+    [vendors],
+  )
   // Mighty has no location_order_config-driven engine path — see
   // mightyEngine.ts/MightyOrderReview.tsx. Matched by vendor_code (stable)
   // rather than name (an admin could rename the display name later).
   const isMighty = useCallback((id: string | null | undefined) => byId(id)?.vendor_code === 'MIGHTY', [byId])
 
-  return { vendors, byId, options, isMighty, loading }
+  return { vendors, byId, options, orderableOptions, isMighty, loading, reload: load }
 }
 
 export function useUserNames() {

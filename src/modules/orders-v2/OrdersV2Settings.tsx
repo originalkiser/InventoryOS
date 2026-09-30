@@ -5,6 +5,7 @@ import { useOrderSettings } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { VendorRulesCard } from './VendorRulesCard'
 import { VendorPartRulesCard } from './VendorPartRulesCard'
+import { VendorVisibilityCard } from './VendorVisibilityCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
 import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
@@ -156,6 +157,7 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
         <Button size="sm" disabled={!dirty} onClick={() => save(draft)}>Save Settings</Button>
       </div>
 
+      <VendorVisibilityCard />
       <VendorRulesCard />
       <VendorPartRulesCard />
       <ProductExceptionsManager onChanged={onExceptionChanged} />
