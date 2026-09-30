@@ -32,6 +32,14 @@ export interface RdOpenOrderRow {
   ship_to_code: string | null; ship_to_name: string | null; product_code: string; product_desc: string | null
   qty_ordered: number | null; uploaded_at: string
 }
+export type RdOrderLedgerStatus = 'open' | 'closed_delivered' | 'closed_no_invoice'
+export interface RdOrderLedgerRow {
+  id: string; location_id: string | null; sales_order_no: string; customer_po_no: string | null
+  order_date: string | null; order_type: string | null; ship_to_name: string | null
+  product_code: string; product_desc: string | null; qty_ordered: number | null
+  status: RdOrderLedgerStatus; delivered_qty: number | null; delivered_at: string | null
+  closed_at: string | null; first_seen_at: string; last_updated_at: string
+}
 export interface RdOpenInvoiceRow {
   id: string; location_id: string | null; sales_order_no: string; customer_po_no: string | null
   invoice_no: string | null; order_date: string | null; ship_date: string | null; invoice_date: string | null
@@ -85,6 +93,41 @@ async function upsertOrderLedger(companyId: string, rows: Record<string, unknown
   }
 }
 
+// Direct ask 2026-09-30: a line that drops off a fresh Open Sales Order
+// upload (still 'open' in the ledger from a PRIOR upload, but absent from
+// THIS one) needs resolving rather than just sitting there forever — check
+// rd_delivery_ledger (the accumulating invoice history, same
+// sales_order_no|product_code key) for a matching shipment. Found: close it
+// with that shipment's qty/ship-date as "delivered." Not found: close it
+// anyway (it's genuinely gone from the vendor's own open-order report) but
+// flagged closed_no_invoice — something to follow up on, not silently drop.
+async function closeStaleOrderLedgerRows(companyId: string, currentKeys: Set<string>) {
+  const { data: openRows, error: openErr } = await sb().schema('inventory').from('rd_order_ledger')
+    .select('id, sales_order_no, product_code').eq('company_id', companyId).eq('status', 'open')
+  if (openErr) throw openErr
+  const stale = (openRows ?? []).filter((r: any) => !currentKeys.has(`${r.sales_order_no}|${r.product_code}`))
+  if (!stale.length) return
+
+  const { data: deliveries, error: delErr } = await sb().schema('inventory').from('rd_delivery_ledger')
+    .select('sales_order_no, product_code, qty_shipped, ship_date, invoice_date').eq('company_id', companyId)
+  if (delErr) throw delErr
+  const deliveryByKey = new Map<string, { qty_shipped: number | null; ship_date: string | null; invoice_date: string | null }>(
+    (deliveries ?? []).map((d: any) => [`${d.sales_order_no}|${d.product_code}`, d]),
+  )
+
+  const now = new Date().toISOString()
+  const updates = stale.map((r: any) => {
+    const delivery = deliveryByKey.get(`${r.sales_order_no}|${r.product_code}`)
+    return delivery
+      ? { id: r.id, status: 'closed_delivered', delivered_qty: delivery.qty_shipped, delivered_at: delivery.ship_date ?? delivery.invoice_date, closed_at: now }
+      : { id: r.id, status: 'closed_no_invoice', delivered_qty: null, delivered_at: null, closed_at: now }
+  })
+  for (let i = 0; i < updates.length; i += 500) {
+    const { error } = await sb().schema('inventory').from('rd_order_ledger').upsert(updates.slice(i, i + 500), { onConflict: 'id' })
+    if (error) throw error
+  }
+}
+
 async function insertDeliveryLedger(companyId: string, rows: Record<string, unknown>[]) {
   for (let i = 0; i < rows.length; i += 1000) {
     const { error } = await sb().schema('inventory').from('rd_delivery_ledger')
@@ -113,6 +156,14 @@ export function useRdReports() {
   const fetchOpenInvoices = useCallback(async (): Promise<RdOpenInvoiceRow[]> => {
     if (!companyId) return []
     return fetchAllRows<RdOpenInvoiceRow>('inventory', 'rd_open_invoices', (q) => q.eq('company_id', companyId))
+  }, [companyId])
+  // The real, accumulating history (direct ask 2026-09-30) — every PO/product
+  // line ever seen on an Open Sales Order upload, still open or resolved
+  // (closed_delivered/closed_no_invoice — see the lifecycle columns on
+  // rd_order_ledger and closeStaleOrderLedgerRows above).
+  const fetchOrderLedger = useCallback(async (): Promise<RdOrderLedgerRow[]> => {
+    if (!companyId) return []
+    return fetchAllRows<RdOrderLedgerRow>('inventory', 'rd_order_ledger', (q) => q.eq('company_id', companyId))
   }, [companyId])
 
   const loadLastUploaded = useCallback(async () => {
@@ -321,7 +372,7 @@ export function useRdReports() {
       // first (summing qty_ordered, since each line is a real slice of the
       // same still-open order) so the ledger always gets exactly one row
       // per key regardless of how many lines the report split it across.
-      const ledgerByKey = new Map<string, { company_id: string; location_id: string | null; sales_order_no: string; product_code: string; customer_po_no: string | null; order_date: string | null; order_type: string | null; ship_to_name: string | null; product_desc: string | null; qty_ordered: number | null; last_updated_at: string }>()
+      const ledgerByKey = new Map<string, { company_id: string; location_id: string | null; sales_order_no: string; product_code: string; customer_po_no: string | null; order_date: string | null; order_type: string | null; ship_to_name: string | null; product_desc: string | null; qty_ordered: number | null; last_updated_at: string; status: string; delivered_qty: null; delivered_at: null; closed_at: null }>()
       for (const r of parsed) {
         const key = `${r.sales_order_no}|${r.product_code}`
         const existing = ledgerByKey.get(key)
@@ -331,9 +382,19 @@ export function useRdReports() {
           sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
           order_date: r.order_date, order_type: r.order_type, ship_to_name: r.ship_to_name,
           product_desc: r.product_desc, qty_ordered: r.qty_ordered, last_updated_at: uploadedAt,
+          // Every row in THIS upload is, by definition, currently open —
+          // reset explicitly (not just on first insert) so a PO that closed
+          // once and somehow reappears on a later report isn't left stuck
+          // showing its old closed status/delivered figures.
+          status: 'open', delivered_qty: null, delivered_at: null, closed_at: null,
         })
       }
       await upsertOrderLedger(companyId, [...ledgerByKey.values()])
+      // Direct ask 2026-09-30: anything still marked 'open' from a PRIOR
+      // upload that isn't in THIS one anymore has left the vendor's own
+      // open-order report — resolve it against rd_delivery_ledger instead of
+      // just leaving it to look perpetually "still open."
+      await closeStaleOrderLedgerRows(companyId, new Set(ledgerByKey.keys()))
       setLastOpenOrdersAt(uploadedAt)
       toast.success(`Open Sales Order report uploaded — ${payload.length} lines`)
       await runReconciliation()
@@ -370,7 +431,7 @@ export function useRdReports() {
       // reason, before ignoreDuplicates does its real job of protecting an
       // already-recorded shipment from being overwritten by a LATER
       // re-upload of the same PO+product.
-      const invLedgerByKey = new Map<string, { company_id: string; location_id: string | null; sales_order_no: string; product_code: string; customer_po_no: string | null; invoice_no: string | null; order_date: string | null; invoice_date: string | null; ship_to_name: string | null; product_desc: string | null; qty_ordered: number | null; qty_shipped: number | null; gallons_ordered: number | null; gallons_shipped: number | null }>()
+      const invLedgerByKey = new Map<string, { company_id: string; location_id: string | null; sales_order_no: string; product_code: string; customer_po_no: string | null; invoice_no: string | null; order_date: string | null; ship_date: string | null; invoice_date: string | null; ship_to_name: string | null; product_desc: string | null; qty_ordered: number | null; qty_shipped: number | null; gallons_ordered: number | null; gallons_shipped: number | null }>()
       for (const r of parsed) {
         const key = `${r.sales_order_no}|${r.product_code}`
         const existing = invLedgerByKey.get(key)
@@ -384,7 +445,7 @@ export function useRdReports() {
         invLedgerByKey.set(key, {
           company_id: companyId, location_id: r.shop_number ? locationIdByShop.get(r.shop_number) ?? null : null,
           sales_order_no: r.sales_order_no, product_code: r.product_code, customer_po_no: r.customer_po_no,
-          invoice_no: r.invoice_no, order_date: r.order_date, invoice_date: r.invoice_date,
+          invoice_no: r.invoice_no, order_date: r.order_date, ship_date: r.ship_date, invoice_date: r.invoice_date,
           ship_to_name: r.ship_to_name, product_desc: r.product_desc, qty_ordered: r.qty_ordered,
           qty_shipped: r.qty_shipped, gallons_ordered: r.gallons_ordered, gallons_shipped: r.gallons_shipped,
         })
@@ -442,7 +503,7 @@ export function useRdReports() {
 
   return {
     lastOpenOrdersAt, lastOpenInvoicesAt, uploading, reconciling, uploadOpenOrders, uploadOpenInvoices, runReconciliation,
-    fetchRdProductHistory, fetchOpenOrders, fetchOpenInvoices,
+    fetchRdProductHistory, fetchOpenOrders, fetchOpenInvoices, fetchOrderLedger,
   }
 }
 
