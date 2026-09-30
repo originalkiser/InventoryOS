@@ -107,19 +107,6 @@ export function OrdersV2ReviewTable({
   const [columnManagerOpen, setColumnManagerOpen] = useState(false)
 
   // Stable per-shop "anchor" row for the expand content — the FIRST line
-  // for that location in the CURRENT (pre-sort) data, not "last of shop in
-  // sorted order" like the old table used. Deliberately sort-independent:
-  // the old table's own anchor already moved around under a re-sort (it
-  // was always whichever row was LAST for that shop in whatever order was
-  // on screen); picking a fixed anchor from the underlying data instead
-  // means the expand toggle and its content always live on the same
-  // physical row regardless of which column is currently sorted, at the
-  // cost of that row not always being the visually-last one for its shop.
-  const anchorLineId = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const l of lines) { const k = l.location_id ?? ''; if (!m.has(k)) m.set(k, l.id) }
-    return m
-  }, [lines])
 
   const col = useMemo(() => createColumnHelper<DraftLineRow>(), [])
   const columns = useMemo(() => [
@@ -327,15 +314,26 @@ export function OrdersV2ReviewTable({
   // already accepted on Final Review's own rebuild (re-sorting by another
   // column still alternates on shop changes, just won't read as a clean
   // per-shop grouping once the shop column itself isn't the active sort).
+  // Direct ask 2026-09-30 (reverted from a fixed data-order anchor):
+  // "expand after the LAST row" again, matching the old table's own
+  // behavior — computed off the live sorted/filtered row order (same
+  // trade-off bandOf already accepts): a re-sort by another column moves
+  // which row is "last" for a shop, so the expand toggle/content only
+  // stays visually anchored to the bottom of a group under the default
+  // Shop sort, not any arbitrary sort.
   const pageRows = table.getRowModel().rows
   const bandOf = new Map<string, boolean>()
+  const isLastOfShop = new Map<string, boolean>()
   {
     let prevShop: string | null = null
     let band = false
-    for (const r of pageRows) {
+    for (let i = 0; i < pageRows.length; i++) {
+      const r = pageRows[i]
       const shopId = r.original.location_id
       if (shopId !== prevShop) { band = !band; prevShop = shopId }
       bandOf.set(r.original.id, band)
+      const next = pageRows[i + 1]
+      isLastOfShop.set(r.original.id, !next || next.original.location_id !== shopId)
     }
   }
 
@@ -375,7 +373,7 @@ export function OrdersV2ReviewTable({
         }}
         expandedRowRender={(l) => {
           const locId = l.location_id ?? ''
-          if (!expanded.has(locId) || anchorLineId.get(locId) !== l.id) return null
+          if (!expanded.has(locId) || !isLastOfShop.get(l.id)) return null
           return (
             <div className="px-3 py-2">
               <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-1">

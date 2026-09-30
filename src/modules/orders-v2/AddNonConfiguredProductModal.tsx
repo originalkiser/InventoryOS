@@ -58,7 +58,14 @@ export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings
     let cancelled = false
     Promise.all([
       sb().schema('inventory').from('vendor_parts')
-        .select('our_part_number, part_number, description, unit_of_measure, unit_cost, metadata')
+        // Bug found live 2026-09-30: this used to also select a literal
+        // "unit_cost" column, which vendor_parts has never had (cost is
+        // only ever derived from metadata.package_qty_gallons *
+        // price_per_gallon, same as everywhere else this table is read) —
+        // PostgREST errors out a select referencing an unknown column, so
+        // this whole query silently came back empty and the product picker
+        // always showed "No results" regardless of the vendor.
+        .select('our_part_number, part_number, description, unit_of_measure, metadata')
         .eq('vendor_id', vendorId),
       sb().schema('inventory').from('uom_mappings').select('vendor_id, from_unit, to_unit, factor, order_type').eq('vendor_id', vendorId),
       sb().schema('inventory').from('product_id_mappings').select('old_product_id, new_product_id'),
@@ -67,8 +74,8 @@ export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings
       setVendorParts(((vp.data ?? []) as any[]).map((r) => ({
         our_part_number: r.our_part_number, part_number: r.part_number, description: r.description,
         unit_of_measure: r.unit_of_measure,
-        unit_cost: r.unit_cost ?? (Number(r.metadata?.package_qty_gallons) > 0 && Number(r.metadata?.price_per_gallon) > 0
-          ? Number(r.metadata.package_qty_gallons) * Number(r.metadata.price_per_gallon) : null),
+        unit_cost: Number(r.metadata?.package_qty_gallons) > 0 && Number(r.metadata?.price_per_gallon) > 0
+          ? Number(r.metadata.package_qty_gallons) * Number(r.metadata.price_per_gallon) : null,
       })))
       setUomMappings((uom.data ?? []) as any[])
       setProductMappings((pm.data ?? []) as any[])

@@ -855,15 +855,19 @@ export function OrdersV2Review() {
           <Button size="sm" variant="secondary" onClick={() => setStatsModalOpen(true)}>
             Stats
           </Button>
-          {/* Bug found live 2026-09-30: Button's default 'primary' variant
-              already sets bg-inky/text-cream, and Tailwind's generated
-              stylesheet order (not class-attribute order) decides which of
-              two conflicting utility classes wins — bg-sky/text-navy here
-              were landing inconsistently against the variant's own
-              bg-inky/text-cream, reading as unreadable near-invisible text.
-              `!` forces these to win outright instead of relying on
-              cascade order. */}
-          <Button size="sm" loading={movingToFinal} className="rounded-lg !bg-sky !text-navy hover:!bg-sky/90" onClick={async () => {
+          {/* Bug found live 2026-09-30, twice: Button's default 'primary'
+              variant already sets bg-inky/text-cream, so bg-sky/text-navy
+              needed `!` to reliably win the cascade at all — but even
+              winning, it was STILL illegible in dark mode specifically,
+              because navy/sky are the CSS-variable-backed tokens that
+              intentionally FLIP per theme (`.dark` remaps --color-navy to
+              a light blue-grey meant for TEXT on a dark page, not a dark
+              foreground color — see index.css). This button is meant to
+              look the same regardless of the app's own light/dark
+              setting, which is exactly what the static sb-* Tailwind
+              namespace (tailwind.config.ts) is for — same fix as
+              Procurement Deck's own always-dark chart cards. */}
+          <Button size="sm" loading={movingToFinal} className="rounded-lg !bg-sb-sky !text-sb-navy hover:!bg-sb-sky/90" onClick={async () => {
             setMovingToFinal(true)
             // See runGeneration's own comment — a completed order stays
             // 'exported', it never gets pulled back into the Final Review
@@ -1515,11 +1519,11 @@ export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozP
       <table className="w-full text-[11px] font-mono">
         <thead className="sticky top-0 z-10 bg-cream">
           <tr className="text-inky/60 uppercase">
-            <td className="py-1 text-center">Product</td><td className="text-center">UOM</td>
-            <td className="text-center">Capacity</td><td className="text-center">On Hand</td>
-            <td className="text-center">Usage/Day</td><td className="text-center">DOS Now</td>
-            <td className="text-center">Qty</td><td className="text-center">On Hand After</td><td className="text-center">DOS After</td>
-            <td className="text-center">$</td><td className="text-center">Why</td>
+            <td className="py-1 text-left">Product</td><td className="text-left">UOM</td>
+            <td className="text-left">Capacity</td><td className="text-left">On Hand</td>
+            <td className="text-left">Usage/Day</td><td className="text-left">DOS Now</td>
+            <td className="text-left">Qty</td><td className="text-left">On Hand After</td><td className="text-left">DOS After</td>
+            <td className="text-left">$</td><td className="text-left">Why</td>
           </tr>
         </thead>
         <tbody>
@@ -1577,7 +1581,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
   const dosAfter = Number(dailyUsage ?? 0) > 0 ? onHandAfter / Number(dailyUsage) : null
 
   return (
-    <tr className="border-t border-navy/10 text-center">
+    <tr className="border-t border-navy/10 text-left">
       <td className="py-1 text-navy">{productId}</td>
       <td className="text-inky/70">{uomDisplayLabel(uom)}</td>
       <td className="text-inky/70">{num(isOz ? toOz(capacity) : capacity, 0)}</td>
@@ -1599,7 +1603,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
       <td className="text-inky/70">{num(isOz ? toOz(dailyUsage) : dailyUsage)}</td>
       <td className="text-inky/70">{dos(dosNow)}</td>
       <td>
-        <div className="flex items-start justify-center gap-1">
+        <div className="flex items-start justify-start gap-1">
           <div>
             {line ? (
               <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
