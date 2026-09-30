@@ -36,14 +36,21 @@ export function fireConfettiCannon(x: number, y: number, count = 70) {
     const dx = Math.cos(angle) * velocity
     const dy = Math.sin(angle) * velocity
     const gravity = 650
-    const duration = 900 + Math.random() * 500
+    // flightDuration is the physical flight this trajectory is computed
+    // over (keeps the same arc/distances); playbackDuration is what's
+    // actually handed to the animation. Halved here (2x speed, direct ask
+    // 2026-09-30) by SEPARATING the two rather than just shrinking
+    // flightDuration alone, which would cut the trajectory short instead
+    // of playing the same full arc back faster.
+    const flightDuration = 900 + Math.random() * 500
+    const playbackDuration = flightDuration / 2
     const spin = (Math.random() - 0.5) * 720
 
     const steps = 14
     const keyframes: Keyframe[] = []
     for (let s = 0; s <= steps; s++) {
       const t = s / steps
-      const time = t * (duration / 1000)
+      const time = t * (flightDuration / 1000)
       const px = dx * time
       const py = dy * time + 0.5 * gravity * time * time
       keyframes.push({
@@ -51,7 +58,7 @@ export function fireConfettiCannon(x: number, y: number, count = 70) {
         opacity: t > 0.7 ? Math.max(0, 1 - (t - 0.7) / 0.3) : 1,
       })
     }
-    el.animate(keyframes, { duration, easing: 'linear', fill: 'forwards' })
+    el.animate(keyframes, { duration: playbackDuration, easing: 'linear', fill: 'forwards' })
   }
 
   setTimeout(() => container.remove(), 2000)

@@ -116,11 +116,20 @@ async function closeStaleOrderLedgerRows(companyId: string, currentKeys: Set<str
   )
 
   const now = new Date().toISOString()
+  // Bug found live 2026-09-30 (a real user's upload failing with "new row
+  // violates row-level security policy for table rd_order_ledger"):
+  // .upsert() builds a real INSERT ... ON CONFLICT DO UPDATE — Postgres
+  // still evaluates the INSERT-side WITH CHECK against the attempted row
+  // BEFORE it ever reaches the conflict/update branch, and this table's
+  // policy is `company_id = get_my_company_id()`. Without company_id in the
+  // payload that column reads as NULL on the attempted row, and
+  // `NULL = ...` is never TRUE in SQL, so the check fails outright even
+  // though every one of these rows was always going to hit the UPDATE path.
   const updates = stale.map((r: any) => {
     const delivery = deliveryByKey.get(`${r.sales_order_no}|${r.product_code}`)
     return delivery
-      ? { id: r.id, status: 'closed_delivered', delivered_qty: delivery.qty_shipped, delivered_at: delivery.ship_date ?? delivery.invoice_date, closed_at: now }
-      : { id: r.id, status: 'closed_no_invoice', delivered_qty: null, delivered_at: null, closed_at: now }
+      ? { id: r.id, company_id: companyId, status: 'closed_delivered', delivered_qty: delivery.qty_shipped, delivered_at: delivery.ship_date ?? delivery.invoice_date, closed_at: now }
+      : { id: r.id, company_id: companyId, status: 'closed_no_invoice', delivered_qty: null, delivered_at: null, closed_at: now }
   })
   for (let i = 0; i < updates.length; i += 500) {
     const { error } = await sb().schema('inventory').from('rd_order_ledger').upsert(updates.slice(i, i + 500), { onConflict: 'id' })
