@@ -26,6 +26,7 @@ import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { ShopConfiguredProductsTable, PoDecisionButtons, Flags } from './OrdersV2Review'
 import { OVERRIDE_CELL, dos, money, num, dShort } from './shared'
+import { uomDisplayLabel } from './types'
 import type { GenerationInput, LineFlag } from './types'
 
 const TABLE_KEY = 'orders-v2.review-lines'
@@ -138,7 +139,7 @@ export function OrdersV2ReviewTable({
       },
     }),
     col.accessor('product_id', { id: 'product', header: 'Product' }),
-    col.accessor((l) => l.uom ?? '—', { id: 'uom', header: 'UOM', enableSorting: false }),
+    col.accessor((l) => uomDisplayLabel(l.uom), { id: 'uom', header: 'UOM', enableSorting: false }),
     col.accessor((l) => (ozProductIds.has(l.product_id) ? (l.max_capacity_gallons ?? 0) * 32 : l.max_capacity_gallons), {
       id: 'capacity', header: 'Capacity', cell: (i) => <span className="block text-right">{num(i.getValue(), 0)}</span>,
     }),

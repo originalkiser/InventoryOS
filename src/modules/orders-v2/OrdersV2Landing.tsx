@@ -190,9 +190,14 @@ export function OrdersV2Landing() {
           fire in sequence) draw a clockwise loop: top, right, bottom, left. */}
       <div className="group relative inline-block self-start">
         <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10">
-          <span className="relative inline-flex items-center justify-center w-4 h-4 mr-1.5">
-            <Droplet className="w-4 h-4" />
-            <Plus className="w-2 h-2 absolute" strokeWidth={3} />
+          {/* Direct ask 2026-09-30: bigger icon, tighter to the text, and
+              the "+" recentered into the droplet's own round bottom bulb
+              (its pointed top eats the upper ~1/3 of the box, so a plain
+              flex-center lands the "+" too high) rather than the icon's
+              literal geometric center. */}
+          <span className="relative inline-flex w-5 h-5 mr-0.5 flex-shrink-0">
+            <Droplet className="w-5 h-5" />
+            <Plus className="w-2 h-2 absolute left-1/2 top-[70%] -translate-x-1/2 -translate-y-1/2" strokeWidth={3} />
           </span>
           Start New Order
         </Button>

@@ -21,6 +21,7 @@ import { Flags } from './OrdersV2Review'
 import { OrderStepper } from './OrderStepper'
 import { daysOfSupply, daysBetween, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription } from './engine'
 import { OVERRIDE_CELL, dos, dShort, money, num, copyTableToClipboard, exportTableCsv, dosAfterForQty, type TableCol } from './shared'
+import { uomDisplayLabel } from './types'
 import type { LineFlag, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
 // The 3 simplified rollup buckets this app already uses for Month End's own
@@ -388,7 +389,7 @@ export function OrdersV2FinalReview() {
       ),
     }),
     col.accessor('product_id', { id: 'product', header: 'Product' }),
-    col.accessor((l) => l.uom ?? '—', { id: 'uom', header: 'UOM' }),
+    col.accessor((l) => uomDisplayLabel(l.uom), { id: 'uom', header: 'UOM' }),
     col.display({
       id: 'last_ordered', header: 'Last Ordered', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
       cell: (i) => {

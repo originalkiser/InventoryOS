@@ -27,13 +27,47 @@ export const orderTypeOf = (uom: string | null | undefined): OrderType => (isBul
 // Falls back to the old whitespace-only normalization for anything not
 // recognizably one of the 3 discrete types, so bulk/other products
 // already relying on their own raw label are untouched.
+//
+// Real bug found live 2026-09-30: an on-premise storage tank refilled by
+// the gallon (dispensed/fractional, exactly what isBulkUom/'bulk' means in
+// this app) was being configured on the Order Config screen as free text —
+// "Medium Tanks", "Large Tanks", "Small Tanks", "Tote Tanks" — none of
+// which is the literal string "bulk", so isBulkUom/orderTypeOf silently
+// misclassified every one of these as 'package': no bulk rounding
+// increment, no bulk minimum, wrong B/P code on the PO number. Confirmed
+// against production: 575+531+150+57 = 1,313 location_order_config rows
+// across these 4 labels, all genuinely tank/gallon-dispensed products, none
+// of them discrete-unit like a drum/case/bay box. Normalizing any "tank"
+// label straight to 'bulk' here fixes every one of those downstream
+// checks at once, since they all key off this single normalized value.
 export function normalizeConfigUom(raw: string): string {
   const v = String(raw ?? '').toLowerCase()
   if (!v) return ''
   if (/box/.test(v)) return 'bay_box'
   if (/drum/.test(v)) return 'drum'
   if (/\bcase\b/.test(v)) return 'case'
+  if (/tank/.test(v)) return 'bulk'
   return v.replace(/\s+/g, '_')
+}
+
+/**
+ * Friendly display label for a UOM — direct ask 2026-09-30, alongside the
+ * tank/bulk fix above: the raw config text is inconsistently worded
+ * ("12 Qt Case" vs "Drum" vs "Medium Tanks"), and an ALREADY-GENERATED
+ * draft/history line can still carry one of the old pre-fix normalized
+ * strings ("medium_tanks", "tote_tanks", etc. — genuine bulk, just not
+ * re-normalized to literal "bulk" until the line is regenerated). This
+ * covers both: the fixed set via UOM_LABELS, the legacy tank variants, and
+ * a readable title-cased fallback for anything else instead of showing the
+ * raw underscored/lowercase value verbatim.
+ */
+export function uomDisplayLabel(uom: string | null | undefined): string {
+  const v = (uom ?? '').trim()
+  if (!v) return '—'
+  const key = v.toLowerCase()
+  if (UOM_LABELS[key]) return UOM_LABELS[key]
+  if (isBulkUom(v) || /tank/.test(key)) return 'Bulk'
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 // How an order minimum is expressed. 'dollars' and 'units_per_order' are

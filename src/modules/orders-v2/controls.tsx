@@ -46,14 +46,26 @@ export function SegmentedSlider<T extends string>({ options, value, onChange, cl
   onChange: (v: T) => void
   className?: string
 }) {
-  const idx = Math.max(0, options.findIndex((o) => o.value === value))
+  // Bug found live 2026-09-30: this used to fall back to index 0 (Monday,
+  // in the day-of-week picker) whenever `value` didn't exactly match ANY
+  // option — e.g. a draft whose order day derives to a weekend value before
+  // its own settings_snapshot has __order_dow set (draftOrderDow's own
+  // fallback), which the Mon-Fri-only option list never includes. That
+  // painted the green highlight bar under Monday even though no button's
+  // text was actually marked active, reading as "Monday looks selected"
+  // until a real click landed on a matching option. No highlight at all
+  // (rather than a wrong one) is the correct state for a value that
+  // genuinely isn't one of the options.
+  const idx = options.findIndex((o) => o.value === value)
   const n = Math.max(1, options.length)
   return (
     <div className={`relative inline-flex rounded border border-navy/30 overflow-hidden text-[11px] font-mono bg-cream ${className ?? ''}`}>
-      <div
-        className="absolute top-0 bottom-0 bg-[#2ECC71] transition-transform duration-200 ease-out"
-        style={{ width: `${100 / n}%`, transform: `translateX(${idx * 100}%)` }}
-      />
+      {idx >= 0 && (
+        <div
+          className="absolute top-0 bottom-0 bg-[#2ECC71] transition-transform duration-200 ease-out"
+          style={{ width: `${100 / n}%`, transform: `translateX(${idx * 100}%)` }}
+        />
+      )}
       {options.map((o) => (
         <button key={o.value} type="button" disabled={o.disabled} onClick={() => onChange(o.value)}
           className={[

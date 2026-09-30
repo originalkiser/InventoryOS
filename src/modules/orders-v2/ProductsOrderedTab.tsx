@@ -8,6 +8,7 @@ import { useLocations } from '@/hooks/useLocations'
 import { useAllOrderHistoryLines, type OrderHistoryLineRow } from './useOrderHistory'
 import { useVendors } from './useLookups'
 import { dShort, money, num } from './shared'
+import { uomDisplayLabel } from './types'
 
 const col = createColumnHelper<OrderHistoryLineRow>()
 
@@ -36,7 +37,7 @@ export function ProductsOrderedTab() {
     col.accessor('po_number', { header: 'PO Number', cell: (i) => i.getValue() ?? '—' }),
     col.accessor('product_id', { header: 'Product', cell: (i) => i.getValue() }),
     col.accessor('order_type', { header: 'Order Type', cell: (i) => i.getValue() }),
-    col.accessor('uom', { header: 'UOM', cell: (i) => i.getValue() ?? '—' }),
+    col.accessor('uom', { header: 'UOM', cell: (i) => uomDisplayLabel(i.getValue()) }),
     col.accessor('qty', { header: 'Qty', cell: (i) => <span className="text-right block">{num(i.getValue())}</span> }),
     col.accessor('unit_cost', { header: 'Unit Cost', cell: (i) => <span className="text-right block">{money(i.getValue())}</span> }),
     col.accessor('line_total', { header: 'Line Total', cell: (i) => <span className="text-right block">{money(i.getValue())}</span> }),

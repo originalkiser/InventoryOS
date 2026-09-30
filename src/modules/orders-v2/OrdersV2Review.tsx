@@ -24,6 +24,7 @@ import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, dos, money, num, dosAfterForQty, dShort } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
+import { uomDisplayLabel } from './types'
 import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
 // New-table beta toggle (2026-09-25) — per-browser (localStorage), not a
@@ -844,7 +845,15 @@ export function OrdersV2Review() {
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
-          <Button size="sm" loading={movingToFinal} className="rounded-lg bg-sky text-navy hover:bg-sky/90" onClick={async () => {
+          {/* Bug found live 2026-09-30: Button's default 'primary' variant
+              already sets bg-inky/text-cream, and Tailwind's generated
+              stylesheet order (not class-attribute order) decides which of
+              two conflicting utility classes wins — bg-sky/text-navy here
+              were landing inconsistently against the variant's own
+              bg-inky/text-cream, reading as unreadable near-invisible text.
+              `!` forces these to win outright instead of relying on
+              cascade order. */}
+          <Button size="sm" loading={movingToFinal} className="rounded-lg !bg-sky !text-navy hover:!bg-sky/90" onClick={async () => {
             setMovingToFinal(true)
             // See runGeneration's own comment — a completed order stays
             // 'exported', it never gets pulled back into the Final Review
@@ -1133,7 +1142,7 @@ export function OrdersV2Review() {
                       </td>
                     )
                     case 'product': return <Td key={id}>{l.product_id}</Td>
-                    case 'uom': return <Td key={id}>{l.uom ?? '—'}</Td>
+                    case 'uom': return <Td key={id}>{uomDisplayLabel(l.uom)}</Td>
                     case 'capacity': return <Td key={id} align="right">{num(isOz ? toOz(l.max_capacity_gallons) : l.max_capacity_gallons, 0)}</Td>
                     case 'on_hand': return (
                       <td key={id} className="px-2 py-1 text-right text-navy whitespace-nowrap">
@@ -1536,7 +1545,7 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
   return (
     <tr className="border-t border-navy/10 text-center">
       <td className="py-1 text-navy">{productId}</td>
-      <td className="text-inky/70">{uom ?? '—'}</td>
+      <td className="text-inky/70">{uomDisplayLabel(uom)}</td>
       <td className="text-inky/70">{num(isOz ? toOz(capacity) : capacity, 0)}</td>
       <td className="text-inky/70">
         {/* onHand is already the combined family total — see OrdersV2Review's

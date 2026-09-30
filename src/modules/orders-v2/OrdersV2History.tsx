@@ -7,6 +7,7 @@ import { useHistoryOrder } from './useOrderHistory'
 import { useVendors, useUserNames } from './useLookups'
 import { Flags } from './OrdersV2Review'
 import { dShort, dTime, dos, money, num } from './shared'
+import { uomDisplayLabel } from './types'
 import type { LineFlag } from './types'
 import toast from 'react-hot-toast'
 
@@ -117,7 +118,7 @@ export function OrdersV2History() {
                 <td className="px-2 py-1 text-navy">{l.po_number ?? '—'}</td>
                 <td className="px-2 py-1 text-navy">{shopLabel(l.location_id)}</td>
                 <td className="px-2 py-1 text-navy">{l.product_id}</td>
-                <td className="px-2 py-1 text-navy">{l.uom ?? '—'}</td>
+                <td className="px-2 py-1 text-navy">{uomDisplayLabel(l.uom)}</td>
                 <td className="px-2 py-1 text-right text-navy">
                   {num(l.qty)}
                   {l.quarts_per_unit != null && <span className="text-inky/50"> ({num(Number(l.qty) * l.quarts_per_unit, 1)} qt)</span>}
