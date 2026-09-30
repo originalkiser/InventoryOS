@@ -192,26 +192,32 @@ export function OrdersV2Landing() {
         <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
       </div>
 
-      {/* Direct ask 2026-09-29: Start New Order moves under the header, on
-          the left, with a green line tracing around its edges on hover. Four
-          plain absolutely-positioned strips (no new CSS keyframes needed —
-          each is just a width/height transition, staggered by delay so they
-          fire in sequence) draw a clockwise loop: top, right, bottom, left. */}
+      {/* Direct ask 2026-09-29, redone 2026-09-30: the original 4-strip trace
+          couldn't share the button's own corner radius (straight bars meet
+          at sharp corners) and read as too thin/faint on hover. A single SVG
+          rounded-rect stroke fixes both — one continuous outline with the
+          same rx as the button, offset outside it via the enlarged svg's own
+          negative inset, animated as ONE trace (stroke-dasharray 0->100 with
+          pathLength=100, so it's independent of the button's real pixel
+          size/perimeter) instead of 4 separately-timed pieces. */}
       <div className="group relative inline-block self-start">
-        <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10">
-          {/* Direct ask 2026-09-30 (follow-up): drop the "+" overlaid inside
-              the droplet entirely — it's now a small superscript badge
-              poking out past the droplet's own top-right edge instead. */}
+        <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10 rounded-lg">
+          {/* Drop the "+" overlaid inside the droplet — it's a small
+              superscript badge poking out past its top-right edge instead. */}
           <span className="relative inline-flex w-5 h-5 mr-0.5 flex-shrink-0">
             <Droplet className="w-5 h-5" />
             <Plus className="w-2.5 h-2.5 absolute -top-1 -right-1" strokeWidth={3.5} />
           </span>
           Start New Order
         </Button>
-        <span className="pointer-events-none absolute left-0 top-0 h-[2px] w-0 bg-[#2ECC71] transition-all duration-300 group-hover:w-full" />
-        <span className="pointer-events-none absolute right-0 top-0 w-[2px] h-0 bg-[#2ECC71] transition-all duration-300 delay-150 group-hover:h-full" />
-        <span className="pointer-events-none absolute right-0 bottom-0 h-[2px] w-0 bg-[#2ECC71] transition-all duration-300 delay-300 group-hover:w-full" style={{ transitionDelay: '300ms' }} />
-        <span className="pointer-events-none absolute left-0 bottom-0 w-[2px] h-0 bg-[#2ECC71] transition-all duration-300 group-hover:h-full" style={{ transitionDelay: '450ms' }} />
+        <svg className="pointer-events-none absolute -inset-[5px] w-[calc(100%+10px)] h-[calc(100%+10px)]" aria-hidden="true">
+          <rect
+            x="2.5" y="2.5" rx="11"
+            style={{ width: 'calc(100% - 5px)', height: 'calc(100% - 5px)' }}
+            fill="none" stroke="#2ECC71" strokeWidth="3" pathLength={100}
+            className="[stroke-dasharray:0_100] transition-[stroke-dasharray] duration-500 ease-out group-hover:[stroke-dasharray:100_0] drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
+          />
+        </svg>
       </div>
 
       <Tabs defaultValue="orders">
