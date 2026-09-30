@@ -70,7 +70,14 @@ export function SegmentedSlider<T extends string>({ options, value, onChange, cl
         <button key={o.value} type="button" disabled={o.disabled} onClick={() => onChange(o.value)}
           className={[
             'relative z-10 flex-1 px-3 py-1.5 uppercase tracking-wide transition-colors whitespace-nowrap',
-            o.value === value ? 'text-navy font-bold' : 'text-inky/50 hover:text-navy',
+            // Direct ask 2026-09-30: the green highlight bar behind the
+            // selected option is the static #2ECC71 (never flips with
+            // theme), but `text-navy` DOES flip in dark mode (becomes a
+            // light blue-grey meant for text on a dark page) — light text
+            // on the same green bg reads as nearly illegible. `text-sb-navy`
+            // is the static, never-flipping namespace, matching the green
+            // bar's own fixed color.
+            o.value === value ? 'text-sb-navy font-bold' : 'text-inky/50 hover:text-navy',
             o.disabled ? 'opacity-30 cursor-not-allowed' : '',
           ].join(' ')}>
           {o.label}
