@@ -382,7 +382,29 @@ async function runDroptopPurchaseOrders(
   const lapComplete = result.status !== 'error' && cumulativeProgress >= ids.length
   const stillCatchingUp = result.status !== 'error' && !lapComplete
   const newLapProgress = stillCatchingUp ? cumulativeProgress : 0
-  return { status: result.status, message: result.message, newCursorLocationId, stillCatchingUp, newLapProgress }
+  // Found live 2026-09-30, investigating a "stuck every morning" report:
+  // result.message is always the raw per-TICK summary from
+  // runChunksConcurrently ("Stopped after 23/278 chunks (time budget) —
+  // remaining continue on the next scheduled run") — it has no idea this
+  // connection spans several ticks via still_catching_up/po_lap_progress,
+  // so the exact same alarming "stuck, not finishing" wording shows up on
+  // the one tick that actually PUSHES cumulativeProgress past 278 and
+  // completes the lap, same as on a tick that leaves real work for later.
+  // Confirmed via production data this run's own coverage was actually
+  // 278/278 shops synced within 48h — the connection wasn't stuck, only
+  // its last-tick message read that way. Override it here with the true
+  // cumulative picture whenever the lap did complete this tick.
+  // The still-catching-up case ALSO gets a clarifying prefix — the raw
+  // "remaining continue on the next scheduled run" phrasing reads as
+  // "tomorrow" (this connection's own daily_time), when it actually means
+  // "the next ~5-minute dispatcher tick, today" per still_catching_up/
+  // isDue()'s own mechanism.
+  const message = lapComplete
+    ? `Lap complete — ${cumulativeProgress}/${ids.length} shops synced across today's ticks (this tick: ${tickSucceeded}/${chunks.length}).`
+    : stillCatchingUp
+      ? `Still catching up (${cumulativeProgress}/${ids.length} shops synced so far today) — retries again within minutes, not waiting for tomorrow. ${result.message ?? ''}`.trim()
+      : result.message
+  return { status: result.status, message, newCursorLocationId, stillCatchingUp, newLapProgress }
 }
 
 // Replaces the earlier runDroptopCustomers (droptop-sync-customers is
