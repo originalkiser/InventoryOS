@@ -69,6 +69,10 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   // (exception_config, comms_config, etc.), unlike useProfilePref above,
   // which is per-user and wouldn't apply "for the full site."
   const [confettiOnExport, setConfettiOnExport] = useAppSetting<boolean>('confetti_on_export', false)
+  // Direct ask 2026-09-30: a way back to the original plain arc-and-fade
+  // burst (no floor collision/bounce/rest/cursor interaction) — company-
+  // wide, same scope as confettiOnExport itself, read by fireConfettiCannon.
+  const [confettiSimple, setConfettiSimple] = useAppSetting<boolean>('confetti_simple', false)
   const [enabledFabs, setEnabledFabs] = useProfilePref<string[]>('quickfab:enabled', QUICK_FAB_DEFAULT)
   const [fabPosition, setFabPosition] = useProfilePref<QuickFabPosition>('quickfab:position', 'bottom-right')
   const [hiddenSections, setHiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
@@ -512,6 +516,21 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
               <button onClick={() => setConfettiOnExport(!confettiOnExport)}
                 className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0', confettiOnExport ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
                 <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', confettiOnExport ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
+              </button>
+            </div>
+            {/* Direct ask 2026-09-30: an escape hatch back to the original
+                plain shoot-out-and-fade burst, for anyone who preferred
+                that over the floor-collision/cursor-interaction version. */}
+            <div className="flex items-center justify-between max-w-sm mt-3 pl-4">
+              <div>
+                <div className="text-sm font-body text-navy dark:text-[#F2F1E6]">Confetti Simple</div>
+                <div className="text-[10px] font-mono text-inky dark:text-[#F2F1E6]/70 mt-0.5 leading-relaxed">
+                  Skips the floor bounce/rest/cursor-interaction — just the original arc out and fade.
+                </div>
+              </div>
+              <button onClick={() => setConfettiSimple(!confettiSimple)}
+                className={['relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0', confettiSimple ? 'bg-[#4F7489]' : 'bg-navy/20'].join(' ')}>
+                <span className={['inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform duration-200', confettiSimple ? 'translate-x-[18px]' : 'translate-x-0.5'].join(' ')} />
               </button>
             </div>
           </div>

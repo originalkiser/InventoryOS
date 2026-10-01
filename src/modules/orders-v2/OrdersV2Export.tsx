@@ -262,6 +262,7 @@ export function OrdersV2Export() {
   // Settings section) — every user's own read of this same value, no
   // permission check needed here since only the write side is gated.
   const [confettiOnExport] = useAppSetting<boolean>('confetti_on_export', false)
+  const [confettiSimple] = useAppSetting<boolean>('confetti_simple', false)
   const { draft, lines, loading, reload } = useDraft(draftId || null)
   // This page sits behind KeepAlivePages once visited more than once — going
   // back to Review/Final Review to change a line, then forward to an
@@ -551,7 +552,7 @@ export function OrdersV2Export() {
             // the tip of the cursor" — the click event's own coordinates,
             // not the button's center, so it genuinely originates from
             // wherever the user actually clicked.
-            if (confettiOnExport) fireConfettiCannon(e.clientX, e.clientY)
+            if (confettiOnExport) fireConfettiCannon(e.clientX, e.clientY, { simple: confettiSimple })
             download()
           }}>
             {draft.status === 'exported' ? `Re-download ${tpl.format.toUpperCase()}` : `Download ${tpl.format.toUpperCase()}`}

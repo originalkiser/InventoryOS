@@ -14,21 +14,17 @@
 // particles bounce off whatever real page elements are marked
 // `data-confetti-floor`, settle and slide to a stop on whichever one they
 // land on (or the bottom of the viewport if they miss every marked
-// surface), rest there for a while, then fade out slowly. The physics is a
-// small manual step simulation (not a closed-form arc) since a bounce is a
-// branch, not a formula.
+// surface), rest there for a while, then fade out slowly.
 //
-// Follow-up same day: once a particle is resting, the cursor can "collide"
-// with it — mousemove pushes any resting particle it passes near a short
-// hop away, settling again nearby. This is why the flight and rest phases
-// are two SEPARATE mechanisms rather than one long precomputed
-// `el.animate()` keyframe list (the original shape, before this follow-up):
-// the flight/bounce/slide portion still plays as one WAAPI animation
-// (nothing needs to react mid-flight), but a WAAPI animation's keyframes
-// are fixed at creation time and can't branch on a live mouse position —
-// once a particle settles, control hands off to plain `style.left/top` +
-// a shared mousemove listener, which CAN react per-event.
-
+// Same-day follow-up #1: once a particle is resting, the cursor can
+// "collide" with it — mousemove knocks it away with a real gravity-
+// affected hop (not a flat sideways teleport), so it arcs up/out and falls
+// back down onto a floor again, the same physics as the initial launch.
+//
+// Same-day follow-up #2: a "Confetti Simple" company-wide setting
+// (confetti_simple) opts back into the ORIGINAL plain arc-and-fade with no
+// floor collision, no rest, no cursor interaction — some people just want
+// the simple version. See `simple` in fireConfettiCannon's options.
 const COLORS = ['#2ECC71', '#B7E0DE', '#E67E22', '#C0392B', '#F2F1E6', '#4F7489']
 
 // Physics tuning — px/s(^2) and unitless ratios, found by eye against a
@@ -51,8 +47,7 @@ const FADE_SECONDS = 2 // then fade out over this long
 
 // Mouse-collision tuning for the resting phase.
 const CURSOR_COLLIDE_RADIUS = 34 // px — cursor within this of a resting particle's center counts as a hit
-const PUSH_DISTANCE = 55 // px — how far a hit knocks the particle away
-const PUSH_COOLDOWN_MS = 220 // matches the CSS transition below, so a particle can't be re-pushed mid-hop
+const PUSH_COOLDOWN_MS = 500 // can't be re-triggered again until its own push-hop animation has had time to finish
 
 interface Floor { top: number; left: number; right: number }
 
@@ -93,6 +88,77 @@ function getFloors(): Floor[] {
   return floors.sort((a, b) => a.top - b.top)
 }
 
+interface FlightResult {
+  keyframes: Keyframe[] // offsets are still raw SECONDS at this point, not 0..1 fractions
+  finalPx: number
+  finalPy: number
+  finalRotation: number
+  totalSimSeconds: number
+  settledOnFloor: boolean // false only if it ran out of MAX_SIM_STEPS mid-air/mid-slide — practically never
+}
+
+// Shared by the initial cannon launch AND a cursor-push reaction — both are
+// "a particle starts somewhere with some velocity, gravity pulls it down,
+// it bounces/slides to a stop on a floor." Works in coordinates RELATIVE to
+// (startX, startY) so the caller can re-anchor it anywhere (the original
+// click point, or wherever a resting particle currently sits).
+function simulateFlight(
+  startX: number, startY: number, vx0: number, vy0: number, spinRate: number, floors: Floor[],
+): FlightResult {
+  let vx = vx0
+  let vy = vy0
+  let px = 0
+  let py = 0
+  let rotation = 0
+  let resting = false
+  let simSeconds = 0
+
+  const keyframes: Keyframe[] = [{ offset: 0, transform: 'translate(0px, 0px) rotate(0deg)', opacity: 1 }]
+  const pushFrame = (atSeconds: number) => keyframes.push({
+    offset: atSeconds,
+    transform: `translate(${px}px, ${py}px) rotate(${rotation}deg)`,
+    opacity: 1,
+  })
+
+  let steps = 0
+  while (!resting && steps < MAX_SIM_STEPS) {
+    steps++
+    const prevPy = py
+    vy += GRAVITY * SIM_DT
+    px += vx * SIM_DT
+    py += vy * SIM_DT
+    rotation += spinRate * SIM_DT
+    simSeconds += SIM_DT
+
+    const gx = startX + px
+    const gyPrev = startY + prevPy
+    const gy = startY + py
+    const floor = floors.find((f) => gx >= f.left && gx <= f.right && gyPrev < f.top && gy >= f.top)
+    if (floor) {
+      py = floor.top - startY
+      if (Math.abs(vy) < REST_VELOCITY) {
+        vy = 0
+        resting = true
+      } else {
+        vy = -vy * RESTITUTION
+        vx *= BOUNCE_FRICTION
+      }
+    }
+    pushFrame(simSeconds)
+  }
+  const settledOnFloor = resting
+  while (resting && Math.abs(vx) > MIN_SLIDE_VELOCITY && steps < MAX_SIM_STEPS) {
+    steps++
+    vx *= SLIDE_FRICTION
+    px += vx * SIM_DT
+    rotation += spinRate * 0.15 * SIM_DT
+    simSeconds += SIM_DT
+    pushFrame(simSeconds)
+  }
+
+  return { keyframes, finalPx: px, finalPy: py, finalRotation: rotation, totalSimSeconds: simSeconds, settledOnFloor }
+}
+
 // ── Shared mouse-collision registry for every resting particle from every
 // burst — one listener total, not one per burst, added lazily on the first
 // particle that ever settles and removed once none remain. ─────────────────
@@ -101,10 +167,54 @@ interface RestingParticle {
   size: number
   left: number
   top: number
+  spinRate: number
+  rotation: number
   pushedUntil: number
 }
 const restingParticles = new Set<RestingParticle>()
 let mouseListenerAttached = false
+
+// A cursor hit replays the SAME simulateFlight physics used for the
+// original launch — gravity stays on, so a knocked particle arcs away and
+// falls back down onto a floor again instead of flatly teleporting
+// sideways and sitting there (direct ask 2026-09-30). Anchored at the
+// particle's CURRENT resting position, with a modest outward+upward
+// velocity scaled by how close the cursor got.
+function pushParticle(p: RestingParticle, cursorX: number, cursorY: number) {
+  const dx = (p.left + p.size / 2) - cursorX
+  const dy = (p.top + p.size / 2) - cursorY
+  const dist = Math.max(1, Math.hypot(dx, dy))
+  const nx = dx / dist
+  const ny = dy / dist
+  const strength = 180 + Math.random() * 120
+  const vx0 = nx * strength
+  // A bit of upward kick regardless of the raw push direction — reads as
+  // "knocked into the air" rather than "shoved along the floor" — gravity
+  // then brings it back down for real, same as the initial launch.
+  const vy0 = ny * strength - 140
+
+  const floors = getFloors()
+  const result = simulateFlight(p.left, p.top, vx0, vy0, p.spinRate, floors)
+  const totalSeconds = Math.max(0.05, result.totalSimSeconds)
+  for (const k of result.keyframes) {
+    const raw = k.offset ?? 0
+    k.offset = Math.min(1, raw / totalSeconds)
+  }
+
+  p.pushedUntil = performance.now() + totalSeconds * 1000 + 50
+  const anim = p.el.animate(result.keyframes, { duration: totalSeconds * 1000, easing: 'linear', fill: 'forwards' })
+  anim.finished.then(() => {
+    anim.cancel()
+    const newLeft = p.left + result.finalPx
+    const newTop = p.top + result.finalPy
+    p.el.style.transform = 'none'
+    p.el.style.left = `${newLeft}px`
+    p.el.style.top = `${newTop}px`
+    p.left = newLeft
+    p.top = newTop
+    p.rotation += result.finalRotation
+  }).catch(() => {})
+}
 
 function onMouseMoveForConfetti(e: MouseEvent) {
   const now = performance.now()
@@ -112,21 +222,8 @@ function onMouseMoveForConfetti(e: MouseEvent) {
     if (now < p.pushedUntil) continue
     const cx = p.left + p.size / 2
     const cy = p.top + p.size / 2
-    const dx = cx - e.clientX
-    const dy = cy - e.clientY
-    const dist = Math.hypot(dx, dy)
-    if (dist === 0 || dist > CURSOR_COLLIDE_RADIUS) continue
-    // Push directly away from the cursor along the (dx,dy) vector, clamped
-    // to stay on screen so a hit near an edge doesn't fling it offscreen.
-    const nx = dx / dist
-    const ny = dy / dist
-    const newLeft = Math.min(Math.max(0, p.left + nx * PUSH_DISTANCE), window.innerWidth - p.size)
-    const newTop = Math.min(Math.max(0, p.top + ny * PUSH_DISTANCE), window.innerHeight - p.size)
-    p.left = newLeft
-    p.top = newTop
-    p.pushedUntil = now + PUSH_COOLDOWN_MS
-    p.el.style.left = `${newLeft}px`
-    p.el.style.top = `${newTop}px`
+    if (Math.hypot(cx - e.clientX, cy - e.clientY) > CURSOR_COLLIDE_RADIUS) continue
+    pushParticle(p, e.clientX, e.clientY)
   }
 }
 
@@ -146,10 +243,57 @@ function removeRestingParticle(p: RestingParticle) {
   }
 }
 
-export function fireConfettiCannon(x: number, y: number, count = 70) {
+export function fireConfettiCannon(x: number, y: number, opts: { count?: number; simple?: boolean } = {}) {
+  const count = opts.count ?? 70
   const container = document.createElement('div')
   container.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9999;overflow:hidden;'
   document.body.appendChild(container)
+
+  // Confetti Simple (direct ask 2026-09-30): the original plain arc-and-
+  // fade, no floor collision/rest/cursor interaction at all — a fixed,
+  // closed-form trajectory for every particle, same shape this file had
+  // before the collision physics was added.
+  if (opts.simple) {
+    for (let i = 0; i < count; i++) {
+      const size = 5 + Math.random() * 6
+      const isCircle = Math.random() < 0.3
+      const el = document.createElement('div')
+      el.style.cssText = [
+        'position:absolute',
+        `left:${x}px`, `top:${y}px`,
+        `width:${size}px`, `height:${size * (isCircle ? 1 : 0.6)}px`,
+        `background:${COLORS[Math.floor(Math.random() * COLORS.length)]}`,
+        `border-radius:${isCircle ? '50%' : '2px'}`,
+        'will-change:transform,opacity',
+      ].join(';')
+      container.appendChild(el)
+
+      const angle = (-90 + (Math.random() * 140 - 70)) * (Math.PI / 180)
+      const velocity = 260 + Math.random() * 360
+      const dx = Math.cos(angle) * velocity
+      const dy = Math.sin(angle) * velocity
+      const gravity = 650
+      const flightDuration = 900 + Math.random() * 500
+      const playbackDuration = (flightDuration / 2) * 1.1
+      const spin = (Math.random() - 0.5) * 720
+
+      const steps = 14
+      const keyframes: Keyframe[] = []
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps
+        const time = t * (flightDuration / 1000)
+        const px = dx * time
+        const py = dy * time + 0.5 * gravity * time * time
+        keyframes.push({
+          transform: `translate(${px}px, ${py}px) rotate(${spin * t}deg)`,
+          opacity: t > 0.7 ? Math.max(0, 1 - (t - 0.7) / 0.3) : 1,
+        })
+      }
+      el.animate(keyframes, { duration: playbackDuration, easing: 'linear', fill: 'forwards' })
+    }
+    setTimeout(() => container.remove(), 2000)
+    return
+  }
 
   const floors = getFloors()
 
@@ -169,73 +313,20 @@ export function fireConfettiCannon(x: number, y: number, count = 70) {
 
     const angle = (-90 + (Math.random() * 140 - 70)) * (Math.PI / 180)
     const velocity = 260 + Math.random() * 360
-    let vx = Math.cos(angle) * velocity
-    let vy = Math.sin(angle) * velocity
+    const vx0 = Math.cos(angle) * velocity
+    const vy0 = Math.sin(angle) * velocity
     const spinRate = (Math.random() - 0.5) * 480 // deg/s while airborne/sliding
 
-    let px = 0 // position relative to launch point (== relative to left/top above)
-    let py = 0
-    let rotation = 0
-    let resting = false
-    let simSeconds = 0
-
-    const keyframes: Keyframe[] = [{ offset: 0, transform: 'translate(0px, 0px) rotate(0deg)', opacity: 1 }]
-    const pushFrame = (atSeconds: number) => keyframes.push({
-      offset: atSeconds, // raw elapsed seconds for now — see the conversion pass below
-      transform: `translate(${px}px, ${py}px) rotate(${rotation}deg)`,
-      opacity: 1,
-    })
-    // Raw elapsed-seconds are stashed in `offset` above and converted to
-    // real 0..1 fractions in one pass below, once the true flight duration
-    // is known.
-
-    let steps = 0
-    while (!resting && steps < MAX_SIM_STEPS) {
-      steps++
-      const prevPy = py
-      vy += GRAVITY * SIM_DT
-      px += vx * SIM_DT
-      py += vy * SIM_DT
-      rotation += spinRate * SIM_DT
-      simSeconds += SIM_DT
-
-      const gx = x + px
-      const gyPrev = y + prevPy
-      const gy = y + py
-      const floor = floors.find((f) => gx >= f.left && gx <= f.right && gyPrev < f.top && gy >= f.top)
-      if (floor) {
-        py = floor.top - y // snap to the surface
-        if (Math.abs(vy) < REST_VELOCITY) {
-          vy = 0
-          resting = true
-        } else {
-          vy = -vy * RESTITUTION
-          vx *= BOUNCE_FRICTION
-        }
-      }
-      pushFrame(simSeconds)
-    }
-    // Still sliding (resting on a floor, vy pinned to 0, vx decaying via
-    // friction) until it genuinely stops — "rest on top of the columns
-    // border and maybe slide off depending on how long the animation goes
-    // for": this is exactly that tail end.
-    while (resting && Math.abs(vx) > MIN_SLIDE_VELOCITY && steps < MAX_SIM_STEPS) {
-      steps++
-      vx *= SLIDE_FRICTION
-      px += vx * SIM_DT
-      rotation += spinRate * 0.15 * SIM_DT // a light tumble while sliding, not a full spin
-      simSeconds += SIM_DT
-      pushFrame(simSeconds)
-    }
-
-    const flightSeconds = simSeconds * TIME_SCALE
+    const result = simulateFlight(x, y, vx0, vy0, spinRate, floors)
+    const flightSeconds = result.totalSimSeconds * TIME_SCALE
+    const keyframes = result.keyframes
     for (const k of keyframes) {
       const raw = k.offset ?? 0
       k.offset = Math.min(1, (raw * TIME_SCALE) / flightSeconds || 0)
     }
 
-    const finalLeft = x + px
-    const finalTop = y + py
+    const finalLeft = x + result.finalPx
+    const finalTop = y + result.finalPy
     const anim = el.animate(keyframes, { duration: flightSeconds * 1000, easing: 'linear', fill: 'forwards' })
 
     anim.finished.then(() => {
@@ -250,9 +341,11 @@ export function fireConfettiCannon(x: number, y: number, count = 70) {
       el.style.transform = 'none'
       el.style.left = `${finalLeft}px`
       el.style.top = `${finalTop}px`
-      el.style.transition = `left ${PUSH_COOLDOWN_MS}ms ease-out, top ${PUSH_COOLDOWN_MS}ms ease-out`
 
-      const particle: RestingParticle = { el, size, left: finalLeft, top: finalTop, pushedUntil: 0 }
+      const particle: RestingParticle = {
+        el, size, left: finalLeft, top: finalTop,
+        spinRate, rotation: result.finalRotation, pushedUntil: 0,
+      }
       addRestingParticle(particle)
 
       setTimeout(() => {
@@ -265,5 +358,5 @@ export function fireConfettiCannon(x: number, y: number, count = 70) {
 
   }
 
-  setTimeout(() => container.remove(), (MAX_SIM_STEPS * SIM_DT * TIME_SCALE + REST_HOLD_SECONDS + FADE_SECONDS + 3) * 1000)
+  setTimeout(() => container.remove(), (MAX_SIM_STEPS * SIM_DT * TIME_SCALE + REST_HOLD_SECONDS + FADE_SECONDS + 5) * 1000)
 }
