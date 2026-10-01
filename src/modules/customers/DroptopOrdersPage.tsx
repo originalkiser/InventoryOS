@@ -318,7 +318,7 @@ export function DroptopOrdersPage() {
   // MERGES them into what's already loaded.
   const fetchOrderDetailForScope = useCallback(async (
     locationIds: string[] | null,
-    opts: { onProgress?: (loaded: number, total: number | null) => void; isCancelled?: () => boolean } = {},
+    opts: { onProgress?: (loaded: number, total: number | null) => void; isCancelled?: () => boolean; signal?: AbortSignal } = {},
   ): Promise<{ orders: OrderRow[]; packages: PackageRow[]; products: ProductRow[]; services: ServiceRow[]; vehicles: VehicleRow[] }> => {
     const sb = supabase as any
     const startIso = `${range.start}T00:00:00.000Z`
@@ -328,6 +328,7 @@ export function DroptopOrdersPage() {
     function applyFilters(q: any) {
       q = q.eq('company_id', companyId).gte('order_finalized_at', startIso).lte('order_finalized_at', endIso)
       if (locationIds?.length) q = q.in('location_id', locationIds)
+      if (opts.signal) q = q.abortSignal(opts.signal)
       return q
     }
 
@@ -403,7 +404,7 @@ export function DroptopOrdersPage() {
         let lastErr: string | null = null
         for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
           if (cancelled()) return []
-          const { data: pageData, error: err } = await sb.rpc('get_droptop_orders_embedded', {
+          let call = sb.rpc('get_droptop_orders_embedded', {
             p_company_id: companyId,
             p_start: subStartIso,
             p_end: subEndIso,
@@ -412,6 +413,8 @@ export function DroptopOrdersPage() {
             p_cursor_id: cursor?.id ?? null,
             p_limit: PAGE,
           })
+          if (opts.signal) call = call.abortSignal(opts.signal)
+          const { data: pageData, error: err } = await call
           if (!err) return (pageData ?? []) as OrderRowEmbedded[]
           lastErr = err.message
           if (attempt < MAX_PAGE_RETRIES) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
@@ -464,12 +467,29 @@ export function DroptopOrdersPage() {
       return
     }
     let cancelled = false
+    // Direct investigation 2026-10-01: a real "narrow custom range, one
+    // shop" fetch timed out even though the identical query ran in ~2s via
+    // EXPLAIN ANALYZE in isolation — the count query and every page's RPC
+    // call below had no AbortController wired up at all, so switching the
+    // date range/shop picker while a broader fetch was still in flight
+    // (very plausible — this is exactly the sequence that led to the
+    // reported timeout) never actually cancelled the ABANDONED request
+    // server-side, only stopped this component from listening to it. The
+    // old fetch kept running to completion (up to its own 60s function
+    // timeout) in parallel with the new one, competing for the same
+    // connection pool/disk cache — a self-inflicted contention source this
+    // page could hit on its own. An AbortController now actually cancels
+    // the previous request's underlying HTTP call the instant the scope
+    // changes, so at most one of this page's own detail fetches is ever
+    // genuinely running against the DB at a time.
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
     setLoadProgress({ loaded: 0, total: null })
     fetchOrderDetailForScope(shopIds.length ? shopIds : null, {
       isCancelled: () => cancelled,
       onProgress: (loaded, total) => { if (!cancelled) setLoadProgress({ loaded, total }) },
+      signal: controller.signal,
     }).then((result) => {
       if (cancelled) return
       setOrders(result.orders)
@@ -479,7 +499,7 @@ export function DroptopOrdersPage() {
       setVehicles(result.vehicles)
       setLoading(false)
     }).catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load orders'); setLoading(false) } })
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
   }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops, detailRequested, fetchOrderDetailForScope])
 
   // "Load data for this shop" quick-load (Build Your Own Report modal,
