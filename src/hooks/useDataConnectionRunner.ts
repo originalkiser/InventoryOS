@@ -88,16 +88,36 @@ export async function runDataConnectionNow(
       // tick did, gated by data-connection-dispatcher's own
       // monthEndCountMonthFor) — so a missed/buggy automated run had no
       // manual recourse short of waiting for the next month-end window.
-      // Now computes the same countMonth the automated tick would, so
-      // clicking Run Now during (or the morning after) the month-end
-      // window genuinely catches count_products up right now.
+      // Now computes the same countMonth the automated tick would.
+      //
+      // The day-1 carryover case (useStoredDataOnly) is NOT satisfied by a
+      // fresh live pull here, unlike the automated tick (which always runs
+      // at one fixed early-morning time) — a manual click can happen at any
+      // time of day, so a live pull on the 1st would capture the NEW
+      // month's own partial-day activity and wrongly attribute it to the
+      // PREVIOUS month (confirmed live 2026-10-02, caught before it ran).
+      // That case instead replays whatever is ALREADY stored in
+      // product_usage — captured BEFORE the live pull below touches it —
+      // via backfill_count_products_from_product_usage (migration
+      // 20260930bz). The live pull still runs afterward either way, since
+      // Run Now's whole point is refreshing current on-hand; it just never
+      // feeds count_products itself on a day-1 carryover.
       const { data: tzRow } = await (supabase as any).schema('platform').from('app_settings')
         .select('value').eq('company_id', companyId).eq('key', TIMEZONE_SETTING_KEY).maybeSingle()
       const tz = typeof tzRow?.value === 'string' ? tzRow.value : DEFAULT_TIMEZONE
-      const countMonth = monthEndCountMonthFor(new Date(), tz) ?? undefined
-      const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1, countMonth }, onProgress)
+      const monthInfo = monthEndCountMonthFor(new Date(), tz)
+      let countMonthNote = ''
+      if (monthInfo?.useStoredDataOnly) {
+        const { data: backfillCount, error: backfillErr } = await (supabase as any)
+          .rpc('backfill_count_products_from_product_usage', { p_count_month: monthInfo.countMonth })
+        if (backfillErr) throw new Error(`Month-end backfill failed: ${backfillErr.message}`)
+        countMonthNote = ` (count_products backfilled for ${monthInfo.countMonth.slice(0, 7)} from already-stored on-hand, ${backfillCount} row(s), no live re-pull)`
+      }
+      const liveCountMonth = monthInfo && !monthInfo.useStoredDataOnly ? monthInfo.countMonth : undefined
+      const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1, countMonth: liveCountMonth }, onProgress)
       summary = `Droptop on-hand: ${r.operations_synced} shop(s), ${r.products_upserted} products`
-        + (countMonth ? ` (count_products updated for ${countMonth.slice(0, 7)})` : '')
+        + (liveCountMonth ? ` (count_products updated for ${liveCountMonth.slice(0, 7)})` : '')
+        + countMonthNote
       warnings = r.warnings
     } else if (key === 'droptop_usage') {
       const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true }, onProgress)
