@@ -33,10 +33,8 @@ import { DataCompletenessBadge } from '@/components/shared/DataCompletenessBadge
 import { DataTable } from '@/components/shared/DataTable'
 import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
-import { buildDroptopOrderManagerUrl, openDroptopTab } from '@/lib/droptopLinks'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { isM5, type Classification } from './PackageMappingPage'
-import { ExternalLink } from 'lucide-react'
 
 interface OrderRow {
   id: string
@@ -1397,7 +1395,6 @@ export function DroptopOrdersPage() {
       <Modal open={!!viewingOrder} onClose={() => setViewingOrder(null)}
         title={viewingOrder ? `Order ${viewingOrder.order_id}` : 'Order'} size="xl">
         {viewingOrder && (() => {
-          const droptopUrl = buildDroptopOrderManagerUrl(viewingOrder.order_id)
           // Direct ask 2026-10-02: Order #/Shop/Region/Customer/City/Status
           // (the "who/where" identity fields) keep the original stacked
           // label-over-value grid; Packages keeps that same stacked style
@@ -1410,11 +1407,6 @@ export function DroptopOrdersPage() {
           const restCols = DETAIL_COLUMNS.filter((c) => c.key !== 'packages').slice(6)
           return (
             <div className="flex flex-col gap-3">
-              {droptopUrl && (
-                <Button size="sm" variant="secondary" className="self-start" onClick={() => openDroptopTab(droptopUrl)}>
-                  <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open in Droptop
-                </Button>
-              )}
               <div className="grid grid-cols-2 gap-2">
                 {topCols.map((c) => (
                   <div key={c.key} className="flex flex-col gap-0.5 min-w-0 border border-navy/20 rounded px-2.5 py-1.5">
