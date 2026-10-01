@@ -327,6 +327,20 @@ function MonthlySummaryTab({ companyId, allowedLocationIds, loc }: {
   // ---- Data coverage / rebuild ----
   const [coverage, setCoverage] = useState<Map<string, number>>(new Map())
   const [earliestMonth, setEarliestMonth] = useState<string | null>(null)
+  // Direct investigation 2026-10-01, real user-reported "why does sales
+  // jump from July to August" — qty_sold is qty_usage_ledger (daily_
+  // product_activity) + qty_order_services (droptop_order_services), and
+  // confirmed via direct SQL that daily_product_activity has an absolute
+  // floor of 2026-08-01 company-wide (zero rows before it, for any shop) —
+  // droptop_orders itself shows no such jump (July/August order counts and
+  // shop counts are nearly identical). This is a real, PERMANENT gap, not
+  // a stale rollup: Droptop's usage/inventory API is a live-state snapshot
+  // with no historical query mode (see droptop-sync-usage's own doc
+  // comment), so there's no "usage as of July 2026" to ever backfill.
+  // Surfaced here so a month-over-month jump straddling this floor doesn't
+  // read as missing ORDER data (droptop_orders' own completeness badge is
+  // a different, genuinely-backfillable signal and isn't affected).
+  const [usageLedgerFloorMonth, setUsageLedgerFloorMonth] = useState<string | null>(null)
   const [rebuildRunning, setRebuildRunning] = useState(false)
   const [rebuildProgress, setRebuildProgress] = useState<{ done: number; total: number; label: string } | null>(null)
   const [rebuildError, setRebuildError] = useState<string | null>(null)
@@ -344,8 +358,16 @@ function MonthlySummaryTab({ companyId, allowedLocationIds, loc }: {
       .eq('company_id', companyId).not('order_finalized_at', 'is', null)
       .order('order_finalized_at', { ascending: true }).limit(1)
       .then(({ data }: any) => { if (data?.[0]?.order_finalized_at) setEarliestMonth(monthKeyOf(data[0].order_finalized_at)) })
+    sb.schema('inventory').from('daily_product_activity').select('activity_date')
+      .eq('company_id', companyId)
+      .order('activity_date', { ascending: true }).limit(1)
+      .then(({ data }: any) => { if (data?.[0]?.activity_date) setUsageLedgerFloorMonth(monthKeyOf(data[0].activity_date)) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId])
+  const monthsBeforeUsageFloor = useMemo(
+    () => (usageLedgerFloorMonth ? months.filter((mk) => mk < usageLedgerFloorMonth) : []),
+    [months, usageLedgerFloorMonth],
+  )
 
   async function refreshMonths(monthKeys: string[]) {
     setRebuildRunning(true); setRebuildError(null)
@@ -467,6 +489,16 @@ function MonthlySummaryTab({ companyId, allowedLocationIds, loc }: {
           <Card>
             <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Company-Wide, by Category</span></CardHeader>
             <CardBody>
+              {monthsBeforeUsageFloor.length > 0 && (
+                <p className="text-[11px] font-mono text-[#E67E22] border border-[#E67E22]/30 bg-[#E67E22]/5 rounded px-2 py-1.5 mb-3">
+                  Usage-ledger data (oil/consumables usage, one of the two sources summed into this total) only
+                  exists from {monthLabel(usageLedgerFloorMonth!)} onward — Droptop's usage feed is a live snapshot
+                  with no historical query mode, so this can never be backfilled further back.{' '}
+                  {monthsBeforeUsageFloor.map(monthLabel).join(', ')} reflect order-level sales only, so a jump
+                  into {monthLabel(usageLedgerFloorMonth!)} isn't missing order data — see Droptop Orders' own
+                  completeness badge for that (a separate, genuinely backfillable signal).
+                </p>
+              )}
               <div className="rounded-lg bg-sb-navy px-4 py-4">
                 <ResponsiveContainer width="100%" height={240}>
                   <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
