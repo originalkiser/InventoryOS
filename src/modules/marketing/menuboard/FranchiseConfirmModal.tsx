@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import type { Location } from '@/types'
 import type { MenuBoardPackage } from './useMenuBoard'
 import { Board, makeLockedShareSlug } from './MenuBoardPage'
@@ -39,6 +40,10 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
   onCreated: (url: string) => void
 }) {
   const { profile } = useAuthStore()
+  // Same z-[100] + docked-width-inset fix as Modal.tsx (harmless default of
+  // 0 on the public, no-auth franchisee setup flow, where AppShell/docked
+  // panels never mount).
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
   const [secondsLeft, setSecondsLeft] = useState(CONFIRM_DELAY_SECONDS)
   const [submitting, setSubmitting] = useState(false)
   // Kicked to true a tick after mount so the width transition actually
@@ -155,7 +160,7 @@ export function FranchiseConfirmModal({ location, address, packages, resolveQuar
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm p-4">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm p-4" style={{ right: dockedWidth }}>
       <div className="w-full max-w-2xl bg-cream rounded-lg border border-navy/30 shadow-2xl flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-5 py-3 border-b border-navy/10 flex-shrink-0">
           <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Confirm &amp; Generate Franchise Menu Board</h3>

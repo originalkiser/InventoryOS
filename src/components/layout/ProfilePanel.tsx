@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
@@ -50,6 +51,13 @@ interface ProfilePanelProps {
 
 export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNotifPrefs, requestPermission }: ProfilePanelProps) {
   const { profile, setProfile } = useAuthStore()
+  // Same fix as Modal.tsx: this is a full-screen centered overlay that used
+  // to render behind a docked side panel (z-65) since it was only z-50, and
+  // it spanned the full viewport with no awareness a panel had already
+  // claimed the right edge. Custom 3-column layout doesn't fit the shared
+  // Modal component's shape, so the same z-[100] + docked-width-inset
+  // pattern is applied directly here instead of converting to it.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
   const { dark, toggle } = useDarkMode()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const isDev = isDeveloper(profile?.role)
@@ -138,7 +146,7 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
     .toUpperCase()
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose} aria-hidden="true">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center p-4" style={{ right: dockedWidth }} onClick={onClose} aria-hidden="true">
       <div
         className="profile-panel relative w-full max-w-4xl max-h-[85vh] bg-[#F2F1E6] dark:bg-[#002745] shadow-2xl border border-navy/20 dark:border-[#F2F1E6]/10 rounded-xl flex flex-col"
         onClick={(e) => e.stopPropagation()}

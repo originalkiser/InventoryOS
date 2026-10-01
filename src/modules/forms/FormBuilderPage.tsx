@@ -11,6 +11,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { HexColorPicker } from 'react-colorful'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { loadFormWithFields, saveFormFields, isSlugAvailable } from '@/hooks/useForms'
 import { useUndoableState } from '@/hooks/useUndoableState'
 import { RichTextEditor, RichTextDisplay } from '@/components/shared/RichTextEditor'
@@ -543,6 +544,8 @@ function ConditionalLogicModal({
   const [rules, setRules] = useState<Partial<ConditionRule>[]>(
     condition?.rules ?? [{ id: crypto.randomUUID(), source_field_id: '', operator: 'equals', value: '' }]
   )
+  // Same z-[100] + docked-width-inset fix as Modal.tsx.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
 
   const sourceFields = allFields.filter((f) => f.id !== field.id && f.field_type !== 'text_block' && f.field_type !== 'calculation')
 
@@ -569,7 +572,7 @@ function ConditionalLogicModal({
   const operatorsRequiringValue = ['equals', 'not_equals', 'contains', 'not_contains', 'greater_than', 'less_than']
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
       <div className="w-full max-w-lg bg-cream rounded-lg border border-navy/30 shadow-2xl p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Conditional Logic</h3>
@@ -993,6 +996,8 @@ function ImportModal({ onImport, onClose }: {
   const [loading, setLoading] = useState(false)
   const [expandedOpts, setExpandedOpts] = useState<Set<string>>(new Set())
   const fileRef = useRef<HTMLInputElement>(null)
+  // Same z-[100] + docked-width-inset fix as Modal.tsx.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
 
   async function handleFile(file: File) {
     setLoading(true)
@@ -1030,7 +1035,7 @@ function ImportModal({ onImport, onClose }: {
   const selectedCount = rows.filter((r) => r.selected && !r.isUnknownType).length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
       <div className="w-full max-w-2xl bg-cream rounded-lg border border-navy/30 shadow-2xl flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-navy/20 flex-shrink-0">
@@ -1373,6 +1378,10 @@ export function FormBuilderPage() {
   const { formId } = useParams<{ formId?: string }>()
   const navigate = useNavigate()
   const { profile } = useAuthStore()
+  // Same z-[100] + docked-width-inset fix as Modal.tsx — shared by the
+  // Share modal and Preview modal below, both custom (non-shared-Modal)
+  // overlays.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
 
   const [formData, setFormData] = useState<Partial<FormDefinition>>({
     title: 'Untitled Form',
@@ -1873,7 +1882,7 @@ export function FormBuilderPage() {
 
       {/* Share modal — updated with org/public clarity */}
       {shareOpen && shareUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm">
+        <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
           <div className="w-full max-w-md bg-cream rounded-lg border border-navy/30 shadow-2xl p-6 flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Share Form</h3>
@@ -1974,7 +1983,7 @@ export function FormBuilderPage() {
           scroll to fit within the viewport at all) can never push it out of
           reach the way it could when both shared one scrolling column. */}
       {previewOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center bg-navy/60 backdrop-blur-sm p-4">
+        <div className="fixed top-0 left-0 bottom-0 z-[100] flex flex-col items-center bg-navy/60 backdrop-blur-sm p-4" style={{ right: dockedWidth }}>
           <div className="w-full max-w-xl flex justify-end mb-2 flex-shrink-0">
             <button onClick={() => setPreviewOpen(false)} className="text-cream/80 hover:text-cream text-sm font-mono bg-navy/40 rounded px-3 py-1">✕ Close Preview</button>
           </div>

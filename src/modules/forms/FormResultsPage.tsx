@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { loadFormWithFields } from '@/hooks/useForms'
 import { useAuthStore } from '@/stores/authStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { Button, Badge, SbLoader } from '@/components/ui'
 import type {
   FormDefinition, FormField, FormSubmission, FormResponse, ScoreStreak,
@@ -135,6 +136,10 @@ export function displayValueFor(resp: FormResponse | undefined, field: FormField
 
 function PackagePricingCell({ response }: { response: FormResponse | undefined }) {
   const [open, setOpen] = useState(false)
+  // Read unconditionally (before the early return below) — same z-[100] +
+  // docked-width-inset fix as Modal.tsx, applied directly since this custom
+  // overlay doesn't use the shared Modal component.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
   const rows = response?.value_json ?? []
   if (!rows.length) return <span className="text-inky/40">—</span>
   const pcts = effectivePenetrationPct(rows)
@@ -145,7 +150,7 @@ function PackagePricingCell({ response }: { response: FormResponse | undefined }
         {rows.length} package{rows.length !== 1 ? 's' : ''}
       </button>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm p-4" onClick={() => setOpen(false)}>
+        <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm p-4" style={{ right: dockedWidth }} onClick={() => setOpen(false)}>
           <div className="bg-cream rounded-lg border border-navy/30 shadow-2xl p-4 max-w-4xl w-full max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Package Pricing</h3>
@@ -448,6 +453,8 @@ function AddColumnModal({ formId, profile, onAdded, onClose }: {
   const [label, setLabel] = useState('')
   const [columnType, setColumnType] = useState<SubmissionColumn['column_type']>('text')
   const [saving, setSaving] = useState(false)
+  // Same z-[100] + docked-width-inset fix as Modal.tsx.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
 
   async function save() {
     if (!label.trim()) return
@@ -465,7 +472,7 @@ function AddColumnModal({ formId, profile, onAdded, onClose }: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
       <div className="w-full max-w-sm bg-cream rounded-lg border border-navy/30 shadow-2xl p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Add Column</h3>

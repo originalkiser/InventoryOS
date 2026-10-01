@@ -3,6 +3,7 @@ import { createColumnHelper } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useMonthEndStore } from '@/stores/monthEndStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { useLocations } from '@/hooks/useLocations'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
@@ -507,6 +508,11 @@ function RecountSlideOver({
   )
   const [completionNotes, setCompletionNotes] = useState(f.completion_notes ?? '')
   const [saving, setSaving] = useState(false)
+  // Same z-[100] + docked-width-inset fix as Modal.tsx — this is a custom
+  // right-edge slide-over rather than the shared Modal component, so it's
+  // applied directly here: insetting the right edge by the docked panel's
+  // width keeps the drawer from opening underneath/behind it.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
 
   const status: Status = completed ? 'complete' : 'open'
   const isPartial = recountType === 'Partial Recount Products'
@@ -561,7 +567,7 @@ function RecountSlideOver({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex justify-end" style={{ right: dockedWidth }}>
       <div className="absolute inset-0 bg-black/80" onClick={onClose} />
       <div className="relative w-full max-w-lg h-full bg-cream border-l border-navy/30 shadow-2xl overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-navy/30 sticky top-0 bg-navy z-10">

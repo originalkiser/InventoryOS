@@ -14,6 +14,7 @@ import { MeetingOverlay } from '@/modules/meetings/MeetingOverlay'
 import type { PanelMode } from '@/components/shared/FloatingPanel'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { useRecentPagesStore } from '@/stores/recentPagesStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { KeepAlivePages } from './KeepAlivePages'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 
@@ -158,6 +159,12 @@ export function AppShell() {
   const pushWidth = !mobile
     ? (lookupMode === 'docked' ? lookupWidth : invMode === 'docked' ? invWidth : tasksMode === 'docked' ? tasksWidth : meetingMode === 'docked' ? meetingWidth : 0)
     : 0
+  // Direct ask 2026-09-30: a modal (e.g. Month End's Shop Balance modal)
+  // used to render BEHIND a docked panel — Modal.tsx reads this same
+  // number (via pinnedPanelStore) to center itself within the remaining
+  // work area instead of across the full viewport. See that store's own
+  // comment for why a tiny shared store instead of prop drilling.
+  useEffect(() => { usePinnedPanelStore.getState().setDockedWidth(pushWidth) }, [pushWidth])
   // w-14 collapsed (56px), w-64 expanded (256px)
   const sidebarWidth = mobile ? 0 : sidebarCollapsed ? 56 : 256
 

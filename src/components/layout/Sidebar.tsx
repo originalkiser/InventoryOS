@@ -1339,12 +1339,18 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobile, mobileOpen, onMo
     if (!mobileOpen) return null
     return (
       <>
+        {/* z-[100]/z-[101] (not z-40/z-50): a docked side panel (Location
+            Lookup/Inventory/Today's Tasks/Quick Meeting) sits at z-65, which
+            used to out-rank this mobile drawer. No docked-width inset here
+            (unlike Modal.tsx) — this is a LEFT-edge drawer and a docked
+            panel is a desktop-only, wide-viewport affair the two would
+            essentially never need to share space with. */}
         <div
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm"
           onClick={onMobileClose}
           aria-hidden="true"
         />
-        <aside className="fixed left-0 top-0 bottom-0 z-50 w-64 flex flex-col bg-chrome shadow-2xl">
+        <aside className="fixed left-0 top-0 bottom-0 z-[101] w-64 flex flex-col bg-chrome shadow-2xl">
           <div className="flex items-center justify-between px-3 h-12 border-b border-chrome-fg/8 flex-shrink-0">
             <img src={sbLogo} alt="SB Net" className="h-5 opacity-80" />
             <button

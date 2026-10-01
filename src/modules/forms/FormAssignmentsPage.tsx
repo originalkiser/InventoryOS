@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { loadFormWithFields } from '@/hooks/useForms'
 import { useAuthStore } from '@/stores/authStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { Button, Badge, SbLoader } from '@/components/ui'
 import { downloadAssignmentTemplate } from '@/lib/formImportTemplate'
 import * as XLSX from 'xlsx'
@@ -48,6 +49,8 @@ function RuleDrawer({
   const [ruleType, setRuleType] = useState<AssignmentRule['rule_type']>(editRule?.rule_type ?? 'interval')
   const [intervalUnit, setIntervalUnit] = useState<string>(editRule?.interval_unit ?? 'month')
   const [intervalValue, setIntervalValue] = useState(String(editRule?.interval_value ?? 1))
+  // Same z-[100] + docked-width-inset fix as Modal.tsx.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
   const [intervalStart, setIntervalStart] = useState(editRule?.interval_start_date ?? '')
   const [setDates, setSetDates] = useState<string[]>(editRule?.set_dates ?? [])
   const [newDate, setNewDate] = useState('')
@@ -95,7 +98,7 @@ function RuleDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-navy/60 backdrop-blur-sm">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-end sm:items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
       <div className="w-full max-w-lg bg-cream rounded-t-2xl sm:rounded-lg border border-navy/30 shadow-2xl flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-navy/20 flex-shrink-0">
           <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">
@@ -243,6 +246,8 @@ function BulkImportModal({
   const [rows, setRows] = useState<BulkRow[]>([])
   const [importing, setImporting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  // Same z-[100] + docked-width-inset fix as Modal.tsx.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
 
   async function handleFile(file: File) {
     const buffer = await file.arrayBuffer()
@@ -282,7 +287,7 @@ function BulkImportModal({
   const selectedCount = rows.filter((r) => r.selected && r.resolvedProfile).length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
       <div className="w-full max-w-xl bg-cream rounded-lg border border-navy/30 shadow-2xl flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-navy/20 flex-shrink-0">
           <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Import Assignments</h3>
@@ -358,6 +363,9 @@ export function FormAssignmentsPage() {
   const { formId } = useParams<{ formId: string }>()
   const navigate = useNavigate()
   const { profile: myProfile } = useAuthStore()
+  // Same z-[100] + docked-width-inset fix as Modal.tsx — used by the Assign
+  // Form drawer below.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
 
   const [form, setForm] = useState<FormDefinition | null>(null)
   const [assignments, setAssignments] = useState<AssignmentRow[]>([])
@@ -579,7 +587,7 @@ export function FormAssignmentsPage() {
 
       {/* Assign Form Drawer */}
       {drawerType === 'assignment' && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-navy/60 backdrop-blur-sm">
+        <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-end sm:items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
           <div className="w-full max-w-md bg-cream rounded-t-2xl sm:rounded-lg border border-navy/30 shadow-2xl p-6 flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Assign Form</h3>

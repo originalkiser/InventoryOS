@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 
 interface ModalProps {
   open: boolean
@@ -32,10 +33,24 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
     return () => window.removeEventListener('keydown', handler)
   }, [open, onClose])
 
+  // Direct ask 2026-09-30: a modal used to render BEHIND a docked side
+  // panel (Location Lookup/Inventory/Today's Tasks/Quick Meeting — z-index
+  // 65, see FloatingPanel.tsx) since Modal's own z-50 lost that fight.
+  // z-[100] (below) fixes the overlap outright; insetting the whole
+  // overlay's right edge by the panel's own width (read from
+  // pinnedPanelStore, written by AppShell from the same number it already
+  // uses to margin-shift the page content) additionally keeps the modal
+  // centered in the remaining work area — and keeps the backdrop from
+  // darkening the panel — instead of spanning across/behind it, so both
+  // stay fully visible side by side rather than just no-longer-
+  // overlapping. Read unconditionally (before the early return below) —
+  // Hooks can't be called after a conditional return.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
+
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center" style={{ right: dockedWidth }}>
       <div
         className="absolute inset-0 bg-black/60"
         onClick={onClose}

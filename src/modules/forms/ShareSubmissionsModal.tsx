@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react'
 import { Toggle } from '@/components/ui'
 import { useAuthStore } from '@/stores/authStore'
+import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import {
   loadSubmissionShares, createSubmissionShare, updateSubmissionShare, deleteSubmissionShare,
 } from '@/hooks/useForms'
@@ -21,6 +22,9 @@ const RESULTS_BASE_URL = `${window.location.origin}/results/`
 
 export function ShareSubmissionsModal({ formId, onClose }: { formId: string; onClose: () => void }) {
   const { profile } = useAuthStore()
+  // Same fix as Modal.tsx — z-[100] + docked-width inset, since this custom
+  // (non-shared-Modal) overlay used to render behind a docked side panel.
+  const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
   const [shares, setShares] = useState<SubmissionShare[]>([])
   const [loading, setLoading] = useState(true)
   const [label, setLabel] = useState('')
@@ -71,7 +75,7 @@ export function ShareSubmissionsModal({ formId, onClose }: { formId: string; onC
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/60 backdrop-blur-sm">
+    <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center bg-navy/60 backdrop-blur-sm" style={{ right: dockedWidth }}>
       <div className="w-full max-w-lg bg-cream rounded-lg border border-navy/30 shadow-2xl p-6 flex flex-col gap-4 max-h-[85vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-heading font-bold text-navy uppercase tracking-wide">Share Results</h3>
