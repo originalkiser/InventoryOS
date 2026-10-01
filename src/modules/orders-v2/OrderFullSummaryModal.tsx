@@ -13,6 +13,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
+import { daysOfSupply } from './engine'
 import { dos, money, num } from './shared'
 
 const sb = () => supabase as any
@@ -28,6 +29,16 @@ interface FullLine {
   dos_before: number | null
   dos_after: number | null
   dos_after_delivery: number | null
+}
+
+// A configured-but-never-ordered (location, product) pair, non-VMI/keepfill
+// only — direct ask 2026-09-30: "line items of the non vmi/keepfill items
+// that were not ordered, showing their on hands and days of supply now."
+interface NotOrderedLine {
+  locationId: string
+  productId: string
+  onHand: number | null
+  dailyUsage: number | null
 }
 
 // Same Top-N preset shape as Month End's own outlier callouts
@@ -46,6 +57,7 @@ export function OrderFullSummaryModal({ draftId, vendorId, open, onClose }: {
   const loc = useLocations()
   const [lines, setLines] = useState<FullLine[]>([])
   const [notOrderedByProduct, setNotOrderedByProduct] = useState<Map<string, Set<string>>>(new Map())
+  const [notOrderedLines, setNotOrderedLines] = useState<NotOrderedLine[]>([])
   const [loading, setLoading] = useState(true)
 
   const [topN, setTopN] = useProfilePref<number>('orders-v2:summary-top-n', 5)
@@ -75,29 +87,62 @@ export function OrderFullSummaryModal({ draftId, vendorId, open, onClose }: {
       // Products configured for this order's own shops (this vendor only)
       // that never made it onto the order at all — same "not on order"
       // concept ShopConfiguredProductsTable already shows per-shop, here
-      // summarized across every shop this order touched.
+      // summarized across every shop this order touched. VMI/keep-fill
+      // products are excluded (direct ask 2026-09-30) — they're deliberately
+      // never ordered through the normal flow, so including them here would
+      // just be noise, not a real gap. metadata.vmi === 'yes' is the same
+      // check useOrdersV2.ts's own rule-building uses for vmi_keepfill_enabled.
       const locationIds = [...new Set(out.map((l) => l.location_id).filter((id): id is string => !!id))]
       if (locationIds.length && vendorId) {
-        const configured: { location_id: string; product_id: string }[] = []
+        const configured: { location_id: string; product_id: string; metadata: Record<string, unknown> | null }[] = []
         for (let i = 0; i < locationIds.length; i += 200) {
           const chunk = locationIds.slice(i, i + 200)
           const { data } = await sb().schema('inventory').from('location_order_config')
-            .select('location_id, product_id').eq('company_id', companyId).eq('vendor_id', vendorId)
+            .select('location_id, product_id, metadata').eq('company_id', companyId).eq('vendor_id', vendorId)
             .eq('active', true).in('location_id', chunk)
-          configured.push(...((data ?? []) as { location_id: string; product_id: string }[]))
+          configured.push(...((data ?? []) as typeof configured))
         }
         if (cancelled) return
         const orderedKeys = new Set(out.filter((l) => l.included).map((l) => `${l.location_id}|${l.product_id}`))
+        const notOrderedPairs = configured.filter((c) =>
+          !orderedKeys.has(`${c.location_id}|${c.product_id}`) &&
+          String(c.metadata?.vmi ?? '').trim().toLowerCase() !== 'yes')
+
         const notOrdered = new Map<string, Set<string>>()
-        for (const c of configured) {
-          if (orderedKeys.has(`${c.location_id}|${c.product_id}`)) continue
+        for (const c of notOrderedPairs) {
           const shops = notOrdered.get(c.product_id) ?? new Set<string>()
           shops.add(c.location_id)
           notOrdered.set(c.product_id, shops)
         }
         setNotOrderedByProduct(notOrdered)
+
+        // On Hand/DOS Now for each not-ordered line — scoped to just the
+        // products actually in notOrderedPairs (not every product_usage row
+        // for these shops), same narrowing precedent as
+        // LocationLookupPage.tsx's own product_usage fetch.
+        if (notOrderedPairs.length) {
+          const productIds = [...new Set(notOrderedPairs.map((c) => c.product_id))]
+          const usageByKey = new Map<string, { on_hand: number | null; daily_usage: number | null }>()
+          for (let i = 0; i < locationIds.length; i += 200) {
+            const chunk = locationIds.slice(i, i + 200)
+            const { data } = await sb().schema('inventory').from('product_usage')
+              .select('location_id, product_id, on_hands, daily_usage')
+              .eq('company_id', companyId).in('location_id', chunk).in('product_id', productIds)
+            for (const r of (data ?? []) as { location_id: string; product_id: string; on_hands: number | null; daily_usage: number | null }[]) {
+              usageByKey.set(`${r.location_id}|${r.product_id}`, { on_hand: r.on_hands, daily_usage: r.daily_usage })
+            }
+          }
+          if (cancelled) return
+          setNotOrderedLines(notOrderedPairs.map((c) => {
+            const u = usageByKey.get(`${c.location_id}|${c.product_id}`)
+            return { locationId: c.location_id, productId: c.product_id, onHand: u?.on_hand ?? null, dailyUsage: u?.daily_usage ?? null }
+          }))
+        } else {
+          setNotOrderedLines([])
+        }
       } else {
         setNotOrderedByProduct(new Map())
+        setNotOrderedLines([])
       }
       setLoading(false)
     })()
@@ -181,6 +226,47 @@ export function OrderFullSummaryModal({ draftId, vendorId, open, onClose }: {
               rows={stats.bottomDosAfter.map((l) => ({ label: `${shopLabel(l.location_id)} · ${l.product_id}`, value: dos(l.dos_after) }))} />
             <RankedCard title={`Top ${topN} — Configured, Not Ordered (${stats.notOrderedCount} total)`}
               rows={stats.notOrderedTop.map((r) => ({ label: r.product_id, value: `${r.shopCount} shop${r.shopCount !== 1 ? 's' : ''}` }))} />
+          </div>
+
+          <div>
+            <h3 className="text-[11px] font-mono uppercase tracking-wide text-inky/60 mb-1.5">
+              Not Ordered — Non-VMI/Keepfill ({notOrderedLines.length.toLocaleString()})
+            </h3>
+            {notOrderedLines.length === 0 ? (
+              <p className="text-[11px] font-mono text-inky/40 pb-2">Nothing configured is missing an order — every non-VMI/keepfill product is on this order.</p>
+            ) : (
+              <div className="max-h-60 overflow-auto rounded border border-navy/15 mb-4">
+                <table className="w-full text-[11px] font-mono">
+                  <thead className="sticky top-0 bg-cream">
+                    <tr className="text-inky/60 uppercase border-b border-navy/15">
+                      <th className="text-left px-2 py-1">Shop</th>
+                      <th className="text-left px-2 py-1">Product</th>
+                      <th className="text-right px-2 py-1">On Hand</th>
+                      <th className="text-right px-2 py-1">DOS Now</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...notOrderedLines]
+                      .sort((a, b) => {
+                        const da = daysOfSupply(a.onHand, a.dailyUsage)
+                        const db = daysOfSupply(b.onHand, b.dailyUsage)
+                        if (da == null && db == null) return 0
+                        if (da == null) return 1
+                        if (db == null) return -1
+                        return da - db
+                      })
+                      .map((l, i) => (
+                        <tr key={`${l.locationId}|${l.productId}|${i}`} className="border-b border-navy/5">
+                          <td className="px-2 py-1 text-navy">{shopLabel(l.locationId)}</td>
+                          <td className="px-2 py-1 text-navy">{l.productId}</td>
+                          <td className="px-2 py-1 text-right text-inky/70">{num(l.onHand)}</td>
+                          <td className="px-2 py-1 text-right text-inky/70">{dos(daysOfSupply(l.onHand, l.dailyUsage))}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div>
