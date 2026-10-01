@@ -43,13 +43,34 @@ function findLabelCell(grid: unknown[][], label: string): { row: number; col: nu
   return null
 }
 
-const MONTH_NUM: Record<string, string> = {
+export const MONTH_NUM: Record<string, string> = {
   january: '01', february: '02', march: '03', april: '04', may: '05', june: '06',
   july: '07', august: '08', september: '09', october: '10', november: '11', december: '12',
 }
 function monthToPeriod(monthName: string, year: number): string | null {
   const mm = MONTH_NUM[monthName.trim().toLowerCase()]
   return mm ? `${year}-${mm}` : null
+}
+
+/**
+ * Best-effort starting point for the per-month year review UI (direct ask
+ * 2026-10-01: a trailing report genuinely spans a year boundary — e.g.
+ * Sep'25 through Aug'26 — so blanketing one year across every month block
+ * was wrong for whichever months fell on the other side of that boundary).
+ * `labels` is assumed chronological (oldest first, matching how both
+ * source reports lay out their month axis); walking backward from
+ * `endYear` at the last label, a month number going UP as you step
+ * backward means you've crossed a Dec->Jan boundary, so everything before
+ * that point is one year earlier. This is only a default — the caller
+ * always shows it for review/edit before import, never applies it blind.
+ */
+export function defaultYearsForMonths(labels: string[], endYear: number): number[] {
+  const nums = labels.map((l) => Number(MONTH_NUM[l.trim().toLowerCase()] ?? 0))
+  const years = new Array(labels.length).fill(endYear)
+  for (let i = labels.length - 2; i >= 0; i--) {
+    years[i] = nums[i] > nums[i + 1] ? years[i + 1] - 1 : years[i + 1]
+  }
+  return years
 }
 
 // ── 1. Product Gallons workbook → StricklandData sheet (raw line items) ───
@@ -122,6 +143,18 @@ export interface ItemFillRow {
   item_fill_pct: number | null
 }
 
+/** Ordered month-block labels (e.g. ['June', 'July', 'August']) for the
+ * per-month year-review step — read without needing a year at all yet. */
+export function peekItemFillStatsMonths(wb: XLSX.WorkBook): string[] {
+  const monthRow = sheetGrid(wb, 'Export')[1] ?? []
+  const labels: string[] = []
+  for (let c = 0; c < monthRow.length; c++) {
+    const label = str(monthRow[c])
+    if (label && MONTH_NUM[label.trim().toLowerCase()]) labels.push(label)
+  }
+  return labels
+}
+
 /**
  * Side-by-side month blocks (June/July/August seen in the first real
  * export, but the block COUNT is detected dynamically, not hardcoded to 3,
@@ -132,14 +165,22 @@ export interface ItemFillRow {
  * blank/"Total" row — blocks don't all have the same row count (a product
  * with orders in July but not August just stops appearing in August's
  * block earlier).
+ *
+ * `yearForBlock` is aligned 1:1 with `peekItemFillStatsMonths`' own output
+ * (one year per block, in the same left-to-right order) — not a single
+ * blanket year, since a trailing report can genuinely span two years (see
+ * defaultYearsForMonths above).
  */
-export function parseItemFillStatsWorkbook(wb: XLSX.WorkBook, year: number): ItemFillRow[] {
+export function parseItemFillStatsWorkbook(wb: XLSX.WorkBook, yearForBlock: number[]): ItemFillRow[] {
   const grid = sheetGrid(wb, 'Export')
   const monthRow = grid[1] ?? []
   const blockStarts: { col: number; period: string }[] = []
+  let blockIdx = 0
   for (let c = 0; c < monthRow.length; c++) {
     const label = str(monthRow[c])
-    if (!label) continue
+    if (!label || !MONTH_NUM[label.trim().toLowerCase()]) continue
+    const year = yearForBlock[blockIdx] ?? yearForBlock[yearForBlock.length - 1]
+    blockIdx++
     const period = monthToPeriod(label, year)
     if (period) blockStarts.push({ col: c, period })
   }
@@ -191,6 +232,26 @@ const OTIF_SHEETS: { sheet: string; segment: OtifRow['segment'] }[] = [
   { sheet: 'Fz OTIF 90 - Package', segment: 'fz_package' },
 ]
 
+/** Ordered month labels from the first OTIF sheet that has any — all 4
+ * sheets share one Time Period axis in practice (same trailing window
+ * reported 4 ways), so this one sequence is reused for all of them below. */
+export function peekOtifMonths(wb: XLSX.WorkBook): string[] {
+  for (const { sheet } of OTIF_SHEETS) {
+    const grid = sheetGrid(wb, sheet)
+    const header = findLabelCell(grid, 'Time Period')
+    if (!header) continue
+    const labels: string[] = []
+    for (let r = header.row + 1; r < grid.length; r++) {
+      const row = grid[r]
+      if (!row) break
+      const label = str(row[header.col])
+      if (label && label.toLowerCase() !== 'total') labels.push(label)
+    }
+    if (labels.length) return labels
+  }
+  return []
+}
+
 /**
  * Each OTIF sheet has its own small sub-table at a slightly different
  * column offset (found live: Corp/Fz Bulk and Fz Package start at column
@@ -201,18 +262,25 @@ const OTIF_SHEETS: { sheet: string; segment: OtifRow['segment'] }[] = [
  * sheet's own "Total" row (a same-range rollup, not a real month — not
  * useful to store once periods have an explicit year, since it can always
  * be recomputed from the real months).
+ *
+ * `yearForRow` is aligned 1:1 with `peekOtifMonths`' own output, reused
+ * across all 4 sheets (see that function's own comment) rather than a
+ * single blanket year.
  */
-export function parseOtifSheets(wb: XLSX.WorkBook, year: number): OtifRow[] {
+export function parseOtifSheets(wb: XLSX.WorkBook, yearForRow: number[]): OtifRow[] {
   const out: OtifRow[] = []
   for (const { sheet, segment } of OTIF_SHEETS) {
     const grid = sheetGrid(wb, sheet)
     const header = findLabelCell(grid, 'Time Period')
     if (!header) continue
+    let rowIdx = 0
     for (let r = header.row + 1; r < grid.length; r++) {
       const row = grid[r]
       if (!row) break
       const monthLabel = str(row[header.col])
       if (!monthLabel || monthLabel.toLowerCase() === 'total') continue
+      const year = yearForRow[rowIdx] ?? yearForRow[yearForRow.length - 1]
+      rowIdx++
       const period = monthToPeriod(monthLabel, year)
       if (!period) continue
       const pct100 = (v: unknown) => (numOrNull(v) != null ? (numOrNull(v) as number) * 100 : null)

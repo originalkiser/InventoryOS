@@ -49,7 +49,25 @@ export function useMmrUpload() {
     return upsertChunked('reladyne_volume_commitment', 'company_id,year,month', rows, companyId)
   }, [companyId])
 
-  return { uploadVolumeData, uploadItemFillStats, uploadOtifStats, uploadCommitment, ready: !!companyId }
+  // Delete-all for the 2 tables affected by the blanket-year bug (direct ask
+  // 2026-10-01) — lets a bad upload be cleared before re-importing with
+  // correct per-month years, same "type REMOVE" ClearTableButton pattern
+  // used elsewhere in the app. Volume Data/Commitment aren't offered here:
+  // Volume Data has no year-assignment step to get wrong in the first
+  // place, and Commitment reads its year straight from the source sheet.
+  const clearItemFillStats = useCallback(async () => {
+    if (!companyId) return
+    await sb().schema('inventory').from('reladyne_item_fill_stats').delete().eq('company_id', companyId)
+  }, [companyId])
+  const clearOtifStats = useCallback(async () => {
+    if (!companyId) return
+    await sb().schema('inventory').from('reladyne_otif_stats').delete().eq('company_id', companyId)
+  }, [companyId])
+
+  return {
+    uploadVolumeData, uploadItemFillStats, uploadOtifStats, uploadCommitment,
+    clearItemFillStats, clearOtifStats, ready: !!companyId,
+  }
 }
 
 // ── Fetch hooks — each loads its own table in full (all of these are small/

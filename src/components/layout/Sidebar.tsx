@@ -758,10 +758,22 @@ function SortableSection({
           onClick={() => { if (!rearranging) onToggleCollapse() }}
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
         >
-          {SECTION_ICONS[sectionKey]}
-          <span className="text-[10px] font-heading text-chrome-fg/80 uppercase tracking-widest truncate flex-1">
-            {meta?.label}
-          </span>
+          {/* Direct ask 2026-10-01: RelaDyne's own wordmark logo already
+              spells out its name, so squeezing it into the same w-5 h-5
+              square every other section's icon uses (illegible at that
+              aspect ratio) AND repeating "RELADYNE" in text next to it was
+              redundant — shown at a readable wide size with no text label
+              instead, same spot the icon+label pair otherwise occupies. */}
+          {sectionKey === 'reladyne' ? (
+            <img src={reladyneLogo} alt="RelaDyne" className="h-4 w-auto max-w-[120px] flex-1 object-contain object-left" />
+          ) : (
+            <>
+              {SECTION_ICONS[sectionKey]}
+              <span className="text-[10px] font-heading text-chrome-fg/80 uppercase tracking-widest truncate flex-1">
+                {meta?.label}
+              </span>
+            </>
+          )}
           <ChevronRight
             className={[
               'w-3 h-3 flex-shrink-0 text-chrome-fg/30 transition-transform duration-150',
