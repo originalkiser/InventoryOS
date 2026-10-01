@@ -7,7 +7,15 @@
 import { supabase } from '@/lib/supabase'
 import { runSkybitzTankSync } from '@/services/skybitzService'
 import { runDroptopSync, runDroptopPurchaseOrderSync, runDroptopOrderSync } from '@/services/droptopService'
+import { monthEndCountMonthFor } from '@/lib/monthEndCountMonth'
 import type { DataConnectionSchedule } from '@/types/integrations'
+
+// Same key/default DataConnectionsTab.tsx's own timezone picker uses
+// (platform.app_settings) — kept as a local literal rather than importing
+// from that file, since it already imports FROM this one (CONNECTION_META
+// etc.) and a two-way import between them would be circular.
+const TIMEZONE_SETTING_KEY = 'data_connection_timezone'
+const DEFAULT_TIMEZONE = 'America/Chicago'
 import {
   useSyncTasksStore, DROPTOP_ON_HAND_TASK_ID, DROPTOP_USAGE_TASK_ID,
   DROPTOP_PO_SYNC_TASK_ID, DROPTOP_ORDERS_TASK_ID, SKYBITZ_TANKS_TASK_ID, AUTOMATED_CHECKS_TASK_ID,
@@ -75,8 +83,21 @@ export async function runDataConnectionNow(
       const r = await runSkybitzTankSync()
       summary = `SkyBitz: ${r.updated} updated, ${r.inserted} new, ${r.unchanged} unchanged`
     } else if (key === 'droptop_on_hand') {
-      const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1 }, onProgress)
+      // Direct ask 2026-10-02: this manual Run Now never participated in
+      // the count_products month-end feed at all (only the automated daily
+      // tick did, gated by data-connection-dispatcher's own
+      // monthEndCountMonthFor) — so a missed/buggy automated run had no
+      // manual recourse short of waiting for the next month-end window.
+      // Now computes the same countMonth the automated tick would, so
+      // clicking Run Now during (or the morning after) the month-end
+      // window genuinely catches count_products up right now.
+      const { data: tzRow } = await (supabase as any).schema('platform').from('app_settings')
+        .select('value').eq('company_id', companyId).eq('key', TIMEZONE_SETTING_KEY).maybeSingle()
+      const tz = typeof tzRow?.value === 'string' ? tzRow.value : DEFAULT_TIMEZONE
+      const countMonth = monthEndCountMonthFor(new Date(), tz) ?? undefined
+      const r = await runDroptopSync(companyId, { mode: 'inventory', daysBack: 1, countMonth }, onProgress)
       summary = `Droptop on-hand: ${r.operations_synced} shop(s), ${r.products_upserted} products`
+        + (countMonth ? ` (count_products updated for ${countMonth.slice(0, 7)})` : '')
       warnings = r.warnings
     } else if (key === 'droptop_usage') {
       const r = await runDroptopSync(companyId, { mode: 'usage', daysBack: 1, logDailyActivity: true }, onProgress)

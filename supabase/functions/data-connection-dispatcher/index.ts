@@ -666,13 +666,28 @@ async function runMondayLocations(supabaseUrl: string, secret: string): Promise<
 // .ts's isMonthEndPeriod, re-implemented timezone-aware here since a Deno
 // edge function's own "now" has no relationship to any one company's local
 // calendar day). Returns null outside that window.
+//
+// The morning of the 1st of the FOLLOWING month also counts toward the
+// PREVIOUS month — direct live report 2026-10-02: the prior month's
+// count_products row stopped updating after its own last write on the
+// morning of its own last day (e.g. the morning of Sep 30), so the stored
+// "September" ending balance missed a full day of Sep 30's own on-hand
+// activity. That morning's Droptop pull reflects the prior day's (the
+// true last day of the previous month's) closing state, so it belongs to
+// the previous month's count_products row, not nothing and not the new
+// month's (which isn't in ITS OWN last-10-days window yet either).
 function monthEndCountMonthFor(date: Date, timeZone: string): string | null {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date)
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value)
   const year = get('year'), month = get('month'), day = get('day')
   const lastDay = new Date(year, month, 0).getDate()
-  if (day < lastDay - 9) return null
-  return `${year}-${String(month).padStart(2, '0')}-01`
+  if (day >= lastDay - 9) return `${year}-${String(month).padStart(2, '0')}-01`
+  if (day === 1) {
+    const prevMonth = month === 1 ? 12 : month - 1
+    const prevYear = month === 1 ? year - 1 : year
+    return `${prevYear}-${String(prevMonth).padStart(2, '0')}-01`
+  }
+  return null
 }
 
 // Chunks locations the same way the interactive "Sync All" button does —
