@@ -54,6 +54,7 @@ import { DroptopPackagesPage } from '@/modules/customers/DroptopPackagesPage'
 import { StaffingReportPage } from '@/modules/customers/StaffingReportPage'
 import { PackageMappingPage } from '@/modules/customers/PackageMappingPage'
 import { ProductSalesHistoryPage } from '@/modules/customers/ProductSalesHistoryPage'
+import { MmrPage } from '@/modules/reladyne/MmrPage'
 import { OrdersV2Landing } from '@/modules/orders-v2/OrdersV2Landing'
 import { OrdersV2DraftPage } from '@/modules/orders-v2/OrdersV2DraftPage'
 import { OrdersV2FinalReview } from '@/modules/orders-v2/OrdersV2FinalReview'
@@ -158,6 +159,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="marketing-planner" element={<MarketingPlannerPage />} />
     <Route path="menu-board" element={<MenuBoardPage />} />
     <Route path="customer-heatmap" element={<CustomerHeatmapPage />} />
+    <Route path="mmr" element={<MmrPage />} />
     <Route path="droptop-orders" element={<DroptopOrdersPage />} />
     <Route path="droptop-vehicles" element={<DroptopVehiclesPage />} />
     <Route path="droptop-packages" element={<DroptopPackagesPage />} />

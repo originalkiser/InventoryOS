@@ -30,6 +30,7 @@ import { isAdminOrDeveloper } from '@/lib/roles'
 import sbLogo from '@/assets/logo-cream.png'
 import sbIcon from '@/assets/SBOC-IconCream.png'
 import droptopLogo from '@/assets/droptop-logo.png'
+import reladyneLogo from '@/assets/reladyne-logo.svg'
 import {
   Package, Settings, Building2, DollarSign, TrendingUp, Megaphone,
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
@@ -80,6 +81,7 @@ export const ICONS: Record<string, JSX.Element> = {
   'product-sales-history': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
   'staffing-report': <Users className="w-4 h-4 flex-shrink-0" />,
   'data-connections': <GrDatabase className="w-4 h-4 flex-shrink-0" />,
+  mmr: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
   drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-chrome-fg/25" />,
 }
 
@@ -90,6 +92,7 @@ export const ICONS: Record<string, JSX.Element> = {
 const SECTION_ICONS: Record<string, JSX.Element> = {
   inventory: <Package className="w-5 h-5 flex-shrink-0 text-sky" />,
   droptop: <img src={droptopLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
+  reladyne: <img src={reladyneLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
   'data-connections': <GrDatabase className="w-5 h-5 flex-shrink-0 text-sky" />,
   'global-config': <Settings className="w-5 h-5 flex-shrink-0 text-chrome-fg/70" />,
   operations: <Building2 className="w-5 h-5 flex-shrink-0 text-[#E67E22]" />,
@@ -111,6 +114,12 @@ const SECTION_ACCENT: Record<string, string> = {
   // Config, and every other brand color is already spoken for) rather than
   // sitting inky-on-inky next to Droptop above it.
   'data-connections': 'bg-sky/15 border-l-2 border-sky',
+  // Same reuse-sky precedent as data-connections above — reladyne-logo.svg
+  // already carries its own brand color (blue/orange), so this section's
+  // own accent doesn't need to be visually distinct from sky the way the
+  // other sections' icons (plain lucide glyphs with no color of their own)
+  // do.
+  reladyne: 'bg-sky/15 border-l-2 border-sky',
   'global-config': 'bg-chrome-fg/[0.08] border-l-2 border-chrome-fg/40',
   operations: 'bg-[#E67E22]/15 border-l-2 border-[#E67E22]',
   finance: 'bg-[#2ECC71]/15 border-l-2 border-[#2ECC71]',
@@ -158,6 +167,9 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
   'data-connections': [
     { key: 'data-connections', label: 'Data Connections', to: '/data-connections' },
   ],
+  reladyne: [
+    { key: 'mmr', label: 'MMR', to: '/mmr' },
+  ],
   'global-config': [
     { key: 'global-config', label: 'Global Config', to: '/global-config' },
   ],
@@ -178,6 +190,7 @@ const SECTION_META: Record<string, { label: string }> = {
   inventory: { label: 'Inventory' },
   droptop: { label: 'Droptop' },
   'data-connections': { label: 'Data Connections' },
+  reladyne: { label: 'RelaDyne' },
   'global-config': { label: 'Configuration' },
   operations: { label: 'Operations' },
   finance: { label: 'Finance' },
