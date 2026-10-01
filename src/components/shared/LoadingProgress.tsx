@@ -38,14 +38,18 @@ export function LoadingProgress({ fraction, countText, messages }: LoadingProgre
   return (
     <div className="py-16 flex flex-col items-center gap-3">
       <SbLoader size={40} />
-      <div className="w-full max-w-md h-2 bg-navy/10 rounded-full overflow-hidden">
+      <div className="w-full max-w-md h-2 bg-navy/10 rounded-full overflow-hidden relative">
         {fraction != null ? (
           <div
             className="h-full bg-sky transition-[width] duration-300 ease-out"
             style={{ width: `${Math.min(100, Math.round(fraction * 100))}%` }}
           />
         ) : (
-          <div className="h-full w-full bg-sky/40 animate-pulse" />
+          // A static full-width opacity pulse used to sit here — it reads as
+          // "stuck" rather than "working" on a long wait with no real
+          // fraction to report (a single SQL aggregation, not a paginated
+          // pull). A sliding segment reads as active regardless of duration.
+          <div className="progress-indeterminate absolute inset-y-0 w-1/3 bg-sky rounded-full" />
         )}
       </div>
       <p className="text-[11px] font-mono text-inky/70">{countText}</p>

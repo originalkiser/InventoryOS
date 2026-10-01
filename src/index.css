@@ -244,6 +244,18 @@ body {
 }
 .live-pulse { animation: live-pulse 2s ease-in-out infinite; }
 
+/* Direct ask 2026-10-01: LoadingProgress's indeterminate state (no real
+   fraction to report — a single SQL aggregation, not a paginated pull) used
+   to be a full-width bar with just an opacity pulse, which reads as
+   "stuck" rather than "working" over a long wait (found live: Droptop
+   Orders' summary load). A sliding segment reads as active regardless of
+   how long it runs. */
+@keyframes progress-indeterminate {
+  0% { left: -35%; }
+  100% { left: 100%; }
+}
+.progress-indeterminate { animation: progress-indeterminate 1.4s ease-in-out infinite; }
+
 /* Direct ask 2026-10-01: "Edit Order"'s permanent green glow (OrderStatsModal.tsx)
    gets a slow pulse instead of sitting at one fixed intensity. */
 @keyframes ov2-glow-pulse {

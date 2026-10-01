@@ -33,8 +33,10 @@ import { DataCompletenessBadge } from '@/components/shared/DataCompletenessBadge
 import { DataTable } from '@/components/shared/DataTable'
 import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
+import { buildDroptopOrderManagerUrl, openDroptopTab } from '@/lib/droptopLinks'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { isM5, type Classification } from './PackageMappingPage'
+import { ExternalLink } from 'lucide-react'
 
 interface OrderRow {
   id: string
@@ -712,12 +714,21 @@ export function DroptopOrdersPage() {
   const orderColumns = useMemo(() => [
     orderCol.accessor('order_id', { id: 'order_id', header: 'Order #' }),
     orderCol.accessor((o) => (o.location_id ? (idToLabel.get(o.location_id) ?? o.location_id) : '—'), { id: 'shop', header: 'Shop' }),
+    // Direct ask 2026-10-01: "Manage Columns" only ever offered this table's
+    // own fixed 12 columns, so Region/Base Service Price/M5%/Subtotal were
+    // only reachable via Build Your Own Report — added here too, same
+    // getters as DETAIL_COLUMNS below, so both column pools genuinely match.
+    orderCol.accessor((o) => o.region || '—', { id: 'region', header: 'Region' }),
     orderCol.accessor((o) => [o.first_name, o.last_name].filter(Boolean).join(' ') || '—', { id: 'customer', header: 'Customer' }),
     orderCol.accessor('city', { id: 'city', header: 'City', cell: (i) => i.getValue() || '—' }),
     orderCol.accessor('status', { id: 'status', header: 'Status', cell: (i) => i.getValue() || '—' }),
     orderCol.display({
       id: 'packages', header: 'Packages', enableSorting: false,
       cell: (i) => (packagesByOrder.get(i.row.original.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—',
+    }),
+    orderCol.display({
+      id: 'base_price', header: 'Base Service Price', enableSorting: false,
+      cell: (i) => <span className="block text-right">{(packagesByOrder.get(i.row.original.id) ?? []).map((p) => p.base_service_price != null ? money(p.base_service_price) : null).filter(Boolean).join(', ') || '—'}</span>,
     }),
     orderCol.display({
       id: 'products', header: 'Products', enableSorting: false,
@@ -728,10 +739,15 @@ export function DroptopOrdersPage() {
       cell: (i) => { const q = quartsFor(i.row.original.id); return <span className="block text-right">{q > 0 ? q.toFixed(2) : '—'}</span> },
     }),
     orderCol.display({
+      id: 'm5_pct', header: 'M5%', enableSorting: false,
+      cell: (i) => { const c = classificationCountsFor(i.row.original.id); return <span className="block text-right">{c.oilChange > 0 ? `${((c.m5 / c.oilChange) * 100).toFixed(1)}%` : 'N/A'}</span> },
+    }),
+    orderCol.display({
       id: 'vehicle', header: 'Vehicle', enableSorting: false,
       cell: (i) => vehicleLabelFor(i.row.original.id),
     }),
     orderCol.accessor('fleet_company_name', { id: 'fleet', header: 'Fleet', cell: (i) => i.getValue() || '—' }),
+    orderCol.accessor('subtotal', { id: 'subtotal', header: 'Subtotal', cell: (i) => <span className="block text-right">{money(i.getValue())}</span> }),
     orderCol.accessor('final_price', { id: 'total', header: 'Total', cell: (i) => <span className="block text-right">{money(i.getValue())}</span> }),
     orderCol.accessor((o) => (o.order_finalized_at ? new Date(o.order_finalized_at).toLocaleDateString() : '—'), { id: 'finalized', header: 'Finalized' }),
   ], [orderCol, idToLabel, packagesByOrder]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -926,6 +942,11 @@ export function DroptopOrdersPage() {
   // report's own Region/Market/AM/Shop pickers below narrow further,
   // client-side, within that already-loaded set — widen the Shop(s)/date
   // range above first if a shop/date isn't showing up as an option here.
+  // Order detail modal — direct ask 2026-10-01: clicking an order row shows
+  // everything already loaded for it (every DETAIL_COLUMNS field, reusing
+  // the exact same getters) without having to widen the table or scroll
+  // right to see columns that aren't currently shown.
+  const [viewingOrder, setViewingOrder] = useState<OrderRow | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
   const [reportMode, setReportMode] = useState<'detail' | 'totals'>('detail')
   const DETAIL_COLUMNS: TableCol2[] = [
@@ -1347,6 +1368,7 @@ export function DroptopOrdersPage() {
                 onGlobalFilterChange={setOrdersFilter}
                 exportFilename={`Droptop Orders - ${range.start} to ${range.end}`}
                 hideColumnControl
+                onRowClick={(o) => setViewingOrder(o)}
                 actions={
                   <>
                     <Button size="sm" variant="secondary" onClick={() => setReportOpen(true)}>Build Report</Button>
@@ -1371,6 +1393,30 @@ export function DroptopOrdersPage() {
           )}
         </>
       )}
+
+      <Modal open={!!viewingOrder} onClose={() => setViewingOrder(null)}
+        title={viewingOrder ? `Order ${viewingOrder.order_id}` : 'Order'} size="md">
+        {viewingOrder && (
+          <div className="flex flex-col gap-3">
+            {(() => {
+              const droptopUrl = buildDroptopOrderManagerUrl(viewingOrder.order_id)
+              return droptopUrl ? (
+                <Button size="sm" variant="secondary" className="self-start" onClick={() => openDroptopTab(droptopUrl)}>
+                  <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open in Droptop
+                </Button>
+              ) : null
+            })()}
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+              {DETAIL_COLUMNS.map((c) => (
+                <div key={c.key} className="flex flex-col gap-0.5 min-w-0">
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky/50">{c.label}</span>
+                  <span className={`text-sm font-mono text-navy break-words ${c.align === 'right' ? 'text-right' : ''}`}>{c.get(viewingOrder)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={reportOpen} onClose={() => setReportOpen(false)}
         title={reportMode === 'detail' && reportShops.length === 1 ? `${reportShops[0]} — Orders` : 'Build Your Own Report'} size="2xl">
