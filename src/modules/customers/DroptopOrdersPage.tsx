@@ -1395,27 +1395,49 @@ export function DroptopOrdersPage() {
       )}
 
       <Modal open={!!viewingOrder} onClose={() => setViewingOrder(null)}
-        title={viewingOrder ? `Order ${viewingOrder.order_id}` : 'Order'} size="md">
-        {viewingOrder && (
-          <div className="flex flex-col gap-3">
-            {(() => {
-              const droptopUrl = buildDroptopOrderManagerUrl(viewingOrder.order_id)
-              return droptopUrl ? (
+        title={viewingOrder ? `Order ${viewingOrder.order_id}` : 'Order'} size="xl">
+        {viewingOrder && (() => {
+          const droptopUrl = buildDroptopOrderManagerUrl(viewingOrder.order_id)
+          // Direct ask 2026-10-02: Order #/Shop/Region/Customer/City/Status
+          // (the "who/where" identity fields) keep the original stacked
+          // label-over-value grid; Packages keeps that same stacked style
+          // too (its value can wrap across lines, which doesn't suit a
+          // single right-aligned row) — everything else becomes a flat
+          // label-left/value-right list, one consistent indent, instead of
+          // the old 2-per-row grid pairing.
+          const topCols = DETAIL_COLUMNS.slice(0, 6)
+          const packagesCol = DETAIL_COLUMNS.find((c) => c.key === 'packages')!
+          const restCols = DETAIL_COLUMNS.filter((c) => c.key !== 'packages').slice(6)
+          return (
+            <div className="flex flex-col gap-3">
+              {droptopUrl && (
                 <Button size="sm" variant="secondary" className="self-start" onClick={() => openDroptopTab(droptopUrl)}>
                   <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open in Droptop
                 </Button>
-              ) : null
-            })()}
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-              {DETAIL_COLUMNS.map((c) => (
-                <div key={c.key} className="flex flex-col gap-0.5 min-w-0">
-                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky/50">{c.label}</span>
-                  <span className={`text-sm font-mono text-navy break-words ${c.align === 'right' ? 'text-right' : ''}`}>{c.get(viewingOrder)}</span>
-                </div>
-              ))}
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                {topCols.map((c) => (
+                  <div key={c.key} className="flex flex-col gap-0.5 min-w-0 border border-navy/20 rounded px-2.5 py-1.5">
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-inky/80">{c.label}</span>
+                    <span className="text-sm font-mono text-navy break-words">{c.get(viewingOrder)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-col gap-0.5 min-w-0 border border-navy/20 rounded px-2.5 py-1.5">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-inky/80">{packagesCol.label}</span>
+                <span className="text-sm font-mono text-navy break-words">{packagesCol.get(viewingOrder)}</span>
+              </div>
+              <div className="flex flex-col border border-navy/20 rounded divide-y divide-navy/15">
+                {restCols.map((c) => (
+                  <div key={c.key} className="flex items-center justify-between gap-3 px-2.5 py-1.5">
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-inky/80 flex-shrink-0">{c.label}</span>
+                    <span className="text-sm font-mono text-navy text-right">{c.get(viewingOrder)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
       </Modal>
 
       <Modal open={reportOpen} onClose={() => setReportOpen(false)}
