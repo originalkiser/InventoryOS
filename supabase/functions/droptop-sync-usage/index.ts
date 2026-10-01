@@ -545,7 +545,7 @@ Deno.serve(async (req) => {
       for (;;) {
         const { data: rows, error } = await (admin as any)
           .schema('inventory').from('product_usage')
-          .select('id, location_id, product_id, category, daily_usage, on_hands, supplier, unit_cost')
+          .select('id, location_id, product_id, category, daily_usage, on_hands, supplier, unit_cost, unit_retail')
           .eq('company_id', companyId)
           .in('location_id', chunkLocationIds)
           .order('location_id', { ascending: true })
@@ -641,7 +641,7 @@ Deno.serve(async (req) => {
         }
 
         // Index inventory by product_id (same case-insensitive keying)
-        const invByProduct = new Map<string, { on_hands: number; product_type: string; supplier: string | null; unit_cost: number | null }>()
+        const invByProduct = new Map<string, { on_hands: number; product_type: string; supplier: string | null; unit_cost: number | null; unit_retail: number | null }>()
         for (const item of inventory) {
           if (!matchesCategory(item.product_type)) continue
           const key = item.product_id.toLowerCase()
@@ -654,6 +654,14 @@ Deno.serve(async (req) => {
             // count_products.ending_value (below) be computed for real
             // instead of estimated, across every category, not just Oil.
             unit_cost: item.unit_cost != null && item.unit_cost !== '' ? parseFloat(item.unit_cost) : null,
+            // Droptop's own per-item RETAIL price (confirmed against
+            // Droptop's own API docs 2026-10-02, e.g. unit_retail "6.99" on
+            // the same item as unit_cost "1.99") — the price a shop charges
+            // when a package is configured to bill at this product's own
+            // retail rate. Direct ask: lets shops with a non-standard
+            // per-product retail price be audited/flagged, same idea as the
+            // existing Droptop package price audit but per-product.
+            unit_retail: item.unit_retail != null && item.unit_retail !== '' ? parseFloat(item.unit_retail) : null,
           })
           if (!displayId.has(key)) displayId.set(key, item.product_id)
         }
@@ -746,6 +754,7 @@ Deno.serve(async (req) => {
             // above — a mode:'usage' run never fetches inventory, so invData
             // is undefined and the existing stored cost must survive.
             unit_cost: invData?.unit_cost ?? existing?.unit_cost ?? null,
+            unit_retail: invData?.unit_retail ?? existing?.unit_retail ?? null,
             daily_usage: dailyUsage,
             on_hands: onHands,
             days_of_supply: daysOfSupply,
@@ -917,6 +926,7 @@ Deno.serve(async (req) => {
             category: existing.category ?? null,
             supplier: existing.supplier ?? null,
             unit_cost: existing.unit_cost ?? null,
+            unit_retail: existing.unit_retail ?? null,
             daily_usage: rollingUsage,
             on_hands: existing.on_hands ?? null,
             days_of_supply: rollingUsage > 0 && existing.on_hands != null ? existing.on_hands / rollingUsage : null,

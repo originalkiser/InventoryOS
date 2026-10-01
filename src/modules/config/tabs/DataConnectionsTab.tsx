@@ -1102,7 +1102,7 @@ export function DataConnectionsTab() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    {row.connection_key === 'droptop_usage' && (
+                    {(row.connection_key === 'droptop_usage' || row.connection_key === 'droptop_on_hand') && (
                       <>
                         <input
                           value={inspectShop} onChange={(e) => setInspectShop(e.target.value)}
@@ -1115,7 +1115,8 @@ export function DataConnectionsTab() {
                           className={`${fieldCls} w-32`}
                         />
                         <Button size="sm" variant="secondary" loading={running === 'inspect'} onClick={inspectDroptopUsage}
-                          title="Read-only peek at Droptop's raw change-event shape, logged to the browser console — no data written">
+                          title="Read-only peek at Droptop's raw inventory/change-event shape, logged to the browser console — no data written. Same underlying call for both On Hand and Usage (droptop-sync-usage's own inspect mode always returns both inventory_sample and changes_sample)."
+                        >
                           Inspect
                         </Button>
                       </>
