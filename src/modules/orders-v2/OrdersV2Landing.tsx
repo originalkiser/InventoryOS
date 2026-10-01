@@ -169,18 +169,25 @@ export function OrdersV2Landing() {
         <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
       </div>
 
-      {/* Direct ask 2026-09-29, redone 2026-09-30 (three times): a single
-          SVG rounded-rect stroke sharing the button's own corner radius,
-          offset outside it — hover-gated again per the latest follow-up
-          (a continuous ambient loop was tried in between and reverted; see
-          ov2-start-order-trace in index.css for the actual .group:hover
-          animation trigger). The glow was getting clipped square at the
-          SVG's own edge (an SVG's default overflow is hidden, unlike a
-          plain HTML element) — overflow-visible plus a bigger margin
-          around the rect fixes that regardless of blur radius, rather than
-          removing the glow. */}
-      <div className="group relative inline-block self-start">
-        <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10 rounded-lg">
+      {/* Direct ask 2026-09-30: simplified from the chasing-trace outline
+          (several rounds of iteration, see git history/index.css's own
+          ov2-start-order-trace keyframes — kept there, just unused below
+          now rather than deleted) down to a plain green glow on hover.
+          The trace SVG block is preserved in a comment immediately below
+          in case the chase animation is wanted back later:
+
+          <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
+            <rect
+              x="12" y="12" rx="11"
+              style={{ width: 'calc(100% - 24px)', height: 'calc(100% - 24px)' }}
+              fill="none" stroke="#2ECC71" strokeWidth="3" pathLength={100}
+              className="ov2-start-order-trace drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
+            />
+          </svg>
+      */}
+      <div className="relative inline-block self-start">
+        <Button size="sm" onClick={() => setStartOpen(true)}
+          className="relative z-10 rounded-lg transition-shadow duration-300 hover:shadow-[0_0_14px_4px_rgba(46,204,113,0.55)]">
           {/* Drop the "+" overlaid inside the droplet — it's a small
               superscript badge poking out past its top-right edge instead. */}
           <span className="relative inline-flex w-5 h-5 mr-0.5 flex-shrink-0">
@@ -189,14 +196,6 @@ export function OrdersV2Landing() {
           </span>
           Start New Order
         </Button>
-        <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
-          <rect
-            x="12" y="12" rx="11"
-            style={{ width: 'calc(100% - 24px)', height: 'calc(100% - 24px)' }}
-            fill="none" stroke="#2ECC71" strokeWidth="3" pathLength={100}
-            className="ov2-start-order-trace drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
-          />
-        </svg>
       </div>
 
       <Tabs defaultValue="orders">

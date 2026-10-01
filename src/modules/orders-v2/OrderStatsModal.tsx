@@ -182,23 +182,26 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
             )}
           </div>
           {editPath && (
-            // Always-on version of "Start New Order"'s own hover-trace glow
-            // (.ov2-edit-order-trace, index.css) — direct ask 2026-09-30:
-            // draw the eye to this button's existence even without the
-            // user hovering it, since it's now the only way to actually
-            // open the order from this table.
+            // Simplified from the always-animating chase outline down to a
+            // plain permanent green glow (direct ask 2026-09-30) — draws
+            // the eye to this button's existence even without hovering,
+            // since it's now the only way to actually open the order from
+            // this table. The trace SVG is preserved in a comment in case
+            // the chase animation is wanted back later:
+            //
+            // <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
+            //   <rect
+            //     x="12" y="12" rx="11"
+            //     style={{ width: 'calc(100% - 24px)', height: 'calc(100% - 24px)' }}
+            //     fill="none" stroke="#2ECC71" strokeWidth="3" pathLength={100}
+            //     className="ov2-edit-order-trace drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
+            //   />
+            // </svg>
             <div className="relative inline-block">
-              <Button size="sm" onClick={() => navigate(editPath)} className="relative z-10 rounded-lg">
+              <Button size="sm" onClick={() => navigate(editPath)}
+                className="relative z-10 rounded-lg shadow-[0_0_14px_4px_rgba(46,204,113,0.55)]">
                 Edit Order →
               </Button>
-              <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
-                <rect
-                  x="12" y="12" rx="11"
-                  style={{ width: 'calc(100% - 24px)', height: 'calc(100% - 24px)' }}
-                  fill="none" stroke="#2ECC71" strokeWidth="3" pathLength={100}
-                  className="ov2-edit-order-trace drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
-                />
-              </svg>
             </div>
           )}
         </div>
