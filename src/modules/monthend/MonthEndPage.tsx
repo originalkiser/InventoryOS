@@ -13,6 +13,7 @@ import { ProductExceptionsTab } from './ProductExceptionsTab'
 import { OverviewTab } from './OverviewTab'
 import { ReviewTab } from './ReviewTab'
 import { ExclusionsTab } from './ExclusionsTab'
+import { RecapTab } from './RecapTab'
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -102,6 +103,7 @@ export function MonthEndPage() {
           <TabsTrigger value="review">Review</TabsTrigger>
           <TabsTrigger value="not_submitted">Not Submitted</TabsTrigger>
           <TabsTrigger value="exclusions">Exclusions</TabsTrigger>
+          <TabsTrigger value="recap">Recap</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewTab /></TabsContent>
         <TabsContent value="counts"><CountsTab /></TabsContent>
@@ -112,6 +114,7 @@ export function MonthEndPage() {
         <TabsContent value="review"><ReviewTab /></TabsContent>
         <TabsContent value="not_submitted"><NotSubmittedTab /></TabsContent>
         <TabsContent value="exclusions"><ExclusionsTab /></TabsContent>
+        <TabsContent value="recap"><RecapTab /></TabsContent>
       </Tabs>
     </div>
   )
