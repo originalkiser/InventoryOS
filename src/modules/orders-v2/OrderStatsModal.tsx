@@ -183,11 +183,12 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
           </div>
           {editPath && (
             // Simplified from the always-animating chase outline down to a
-            // plain permanent green glow (direct ask 2026-09-30) — draws
-            // the eye to this button's existence even without hovering,
-            // since it's now the only way to actually open the order from
-            // this table. The trace SVG is preserved in a comment in case
-            // the chase animation is wanted back later:
+            // permanent green glow (direct ask 2026-09-30), now with a slow
+            // pulse (direct ask 2026-10-01, .ov2-glow-pulse in index.css) —
+            // draws the eye to this button's existence even without
+            // hovering, since it's now the only way to actually open the
+            // order from this table. The trace SVG is preserved in a
+            // comment in case the chase animation is wanted back later:
             //
             // <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
             //   <rect
@@ -199,7 +200,7 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
             // </svg>
             <div className="relative inline-block">
               <Button size="sm" onClick={() => navigate(editPath)}
-                className="relative z-10 rounded-lg shadow-[0_0_14px_4px_rgba(46,204,113,0.55)]">
+                className="relative z-10 rounded-lg ov2-glow-pulse">
                 Edit Order →
               </Button>
             </div>

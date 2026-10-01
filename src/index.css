@@ -244,6 +244,14 @@ body {
 }
 .live-pulse { animation: live-pulse 2s ease-in-out infinite; }
 
+/* Direct ask 2026-10-01: "Edit Order"'s permanent green glow (OrderStatsModal.tsx)
+   gets a slow pulse instead of sitting at one fixed intensity. */
+@keyframes ov2-glow-pulse {
+  0%, 100% { box-shadow: 0 0 8px 2px rgba(46,204,113,0.35); }
+  50% { box-shadow: 0 0 16px 5px rgba(46,204,113,0.6); }
+}
+.ov2-glow-pulse { animation: ov2-glow-pulse 2.6s ease-in-out infinite; }
+
 @keyframes row-flash {
   0% { background-color: rgba(183,224,222,0.35); }
   100% { background-color: transparent; }

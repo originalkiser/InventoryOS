@@ -10,6 +10,7 @@ import { useAllOrderHistoryLines, type OrderHistoryLineRow } from './useOrderHis
 import { useVendors } from './useLookups'
 import { dShort, money, num } from './shared'
 import { uomDisplayLabel } from './types'
+import { ProductsOrderedChart } from './ProductsOrderedChart'
 
 const col = createColumnHelper<OrderHistoryLineRow>()
 
@@ -61,6 +62,8 @@ export function ProductsOrderedTab() {
           <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
         </Button>
       </div>
+
+      <ProductsOrderedChart rows={rows} />
 
       <DataTable
         table={table.table}

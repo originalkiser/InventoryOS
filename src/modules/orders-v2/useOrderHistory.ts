@@ -285,6 +285,7 @@ export interface OrderHistoryLineRow {
   qty: number
   unit_cost: number | null
   line_total: number | null
+  quarts_per_unit: number | null
 }
 
 /**
@@ -309,7 +310,7 @@ export function useAllOrderHistoryLines() {
         'ov2_order_history', companyId, 'id, vendor_id, order_date', 'order_date'),
       fetchAllHistoryRows<Omit<OrderHistoryLineRow, 'vendor_id' | 'order_date'>>(
         'ov2_order_history_lines', companyId,
-        'id, order_id, location_id, po_number, product_id, order_type, uom, qty, unit_cost, line_total', 'id'),
+        'id, order_id, location_id, po_number, product_id, order_type, uom, qty, unit_cost, line_total, quarts_per_unit', 'id'),
     ])
     const headerById = new Map(headers.map((h) => [h.id, h]))
     setRows(lines.map((l) => {

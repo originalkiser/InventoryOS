@@ -3,7 +3,15 @@ import { create } from 'zustand'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 
-export const DEFAULT_SECTION_ORDER = ['inventory', 'droptop', 'data-connections', 'global-config', 'operations', 'finance', 'accounting', 'marketing']
+// Found live 2026-10-01: a brand-new top-level section (here, 'reladyne')
+// never actually appeared in the sidebar even once enabled in Profile ->
+// Sidebar Sections, because that checkbox only ever controls
+// `hiddenSections` (an exclude-list) — the section still has to be a member
+// of this list to be rendered at all (see the merge logic below, and
+// `visibleSectionKeys`/`allowedSections` in Sidebar.tsx, which both filter
+// FROM `sectionOrder` rather than from SECTION_ITEMS' own keys). Any key
+// added to SECTION_ITEMS must be added here too.
+export const DEFAULT_SECTION_ORDER = ['inventory', 'droptop', 'data-connections', 'reladyne', 'global-config', 'operations', 'finance', 'accounting', 'marketing']
 export const DEFAULT_UTILITY_ORDER = ['calendar', 'issues', 'meetings', 'feature-requests', 'tasks']
 
 interface SidebarPrefs {

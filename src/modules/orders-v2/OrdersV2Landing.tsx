@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Droplet, Plus, Upload } from 'lucide-react'
 import { createColumnHelper } from '@tanstack/react-table'
@@ -81,6 +81,20 @@ export function OrdersV2Landing() {
   const [orderDow, setOrderDow] = useState<number>(() => new Date().getDay())
   const [starting, setStarting] = useState(false)
   const coverage = useOrderDayCoverage(vendors.byId(effectiveVendorId || null)?.name)
+  // Direct ask 2026-10-01: coverage.counts starts as all-zero and only
+  // fills in once its own fetch resolves (~half a second), so the "No
+  // shops order on X" error used to flash on every modal open/vendor
+  // switch before quietly resolving — jumpy for no reason, since a
+  // genuinely empty day is rare. Only treat it as a real "no shops" result
+  // once it's stayed at zero for a few seconds, not the instant it reads
+  // zero; any nonzero count (the normal case) clears this immediately.
+  const [confirmedZeroDow, setConfirmedZeroDow] = useState<number | null>(null)
+  useEffect(() => {
+    setConfirmedZeroDow(null)
+    if (!coverage.applies || coverage.counts[orderDow] !== 0) return
+    const t = setTimeout(() => setConfirmedZeroDow(orderDow), 5000)
+    return () => clearTimeout(t)
+  }, [coverage.applies, coverage.counts, orderDow])
   // Ad hoc: order a vendor for an explicit, manually-picked set of shops
   // instead of the vendor's regular order-day schedule (or "every shop" for
   // a vendor with no schedule at all) — for a one-off run limited to
@@ -169,12 +183,13 @@ export function OrdersV2Landing() {
         <Button size="sm" variant="secondary" onClick={() => navigate('/orders-v2/settings')}>Order Settings</Button>
       </div>
 
-      {/* Direct ask 2026-09-30: simplified from the chasing-trace outline
-          (several rounds of iteration, see git history/index.css's own
-          ov2-start-order-trace keyframes — kept there, just unused below
-          now rather than deleted) down to a plain green glow on hover.
-          The trace SVG block is preserved in a comment immediately below
-          in case the chase animation is wanted back later:
+      {/* Direct ask 2026-09-30, glow dropped entirely 2026-10-01: the
+          hover-triggered green glow lagged visibly behind the button's own
+          instant hover color change (a shadow transition can't keep pace
+          with a same-frame color swap), which read as broken rather than
+          polished — removed rather than re-timed. The chasing-trace outline
+          this replaced, and the glow itself, are preserved in a comment in
+          case either is wanted back later:
 
           <svg className="pointer-events-none absolute -inset-3.5 w-[calc(100%+28px)] h-[calc(100%+28px)] overflow-visible" aria-hidden="true">
             <rect
@@ -184,10 +199,10 @@ export function OrdersV2Landing() {
               className="ov2-start-order-trace drop-shadow-[0_0_4px_rgba(46,204,113,0.7)]"
             />
           </svg>
+          className="relative z-10 rounded-lg transition-shadow duration-300 hover:shadow-[0_0_14px_4px_rgba(46,204,113,0.55)]"
       */}
       <div className="relative inline-block self-start">
-        <Button size="sm" onClick={() => setStartOpen(true)}
-          className="relative z-10 rounded-lg transition-shadow duration-300 hover:shadow-[0_0_14px_4px_rgba(46,204,113,0.55)]">
+        <Button size="sm" onClick={() => setStartOpen(true)} className="relative z-10 rounded-lg">
           {/* Drop the "+" overlaid inside the droplet — it's a small
               superscript badge poking out past its top-right edge instead. */}
           <span className="relative inline-flex w-5 h-5 mr-0.5 flex-shrink-0">
@@ -313,16 +328,18 @@ export function OrdersV2Landing() {
                   options={[1, 2, 3, 4, 5].map((i) => ({ value: String(i), label: `${DOW[i].slice(0, 3)} (${coverage.counts[i]})` }))}
                 />
               </label>
-              {coverage.counts[orderDow] === 0 ? (
+              {coverage.counts[orderDow] !== 0 ? (
+                <p className="text-[11px] font-mono text-inky/60">
+                  {coverage.counts[orderDow]} shop{coverage.counts[orderDow] !== 1 ? 's' : ''} order on {DOW[orderDow]}.
+                  Defaults to the order date&apos;s weekday — change it to run a different day&apos;s shops.
+                </p>
+              ) : confirmedZeroDow === orderDow ? (
                 <p className="text-[11px] font-mono text-[#C0392B]">
                   No shops order on {DOW[orderDow]}. Pick a day with shops on it, or check the Reladyne Delivery Day
                   column on the location list — the order day is derived from it (delivery minus three business days).
                 </p>
               ) : (
-                <p className="text-[11px] font-mono text-inky/60">
-                  {coverage.counts[orderDow]} shop{coverage.counts[orderDow] !== 1 ? 's' : ''} order on {DOW[orderDow]}.
-                  Defaults to the order date&apos;s weekday — change it to run a different day&apos;s shops.
-                </p>
+                <p className="text-[11px] font-mono text-inky/40">Checking shop schedule…</p>
               )}
             </>
           ) : (
