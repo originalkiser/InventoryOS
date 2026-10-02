@@ -18,6 +18,7 @@ import type { ImportMode } from '@/modules/config/useConfigTab'
 import { mappedValue } from '@/lib/columnTransform'
 import { useMenuBoardPackages, useMenuBoardQuartPricing, type MenuBoardPackage } from './useMenuBoard'
 import { FranchiseTab } from './FranchiseTab'
+import { ShareDirectoryModal } from './ShareDirectoryModal'
 import { byNaturalLabel, naturalCompare } from '@/lib/naturalSort'
 import { imagesToPdf } from '@/lib/imagesToPdf'
 import type { Location, ColumnMapping } from '@/types'
@@ -176,7 +177,7 @@ async function qrDataUrl(text: string, pixelSize: number): Promise<string> {
  * Shop Links table renders up to one of these per shop, so a fixed high-res
  * bitmap regardless of display size would add up fast on a 300+-shop table.
  */
-function QrImage({ url, size = 56, className = '' }: { url: string; size?: number; className?: string }) {
+export function QrImage({ url, size = 56, className = '' }: { url: string; size?: number; className?: string }) {
   const [src, setSrc] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -1350,6 +1351,7 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
   // pointer leaves the button on the way to its own checkbox list, so it
   // can't be scrolled. Same pattern as LocationsPage.tsx's Manage Columns.
   const [colsOpen, setColsOpen] = useState(false)
+  const [shareTableOpen, setShareTableOpen] = useState(false)
   const colLabel = (c: ReturnType<typeof table.getAllLeafColumns>[number]) =>
     typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id
 
@@ -1399,15 +1401,24 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
           exportFilename="Menu Board Shop Links"
           hideColumnControl
           actions={
-            <button
-              onClick={() => setColsOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-              </svg>
-              Columns
-            </button>
+            <>
+              <button
+                onClick={() => setColsOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                </svg>
+                Columns
+              </button>
+              <button
+                onClick={() => setShareTableOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-navy/30 rounded hover:border-navy/60 text-inky transition-colors"
+                title="Create a no-login link to this table"
+              >
+                Share table
+              </button>
+            </>
           }
         />
       )}
@@ -1420,6 +1431,7 @@ function ShopLinksTab({ loc }: { loc: ReturnType<typeof useLocations> }) {
         onChange={applyShownColumns}
         onReset={resetColumnsToDefault}
       />
+      {shareTableOpen && <ShareDirectoryModal baseUrl={MENU_BOARD_BASE_URL} onClose={() => setShareTableOpen(false)} />}
     </CardBody></Card>
   )
 }

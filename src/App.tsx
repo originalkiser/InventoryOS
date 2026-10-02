@@ -16,6 +16,7 @@ import { PublicFranchiseSetupPage } from '@/pages/PublicFranchiseSetupPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
 import { MenuBoardPdfPage } from '@/modules/marketing/menuboard/MenuBoardPdfPage'
 import { NearestMenuBoardPage } from '@/modules/marketing/menuboard/NearestMenuBoardPage'
+import { PublicMenuBoardDirectoryPage } from '@/modules/marketing/menuboard/PublicMenuBoardDirectoryPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, profile, initialized } = useAuthStore()
@@ -98,6 +99,8 @@ function MenuBoardApp() {
         <Route path="/" element={<NearestMenuBoardPage />} />
         {/* Legacy links minted before pretty slugs existed. */}
         <Route path="/m/:token" element={<PublicMenuBoardPage />} />
+        {/* Shareable no-login table of every shop's links (admin: Shop Links > Share table). */}
+        <Route path="/directory/:token" element={<PublicMenuBoardDirectoryPage />} />
         <Route path="/:slug/pdf" element={<MenuBoardPdfPage />} />
         <Route path="/:slug" element={<PublicMenuBoardPage />} />
         <Route path="*" element={
