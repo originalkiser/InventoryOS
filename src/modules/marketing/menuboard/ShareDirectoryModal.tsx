@@ -11,7 +11,7 @@ import { useAuthStore } from '@/stores/authStore'
 
 const sb = () => supabase as any
 
-interface DirectoryShareRow { token: string; label: string | null; include_emails: boolean; scope: 'active' | 'upcoming'; group_filter: string | null; created_at: string }
+interface DirectoryShareRow { token: string; label: string | null; include_emails: boolean; scope: 'active' | 'upcoming'; group_filter: string | null; include_recent: boolean; created_at: string }
 
 export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onClose: () => void }) {
   const { profile } = useAuthStore()
@@ -24,13 +24,15 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
   // 'upcoming' = shops not open yet (inactive, no Date Opened) with whatever package pricing is filled in.
   const [scope, setScope] = useState<'active' | 'upcoming'>('active')
   const [groupFilter, setGroupFilter] = useState('Pre-Opening')
+  // Upcoming links only: a second table underneath of shops opened or acquired in the last 90 days.
+  const [includeRecent, setIncludeRecent] = useState(false)
 
   const urlFor = (token: string) => `${baseUrl}directory/${token}`
 
   const load = useCallback(async () => {
     if (!companyId) { setLoading(false); return }
     const { data } = await sb().schema('marketing').from('menu_board_directory_shares')
-      .select('token, label, include_emails, scope, group_filter, created_at').eq('company_id', companyId).eq('active', true)
+      .select('token, label, include_emails, scope, group_filter, include_recent, created_at').eq('company_id', companyId).eq('active', true)
       .order('created_at', { ascending: false })
     setRows((data ?? []) as DirectoryShareRow[])
     setLoading(false)
@@ -43,7 +45,8 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
     const { data, error } = await sb().schema('marketing').from('menu_board_directory_shares')
       .insert({
         company_id: companyId, label: label.trim() || null, include_emails: includeEmails, scope,
-        group_filter: scope === 'upcoming' ? (groupFilter.trim() || null) : null, created_by: profile?.id ?? null,
+        group_filter: scope === 'upcoming' ? (groupFilter.trim() || null) : null,
+        include_recent: scope === 'upcoming' && includeRecent, created_by: profile?.id ?? null,
       })
       .select('token').single()
     setCreating(false)
@@ -88,6 +91,12 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
                 className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy placeholder-inky/60 focus:outline-none focus:ring-2 focus:ring-sky" />
             </label>
           )}
+          {scope === 'upcoming' && (
+            <label className="flex items-center gap-2 text-xs font-mono text-inky cursor-pointer">
+              <Toggle checked={includeRecent} onChange={setIncludeRecent} size="sm" />
+              Add a second table: shops opened or acquired in the last 90 days
+            </label>
+          )}
           <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Project Management)"
             className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy placeholder-inky/60 focus:outline-none focus:ring-2 focus:ring-sky" />
           <label className="flex items-center gap-2 text-xs font-mono text-inky cursor-pointer">
@@ -108,7 +117,7 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] font-mono text-navy truncate">
                   {r.label || (r.scope === 'upcoming' ? 'Upcoming shops' : 'Shop links table')}
-                  {r.scope === 'upcoming' && <span className="ml-1.5 text-inky/40">(upcoming{r.group_filter ? `: ${r.group_filter}` : ''})</span>}
+                  {r.scope === 'upcoming' && <span className="ml-1.5 text-inky/40">(upcoming{r.group_filter ? `: ${r.group_filter}` : ''}{r.include_recent ? ' + last 90 days' : ''})</span>}
                   {r.include_emails && <span className="ml-1.5 text-inky/40">(includes emails)</span>}
                 </div>
                 <div className="text-[10px] font-mono text-inky/50 truncate">{urlFor(r.token)}</div>
