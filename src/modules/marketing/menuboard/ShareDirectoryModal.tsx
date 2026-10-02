@@ -11,7 +11,7 @@ import { useAuthStore } from '@/stores/authStore'
 
 const sb = () => supabase as any
 
-interface DirectoryShareRow { token: string; label: string | null; include_emails: boolean; created_at: string }
+interface DirectoryShareRow { token: string; label: string | null; include_emails: boolean; scope: 'active' | 'upcoming'; group_filter: string | null; created_at: string }
 
 export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onClose: () => void }) {
   const { profile } = useAuthStore()
@@ -21,13 +21,16 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
   const [creating, setCreating] = useState(false)
   const [label, setLabel] = useState('')
   const [includeEmails, setIncludeEmails] = useState(false)
+  // 'upcoming' = shops not open yet (inactive, no Date Opened) with whatever package pricing is filled in.
+  const [scope, setScope] = useState<'active' | 'upcoming'>('active')
+  const [groupFilter, setGroupFilter] = useState('Pre-Opening')
 
   const urlFor = (token: string) => `${baseUrl}directory/${token}`
 
   const load = useCallback(async () => {
     if (!companyId) { setLoading(false); return }
     const { data } = await sb().schema('marketing').from('menu_board_directory_shares')
-      .select('token, label, include_emails, created_at').eq('company_id', companyId).eq('active', true)
+      .select('token, label, include_emails, scope, group_filter, created_at').eq('company_id', companyId).eq('active', true)
       .order('created_at', { ascending: false })
     setRows((data ?? []) as DirectoryShareRow[])
     setLoading(false)
@@ -38,7 +41,10 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
     if (!companyId) return
     setCreating(true)
     const { data, error } = await sb().schema('marketing').from('menu_board_directory_shares')
-      .insert({ company_id: companyId, label: label.trim() || null, include_emails: includeEmails, created_by: profile?.id ?? null })
+      .insert({
+        company_id: companyId, label: label.trim() || null, include_emails: includeEmails, scope,
+        group_filter: scope === 'upcoming' ? (groupFilter.trim() || null) : null, created_by: profile?.id ?? null,
+      })
       .select('token').single()
     setCreating(false)
     if (error) { toast.error(error.message); return }
@@ -64,6 +70,24 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
 
         <div className="flex flex-col gap-2">
           <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">New link</span>
+          <div className="flex flex-col gap-1.5">
+            {([
+              ['active', 'Active shops', 'Every open shop — board link, QR code and PDF.'],
+              ['upcoming', 'Upcoming shops', 'Shops not open yet (inactive, no Date Opened), with whichever package prices are filled in.'],
+            ] as const).map(([key, title, desc]) => (
+              <label key={key} className={`flex items-start gap-2 text-xs font-mono rounded border p-2 cursor-pointer ${scope === key ? 'border-sky bg-sky/5' : 'border-navy/20'}`}>
+                <input type="radio" checked={scope === key} onChange={() => setScope(key)} className="mt-0.5 accent-sky" />
+                <span><span className="text-navy font-bold">{title}</span><span className="block text-inky/60">{desc}</span></span>
+              </label>
+            ))}
+          </div>
+          {scope === 'upcoming' && (
+            <label className="flex flex-col gap-1 text-[10px] font-mono text-inky/70">
+              Only Monday groups containing (leave blank for all upcoming shops)
+              <input value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} placeholder="e.g. Pre-Opening"
+                className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy placeholder-inky/60 focus:outline-none focus:ring-2 focus:ring-sky" />
+            </label>
+          )}
           <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Project Management)"
             className="w-full bg-cream border border-navy/40 rounded px-3 py-2 text-sm font-body text-navy placeholder-inky/60 focus:outline-none focus:ring-2 focus:ring-sky" />
           <label className="flex items-center gap-2 text-xs font-mono text-inky cursor-pointer">
@@ -83,7 +107,8 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
             <div key={r.token} className="flex items-center gap-2 rounded border border-navy/15 px-2 py-1.5">
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] font-mono text-navy truncate">
-                  {r.label || 'Shop links table'}
+                  {r.label || (r.scope === 'upcoming' ? 'Upcoming shops' : 'Shop links table')}
+                  {r.scope === 'upcoming' && <span className="ml-1.5 text-inky/40">(upcoming{r.group_filter ? `: ${r.group_filter}` : ''})</span>}
                   {r.include_emails && <span className="ml-1.5 text-inky/40">(includes emails)</span>}
                 </div>
                 <div className="text-[10px] font-mono text-inky/50 truncate">{urlFor(r.token)}</div>

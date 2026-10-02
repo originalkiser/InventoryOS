@@ -218,7 +218,7 @@ const CORE_FIELDS = new Set([
   'shop_city', 'status', 'active', 'region', 'owner', 'market', 'area_manager',
   'am_phone', 'am_email', 'director', 'rd_email', 'address', 'city', 'state',
   'county', 'zip', 'store_phone', 'store_email', 'droptop_operation_id',
-  'latitude', 'longitude', 'monday_item_id', 'raw_monday_data', 'last_synced_at', 'last_change_source',
+  'latitude', 'longitude', 'monday_item_id', 'monday_group', 'raw_monday_data', 'last_synced_at', 'last_change_source',
 ])
 
 // A blank Monday cell must never overwrite an existing, manually-maintained
@@ -242,7 +242,7 @@ function coreOnly(fields: Record<string, unknown>): Record<string, unknown> {
 }
 
 interface MondayColumnValue { id: string; text: string | null; display_value?: string }
-interface MondayItem { id: string; name: string; column_values: MondayColumnValue[] }
+interface MondayItem { id: string; name: string; group?: { id: string; title: string } | null; column_values: MondayColumnValue[] }
 
 async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0
@@ -276,7 +276,7 @@ async function fetchAllItems(apiKey: string, columnIds: string[]): Promise<Monda
     apiKey,
     `query($boardId: ID!, $ids: [String!]) {
       boards(ids: [$boardId]) {
-        items_page(limit: ${PAGE_SIZE}) { cursor items { id name column_values(ids: $ids) { ${colValuesQuery} } } }
+        items_page(limit: ${PAGE_SIZE}) { cursor items { id name group { id title } column_values(ids: $ids) { ${colValuesQuery} } } }
       }
     }`,
     { boardId: BOARD_ID, ids: columnIds },
@@ -289,7 +289,7 @@ async function fetchAllItems(apiKey: string, columnIds: string[]): Promise<Monda
     const next = await mondayQuery(
       apiKey,
       `query($cursor: String!, $ids: [String!]) {
-        next_items_page(limit: ${PAGE_SIZE}, cursor: $cursor) { cursor items { id name column_values(ids: $ids) { ${colValuesQuery} } } }
+        next_items_page(limit: ${PAGE_SIZE}, cursor: $cursor) { cursor items { id name group { id title } column_values(ids: $ids) { ${colValuesQuery} } } }
       }`,
       { cursor, ids: columnIds },
     )
@@ -383,6 +383,8 @@ function buildLocationFields(item: MondayItem, storeNumber: string, fieldMap: [s
   fields.shop_city = buildShopCity(storeNumber, fields.city as string | null)
 
   fields.monday_item_id = item.id
+  // Which Monday group (board section) the item sits in — e.g. 'Corporate Pre-Opening Queue'. Used by the Menu Board's upcoming-shops share.
+  fields.monday_group = item.group?.title ?? null
   fields.raw_monday_data = item
   fields.last_synced_at = new Date().toISOString()
   fields.last_change_source = 'monday_sync'
