@@ -103,6 +103,8 @@ export interface DataConnectionSchedule {
   last_manual_run_status?: string | null
   last_manual_run_message?: string | null
   last_manual_run_by?: string | null
+  // Admin-set 'critical' tag — a failed last run on a critical connection raises the TopBar alert.
+  is_critical?: boolean
 }
 
 // Integration 4 — Placed Orders

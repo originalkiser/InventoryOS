@@ -87,6 +87,8 @@ interface BackfillJob {
   min_coverage_pct: number
   months_pulled: number
   months_skipped: number
+  // Orders: "<shop uuid>|<window index>" tokens (7-day windows, see monthWindows);
+  // Time Clock: bare shop uuids. A bare uuid on an Orders job is expanded to all its windows.
   month_pending_ids: string[] | null
   usage_pending_location_ids: string[] | null
   usage_done_count: number
@@ -101,6 +103,17 @@ function monthBefore(monthStart: string): string {
   const d = new Date(`${monthStart}T00:00:00.000Z`)
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)
 }
+
+// A month cut into 7-day windows (the last runs to month end): one shop's WHOLE month in a
+// single call regularly outran the 150s limit, so Orders pulls a shop one window at a time.
+function monthWindows(monthStart: string): { start: string; end: string }[] {
+  const [y, m] = monthStart.split('-')
+  const lastDay = Number(monthEndOf(monthStart).slice(8, 10))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return ([[1, 7], [8, 14], [15, 21], [22, lastDay]] as const).map(([a, b]) => ({ start: `${y}-${m}-${pad(a)}`, end: `${y}-${m}-${pad(b)}` }))
+}
+const unixStart = (d: string) => Math.floor(new Date(`${d}T00:00:00.000Z`).getTime() / 1000)
+const unixEnd = (d: string) => Math.floor(new Date(`${d}T23:59:59.999Z`).getTime() / 1000)
 
 // ── Chunked-call helpers — copied verbatim (in spirit) from
 // data-connection-dispatcher/index.ts, which already proved this exact
@@ -138,11 +151,23 @@ async function callChunk(
   url: string, secret: string, body: Record<string, unknown>, label: string,
 ): Promise<{ ok: boolean; data: any; warnings: string[] }> {
   try {
-    const res = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-      body: JSON.stringify(body),
-    })
+    // HTTP 503 ("BOOT_ERROR: Function failed to start") is the platform failing to
+    // spin the function up — nothing ran, so retrying is safe (found live
+    // 2026-10-02 failing a scheduled sync's chunk). Up to 3 attempts, backing off.
+    let res: Response
+    for (let attempt = 1; ; attempt++) {
+      res = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+        body: JSON.stringify(body),
+      })
+      if (res.status === 503 && attempt < 3) {
+        await res.text().catch(() => '')
+        await new Promise((resolve) => setTimeout(resolve, attempt * 4000))
+        continue
+      }
+      break
+    }
     const { data, error } = await parseSyncResponse(res)
     if (error) return { ok: false, data: null, warnings: [`${label}: ${error}`] }
     return { ok: true, data, warnings: ((data?.warnings ?? []) as string[]).map((w) => `${label}: ${w}`) }
@@ -236,8 +261,14 @@ async function runChunksConcurrently(
 // all-day cadence.
 const OVERNIGHT_START_HOUR = 21 // 9pm
 const OVERNIGHT_END_HOUR = 6    // 6am
+// Weekends are open all day too (direct ask 2026-10-02: "now that we are at a weekend
+// and SB Net will only be used for menu boards"): nobody is in the app for the
+// business-hours slowdown this window exists to protect.
 function isOvernight(now: Date, tz: string): boolean {
   const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(now))
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(now)
+  // Friday from 5pm counts as the weekend starting — the office is done for the week.
+  if (weekday === 'Sat' || weekday === 'Sun' || (weekday === 'Fri' && hour >= 17)) return true
   return hour >= OVERNIGHT_START_HOUR || hour < OVERNIGHT_END_HOUR
 }
 
@@ -300,14 +331,18 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
   // granularity just requeues on its own without dragging two others down
   // with it, instead of every shop in a failed 3-shop chunk being retried
   // together.
-  const chunkSize = job.connection_key === 'droptop_orders' ? 1 : 20
+  const isOrders = job.connection_key === 'droptop_orders'
+  const windows = monthWindows(cursor)
+  const chunkSize = isOrders ? 1 : 20
   const countField = job.connection_key === 'droptop_orders' ? 'orders_upserted' : 'records_upserted'
   // Sequential with a pause between shops for Orders — explicitly requested
   // ("without using a bunch of compute and without killing Droptop's
   // servers ... we don't need it all at once"). Time Clock keeps its
   // existing concurrency (no opts passed) since nothing suggests it needs
   // the same treatment.
-  const chunkOpts = job.connection_key === 'droptop_orders' ? { concurrency: 1, delayMs: 3000 } : {}
+  // Raised from {concurrency: 1, delayMs: 3000} (2026-10-02): a weekend with nobody in the app,
+  // and 7-day windows per call instead of whole months, so 3 at a time is comfortable.
+  const chunkOpts = isOrders ? { concurrency: 3, delayMs: 500 } : {}
 
   let pendingIds = job.month_pending_ids
   let coverageNote = ''
@@ -332,18 +367,28 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
       }).eq('id', job.id)
       return { job_id: job.id, connection: job.connection_key, summary, completed }
     }
-    pendingIds = target
-    coverageNote = ` (was ${(coverage * 100).toFixed(0)}% covered)`
+    // Only the shops with NO data for this month — re-pulling the ones already
+    // covered was most of the work. Orders then goes one 7-day window per shop.
+    const missingIds = target.filter((id) => !observed.has(id))
+    pendingIds = isOrders ? missingIds.flatMap((id) => windows.map((_, w) => `${id}|${w}`)) : missingIds
+    coverageNote = ` (was ${(coverage * 100).toFixed(0)}% covered, ${missingIds.length} shop(s) missing)`
   }
 
+  // A job resumed from before windowed pulls holds bare shop uuids — expand them.
+  if (isOrders) pendingIds = pendingIds.flatMap((p) => (p.includes('|') ? [p] : windows.map((_, w) => `${p}|${w}`)))
   const thisTickIds = pendingIds.slice(0, MAX_IDS_PER_TICK)
   const remainingAfterTick = pendingIds.slice(MAX_IDS_PER_TICK)
-  const startUnix = Math.floor(new Date(`${pStart}T00:00:00.000Z`).getTime() / 1000)
-  const endUnix = Math.floor(new Date(`${pEnd}T23:59:59.999Z`).getTime() / 1000)
+  const startUnix = unixStart(pStart)
+  const endUnix = unixEnd(pEnd)
   const chunks = chunkArray(thisTickIds, chunkSize)
   const result = await runChunksConcurrently(
     `${supabaseUrl}/functions/v1/${fnName}`, droptopSecret, chunks,
-    (ids) => ({ mode: 'sync', startUnix, endUnix, locationIds: ids }),
+    (ids) => {
+      if (!isOrders) return { mode: 'sync', startUnix, endUnix, locationIds: ids }
+      const [shopId, w] = ids[0].split('|')
+      const win = windows[Number(w)]
+      return { mode: 'sync', startUnix: unixStart(win.start), endUnix: unixEnd(win.end), locationIds: [shopId] }
+    },
     countField,
     chunkOpts,
   )
@@ -376,12 +421,13 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
   // longer block the other 159 indefinitely.
   const newPending = [...remainingAfterTick, ...result.unresolvedIds]
   const succeededCount = thisTickIds.length - result.unresolvedIds.length
+  const unit = isOrders ? 'shop-week(s)' : 'shop(s)'
   const monthDone = newPending.length === 0
   const prevMonth = monthBefore(cursor)
   const completed = monthDone && prevMonth < job.floor_month
-  let summary = `${pStart}${coverageNote} — pulled ${succeededCount} shop(s) this tick (${result.total} ${countField.replace('_upserted', '')})`
+  let summary = `${pStart}${coverageNote} — pulled ${succeededCount} ${unit} this tick (${result.total} ${countField.replace('_upserted', '')})`
   if (result.unresolvedIds.length) summary += `, ${result.unresolvedIds.length} failed/timed out (requeued)`
-  if (!monthDone) summary += `, ${newPending.length} shop(s) left for this month`
+  if (!monthDone) summary += `, ${newPending.length} ${unit} left for this month`
   if (result.message) summary += ` | ${result.message}`
 
   await (admin as any).schema('inventory').from('data_connection_backfill_jobs').update({
@@ -486,6 +532,17 @@ Deno.serve(async (req) => {
           continue
         }
       }
+      // Claim the job so an overlapping tick (the cron now fires every 3 min, a tick can
+      // take longer) or a manual "Run tick now" can't advance it at the same time. A claim
+      // older than 6 minutes is treated as abandoned (a killed invocation).
+      const staleBefore = new Date(Date.now() - 6 * 60_000).toISOString()
+      const { data: claimed } = await (admin as any).schema('inventory').from('data_connection_backfill_jobs')
+        .update({ tick_started_at: new Date().toISOString() })
+        .eq('id', job.id).or(`tick_started_at.is.null,tick_started_at.lt.${staleBefore}`).select('id')
+      if (!claimed?.length) {
+        results.push({ job_id: job.id, connection: job.connection_key, summary: 'Skipped — another tick is already running this job' })
+        continue
+      }
       try {
         if (job.connection_key === 'droptop_usage') {
           results.push(await tickUsageJob(admin, job, supabaseUrl, droptopSecret))
@@ -498,6 +555,8 @@ Deno.serve(async (req) => {
           last_run_at: new Date().toISOString(), error_message: message, updated_at: new Date().toISOString(),
         }).eq('id', job.id)
         results.push({ job_id: job.id, connection: job.connection_key, error: message })
+      } finally {
+        await (admin as any).schema('inventory').from('data_connection_backfill_jobs').update({ tick_started_at: null }).eq('id', job.id)
       }
     }
 

@@ -34,6 +34,19 @@ const DOT_CLASS: Record<ReturnType<typeof statusColor>, string> = {
   gray: 'bg-chrome-fg/25',
 }
 
+// Whichever of the scheduled/manual run actually happened most recently — a manual Run Now shouldn't be
+// shadowed by an older scheduled-run timestamp, or vice versa.
+function latestRun(row: DataConnectionSchedule | undefined) {
+  const scheduledAt = row?.last_run_at ?? null
+  const manualAt = row?.last_manual_run_at ?? null
+  const useManual = !!manualAt && (!scheduledAt || new Date(manualAt) > new Date(scheduledAt))
+  return {
+    at: useManual ? manualAt : scheduledAt,
+    status: useManual ? (row?.last_manual_run_status ?? null) : (row?.last_run_status ?? null),
+    message: useManual ? (row?.last_manual_run_message ?? null) : (row?.last_run_message ?? null),
+  }
+}
+
 export function SyncStatusWidget() {
   const navigate = useNavigate()
   const { profile } = useAuthStore()
@@ -62,6 +75,29 @@ export function SyncStatusWidget() {
   }, [companyId])
 
   useEffect(() => { if (open) loadRows() }, [open, loadRows])
+
+  // The critical-failure alert on the icon has to be right without anyone opening the panel, so (for
+  // admins/developers, who are the ones who can act on it) the rows load up front, refresh every 5 minutes,
+  // and reload whenever a sync started from this browser finishes.
+  const finishedCount = tasks.filter((t) => t.status !== 'running').length
+  useEffect(() => {
+    if (!canRunNow) return
+    loadRows()
+    const id = setInterval(loadRows, 5 * 60_000)
+    return () => clearInterval(id)
+  }, [canRunNow, loadRows])
+  useEffect(() => { if (canRunNow && finishedCount > 0) loadRows() }, [canRunNow, finishedCount, loadRows])
+
+  // Critical connections whose most recent run (scheduled or manual, whichever is newer) didn't succeed.
+  const failedCritical = canRunNow && rows
+    ? CONNECTION_ORDER.flatMap((key) => {
+        const row = rows.find((r) => r.connection_key === key)
+        if (!row?.is_critical) return []
+        const latest = latestRun(row)
+        return latest.status && latest.status !== 'success' ? [{ key, latest }] : []
+      })
+    : []
+  const failedCriticalKeys = new Set(failedCritical.map((f) => f.key))
 
   const running = tasks.filter((t) => t.status === 'running')
   const finished = tasks.filter((t) => t.status !== 'running')
@@ -126,15 +162,24 @@ export function SyncStatusWidget() {
       <button
         ref={buttonRef}
         onClick={openPanel}
-        title={running.length > 0 ? `${running.length} sync${running.length !== 1 ? 's' : ''} running` : 'Data sync status'}
+        title={failedCritical.length > 0
+          ? `${failedCritical.length} critical data connection${failedCritical.length !== 1 ? 's' : ''} failed their last run`
+          : running.length > 0 ? `${running.length} sync${running.length !== 1 ? 's' : ''} running` : 'Data sync status'}
         className={[
           'flex items-center gap-1 px-2 h-7 rounded border transition-all',
-          running.length > 0 ? 'border-sky text-sky' : 'border-chrome-fg/20 text-chrome-fg/60 hover:text-chrome-fg',
+          failedCritical.length > 0 ? 'border-sb-red text-sb-red'
+            : running.length > 0 ? 'border-sky text-sky' : 'border-chrome-fg/20 text-chrome-fg/60 hover:text-chrome-fg',
         ].join(' ')}
       >
         {running.length > 0 ? <SbLoader size={16} hideMark /> : <GrDatabase className="w-4 h-4" />}
         {running.length > 1 && <span className="text-[10px] font-mono">{running.length}</span>}
       </button>
+      {/* Alert badge on the icon — one or more connections tagged Critical failed their last run. */}
+      {failedCritical.length > 0 && (
+        <span className="pointer-events-none absolute -top-1.5 -right-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-sb-red text-white">
+          <AlertTriangle className="w-2.5 h-2.5" />
+        </span>
+      )}
 
       {open && createPortal(
         <div
@@ -151,13 +196,44 @@ export function SyncStatusWidget() {
             </div>
           )}
 
+          {failedCritical.length > 0 && (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-sb-red/50 bg-sb-red/10 p-2">
+              <span className="text-[10px] font-mono text-sb-red uppercase tracking-wide font-bold">
+                Critical — last run failed ({failedCritical.length})
+              </span>
+              {failedCritical.map(({ key, latest }) => {
+                const meta = CONNECTION_META[key] ?? { label: key }
+                return (
+                  <div key={key} className="flex items-stretch gap-2 px-1 py-1 rounded">
+                    <div className="flex-1 min-w-0 self-center">
+                      <div className="text-xs font-mono text-chrome-fg truncate">{meta.label}</div>
+                      <div className="text-[10px] font-mono text-chrome-fg/50">
+                        {latest.status} · {latest.at ? formatInTz(latest.at, timezone) : '—'}
+                      </div>
+                      {latest.message && (
+                        <div className="text-[10px] font-mono text-sb-red/90 line-clamp-2 break-words" title={latest.message}>{latest.message}</div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => runNow(key)}
+                      disabled={runningKey === key || running.some((t) => t.label === meta.label)}
+                      className="flex-shrink-0 self-stretch px-2 flex items-center justify-center rounded border border-sb-red/50 text-[10px] font-mono uppercase tracking-wide text-sky hover:text-chrome-fg hover:bg-chrome-fg/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      {runningKey === key ? '…' : 'Re-run'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           <div className="flex flex-col gap-1.5">
             <span className="text-[10px] font-mono text-chrome-fg/40 uppercase tracking-wide">Recent Performance</span>
             {rows === null ? (
               <p className="text-xs font-mono text-chrome-fg/40 italic py-2 text-center">Loading…</p>
             ) : (
               <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
-                {CONNECTION_ORDER.map((key) => {
+                {CONNECTION_ORDER.filter((key) => !failedCriticalKeys.has(key)).map((key) => {
                   const row = rows.find((r) => r.connection_key === key)
                   const meta = CONNECTION_META[key] ?? { label: key }
                   // Whichever of the scheduled/manual run actually happened

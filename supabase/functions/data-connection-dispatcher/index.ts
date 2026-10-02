@@ -84,11 +84,24 @@ async function callChunk(
   url: string, secret: string, body: Record<string, unknown>, label: string,
 ): Promise<{ ok: boolean; warnings: string[] }> {
   try {
-    const res = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
-      body: JSON.stringify(body),
-    })
+    // HTTP 503 ("BOOT_ERROR: Function failed to start") means the platform failed to
+    // spin the function up — nothing ran, so retrying is safe. Found live 2026-10-02:
+    // Droptop On Hand's 6:30am run ended 'partial' on "Chunk 3/15: HTTP 503 BOOT_ERROR"
+    // and that chunk's shops simply weren't pulled. Up to 3 attempts, backing off.
+    let res: Response
+    for (let attempt = 1; ; attempt++) {
+      res = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-sync-token': secret },
+        body: JSON.stringify(body),
+      })
+      if (res.status === 503 && attempt < 3) {
+        await res.text().catch(() => '')
+        await new Promise((resolve) => setTimeout(resolve, attempt * 4000))
+        continue
+      }
+      break
+    }
     const { data, error } = await parseSyncResponse(res)
     if (error) return { ok: false, warnings: [`${label}: ${error}`] }
     return { ok: true, warnings: ((data?.warnings ?? []) as string[]).map((w) => `${label}: ${w}`) }

@@ -1049,6 +1049,15 @@ export function DataConnectionsTab() {
                 <p className="text-[11px] font-mono text-inky/60">{meta.description}</p>
 
                 <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-inky uppercase tracking-wide" title="If a critical connection's last run fails, an alert shows on the TopBar data icon">Critical</span>
+                  <Toggle
+                    checked={!!row.is_critical}
+                    onChange={(v) => saveRow(row, { is_critical: v })}
+                    color="amber" size="sm" label={row.is_critical ? 'Alert on failure' : 'Off'}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
                   <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Automate</span>
                   <Toggle
                     checked={row.enabled}
