@@ -316,7 +316,9 @@ async function eligibleLocationIdsFor(
   })
 }
 
-async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: BackfillJob, supabaseUrl: string, droptopSecret: string): Promise<Record<string, unknown>> {
+async function tickMonthWalkJob(
+  admin: ReturnType<typeof createClient>, job: BackfillJob, supabaseUrl: string, droptopSecret: string, skipDepth = 0,
+): Promise<Record<string, unknown>> {
   const cursor = job.cursor_month!
   const pStart = cursor
   const pEnd = monthEndOf(cursor)
@@ -365,6 +367,12 @@ async function tickMonthWalkJob(admin: ReturnType<typeof createClient>, job: Bac
         months_skipped: job.months_skipped + 1, status: completed ? 'completed' : 'running',
         last_run_at: new Date().toISOString(), last_tick_summary: summary, error_message: null, updated_at: new Date().toISOString(),
       }).eq('id', job.id)
+      // A month that's already covered costs only a coverage RPC, so keep walking back through
+      // consecutive covered months in THIS tick instead of spending a whole cron cycle on each,
+      // until one needs pulling (bounded so a tick can't run away).
+      if (!completed && skipDepth < 8) {
+        return tickMonthWalkJob(admin, { ...job, cursor_month: prevMonth, month_pending_ids: null, months_skipped: job.months_skipped + 1 }, supabaseUrl, droptopSecret, skipDepth + 1)
+      }
       return { job_id: job.id, connection: job.connection_key, summary, completed }
     }
     // Only the shops with NO data for this month — re-pulling the ones already
