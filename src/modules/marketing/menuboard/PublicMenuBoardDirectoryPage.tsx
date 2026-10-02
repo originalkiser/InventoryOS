@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
-import { Select, SbLoader } from '@/components/ui'
+import { SbLoader } from '@/components/ui'
 import { naturalCompare } from '@/lib/naturalSort'
 import { QrImage } from './MenuBoardPage'
 
@@ -50,6 +50,22 @@ const PRICE_COLS: { key: string; label: string }[] = [
 ]
 const CORE_PRICE_KEYS = new Set(['economy', 'premium_hm', 'premium_full_synthetic', 'premium_full_synthetic_hm', 'rp'])
 const price = (v: number | null | undefined) => (v == null ? '—' : `$${Number(v).toFixed(2)}`)
+
+// Static brand colors only (sb-*), never the theme tokens that flip in dark mode — this page has a fixed
+// cream background, so a theme-colored label/select goes pale on it for anyone whose OS is in dark mode.
+function FilterSelect({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-heading font-bold text-sb-navy uppercase tracking-wide">{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-white border border-sb-navy/50 rounded px-2 py-2 text-sm font-body text-sb-navy focus:outline-none focus:ring-2 focus:ring-sb-sky">
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
+  )
+}
 
 const csv = (v: string | null | undefined) => `"${String(v ?? '').replace(/"/g, '""')}"`
 
@@ -139,7 +155,7 @@ export function PublicMenuBoardDirectoryPage() {
       <div className="max-w-[1400px] mx-auto flex flex-col gap-3">
         <div>
           <h1 className="text-lg font-heading font-bold text-sb-navy tracking-wide uppercase">{dir.label || (upcoming ? 'Upcoming Shops' : 'Menu Board Shop Links')}</h1>
-          <p className="text-xs font-mono text-sb-navy/60 mt-0.5 max-w-3xl">
+          <p className="text-xs font-mono text-sb-navy mt-1 max-w-3xl">
             {upcoming
               ? "Shops that aren't open yet, listed once package pricing has been added for them. Prices, links and the PDF update as pricing is entered, and shops appear here automatically — nothing to re-share."
               : "One live menu board link and PDF per active shop. Both always show the shop's current prices, and new shops appear here automatically — nothing to regenerate or re-share."}
@@ -148,71 +164,71 @@ export function PublicMenuBoardDirectoryPage() {
 
         <div className="flex items-end gap-3 flex-wrap">
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-heading text-sb-navy/70 uppercase tracking-wide">Search</span>
+            <span className="text-xs font-heading font-bold text-sb-navy uppercase tracking-wide">Search</span>
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Shop, city, market, manager…"
-              className="w-64 bg-white border border-sb-navy/40 rounded px-3 py-2 text-sm font-body text-sb-navy focus:outline-none focus:ring-2 focus:ring-sky" />
+              className="w-64 bg-white border border-sb-navy/50 rounded px-2 py-2 text-sm font-body text-sb-navy placeholder-sb-navy/50 focus:outline-none focus:ring-2 focus:ring-sb-sky" />
           </label>
           <div className="w-48">
-            <Select label="Market" value={market} onChange={(e) => setMarket(e.target.value)}
+            <FilterSelect label="Market" value={market} onChange={setMarket}
               options={[{ value: '', label: 'All markets' }, ...markets.map((m) => ({ value: m, label: m }))]} />
           </div>
           <div className="w-40">
-            <Select label="Owner" value={owner} onChange={(e) => setOwner(e.target.value)}
+            <FilterSelect label="Owner" value={owner} onChange={setOwner}
               options={[{ value: '', label: 'All' }, { value: 'Corporate', label: 'Corporate' }, { value: 'Franchise', label: 'Franchise' }]} />
           </div>
           {upcoming && groups.length > 0 && (
             <div className="w-60">
-              <Select label="Monday Group" value={group} onChange={(e) => setGroup(e.target.value)}
+              <FilterSelect label="Monday Group" value={group} onChange={setGroup}
                 options={[{ value: '', label: 'All groups' }, ...groups.map((g) => ({ value: g, label: g }))]} />
             </div>
           )}
           <button onClick={exportCsv}
-            className="px-3 py-2 text-xs font-mono border border-sb-navy/40 rounded text-sb-navy hover:bg-sb-navy/5">
+            className="px-2 py-2 text-xs font-mono border border-sb-navy/50 rounded text-sb-navy font-bold hover:bg-sb-navy/10">
             Export CSV
           </button>
-          <span className="text-xs font-mono text-sb-navy/60 pb-2">{filtered.length} of {shops.length} shops</span>
+          <span className="text-xs font-mono text-sb-navy pb-2">{filtered.length} of {shops.length} shops</span>
         </div>
 
         <div className="overflow-auto rounded border border-sb-navy/30 bg-white max-h-[78vh]">
           <table className="w-full text-xs font-mono">
             <thead className="sticky top-0 z-10">
               <tr className="bg-sb-navy text-sb-cream uppercase tracking-wide">
-                <th className="text-left px-3 py-2 whitespace-nowrap">Shop</th>
-                <th className="text-left px-3 py-2 whitespace-nowrap">Owner</th>
-                <th className="text-left px-3 py-2 whitespace-nowrap">Market</th>
-                <th className="text-left px-3 py-2 whitespace-nowrap">Regional Director</th>
-                <th className="text-left px-3 py-2 whitespace-nowrap">Area Manager</th>
-                {upcoming && <th className="text-left px-3 py-2 whitespace-nowrap">Monday Group</th>}
-                {priceCols.map((c) => <th key={c.key} className="text-right px-3 py-2 whitespace-nowrap">{c.label}</th>)}
-                {emails && <th className="text-left px-3 py-2 whitespace-nowrap">Shop Email</th>}
-                {emails && <th className="text-left px-3 py-2 whitespace-nowrap">Area Manager Email</th>}
-                <th className="text-left px-3 py-2 whitespace-nowrap">Menu Board Link</th>
-                <th className="text-left px-3 py-2 whitespace-nowrap">QR Code</th>
-                <th className="text-left px-3 py-2 whitespace-nowrap">PDF</th>
+                <th className="text-left px-2 py-2 whitespace-nowrap">Shop</th>
+                <th className="text-left px-2 py-2 whitespace-nowrap">Owner</th>
+                <th className="text-left px-2 py-2 whitespace-nowrap">Market</th>
+                <th className="text-left px-2 py-2 whitespace-nowrap">Regional Director</th>
+                <th className="text-left px-2 py-2 whitespace-nowrap">Area Manager</th>
+                {upcoming && <th className="text-left px-2 py-2 whitespace-nowrap">Monday Group</th>}
+                {priceCols.map((c) => <th key={c.key} className="text-right px-2 py-2 leading-tight min-w-[5rem]">{c.label}</th>)}
+                {emails && <th className="text-left px-2 py-2 whitespace-nowrap">Shop Email</th>}
+                {emails && <th className="text-left px-2 py-2 whitespace-nowrap">Area Manager Email</th>}
+                <th className="text-left px-2 py-2 whitespace-nowrap">Menu Board Link</th>
+                <th className="text-left px-2 py-2 whitespace-nowrap">QR Code</th>
+                <th className="text-left px-2 py-2 whitespace-nowrap">PDF</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={8 + (emails ? 2 : 0) + (upcoming ? 1 + priceCols.length : 0)} className="px-3 py-8 text-center text-sb-navy/50">{upcoming && shops.length === 0 ? 'No upcoming shops have pricing yet.' : 'No shops match.'}</td></tr>
+                <tr><td colSpan={8 + (emails ? 2 : 0) + (upcoming ? 1 + priceCols.length : 0)} className="px-3 py-8 text-center text-sb-navy">{upcoming && shops.length === 0 ? 'No upcoming shops have pricing yet.' : 'No shops match.'}</td></tr>
               ) : filtered.map((s) => (
                 <tr key={s.slug} className="border-b border-sb-navy/10 hover:bg-sb-navy/5 align-middle">
-                  <td className="px-3 py-1.5 text-sb-navy whitespace-nowrap font-bold">{label(s)}</td>
-                  <td className="px-3 py-1.5 text-sb-navy/80">{s.owner || '—'}</td>
-                  <td className="px-3 py-1.5 text-sb-navy/80 whitespace-nowrap">{s.market || '—'}</td>
-                  <td className="px-3 py-1.5 text-sb-navy/80 whitespace-nowrap">{s.regional_director || '—'}</td>
-                  <td className="px-3 py-1.5 text-sb-navy/80 whitespace-nowrap">{s.area_manager || '—'}</td>
-                  {upcoming && <td className="px-3 py-1.5 text-sb-navy/80 whitespace-nowrap">{s.monday_group || '—'}</td>}
-                  {priceCols.map((c) => <td key={c.key} className={`px-3 py-1.5 text-right whitespace-nowrap ${s.prices?.[c.key] == null ? 'text-sb-navy/30' : 'text-sb-navy font-bold'}`}>{price(s.prices?.[c.key])}</td>)}
-                  {emails && <td className="px-3 py-1.5 text-sb-navy/80">{s.store_email || '—'}</td>}
-                  {emails && <td className="px-3 py-1.5 text-sb-navy/80">{s.am_email || '—'}</td>}
-                  <td className="px-3 py-1.5 whitespace-nowrap">
-                    <a href={boardUrl(s)} target="_blank" rel="noreferrer" className="text-inky underline">{boardUrl(s).replace(/^https?:\/\//, '')}</a>
-                    <button onClick={() => copy(boardUrl(s))} className="ml-1.5 text-sb-navy/40 hover:text-sb-navy" title="Copy link">⧉</button>
+                  <td className="px-2 py-1.5 text-sb-navy whitespace-nowrap font-bold">{label(s)}</td>
+                  <td className="px-2 py-1.5 text-sb-navy">{s.owner || '—'}</td>
+                  <td className="px-2 py-1.5 text-sb-navy whitespace-nowrap">{s.market || '—'}</td>
+                  <td className="px-2 py-1.5 text-sb-navy">{s.regional_director || '—'}</td>
+                  <td className="px-2 py-1.5 text-sb-navy">{s.area_manager || '—'}</td>
+                  {upcoming && <td className="px-2 py-1.5 text-sb-navy min-w-[9rem] max-w-[12rem] break-words">{s.monday_group || '—'}</td>}
+                  {priceCols.map((c) => <td key={c.key} className={`px-2 py-1.5 text-right whitespace-nowrap ${s.prices?.[c.key] == null ? 'text-sb-navy/30' : 'text-sb-navy font-bold'}`}>{price(s.prices?.[c.key])}</td>)}
+                  {emails && <td className="px-2 py-1.5 text-sb-navy">{s.store_email || '—'}</td>}
+                  {emails && <td className="px-2 py-1.5 text-sb-navy">{s.am_email || '—'}</td>}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <a href={boardUrl(s)} target="_blank" rel="noreferrer" className="text-sb-inky font-bold underline">{boardUrl(s).replace(/^https?:\/\//, '')}</a>
+                    <button onClick={() => copy(boardUrl(s))} className="ml-1.5 text-sb-navy/60 hover:text-sb-navy" title="Copy link">⧉</button>
                   </td>
-                  <td className="px-3 py-1.5"><QrImage url={boardUrl(s)} size={40} /></td>
-                  <td className="px-3 py-1.5 whitespace-nowrap">
-                    <a href={pdfUrl(s)} target="_blank" rel="noreferrer" className="text-inky underline">Download PDF</a>
-                    <button onClick={() => copy(pdfUrl(s))} className="ml-1.5 text-sb-navy/40 hover:text-sb-navy" title="Copy PDF link">⧉</button>
+                  <td className="px-2 py-1.5"><QrImage url={boardUrl(s)} size={40} /></td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <a href={pdfUrl(s)} target="_blank" rel="noreferrer" className="text-sb-inky font-bold underline">PDF</a>
+                    <button onClick={() => copy(pdfUrl(s))} className="ml-1.5 text-sb-navy/60 hover:text-sb-navy" title="Copy PDF link">⧉</button>
                   </td>
                 </tr>
               ))}
