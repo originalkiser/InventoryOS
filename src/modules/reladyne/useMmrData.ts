@@ -167,3 +167,39 @@ export function useReladyneVolumeCommitment() {
   useEffect(() => { reload() }, [reload])
   return { rows, loading, reload }
 }
+
+// Explicit per-product Bulk/Package/Drum overrides for the Product Gallons
+// tab (migration 20260930cd) — absence of a row means "use the default".
+export function useReladyneProductGroupMap() {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const [overrides, setOverrides] = useState<Map<string, 'bulk' | 'package' | 'drum'>>(new Map())
+  const [loading, setLoading] = useState(true)
+
+  const reload = useCallback(async () => {
+    if (!companyId) { setLoading(false); return }
+    const { data } = await sb().schema('inventory').from('reladyne_product_group_map')
+      .select('product_desc, group_key').eq('company_id', companyId)
+    setOverrides(new Map((data ?? []).map((r: { product_desc: string; group_key: 'bulk' | 'package' | 'drum' }) => [r.product_desc, r.group_key])))
+    setLoading(false)
+  }, [companyId])
+  useEffect(() => { reload() }, [reload])
+
+  async function setGroup(productDesc: string, group: 'bulk' | 'package' | 'drum' | null) {
+    if (!companyId) return
+    if (group == null) {
+      const { error } = await sb().schema('inventory').from('reladyne_product_group_map')
+        .delete().eq('company_id', companyId).eq('product_desc', productDesc)
+      if (error) throw new Error(error.message)
+      setOverrides((prev) => { const n = new Map(prev); n.delete(productDesc); return n })
+      return
+    }
+    const { error } = await sb().schema('inventory').from('reladyne_product_group_map')
+      .upsert({ company_id: companyId, product_desc: productDesc, group_key: group, updated_by: profile?.id ?? null, updated_at: new Date().toISOString() },
+        { onConflict: 'company_id,product_desc' })
+    if (error) throw new Error(error.message)
+    setOverrides((prev) => new Map(prev).set(productDesc, group))
+  }
+
+  return { overrides, loading, setGroup, reload }
+}
