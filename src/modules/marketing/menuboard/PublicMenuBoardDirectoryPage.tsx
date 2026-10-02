@@ -33,8 +33,8 @@ interface DirectoryShop {
 
 interface Directory { label: string | null; scope: 'active' | 'upcoming'; include_emails: boolean; shops: DirectoryShop[] }
 
-// Upcoming-shop pricing columns. A column only shows when at least one shop has a value in it, so
-// the table uses just the package prices that are actually filled out.
+// Upcoming-shop pricing columns. The five core packages always show; the rest (diesel, European, fees)
+// only appear once at least one shop has a value in them.
 const PRICE_COLS: { key: string; label: string }[] = [
   { key: 'economy', label: 'Economy' },
   { key: 'premium_hm', label: 'Premium HM' },
@@ -48,6 +48,7 @@ const PRICE_COLS: { key: string; label: string }[] = [
   { key: 'disposal_fee', label: 'Disposal Fee' },
   { key: 'oil_inflation_surcharge', label: 'Oil Inflation Surcharge' },
 ]
+const CORE_PRICE_KEYS = new Set(['economy', 'premium_hm', 'premium_full_synthetic', 'premium_full_synthetic_hm', 'rp'])
 const price = (v: number | null | undefined) => (v == null ? '—' : `$${Number(v).toFixed(2)}`)
 
 const csv = (v: string | null | undefined) => `"${String(v ?? '').replace(/"/g, '""')}"`
@@ -60,7 +61,6 @@ export function PublicMenuBoardDirectoryPage() {
   const [market, setMarket] = useState('')
   const [owner, setOwner] = useState('')
   const [group, setGroup] = useState('')
-  const [pricing, setPricing] = useState<'' | 'has' | 'none'>('')
 
   useEffect(() => {
     let cancelled = false
@@ -84,11 +84,10 @@ export function PublicMenuBoardDirectoryPage() {
   const shops = useMemo(() => [...(dir?.shops ?? [])].sort((a, b) => naturalCompare(label(a), label(b))), [dir])
   const upcoming = dir?.scope === 'upcoming'
   const priceCols = useMemo(
-    () => (upcoming ? PRICE_COLS.filter((c) => shops.some((s) => s.prices?.[c.key] != null)) : []),
+    () => (upcoming ? PRICE_COLS.filter((c) => CORE_PRICE_KEYS.has(c.key) || shops.some((s) => s.prices?.[c.key] != null)) : []),
     [upcoming, shops],
   )
   const groups = useMemo(() => [...new Set(shops.map((s) => s.monday_group).filter((g): g is string => !!g))].sort(naturalCompare), [shops])
-  const hasAnyPrice = (s: DirectoryShop) => PRICE_COLS.some((c) => s.prices?.[c.key] != null)
   const markets = useMemo(() => [...new Set(shops.map((s) => s.market).filter((m): m is string => !!m))].sort(naturalCompare), [shops])
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -96,13 +95,11 @@ export function PublicMenuBoardDirectoryPage() {
       if (market && s.market !== market) return false
       if (owner && s.owner !== owner) return false
       if (group && s.monday_group !== group) return false
-      if (pricing === 'has' && !hasAnyPrice(s)) return false
-      if (pricing === 'none' && hasAnyPrice(s)) return false
       if (!q) return true
       return [label(s), s.city, s.state, s.market, s.area_manager, s.regional_director, s.store_email, s.am_email]
         .some((v) => (v ?? '').toLowerCase().includes(q))
     })
-  }, [shops, query, market, owner, group, pricing])
+  }, [shops, query, market, owner, group])
 
   function copy(text: string) {
     navigator.clipboard.writeText(text).then(() => toast.success('Copied')).catch(() => toast.error('Could not copy'))
@@ -144,7 +141,7 @@ export function PublicMenuBoardDirectoryPage() {
           <h1 className="text-lg font-heading font-bold text-sb-navy tracking-wide uppercase">{dir.label || (upcoming ? 'Upcoming Shops' : 'Menu Board Shop Links')}</h1>
           <p className="text-xs font-mono text-sb-navy/60 mt-0.5 max-w-3xl">
             {upcoming
-              ? "Shops that aren't open yet, with whichever package prices are filled in so far. Prices, links and the PDF update as the pricing is entered, and shops appear here automatically as they're added — nothing to re-share."
+              ? "Shops that aren't open yet, listed once package pricing has been added for them. Prices, links and the PDF update as pricing is entered, and shops appear here automatically — nothing to re-share."
               : "One live menu board link and PDF per active shop. Both always show the shop's current prices, and new shops appear here automatically — nothing to regenerate or re-share."}
           </p>
         </div>
@@ -167,12 +164,6 @@ export function PublicMenuBoardDirectoryPage() {
             <div className="w-60">
               <Select label="Monday Group" value={group} onChange={(e) => setGroup(e.target.value)}
                 options={[{ value: '', label: 'All groups' }, ...groups.map((g) => ({ value: g, label: g }))]} />
-            </div>
-          )}
-          {upcoming && (
-            <div className="w-44">
-              <Select label="Pricing" value={pricing} onChange={(e) => setPricing(e.target.value as '' | 'has' | 'none')}
-                options={[{ value: '', label: 'All' }, { value: 'has', label: 'Has pricing' }, { value: 'none', label: 'No pricing yet' }]} />
             </div>
           )}
           <button onClick={exportCsv}
@@ -202,7 +193,7 @@ export function PublicMenuBoardDirectoryPage() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={8 + (emails ? 2 : 0) + (upcoming ? 1 + priceCols.length : 0)} className="px-3 py-8 text-center text-sb-navy/50">No shops match.</td></tr>
+                <tr><td colSpan={8 + (emails ? 2 : 0) + (upcoming ? 1 + priceCols.length : 0)} className="px-3 py-8 text-center text-sb-navy/50">{upcoming && shops.length === 0 ? 'No upcoming shops have pricing yet.' : 'No shops match.'}</td></tr>
               ) : filtered.map((s) => (
                 <tr key={s.slug} className="border-b border-sb-navy/10 hover:bg-sb-navy/5 align-middle">
                   <td className="px-3 py-1.5 text-sb-navy whitespace-nowrap font-bold">{label(s)}</td>

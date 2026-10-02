@@ -73,7 +73,7 @@ export function ShareDirectoryModal({ baseUrl, onClose }: { baseUrl: string; onC
           <div className="flex flex-col gap-1.5">
             {([
               ['active', 'Active shops', 'Every open shop — board link, QR code and PDF.'],
-              ['upcoming', 'Upcoming shops', 'Shops not open yet (inactive, no Date Opened), with whichever package prices are filled in.'],
+              ['upcoming', 'Upcoming shops', 'Shops not open yet (inactive, no Date Opened) — listed once package pricing is added for them.'],
             ] as const).map(([key, title, desc]) => (
               <label key={key} className={`flex items-start gap-2 text-xs font-mono rounded border p-2 cursor-pointer ${scope === key ? 'border-sky bg-sky/5' : 'border-navy/20'}`}>
                 <input type="radio" checked={scope === key} onChange={() => setScope(key)} className="mt-0.5 accent-sky" />
