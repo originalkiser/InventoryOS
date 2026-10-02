@@ -120,7 +120,9 @@ const SECTION_ACCENT: Record<string, string> = {
   // own accent doesn't need to be visually distinct from sky the way the
   // other sections' icons (plain lucide glyphs with no color of their own)
   // do.
-  reladyne: 'bg-sky/15 border-l-2 border-sky',
+  // Static sb-cream (never flips in dark mode, unlike plain `cream`) — the
+  // wordmark logo is navy/orange and unreadable on the dark sidebar.
+  reladyne: 'bg-sb-cream border-l-2 border-sky',
   'global-config': 'bg-chrome-fg/[0.08] border-l-2 border-chrome-fg/40',
   operations: 'bg-[#E67E22]/15 border-l-2 border-[#E67E22]',
   finance: 'bg-[#2ECC71]/15 border-l-2 border-[#2ECC71]',
@@ -767,7 +769,13 @@ function SortableSection({
               redundant — shown at a readable wide size with no text label
               instead, same spot the icon+label pair otherwise occupies. */}
           {sectionKey === 'reladyne' ? (
-            <img src={reladyneLogo} alt="RelaDyne" className="h-4 w-auto max-w-[120px] flex-1 object-contain object-left" />
+            // Logo's own navy/orange is illegible on the dark sidebar (found
+            // live 2026-10-02), so this header sits on a static cream bar
+            // (see SECTION_ACCENT) — the wrapper div takes the flex-1 so the
+            // chevron below lands flush right, like every other section's.
+            <div className="flex-1 min-w-0">
+              <img src={reladyneLogo} alt="RelaDyne" className="h-5 w-auto max-w-[130px] object-contain object-left" />
+            </div>
           ) : (
             <>
               {SECTION_ICONS[sectionKey]}
@@ -778,7 +786,8 @@ function SortableSection({
           )}
           <ChevronRight
             className={[
-              'w-3 h-3 flex-shrink-0 text-chrome-fg/30 transition-transform duration-150',
+              'w-3 h-3 flex-shrink-0 transition-transform duration-150',
+              sectionKey === 'reladyne' ? 'text-sb-navy/60' : 'text-chrome-fg/30',
               collapsed ? '' : 'rotate-90',
             ].join(' ')}
           />
