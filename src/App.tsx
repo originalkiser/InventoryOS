@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthStore } from '@/stores/authStore'
 import { SUPABASE_MISSING } from '@/lib/supabase'
@@ -49,9 +49,49 @@ function isMenuBoardHost(): boolean {
   return window.location.hostname.startsWith('menu.')
 }
 
+// Add to Home Screen on a shop's board has to reopen THAT shop's board, not
+// the bare root. The static site.webmanifest declares start_url "/" (right
+// for the main app), and newer iOS / Android honor a manifest's start_url
+// over the page you were on when you tapped Add to Home Screen — so every
+// pinned menu board used to reopen menu.sboc.app/ (the nearest-shop landing
+// page) regardless of which shop it was pinned from. On this host only, swap
+// the manifest for one whose start_url/id is the page currently showing.
+// Re-runs on every route change, so a pin taken after the root redirects to
+// the nearest shop's slug also captures that slug. A data: URL (not a static
+// file) because the value is per-visit; iOS versions that ignore manifests
+// fall back to the current URL anyway, which is the same result.
+function MenuBoardHomeScreenMeta() {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    const origin = window.location.origin
+    const manifest = {
+      name: 'SB Menu Board', short_name: 'Menu Board',
+      id: pathname, start_url: origin + pathname, scope: origin + '/',
+      display: 'standalone', theme_color: '#002745', background_color: '#002745',
+      icons: [
+        { src: origin + '/android-chrome-192x192.png', sizes: '192x192', type: 'image/png' },
+        { src: origin + '/android-chrome-512x512.png', sizes: '512x512', type: 'image/png' },
+      ],
+    }
+    let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+    if (!link) { link = document.createElement('link'); link.rel = 'manifest'; document.head.appendChild(link) }
+    link.href = 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify(manifest))
+    const setMeta = (name: string, content: string) => {
+      let m = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)
+      if (!m) { m = document.createElement('meta'); m.name = name; document.head.appendChild(m) }
+      m.content = content
+    }
+    setMeta('apple-mobile-web-app-capable', 'yes')
+    setMeta('mobile-web-app-capable', 'yes')
+    setMeta('apple-mobile-web-app-title', 'Menu Board')
+  }, [pathname])
+  return null
+}
+
 function MenuBoardApp() {
   return (
     <BrowserRouter>
+      <MenuBoardHomeScreenMeta />
       <Routes>
         {/* Bare root — no specific shop link, so resolve one via the
             visitor's geolocation (falls back to a manual picker). */}
