@@ -53,6 +53,7 @@ import { DroptopVehiclesPage } from '@/modules/customers/DroptopVehiclesPage'
 import { DroptopPackagesPage } from '@/modules/customers/DroptopPackagesPage'
 import { StaffingReportPage } from '@/modules/customers/StaffingReportPage'
 import { PackageMappingPage } from '@/modules/customers/PackageMappingPage'
+import { PricingAuditPage } from '@/modules/customers/pricingAudit/PricingAuditPage'
 import { ProductSalesHistoryPage } from '@/modules/customers/ProductSalesHistoryPage'
 import { MmrPage } from '@/modules/reladyne/MmrPage'
 import { OrdersV2Landing } from '@/modules/orders-v2/OrdersV2Landing'
@@ -165,6 +166,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="droptop-packages" element={<DroptopPackagesPage />} />
     <Route path="staffing-report" element={<StaffingReportPage />} />
     <Route path="package-mapping" element={<PackageMappingPage />} />
+    <Route path="pricing-audit" element={<PricingAuditPage />} />
     <Route path="product-sales-history" element={<ProductSalesHistoryPage />} />
     {/* Was previously an outer, top-level catch-all in App.tsx — moved here
         since AppShell's own route is now a "/*" splat and would otherwise
