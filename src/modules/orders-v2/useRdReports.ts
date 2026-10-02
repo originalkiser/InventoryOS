@@ -125,11 +125,16 @@ async function closeStaleOrderLedgerRows(companyId: string, currentKeys: Set<str
   // payload that column reads as NULL on the attempted row, and
   // `NULL = ...` is never TRUE in SQL, so the check fails outright even
   // though every one of these rows was always going to hit the UPDATE path.
+  // Same class of failure, second column set (found live 2026-10-02: "null value in column sales_order_no ... violates not-null constraint"): the INSERT-side
+  // check also covers every other NOT NULL column with no default —
+  // sales_order_no and product_code — so they have to ride along too, even
+  // though the row always resolves to the UPDATE branch by id. Their values
+  // are the row's own, so the update leaves them unchanged.
   const updates = stale.map((r: any) => {
     const delivery = deliveryByKey.get(`${r.sales_order_no}|${r.product_code}`)
     return delivery
-      ? { id: r.id, company_id: companyId, status: 'closed_delivered', delivered_qty: delivery.qty_shipped, delivered_at: delivery.ship_date ?? delivery.invoice_date, closed_at: now }
-      : { id: r.id, company_id: companyId, status: 'closed_no_invoice', delivered_qty: null, delivered_at: null, closed_at: now }
+      ? { id: r.id, company_id: companyId, sales_order_no: r.sales_order_no, product_code: r.product_code, status: 'closed_delivered', delivered_qty: delivery.qty_shipped, delivered_at: delivery.ship_date ?? delivery.invoice_date, closed_at: now }
+      : { id: r.id, company_id: companyId, sales_order_no: r.sales_order_no, product_code: r.product_code, status: 'closed_no_invoice', delivered_qty: null, delivered_at: null, closed_at: now }
   })
   for (let i = 0; i < updates.length; i += 500) {
     const { error } = await sb().schema('inventory').from('rd_order_ledger').upsert(updates.slice(i, i + 500), { onConflict: 'id' })
