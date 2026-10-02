@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { RefreshCw } from 'lucide-react'
+import { RdOrderCheckCard } from './RdOrderCheckCard'
 import { Button, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
@@ -38,7 +39,7 @@ const LEDGER_STATUS_COLOR: Record<string, string> = {
  * upload, plus an Overdue callout for anything still open past when the
  * shop should have received it.
  */
-export function RdReportsTab() {
+export function RdReportsTab({ refreshKey = 0 }: { refreshKey?: number }) {
   const loc = useLocations()
   const vendors = useVendors()
   const { lastOpenOrdersAt, lastOpenInvoicesAt, fetchOpenOrders, fetchOpenInvoices, fetchOrderLedger } = useRdReports()
@@ -55,7 +56,7 @@ export function RdReportsTab() {
     setLedger(l)
     setLoading(false)
   }, [fetchOpenOrders, fetchOpenInvoices, fetchOrderLedger])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, refreshKey])
 
   // RelaDyne's own delivery-schedule lookup — same shape as OrdersV2Review/
   // OrdersV2FinalReview's own scheduleLookup, scoped here to whichever
@@ -198,6 +199,8 @@ export function RdReportsTab() {
           <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
         </Button>
       </div>
+
+      <RdOrderCheckCard refreshKey={refreshKey} />
 
       {overdue.length > 0 && (
         <div className="rounded border border-[#C0392B]/40 bg-[#C0392B]/5 flex flex-col gap-2 p-3">

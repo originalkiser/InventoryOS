@@ -14,15 +14,16 @@
 // (on-hand/DOS-now/DOS-after/why) is copied verbatim from SmoothingRow
 // (OrdersV2Review.tsx) rather than reimplemented, so the two tables can
 // never quietly disagree on a number.
-import { useMemo, useState, useEffect, useRef } from 'react'
+import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { Pencil, Plus } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { daysOfSupply, gallonsPerUnit } from './engine'
-import { DOS_COLOR_LEGEND, dos, money, num } from './shared'
+import { DOS_COLOR_LEGEND, dos, money, num, dShort } from './shared'
+import { QtyStepper, ZeroReasonButtons, isZeroAdjusted, type ZeroReason } from './lineControls'
+import type { LastInfoFor } from './OrdersV2Review'
 import { uomDisplayLabel } from './types'
 import type { DraftLineRow } from './useOrdersV2'
 import type { useProductExceptions } from './useProductExceptions'
@@ -60,41 +61,21 @@ function deriveRow(r: ShopProductRow, leadDays: number) {
   return { productId, locationId, unitCost, uom, capacity, onHand, dailyUsage, dosNow, why, whyClass, quartsPerUnit, qty, onHandAfter, dosAfter }
 }
 
-// Same focus-preserving controlled-input pattern as OrdersV2ReviewTable's
-// own QtyInput (see that file's own comment on the re-render-clobbers-typing
-// bug this avoids) — for an existing line. A configured-but-not-yet-ordered
-// candidate keeps SmoothingRow's original uncontrolled blur-to-add input,
-// since there's no live value for it to clobber.
-function ShopProductQtyInput({ line, onPatch }: { line: DraftLineRow; onPatch: (l: DraftLineRow, qty: number) => void }) {
-  const [text, setText] = useState(() => String(line.qty))
-  const lastCommittedRef = useRef<number>(Number(line.qty))
-  useEffect(() => {
-    if (Number(line.qty) !== lastCommittedRef.current) {
-      setText(String(line.qty))
-      lastCommittedRef.current = Number(line.qty)
-    }
-  }, [line.qty])
-  return (
-    <input type="number" min={0} step={line.uom === 'bulk' ? 0.1 : 1} value={text}
-      onChange={(e) => {
-        setText(e.target.value)
-        const n = Number(e.target.value) || 0
-        lastCommittedRef.current = n
-        onPatch(line, n)
-      }}
-      className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-  )
-}
-
-export function ShopConfiguredProductsDataTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays, dosAfterColorClass }: {
+export function ShopConfiguredProductsDataTable({ rows, onPatch, onAdd, showVmi, ozProductIds, leadDays, dosAfterColorClass, lastInfoFor, onZeroReason, tall }: {
   rows: ShopProductRow[]
+  // Optional Last Ordered / Last Delivered columns (see useLastOrderedInfo().infoFor).
+  lastInfoFor?: LastInfoFor
+  // Optional "why zero?" buttons on a line adjusted to 0.
+  onZeroReason?: (line: DraftLineRow, reason: ZeroReason | null, note: string | null) => void
+  // Taller body for the shop popup — about 18 products without scrolling.
+  tall?: boolean
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
   dosAfterColorClass?: (v: number | null) => string
   showVmi: boolean
   ozProductIds: Set<string>
-  exceptionFor: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>['rows'][number] | null
-  onOpenException: (locationId: string, productId: string) => void
+  exceptionFor?: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>["rows"][number] | null
+  onOpenException?: (locationId: string, productId: string) => void
   leadDays: number
 }) {
   const [columnManagerOpen, setColumnManagerOpen] = useState(false)
@@ -150,6 +131,31 @@ export function ShopConfiguredProductsDataTable({ rows, onPatch, onAdd, showVmi,
     col.accessor((r) => deriveRow(r, leadDays).dosNow, {
       id: 'dos_now', header: 'DOS Now', enableSorting: false, cell: (i) => <span className="block text-right">{dos(i.getValue())}</span>,
     }),
+    ...(lastInfoFor ? [
+      col.display({
+        id: 'last_ordered', header: 'Last Ordered', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
+        cell: (i) => {
+          const d = deriveRow(i.row.original, leadDays)
+          const info = lastInfoFor(d.locationId, d.productId, d.onHand, d.dailyUsage)
+          return info.lastOrderDate ? (
+            <div className="whitespace-nowrap">
+              <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
+              {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
+            </div>
+          ) : '—'
+        },
+      }),
+      col.display({
+        id: 'last_delivered', header: 'Last Delivered', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
+        cell: (i) => {
+          const d = deriveRow(i.row.original, leadDays)
+          const info = lastInfoFor(d.locationId, d.productId, d.onHand, d.dailyUsage)
+          return <span className="whitespace-nowrap">{info.lastDeliveredDate
+            ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
+            : '—'}</span>
+        },
+      }),
+    ] : []),
     col.display({
       id: 'qty', header: 'Qty', meta: { noClip: true }, enableSorting: false,
       cell: (i) => {
@@ -157,27 +163,14 @@ export function ShopConfiguredProductsDataTable({ rows, onPatch, onAdd, showVmi,
         const d = deriveRow(r, leadDays)
         const isOz = ozProductIds.has(d.productId)
         return (
-          <div className="flex items-start justify-end gap-1">
-            <div>
-              {r.line ? (
-                <ShopProductQtyInput line={r.line} onPatch={onPatch} />
-              ) : r.input ? (
-                <input type="number" min={0} step={d.uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
-                  onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(r.input!, v) }}
-                  title="Add this product to the order"
-                  className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-right text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
-              ) : null}
-              {isOz && r.line && d.quartsPerUnit != null && (
-                <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(r.line.qty) * d.quartsPerUnit * 32, 0)}oz</div>
-              )}
-            </div>
-            {d.locationId && d.productId && (
-              <button
-                onClick={() => onOpenException(d.locationId, d.productId)}
-                title={exceptionFor(d.locationId, d.productId) ? 'Edit product exception' : 'Add product exception'}
-                className="text-inky/40 hover:text-navy flex-shrink-0 mt-0.5">
-                {exceptionFor(d.locationId, d.productId) ? <Pencil className="w-3 h-3" /> : <Plus className="w-3.5 h-3.5" />}
-              </button>
+          <div className="flex flex-col items-end">
+            {r.line ? (
+              <QtyStepper value={Number(r.line.qty)} bulk={d.uom === 'bulk'} align="text-right" onChange={(n) => onPatch(r.line!, n)} />
+            ) : r.input ? (
+              <QtyStepper value={0} bulk={d.uom === 'bulk'} align="text-right" commitOn="blur" muted onChange={(n) => { if (n > 0) onAdd(r.input!, n) }} />
+            ) : null}
+            {isOz && r.line && d.quartsPerUnit != null && (
+              <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(r.line.qty) * d.quartsPerUnit * 32, 0)}oz</div>
             )}
           </div>
         )
@@ -206,13 +199,19 @@ export function ShopConfiguredProductsDataTable({ rows, onPatch, onAdd, showVmi,
       id: 'dollars', header: '$', enableSorting: false, cell: (i) => <span className="block text-right">{money(i.getValue())}</span>,
     }),
     col.display({
-      id: 'why', header: 'Why', enableSorting: false, enableColumnFilter: false,
+      id: 'why', header: 'Why', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
       cell: (i) => {
-        const d = deriveRow(i.row.original, leadDays)
-        return <span className={d.whyClass}>{d.why}</span>
+        const r = i.row.original
+        const d = deriveRow(r, leadDays)
+        return (
+          <>
+            <span className={d.whyClass}>{d.why}</span>
+            {r.line && onZeroReason && isZeroAdjusted(r.line) && <ZeroReasonButtons line={r.line} onChange={(rs, n) => onZeroReason(r.line!, rs, n)} />}
+          </>
+        )
       },
     }),
-  ], [col, leadDays, ozProductIds, onPatch, onAdd, exceptionFor, onOpenException, dosAfterColorClass])
+  ], [col, leadDays, ozProductIds, onPatch, onAdd, dosAfterColorClass, lastInfoFor, onZeroReason])
 
   const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(visible, columns, {
     persistKey: TABLE_KEY,
@@ -253,6 +252,7 @@ export function ShopConfiguredProductsDataTable({ rows, onPatch, onAdd, showVmi,
         onGlobalFilterChange={setGlobalFilter}
         hideColumnControl
         hideExport
+        bodyMaxHeightClass={tall ? 'max-h-[calc(90vh-13rem)]' : undefined}
         actions={
           <button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>
         }

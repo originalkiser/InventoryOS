@@ -61,7 +61,7 @@ export function OrdersV2FinalReview() {
   // line edited back on Review after Final Review was already cached here
   // would otherwise never show up (nothing unmounted to re-trigger
   // useDraft's own load effect). Same fix as OrdersV2Review/Export.
-  usePageRevisit(reload)
+  usePageRevisit(reload, 3000, { tabReturn: false })
   // Same Last Ordered/Last Delivered + on-hand plausibility flag as
   // OrdersV2Review — see that hook's own header comment for scope/design.
   const lastOrderedInfo = useLastOrderedInfo(draft?.vendor_id ?? null, vendors.byId(draft?.vendor_id ?? null)?.name ?? null)

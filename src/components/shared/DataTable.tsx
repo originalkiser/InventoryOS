@@ -23,6 +23,8 @@ interface DataTableProps<T> {
   hideColumnControl?: boolean
   /** Suppress the built-in Export dropdown (use when the caller provides its own export UI) */
   hideExport?: boolean
+  // Overrides the table body's max height (default max-h-[calc(100vh-300px)]) — for a table inside a modal that should show more rows before scrolling.
+  bodyMaxHeightClass?: string
   /** Below the `sm` breakpoint, render each row as a stacked card instead of a wide scrolling table */
   mobileCards?: boolean
   /** Called whenever the internal row-selection Set changes */
@@ -155,6 +157,7 @@ export function DataTable<T>({
   attachmentEntityType,
   hideColumnControl,
   hideExport,
+  bodyMaxHeightClass,
   mobileCards,
   onSelectionChange,
   clearSelectionToken,
@@ -511,7 +514,7 @@ export function DataTable<T>({
       )}
 
       {/* Table */}
-      <div className={`overflow-auto rounded border border-inky/20 max-h-[calc(100vh-300px)]${mobileCards ? ' hidden sm:block' : ''}`}>
+      <div className={`overflow-auto rounded border border-inky/20 ${bodyMaxHeightClass ?? 'max-h-[calc(100vh-300px)]'}${mobileCards ? ' hidden sm:block' : ''}`}>
         <table
           className={`text-xs font-body table-fixed${hasFill ? ' w-full' : ''}`}
           style={hasFill ? { minWidth: table.getTotalSize() + SEL_W } : { width: table.getTotalSize() + SEL_W }}

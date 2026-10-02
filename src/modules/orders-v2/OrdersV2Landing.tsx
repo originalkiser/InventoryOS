@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Droplet, Plus, Upload } from 'lucide-react'
 import { createColumnHelper } from '@tanstack/react-table'
@@ -9,7 +9,7 @@ import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
-import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, type DraftRow } from './useOrdersV2'
+import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, draftAdHocLocationIds, draftOrderDow, isReladyne, isValvoline, type DraftRow } from './useOrdersV2'
 import { useRdReports } from './useRdReports'
 import { RdReportsTab } from './RdReportsTab'
 import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
@@ -27,6 +27,15 @@ function isToday(iso: string | null): boolean {
   const d = new Date(iso)
   const now = new Date()
   return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+}
+
+/** What kind of order a draft is — see the Order Type column. */
+function orderTypeLabel(d: DraftRow, vendor: string): string {
+  if (typeof (d.settings_snapshot as any)?.__resend_for_date === 'string') return 'Re-send (missed items)'
+  if (draftAdHocLocationIds(d)) return 'Ad hoc order'
+  if (isReladyne(vendor)) return DOW[draftOrderDow(d)]
+  if (isValvoline(vendor)) return 'Weekly'
+  return 'Regular'
 }
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -62,6 +71,13 @@ export function OrdersV2Landing() {
   const vendors = useVendors()
   const names = useUserNames()
   const rd = useRdReports()
+  // Bumped when an RD report upload finishes so the RelaDyne Reports tab's order check re-runs against the new data.
+  const [rdRefresh, setRdRefresh] = useState(0)
+  const prevRdUploading = useRef(rd.uploading)
+  useEffect(() => {
+    if (prevRdUploading.current && !rd.uploading) setRdRefresh((k) => k + 1)
+    prevRdUploading.current = rd.uploading
+  }, [rd.uploading])
   const [statsDraft, setStatsDraft] = useState<DraftRow | null>(null)
   const [soOpen, setSoOpen] = useState(false)
   const [ioOpen, setIoOpen] = useState(false)
@@ -150,6 +166,9 @@ export function OrdersV2Landing() {
       cell: (i) => (i.row.original.settings_snapshot as any)?.__shop_count ?? '—',
     }),
     col.accessor((d) => orderDayLabel(d.settings_snapshot), { id: 'order_day', header: 'Order Day' }),
+    // Direct ask 2026-10-02: any ad hoc order says so; a regular RelaDyne order
+    // shows its weekday; a regular Valvoline order is 'Weekly'.
+    col.accessor((d) => orderTypeLabel(d, vendorName(d.vendor_id)), { id: 'order_type', header: 'Order Type' }),
     col.display({ id: 'products', header: 'Products', enableSorting: false, cell: (i) => aggregates[i.row.original.id]?.products ?? '—' }),
     col.display({ id: 'gallons', header: 'Gallons', enableSorting: false, cell: (i) => gallons(aggregates[i.row.original.id]?.gallons) }),
     col.display({ id: 'cost', header: 'Cost', enableSorting: false, cell: (i) => <span className="text-right block">{money(aggregates[i.row.original.id]?.cost)}</span> }),
@@ -251,7 +270,7 @@ export function OrdersV2Landing() {
         </TabsContent>
 
         <TabsContent value="rd_reports">
-          <RdReportsTab />
+          <RdReportsTab refreshKey={rdRefresh} />
         </TabsContent>
 
         <TabsContent value="valvoline_db">

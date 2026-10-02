@@ -163,6 +163,16 @@ export async function markDraftComplete(
   companyId: string, userId: string | null, draft: DraftRow, lines: DraftLineRow[],
   shopNumberOf: (locationId: string | null) => string, vendorName?: string | null,
 ): Promise<string | null> {
+  // A "re-send missed items" draft (see rdOrderCheck.ts createResendDraft)
+  // carries lines the ORIGINAL order already recorded in history — writing a
+  // second history copy would double-count them in RD reconciliation and
+  // Last Ordered. Just mark the draft exported and stop.
+  if (typeof (draft.settings_snapshot as any)?.__resend_for_date === 'string') {
+    await sb().schema('inventory').from('ov2_order_drafts')
+      .update({ status: 'exported', last_edited_by: userId, updated_at: new Date().toISOString() }).eq('id', draft.id)
+    return draft.id
+  }
+
   const included = lines.filter((l) => l.included && Number(l.qty) > 0)
   const total = included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0)
   const totalGallons = included.reduce((s, l) => s + (l.quarts_per_unit ? Number(l.qty) * Number(l.quarts_per_unit) : 0), 0) / 4

@@ -262,7 +262,7 @@ export function PoStatusPage() {
   // page now catches up automatically when revisited — after triggering a
   // sync from Data Connections and coming back, or just returning to this
   // browser tab — same pattern as Comms/Alerts/Exceptions.
-  usePageRevisit(load)
+  usePageRevisit(load, 3000, { tabReturn: false })
 
   const shopLabel = useCallback((id: string | null) => (id ? (loc.codeOf(id) || loc.labelOf(id)) : '—') || '—', [loc])
 

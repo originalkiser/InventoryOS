@@ -14,9 +14,9 @@
 // conditional formatting keep working" true by construction: the values
 // and classNames it renders are computed by the exact same functions the
 // old table already calls, not a reimplementation.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { ChevronDown, ChevronRight, Pencil, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { useTable } from '@/hooks/useTable'
@@ -28,54 +28,16 @@ import { PoDecisionButtons, Flags } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { OVERRIDE_CELL, DOS_COLOR_LEGEND, dos, money, num, dShort } from './shared'
 import { uomDisplayLabel } from './types'
+import { QtyStepper, ZeroReasonButtons, isZeroAdjusted, type ZeroReason } from './lineControls'
 import type { GenerationInput, LineFlag } from './types'
 
 const TABLE_KEY = 'orders-v2.review-lines'
 const DEFAULT_PINNED = ['shop']
 
-// Real bug found live 2026-09-29: the qty input used to be a plain
-// `value={l.qty}` controlled field rendered inline inside the column's
-// `cell` function — every keystroke's onChange called patchQty, which
-// updates OrdersV2Review's own `lines` state and re-renders this whole
-// table; on THAT re-render `l.qty` (now a plain number, not the exact
-// string just typed) got written straight back into `value`, which can
-// clobber a not-yet-finished edit (e.g. typing "0." → Number("0.") is 0 →
-// value snaps back to "0", eating the trailing decimal) and read as "only
-// one digit sticks, have to click back in" for a table only ever used by
-// beta testers. Same fix this app already uses for the identical class of
-// bug (Procurement Deck's DecimalMiniInput): own local text state that
-// only resyncs from `line.qty` when it changed for a reason OTHER than
-// this input's own last commit, never from the re-render its own onChange
-// just caused. Also gives this cell a genuinely stable component identity
-// at its render position (a real named component, not a value returned
-// from a plain function DataTable calls per cell) — not required for React
-// to preserve the underlying DOM/focus, but the more foolproof shape for
-// exactly this kind of "loses text in this exact spot" report.
-function QtyInput({ line, onPatch }: { line: DraftLineRow; onPatch: (l: DraftLineRow, qty: number) => void }) {
-  const [text, setText] = useState(() => String(line.qty))
-  const lastCommittedRef = useRef<number>(Number(line.qty))
-  useEffect(() => {
-    if (Number(line.qty) !== lastCommittedRef.current) {
-      setText(String(line.qty))
-      lastCommittedRef.current = Number(line.qty)
-    }
-  }, [line.qty])
-  return (
-    <input type="number" min={0} step={line.uom === 'bulk' ? 0.1 : 1} value={text}
-      onChange={(e) => {
-        setText(e.target.value)
-        const n = Number(e.target.value) || 0
-        lastCommittedRef.current = n
-        onPatch(line, n)
-      }}
-      className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-  )
-}
-
 export function OrdersV2ReviewTable({
   lines, draft, shopLabel, ozProductIds, lastOrderedInfo, deliveryFor, describeSchedule,
-  liveFlags, dosAfterColorClass, groupMinimumStatus, patchQty, exceptionFor, onOpenException,
-  decidePoOverride, decidePoExclude, decidePoCombine, includeToggle, onRemoveLine,
+  liveFlags, dosAfterColorClass, groupMinimumStatus, patchQty,
+  decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
   inputByLineKey, toolbarExtra,
 }: {
@@ -95,8 +57,8 @@ export function OrdersV2ReviewTable({
   decidePoOverride: (l: DraftLineRow) => void
   decidePoExclude: (l: DraftLineRow) => void
   decidePoCombine: (l: DraftLineRow) => void
-  includeToggle: (l: DraftLineRow) => void
-  onRemoveLine: (id: string) => void
+  // Optional "why zero?" tag on a line adjusted to 0 (see lineControls.tsx).
+  onZeroReason: (l: DraftLineRow, reason: ZeroReason | null, note: string | null) => void
   expanded: Set<string>
   onToggleExpand: (locId: string) => void
   shopRows: (locId: string) => { input?: GenerationInput; line?: DraftLineRow }[]
@@ -214,22 +176,13 @@ export function OrdersV2ReviewTable({
         const l = i.row.original
         const isOz = ozProductIds.has(l.product_id)
         return (
-          <div className={l.is_override ? OVERRIDE_CELL : ''}>
-            <div className="flex items-start justify-end gap-1">
-              <div>
-                <QtyInput line={l} onPatch={patchQty} />
-                {l.quarts_per_unit != null && (
-                  <div className="text-[10px] text-inky/50 mt-0.5">
-                    {isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
-                  </div>
-                )}
+          <div className={`flex flex-col items-end ${l.is_override ? OVERRIDE_CELL : ''}`}>
+            <QtyStepper value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right" onChange={(n) => patchQty(l, n)} />
+            {l.quarts_per_unit != null && (
+              <div className="text-[10px] text-inky/50 mt-0.5">
+                {isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
               </div>
-              <button onClick={() => onOpenException(l.location_id ?? '', l.product_id)}
-                title={exceptionFor(l.location_id ?? '', l.product_id) ? 'Edit product exception' : 'Add product exception'}
-                className="text-inky/40 hover:text-navy flex-shrink-0 mt-1.5">
-                {exceptionFor(l.location_id ?? '', l.product_id) ? <Pencil className="w-3 h-3" /> : <Plus className="w-3.5 h-3.5" />}
-              </button>
-            </div>
+            )}
           </div>
         )
       },
@@ -262,28 +215,14 @@ export function OrdersV2ReviewTable({
             {(l.flags ?? []).includes('covered_by_open_po') && (
               <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
             )}
+            {isZeroAdjusted(l) && <ZeroReasonButtons line={l} onChange={(r, n) => onZeroReason(l, r, n)} />}
           </>
         )
       },
     }),
-    col.display({
-      id: 'actions', header: '', enableSorting: false, enableColumnFilter: false,
-      cell: (i) => {
-        const l = i.row.original
-        return (
-          <div className="flex items-center gap-1">
-            <button title={l.included ? 'Exclude from order' : 'Include in order'} onClick={() => includeToggle(l)}
-              className="text-[10px] border border-navy/30 rounded px-1 py-0.5 text-inky hover:border-navy">
-              {l.included ? 'Exclude' : 'Include'}
-            </button>
-            <button title="Remove line" onClick={() => onRemoveLine(l.id)} className="text-inky/40 hover:text-[#C0392B]">✕</button>
-          </div>
-        )
-      },
-    }),
   ], [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, draft.order_date,
-      patchQty, exceptionFor, onOpenException, dosAfterColorClass, liveFlags, decidePoOverride, decidePoExclude,
-      decidePoCombine, includeToggle, onRemoveLine, expanded, onToggleExpand])
+      patchQty, dosAfterColorClass, liveFlags, decidePoOverride, decidePoExclude,
+      decidePoCombine, onZeroReason, expanded, onToggleExpand])
 
   const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(lines, columns, {
     persistKey: TABLE_KEY,
@@ -397,9 +336,9 @@ export function OrdersV2ReviewTable({
                 onAdd={onAddConfiguredProduct}
                 showVmi={showConfigVmi}
                 ozProductIds={ozProductIds}
-                exceptionFor={exceptionFor}
-                onOpenException={onOpenException}
                 leadDays={leadDaysFor(locId)}
+                lastInfoFor={lastOrderedInfo.infoFor}
+                onZeroReason={onZeroReason}
               />
             </div>
           )

@@ -18,7 +18,21 @@ export function useAuth() {
       }
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // supabase-js re-emits SIGNED_IN (and refreshes the token) every time
+      // the browser tab/window regains focus. Treating each as a brand-new
+      // login swapped in fresh session/user/profile objects and re-fetched
+      // the profile on every alt-tab, which re-rendered — and in places
+      // re-fetched — whatever page was open (found live 2026-10-02: Orders
+      // v2 flashing and jumping to the top after switching windows). When it's
+      // the SAME user we already have loaded, only the session (new access
+      // token) needs updating; the user and profile objects stay as they are.
+      const current = useAuthStore.getState()
+      const sameUser = !!session?.user && current.user?.id === session.user.id && !!current.profile
+      if (sameUser && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+        setSession(session)
+        return
+      }
       setSession(session)
       setUser(session?.user ?? null)
       if (session?.user) {

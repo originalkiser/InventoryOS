@@ -13,6 +13,8 @@ import { useProductExceptions } from './useProductExceptions'
 import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { useLocations } from '@/hooks/useLocations'
 import { usePageRevisit } from '@/hooks/usePageActive'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
+import { QtyStepper, ZeroReasonButtons, isZeroAdjusted, zeroReasonText, type ZeroReason } from './lineControls'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
 import { supabase } from '@/lib/supabase'
@@ -30,14 +32,15 @@ import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTab
 import { uomDisplayLabel } from './types'
 import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
-// New-table beta toggle (2026-09-25) — per-browser (localStorage), not a
-// company-wide setting: the whole point is testing OrdersV2ReviewTable.tsx
-// against real live orders without changing what anyone else sees, so it
-// defaults OFF and only flips for whoever explicitly turns it on here.
+// New-table beta toggle (2026-09-25) — a personal preference, not a
+// company-wide setting: it defaults OFF and only flips for whoever turns it
+// on here. Stored on the user's profile (useProfilePref, with localStorage as
+// the instant cache) so the choice sticks across orders, browsers and
+// devices instead of living in one browser's storage (direct ask 2026-10-02:
+// forgot to enable it one morning and didn't want to flip it mid-order).
+// Same key as the older localStorage-only version, so an existing '1'/'0'
+// there migrates into the profile automatically.
 const NEW_TABLE_KEY = 'ov2_review_new_table'
-function loadNewTablePref(): boolean {
-  try { return localStorage.getItem(NEW_TABLE_KEY) === '1' } catch { return false }
-}
 
 // Shop-expand mode toggle (direct ask 2026-09-30) — same per-browser
 // persistence as the new-table beta toggle above: a personal viewing
@@ -73,7 +76,6 @@ const MAIN_COLUMNS: { id: string; label: string }[] = [
   { id: 'dos_at_delivery', label: 'DOS @ Delivery' },
   { id: 'dollars', label: '$' },
   { id: 'flags', label: 'Flags' },
-  { id: 'actions', label: '' },
 ]
 const DEFAULT_COLUMN_ORDER = MAIN_COLUMNS.map((c) => c.id)
 const COLUMN_PREFS_KEY = 'ov2_review_columns'
@@ -86,9 +88,12 @@ function loadColumnPrefs(): { order: string[]; hidden: string[] } {
     // Merge in any column added since a user last saved prefs (e.g. this
     // release's new on_hand_after) — appended at the end rather than
     // silently missing from their customized order.
-    const known = new Set(parsed.order ?? [])
-    const order = [...(parsed.order ?? []), ...DEFAULT_COLUMN_ORDER.filter((id) => !known.has(id))]
-    return { order, hidden: (parsed.hidden ?? []).filter((id) => id !== 'shop') }
+    // 'actions' (Exclude/Remove buttons) was removed 2026-10-02 — drop it from
+    // any previously-saved order so it doesn't leave an empty header behind.
+    const saved = (parsed.order ?? []).filter((id) => id !== 'actions')
+    const known = new Set(saved)
+    const order = [...saved, ...DEFAULT_COLUMN_ORDER.filter((id) => !known.has(id))]
+    return { order, hidden: (parsed.hidden ?? []).filter((id) => id !== 'shop' && id !== 'actions') }
   } catch {
     return { order: DEFAULT_COLUMN_ORDER, hidden: [] }
   }
@@ -120,7 +125,7 @@ export function OrdersV2Review() {
   // editing a line there wouldn't otherwise re-fetch, since nothing
   // unmounted to re-trigger useDraft's own load effect. usePageRevisit
   // catches it back up the moment it becomes the visible page again.
-  usePageRevisit(reload)
+  usePageRevisit(reload, 3000, { tabReturn: false })
   // Last Ordered/Last Delivered columns + on-hand plausibility flag
   // (2026-09-22 request) — called unconditionally (before the loading/
   // not-found early returns below) per Rules of Hooks; vendors.byId
@@ -241,11 +246,9 @@ export function OrdersV2Review() {
   // Main table column customize modal — hide/reorder, see MAIN_COLUMNS.
   const [columnPrefs, setColumnPrefs] = useState(loadColumnPrefs)
   const [columnModalOpen, setColumnModalOpen] = useState(false)
-  const [useNewTable, setUseNewTableState] = useState(loadNewTablePref)
-  function setUseNewTable(v: boolean) {
-    setUseNewTableState(v)
-    try { localStorage.setItem(NEW_TABLE_KEY, v ? '1' : '0') } catch { /* ignore */ }
-  }
+  const [useNewTablePref, setUseNewTablePref] = useProfilePref<boolean | number>(NEW_TABLE_KEY, false)
+  const useNewTable = !!useNewTablePref
+  const setUseNewTable = (v: boolean) => setUseNewTablePref(v)
   // Dropdown (inline row expand, existing behavior) vs Popup (a modal) for
   // "show every product configured for this shop" — direct ask 2026-09-30.
   // popupShopId is which shop's popup is currently open (null = closed);
@@ -364,7 +367,16 @@ export function OrdersV2Review() {
   // toggle used to flip that flag.
   const patchQty = useCallback((l: DraftLineRow, qty: number) => {
     const isVmi = l.flags?.includes('vmi_keepfill')
-    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty), ...(isVmi ? {} : { included: qty > 0 }) })
+    patchLine(l.id, {
+      qty, dos_after: dosAfterForQty(l, qty), ...(isVmi ? {} : { included: qty > 0 }),
+      // A line back above zero no longer needs its "why zero" tag.
+      ...(qty > 0 && (l.zero_reason || l.zero_reason_note) ? { zero_reason: null, zero_reason_note: null } : {}),
+    })
+  }, [patchLine])
+  // Optional reason tag on a line adjusted to zero (see lineControls.tsx) —
+  // never marks the line as a qty override, it's just an annotation.
+  const setZeroReason = useCallback((l: DraftLineRow, reason: ZeroReason | null, note: string | null) => {
+    patchLine(l.id, { zero_reason: reason, zero_reason_note: note }, false)
   }, [patchLine])
 
   // DOS After coloring, against this order's own target/max (the card
@@ -767,6 +779,18 @@ export function OrdersV2Review() {
       .sort((a, b) => shopLabel(a).localeCompare(shopLabel(b), undefined, { numeric: true }))
   }, [eligibleLocationIds, lines, shopLabel])
 
+  // Per shop: lines the engine suggested (system_qty > 0) that were then
+  // adjusted to 0 — shown in "Shops With No Orders" above.
+  const zeroedByShop = useMemo(() => {
+    const m = new Map<string, DraftLineRow[]>()
+    for (const l of lines) {
+      if (!l.location_id || !isZeroAdjusted(l)) continue
+      const arr = m.get(l.location_id)
+      if (arr) arr.push(l); else m.set(l.location_id, [l])
+    }
+    return m
+  }, [lines])
+
   // The specific (location, product) candidate behind a draft line — for
   // the "other case types on hand" sub-listing under the main On Hand
   // column, since own_on_hand/equivalent_products live on the generation
@@ -1043,6 +1067,9 @@ export function OrdersV2Review() {
                 exceptionFor={exceptionFor}
                 onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
                 leadDays={leadDaysFor(popupShopId)}
+                lastInfoFor={lastOrderedInfo.infoFor}
+                onZeroReason={setZeroReason}
+                tall
                 dosAfterColorClass={dosAfterColorClass}
               />
             ) : (
@@ -1055,6 +1082,8 @@ export function OrdersV2Review() {
                 exceptionFor={exceptionFor}
                 onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
                 leadDays={leadDaysFor(popupShopId)}
+                lastInfoFor={lastOrderedInfo.infoFor}
+                onZeroReason={setZeroReason}
                 dosAfterColorClass={dosAfterColorClass}
               />
             )}
@@ -1265,8 +1294,7 @@ export function OrdersV2Review() {
           decidePoOverride={decidePoOverride}
           decidePoExclude={decidePoExclude}
           decidePoCombine={decidePoCombine}
-          includeToggle={(l) => patchLine(l.id, { included: !l.included })}
-          onRemoveLine={removeLine}
+          onZeroReason={setZeroReason}
           expanded={expanded}
           onToggleExpand={handleShopClick}
           shopRows={shopRows}
@@ -1399,25 +1427,15 @@ export function OrdersV2Review() {
                     }
                     case 'qty': return (
                       <td key={id} className={`px-2 py-1 text-right ${l.is_override ? OVERRIDE_CELL : ''}`}>
-                        <div className="flex items-start justify-end gap-1">
-                          <div>
-                            <input type="number" min={0} step={l.uom === 'bulk' ? 0.1 : 1} value={l.qty}
-                              onChange={(e) => patchQty(l, Number(e.target.value) || 0)}
-                              className="w-20 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-right text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-                            {l.quarts_per_unit != null && (
-                              <div className="text-[10px] text-inky/50 mt-0.5">
-                                {isOz
-                                  ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
-                                  : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
-                              </div>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => setExceptionTarget({ locationId: l.location_id ?? '', productId: l.product_id })}
-                            title={exceptionFor(l.location_id ?? '', l.product_id) ? 'Edit product exception' : 'Add product exception'}
-                            className="text-inky/40 hover:text-navy flex-shrink-0 mt-1.5">
-                            {exceptionFor(l.location_id ?? '', l.product_id) ? <Pencil className="w-3 h-3" /> : <Plus className="w-3.5 h-3.5" />}
-                          </button>
+                        <div className="flex flex-col items-end">
+                          <QtyStepper value={Number(l.qty)} bulk={l.uom === 'bulk'} onChange={(n) => patchQty(l, n)} align="text-right" />
+                          {l.quarts_per_unit != null && (
+                            <div className="text-[10px] text-inky/50 mt-0.5">
+                              {isOz
+                                ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz`
+                                : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+                            </div>
+                          )}
                         </div>
                       </td>
                     )
@@ -1432,19 +1450,8 @@ export function OrdersV2Review() {
                         {(l.flags ?? []).includes('covered_by_open_po') && (
                           <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
                         )}
+                        {isZeroAdjusted(l) && <ZeroReasonButtons line={l} onChange={(r, n) => setZeroReason(l, r, n)} />}
                       </td>
-                    )
-                    case 'actions': return (
-                      <Td key={id}>
-                        <div className="flex items-center gap-1">
-                          <button title={l.included ? 'Exclude from order' : 'Include in order'}
-                            onClick={() => patchLine(l.id, { included: !l.included })}
-                            className="text-[10px] border border-navy/30 rounded px-1 py-0.5 text-inky hover:border-navy">
-                            {l.included ? 'Exclude' : 'Include'}
-                          </button>
-                          <button title="Remove line" onClick={() => removeLine(l.id)} className="text-inky/40 hover:text-[#C0392B]">✕</button>
-                        </div>
-                      </Td>
                     )
                     default: return null
                   }
@@ -1478,6 +1485,8 @@ export function OrdersV2Review() {
                             exceptionFor={exceptionFor}
                             onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
                             leadDays={leadDaysFor(locId)}
+                lastInfoFor={lastOrderedInfo.infoFor}
+                onZeroReason={setZeroReason}
                           />
                         </td>
                       </tr>
@@ -1511,14 +1520,36 @@ export function OrdersV2Review() {
               </div>
               {shopsWithNoOrders.map((locId) => {
                 const shopOpen = expanded.has(locId)
+                // Suggested products someone adjusted down to 0 — the likely
+                // reason this shop ended up with nothing on the order (direct
+                // ask 2026-10-02), with the reason tag if one was given.
+                const zeroed = zeroedByShop.get(locId) ?? []
                 return (
                   <div key={locId} className="border-t border-navy/10 pt-1.5">
-                    <button
-                      onClick={() => handleShopClick(locId)}
-                      className="inline-flex items-center gap-1 text-xs font-mono text-navy hover:underline hover:text-sky">
-                      {shopOpen ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
-                      {shopLabel(locId)}
-                    </button>
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <button
+                        onClick={() => handleShopClick(locId)}
+                        className="inline-flex items-center gap-1 text-xs font-mono text-navy hover:underline hover:text-sky">
+                        {shopOpen ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+                        {shopLabel(locId)}
+                      </button>
+                      {zeroed.length > 0 && (
+                        <span className="text-[10px] font-mono text-[#E67E22] font-bold">
+                          {zeroed.length} suggested product{zeroed.length === 1 ? '' : 's'} adjusted to 0
+                        </span>
+                      )}
+                    </div>
+                    {zeroed.length > 0 && (
+                      <ul className="ml-4 mt-0.5 text-[10px] font-mono text-inky/70 flex flex-col gap-0.5">
+                        {zeroed.map((z) => (
+                          <li key={z.id}>
+                            <span className="text-navy">{z.product_id}</span>
+                            <span className="text-inky/50"> · suggested {num(z.system_qty, 1)}</span>
+                            {zeroReasonText(z) ? <span> — {zeroReasonText(z)}</span> : <span className="text-inky/40 italic"> — no reason given</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {shopOpen && (
                       <div className="mt-1">
                         {(() => {
@@ -1538,6 +1569,8 @@ export function OrdersV2Review() {
                             exceptionFor={exceptionFor}
                             onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
                             leadDays={leadDaysFor(locId)}
+                lastInfoFor={lastOrderedInfo.infoFor}
+                onZeroReason={setZeroReason}
                           />
                         ) : (
                           <ShopConfiguredProductsTable
@@ -1549,6 +1582,8 @@ export function OrdersV2Review() {
                             exceptionFor={exceptionFor}
                             onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
                             leadDays={leadDaysFor(locId)}
+                lastInfoFor={lastOrderedInfo.infoFor}
+                onZeroReason={setZeroReason}
                           />
                         )}
                       </div>
@@ -1660,10 +1695,15 @@ function ColumnCustomizeModal({ open, onClose, columns, prefs, onChange, default
  * "why isn't this shop ordering more" and "why isn't this shop ordering
  * anything" use the exact same product list, columns, and add-a-line
  * behavior. */
-export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays, dosAfterColorClass }: {
+export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozProductIds, exceptionFor, onOpenException, leadDays, dosAfterColorClass, lastInfoFor, onZeroReason }: {
   rows: { input?: GenerationInput; line?: DraftLineRow }[]
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
+  // Optional — adds Last Ordered / Last Delivered columns (direct ask
+  // 2026-10-02, for the shop popup) from useLastOrderedInfo().infoFor.
+  lastInfoFor?: LastInfoFor
+  // Optional — shows the "why zero?" buttons on a line adjusted to 0.
+  onZeroReason?: (line: DraftLineRow, reason: ZeroReason | null, note: string | null) => void
   // Optional — matches the main table's own DOS-After color coding (direct
   // ask 2026-09-30, for the "popup" shop-expand mode specifically). Omitted
   // by the two existing inline-expand call sites, which keep their prior
@@ -1698,13 +1738,16 @@ export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozP
   // header scrolled away with it, leaving no correct header visible for a
   // shop with enough configured products to need scrolling.
   return (
-    <div className="max-h-72 overflow-auto rounded border border-navy/10">
+    // Tall enough for a typical shop's ~18 configured products without
+    // scrolling (direct ask 2026-10-02); still scrolls on a short window.
+    <div className="max-h-[min(75vh,46rem)] overflow-auto rounded border border-navy/10">
       <table className="w-full text-[11px] font-mono">
         <thead className="sticky top-0 z-10 bg-cream">
           <tr className="text-inky/60 uppercase">
             <td className="py-1 text-left">Product</td><td className="text-left">UOM</td>
             <td className="text-left">Capacity</td><td className="text-left">On Hand</td>
             <td className="text-left">Usage/Day</td><td className="text-left">DOS Now</td>
+            {lastInfoFor && <><td className="text-left">Last Ordered</td><td className="text-left">Last Delivered</td></>}
             <td className="text-left">Qty</td><td className="text-left">On Hand After</td><td className="text-left">DOS After</td>
             <td className="text-left">$</td><td className="text-left">Why</td>
           </tr>
@@ -1714,7 +1757,7 @@ export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozP
             <SmoothingRow key={r.line?.id ?? r.input?.product_id} input={r.input} line={r.line} onPatch={onPatch} onAdd={onAdd}
               isOz={ozProductIds.has(r.line?.product_id ?? r.input?.product_id ?? '')}
               exceptionFor={exceptionFor} onOpenException={onOpenException} leadDays={leadDays}
-              dosAfterColorClass={dosAfterColorClass} />
+              dosAfterColorClass={dosAfterColorClass} lastInfoFor={lastInfoFor} onZeroReason={onZeroReason} />
           ))}
         </tbody>
       </table>
@@ -1725,7 +1768,9 @@ export function ShopConfiguredProductsTable({ rows, onPatch, onAdd, showVmi, ozP
 /** One row in a shop's product list — an existing line (editable in place)
  * or a configured-but-not-ordered candidate (typing a qty adds it). Shared
  * by the smoothing panel and the shop-name expand row below the table. */
-function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenException, leadDays, dosAfterColorClass }: {
+function SmoothingRow({ input, line, onPatch, onAdd, isOz, leadDays, dosAfterColorClass, lastInfoFor, onZeroReason }: {
+  lastInfoFor?: LastInfoFor
+  onZeroReason?: (line: DraftLineRow, reason: ZeroReason | null, note: string | null) => void
   input?: GenerationInput; line?: DraftLineRow
   onPatch: (line: DraftLineRow, qty: number) => void
   onAdd: (input: GenerationInput, qty: number) => void
@@ -1787,38 +1832,51 @@ function SmoothingRow({ input, line, onPatch, onAdd, isOz, exceptionFor, onOpenE
       </td>
       <td className="text-inky/70">{num(isOz ? toOz(dailyUsage) : dailyUsage)}</td>
       <td className="text-inky/70">{dos(dosNow)}</td>
+      {lastInfoFor && <LastOrderedDeliveredCells info={lastInfoFor(locationId, productId, onHand, dailyUsage)} />}
       <td>
-        <div className="flex items-start justify-start gap-1">
-          <div>
-            {line ? (
-              <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} value={line.qty}
-                onChange={(e) => onPatch(line, Number(e.target.value) || 0)}
-                className="w-16 bg-transparent border border-navy/25 rounded px-1 py-0.5 text-center text-navy focus:outline-none focus:ring-1 focus:ring-sky" />
-            ) : input ? (
-              <input type="number" min={0} step={uom === 'bulk' ? 0.1 : 1} defaultValue="" placeholder="0"
-                onBlur={(e) => { const v = Number(e.target.value) || 0; if (v > 0) onAdd(input, v) }}
-                title="Add this product to the order"
-                className="w-16 bg-transparent border border-navy/20 rounded px-1 py-0.5 text-center text-inky/60 focus:outline-none focus:ring-1 focus:ring-sky" />
-            ) : null}
-            {isOz && line && quartsPerUnit != null && (
-              <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(line.qty) * quartsPerUnit * 32, 0)}oz</div>
-            )}
-          </div>
-          {locationId && productId && (
-            <button
-              onClick={() => onOpenException(locationId, productId)}
-              title={exceptionFor(locationId, productId) ? 'Edit product exception' : 'Add product exception'}
-              className="text-inky/40 hover:text-navy flex-shrink-0 mt-0.5">
-              {exceptionFor(locationId, productId) ? <Pencil className="w-3 h-3" /> : <Plus className="w-3.5 h-3.5" />}
-            </button>
+        <div>
+          {line ? (
+            <QtyStepper value={Number(line.qty)} bulk={uom === 'bulk'} onChange={(n) => onPatch(line, n)} />
+          ) : input ? (
+            <QtyStepper value={0} bulk={uom === 'bulk'} commitOn="blur" muted onChange={(n) => { if (n > 0) onAdd(input, n) }} />
+          ) : null}
+          {isOz && line && quartsPerUnit != null && (
+            <div className="text-[10px] text-inky/50 mt-0.5">{num(Number(line.qty) * quartsPerUnit * 32, 0)}oz</div>
           )}
         </div>
       </td>
       <td className="text-inky/70">{num(isOz ? toOz(onHandAfter) : onHandAfter)}</td>
       <td title={dosAfterColorClass ? DOS_COLOR_LEGEND : undefined} className={dosAfterColorClass ? `font-bold ${dosAfterColorClass(dosAfter)}` : 'text-inky/70'}>{dos(dosAfter)}</td>
       <td className="text-navy">{money(line ? Number(line.qty) * unitCost : 0)}</td>
-      <td className={whyClass}>{why}</td>
+      <td className={whyClass}>
+        {why}
+        {line && onZeroReason && isZeroAdjusted(line) && <ZeroReasonButtons line={line} onChange={(r, n) => onZeroReason(line, r, n)} />}
+      </td>
     </tr>
+  )
+}
+
+/** Same signature as useLastOrderedInfo().infoFor. */
+export type LastInfoFor = ReturnType<typeof useLastOrderedInfo>['infoFor']
+
+/** Last Ordered / Last Delivered table cells — same text as the main table's own columns. */
+export function LastOrderedDeliveredCells({ info }: { info: ReturnType<LastInfoFor> }) {
+  return (
+    <>
+      <td className="text-inky/70 whitespace-nowrap">
+        {info.lastOrderDate ? (
+          <>
+            <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
+            {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
+          </>
+        ) : '—'}
+      </td>
+      <td className="text-inky/70 whitespace-nowrap">
+        {info.lastDeliveredDate
+          ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
+          : '—'}
+      </td>
+    </>
   )
 }
 

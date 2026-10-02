@@ -271,7 +271,7 @@ export function OrdersV2Export() {
   // useDraft's own load effect, and this page has no other refresh path).
   // usePageRevisit re-fetches the instant this becomes the visible page
   // again, so the export always reflects the order's current, real state.
-  usePageRevisit(reload)
+  usePageRevisit(reload, 3000, { tabReturn: false })
 
   const [tpl, setTpl] = useState<ExportTemplate>(DEFAULT_TEMPLATE)
   const [savedTpl, setSavedTpl] = useState<ExportTemplate | null>(null)

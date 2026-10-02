@@ -14,6 +14,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import toast from 'react-hot-toast'
 import { isReladyne } from './useOrdersV2'
+import { loadOrderCheck, previousBusinessDay } from './rdOrderCheck'
 import {
   parseOpenOrdersXlsx, parseOpenInvoicesXlsx, reconcilePoActivity,
   type ParsedOpenInvoiceRow, type HistoryLineForRecon, type DroptopPoForRecon,
@@ -412,12 +413,29 @@ export function useRdReports() {
       setLastOpenOrdersAt(uploadedAt)
       toast.success(`Open Sales Order report uploaded — ${payload.length} lines`)
       await runReconciliation()
+      // Direct ask 2026-10-02: each morning's upload should catch anything
+      // from the last business day's RelaDyne orders that never made it onto
+      // RelaDyne's side. Best-effort — never fails an otherwise-good upload.
+      try {
+        const p = new Date()
+        const todayIso = `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, '0')}-${String(p.getDate()).padStart(2, '0')}`
+        const shopById = new Map(loc.locations.map((l) => [l.id, (l.name || '').match(/\d+/)?.[0] ?? (l.name || '')]))
+        const check = await loadOrderCheck(companyId, previousBusinessDay(todayIso), (id) => (id ? shopById.get(id) ?? '' : ''))
+        const missingCount = check.lines.filter((l) => l.status === 'missing').length
+        if (missingCount > 0) {
+          toast.error(
+            `${missingCount} line${missingCount === 1 ? '' : 's'} from ${check.date}'s RelaDyne orders ${missingCount === 1 ? 'is' : 'are'} missing from this Open Sales Order report — see RelaDyne Reports → Order check.`,
+            { duration: 15000 })
+        } else if (check.orderCount > 0) {
+          toast.success(`All of ${check.date}'s RelaDyne order lines are on the report`)
+        }
+      } catch { /* best-effort */ }
     } catch (e: any) {
       toast.error(e.message ?? 'Failed to upload Open Sales Order report')
     } finally {
       setUploading(null)
     }
-  }, [companyId, locationIdByShop, profile?.id, runReconciliation])
+  }, [companyId, locationIdByShop, profile?.id, runReconciliation, loc.locations])
 
   const uploadOpenInvoices = useCallback(async (rows: Record<string, string>[]) => {
     if (!companyId) return

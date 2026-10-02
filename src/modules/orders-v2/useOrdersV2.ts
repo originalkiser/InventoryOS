@@ -304,6 +304,9 @@ export interface DraftLineRow extends GeneratedLine {
   draft_id: string
   dos_after_delivery: number | null
   is_override: boolean
+  // Optional 'why did we zero this' tag (see lineControls.tsx) — draft lines only.
+  zero_reason?: string | null
+  zero_reason_note?: string | null
 }
 
 export function useDrafts() {

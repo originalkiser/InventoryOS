@@ -21,7 +21,11 @@ export const PageActiveContext = createContext(true)
  * Rate-limited (default 3s) so rapid back-and-forth navigation (e.g.
  * mashing Alt+Left/Right) can't spam a real refetch every time.
  */
-export function usePageRevisit(onRevisit: () => void, minIntervalMs = 3000) {
+export function usePageRevisit(onRevisit: () => void, minIntervalMs = 3000, options: { tabReturn?: boolean } = {}) {
+  // tabReturn: false = only fire when navigating back to this kept-alive page,
+  // NOT when the browser tab/window regains focus. For pages holding in-progress
+  // edits (Orders v2): a reload there flashes the loader and scroll-jumps to the top.
+  const tabReturn = options.tabReturn !== false
   const isActive = useContext(PageActiveContext)
   const wasActive = useRef(isActive)
   const onRevisitRef = useRef(onRevisit)
@@ -44,12 +48,12 @@ export function usePageRevisit(onRevisit: () => void, minIntervalMs = 3000) {
 
   // Came back to this browser tab while this page happens to be the active one.
   useEffect(() => {
-    if (!isActive) return
+    if (!isActive || !tabReturn) return
     function onVisibility() {
       if (document.visibilityState === 'visible') fire()
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive])
+  }, [isActive, tabReturn])
 }
