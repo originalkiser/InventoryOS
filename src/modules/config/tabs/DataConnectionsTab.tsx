@@ -16,6 +16,7 @@ import {
 } from '@/components/ui'
 import { DataHealthTab, CoverageEvaluationNote } from './DataHealthTab'
 import { BackgroundBackfillPanel } from './BackgroundBackfillPanel'
+import { OrderRepairPanel } from './OrderRepairPanel'
 import { runDroptopSync, runDroptopOrderSync } from '@/services/droptopService'
 import { runGeocoding } from '@/services/geocodingService'
 import { runAutoVinDecode } from '@/services/vinDecodeService'
@@ -1286,6 +1287,7 @@ export function DataConnectionsTab() {
             </div>
           )}
           <BackgroundBackfillPanel connectionKey="droptop_orders" companyId={companyId} targetLocationIds={orderBackfillTargetIds} />
+          <OrderRepairPanel companyId={companyId} />
         </CardBody>
       </Card>
 

@@ -92,6 +92,15 @@ interface BackfillJob {
   month_pending_ids: string[] | null
   usage_pending_location_ids: string[] | null
   usage_done_count: number
+  // Repair jobs (job_kind 'repair', migration 20260930cm) — see tickRepairJob.
+  job_kind: 'backfill' | 'repair'
+  repair_pending: string[] | null
+  repair_round: number
+  repair_gave_up: string[]
+  repair_found: number
+  repair_fixed: number
+  paused_until: string | null
+  consecutive_stress: number
 }
 
 function monthEndOf(monthStart: string): string {
@@ -451,6 +460,141 @@ async function tickMonthWalkJob(
   return { job_id: job.id, connection: job.connection_key, summary, completed }
 }
 
+// ── Orders data repair (job_kind 'repair') ──────────────────────────────────
+// The 2026-10-02/03 backfill ran while the database was saturated: orders saved, but some child
+// rows (packages/services/taxes ...) failed to insert and were reported only as sync WARNINGS,
+// which the backfill treated as success. This job scans one month at a time for shop-weeks where
+// too many Finalized orders have no package row, re-pulls only those, then re-scans the month to
+// verify. Deliberately gentle — the backfill that preceded it took the app down:
+//   * only 11pm-5am company time, and never within 10 min before / 30 min after any enabled DAILY
+//     data connection's scheduled time (so it can't overlap the nightly syncs);
+//   * one Droptop call at a time, 2s apart, at most 8 calls (~100s) per tick;
+//   * a shop-week only counts as fixed if the sync returned NO warnings at all;
+//   * any timeout/5xx-looking result stops the tick and pauses the job (30m, 60m, 90m, 120m);
+//     4 pauses in a row stops it with an error instead of pushing on.
+const REPAIR_START_HOUR = 23
+const REPAIR_END_HOUR = 5
+const REPAIR_MAX_CALLS_PER_TICK = 8
+const REPAIR_BUDGET_MS = 100_000
+const REPAIR_MAX_ATTEMPTS = 3
+const REPAIR_MAX_ROUNDS = 3
+const REPAIR_MIN_MISSING = 5
+const REPAIR_MIN_MISSING_RATIO = 0.05
+const STRESS_RE = /statement timeout|canceling statement|timed? ?out|aborted|HTTP 5\d\d|BOOT_ERROR|too many connections|connection (refused|terminated|closed)/i
+
+async function inRepairWindow(admin: ReturnType<typeof createClient>, companyId: string, now: Date, tz: string): Promise<{ ok: boolean; why?: string }> {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(now)
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0) % 24
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0)
+  if (!(hour >= REPAIR_START_HOUR || hour < REPAIR_END_HOUR)) return { ok: false, why: `outside the ${REPAIR_START_HOUR}:00-${REPAIR_END_HOUR}:00 repair window (${tz})` }
+  const nowMin = hour * 60 + minute
+  const { data } = await (admin as any).schema('inventory').from('data_connection_schedules')
+    .select('connection_key, daily_time, schedule_mode').eq('company_id', companyId).eq('enabled', true)
+  for (const sc of (data ?? []) as { connection_key: string; daily_time: string | null; schedule_mode: string }[]) {
+    if (sc.schedule_mode !== 'daily' || !sc.daily_time) continue
+    const [h, m] = sc.daily_time.split(':').map((v) => parseInt(v, 10))
+    const at = h * 60 + m
+    const since = (nowMin - at + 1440) % 1440
+    const until = (at - nowMin + 1440) % 1440
+    if (since < 30 || until < 10) return { ok: false, why: `keeping clear of ${sc.connection_key}'s scheduled run (${sc.daily_time})` }
+  }
+  return { ok: true }
+}
+
+async function tickRepairJob(admin: ReturnType<typeof createClient>, job: BackfillJob, supabaseUrl: string, droptopSecret: string): Promise<Record<string, unknown>> {
+  const now = new Date()
+  const nowIso = now.toISOString()
+  const table = () => (admin as any).schema('inventory').from('data_connection_backfill_jobs')
+  if (job.paused_until && new Date(job.paused_until) > now) {
+    return { job_id: job.id, connection: job.connection_key, summary: `Paused until ${job.paused_until} (cool-down after timeouts)` }
+  }
+  const cursor = job.cursor_month!
+  const label = cursor.slice(0, 7)
+  const windows = monthWindows(cursor)
+  const gaveUp = [...(job.repair_gave_up ?? [])]
+  let pending = job.repair_pending
+  let round = job.repair_round
+  let found = job.repair_found
+
+  // Cool-down: pause progressively longer; stop outright after 4 in a row.
+  async function cooldown(reason: string, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const n = job.consecutive_stress + 1
+    const stop = n >= 4
+    const summary = `${label} — ${stop ? 'STOPPED' : 'pausing'}: database looks stressed (${reason.slice(0, 160)})`
+    await table().update({
+      ...extra, consecutive_stress: n, paused_until: stop ? null : new Date(now.getTime() + Math.min(30 * n, 120) * 60_000).toISOString(),
+      status: stop ? 'error' : 'running', last_run_at: nowIso, last_tick_summary: summary,
+      error_message: stop ? `Stopped after ${n} cool-downs in a row — ${reason.slice(0, 300)}` : null, updated_at: nowIso,
+    }).eq('id', job.id)
+    return { job_id: job.id, connection: job.connection_key, summary }
+  }
+  async function advanceMonth(summary: string, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const prev = monthBefore(cursor)
+    const completed = prev < job.floor_month
+    await table().update({
+      ...extra, cursor_month: completed ? cursor : prev, repair_pending: null, repair_round: 0, consecutive_stress: 0, paused_until: null,
+      status: completed ? 'completed' : 'running', last_run_at: nowIso, last_tick_summary: summary, error_message: null, updated_at: nowIso,
+    }).eq('id', job.id)
+    return { job_id: job.id, connection: job.connection_key, summary, completed }
+  }
+
+  // ── Scan: which shop-weeks of this month are missing package rows? ──
+  if (pending == null) {
+    const flagged: string[] = []
+    for (let w = 0; w < 4; w++) {
+      const { data, error } = await (admin as any).rpc('find_incomplete_order_windows', { p_start: windows[w].start, p_end: windows[w].end })
+      if (error) return cooldown(`scan failed: ${error.message}`)
+      for (const r of (data ?? []) as { location_id: string; orders: number | string; missing: number | string }[]) {
+        const n = Number(r.orders), m = Number(r.missing)
+        if (m < REPAIR_MIN_MISSING || n <= 0 || m / n < REPAIR_MIN_MISSING_RATIO) continue
+        if (!job.location_ids.includes(r.location_id)) continue
+        const key = `${r.location_id}|${w}`
+        if (!gaveUp.includes(key)) flagged.push(key)
+      }
+    }
+    if (flagged.length === 0) return advanceMonth(`${label} — clean${round > 0 ? ` after ${round} round(s)` : ''}`, { repair_gave_up: gaveUp })
+    if (round >= REPAIR_MAX_ROUNDS) {
+      return advanceMonth(`${label} — gave up on ${flagged.length} shop-week(s) still incomplete after ${REPAIR_MAX_ROUNDS} rounds`, { repair_gave_up: [...gaveUp, ...flagged] })
+    }
+    pending = flagged.map((k) => `${k}|0`)
+    round += 1
+    found += flagged.length
+    await table().update({ repair_pending: pending, repair_round: round, repair_found: found, last_run_at: nowIso, updated_at: nowIso,
+      last_tick_summary: `${label} — round ${round}: ${flagged.length} shop-week(s) need re-pulling` }).eq('id', job.id)
+    return { job_id: job.id, connection: job.connection_key, summary: `${label} — round ${round}: ${flagged.length} shop-week(s) need re-pulling` }
+  }
+
+  // ── Pull: re-fetch flagged shop-weeks, strictly one at a time ──
+  const startedAt = Date.now()
+  const queue = [...pending]
+  const retry: string[] = []
+  let fixed = 0, retried = 0, dropped = 0, calls = 0
+  let stress: string | null = null
+  while (queue.length && calls < REPAIR_MAX_CALLS_PER_TICK && Date.now() - startedAt < REPAIR_BUDGET_MS) {
+    const tok = queue.shift()!
+    const [shopId, w, r] = tok.split('|')
+    const win = windows[Number(w)]
+    if (calls > 0) await new Promise((resolve) => setTimeout(resolve, 2000))
+    const res = await callChunk(`${supabaseUrl}/functions/v1/droptop-sync-orders`, droptopSecret,
+      { mode: 'sync', startUnix: unixStart(win.start), endUnix: unixEnd(win.end), locationIds: [shopId] }, `repair ${label} wk${Number(w) + 1}`)
+    calls++
+    if (res.ok && res.warnings.length === 0) { fixed++; continue }
+    const text = res.warnings.join(' | ')
+    const attempts = Number(r ?? 0) + 1
+    if (attempts >= REPAIR_MAX_ATTEMPTS) { gaveUp.push(`${shopId}|${w}`); dropped++ } else { retry.push(`${shopId}|${w}|${attempts}`); retried++ }
+    if (STRESS_RE.test(text)) { stress = text; break }
+  }
+  const remaining = [...queue, ...retry]
+  const summary = `${label} — round ${round}: ${fixed} clean, ${retried} to retry, ${dropped} given up, ${remaining.length} left${stress ? ' (stopped early: timeouts)' : ''}`
+  const progress = {
+    repair_pending: remaining.length ? remaining : null, repair_gave_up: gaveUp, repair_fixed: job.repair_fixed + fixed,
+    last_run_at: nowIso, last_tick_summary: summary, updated_at: nowIso,
+  }
+  if (stress) return cooldown(stress, progress)
+  await table().update({ ...progress, consecutive_stress: 0, error_message: null }).eq('id', job.id)
+  return { job_id: job.id, connection: job.connection_key, summary }
+}
+
 async function tickUsageJob(admin: ReturnType<typeof createClient>, job: BackfillJob, supabaseUrl: string, droptopSecret: string): Promise<Record<string, unknown>> {
   const pending = job.usage_pending_location_ids ?? []
   if (pending.length === 0) {
@@ -535,7 +679,10 @@ Deno.serve(async (req) => {
     for (const job of (jobs ?? []) as BackfillJob[]) {
       if (isCronCall) {
         const tz = await timezoneFor(job.company_id)
-        if (!isOvernight(now, tz)) {
+        if (job.job_kind === 'repair') {
+          const w = await inRepairWindow(admin, job.company_id, now, tz)
+          if (!w.ok) { results.push({ job_id: job.id, connection: job.connection_key, summary: `Skipped — ${w.why}` }); continue }
+        } else if (!isOvernight(now, tz)) {
           results.push({ job_id: job.id, connection: job.connection_key, summary: `Skipped — outside the overnight window (${OVERNIGHT_START_HOUR}:00-${OVERNIGHT_END_HOUR}:00 ${tz})` })
           continue
         }
@@ -552,7 +699,9 @@ Deno.serve(async (req) => {
         continue
       }
       try {
-        if (job.connection_key === 'droptop_usage') {
+        if (job.job_kind === 'repair') {
+          results.push(await tickRepairJob(admin, job, supabaseUrl, droptopSecret))
+        } else if (job.connection_key === 'droptop_usage') {
           results.push(await tickUsageJob(admin, job, supabaseUrl, droptopSecret))
         } else {
           results.push(await tickMonthWalkJob(admin, job, supabaseUrl, droptopSecret))

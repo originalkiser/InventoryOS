@@ -44,7 +44,7 @@ export function BackgroundBackfillPanel({ connectionKey, companyId, targetLocati
     if (!companyId) return
     const sb = supabase as any
     const { data, error } = await sb.schema('inventory').from('data_connection_backfill_jobs')
-      .select('*').eq('company_id', companyId).eq('connection_key', connectionKey)
+      .select('*').eq('company_id', companyId).eq('connection_key', connectionKey).eq('job_kind', 'backfill')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
     if (!error) setJob(data as BackfillJob | null)
     setLoading(false)
