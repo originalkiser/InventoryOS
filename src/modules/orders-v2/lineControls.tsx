@@ -56,10 +56,29 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
     lastCommittedRef.current = n
     onChange(n)
   }
-  const bump = (delta: number) => commit(Math.max(0, Math.round(((Number(text) || 0) + delta) * 100) / 100))
+  // Faint "+1" drifting up / "−1" drifting down when a button is pressed (see .qty-float-* in index.css).
+  const [floats, setFloats] = useState<{ id: number; dir: 1 | -1 }[]>([])
+  const floatSeq = useRef(0)
+  function flash(dir: 1 | -1) {
+    const id = ++floatSeq.current
+    setFloats((f) => [...f, { id, dir }])
+    window.setTimeout(() => setFloats((f) => f.filter((x) => x.id !== id)), 1100)
+  }
+  const bump = (delta: number) => {
+    const next = Math.max(0, Math.round(((Number(text) || 0) + delta) * 100) / 100)
+    if (next === (Number(text) || 0)) return
+    flash(delta > 0 ? 1 : -1)
+    commit(next)
+  }
 
   return (
-    <div className="inline-flex items-stretch gap-0.5">
+    <div className="relative inline-flex items-stretch gap-0.5">
+      {floats.map((f) => (
+        <span key={f.id} aria-hidden
+          className={`pointer-events-none absolute z-20 text-xs font-mono font-bold ${f.dir > 0 ? 'right-3 -top-1 text-sb-green qty-float-up' : 'left-3 -bottom-1 text-sb-red qty-float-down'}`}>
+          {f.dir > 0 ? '+1' : '−1'}
+        </span>
+      ))}
       <button type="button" title="Decrease by 1" disabled={(Number(text) || 0) <= 0} onClick={() => bump(-1)} className={STEP_BTN}>−</button>
       <input
         type="number" min={0} step={bulk ? 0.1 : 1} value={text} placeholder="0" data-qty-input

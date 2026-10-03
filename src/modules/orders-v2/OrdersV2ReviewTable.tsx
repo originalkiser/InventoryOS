@@ -176,7 +176,7 @@ export function OrdersV2ReviewTable({
         const l = i.row.original
         const isOz = ozProductIds.has(l.product_id)
         return (
-          <div className={`flex flex-col items-end ${l.is_override ? OVERRIDE_CELL : ''}`}>
+          <div className={`flex flex-col items-end ${l.is_override ? `${OVERRIDE_CELL} pl-2 py-1` : ''}`}>
             <QtyStepper value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right" onChange={(n) => patchQty(l, n)} />
             {l.quarts_per_unit != null && (
               <div className="text-[10px] text-inky/50 mt-0.5">

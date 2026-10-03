@@ -36,6 +36,12 @@
 
 /* Shared UI animations (referenced via Tailwind arbitrary animate-[...]). */
 @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+/* Qty stepper: a faint +1 drifts up / -1 drifts down when a +/- button is pressed. Slow and short on purpose. */
+@keyframes qtyFloatUp { 0% { opacity: 0; transform: translateY(2px) } 20% { opacity: 0.6 } 100% { opacity: 0; transform: translateY(-20px) } }
+@keyframes qtyFloatDown { 0% { opacity: 0; transform: translateY(-2px) } 20% { opacity: 0.6 } 100% { opacity: 0; transform: translateY(20px) } }
+.qty-float-up { animation: qtyFloatUp 1000ms ease-out forwards }
+.qty-float-down { animation: qtyFloatDown 1000ms ease-out forwards }
+@media (prefers-reduced-motion: reduce) { .qty-float-up, .qty-float-down { animation: none; opacity: 0 } }
 @keyframes fabRise { from { opacity: 0; transform: translateY(10px) scale(0.9) } to { opacity: 1; transform: translateY(0) scale(1) } }
 @keyframes panelIn { from { opacity: 0; transform: translateY(8px) scale(0.98) } to { opacity: 1; transform: translateY(0) scale(1) } }
 @keyframes swipeRight { from { opacity: 0; transform: translateX(-14px) } to { opacity: 1; transform: translateX(0) } }

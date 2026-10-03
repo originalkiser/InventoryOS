@@ -633,7 +633,7 @@ export function DataTable<T>({
                       style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 10 }}
                       className={['px-2 py-2 text-center border-b border-inky/10', zebraClass].join(' ')}
                     >
-                      <span aria-hidden className={`pointer-events-none absolute inset-0 group-hover:bg-sky/10 ${pinnedOverlay}`} />
+                      <span aria-hidden className={`pointer-events-none absolute inset-0 -z-10 group-hover:bg-sky/10 ${pinnedOverlay}`} />
                       <input
                         type="checkbox"
                         checked={selected}
@@ -664,7 +664,7 @@ export function DataTable<T>({
                           ].join(' ')}
                         >
                           {cell.column.getIsPinned() === 'left' && (
-                            <span aria-hidden className={`pointer-events-none absolute inset-0 group-hover:bg-sky/10 ${pinnedOverlay}`} />
+                            <span aria-hidden className={`pointer-events-none absolute inset-0 -z-10 group-hover:bg-sky/10 ${pinnedOverlay}`} />
                           )}
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
