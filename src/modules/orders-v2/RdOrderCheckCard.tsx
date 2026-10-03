@@ -12,7 +12,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import { useVendors } from './useLookups'
 import { isReladyne } from './useOrdersV2'
-import { loadOrderCheck, createResendDraft, previousBusinessDay, type OrderCheckResult } from './rdOrderCheck'
+import { loadOrderCheck, createResendDraft, previousBusinessDay, saveRdOrderCheckSummary, type OrderCheckResult } from './rdOrderCheck'
 import { dShort, dTime, num } from './shared'
 
 const todayIso = () => {
@@ -47,7 +47,10 @@ export function RdOrderCheckCard({ refreshKey = 0 }: { refreshKey?: number }) {
     setLoading(true)
     setError(null)
     try {
-      setResult(await loadOrderCheck(profile.company_id, date, shopNumberOf))
+      const r = await loadOrderCheck(profile.company_id, date, shopNumberOf)
+      setResult(r)
+      // Only the previous business day (or later) drives the Inventory Alert — looking at an older date shouldn't overwrite it.
+      if (r.orderCount > 0 && date >= previousBusinessDay(todayIso())) await saveRdOrderCheckSummary(profile.company_id, r)
     } catch (e: any) {
       setError(e?.message ?? 'Could not run the order check')
     } finally {

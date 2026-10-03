@@ -17,6 +17,7 @@
 import { supabase } from '@/lib/supabase'
 import { isReladyne } from './useOrdersV2'
 import { poNumber } from './engine'
+import { useInventoryAlertsStore } from '@/hooks/useInventoryAlerts'
 import type { OrderType } from './types'
 
 const sb = () => supabase as any
@@ -61,6 +62,33 @@ export interface OrderCheckResult {
   sourceOrderIds: string[]
   /** __order_dow of the first source order, carried onto a re-send draft so weekday export templates still resolve. */
   sourceOrderDow: number | null
+}
+
+// The latest order-check result, kept as a small company setting so the Inventory Alerts badge/page can
+// show "N lines missing" without re-running the (multi-query) check itself. Written whenever the check
+// is run for the previous business day or later: after each Open Sales Order upload, and on the RD Reports card.
+export const RD_ORDER_CHECK_KEY = 'rd_order_check_summary'
+export interface RdOrderCheckSummary {
+  date: string
+  orderCount: number
+  missing: number
+  unmapped: number
+  checkedAt: string
+}
+
+export async function saveRdOrderCheckSummary(companyId: string, result: OrderCheckResult): Promise<void> {
+  const summary: RdOrderCheckSummary = {
+    date: result.date,
+    orderCount: result.orderCount,
+    missing: result.lines.filter((l) => l.status === 'missing').length,
+    unmapped: result.lines.filter((l) => l.status === 'unmapped').length,
+    checkedAt: new Date().toISOString(),
+  }
+  const { error } = await sb().schema('platform').from('app_settings')
+    .upsert({ company_id: companyId, key: RD_ORDER_CHECK_KEY, value: summary, updated_at: new Date().toISOString() }, { onConflict: 'company_id,key' })
+  if (error) { console.warn('[rd-order-check] summary save failed:', error.message); return }
+  // Refresh the sidebar badge / alerts page right away.
+  void useInventoryAlertsStore.getState().reload(companyId)
 }
 
 /** Previous weekday before `todayIso` (YYYY-MM-DD) — Monday looks back to Friday. Holidays aren't considered. */

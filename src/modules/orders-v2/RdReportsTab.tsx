@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { RefreshCw } from 'lucide-react'
 import { RdOrderCheckCard } from './RdOrderCheckCard'
+import { OverduePoPanel } from './OverduePoPanel'
+import { groupOverdueByPo } from './rdPoCheck'
 import { Button, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
@@ -101,14 +103,7 @@ export function RdReportsTab({ refreshKey = 0 }: { refreshKey?: number }) {
   // when the shop's own schedule says it should have already arrived —
   // grouped to the side so it's obvious which POs are actually worth
   // calling the vendor about, versus just normally still in transit.
-  const overdue = useMemo(
-    () => ledger
-      .filter((l) => l.status === 'open')
-      .map((l) => ({ line: l, expected: expectedDeliveryFor(l.location_id, l.order_date) }))
-      .filter((r) => r.expected != null && r.expected < today)
-      .sort((a, b) => (a.expected as string).localeCompare(b.expected as string)),
-    [ledger, expectedDeliveryFor, today],
-  )
+  const overdueGroups = useMemo(() => groupOverdueByPo(ledger, expectedDeliveryFor, today), [ledger, expectedDeliveryFor, today])
 
   const shopLabel = useCallback(
     (id: string | null) => (id ? (loc.fieldValue(id, 'shop_city') || loc.codeOf(id)) : '—'),
@@ -202,40 +197,7 @@ export function RdReportsTab({ refreshKey = 0 }: { refreshKey?: number }) {
 
       <RdOrderCheckCard refreshKey={refreshKey} />
 
-      {overdue.length > 0 && (
-        <div className="rounded border border-[#C0392B]/40 bg-[#C0392B]/5 flex flex-col gap-2 p-3">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-[#C0392B]">
-            Should have delivered by now ({overdue.length})
-          </span>
-          <p className="text-[11px] font-mono text-inky/60">
-            Still open on RelaDyne's own report, but past the shop's own expected delivery date — worth checking
-            with the vendor on billing/delivery status for these.
-          </p>
-          <div className="overflow-auto max-h-56 rounded border border-[#C0392B]/30">
-            <table className="w-full text-[11px] font-mono">
-              <thead className="sticky top-0 z-10"><tr className="bg-cream text-inky uppercase border-b border-navy/20">
-                <th className="text-left px-2 py-1">Shop</th><th className="text-left px-2 py-1">Sales Order #</th>
-                <th className="text-left px-2 py-1">PO #</th><th className="text-left px-2 py-1">Product</th>
-                <th className="text-right px-2 py-1">Qty Ordered</th>
-                <th className="text-left px-2 py-1">Order Date</th><th className="text-left px-2 py-1">Expected Delivery</th>
-              </tr></thead>
-              <tbody>
-                {overdue.map(({ line: l, expected }) => (
-                  <tr key={l.id} className="border-b border-navy/10">
-                    <td className="px-2 py-1 text-navy">{shopLabel(l.location_id)}</td>
-                    <td className="px-2 py-1 text-navy">{l.sales_order_no}</td>
-                    <td className="px-2 py-1 text-navy">{l.customer_po_no ?? '—'}</td>
-                    <td className="px-2 py-1 text-navy">{l.product_code}</td>
-                    <td className="px-2 py-1 text-right text-navy">{l.qty_ordered ?? '—'}</td>
-                    <td className="px-2 py-1 text-navy">{dShort(l.order_date)}</td>
-                    <td className="px-2 py-1 text-[#C0392B] font-bold">{expected ? dShort(expected) : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      <OverduePoPanel groups={overdueGroups} shopLabel={shopLabel} />
 
       <Tabs defaultValue="ledger">
         <TabsList>

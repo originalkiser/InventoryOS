@@ -25,6 +25,10 @@ interface DataTableProps<T> {
   hideExport?: boolean
   // Overrides the table body's max height (default max-h-[calc(100vh-300px)]) — for a table inside a modal that should show more rows before scrolling.
   bodyMaxHeightClass?: string
+  /** Called with each body row's <tr> and its row key (for visibility tracking, see Orders v2's rowSeen.ts). */
+  onRowRef?: (el: HTMLTableRowElement | null, rowKey: string) => void
+  /** Reports the key of the LAST row of the filtered + sorted data (all pages), or null when empty. */
+  onLastRowKey?: (key: string | null) => void
   /** Below the `sm` breakpoint, render each row as a stacked card instead of a wide scrolling table */
   mobileCards?: boolean
   /** Called whenever the internal row-selection Set changes */
@@ -158,6 +162,8 @@ export function DataTable<T>({
   hideColumnControl,
   hideExport,
   bodyMaxHeightClass,
+  onRowRef,
+  onLastRowKey,
   mobileCards,
   onSelectionChange,
   clearSelectionToken,
@@ -231,6 +237,11 @@ export function DataTable<T>({
   }
 
   const filteredRows = table.getFilteredRowModel().rows
+  const lastKeyOfData = (() => {
+    const all = table.getPrePaginationRowModel().rows
+    return all.length ? rowKey(all[all.length - 1]) : null
+  })()
+  useEffect(() => { onLastRowKey?.(lastKeyOfData) }, [lastKeyOfData]) // eslint-disable-line react-hooks/exhaustive-deps
   const currentPageRows = table.getRowModel().rows
   const isAllPageSelected =
     currentPageRows.length > 0 && currentPageRows.every((r) => selectedIds.has(rowKey(r)))
@@ -602,6 +613,7 @@ export function DataTable<T>({
                 return (
                   <Fragment key={row.id}>
                   <tr
+                    ref={onRowRef ? (el) => onRowRef(el, rowKey(row)) : undefined}
                     onClick={onRowClick ? (e) => {
                       // Found live 2026-09-25 building Exception Reporting's
                       // own row-click-to-edit: this guard only ever excluded

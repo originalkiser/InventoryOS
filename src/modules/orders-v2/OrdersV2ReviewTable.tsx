@@ -39,8 +39,10 @@ export function OrdersV2ReviewTable({
   liveFlags, dosAfterColorClass, groupMinimumStatus, patchQty,
   decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
-  inputByLineKey, toolbarExtra,
+  inputByLineKey, toolbarExtra, onRowRef, onLastRowKey,
 }: {
+  onRowRef?: (el: HTMLTableRowElement | null, rowKey: string) => void
+  onLastRowKey?: (key: string | null) => void
   lines: DraftLineRow[]
   draft: DraftRow
   shopLabel: (id: string | null) => string
@@ -292,6 +294,8 @@ export function OrdersV2ReviewTable({
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         exportFilename={`Order Review - ${draft.order_date}`}
+        onRowRef={onRowRef}
+        onLastRowKey={onLastRowKey}
         hideColumnControl
         // belowMin can only ever be true for an included line (see
         // groupMinimumStatus's own gating in OrdersV2Review.tsx), so this

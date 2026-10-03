@@ -54,7 +54,7 @@ export interface CommsConfig {
 export const DEFAULT_COMMS_CONFIG: CommsConfig = {
   contactMethods: ['Phone', 'Email', 'Text', 'In Person', 'Teams'],
   whoContacted: ['Procurement', 'Area Manager', 'Shop Manager'],
-  commTypes: ['Product Request', 'Exception Reporting', 'Offline Tank Monitor', 'Low VMI Coverage'],
+  commTypes: ['Product Request', 'Exception Reporting', 'Offline Tank Monitor', 'Low VMI Coverage', 'PO Delivery Check-In'],
   actionTaken: ['Ad Hoc Order', 'Ordering on Next Order'],
   staleDays: 3,
   bumpDays: 3,
@@ -66,7 +66,8 @@ export const DEFAULT_COMMS_CONFIG: CommsConfig = {
 // company's customized commTypes list, so a row using one of these can still
 // be corrected by hand instead of only ever showing as a value nothing in
 // the dropdown matches.
-export const SYSTEM_COMM_TYPES = ['Offline Tank Monitor', 'Low VMI Coverage']
+// 'PO Delivery Check-In' is logged by the RD Reports "Should have delivered by now" email flow (PoCheckInEmailModal).
+export const SYSTEM_COMM_TYPES = ['Offline Tank Monitor', 'Low VMI Coverage', 'PO Delivery Check-In']
 
 export const isEmailMethod = (m: string | null | undefined) => (m ?? '').toLowerCase().includes('email')
 

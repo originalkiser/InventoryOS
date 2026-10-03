@@ -23,7 +23,12 @@ const STEPS: { key: OrderStep; n: number; label: string; path: (id: string) => s
  * whole strip is centered to roughly the middle third of the page instead
  * of stretching edge to edge.
  */
-export function OrderStepper({ draftId, current }: { draftId: string; current: OrderStep }) {
+export function OrderStepper({ draftId, current, onBeforeNavigate }: {
+  draftId: string
+  current: OrderStep
+  /** Return false to cancel the navigation (Review uses this to hold the user until they've seen the last row). */
+  onBeforeNavigate?: (target: OrderStep) => boolean
+}) {
   const navigate = useNavigate()
   const currentIdx = STEPS.findIndex((s) => s.key === current)
 
@@ -49,7 +54,7 @@ export function OrderStepper({ draftId, current }: { draftId: string; current: O
           return (
             <div key={step.key} className="flex items-center gap-2 flex-1 last:flex-none">
               <button
-                onClick={() => navigate(step.path(draftId))}
+                onClick={() => { if (onBeforeNavigate && !onBeforeNavigate(step.key)) return; navigate(step.path(draftId)) }}
                 className="flex flex-col items-center gap-1 w-[72px] flex-shrink-0 group"
               >
                 <span className={[

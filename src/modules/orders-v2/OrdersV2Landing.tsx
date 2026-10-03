@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Droplet, Plus, Upload } from 'lucide-react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { Button, Input, Modal, MultiSelectDropdown, SbLoader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui'
@@ -71,6 +71,9 @@ export function OrdersV2Landing() {
   const vendors = useVendors()
   const names = useUserNames()
   const rd = useRdReports()
+  // /orders-v2?tab=rd_reports (the Inventory Alert's link) opens that tab directly.
+  const [searchParams] = useSearchParams()
+  const initialTab = ['orders', 'products_ordered', 'rd_reports', 'valvoline_db'].includes(searchParams.get('tab') ?? '') ? (searchParams.get('tab') as string) : 'orders'
   // Bumped when an RD report upload finishes so the RelaDyne Reports tab's order check re-runs against the new data.
   const [rdRefresh, setRdRefresh] = useState(0)
   const prevRdUploading = useRef(rd.uploading)
@@ -232,7 +235,7 @@ export function OrdersV2Landing() {
         </Button>
       </div>
 
-      <Tabs defaultValue="orders">
+      <Tabs defaultValue={initialTab}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <TabsList>
             <TabsTrigger value="orders">Orders ({drafts.length})</TabsTrigger>

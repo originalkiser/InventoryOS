@@ -7,7 +7,8 @@ import { usePageRevisit } from '@/hooks/usePageActive'
 import { DataConnectionUpdatesSection } from './DataConnectionUpdatesSection'
 
 export function InventoryAlertsPage() {
-  const { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
+  const { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, rdOrderCheck, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
+  const totalAlerts = count + connectionIssueCount + (rdOrderCheck ? 1 : 0)
   const navigate = useNavigate()
   const [showIgnored, setShowIgnored] = useState(false)
 
@@ -25,8 +26,8 @@ export function InventoryAlertsPage() {
           <p className="text-xs text-inky mt-0.5">
             Configuration gaps across shops
             {connectionIssueCount > 0 ? ' and data connection failures' : ''}.{' '}
-            {count + connectionIssueCount > 0
-              ? `${count + connectionIssueCount} alert${count + connectionIssueCount !== 1 ? 's' : ''} to review.`
+            {totalAlerts > 0
+              ? `${totalAlerts} alert${totalAlerts !== 1 ? 's' : ''} to review.`
               : 'All clear.'}
           </p>
         </div>
@@ -39,6 +40,23 @@ export function InventoryAlertsPage() {
         <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
       ) : (
         <div className="flex flex-col gap-4">
+          {rdOrderCheck && (
+            <Card className="border-[#C0392B]/40">
+              <CardBody className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-sm font-heading font-bold text-navy">RelaDyne orders missing from the open sales orders</span>
+                  <Badge color="red">{rdOrderCheck.missing}</Badge>
+                </div>
+                <p className="text-[11px] font-mono text-inky/70">
+                  {rdOrderCheck.missing} line{rdOrderCheck.missing === 1 ? '' : 's'} from the {rdOrderCheck.date} RelaDyne order{rdOrderCheck.orderCount === 1 ? '' : 's'} aren't on
+                  RelaDyne's Open Sales Order report — they may have been missed in the export or added after it went out.
+                </p>
+                <div>
+                  <Button size="sm" onClick={() => navigate('/orders-v2?tab=rd_reports')}>Review &amp; re-send missing lines</Button>
+                </div>
+              </CardBody>
+            </Card>
+          )}
           {groups.map((g) => (
             <AlertGroupCard key={g.key} group={g}
               onOpenShop={(id) => navigate(`/location-lookup?shop=${id}`)}

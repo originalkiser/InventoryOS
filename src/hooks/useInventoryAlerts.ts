@@ -106,6 +106,19 @@ async function fetchRaw(companyId: string): Promise<{ rawGroups: AlertGroup[]; l
   return { rawGroups, locById, connectionIssueCount }
 }
 
+// Latest RelaDyne order-check result (written by orders-v2/rdOrderCheck.ts) — "N lines from <date>'s orders
+// aren't on RelaDyne's open sales orders". Not a per-shop alert, so it's carried separately from rawGroups.
+export interface RdOrderCheckAlert { date: string; missing: number; orderCount: number; checkedAt: string }
+async function fetchRdOrderCheck(companyId: string): Promise<RdOrderCheckAlert | null> {
+  const { data } = await (supabase as any).schema('platform').from('app_settings').select('value')
+    .eq('company_id', companyId).eq('key', 'rd_order_check_summary').maybeSingle()
+  const v = data?.value
+  if (!v || typeof v.date !== 'string' || !(Number(v.missing) > 0)) return null
+  // A result more than a week old is stale — whatever it flagged has long since been dealt with or lost relevance.
+  if (Date.now() - new Date(v.date + 'T00:00:00').getTime() > 8 * 86400000) return null
+  return { date: v.date, missing: Number(v.missing), orderCount: Number(v.orderCount ?? 0), checkedAt: String(v.checkedAt ?? '') }
+}
+
 async function fetchIgnores(companyId: string): Promise<string[]> {
   const { data } = await (supabase as any).schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', IGNORE_KEY).maybeSingle()
   return Array.isArray(data?.value) ? (data.value as string[]) : []
@@ -121,6 +134,7 @@ interface AlertsState {
   locById: Record<string, Location>
   ignores: string[]
   connectionIssueCount: number // latest run per data connection that isn't 'success'
+  rdOrderCheck: RdOrderCheckAlert | null // RelaDyne order lines missing from the open sales orders (counts as 1 alert)
   derivedCount: number // exclusion + ignore filtered shops + connectionIssueCount; written by the hook for the nav badge
   loaded: boolean; loading: boolean; loadedCompany: string | null
   load: (companyId: string) => Promise<void>
@@ -129,15 +143,15 @@ interface AlertsState {
 }
 
 export const useInventoryAlertsStore = create<AlertsState>((set, get) => ({
-  rawGroups: [], locById: {}, ignores: [], connectionIssueCount: 0, derivedCount: 0, loaded: false, loading: false, loadedCompany: null,
+  rawGroups: [], locById: {}, ignores: [], connectionIssueCount: 0, rdOrderCheck: null, derivedCount: 0, loaded: false, loading: false, loadedCompany: null,
   load: async (companyId) => {
     const s = get()
     if (s.loading) return
     if (s.loaded && s.loadedCompany === companyId) return
     set({ loading: true })
     try {
-      const [{ rawGroups, locById, connectionIssueCount }, ignores] = await Promise.all([fetchRaw(companyId), fetchIgnores(companyId)])
-      set({ rawGroups, locById, ignores, connectionIssueCount, loaded: true, loadedCompany: companyId, loading: false })
+      const [{ rawGroups, locById, connectionIssueCount }, ignores, rdOrderCheck] = await Promise.all([fetchRaw(companyId), fetchIgnores(companyId), fetchRdOrderCheck(companyId)])
+      set({ rawGroups, locById, ignores, connectionIssueCount, rdOrderCheck, loaded: true, loadedCompany: companyId, loading: false })
     } catch { set({ loading: false }) }
   },
   reload: async (companyId) => { set({ loaded: false, loadedCompany: null }); await get().load(companyId) },
@@ -157,6 +171,7 @@ export function useInventoryAlerts() {
   const locById = useInventoryAlertsStore((s) => s.locById)
   const ignores = useInventoryAlertsStore((s) => s.ignores)
   const connectionIssueCount = useInventoryAlertsStore((s) => s.connectionIssueCount)
+  const rdOrderCheck = useInventoryAlertsStore((s) => s.rdOrderCheck)
   const loaded = useInventoryAlertsStore((s) => s.loaded)
   const loading = useInventoryAlertsStore((s) => s.loading)
   const load = useInventoryAlertsStore((s) => s.load)
@@ -178,11 +193,12 @@ export function useInventoryAlerts() {
 
   // Publish the filtered count (+ non-success connection runs) so the
   // sidebar badge reads it without re-deriving.
-  useEffect(() => { useInventoryAlertsStore.setState({ derivedCount: count + connectionIssueCount }) }, [count, connectionIssueCount])
+  const rdAlertCount = rdOrderCheck ? 1 : 0
+  useEffect(() => { useInventoryAlertsStore.setState({ derivedCount: count + connectionIssueCount + rdAlertCount }) }, [count, connectionIssueCount, rdAlertCount])
 
   const reload = useCallback(() => { if (companyId) reloadFn(companyId) }, [companyId, reloadFn])
   const ignore = useCallback((groupKey: string, shopId: string) => { if (companyId) setIgnore(companyId, `${groupKey}|${shopId}`, true) }, [companyId, setIgnore])
   const unignore = useCallback((groupKey: string, shopId: string) => { if (companyId) setIgnore(companyId, `${groupKey}|${shopId}`, false) }, [companyId, setIgnore])
 
-  return { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, loaded, loading, reload, ignore, unignore }
+  return { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, rdOrderCheck, loaded, loading, reload, ignore, unignore }
 }

@@ -14,7 +14,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useLocations } from '@/hooks/useLocations'
 import toast from 'react-hot-toast'
 import { isReladyne } from './useOrdersV2'
-import { loadOrderCheck, previousBusinessDay } from './rdOrderCheck'
+import { loadOrderCheck, previousBusinessDay, saveRdOrderCheckSummary } from './rdOrderCheck'
 import {
   parseOpenOrdersXlsx, parseOpenInvoicesXlsx, reconcilePoActivity,
   type ParsedOpenInvoiceRow, type HistoryLineForRecon, type DroptopPoForRecon,
@@ -422,6 +422,7 @@ export function useRdReports() {
         const shopById = new Map(loc.locations.map((l) => [l.id, (l.name || '').match(/\d+/)?.[0] ?? (l.name || '')]))
         const check = await loadOrderCheck(companyId, previousBusinessDay(todayIso), (id) => (id ? shopById.get(id) ?? '' : ''))
         const missingCount = check.lines.filter((l) => l.status === 'missing').length
+        if (check.orderCount > 0) await saveRdOrderCheckSummary(companyId, check)
         if (missingCount > 0) {
           toast.error(
             `${missingCount} line${missingCount === 1 ? '' : 's'} from ${check.date}'s RelaDyne orders ${missingCount === 1 ? 'is' : 'are'} missing from this Open Sales Order report — see RelaDyne Reports → Order check.`,

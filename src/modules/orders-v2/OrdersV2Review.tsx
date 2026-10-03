@@ -14,6 +14,7 @@ import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { useLocations } from '@/hooks/useLocations'
 import { usePageRevisit } from '@/hooks/usePageActive'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
+import { useRowSeenTracker } from './rowSeen'
 import { QtyStepper, ZeroReasonButtons, isZeroAdjusted, zeroReasonText, type ZeroReason } from './lineControls'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useAuthStore } from '@/stores/authStore'
@@ -286,6 +287,12 @@ export function OrdersV2Review() {
   const [statsModalOpen, setStatsModalOpen] = useState(false)
   const [addNonConfiguredOpen, setAddNonConfiguredOpen] = useState(false)
   const [movingToFinal, setMovingToFinal] = useState(false)
+  // Final Review is blocked until the LAST row of the order has been on screen (scrolled to, or its page
+  // opened) — direct ask 2026-10-03. The classic table's last row is known right here; the beta table
+  // reports its own (it can be filtered/sorted/paged internally).
+  const rowSeen = useRowSeenTracker()
+  const [betaLastRowKey, setBetaLastRowKey] = useState<string | null>(null)
+  const [seenWarningOpen, setSeenWarningOpen] = useState(false)
   // Real bug found live 2026-09-29: this page sits behind KeepAlivePages
   // (see the usePageRevisit(reload) call above) — clicking "Final Review →"
   // sets movingToFinal true and navigates away, but since this component
@@ -978,6 +985,9 @@ export function OrdersV2Review() {
               namespace (tailwind.config.ts) is for — same fix as
               Procurement Deck's own always-dark chart cards. */}
           <Button size="sm" loading={movingToFinal} className="rounded-lg !bg-sb-sky !text-sb-navy hover:!bg-sb-sky/90" onClick={async () => {
+            // The last row of whichever table is showing must have been on screen.
+            const lastKey = useNewTable ? betaLastRowKey : (visible.length ? visible[visible.length - 1].id : null)
+            if (lines.length > 0 && !rowSeen.hasSeen(lastKey)) { setSeenWarningOpen(true); return }
             setMovingToFinal(true)
             // See runGeneration's own comment — a completed order stays
             // 'exported', it never gets pulled back into the Final Review
@@ -990,7 +1000,22 @@ export function OrdersV2Review() {
         </div>
       </div>
 
-      <OrderStepper draftId={draft.id} current="review" />
+      <Modal open={seenWarningOpen} onClose={() => setSeenWarningOpen(false)} title="Review the whole order first" size="md">
+        <div className="flex flex-col gap-4">
+          <p className="text-sm font-body text-navy">
+            I noticed you did not see all rows of the order. Make sure you scrolled through them all and/or went to the
+            next page to review all items.
+          </p>
+          <div className="flex justify-end"><Button size="sm" onClick={() => setSeenWarningOpen(false)}>Back to the order</Button></div>
+        </div>
+      </Modal>
+
+      <OrderStepper draftId={draft.id} current="review" onBeforeNavigate={(target) => {
+        if (target === 'review') return true
+        const lastKey = useNewTable ? betaLastRowKey : (visible.length ? visible[visible.length - 1].id : null)
+        if (lines.length > 0 && !rowSeen.hasSeen(lastKey)) { setSeenWarningOpen(true); return false }
+        return true
+      }} />
       </div>
 
       {/* Product Exceptions moved into Order Settings (direct ask
@@ -1303,6 +1328,8 @@ export function OrdersV2Review() {
           leadDaysFor={leadDaysFor}
           inputByLineKey={inputByLineKey}
           toolbarExtra={toolbarToggles}
+          onRowRef={rowSeen.observe}
+          onLastRowKey={setBetaLastRowKey}
         />
       )}
 
@@ -1458,7 +1485,7 @@ export function OrdersV2Review() {
                 }
                 return (
                   <Fragment key={l.id}>
-                    <tr className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${belowMin ? 'bg-[#C0392B]/10' : overCapacity ? 'bg-[#E67E22]/15' : bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
+                    <tr ref={(el) => rowSeen.observe(el, l.id)} className={`border-b border-navy/15 ${l.included ? '' : 'opacity-45'} ${belowMin ? 'bg-[#C0392B]/10' : overCapacity ? 'bg-[#E67E22]/15' : bandOf.get(l.id) ? 'bg-navy/[0.035]' : ''}`}>
                       {visibleColumnIds.map(cellFor)}
                     </tr>
                     {isLastOfShop && shopOpen && (
