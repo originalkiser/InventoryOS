@@ -128,3 +128,20 @@ export function SegmentedSlider<T extends string>({ options, value, onChange, cl
     </div>
   )
 }
+
+/**
+ * A chip that slides in/out sideways (width + fade, ~0.5s) instead of popping in and shoving the row around —
+ * direct ask 2026-10-03: the "N overrides" chip appearing after a first edit made the summary line jump. It stays
+ * mounted so it can animate out, and remembers its last content while it does.
+ */
+export function SlideChip({ show, className = '', children }: { show: boolean; className?: string; children: React.ReactNode }) {
+  const last = useRef<React.ReactNode>(children)
+  if (show) last.current = children
+  return (
+    <span aria-hidden={!show}
+      className="inline-flex overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-500 ease-in-out"
+      style={{ maxWidth: show ? '16rem' : 0, opacity: show ? 1 : 0 }}>
+      <span className={className}>{show ? children : last.current}</span>
+    </span>
+  )
+}

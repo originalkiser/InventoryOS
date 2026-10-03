@@ -7,7 +7,9 @@ import { OrdersV2SettingsBody } from './OrdersV2Settings'
 import { OrderStatsModal } from './OrderStatsModal'
 import { AddNonConfiguredProductModal } from './AddNonConfiguredProductModal'
 import { OrderStepper } from './OrderStepper'
-import { ToggleButton, SegmentedSlider } from './controls'
+import { ToggleButton, SegmentedSlider, SlideChip } from './controls'
+import { dosTone, DOS_TONE_COLOR, TAG_DEFS, type TagKey } from './lineFlags'
+import { HoverTip, SwatchTipBody } from '@/components/ui/HoverTip'
 import { ExceptionEditModal } from './ExceptionEditModal'
 import { useProductExceptions } from './useProductExceptions'
 import { useLastOrderedInfo } from './useLastOrderedInfo'
@@ -27,7 +29,7 @@ import {
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
-import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
+import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { uomDisplayLabel } from './types'
@@ -41,7 +43,6 @@ import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalend
 // forgot to enable it one morning and didn't want to flip it mid-order).
 // Same key as the older localStorage-only version, so an existing '1'/'0'
 // there migrates into the profile automatically.
-const NEW_TABLE_KEY = 'ov2_review_new_table'
 
 // Shop-expand mode toggle (direct ask 2026-09-30) — same per-browser
 // persistence as the new-table beta toggle above: a personal viewing
@@ -247,9 +248,9 @@ export function OrdersV2Review() {
   // Main table column customize modal — hide/reorder, see MAIN_COLUMNS.
   const [columnPrefs, setColumnPrefs] = useState(loadColumnPrefs)
   const [columnModalOpen, setColumnModalOpen] = useState(false)
-  const [useNewTablePref, setUseNewTablePref] = useProfilePref<boolean | number>(NEW_TABLE_KEY, false)
-  const useNewTable = !!useNewTablePref
-  const setUseNewTable = (v: boolean) => setUseNewTablePref(v)
+  // The new table is the default (2026-10-03); a user can opt back to the original in Order Settings.
+  const [useOldTablePref] = useProfilePref<boolean | number>(OV2_USE_OLD_TABLE_KEY, false)
+  const useNewTable = !useOldTablePref
   // Dropdown (inline row expand, existing behavior) vs Popup (a modal) for
   // "show every product configured for this shop" — direct ask 2026-09-30.
   // popupShopId is which shop's popup is currently open (null = closed);
@@ -393,10 +394,16 @@ export function OrdersV2Review() {
   // order didn't get this product where it needs to be).
   const dosAfterColorClass = useCallback((v: number | null): string => {
     if (v == null || !dosOverride) return 'text-navy'
-    if (v > dosOverride.max) return 'text-[#E67E22]'
-    if (v >= dosOverride.target) return 'text-[#2ECC71]'
+    const tone = dosTone(v, { target: dosOverride.target, minTrigger: dosOverride.trigger, max: dosOverride.max })
+    if (tone === 'orange') return 'text-[#E67E22]'
+    if (tone === 'green') return 'text-[#2ECC71]'
+    if (tone === 'yellow') return 'text-[#E0B63A]'
     return 'text-[#C0392B]'
   }, [dosOverride])
+  const dosThresholds = useMemo(
+    () => (dosOverride ? { target: dosOverride.target, minTrigger: dosOverride.trigger, max: dosOverride.max } : null),
+    [dosOverride],
+  )
 
   // Read-only counterpart to runGeneration below — fetches/builds the same
   // candidate set (allInputs/eligibleLocationIds/ozProductIds) but never
@@ -905,6 +912,14 @@ export function OrdersV2Review() {
     return remainingAtDelivery + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
   }
 
+  // Stable identity for the new table's memoized columns (the plain function above is re-created every render).
+  const onHandAfterCb = useCallback((l: DraftLineRow): number => {
+    const dd = draft ? deliveryFor(l.location_id ?? '', draft.order_date) : null
+    const leadDays = draft && dd ? Math.max(0, daysBetween(draft.order_date, dd)) : 0
+    const remaining = Math.max(0, Number(l.on_hand ?? 0) - Number(l.daily_usage ?? 0) * leadDays)
+    return remaining + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
+  }, [draft, deliveryFor])
+
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
   if (!draft) return <p className="text-xs font-mono text-inky/60 py-8">Draft not found. It may have been deleted.</p>
 
@@ -958,11 +973,6 @@ export function OrdersV2Review() {
         <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
           className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-[11px] font-mono text-navy border border-sky/40 bg-sky/10 rounded px-2 py-1"
-            title="Try the new sortable/filterable/resizable table alongside the existing one — off by default, only affects your own browser.">
-            <Toggle checked={useNewTable} onChange={setUseNewTable} size="sm" color="cyan" />
-            New Table (Beta)
-          </label>
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
@@ -1151,18 +1161,21 @@ export function OrdersV2Review() {
               <input type="number" min={0} value={dosOverride.target}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.target !== settings.days_of_supply_target ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+              <DosLegend kind="target" />
             </label>
             <label className="flex flex-col gap-0.5 items-center">
               <span className={`text-[9px] font-mono text-center ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Min Trigger</span>
               <input type="number" min={0} value={dosOverride.trigger}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+              <DosLegend kind="trigger" />
             </label>
             <label className="flex flex-col gap-0.5 items-center">
               <span className={`text-[9px] font-mono text-center ${dosOverride.max !== settings.days_of_supply_max ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Max</span>
               <input type="number" min={0} value={dosOverride.max}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.max !== settings.days_of_supply_max ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
+              <DosLegend kind="max" />
             </label>
             {usesOrderDays && !isAdHoc && (
               <label className="flex flex-col gap-0.5 items-center">
@@ -1235,15 +1248,13 @@ export function OrdersV2Review() {
             </button>
           </>
         )}
-        <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy flex-wrap">
+        <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy min-h-[1.75rem]">
           <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
           <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
           <span>{num(totalQtyOrdered, 0)} qty ordered</span>
-          {overrideCount > 0 && (
-            <span className="rounded px-1.5 py-0.5 bg-[#E67E22]/15 text-[#E67E22] border border-[#E67E22]/40">
-              {overrideCount} override{overrideCount !== 1 ? 's' : ''}
-            </span>
-          )}
+          <SlideChip show={overrideCount > 0} className="rounded px-1.5 py-0.5 bg-[#E67E22]/15 text-[#E67E22] border border-[#E67E22]/40">
+            {overrideCount} override{overrideCount !== 1 ? 's' : ''}
+          </SlideChip>
           <span className="font-bold">
             Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
           </span>
@@ -1310,8 +1321,8 @@ export function OrdersV2Review() {
           lastOrderedInfo={lastOrderedInfo}
           deliveryFor={deliveryFor}
           describeSchedule={describeSchedule}
-          liveFlags={liveFlags}
-          dosAfterColorClass={dosAfterColorClass}
+          thresholds={dosThresholds}
+          onHandAfterAtDelivery={onHandAfterCb}
           groupMinimumStatus={groupMinimumStatus}
           patchQty={patchQty}
           exceptionFor={exceptionFor}
@@ -1904,6 +1915,31 @@ export function LastOrderedDeliveredCells({ info }: { info: ReturnType<LastInfoF
           : '—'}
       </td>
     </>
+  )
+}
+
+/**
+ * Tiny color swatches under a DOS input showing what its threshold paints: the "Flag – Before" (DOS Now), the
+ * "Tag – After" (DOS After) and the cell color in the DOS columns — each with a hover explanation.
+ */
+function DosLegend({ kind }: { kind: 'target' | 'trigger' | 'max' }) {
+  const spec: Record<typeof kind, { before?: TagKey; after: TagKey; format: keyof typeof DOS_TONE_COLOR; formatText: string }> = {
+    target: { before: 'dos_now_below_target', after: 'dos_after_below_target', format: 'yellow', formatText: 'DOS cells below the target (but at or above the min trigger) are shaded yellow.' },
+    trigger: { before: 'dos_now_low', after: 'dos_after_low', format: 'red', formatText: 'DOS cells below the min trigger are shaded red.' },
+    max: { after: 'over_dos_max', format: 'orange', formatText: 'DOS cells above the max are shaded orange.' },
+  }
+  const sp = spec[kind]
+  const sw = (color: string, title: string, description: string, round = false) => (
+    <HoverTip content={<SwatchTipBody color={color} title={title} description={description} />}>
+      <span className={`inline-block w-2.5 h-2.5 border border-navy/20 ${round ? 'rounded-full' : 'rounded-sm'}`} style={{ background: color }} />
+    </HoverTip>
+  )
+  return (
+    <span className="inline-flex items-center gap-1">
+      {sp.before && sw(TAG_DEFS[sp.before].color, `Flag – Before: ${TAG_DEFS[sp.before].label}`, TAG_DEFS[sp.before].description)}
+      {sw(TAG_DEFS[sp.after].color, `Tag – After: ${TAG_DEFS[sp.after].label}`, TAG_DEFS[sp.after].description)}
+      {sw(DOS_TONE_COLOR[sp.format], 'Cell color', sp.formatText, true)}
+    </span>
   )
 }
 

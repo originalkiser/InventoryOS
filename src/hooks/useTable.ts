@@ -16,11 +16,21 @@ import {
   type ColumnSizingState,
   type FilterFn,
 } from '@tanstack/react-table'
+import { rowMatchesFilter } from '@/lib/columnFilterValue'
 
-// Excel-style multi-select: filter value is an array of allowed display strings.
-const multiSelectFilter: FilterFn<any> = (row, columnId, value: string[]) => {
-  if (!value || value.length === 0) return true
-  return value.includes(String(row.getValue(columnId) ?? ''))
+// Excel-style multi-select: filter value is an array of allowed display strings — or, for columns that opt in via
+// their meta (numeric / colorOf / multiValue), the richer shape in lib/columnFilterValue.ts.
+const multiSelectFilter: FilterFn<any> = (row, columnId, value: unknown) => {
+  if (value == null || (Array.isArray(value) && value.length === 0)) return true
+  // Per-column opt-ins (numeric / colorOf / multiValue) live in the column's meta; the row's memoized cell map is
+  // the cheap way to reach it from inside a filterFn.
+  const meta = (row as any)._getAllCellsByColumnId?.()[columnId]?.column.columnDef.meta as any
+  if (Array.isArray(value) && !meta?.multiValue) return value.includes(String(row.getValue(columnId) ?? ''))
+  return rowMatchesFilter(value, {
+    value: row.getValue(columnId),
+    multi: meta?.multiValue ? meta.multiValue(row.original) : null,
+    color: meta?.colorOf ? meta.colorOf(row.original) : null,
+  })
 }
 
 // Sort/filter state for a persistKey'd table, keyed by that string alone —

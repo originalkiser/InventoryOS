@@ -4,6 +4,7 @@
 // One implementation used by the classic review table, the beta table, and
 // both shop-product lists so they can't drift.
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { DraftLineRow } from './useOrdersV2'
 
 // ── Qty stepper ─────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ const NO_SPINNER = '[appearance:textfield] [&::-webkit-outer-spin-button]:appear
  * adds the product only once focus leaves the box (adding mid-typing would
  * swap the row out from under the cursor), while a + click adds immediately.
  */
-export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change', inputClassName = 'w-14', align = 'text-center', muted = false }: {
+export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change', inputClassName = 'w-14', align = 'text-center', muted = false, zeroReason }: {
   value: number
   onChange: (n: number) => void
   bulk?: boolean
@@ -41,6 +42,11 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
   inputClassName?: string
   align?: 'text-center' | 'text-right'
   muted?: boolean
+  /**
+   * When given, a line that was suggested (> 0) and then set to 0 swaps its "−" button for a "0?" button that
+   * pops up the optional "why did you zero this?" reasons right beside it (instead of a row of buttons elsewhere).
+   */
+  zeroReason?: { line: ReasonFields; onChange: (reason: ZeroReason | null, note: string | null) => void }
 }) {
   const [text, setText] = useState(() => String(value))
   const lastCommittedRef = useRef<number>(Number(value))
@@ -56,30 +62,37 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
     lastCommittedRef.current = n
     onChange(n)
   }
-  // Faint "+1" drifting up / "−1" drifting down when a button is pressed (see .qty-float-* in index.css).
-  const [floats, setFloats] = useState<{ id: number; dir: 1 | -1 }[]>([])
+  // Faint "+1" drifting up / "−1" drifting down from wherever the cursor clicked (see .qty-float-* in index.css).
+  // Portalled to <body> at the click's viewport position so the cell's overflow clipping can't cut it off.
+  const [floats, setFloats] = useState<{ id: number; dir: 1 | -1; x: number; y: number }[]>([])
   const floatSeq = useRef(0)
-  function flash(dir: 1 | -1) {
+  function flash(dir: 1 | -1, x: number, y: number) {
     const id = ++floatSeq.current
-    setFloats((f) => [...f, { id, dir }])
-    window.setTimeout(() => setFloats((f) => f.filter((x) => x.id !== id)), 1100)
+    setFloats((f) => [...f, { id, dir, x, y }])
+    window.setTimeout(() => setFloats((f) => f.filter((q) => q.id !== id)), 1100)
   }
-  const bump = (delta: number) => {
+  const bump = (delta: number, e: React.MouseEvent) => {
     const next = Math.max(0, Math.round(((Number(text) || 0) + delta) * 100) / 100)
     if (next === (Number(text) || 0)) return
-    flash(delta > 0 ? 1 : -1)
+    flash(delta > 0 ? 1 : -1, e.clientX, e.clientY)
     commit(next)
   }
+  const showZeroReason = !!zeroReason && (Number(text) || 0) === 0 && Number(zeroReason.line.system_qty) > 0
 
   return (
     <div className="relative inline-flex items-stretch gap-0.5">
-      {floats.map((f) => (
-        <span key={f.id} aria-hidden
-          className={`pointer-events-none absolute z-20 text-xs font-mono font-bold ${f.dir > 0 ? 'right-3 -top-1 text-sb-green qty-float-up' : 'left-3 -bottom-1 text-sb-red qty-float-down'}`}>
-          {f.dir > 0 ? '+1' : '−1'}
-        </span>
-      ))}
-      <button type="button" title="Decrease by 1" disabled={(Number(text) || 0) <= 0} onClick={() => bump(-1)} className={STEP_BTN}>−</button>
+      {floats.length > 0 && createPortal(
+        <>{floats.map((f) => (
+          <span key={f.id} aria-hidden style={{ position: 'fixed', left: f.x - 8, top: f.y - 10, zIndex: 500 }}
+            className={`pointer-events-none text-xs font-mono font-bold ${f.dir > 0 ? 'text-sb-green qty-float-up' : 'text-sb-red qty-float-down'}`}>
+            {f.dir > 0 ? '+1' : '−1'}
+          </span>
+        ))}</>,
+        document.body,
+      )}
+      {showZeroReason && zeroReason
+        ? <ZeroReasonPopoverButton line={zeroReason.line} onChange={zeroReason.onChange} />
+        : <button type="button" title="Decrease by 1" disabled={(Number(text) || 0) <= 0} onClick={(e) => bump(-1, e)} className={STEP_BTN}>−</button>}
       <input
         type="number" min={0} step={bulk ? 0.1 : 1} value={text} placeholder="0" data-qty-input
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); moveToNextQty(e.currentTarget, e.shiftKey) } }}
@@ -95,7 +108,7 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
           if (commitOn === 'blur' && (Number(text) || 0) !== lastCommittedRef.current) commit(Number(text) || 0)
         }}
         className={`${inputClassName} ${align} ${NO_SPINNER} bg-transparent border rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-sky ${muted ? 'border-navy/20 text-inky/60' : 'border-navy/25 text-navy'}`} />
-      <button type="button" title="Increase by 1" onClick={() => bump(1)} className={STEP_BTN}>+</button>
+      <button type="button" title="Increase by 1" onClick={(e) => bump(1, e)} className={STEP_BTN}>+</button>
     </div>
   )
 }
@@ -124,6 +137,77 @@ export function zeroReasonText(l: ReasonFields): string | null {
   const label = zeroReasonLabel(l.zero_reason)
   if (!label) return null
   return l.zero_reason === 'other' && l.zero_reason_note?.trim() ? `Other: ${l.zero_reason_note.trim()}` : label
+}
+
+/**
+ * "0?" button (stands in for the minus when a suggested line was zeroed). Opens a small interactive popover up and
+ * to the right of the button with the optional reasons. Closing: click outside, Escape, or picking a reason.
+ */
+function ZeroReasonPopoverButton({ line, onChange }: {
+  line: ReasonFields
+  onChange: (reason: ZeroReason | null, note: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ left: 0, top: 0 })
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+  const reason = (line.zero_reason ?? null) as ZeroReason | null
+  const [note, setNote] = useState(line.zero_reason_note ?? '')
+  useEffect(() => { setNote(line.zero_reason_note ?? '') }, [line.zero_reason_note])
+
+  function toggle() {
+    const r = btnRef.current?.getBoundingClientRect()
+    // Anchor the popover's bottom-left corner to the button's top-right corner.
+    if (r) setPos({ left: Math.min(r.right + 4, window.innerWidth - 200), top: r.top - 4 })
+    setOpen((v) => !v)
+  }
+  useEffect(() => {
+    if (!open) return
+    const down = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!popRef.current?.contains(t) && !btnRef.current?.contains(t)) setOpen(false)
+    }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', down)
+    document.addEventListener('keydown', key)
+    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key) }
+  }, [open])
+
+  const chip = (active: boolean) =>
+    `text-[10px] rounded border px-1.5 py-0.5 whitespace-nowrap text-left ${active ? 'bg-[#B7E0DE] text-[#002745] border-[#B7E0DE] font-bold' : 'border-[#F2F1E6]/30 text-[#F2F1E6] hover:border-[#B7E0DE]'}`
+  return (
+    <>
+      <button ref={btnRef} type="button" onClick={toggle}
+        title={reason ? `Zeroed — ${zeroReasonText(line)}` : 'Why was this zeroed? (optional)'}
+        className={`w-10 flex-shrink-0 flex items-center justify-center rounded border text-[11px] font-mono font-bold leading-none select-none ${reason ? 'border-[#B7E0DE] bg-[#B7E0DE]/30 text-navy' : 'border-[#E67E22]/60 text-[#E67E22] hover:border-[#E67E22]'}`}>
+        0?
+      </button>
+      {open && createPortal(
+        <div ref={popRef} style={{ position: 'fixed', left: pos.left, top: pos.top, transform: 'translateY(-100%)', zIndex: 450 }}
+          className="rounded-lg border border-[#B7E0DE]/40 bg-[#002745] p-2 shadow-xl flex flex-col gap-1 w-44 animate-[fadeIn_100ms_ease-out]">
+          <span className="text-[9px] font-mono uppercase tracking-wide text-[#F2F1E6]/60">Why zero? (optional)</span>
+          {ZERO_REASONS.map((r) => (
+            <button key={r.key} type="button" className={chip(reason === r.key)}
+              onClick={() => {
+                if (reason === r.key) onChange(null, null)
+                else onChange(r.key, r.key === 'other' ? (note.trim() || null) : null)
+                if (r.key !== 'other') setOpen(false)
+              }}>
+              {r.label}
+            </button>
+          ))}
+          {reason === 'other' && (
+            <input autoFocus value={note} onChange={(e) => setNote(e.target.value)}
+              onBlur={() => { if ((note.trim() || null) !== (line.zero_reason_note ?? null)) onChange('other', note.trim() || null) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { onChange('other', note.trim() || null); setOpen(false) } }}
+              placeholder="Reason…"
+              className="w-full bg-transparent border border-[#F2F1E6]/30 rounded px-1.5 py-0.5 text-[10px] font-mono text-[#F2F1E6] placeholder-[#F2F1E6]/40 focus:outline-none focus:border-[#B7E0DE]" />
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
 }
 
 /**

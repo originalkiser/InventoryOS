@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
+import { OV2_USE_OLD_TABLE_KEY } from './shared'
 import { Button, Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
 import { useOrderSettings } from './useOrdersV2'
 import { useVendors } from './useLookups'
@@ -163,7 +165,26 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
       <ProductExceptionsManager onChanged={onExceptionChanged} />
       <OrderDaysCard />
       <DeliverySchedulesCard />
+      <ReviewTablePrefCard />
     </div>
+  )
+}
+
+/** Personal (per-user, follows you across devices) — not a company setting. */
+function ReviewTablePrefCard() {
+  const [useOld, setUseOld] = useProfilePref<boolean | number>(OV2_USE_OLD_TABLE_KEY, false)
+  return (
+    <Card><CardBody className="flex flex-col gap-2">
+      <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Review Order Table</h3>
+      <label className="flex items-center gap-2 text-xs font-mono text-navy">
+        <Toggle checked={!!useOld} onChange={(v) => setUseOld(v)} size="sm" />
+        Use old table
+      </label>
+      <p className="text-[11px] font-mono text-inky/60">
+        The Review Order step now opens the newer table by default (sortable, filterable, resizable, with Flags and Tags).
+        Turn this on to use the original table instead. This only affects your own login.
+      </p>
+    </CardBody></Card>
   )
 }
 

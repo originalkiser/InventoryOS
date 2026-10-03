@@ -1,42 +1,104 @@
-// New (2026-09-25), opt-in rebuild of OrdersV2Review's main lines table onto
-// this app's standard useTable/DataTable/useColumnPrefs/ColumnManagerModal
-// stack — same pattern as ExceptionTable.tsx and OrdersV2FinalReview.tsx's
-// own rebuilds. Gated behind a "New table (beta)" toggle in
-// OrdersV2Review.tsx (localStorage, default OFF) rather than replacing the
-// existing hand-rolled table outright — direct ask: keep the proven table
-// live for real orders while this one gets tested alongside it.
+// Orders v2 Review's main lines table, built on this app's standard useTable/DataTable/useColumnPrefs/
+// ColumnManagerModal stack (same pattern as ExceptionTable.tsx and OrdersV2FinalReview.tsx). This is now the
+// DEFAULT table (2026-10-03); the original hand-rolled table still lives in OrdersV2Review.tsx behind a per-user
+// "Use old table" setting (Order Settings).
 //
-// Deliberately a "dumb", fully prop-driven presentational component: every
-// piece of business logic (live DOS/on-hand-after recompute, minimum
-// checks, PO-decision handling, shop-expand candidate lists) stays owned by
-// OrdersV2Review.tsx exactly as it already is — this component only
-// renders whatever it's handed. That's what makes "live calculations and
-// conditional formatting keep working" true by construction: the values
-// and classNames it renders are computed by the exact same functions the
-// old table already calls, not a reimplementation.
-import { useMemo, useState } from 'react'
+// Deliberately a "dumb", fully prop-driven presentational component: every piece of business logic (live
+// DOS/on-hand-after recompute, minimum checks, PO-decision handling, shop-expand candidate lists) stays owned by
+// OrdersV2Review.tsx — this component only renders whatever it's handed. The Flags/Tags it shows are computed by the
+// pure lineFlags.ts from each line's CURRENT values, so they update live as quantities are edited.
+import { useCallback, useMemo, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Flag } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
+import { HoverTip, SwatchTipBody } from '@/components/ui/HoverTip'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
 import type { useLastOrderedInfo } from './useLastOrderedInfo'
 import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
-import { PoDecisionButtons, Flags } from './OrdersV2Review'
+import { PoDecisionButtons } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
-import { OVERRIDE_CELL, DOS_COLOR_LEGEND, dos, money, num, dShort } from './shared'
+import { ToggleButton } from './controls'
+import { dos, money, num, dShort } from './shared'
 import { uomDisplayLabel } from './types'
-import { QtyStepper, ZeroReasonButtons, isZeroAdjusted, type ZeroReason } from './lineControls'
-import type { GenerationInput, LineFlag } from './types'
+import { QtyStepper, type ZeroReason } from './lineControls'
+import {
+  computeLineTags, combinedSuffix, dosTone, rowToneOf, DOS_TONE_COLOR, DOS_TONE_LABEL, ROW_TONE_META,
+  type DosThresholds, type LineTags, type RowTone, type TagDef,
+} from './lineFlags'
+import type { GenerationInput } from './types'
 
 const TABLE_KEY = 'orders-v2.review-lines'
 const DEFAULT_PINNED = ['shop']
+const COMBINED_MODE_KEY = 'ov2_review_combined_mode'
+const NO_THRESHOLDS: DosThresholds = { target: 0, minTrigger: 0, max: Number.POSITIVE_INFINITY }
+const TONE_ORDER: RowTone[] = ['below_min', 'over_capacity_target', 'excluded']
+// Row tones are drawn as translucent washes of their color over the plain cream row (alpha 0x2B ≈ 17%).
+const toneWash = (t: RowTone) => `${ROW_TONE_META[t].color}2B`
+
+// ── Small presentational pieces ─────────────────────────────────────────────
+
+/** A tiny colored flag glyph with a styled hover tooltip — used inline above On Hand / On Hand After. */
+function TagIcon({ tag }: { tag: TagDef }) {
+  return (
+    <HoverTip content={<SwatchTipBody color={tag.color} title={tag.label} description={tag.description} />}>
+      <Flag className="w-3 h-3" style={{ color: tag.color, fill: tag.color }} strokeWidth={1.5} />
+    </HoverTip>
+  )
+}
+
+/** A tag as an inline, never-stacked chip: color swatch + label. */
+function TagChip({ tag }: { tag: TagDef }) {
+  return (
+    <HoverTip content={<SwatchTipBody color={tag.color} title={tag.label} description={tag.description} />}>
+      <span className="inline-flex items-center gap-1 rounded border px-1 text-[9px] leading-4 whitespace-nowrap text-navy"
+        style={{ borderColor: `${tag.color}99`, background: `${tag.color}26` }}>
+        <span className="inline-block w-1.5 h-1.5 rounded-sm flex-shrink-0" style={{ background: tag.color }} />
+        {tag.label}
+      </span>
+    </HoverTip>
+  )
+}
+
+/** One line of reasoning, with a "more" toggle that slides the full text open/closed. */
+function NoteLine({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="flex items-start gap-1 text-[10px] font-mono text-inky/70 italic leading-tight max-w-[22rem]">
+      <div className="min-w-0 overflow-hidden transition-[max-height] duration-300 ease-in-out" style={{ maxHeight: open ? '8rem' : '0.9rem' }}>
+        <div className={open ? 'whitespace-normal' : 'truncate'}>{text}</div>
+      </div>
+      {text.length > 38 && (
+        <button type="button" onClick={() => setOpen((v) => !v)} className="not-italic text-sky hover:underline flex-shrink-0">{open ? 'less' : 'more'}</button>
+      )}
+    </div>
+  )
+}
+
+/** A DOS value with the yellow/red-scale conditional formatting and a hover explanation. */
+function DosCell({ v, thresholds }: { v: number | null | undefined; thresholds: DosThresholds | null }) {
+  const tone = thresholds ? dosTone(v ?? null, thresholds) : null
+  if (!tone) return <span className="block text-right">{dos(v)}</span>
+  const color = DOS_TONE_COLOR[tone]
+  return (
+    <span className="block text-right">
+      <HoverTip content={<SwatchTipBody color={color} title={DOS_TONE_LABEL[tone]} />}>
+        <span className="inline-block rounded px-1 font-bold text-navy" style={{ background: `${color}40`, boxShadow: `inset 0 -2px 0 ${color}` }}>
+          {dos(v)}
+        </span>
+      </HoverTip>
+    </span>
+  )
+}
+
+// ── Table ───────────────────────────────────────────────────────────────────
 
 export function OrdersV2ReviewTable({
   lines, draft, shopLabel, ozProductIds, lastOrderedInfo, deliveryFor, describeSchedule,
-  liveFlags, dosAfterColorClass, groupMinimumStatus, patchQty,
+  thresholds, onHandAfterAtDelivery, groupMinimumStatus, patchQty,
   decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
   inputByLineKey, toolbarExtra, onRowRef, onLastRowKey,
@@ -50,8 +112,10 @@ export function OrdersV2ReviewTable({
   lastOrderedInfo: ReturnType<typeof useLastOrderedInfo>
   deliveryFor: (locationId: string | null, fromDate: string) => string | null
   describeSchedule: (locationId: string | null) => string | null
-  liveFlags: (l: DraftLineRow) => LineFlag[]
-  dosAfterColorClass: (v: number | null) => string
+  /** This order's own DOS target / min trigger / max (the card above the table), or null until seeded. */
+  thresholds: DosThresholds | null
+  /** On hand projected to the shop's delivery date plus this line's order, in quarts. */
+  onHandAfterAtDelivery: (l: DraftLineRow) => number
   groupMinimumStatus: Map<string, boolean>
   patchQty: (l: DraftLineRow, qty: number) => void
   exceptionFor: (locationId: string, productId: string) => ReturnType<typeof useProductExceptions>['rows'][number] | null
@@ -68,165 +132,254 @@ export function OrdersV2ReviewTable({
   showConfigVmi: boolean
   leadDaysFor: (locId: string) => number
   inputByLineKey: Map<string, GenerationInput>
-  // The VMI/over-capacity/Dropdown-Popup toggles + Add Non-Configured
-  // Product button — direct ask 2026-09-30: these need to render right
-  // next to Manage Columns (this component's own DataTable toolbar), not
-  // in OrdersV2Review.tsx's separate row above, since that's a different
-  // mount point than where Manage Columns itself lives.
+  // The VMI/over-capacity/Dropdown-Popup toggles + Add Non-Configured Product button render right next to Manage
+  // Columns (this component's own DataTable toolbar), not in OrdersV2Review.tsx's separate row above.
   toolbarExtra?: React.ReactNode
 }) {
   const [columnManagerOpen, setColumnManagerOpen] = useState(false)
+  // "Combined – Hidden" shows just the combined total with the math on hover; "Combined – Listed" writes each
+  // combined product's on-hand out in the cell.
+  const [combinedModePref, setCombinedModePref] = useProfilePref<string>(COMBINED_MODE_KEY, 'hidden')
+  const combinedListed = combinedModePref === 'listed'
+  const [toneFilter, setToneFilter] = useState<Set<RowTone>>(new Set())
 
-  // Stable per-shop "anchor" row for the expand content — the FIRST line
+  // Live Flags/Tags per line — recomputed whenever any line or the thresholds change.
+  const th = thresholds ?? NO_THRESHOLDS
+  const tagMap = useMemo(() => {
+    const ctx = {
+      thresholds: th,
+      onHandAfter: (l: DraftLineRow) => onHandAfterAtDelivery(l),
+      belowMinimum: (l: DraftLineRow) => groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false,
+    }
+    const m = new Map<string, { tags: LineTags; tone: RowTone | null }>()
+    for (const l of lines) {
+      const tags = computeLineTags(l as any, ctx)
+      m.set(l.id, { tags, tone: rowToneOf(l, tags) })
+    }
+    return m
+  }, [lines, th, onHandAfterAtDelivery, groupMinimumStatus])
+  const tagsOf = useCallback((l: DraftLineRow) => tagMap.get(l.id)?.tags ?? { before: [], after: [], note: null }, [tagMap])
+  const toneOf = useCallback((l: DraftLineRow) => tagMap.get(l.id)?.tone ?? null, [tagMap])
+
+  const toneCounts = useMemo(() => {
+    const c: Record<RowTone, number> = { below_min: 0, over_capacity_target: 0, excluded: 0 }
+    for (const l of lines) { const t = tagMap.get(l.id)?.tone; if (t) c[t]++ }
+    return c
+  }, [lines, tagMap])
+  const shownLines = useMemo(
+    () => (toneFilter.size ? lines.filter((l) => { const t = tagMap.get(l.id)?.tone; return !!t && toneFilter.has(t) }) : lines),
+    [lines, tagMap, toneFilter],
+  )
 
   const col = useMemo(() => createColumnHelper<DraftLineRow>(), [])
-  const columns = useMemo(() => [
-    col.accessor((l) => shopLabel(l.location_id), {
-      id: 'shop', header: 'Shop',
-      cell: (i) => {
-        const l = i.row.original
-        const locId = l.location_id ?? ''
-        const open = expanded.has(locId)
-        return (
-          <button onClick={() => onToggleExpand(locId)} title="Show every product configured for this shop"
-            className="inline-flex items-center gap-1 hover:underline hover:text-sky">
-            {open ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
-            {i.getValue()}
-          </button>
-        )
-      },
-    }),
-    col.accessor('product_id', { id: 'product', header: 'Product' }),
-    col.accessor((l) => uomDisplayLabel(l.uom), { id: 'uom', header: 'UOM', enableSorting: false }),
-    col.accessor((l) => (ozProductIds.has(l.product_id) ? (l.max_capacity_gallons ?? 0) * 32 : l.max_capacity_gallons), {
-      id: 'capacity', header: 'Capacity', cell: (i) => <span className="block text-right">{num(i.getValue(), 0)}</span>,
-    }),
-    col.display({
-      id: 'on_hand', header: 'On Hand', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
-      cell: (i) => {
-        const l = i.row.original
-        const isOz = ozProductIds.has(l.product_id)
-        const toOz = (v: number | null | undefined) => (v == null ? v : v * 32)
-        const input = inputByLineKey.get(`${l.location_id}|${l.product_id}`)
-        const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
-        return (
-          <div className="text-right">
-            {/* l.on_hand is already the combined family total — see
-                OrdersV2Review's own "on_hand" cell comment. */}
-            {num(isOz ? toOz(l.on_hand) : l.on_hand)}
-            {input?.equivalent_products && input.equivalent_products.length > 0 && (
-              <div className="text-[9px] text-inky/50 leading-tight font-normal text-left">
-                <div className="text-sky font-bold uppercase tracking-wide">Combining On Hands</div>
-                <div>{l.product_id}: {num(input.own_on_hand)}</div>
-                {input.equivalent_products.map((e) => <div key={e.product_id}>{e.product_id}: {num(e.on_hand)}</div>)}
+  const columns = useMemo(() => {
+    const numericMeta = { numeric: true }
+    const dosMeta = (pick: (l: DraftLineRow) => number | null) => ({
+      numeric: true,
+      colorOf: (l: DraftLineRow) => (thresholds ? dosTone(pick(l), thresholds) : null),
+      colorLabels: DOS_TONE_LABEL as Record<string, string>,
+      colorSwatch: DOS_TONE_COLOR as Record<string, string>,
+    })
+    const onHandOf = (l: DraftLineRow) => (ozProductIds.has(l.product_id) ? Number(l.on_hand ?? 0) * 32 : l.on_hand)
+    const onHandAfterOf = (l: DraftLineRow) => {
+      const v = onHandAfterAtDelivery(l)
+      return ozProductIds.has(l.product_id) ? v * 32 : v
+    }
+    const infoOf = (l: DraftLineRow) => lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
+    const lastOrderedText = (l: DraftLineRow) => {
+      const info = infoOf(l)
+      return info.lastOrderDate ? `${dShort(info.lastOrderDate)} · ${num(info.lastOrderQty, 1)}${info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}` : '—'
+    }
+    const lastDeliveredText = (l: DraftLineRow) => {
+      const info = infoOf(l)
+      return info.lastDeliveredDate ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}` : '—'
+    }
+    const deliveryText = (l: DraftLineRow) => { const dd = deliveryFor(l.location_id, draft.order_date); return dd ? dShort(dd) : '—' }
+
+    // Tiny colored flags sit in the cell's top margin, inline (never stacked), each with a styled hover tooltip.
+    const iconStrip = (tags: TagDef[], extra?: React.ReactNode) =>
+      (tags.length > 0 || extra) ? (
+        <span className="absolute -top-0.5 right-0 inline-flex items-center gap-0.5 leading-none">{extra}{tags.map((t) => <TagIcon key={t.key} tag={t} />)}</span>
+      ) : null
+
+    return [
+      col.accessor((l) => shopLabel(l.location_id), {
+        id: 'shop', header: 'Shop',
+        cell: (i) => {
+          const l = i.row.original
+          const locId = l.location_id ?? ''
+          const open = expanded.has(locId)
+          return (
+            <button onClick={() => onToggleExpand(locId)} title="Show every product configured for this shop"
+              className="inline-flex items-center gap-1 hover:underline hover:text-sky">
+              {open ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+              {i.getValue()}
+            </button>
+          )
+        },
+      }),
+      col.accessor('product_id', { id: 'product', header: 'Product' }),
+      col.accessor((l) => uomDisplayLabel(l.uom), { id: 'uom', header: 'UOM', enableSorting: false }),
+      col.accessor((l) => (ozProductIds.has(l.product_id) ? (l.max_capacity_gallons ?? 0) * 32 : l.max_capacity_gallons), {
+        id: 'capacity', header: 'Capacity', meta: numericMeta, cell: (i) => <span className="block text-right">{num(i.getValue(), 0)}</span>,
+      }),
+      col.accessor((l) => onHandOf(l), {
+        id: 'on_hand', header: 'On Hand', enableSorting: false, meta: { noClip: true, numeric: true },
+        cell: (i) => {
+          const l = i.row.original
+          const input = inputByLineKey.get(`${l.location_id}|${l.product_id}`)
+          const info = infoOf(l)
+          const isOz = ozProductIds.has(l.product_id)
+          const toOz = (v: number) => (isOz ? v * 32 : v)
+          const combined = input?.equivalent_products ?? []
+          const { before } = tagsOf(l)
+          const off = info.onHandCheck && !info.onHandCheck.withinRange ? info.onHandCheck : null
+          return (
+            <div className="relative pt-2 text-right">
+              {iconStrip(before, off && (
+                <HoverTip content={<SwatchTipBody color="#C0392B" title="On hand may be off"
+                  description={`Based on the last delivery, on hand was expected to be roughly ${num(off.expected)} (${num(off.low)}–${num(off.high)}).`} />}>
+                  <AlertTriangle className="w-3 h-3 text-[#C0392B]" />
+                </HoverTip>
+              ))}
+              {combined.length > 0 && !combinedListed ? (
+                <HoverTip placement="bottom" content={
+                  <div className="flex flex-col gap-0.5 text-[11px] font-mono">
+                    <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">Combined on hand</span>
+                    <span>{[`${l.product_id} ${num(toOz(input?.own_on_hand ?? 0))}`, ...combined.map((e) => `${e.product_id} ${num(toOz(e.on_hand))}`)].join(' + ')}</span>
+                    <span className="font-bold">= {num(onHandOf(l))}</span>
+                  </div>
+                }>
+                  <span className="cursor-help underline decoration-dotted decoration-sky underline-offset-2">{num(onHandOf(l))}</span>
+                </HoverTip>
+              ) : <span>{num(onHandOf(l))}</span>}
+              {combined.length > 0 && combinedListed && (
+                <div className="text-[9px] text-inky/60 leading-tight font-normal whitespace-nowrap">
+                  <span title={l.product_id}>{combinedSuffix(l.product_id)}</span> {num(toOz(input?.own_on_hand ?? 0))}
+                  {combined.map((e) => <span key={e.product_id} title={e.product_id}> · {combinedSuffix(e.product_id)} {num(toOz(e.on_hand))}</span>)}
+                </div>
+              )}
+            </div>
+          )
+        },
+      }),
+      col.accessor((l) => (ozProductIds.has(l.product_id) ? (l.daily_usage ?? 0) * 32 : l.daily_usage), {
+        id: 'usage_day', header: 'Usage/day', enableSorting: false, meta: numericMeta, cell: (i) => <span className="block text-right">{num(i.getValue())}</span>,
+      }),
+      col.accessor('dos_before', {
+        id: 'dos_now', header: 'DOS Now', enableSorting: false, meta: dosMeta((l) => l.dos_before ?? null),
+        cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} />,
+      }),
+      col.accessor((l) => lastOrderedText(l), {
+        id: 'last_ordered', header: 'Last Ordered', enableSorting: false, meta: { noClip: true },
+        cell: (i) => {
+          const info = infoOf(i.row.original)
+          return info.lastOrderDate ? (
+            <>
+              <div>{i.getValue()}</div>
+              {info.eta && <div className="text-[9px] text-inky/50 leading-tight">ETA {dShort(info.eta)}</div>}
+            </>
+          ) : '—'
+        },
+      }),
+      col.accessor((l) => lastDeliveredText(l), { id: 'last_delivered', header: 'Last Delivered', enableSorting: false, meta: { noClip: true } }),
+      col.accessor((l) => deliveryText(l), {
+        id: 'delivery_date', header: 'Delivery', enableSorting: false, meta: { noClip: true },
+        cell: (i) => {
+          const sd = describeSchedule(i.row.original.location_id)
+          return (
+            <>
+              <div>{i.getValue()}</div>
+              {sd && <div className="text-[9px] text-inky/50 leading-tight">{sd}</div>}
+            </>
+          )
+        },
+      }),
+      col.accessor((l) => Number(l.qty), {
+        id: 'qty', header: 'Qty', enableSorting: false,
+        meta: {
+          noClip: true, numeric: true,
+          // The orange "edited by hand" bar runs the full height of the cell, not just the content.
+          cellClassName: (l: DraftLineRow) => (l.is_override ? 'shadow-[inset_3px_0_0_#E67E22] pl-3' : ''),
+        },
+        cell: (i) => {
+          const l = i.row.original
+          const isOz = ozProductIds.has(l.product_id)
+          return (
+            <div className="flex items-center justify-end gap-1.5">
+              <QtyStepper value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
+                onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
+              {l.quarts_per_unit != null && (
+                <span className="text-[10px] text-inky/50 whitespace-nowrap w-12 text-left">
+                  {isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
+                </span>
+              )}
+            </div>
+          )
+        },
+      }),
+      col.accessor((l) => onHandAfterOf(l), {
+        id: 'on_hand_after', header: 'On Hand After', enableSorting: false, meta: { noClip: true, numeric: true },
+        cell: (i) => {
+          const { after } = tagsOf(i.row.original)
+          // Only the capacity-related tags belong above this number; the rest read in the Tags column.
+          const capTags = after.filter((t) => t.key === 'capacity_capped' || t.key === 'exceeded_capacity_for_dos_target')
+          return (
+            <div className="relative pt-2 text-right">
+              {iconStrip(capTags)}
+              {num(i.getValue())}
+            </div>
+          )
+        },
+      }),
+      col.accessor('dos_after', {
+        id: 'dos_after', header: 'DOS After', meta: dosMeta((l) => l.dos_after ?? null),
+        cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} />,
+      }),
+      col.accessor('dos_after_delivery', {
+        id: 'dos_at_delivery', header: 'DOS @ Delivery', enableSorting: false, meta: numericMeta,
+        cell: (i) => <span className="block text-right">{dos(i.getValue())}</span>,
+      }),
+      col.accessor((l) => Number(l.qty) * Number(l.unit_cost ?? 0), {
+        id: 'dollars', header: 'Ordered Cost', meta: numericMeta, cell: (i) => <span className="block text-right">{money(i.getValue())}</span>,
+      }),
+      col.accessor((l) => tagsOf(l).before.map((t) => t.label).join(', '), {
+        id: 'flags_before', header: 'Flags – Before', enableSorting: false,
+        meta: { noClip: true, multiValue: (l: DraftLineRow) => tagsOf(l).before.map((t) => t.label) },
+        cell: (i) => {
+          const l = i.row.original
+          const { before } = tagsOf(l)
+          return (
+            <div className="flex items-center gap-1 whitespace-nowrap">
+              {before.length === 0 ? <span className="text-inky/25">—</span> : before.map((t) => <TagChip key={t.key} tag={t} />)}
+              {(l.flags ?? []).includes('covered_by_open_po') && (
+                <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
+              )}
+            </div>
+          )
+        },
+      }),
+      col.accessor((l) => tagsOf(l).after.map((t) => t.label).join(', '), {
+        id: 'tags_after', header: 'Tags – After', enableSorting: false,
+        meta: { noClip: true, multiValue: (l: DraftLineRow) => tagsOf(l).after.map((t) => t.label) },
+        cell: (i) => {
+          const { after, note } = tagsOf(i.row.original)
+          return (
+            <div className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-1 whitespace-nowrap">
+                {after.length === 0 ? <span className="text-inky/25">—</span> : after.map((t) => <TagChip key={t.key} tag={t} />)}
               </div>
-            )}
-            {info.onHandCheck && !info.onHandCheck.withinRange && (
-              <div className="text-[9px] text-[#C0392B] font-bold mt-0.5 normal-case"
-                title={`Based on the last delivery, on hand was expected to be roughly ${num(info.onHandCheck.expected)} (${num(info.onHandCheck.low)}–${num(info.onHandCheck.high)})`}>
-                ⚠ On hand may be off
-              </div>
-            )}
-          </div>
-        )
-      },
-    }),
-    col.accessor((l) => (ozProductIds.has(l.product_id) ? (l.daily_usage ?? 0) * 32 : l.daily_usage), {
-      id: 'usage_day', header: 'Usage/day', enableSorting: false, cell: (i) => <span className="block text-right">{num(i.getValue())}</span>,
-    }),
-    col.accessor('dos_before', { id: 'dos_now', header: 'DOS Now', enableSorting: false, cell: (i) => <span className="block text-right">{dos(i.getValue())}</span> }),
-    col.display({
-      id: 'last_ordered', header: 'Last Ordered', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
-      cell: (i) => {
-        const l = i.row.original
-        const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
-        return info.lastOrderDate ? (
-          <>
-            <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
-            {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
-          </>
-        ) : '—'
-      },
-    }),
-    col.display({
-      id: 'last_delivered', header: 'Last Delivered', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
-      cell: (i) => {
-        const l = i.row.original
-        const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
-        return info.lastDeliveredDate
-          ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
-          : '—'
-      },
-    }),
-    col.display({
-      id: 'delivery_date', header: 'Delivery', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
-      cell: (i) => {
-        const l = i.row.original
-        const dd = deliveryFor(l.location_id, draft.order_date)
-        const sd = describeSchedule(l.location_id)
-        return (
-          <>
-            <div>{dd ? dShort(dd) : '—'}</div>
-            {sd && <div className="text-[9px] text-inky/50">{sd}</div>}
-          </>
-        )
-      },
-    }),
-    col.accessor('qty', {
-      id: 'qty', header: 'Qty', meta: { noClip: true }, enableSorting: false,
-      cell: (i) => {
-        const l = i.row.original
-        const isOz = ozProductIds.has(l.product_id)
-        return (
-          <div className={`flex flex-col items-end ${l.is_override ? `${OVERRIDE_CELL} pl-2 py-1` : ''}`}>
-            <QtyStepper value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right" onChange={(n) => patchQty(l, n)} />
-            {l.quarts_per_unit != null && (
-              <div className="text-[10px] text-inky/50 mt-0.5">
-                {isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
-              </div>
-            )}
-          </div>
-        )
-      },
-    }),
-    col.accessor((l) => {
-      const isOz = ozProductIds.has(l.product_id)
-      // Projected to the shop's actual delivery date, not just today — same
-      // fix as the main (non-beta) table's own "On Hand After", see its
-      // onHandAfterAtDelivery comment. Usage runs the shelf down over the
-      // lead time first (floored at 0), THEN whatever's ordered lands.
-      const leadDays = leadDaysFor(l.location_id ?? '')
-      const remainingAtDelivery = Math.max(0, Number(l.on_hand ?? 0) - Number(l.daily_usage ?? 0) * leadDays)
-      const v = remainingAtDelivery + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
-      return isOz ? v * 32 : v
-    }, { id: 'on_hand_after', header: 'On Hand After', enableSorting: false, cell: (i) => <span className="block text-right">{num(i.getValue())}</span> }),
-    col.accessor('dos_after', {
-      id: 'dos_after', header: 'DOS After',
-      cell: (i) => <span title={DOS_COLOR_LEGEND} className={`block text-right font-bold ${dosAfterColorClass(i.getValue())}`}>{dos(i.getValue())}</span>,
-    }),
-    col.accessor('dos_after_delivery', { id: 'dos_at_delivery', header: 'DOS @ Delivery', enableSorting: false, cell: (i) => <span className="block text-right">{dos(i.getValue())}</span> }),
-    col.accessor((l) => Number(l.qty) * Number(l.unit_cost ?? 0), { id: 'dollars', header: '$', cell: (i) => <span className="block text-right">{money(i.getValue())}</span> }),
-    col.display({
-      id: 'flags', header: 'Flags', enableSorting: false, enableColumnFilter: false, meta: { noClip: true },
-      cell: (i) => {
-        const l = i.row.original
-        return (
-          <>
-            <Flags flags={liveFlags(l)} />
-            {l.note && <div className="text-[10px] font-mono text-inky/60 italic mt-0.5">{l.note}</div>}
-            {(l.flags ?? []).includes('covered_by_open_po') && (
-              <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
-            )}
-            {isZeroAdjusted(l) && <ZeroReasonButtons line={l} onChange={(r, n) => onZeroReason(l, r, n)} />}
-          </>
-        )
-      },
-    }),
-  ], [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, draft.order_date,
-      patchQty, dosAfterColorClass, liveFlags, decidePoOverride, decidePoExclude,
+              {note && <NoteLine text={note} />}
+            </div>
+          )
+        },
+      }),
+    ]
+  }, [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, draft.order_date,
+      patchQty, thresholds, tagsOf, onHandAfterAtDelivery, combinedListed, decidePoOverride, decidePoExclude,
       decidePoCombine, onZeroReason, expanded, onToggleExpand])
 
-  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(lines, columns, {
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(shownLines, columns, {
     persistKey: TABLE_KEY,
     initialPageSize: 50,
     initialSorting: [{ id: 'shop', desc: false }],
@@ -257,18 +410,8 @@ export function OrdersV2ReviewTable({
     setColumnPinning({ left: DEFAULT_PINNED, right: [] })
   }
 
-  // Same-band-per-shop grouping as the old table — computed off the live
-  // sorted/filtered row order DataTable is about to render, same trade-off
-  // already accepted on Final Review's own rebuild (re-sorting by another
-  // column still alternates on shop changes, just won't read as a clean
-  // per-shop grouping once the shop column itself isn't the active sort).
-  // Direct ask 2026-09-30 (reverted from a fixed data-order anchor):
-  // "expand after the LAST row" again, matching the old table's own
-  // behavior — computed off the live sorted/filtered row order (same
-  // trade-off bandOf already accepts): a re-sort by another column moves
-  // which row is "last" for a shop, so the expand toggle/content only
-  // stays visually anchored to the bottom of a group under the default
-  // Shop sort, not any arbitrary sort.
+  // Same-band-per-shop grouping, computed off the live sorted/filtered row order DataTable is about to render.
+  // "Expand after the LAST row" of a shop group — a re-sort by another column moves which row is "last".
   const pageRows = table.getRowModel().rows
   const bandOf = new Map<string, boolean>()
   const isLastOfShop = new Map<string, boolean>()
@@ -291,36 +434,17 @@ export function OrdersV2ReviewTable({
     <>
       <DataTable
         table={table}
+        density="compact"
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         exportFilename={`Order Review - ${draft.order_date}`}
         onRowRef={onRowRef}
         onLastRowKey={onLastRowKey}
         hideColumnControl
-        // belowMin can only ever be true for an included line (see
-        // groupMinimumStatus's own gating in OrdersV2Review.tsx), so this
-        // never has to arbitrate between "dim" and "below minimum" for the
-        // same row — they're mutually exclusive by construction.
-        getRowClassName={(l) => {
-          if (!l.included) return 'bg-[#E4E4DC] dark:bg-[#16222E]'
-          const belowMin = groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false
-          if (belowMin) return 'bg-[#F4DBD4] dark:bg-[#3A1F1C]'
-          // Whole-row treatment for a line the engine let exceed its
-          // configured capacity to reach the DOS target — see
-          // OrdersV2Review's own `overCapacity` comment, same flag.
-          if ((l.flags ?? []).includes('exceeded_capacity_for_dos_target' as LineFlag)) return 'bg-[#E67E22]/15'
-          // DataTable's own zebra stripe only kicks in when this returns an
-          // EMPTY string (its own default-stripe fallback, meant for a
-          // caller with no opinion on some rows) — this caller always has
-          // an opinion (which shop-group band a row belongs to), so the
-          // "off" band needs its own explicit class too. Returning '' here
-          // used to fall through to DataTable's plain per-ROW alternation
-          // for every "off" shop group, mixing a second, unrelated striping
-          // pattern in on top of the per-shop bands and making a multi-
-          // product shop's own rows look like they were striped row by row
-          // instead of banded as one group.
-          return bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : 'bg-cream'
-        }}
+        // A toned row (excluded / under order minimum / over capacity to reach the DOS target) drops the zebra and
+        // shop banding entirely and shows its one tone color across the whole row; every other row is banded per shop.
+        getRowTone={(l) => { const t = toneOf(l); return t ? toneWash(t) : null }}
+        getRowClassName={(l) => (bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : 'bg-cream')}
         expandedRowRender={(l) => {
           const locId = l.location_id ?? ''
           if (!expanded.has(locId) || !isLastOfShop.get(l.id)) return null
@@ -349,6 +473,25 @@ export function OrdersV2ReviewTable({
         }}
         actions={
           <>
+            {TONE_ORDER.map((t) => {
+              const active = toneFilter.has(t)
+              return (
+                <HoverTip key={t} content={<SwatchTipBody color={ROW_TONE_META[t].color} title={ROW_TONE_META[t].label}
+                  description={active ? 'Click to stop filtering to these rows.' : 'Click to show only rows with this color.'} />}>
+                  <button type="button"
+                    onClick={() => setToneFilter((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n })}
+                    className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs font-mono ${active ? 'border-navy bg-navy/10 text-navy font-bold' : 'border-navy/30 text-inky hover:border-navy'}`}>
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: ROW_TONE_META[t].color }} />
+                    {ROW_TONE_META[t].label}
+                    <span className="text-inky/60">{toneCounts[t]}</span>
+                  </button>
+                </HoverTip>
+              )
+            })}
+            <ToggleButton checked={combinedListed} onChange={(v) => setCombinedModePref(v ? 'listed' : 'hidden')}
+              onLabel="Combined – Listed" offLabel="Combined – Hidden"
+              onTooltip="Click to hide the per-product breakdown of combined on hands (shown on hover instead)"
+              offTooltip="Click to list each combined product's on hand in the cell" />
             {toolbarExtra}
             <button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>
           </>

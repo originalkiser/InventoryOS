@@ -65,6 +65,15 @@ interface DataTableProps<T> {
    */
   getRowClassName?: (original: T) => string
   /**
+   * A full-row "tone" (any CSS color, usually translucent) for a row, or null. Unlike getRowClassName, a toned row
+   * drops the zebra banding entirely — it sits on a plain opaque cream base with the tone laid over it in EVERY
+   * cell (pinned or not) — so the tone is one clean, consistent color rather than a mix of tone and stripe.
+   * Selection still wins. (Orders v2 Review's below-minimum / excluded / over-capacity rows.)
+   */
+  getRowTone?: (original: T) => string | null
+  /** 'compact' = ~25% shorter rows (tighter cell padding). Default 'normal'. */
+  density?: 'normal' | 'compact'
+  /**
    * Renders an extra full-width row directly below a given row — a
    * "click the shop name to see everything configured for it" sub-table,
    * a detail panel, etc. (Orders v2 Review's own shop-expand row is the
@@ -172,6 +181,8 @@ export function DataTable<T>({
   dangerZone,
   onRowClick,
   getRowClassName,
+  getRowTone,
+  density = 'normal',
   expandedRowRender,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
@@ -602,9 +613,11 @@ export function DataTable<T>({
                 // A caller-provided tint (e.g. status color-coding) takes the
                 // zebra stripe's place — selection still wins over it, same
                 // as it already won over the plain stripe.
-                const tint = getRowClassName?.(row.original) ?? ''
-                const zebraClass = i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'
-                const bandClass = selected ? 'bg-sky/15' : tint || zebraClass
+                const tone = selected ? null : (getRowTone?.(row.original) ?? null)
+                const tint = tone ? '' : (getRowClassName?.(row.original) ?? '')
+                const zebraClass = tone || i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'
+                const bandClass = selected ? 'bg-sky/15' : tone ? 'bg-cream' : tint || zebraClass
+                const padClass = density === 'compact' ? 'px-2 py-0.5' : 'px-3 py-2'
                 // Pinned cells must be fully opaque or scrolled columns show through them. The row's tint
                 // (selection, status color, ...) is often translucent, so a pinned cell gets the opaque zebra
                 // color as its own background and the tint is laid over it as a click-through overlay.
@@ -643,9 +656,10 @@ export function DataTable<T>({
                         renders consistently and correctly across every column. */}
                     <td
                       style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 10 }}
-                      className={['px-2 py-2 text-center border-b border-inky/10', zebraClass].join(' ')}
+                      className={[density === 'compact' ? 'px-1.5 py-0.5' : 'px-2 py-2', 'text-center border-b border-inky/10', zebraClass].join(' ')}
                     >
                       <span aria-hidden className={`pointer-events-none absolute inset-0 -z-10 group-hover:bg-sky/10 ${pinnedOverlay}`} />
+                      {tone && <span aria-hidden className="pointer-events-none absolute inset-0 -z-10" style={{ background: tone }} />}
                       <input
                         type="checkbox"
                         checked={selected}
@@ -657,6 +671,11 @@ export function DataTable<T>({
                     {row.getVisibleCells().map((cell) => {
                       const noClip = (cell.column.columnDef.meta as any)?.noClip
                       const isFill = (cell.column.columnDef.meta as any)?.fill
+                      const extraCellClass = (cell.column.columnDef.meta as any)?.cellClassName?.(row.original) ?? ''
+                      const pinnedLeft = cell.column.getIsPinned() === 'left'
+                      // A toned row needs EVERY cell on the same opaque base with the tone over it (a non-pinned
+                      // cell normally has no background of its own and just shows the row's).
+                      const toneOnCell = !!tone && !pinnedLeft
                       return (
                         <td
                           key={cell.id}
@@ -667,17 +686,20 @@ export function DataTable<T>({
                             ...(noClip || isFill ? {} : { overflow: 'hidden', textOverflow: 'ellipsis' }),
                             ...(cell.column.getIsPinned() === 'left'
                               ? { position: 'sticky', left: cell.column.getStart('left') + SEL_W, zIndex: 10 }
-                              : {}),
+                              : toneOnCell ? { position: 'relative', zIndex: 0 } : {}),
                           }}
                           className={[
-                            'px-3 py-2 text-navy border-b border-inky/10',
+                            padClass, 'text-navy border-b border-inky/10',
                             noClip ? '' : 'whitespace-nowrap',
-                            cell.column.getIsPinned() === 'left' ? `${zebraClass} border-r-2 border-r-inky/20` : '',
+                            pinnedLeft ? `${zebraClass} border-r-2 border-r-inky/20` : '',
+                            toneOnCell ? 'bg-cream' : '',
+                            extraCellClass,
                           ].join(' ')}
                         >
-                          {cell.column.getIsPinned() === 'left' && (
+                          {(pinnedLeft || toneOnCell) && (
                             <span aria-hidden className={`pointer-events-none absolute inset-0 -z-10 group-hover:bg-sky/10 ${pinnedOverlay}`} />
                           )}
+                          {tone && (pinnedLeft || toneOnCell) && <span aria-hidden className="pointer-events-none absolute inset-0 -z-10" style={{ background: tone }} />}
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
                       )

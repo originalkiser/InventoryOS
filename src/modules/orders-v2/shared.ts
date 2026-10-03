@@ -77,6 +77,9 @@ export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {
   sky: 'bg-sky/25 text-navy border-sky/50',
 }
 
+/** Per-user profile pref (Order Settings): show the ORIGINAL Review table instead of the new default one. */
+export const OV2_USE_OLD_TABLE_KEY = 'ov2_review_use_old_table'
+
 /** Amber treatment marking a user override, used everywhere edits are shown. */
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'
 
