@@ -71,6 +71,10 @@ interface DataTableProps<T> {
    * Selection still wins. (Orders v2 Review's below-minimum / excluded / over-capacity rows.)
    */
   getRowTone?: (original: T) => string | null
+  /** Controls rendered right after the search box, where the Export button normally sits. */
+  leadingActions?: React.ReactNode
+  /** Show the Export button only while at least one row is checked. */
+  exportOnlyWhenSelected?: boolean
   /** 'compact' = ~25% shorter rows (tighter cell padding). Default 'normal'. */
   density?: 'normal' | 'compact'
   /**
@@ -183,6 +187,8 @@ export function DataTable<T>({
   getRowClassName,
   getRowTone,
   density = 'normal',
+  leadingActions,
+  exportOnlyWhenSelected,
   expandedRowRender,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
@@ -409,8 +415,10 @@ export function DataTable<T>({
           <Button variant="secondary" size="sm" onClick={() => setColumnManagerOpen(true)}>Manage Columns</Button>
         )}
 
+        {leadingActions}
+
         {/* Export button + dropdown */}
-        {exportFilename && !hideExport && (
+        {exportFilename && !hideExport && !(exportOnlyWhenSelected && selectedCount === 0) && (
           <div ref={exportMenuRef} className="relative">
             <Button
               variant="secondary"

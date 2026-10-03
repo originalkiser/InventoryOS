@@ -10,6 +10,9 @@ import type { DraftLineRow } from './useOrdersV2'
 // ── Qty stepper ─────────────────────────────────────────────────────────
 
 // Same height as the number box (the row is items-stretch) and twice the old 20px width, so they're easy to hit.
+// Fluid variant (the Review table's Order Qty column): the box and both buttons shrink with the column instead of
+// spilling over their neighbors — buttons share 1 part each, the box 2 parts, with small floors.
+const FLUID_BTN = 'flex-1 basis-0 min-w-[0.9rem] max-w-[2.5rem] flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none overflow-hidden'
 const STEP_BTN = 'w-10 flex-shrink-0 flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none'
 
 /** Enter in a qty box moves to the next row's qty box (Shift+Enter goes back up) within the same table. */
@@ -34,7 +37,7 @@ const NO_SPINNER = '[appearance:textfield] [&::-webkit-outer-spin-button]:appear
  * adds the product only once focus leaves the box (adding mid-typing would
  * swap the row out from under the cursor), while a + click adds immediately.
  */
-export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change', inputClassName = 'w-14', align = 'text-center', muted = false, zeroReason }: {
+export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change', inputClassName = 'w-14', align = 'text-center', muted = false, zeroReason, fluid = false }: {
   value: number
   onChange: (n: number) => void
   bulk?: boolean
@@ -47,6 +50,8 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
    * pops up the optional "why did you zero this?" reasons right beside it (instead of a row of buttons elsewhere).
    */
   zeroReason?: { line: ReasonFields; onChange: (reason: ZeroReason | null, note: string | null) => void }
+  /** Shrinks the box/buttons with the available width (and never wraps) — for a resizable table column. */
+  fluid?: boolean
 }) {
   const [text, setText] = useState(() => String(value))
   const lastCommittedRef = useRef<number>(Number(value))
@@ -80,7 +85,7 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
   const showZeroReason = !!zeroReason && (Number(text) || 0) === 0 && Number(zeroReason.line.system_qty) > 0
 
   return (
-    <div className="relative inline-flex items-stretch gap-0.5">
+    <div className={fluid ? 'relative flex items-stretch gap-0.5 w-full min-w-0 flex-nowrap' : 'relative inline-flex items-stretch gap-0.5'}>
       {floats.length > 0 && createPortal(
         <>{floats.map((f) => (
           <span key={f.id} aria-hidden style={{ position: 'fixed', left: f.x - 8, top: f.y - 10, zIndex: 500 }}
@@ -91,8 +96,8 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
         document.body,
       )}
       {showZeroReason && zeroReason
-        ? <ZeroReasonPopoverButton line={zeroReason.line} onChange={zeroReason.onChange} />
-        : <button type="button" title="Decrease by 1" disabled={(Number(text) || 0) <= 0} onClick={(e) => bump(-1, e)} className={STEP_BTN}>−</button>}
+        ? <ZeroReasonPopoverButton line={zeroReason.line} onChange={zeroReason.onChange} fluid={fluid} />
+        : <button type="button" title="Decrease by 1" disabled={(Number(text) || 0) <= 0} onClick={(e) => bump(-1, e)} className={fluid ? FLUID_BTN : STEP_BTN}>−</button>}
       <input
         type="number" min={0} step={bulk ? 0.1 : 1} value={text} placeholder="0" data-qty-input
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); moveToNextQty(e.currentTarget, e.shiftKey) } }}
@@ -107,8 +112,8 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
         onBlur={() => {
           if (commitOn === 'blur' && (Number(text) || 0) !== lastCommittedRef.current) commit(Number(text) || 0)
         }}
-        className={`${inputClassName} ${align} ${NO_SPINNER} bg-transparent border rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-sky ${muted ? 'border-navy/20 text-inky/60' : 'border-navy/25 text-navy'}`} />
-      <button type="button" title="Increase by 1" onClick={(e) => bump(1, e)} className={STEP_BTN}>+</button>
+        className={`${fluid ? 'flex-[2] w-0 min-w-[1.4rem]' : inputClassName} ${align} ${NO_SPINNER} bg-transparent border rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-sky ${muted ? 'border-navy/20 text-inky/60' : 'border-navy/25 text-navy'}`} />
+      <button type="button" title="Increase by 1" onClick={(e) => bump(1, e)} className={fluid ? FLUID_BTN : STEP_BTN}>+</button>
     </div>
   )
 }
@@ -143,9 +148,10 @@ export function zeroReasonText(l: ReasonFields): string | null {
  * "0?" button (stands in for the minus when a suggested line was zeroed). Opens a small interactive popover up and
  * to the right of the button with the optional reasons. Closing: click outside, Escape, or picking a reason.
  */
-function ZeroReasonPopoverButton({ line, onChange }: {
+function ZeroReasonPopoverButton({ line, onChange, fluid = false }: {
   line: ReasonFields
   onChange: (reason: ZeroReason | null, note: string | null) => void
+  fluid?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ left: 0, top: 0 })
@@ -179,7 +185,7 @@ function ZeroReasonPopoverButton({ line, onChange }: {
     <>
       <button ref={btnRef} type="button" onClick={toggle}
         title={reason ? `Zeroed — ${zeroReasonText(line)}` : 'Why was this zeroed? (optional)'}
-        className={`w-10 flex-shrink-0 flex items-center justify-center rounded border text-[11px] font-mono font-bold leading-none select-none ${reason ? 'border-[#B7E0DE] bg-[#B7E0DE]/30 text-navy' : 'border-[#E67E22]/60 text-[#E67E22] hover:border-[#E67E22]'}`}>
+        className={`${fluid ? 'flex-1 basis-0 min-w-[0.9rem] max-w-[2.5rem] overflow-hidden' : 'w-10 flex-shrink-0'} flex items-center justify-center rounded border text-[11px] font-mono font-bold leading-none select-none ${reason ? 'border-[#B7E0DE] bg-[#B7E0DE]/30 text-navy' : 'border-[#E67E22]/60 text-[#E67E22] hover:border-[#E67E22]'}`}>
         0?
       </button>
       {open && createPortal(

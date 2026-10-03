@@ -7,7 +7,7 @@
 // DOS/on-hand-after recompute, minimum checks, PO-decision handling, shop-expand candidate lists) stays owned by
 // OrdersV2Review.tsx — this component only renders whatever it's handed. The Flags/Tags it shows are computed by the
 // pure lineFlags.ts from each line's CURRENT values, so they update live as quantities are edited.
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
 import { AlertTriangle, ChevronDown, ChevronRight, Flag } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
@@ -22,7 +22,7 @@ import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { PoDecisionButtons } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { ToggleButton } from './controls'
-import { dos, money, num, dShort } from './shared'
+import { dos, money, num, dShort, OV2_DOS_STYLE_KEY } from './shared'
 import { uomDisplayLabel } from './types'
 import { QtyStepper, type ZeroReason } from './lineControls'
 import {
@@ -79,20 +79,23 @@ function NoteLine({ text }: { text: string }) {
 }
 
 /** A DOS value with the yellow/red-scale conditional formatting and a hover explanation. */
-function DosCell({ v, thresholds }: { v: number | null | undefined; thresholds: DosThresholds | null }) {
+function DosCell({ v, thresholds, style }: { v: number | null | undefined; thresholds: DosThresholds | null; style: 'badge' | 'text' }) {
   const tone = thresholds ? dosTone(v ?? null, thresholds) : null
   if (!tone) return <span className="block text-right">{dos(v)}</span>
   const color = DOS_TONE_COLOR[tone]
   return (
     <span className="block text-right">
       <HoverTip content={<SwatchTipBody color={color} title={DOS_TONE_LABEL[tone]} />}>
-        <span className="inline-block rounded px-1 font-bold text-navy" style={{ background: `${color}40`, boxShadow: `inset 0 -2px 0 ${color}` }}>
-          {dos(v)}
-        </span>
+        {style === 'text'
+          ? <span className="font-bold" style={{ color }}>{dos(v)}</span>
+          : <span className="inline-block rounded px-1 font-bold text-navy" style={{ background: `${color}40`, boxShadow: `inset 0 -2px 0 ${color}` }}>{dos(v)}</span>}
       </HoverTip>
     </span>
   )
 }
+
+/** Rough pixel width of a row of tag chips, so a Flags/Tags column can be sized to fit them (no overlap into the next column). */
+const chipsWidth = (tags: TagDef[]) => tags.reduce((s, t) => s + t.label.length * 5.4 + 28, 0)
 
 // ── Table ───────────────────────────────────────────────────────────────────
 
@@ -101,8 +104,13 @@ export function OrdersV2ReviewTable({
   thresholds, onHandAfterAtDelivery, groupMinimumStatus, patchQty,
   decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
-  inputByLineKey, toolbarExtra, onRowRef, onLastRowKey,
+  inputByLineKey, toolbarExtra, onRowRef, onLastRowKey, isSeen, jumpNonce, variant = 'order',
 }: {
+  /** 'noOrders' = the second table of every product for shops that ended up with no order: no shop expand, no tone filters. */
+  variant?: 'order' | 'noOrders'
+  /** Has this row key been on screen (see rowSeen.ts)? With jumpNonce, lets the table page/scroll to the first unseen row. */
+  isSeen?: (key: string) => boolean
+  jumpNonce?: number
   onRowRef?: (el: HTMLTableRowElement | null, rowKey: string) => void
   onLastRowKey?: (key: string | null) => void
   lines: DraftLineRow[]
@@ -141,6 +149,10 @@ export function OrdersV2ReviewTable({
   // combined product's on-hand out in the cell.
   const [combinedModePref, setCombinedModePref] = useProfilePref<string>(COMBINED_MODE_KEY, 'hidden')
   const combinedListed = combinedModePref === 'listed'
+  const [dosStylePref] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
+  const dosStyle = dosStylePref === 'text' ? 'text' : 'badge'
+  const isOrderTable = variant === 'order'
+  const tableKey = isOrderTable ? TABLE_KEY : `${TABLE_KEY}-noorders`
   const [toneFilter, setToneFilter] = useState<Set<RowTone>>(new Set())
 
   // Live Flags/Tags per line — recomputed whenever any line or the thresholds change.
@@ -194,12 +206,28 @@ export function OrdersV2ReviewTable({
       const info = infoOf(l)
       return info.lastDeliveredDate ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}` : '—'
     }
-    const deliveryText = (l: DraftLineRow) => { const dd = deliveryFor(l.location_id, draft.order_date); return dd ? dShort(dd) : '—' }
+    const deliveryText = (l: DraftLineRow) => {
+      const dd = deliveryFor(l.location_id, draft.order_date)
+      if (!dd) return '—'
+      const dow = new Date(`${dd}T00:00:00`).toLocaleDateString('en-US', { weekday: 'long' })
+      return `${dShort(dd)} ${dow}`
+    }
+
+    // Flags/Tags columns start wide enough for the widest set of chips on any line, so chips never spill into the
+    // neighboring column; they still clip (instead of overlapping) if someone narrows the column by hand.
+    let flagsBeforeSize = 110, tagsAfterSize = 110
+    for (const l of lines) {
+      const t = tagMap.get(l.id)?.tags
+      if (!t) continue
+      flagsBeforeSize = Math.max(flagsBeforeSize, chipsWidth(t.before) + ((l.flags ?? []).includes('covered_by_open_po') ? 190 : 0) + 24)
+      tagsAfterSize = Math.max(tagsAfterSize, chipsWidth(t.after) + 24)
+    }
+    flagsBeforeSize = Math.min(flagsBeforeSize, 640); tagsAfterSize = Math.min(tagsAfterSize, 640)
 
     // Tiny colored flags sit in the cell's top margin, inline (never stacked), each with a styled hover tooltip.
     const iconStrip = (tags: TagDef[], extra?: React.ReactNode) =>
       (tags.length > 0 || extra) ? (
-        <span className="absolute -top-0.5 right-0 inline-flex items-center gap-0.5 leading-none">{extra}{tags.map((t) => <TagIcon key={t.key} tag={t} />)}</span>
+        <span className="absolute -top-1.5 -right-1.5 inline-flex items-center gap-0.5 leading-none">{extra}{tags.map((t) => <TagIcon key={t.key} tag={t} />)}</span>
       ) : null
 
     return [
@@ -209,6 +237,7 @@ export function OrdersV2ReviewTable({
           const l = i.row.original
           const locId = l.location_id ?? ''
           const open = expanded.has(locId)
+          if (!isOrderTable) return <span>{i.getValue()}</span>
           return (
             <button onClick={() => onToggleExpand(locId)} title="Show every product configured for this shop"
               className="inline-flex items-center gap-1 hover:underline hover:text-sky">
@@ -231,9 +260,29 @@ export function OrdersV2ReviewTable({
           const info = infoOf(l)
           const isOz = ozProductIds.has(l.product_id)
           const toOz = (v: number) => (isOz ? v * 32 : v)
+          const unit = isOz ? 'oz' : 'qt'
           const combined = input?.equivalent_products ?? []
           const { before } = tagsOf(l)
           const off = info.onHandCheck && !info.onHandCheck.withinRange ? info.onHandCheck : null
+          // Out of stock / at-or-below the critical minimum read as RED TEXT on the number (with the reason on hover)
+          // rather than as a flag.
+          const storedFlags = (l.flags ?? []) as string[]
+          const outOfStock = storedFlags.includes('stocked_out') || Number(l.on_hand ?? 0) <= 0
+          const critical = storedFlags.includes('critical_minimum')
+          const reasons: React.ReactNode[] = []
+          if (outOfStock) reasons.push(<SwatchTipBody key="oos" color="#C0392B" title="Out of stock" description="No on hand recorded for this product." />)
+          if (critical) reasons.push(<SwatchTipBody key="crit" color="#C0392B" title="At or below the critical minimum" description="On hand dropped to this product's critical minimum (e.g. enough for one oil change), so it was ordered even though days of supply looked fine." />)
+          if (combined.length > 0 && !combinedListed) {
+            reasons.push(
+              <div key="comb" className="flex flex-col gap-0.5 text-[11px] font-mono">
+                <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">Combined on hand</span>
+                <span>{l.product_id} {num(toOz(input?.own_on_hand ?? 0))}{unit} +</span>
+                {combined.map((e, idx) => <span key={e.product_id}>{e.product_id} {num(toOz(e.on_hand))}{unit} {idx === combined.length - 1 ? '=' : '+'}</span>)}
+                <span className="font-bold">Total {num(onHandOf(l))}{unit}</span>
+              </div>,
+            )
+          }
+          const numEl = <span className={`${outOfStock || critical ? 'font-bold text-[#C0392B]' : ''}${combined.length > 0 && !combinedListed ? ' underline decoration-dotted decoration-sky underline-offset-2' : ''}`}>{num(onHandOf(l))}</span>
           return (
             <div className="relative pt-2 text-right">
               {iconStrip(before, off && (
@@ -242,17 +291,9 @@ export function OrdersV2ReviewTable({
                   <AlertTriangle className="w-3 h-3 text-[#C0392B]" />
                 </HoverTip>
               ))}
-              {combined.length > 0 && !combinedListed ? (
-                <HoverTip placement="bottom" content={
-                  <div className="flex flex-col gap-0.5 text-[11px] font-mono">
-                    <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">Combined on hand</span>
-                    <span>{[`${l.product_id} ${num(toOz(input?.own_on_hand ?? 0))}`, ...combined.map((e) => `${e.product_id} ${num(toOz(e.on_hand))}`)].join(' + ')}</span>
-                    <span className="font-bold">= {num(onHandOf(l))}</span>
-                  </div>
-                }>
-                  <span className="cursor-help underline decoration-dotted decoration-sky underline-offset-2">{num(onHandOf(l))}</span>
-                </HoverTip>
-              ) : <span>{num(onHandOf(l))}</span>}
+              {reasons.length > 0
+                ? <HoverTip placement="bottom" content={<div className="flex flex-col gap-2">{reasons}</div>}>{numEl}</HoverTip>
+                : numEl}
               {combined.length > 0 && combinedListed && (
                 <div className="text-[9px] text-inky/60 leading-tight font-normal whitespace-nowrap">
                   <span title={l.product_id}>{combinedSuffix(l.product_id)}</span> {num(toOz(input?.own_on_hand ?? 0))}
@@ -268,7 +309,7 @@ export function OrdersV2ReviewTable({
       }),
       col.accessor('dos_before', {
         id: 'dos_now', header: 'DOS Now', enableSorting: false, meta: dosMeta((l) => l.dos_before ?? null),
-        cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} />,
+        cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} style={dosStyle} />,
       }),
       col.accessor((l) => lastOrderedText(l), {
         id: 'last_ordered', header: 'Last Ordered', enableSorting: false, meta: { noClip: true },
@@ -285,20 +326,13 @@ export function OrdersV2ReviewTable({
       col.accessor((l) => lastDeliveredText(l), { id: 'last_delivered', header: 'Last Delivered', enableSorting: false, meta: { noClip: true } }),
       col.accessor((l) => deliveryText(l), {
         id: 'delivery_date', header: 'Delivery', enableSorting: false, meta: { noClip: true },
-        cell: (i) => {
-          const sd = describeSchedule(i.row.original.location_id)
-          return (
-            <>
-              <div>{i.getValue()}</div>
-              {sd && <div className="text-[9px] text-inky/50 leading-tight">{sd}</div>}
-            </>
-          )
-        },
+        // Just the date and weekday — no "(RelaDyne delivery day)" schedule text.
+        cell: (i) => <div>{i.getValue()}</div>,
       }),
       col.accessor((l) => Number(l.qty), {
-        id: 'qty', header: 'Qty', enableSorting: false,
+        id: 'qty', header: 'Order Qty', enableSorting: false, size: 190, minSize: 96,
         meta: {
-          noClip: true, numeric: true,
+          numeric: true,
           // The orange "edited by hand" bar runs the full height of the cell, not just the content.
           cellClassName: (l: DraftLineRow) => (l.is_override ? 'shadow-[inset_3px_0_0_#E67E22] pl-3' : ''),
         },
@@ -306,11 +340,13 @@ export function OrdersV2ReviewTable({
           const l = i.row.original
           const isOz = ozProductIds.has(l.product_id)
           return (
-            <div className="flex items-center justify-end gap-1.5">
-              <QtyStepper value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
-                onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
+            <div className="flex items-center gap-1.5 min-w-0 flex-nowrap">
+              <div className="flex-1 min-w-0">
+                <QtyStepper fluid value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
+                  onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
+              </div>
               {l.quarts_per_unit != null && (
-                <span className="text-[10px] text-inky/50 whitespace-nowrap w-12 text-left">
+                <span className="text-[10px] text-inky/50 whitespace-nowrap flex-shrink-[4] min-w-0 truncate text-left">
                   {isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
                 </span>
               )}
@@ -334,7 +370,7 @@ export function OrdersV2ReviewTable({
       }),
       col.accessor('dos_after', {
         id: 'dos_after', header: 'DOS After', meta: dosMeta((l) => l.dos_after ?? null),
-        cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} />,
+        cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} style={dosStyle} />,
       }),
       col.accessor('dos_after_delivery', {
         id: 'dos_at_delivery', header: 'DOS @ Delivery', enableSorting: false, meta: numericMeta,
@@ -344,8 +380,8 @@ export function OrdersV2ReviewTable({
         id: 'dollars', header: 'Ordered Cost', meta: numericMeta, cell: (i) => <span className="block text-right">{money(i.getValue())}</span>,
       }),
       col.accessor((l) => tagsOf(l).before.map((t) => t.label).join(', '), {
-        id: 'flags_before', header: 'Flags – Before', enableSorting: false,
-        meta: { noClip: true, multiValue: (l: DraftLineRow) => tagsOf(l).before.map((t) => t.label) },
+        id: 'flags_before', header: 'Flags – Before', enableSorting: false, minSize: 90, size: flagsBeforeSize,
+        meta: { multiValue: (l: DraftLineRow) => tagsOf(l).before.map((t) => t.label) },
         cell: (i) => {
           const l = i.row.original
           const { before } = tagsOf(l)
@@ -360,8 +396,8 @@ export function OrdersV2ReviewTable({
         },
       }),
       col.accessor((l) => tagsOf(l).after.map((t) => t.label).join(', '), {
-        id: 'tags_after', header: 'Tags – After', enableSorting: false,
-        meta: { noClip: true, multiValue: (l: DraftLineRow) => tagsOf(l).after.map((t) => t.label) },
+        id: 'tags_after', header: 'Tags – After', enableSorting: false, minSize: 90, size: tagsAfterSize,
+        meta: { multiValue: (l: DraftLineRow) => tagsOf(l).after.map((t) => t.label) },
         cell: (i) => {
           const { after, note } = tagsOf(i.row.original)
           return (
@@ -377,15 +413,15 @@ export function OrdersV2ReviewTable({
     ]
   }, [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, draft.order_date,
       patchQty, thresholds, tagsOf, onHandAfterAtDelivery, combinedListed, decidePoOverride, decidePoExclude,
-      decidePoCombine, onZeroReason, expanded, onToggleExpand])
+      decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, isOrderTable, lines, tagMap])
 
   const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(shownLines, columns, {
-    persistKey: TABLE_KEY,
+    persistKey: tableKey,
     initialPageSize: 50,
     initialSorting: [{ id: 'shop', desc: false }],
     initialColumnPinning: { left: DEFAULT_PINNED, right: [] },
   })
-  useColumnPrefs(TABLE_KEY, table, columnVisibility, columnOrder, setColumnOrder)
+  useColumnPrefs(tableKey, table, columnVisibility, columnOrder, setColumnOrder)
 
   const allColItems: ColItem[] = useMemo(
     () => table.getAllLeafColumns().map((c) => ({ id: c.id, label: String(c.columnDef.header ?? c.id) })),
@@ -428,6 +464,23 @@ export function OrdersV2ReviewTable({
     }
   }
 
+  // "Go back to review": page to, and scroll to, the first row (in the table's current order) not yet on screen.
+  const lastJump = useRef(jumpNonce ?? 0)
+  useEffect(() => {
+    if (jumpNonce == null || jumpNonce === lastJump.current || !isSeen) return
+    lastJump.current = jumpNonce
+    const rows = table.getPrePaginationRowModel().rows
+    const idx = rows.findIndex((r) => !isSeen(r.original.id))
+    if (idx < 0) return
+    const size = table.getState().pagination.pageSize
+    if (size > 0) table.setPageIndex(Math.floor(idx / size))
+    const key = rows[idx].original.id
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-seen-key="${CSS.escape(key)}"]`)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 80)
+  }, [jumpNonce, isSeen, table])
+
   if (!lines.length) return <p className="text-xs font-mono text-inky/50 py-8">Nothing to show for this filter.</p>
 
   return (
@@ -435,6 +488,8 @@ export function OrdersV2ReviewTable({
       <DataTable
         table={table}
         density="compact"
+        exportOnlyWhenSelected
+        leadingActions={<button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>}
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         exportFilename={`Order Review - ${draft.order_date}`}
@@ -447,7 +502,7 @@ export function OrdersV2ReviewTable({
         getRowClassName={(l) => (bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : 'bg-cream')}
         expandedRowRender={(l) => {
           const locId = l.location_id ?? ''
-          if (!expanded.has(locId) || !isLastOfShop.get(l.id)) return null
+          if (!isOrderTable || !expanded.has(locId) || !isLastOfShop.get(l.id)) return null
           return (
             <div className="px-3 py-2">
               <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60 mb-1">
@@ -473,7 +528,7 @@ export function OrdersV2ReviewTable({
         }}
         actions={
           <>
-            {TONE_ORDER.map((t) => {
+            {isOrderTable && TONE_ORDER.map((t) => {
               const active = toneFilter.has(t)
               return (
                 <HoverTip key={t} content={<SwatchTipBody color={ROW_TONE_META[t].color} title={ROW_TONE_META[t].label}
@@ -493,7 +548,6 @@ export function OrdersV2ReviewTable({
               onTooltip="Click to hide the per-product breakdown of combined on hands (shown on hover instead)"
               offTooltip="Click to list each combined product's on hand in the cell" />
             {toolbarExtra}
-            <button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>
           </>
         }
       />

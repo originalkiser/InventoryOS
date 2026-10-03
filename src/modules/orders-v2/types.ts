@@ -325,6 +325,7 @@ export type LineFlag =
   | 'po_decision_exclude'    // user chose: the open PO covers it, don't order more
   | 'po_decision_combine'    // user chose: factor the open PO's outstanding qty into on-hand and re-target
   | 'rounded_to_bulk_minimum' // bulk per-product minimum: raised to the drum minimum, see GeneratedLine.note for the real calculated amount
+  | 'recently_ordered'       // ordered within RECENT_ORDER_DAYS and the product doesn't need another yet — kept on the order at 0, see GeneratedLine.note
   | 'exceeded_capacity_for_dos_target' // ordered past configured capacity to reach the DOS target after delivery — see GeneratedLine.note for the real numbers
 
 export interface GeneratedLine {

@@ -56,6 +56,7 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   case_minimum_topup: { label: 'Case min', tone: 'sky', title: 'Raised to meet the vendor case-type order minimum' },
   repeat_ordering: { label: 'Repeat ordering', tone: 'red', title: 'A lot of supply has already been ordered for this product recently and it still reads low — on-hand may not be reflecting deliveries' },
   over_dos_max: { label: 'Over DOS max', tone: 'orange', title: 'Pushed past the soft days-of-supply ceiling to reach an order minimum' },
+  recently_ordered: { label: 'Ordered recently', tone: 'sky', title: 'Ordered within the last 8 days and the on hand plus that order still covers usage — kept on the order at 0. Add a quantity if it should go on anyway.' },
   stocked_out: { label: 'Out of stock', tone: 'red', title: 'No on-hand recorded for this product' },
   critical_minimum: { label: 'Critical min', tone: 'orange', title: 'Ordered because on-hand dropped to/below this product\'s critical minimum (e.g. enough for one oil change), not the usual days-of-supply trigger' },
   alone_default_qty: { label: 'Alone qty', tone: 'sky', title: 'Only line on the order — used its configured alone quantity' },
@@ -79,6 +80,9 @@ export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {
 
 /** Per-user profile pref (Order Settings): show the ORIGINAL Review table instead of the new default one. */
 export const OV2_USE_OLD_TABLE_KEY = 'ov2_review_use_old_table'
+
+/** Per-user profile pref: how DOS Now / DOS After are conditionally formatted — 'badge' (shaded + underlined, default) or 'text' (colored text only). */
+export const OV2_DOS_STYLE_KEY = 'ov2_review_dos_style'
 
 /** Amber treatment marking a user override, used everywhere edits are shown. */
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'

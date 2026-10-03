@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
-import { OV2_USE_OLD_TABLE_KEY } from './shared'
-import { Button, Card, CardBody, Input, SbLoader, Select, Toggle } from '@/components/ui'
+import { OV2_DOS_STYLE_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
+import { Button, Card, CardBody, Input, SbLoader, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toggle } from '@/components/ui'
 import { useOrderSettings } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { VendorRulesCard } from './VendorRulesCard'
@@ -54,6 +54,13 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
 
   return (
+    <Tabs defaultValue="shared">
+      <TabsList>
+        <TabsTrigger value="shared">Shared Order Settings</TabsTrigger>
+        <TabsTrigger value="user">User Order Settings</TabsTrigger>
+      </TabsList>
+      <TabsContent value="user"><UserOrderSettings /></TabsContent>
+      <TabsContent value="shared">
     <div className="flex flex-col gap-4">
       <Card><CardBody className="flex flex-col gap-3">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Days of Supply</h3>
@@ -165,26 +172,42 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
       <ProductExceptionsManager onChanged={onExceptionChanged} />
       <OrderDaysCard />
       <DeliverySchedulesCard />
-      <ReviewTablePrefCard />
     </div>
+      </TabsContent>
+    </Tabs>
   )
 }
 
-/** Personal (per-user, follows you across devices) — not a company setting. */
-function ReviewTablePrefCard() {
+/** Personal (per-user, follows you across devices) — not company-wide like everything on the Shared tab. */
+function UserOrderSettings() {
   const [useOld, setUseOld] = useProfilePref<boolean | number>(OV2_USE_OLD_TABLE_KEY, false)
+  const [dosStyle, setDosStyle] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
   return (
-    <Card><CardBody className="flex flex-col gap-2">
-      <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Review Order Table</h3>
-      <label className="flex items-center gap-2 text-xs font-mono text-navy">
-        <Toggle checked={!!useOld} onChange={(v) => setUseOld(v)} size="sm" />
-        Use old table
-      </label>
-      <p className="text-[11px] font-mono text-inky/60">
-        The Review Order step now opens the newer table by default (sortable, filterable, resizable, with Flags and Tags).
-        Turn this on to use the original table instead. This only affects your own login.
-      </p>
-    </CardBody></Card>
+    <div className="flex flex-col gap-4">
+      <p className="text-[11px] font-mono text-inky/70">These only affect your own login (and follow you to other devices).</p>
+      <Card><CardBody className="flex flex-col gap-2">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Review Order Table</h3>
+        <label className="flex items-center gap-2 text-xs font-mono text-navy">
+          <Toggle checked={!!useOld} onChange={(v) => setUseOld(v)} size="sm" />
+          Use old table
+        </label>
+        <p className="text-[11px] font-mono text-inky/60">
+          The Review Order step opens the newer table by default (sortable, filterable, resizable, with Flags and Tags).
+          Turn this on to use the original table instead.
+        </p>
+      </CardBody></Card>
+      <Card><CardBody className="flex flex-col gap-2">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">DOS Conditional Formatting</h3>
+        <label className="flex items-center gap-2 text-xs font-mono text-navy">
+          <Toggle checked={dosStyle === 'text'} onChange={(v) => setDosStyle(v ? 'text' : 'badge')} size="sm" />
+          Color the text only
+        </label>
+        <p className="text-[11px] font-mono text-inky/60">
+          Off (default): DOS Now and DOS After get a shaded background with an underline in the tone color. On: just the
+          number's text is colored, like the original table.
+        </p>
+      </CardBody></Card>
+    </div>
   )
 }
 

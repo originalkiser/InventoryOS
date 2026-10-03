@@ -36,5 +36,8 @@ export function useRowSeenTracker() {
     return seen.current.has(key)
   }, [])
 
-  return { observe, hasSeen }
+  /** Strict: has this exact row key been on screen? (hasSeen above is lenient when there's nothing to check.) */
+  const isSeen = useCallback((key: string) => seen.current.has(key), [])
+
+  return { observe, hasSeen, isSeen }
 }

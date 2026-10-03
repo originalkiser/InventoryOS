@@ -9,6 +9,7 @@ import { AddNonConfiguredProductModal } from './AddNonConfiguredProductModal'
 import { OrderStepper } from './OrderStepper'
 import { ToggleButton, SegmentedSlider, SlideChip } from './controls'
 import { dosTone, DOS_TONE_COLOR, TAG_DEFS, type TagKey } from './lineFlags'
+import { candidateLine, isCandidateLine } from './candidateLine'
 import { HoverTip, SwatchTipBody } from '@/components/ui/HoverTip'
 import { ExceptionEditModal } from './ExceptionEditModal'
 import { useProductExceptions } from './useProductExceptions'
@@ -294,6 +295,9 @@ export function OrdersV2Review() {
   const rowSeen = useRowSeenTracker()
   const [betaLastRowKey, setBetaLastRowKey] = useState<string | null>(null)
   const [seenWarningOpen, setSeenWarningOpen] = useState(false)
+  const [seenWarningCount, setSeenWarningCount] = useState(0)
+  const [jumpNonce, setJumpNonce] = useState(0)
+  const [regenModalOpen, setRegenModalOpen] = useState(false)
   // Real bug found live 2026-09-29: this page sits behind KeepAlivePages
   // (see the usePageRevisit(reload) call above) — clicking "Final Review →"
   // sets movingToFinal true and navigates away, but since this component
@@ -476,7 +480,7 @@ export function OrdersV2Review() {
   }, [draft, loading, lines.length, allInputs.length, generating, loadCandidatesForDisplay, vendors.loading])
 
   /** Run the engine and replace the draft's lines with the result. */
-  const runGeneration = useCallback(async (dow?: number) => {
+  const runGeneration = useCallback(async (dow?: number, opts?: { keepOverrides?: boolean }) => {
     if (!draft || !profile?.company_id) return
     // Refuses to run ahead of useVendors()'s own fetch — found live
     // 2026-09-23: rulesFor()'s usesOrderDays depends on
@@ -576,7 +580,7 @@ export function OrdersV2Review() {
         return { ...l, flags, dos_after_delivery: dosAfterDelivery(l.on_hand, l.daily_usage, draft.order_date, deliver) }
       })
 
-      await replaceLines(withDelivery)
+      await replaceLines(withDelivery, !!opts?.keepOverrides)
       setSkipped(result.skipped)
       const shops = new Set(withDelivery.map((l) => l.location_id)).size
       // Cache the shop count (and keep-fill alerts) on the header so the
@@ -882,6 +886,34 @@ export function OrdersV2Review() {
     return rows
   }
 
+  // Every configured product for every shop that ended up with no order (honoring the VMI/keepfill toggle), as
+  // Review-table rows: a real draft line where one exists, otherwise a qty-0 candidate row (see candidateLine.ts).
+  const noOrderLines = useMemo(() => {
+    if (!draft || !noOrdersOpen) return []
+    const out: DraftLineRow[] = []
+    for (const locId of shopsWithNoOrders) {
+      for (const r of shopRows(locId)) {
+        if (!showConfigVmi && (r.input?.rule.vmi_keepfill_enabled || r.line?.flags?.includes('vmi_keepfill'))) continue
+        if (r.line) { out.push(r.line); continue }
+        if (r.input) out.push(candidateLine(r.input, draft.id, draft.order_date, deliveryFor(locId, draft.order_date)))
+      }
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, noOrdersOpen, shopsWithNoOrders, lines, inputsByLocation, showConfigVmi, deliveryFor])
+  // Typing a quantity on a candidate row adds a real line; on an existing line it patches it. A stable identity
+  // (via the ref) so the table's memoized columns aren't rebuilt on every render.
+  const patchQtyOrAddRef = useRef<(l: DraftLineRow, qty: number) => void>(() => {})
+  patchQtyOrAddRef.current = (l, qty) => {
+    if (isCandidateLine(l)) {
+      const input = inputByLineKey.get(`${l.location_id}|${l.product_id}`)
+      if (input && qty > 0) addConfiguredProduct(input, qty)
+    } else patchQty(l, qty)
+  }
+  const patchQtyOrAdd = useCallback((l: DraftLineRow, qty: number) => patchQtyOrAddRef.current(l, qty), [])
+  const noExpandedShops = useMemo(() => new Set<string>(), [])
+  const noopExpand = useCallback(() => {}, [])
+
   // Business days until this shop's next delivery for this order date — the
   // shop-expand sub-table's "DOS after" needs this to project on-hand
   // forward to the date the order would actually arrive, not just today.
@@ -922,6 +954,32 @@ export function OrdersV2Review() {
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
   if (!draft) return <p className="text-xs font-mono text-inky/60 py-8">Draft not found. It may have been deleted.</p>
+
+  // ---- Final Review gate: every row should have been on screen (see rowSeen.ts) ----------------------
+  const unseenRows = () => visible.filter((l) => !rowSeen.isSeen(l.id))
+  /** Opens the "Full order not seen" prompt (returns true) when any row hasn't been reviewed. */
+  function promptIfUnseen(): boolean {
+    if (lines.length === 0) return false
+    const n = unseenRows().length
+    if (n === 0) return false
+    setSeenWarningCount(n)
+    setSeenWarningOpen(true)
+    return true
+  }
+  async function goToFinal() {
+    setMovingToFinal(true)
+    // See runGeneration's own comment — a completed order stays 'exported', it never gets pulled back into the
+    // Final Review tab just because someone stepped through to revisit it.
+    if (draft && draft.status !== 'exported') await setStatus('final_review')
+    navigate(`/orders-v2/draft/${draft!.id}/final`)
+  }
+  function goBackToFirstUnseen() {
+    setSeenWarningOpen(false)
+    if (useNewTable) { setJumpNonce((n) => n + 1); return }
+    const first = unseenRows()[0]
+    if (!first) return
+    document.querySelector<HTMLElement>(`[data-seen-key="${CSS.escape(first.id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
 
   const vendorName = vendors.byId(draft.vendor_id)?.name ?? 'All vendors'
   const usesOrderDays = rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays
@@ -994,36 +1052,48 @@ export function OrdersV2Review() {
               setting, which is exactly what the static sb-* Tailwind
               namespace (tailwind.config.ts) is for — same fix as
               Procurement Deck's own always-dark chart cards. */}
-          <Button size="sm" loading={movingToFinal} className="rounded-lg !bg-sb-sky !text-sb-navy hover:!bg-sb-sky/90" onClick={async () => {
-            // The last row of whichever table is showing must have been on screen.
-            const lastKey = useNewTable ? betaLastRowKey : (visible.length ? visible[visible.length - 1].id : null)
-            if (lines.length > 0 && !rowSeen.hasSeen(lastKey)) { setSeenWarningOpen(true); return }
-            setMovingToFinal(true)
-            // See runGeneration's own comment — a completed order stays
-            // 'exported', it never gets pulled back into the Final Review
-            // tab just because someone stepped through to revisit it.
-            if (draft.status !== 'exported') await setStatus('final_review')
-            navigate(`/orders-v2/draft/${draft.id}/final`)
+          <Button size="sm" loading={movingToFinal} className="rounded-lg !bg-sb-sky !text-sb-navy hover:!bg-sb-sky/90" onClick={() => {
+            if (promptIfUnseen()) return
+            void goToFinal()
           }}>
             Final Review →
           </Button>
         </div>
       </div>
 
-      <Modal open={seenWarningOpen} onClose={() => setSeenWarningOpen(false)} title="Review the whole order first" size="md">
+      <Modal open={seenWarningOpen} onClose={() => setSeenWarningOpen(false)} title="Full order not seen" size="md">
         <div className="flex flex-col gap-4">
           <p className="text-sm font-body text-navy">
-            I noticed you did not see all rows of the order. Make sure you scrolled through them all and/or went to the
-            next page to review all items.
+            {seenWarningCount} order row{seenWarningCount === 1 ? ' has' : 's have'} not been reviewed. Do you want to continue
+            to Final Review, or go back and review {seenWarningCount === 1 ? 'that line' : 'those lines'}?
           </p>
-          <div className="flex justify-end"><Button size="sm" onClick={() => setSeenWarningOpen(false)}>Back to the order</Button></div>
+          <div className="flex justify-end gap-2 flex-wrap">
+            <Button size="sm" variant="secondary" onClick={() => { setSeenWarningOpen(false); void goToFinal() }}>Continue to final review</Button>
+            <Button size="sm" onClick={goBackToFirstUnseen}>Back to the order</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={regenModalOpen} onClose={() => setRegenModalOpen(false)} title="Regenerate this order?" size="md">
+        <div className="flex flex-col gap-3">
+          <p className="text-sm font-body text-navy">Regenerating rebuilds the suggested quantities from the latest on hands, usage and settings.</p>
+          <button type="button" onClick={() => { setRegenModalOpen(false); void runGeneration() }}
+            className="text-left rounded-lg border border-navy/30 hover:border-navy p-3 flex flex-col gap-0.5">
+            <span className="text-sm font-heading font-bold text-navy">Full regeneration — ignore any overrides <span className="text-[#E67E22]">({overrideCount} overridden)</span></span>
+            <span className="text-[11px] font-mono text-inky/70">Every line is rebuilt from scratch; quantities you edited by hand are replaced.</span>
+          </button>
+          <button type="button" onClick={() => { setRegenModalOpen(false); void runGeneration(undefined, { keepOverrides: true }) }}
+            className="text-left rounded-lg border border-navy/30 hover:border-navy p-3 flex flex-col gap-0.5">
+            <span className="text-sm font-heading font-bold text-navy">Keep overrides — only regenerate untouched items <span className="text-[#E67E22]">({overrideCount} kept)</span></span>
+            <span className="text-[11px] font-mono text-inky/70">Lines you edited stay exactly as they are; everything else is rebuilt.</span>
+          </button>
+          <div className="flex justify-end"><Button size="sm" variant="ghost" onClick={() => setRegenModalOpen(false)}>Cancel</Button></div>
         </div>
       </Modal>
 
       <OrderStepper draftId={draft.id} current="review" onBeforeNavigate={(target) => {
         if (target === 'review') return true
-        const lastKey = useNewTable ? betaLastRowKey : (visible.length ? visible[visible.length - 1].id : null)
-        if (lines.length > 0 && !rowSeen.hasSeen(lastKey)) { setSeenWarningOpen(true); return false }
+        if (promptIfUnseen()) return false
         return true
       }} />
       </div>
@@ -1211,7 +1281,7 @@ export function OrdersV2Review() {
                 genuinely taller too, per the direct ask. */}
             <div className="flex flex-col gap-0.5 items-center">
               <span className="text-[9px] font-mono invisible" aria-hidden="true">Regenerate</span>
-              <Button size="sm" variant="secondary" loading={generating} onClick={() => runGeneration()}
+              <Button size="sm" variant="secondary" loading={generating} onClick={() => (lines.length > 0 ? setRegenModalOpen(true) : void runGeneration())}
                 className={`!py-2 ${needsRegenerate ? 'ring-2 ring-[#E67E22] ring-offset-2 ring-offset-cream animate-pulse' : ''}`}>
                 <RefreshCw className="w-3.5 h-3.5 mr-1" /> Regenerate
               </Button>
@@ -1341,6 +1411,8 @@ export function OrdersV2Review() {
           toolbarExtra={toolbarToggles}
           onRowRef={rowSeen.observe}
           onLastRowKey={setBetaLastRowKey}
+          isSeen={rowSeen.isSeen}
+          jumpNonce={jumpNonce}
         />
       )}
 
@@ -1545,7 +1617,47 @@ export function OrdersV2Review() {
               Shops With No Orders ({shopsWithNoOrders.length})
             </span>
           </button>
-          {noOrdersOpen && (
+          {noOrdersOpen && useNewTable && (
+            <div className="flex flex-col gap-2">
+              <p className="text-[10px] font-mono text-inky/50">
+                {isAdHoc ? 'Selected for this ad hoc order, but nothing' : `On ${DOW[orderDow]}'s order day, but nothing`} ended up included in this
+                order. Every configured product for these shops is listed below — type an Order Qty to add one.
+              </p>
+              <OrdersV2ReviewTable
+                variant="noOrders"
+                lines={noOrderLines}
+                draft={draft}
+                shopLabel={shopLabel}
+                ozProductIds={ozProductIds}
+                lastOrderedInfo={lastOrderedInfo}
+                deliveryFor={deliveryFor}
+                describeSchedule={describeSchedule}
+                thresholds={dosThresholds}
+                onHandAfterAtDelivery={onHandAfterCb}
+                groupMinimumStatus={groupMinimumStatus}
+                patchQty={patchQtyOrAdd}
+                exceptionFor={exceptionFor}
+                onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+                decidePoOverride={decidePoOverride}
+                decidePoExclude={decidePoExclude}
+                decidePoCombine={decidePoCombine}
+                onZeroReason={setZeroReason}
+                expanded={noExpandedShops}
+                onToggleExpand={noopExpand}
+                shopRows={shopRows}
+                onAddConfiguredProduct={addConfiguredProduct}
+                showConfigVmi={showConfigVmi}
+                leadDaysFor={leadDaysFor}
+                inputByLineKey={inputByLineKey}
+                toolbarExtra={
+                  <ToggleButton checked={showConfigVmi} onChange={setShowConfigVmi}
+                    onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+                    onTooltip="Click to hide VMI/keep-fill products" offTooltip="Click to also show VMI/keep-fill products" />
+                }
+              />
+            </div>
+          )}
+          {noOrdersOpen && !useNewTable && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <p className="text-[10px] font-mono text-inky/50">
@@ -1935,10 +2047,12 @@ function DosLegend({ kind }: { kind: 'target' | 'trigger' | 'max' }) {
     </HoverTip>
   )
   return (
-    <span className="inline-flex items-center gap-1">
+    <span className="relative block h-0 w-full">
+     <span className="absolute left-1/2 -translate-x-1/2 top-1 inline-flex items-center gap-1 whitespace-nowrap">
       {sp.before && sw(TAG_DEFS[sp.before].color, `Flag – Before: ${TAG_DEFS[sp.before].label}`, TAG_DEFS[sp.before].description)}
       {sw(TAG_DEFS[sp.after].color, `Tag – After: ${TAG_DEFS[sp.after].label}`, TAG_DEFS[sp.after].description)}
       {sw(DOS_TONE_COLOR[sp.format], 'Cell color', sp.formatText, true)}
+     </span>
     </span>
   )
 }

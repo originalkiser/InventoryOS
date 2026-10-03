@@ -468,3 +468,31 @@ describe('never emits a non-finite quantity', () => {
     expect(roundQty(Number.POSITIVE_INFINITY, 'bulk', 1)).toBe(0)
   })
 })
+
+describe('recently ordered (2026-10-03)', () => {
+  // on_hand 10 / usage 1 = 10 days (< default min trigger), so the product is due on its own.
+  const due = () => input({ on_hand: 10, daily_usage: 1 })
+  const hist = (daysAgo: number, dosOrdered: number) => ({
+    location_id: 'L1', product_id: 'P1', order_date: `2026-08-${String(19 - daysAgo).padStart(2, '0')}`,
+    dos_before: 10, dos_ordered: dosOrdered, qty: 4,
+  })
+
+  it('keeps a due product on the order at 0 (flagged) when its last order already covers usage', () => {
+    const res = generateOrder([due()], ctx({ history: [hist(5, 30)] }))
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBe(0)
+    expect(res.lines[0].included).toBe(false)
+    expect(res.lines[0].flags).toContain('recently_ordered')
+    expect(res.lines[0].note).toMatch(/would order \d+/)
+    expect(res.skipped).toContainEqual({ location_id: 'L1', product_id: 'P1', reason: 'recently_ordered' })
+  })
+  it('still orders when on hand plus the last order is still under the min trigger', () => {
+    const res = generateOrder([due()], ctx({ history: [hist(5, 2)] }))
+    expect(res.lines[0].qty).toBeGreaterThan(0)
+    expect(res.lines[0].flags).not.toContain('recently_ordered')
+  })
+  it('ignores an order older than 8 days', () => {
+    const res = generateOrder([due()], ctx({ history: [hist(9, 30)] }))
+    expect(res.lines[0].qty).toBeGreaterThan(0)
+  })
+})

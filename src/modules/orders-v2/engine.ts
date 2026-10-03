@@ -325,6 +325,36 @@ export function capsFor(input: GenerationInput, ctx: GenerationContext, opts?: {
   return { maxUnits: Math.max(0, maxUnits), capacityBound, dosBound }
 }
 
+// ── Recently ordered ────────────────────────────────────────────────────
+
+/** A product ordered within this many days isn't ordered again unless usage really requires it (2026-10-03). */
+export const RECENT_ORDER_DAYS = 8
+
+/**
+ * If this product was ordered in the last RECENT_ORDER_DAYS, returns what that order was and whether another is
+ * truly needed. The last order's days-of-supply are counted as on hand whether or not on-hand data has caught up
+ * to the delivery (it may not have), so the rule errs toward NOT double-ordering a slow mover; a product whose
+ * on hand PLUS that order is still under the DOS min trigger (or critical minimum) is still due.
+ */
+export function recentOrderCheck(input: GenerationInput, ctx: GenerationContext):
+  { lastDate: string; lastQty: number; stillNeeded: boolean } | null {
+  const recent = ctx.history.filter((h) =>
+    h.location_id === input.location_id && h.product_id === input.product_id
+    // >= 1: an order dated today is this order itself (regenerating an already-exported draft), not a prior one.
+    && daysBetween(h.order_date, ctx.orderDate) >= 1
+    && daysBetween(h.order_date, ctx.orderDate) <= RECENT_ORDER_DAYS)
+  if (recent.length === 0) return null
+  const usage = n(input.daily_usage)
+  const orderedDos = recent.reduce((s, h) => s + n(h.dos_ordered), 0)
+  const effectiveOnHand = n(input.on_hand) + orderedDos * usage
+  const effectiveDos = usage > 0 ? effectiveOnHand / usage : null
+  const critical = input.rule.min_on_hand_qty != null && input.rule.min_on_hand_qty > 0
+  const stillNeeded = (effectiveDos != null && effectiveDos < ctx.settings.days_of_supply_min_trigger)
+    || (critical && effectiveOnHand <= (input.rule.min_on_hand_qty as number))
+  const latest = recent.reduce((a, b) => (a.order_date >= b.order_date ? a : b))
+  return { lastDate: latest.order_date, lastQty: recent.reduce((s, h) => s + n(h.qty), 0), stillNeeded }
+}
+
 // ── Flags ───────────────────────────────────────────────────────────────
 
 function historyFlags(input: GenerationInput, ctx: GenerationContext): LineFlag[] {
@@ -852,6 +882,9 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
 
   // ---- eligibility + Pass 1 ------------------------------------------------
   const pass1: GeneratedLine[] = []
+  // Products skipped because they were ordered within RECENT_ORDER_DAYS — kept on the order as qty 0 lines (after
+  // smoothing, so smoothing can never pull one back in) for the user to check.
+  const recentLines: GeneratedLine[] = []
   const eligibleSpare = new Map<string, GenerationInput[]>()   // group key -> products not ordered in pass 1
 
   for (const input of inputs) {
@@ -949,6 +982,16 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       if (!eligibleSpare.has(groupKey)) eligibleSpare.set(groupKey, [])
       eligibleSpare.get(groupKey)!.push(input)
       skipped.push({ ...idOf(input), reason: 'no_room_or_zero_qty' })
+      continue
+    }
+    const recent = rule.vmi_keepfill_enabled ? null : recentOrderCheck(input, ctx)
+    if (recent && !recent.stillNeeded) {
+      const zero = buildLine(input, ctx, 0, caps)
+      zero.flags.push('recently_ordered')
+      if (belowCriticalFloor) zero.flags.push('critical_minimum')
+      zero.note = `Ordered ${recent.lastDate} (${recent.lastQty} unit${recent.lastQty === 1 ? '' : 's'}) — would order ${units} if it hadn't been ordered in the last ${RECENT_ORDER_DAYS} days`
+      recentLines.push(zero)
+      skipped.push({ ...idOf(input), reason: 'recently_ordered' })
       continue
     }
     const line = buildLine(input, ctx, units, caps)
@@ -1185,7 +1228,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     groups.push({ location_id, order_type, lines, dollars, minimum, meetsMinimum, smoothingApplied })
   }
 
-  return { lines: groups.flatMap((g) => g.lines), groups, skipped }
+  return { lines: [...groups.flatMap((g) => g.lines), ...recentLines], groups, skipped }
 }
 
 function idOf(i: GenerationInput) { return { location_id: i.location_id, product_id: i.product_id } }

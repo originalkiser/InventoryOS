@@ -467,10 +467,18 @@ export function useDraft(draftId: string | null) {
   useEffect(() => { load() }, [load])
 
   /** Replace the draft's lines with a fresh generation run. */
-  async function replaceLines(generated: (GeneratedLine & { dos_after_delivery?: number | null })[]) {
+  async function replaceLines(generated: (GeneratedLine & { dos_after_delivery?: number | null })[], keepOverrides = false) {
     if (!companyId || !draftId) return
-    await sb().schema('inventory').from('ov2_order_draft_lines').delete().eq('draft_id', draftId)
-    const err = await insertGeneratedLines(companyId, draftId, generated)
+    // keepOverrides: leave every line the user edited by hand exactly as it is, and only replace (and
+    // regenerate) the untouched ones — a generated line for a product that already has an override is dropped.
+    const keptKeys = keepOverrides
+      ? new Set(lines.filter((l) => l.is_override).map((l) => `${l.location_id}|${l.product_id}`))
+      : null
+    let del = sb().schema('inventory').from('ov2_order_draft_lines').delete().eq('draft_id', draftId)
+    if (keepOverrides) del = del.eq('is_override', false)
+    await del
+    const toInsert = keptKeys ? generated.filter((g) => !keptKeys.has(`${g.location_id}|${g.product_id}`)) : generated
+    const err = await insertGeneratedLines(companyId, draftId, toInsert)
     if (err) { toast.error(err); return }
     await load()
   }

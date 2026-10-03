@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabase'
 import { useLocations } from '@/hooks/useLocations'
 import { MINIMUM_TYPE_LABELS, type MinimumType } from './types'
 import { OrderFullSummaryModal } from './OrderFullSummaryModal'
+import { unchangedStreak, type StreakDraft } from './settingsStreak'
+import { dShort } from './shared'
 
 const sb = () => supabase as any
 const PAGE = 1000
@@ -39,7 +41,9 @@ const SETTING_ROWS: { key: string; label: string; fmt?: (v: unknown) => string }
  * new schema — the point is surfacing decisions that are already there but
  * were never summarized anywhere, to help tune settings/logic over time.
  */
-export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onClose, editPath, onDelete }: {
+export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onClose, editPath, onDelete, details }: {
+  /** Orders tab: vendor / dates / order type for the header, plus every draft (to show "unchanged in N orders"). */
+  details?: { vendorName: string; orderDate: string; createdAt: string; orderType: string; orderDay: string | null; current: StreakDraft; allDrafts: StreakDraft[] }
   draftId: string
   vendorId?: string | null
   settingsSnapshot: Record<string, unknown> | null | undefined
@@ -105,18 +109,37 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
   return (
     <Modal open={open} onClose={onClose} title="Order Settings & Adjustments" size="lg">
       <div className="flex flex-col gap-4">
+        {details && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {[
+              { label: 'Vendor', value: details.vendorName },
+              { label: 'Order Date', value: dShort(details.orderDate) },
+              { label: 'Order Type', value: details.orderType },
+              { label: 'Created', value: dShort(details.createdAt.slice(0, 10)) },
+            ].map((c) => (
+              <div key={c.label} className="rounded border border-navy/25 px-2 py-1.5">
+                <div className="text-[9px] font-mono uppercase tracking-wide text-navy/75">{c.label}</div>
+                <div className="text-xs font-mono text-navy font-bold">{c.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
         {settingsSnapshot && (
           <div>
-            <h3 className="text-[11px] font-mono uppercase tracking-wide text-inky/60 mb-1.5">Settings used</h3>
+            <h3 className="text-[11px] font-mono uppercase tracking-wide text-navy/75 mb-1.5">Settings used</h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {SETTING_ROWS.filter((r) => settingsSnapshot[r.key] !== undefined).map((r) => (
-                <div key={r.key} className="rounded border border-navy/15 px-2 py-1.5">
-                  <div className="text-[9px] font-mono uppercase tracking-wide text-inky/50">{r.label}</div>
-                  <div className="text-xs font-mono text-navy font-bold">
-                    {r.fmt ? r.fmt(settingsSnapshot[r.key]) : String(settingsSnapshot[r.key])}
+              {SETTING_ROWS.filter((r) => settingsSnapshot[r.key] !== undefined).map((r) => {
+                const streak = details ? unchangedStreak(r.key, details.current, details.allDrafts) : 1
+                return (
+                  <div key={r.key} className="rounded border border-navy/25 px-2 py-1.5">
+                    <div className="text-[9px] font-mono uppercase tracking-wide text-navy/75">{r.label}</div>
+                    <div className="text-xs font-mono text-navy font-bold">
+                      {r.fmt ? r.fmt(settingsSnapshot[r.key]) : String(settingsSnapshot[r.key])}
+                    </div>
+                    {streak >= 2 && <div className="text-[9px] font-mono text-[#2ECC71] font-bold mt-0.5">unchanged in {streak} orders</div>}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}
@@ -125,7 +148,7 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
           <div className="py-8 flex justify-center"><SbLoader size={28} /></div>
         ) : (
           <div>
-            <h3 className="text-[11px] font-mono uppercase tracking-wide text-inky/60 mb-1.5">
+            <h3 className="text-[11px] font-mono uppercase tracking-wide text-navy/75 mb-1.5">
               How the final order differs from what was originally suggested
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -133,14 +156,14 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
                 const rows = buckets[t.key]
                 const isOpen = expanded === t.key
                 return (
-                  <div key={t.key} className="rounded border border-navy/20">
+                  <div key={t.key} className="rounded border border-navy/25">
                     <button
                       onClick={() => setExpanded(isOpen ? null : t.key)}
                       disabled={rows.length === 0}
                       className="w-full flex items-center justify-between gap-1 px-2 py-2 text-left disabled:cursor-default"
                     >
                       <div>
-                        <div className="text-[9px] font-mono uppercase tracking-widest text-inky/50">{t.label}</div>
+                        <div className="text-[9px] font-mono uppercase tracking-widest text-navy/75">{t.label}</div>
                         <div className={`text-xl font-heading font-bold ${t.color}`}>{rows.length}</div>
                       </div>
                       {rows.length > 0 && (isOpen ? <ChevronDown className="w-3.5 h-3.5 text-inky/50" /> : <ChevronRight className="w-3.5 h-3.5 text-inky/50" />)}

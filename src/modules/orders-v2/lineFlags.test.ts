@@ -22,8 +22,8 @@ describe('dosTone', () => {
 
 describe('computeLineTags', () => {
   it('puts pre-order conditions in Before and order consequences in After', () => {
-    const t = computeLineTags(base({ flags: ['stocked_out', 'smoothing_topped_up'], dos_before: 10 }), ctx(50))
-    expect(keys(t.before)).toEqual(['stocked_out', 'dos_now_low'])
+    const t = computeLineTags(base({ flags: ['critical_minimum', 'smoothing_topped_up'], dos_before: 10 }), ctx(50))
+    expect(keys(t.before)).toEqual(['critical_minimum', 'dos_now_low'])
     expect(keys(t.after)).toContain('smoothing_topped_up')
   })
   it('flags DOS Now yellow when under target but at/above the trigger', () => {
@@ -45,6 +45,16 @@ describe('computeLineTags', () => {
     expect(edited.note).toBeNull()
     // zeroed -> gone
     expect(computeLineTags({ ...line, qty: 0 }, ctx(150)).note).toBeNull()
+  })
+  it('shows only the DOS-target over-capacity tag when both would apply', () => {
+    const t = computeLineTags(base({ flags: ['exceeded_capacity_for_dos_target'] }), ctx(150))
+    expect(keys(t.after)).toContain('exceeded_capacity_for_dos_target')
+    expect(keys(t.after)).not.toContain('capacity_capped')
+  })
+  it('keeps the recently-ordered tag and its note even though the qty is 0', () => {
+    const t = computeLineTags(base({ flags: ['recently_ordered'], qty: 0, note: 'Ordered 2026-09-28' }), ctx(10))
+    expect(keys(t.after)).toContain('recently_ordered')
+    expect(t.note).toBe('Ordered 2026-09-28')
   })
   it('drops engine quantity tags once edited or zeroed, but keeps PO decisions', () => {
     const line = base({ flags: ['case_minimum_topup', 'po_decision_override'] })

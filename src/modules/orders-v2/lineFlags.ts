@@ -54,7 +54,6 @@ const def = (key: TagKey, group: TagGroup, label: string, color: string, descrip
 
 export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   // ── Flags – Before ───────────────────────────────────────────────────────
-  def('stocked_out', 'before', 'Out of stock', '#C0392B', 'No on-hand recorded for this product.'),
   def('dos_now_low', 'before', 'DOS Now: low', '#E04B3C', 'Days of supply right now is below the DOS Min Trigger.'),
   def('dos_now_below_target', 'before', 'DOS Now: below target', '#E0B63A', 'Days of supply right now is below the DOS Target but at or above the DOS Min Trigger.'),
   def('critical_minimum', 'before', 'Critical min', '#E67E22', 'On-hand fell to this product\'s critical minimum (e.g. enough for one oil change), not the usual days-of-supply trigger.'),
@@ -64,11 +63,12 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   def('vmi_keepfill', 'before', 'VMI / Keep-fill', '#4F7489', 'Vendor-managed inventory tracked by tank monitor — left out of the order total by default since the vendor refills it.'),
   // ── Tags – After ─────────────────────────────────────────────────────────
   def('below_minimum', 'after', 'Under order min', '#D2574A', 'The shop is still under its order minimum after this order.'),
-  def('capacity_capped', 'after', 'Over capacity', '#C2602A', 'This quantity puts on-hand past the shop\'s configured capacity for this product.'),
-  def('exceeded_capacity_for_dos_target', 'after', 'Over capacity: DOS target', '#F2A65A', 'Ordered past configured capacity on purpose to reach the DOS Target — see the note for the numbers.'),
+  def('capacity_capped', 'after', 'Over capacity', '#6E3B1F', 'This quantity puts on-hand past the shop\'s configured capacity for this product.'),
+  def('exceeded_capacity_for_dos_target', 'after', 'Over capacity: DOS target', '#A8456B', 'Ordered past configured capacity on purpose to reach the DOS Target — see the note for the numbers.'),
   def('over_dos_max', 'after', 'Over DOS max', '#E67E22', 'DOS After is above the DOS Max.'),
   def('dos_after_low', 'after', 'DOS After: low', '#E04B3C', 'Days of supply after this order is still below the DOS Min Trigger.'),
   def('dos_after_below_target', 'after', 'DOS After: below target', '#E0B63A', 'Days of supply after this order is below the DOS Target but at or above the DOS Min Trigger.'),
+  def('recently_ordered', 'after', 'Ordered recently', '#3E8E9B', 'Ordered in the last 8 days and the on hand plus that order still covers usage — kept on the order at 0. Add a quantity if it should go on anyway.'),
   def('case_minimum_topup', 'after', 'Case min', '#B7E0DE', 'Raised to meet the vendor\'s case-type order minimum.'),
   def('alone_default_qty', 'after', 'Alone qty', '#6FB7B2', 'Only line on the order — used its configured "alone" quantity.'),
   def('added_for_smoothing', 'after', 'Added: smoothing', '#8FB8D0', 'Pulled onto this order from the shop\'s other products to help it reach its order minimum.'),
@@ -79,7 +79,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   def('po_decision_combine', 'after', 'PO: combined', '#7FDBA6', 'Decided to count the open PO\'s outstanding quantity as on-hand and re-target the order quantity.'),
 ] as [TagKey, TagDef][]) as Record<TagKey, TagDef>
 
-const BEFORE_STORED: LineFlag[] = ['stocked_out', 'critical_minimum', 'repeat_ordering', 'keepfill_will_run_out', 'covered_by_open_po', 'vmi_keepfill']
+const BEFORE_STORED: LineFlag[] = ['critical_minimum', 'repeat_ordering', 'keepfill_will_run_out', 'covered_by_open_po', 'vmi_keepfill']
 const PO_DECISIONS: LineFlag[] = ['po_decision_override', 'po_decision_exclude', 'po_decision_combine']
 // Tags the engine stamped because of the quantity IT chose — meaningless once someone edits the qty, or sets it to 0.
 const ENGINE_QTY_TAGS: LineFlag[] = ['case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']
@@ -127,9 +127,11 @@ export function computeLineTags<L extends TagLine>(l: L, ctx: TagContext): LineT
   const overCapacity = !qty0 && l.max_capacity_gallons != null && ctx.onHandAfter(l) > l.max_capacity_gallons
   if (l.included && ctx.belowMinimum(l)) after.push('below_minimum')
   if (overCapacity) {
-    after.push('capacity_capped')
+    // "Over capacity: DOS target" already says it's over capacity, and why — never show both.
     if (stored.has('exceeded_capacity_for_dos_target') && !l.is_override) after.push('exceeded_capacity_for_dos_target')
+    else after.push('capacity_capped')
   }
+  if (stored.has('recently_ordered')) after.push('recently_ordered')
   if (!qty0 && l.dos_after != null && l.dos_after > t.max) after.push('over_dos_max')
   if (l.dos_after != null) {
     if (l.dos_after < t.minTrigger) after.push('dos_after_low')
@@ -138,7 +140,8 @@ export function computeLineTags<L extends TagLine>(l: L, ctx: TagContext): LineT
   if (!qty0 && !l.is_override) for (const f of ENGINE_QTY_TAGS) if (stored.has(f)) after.push(f)
   for (const f of PO_DECISIONS) if (stored.has(f)) after.push(f)
 
-  const noteStillApplies = !l.is_override && !qty0 && (stored.has('rounded_to_bulk_minimum') || after.includes('exceeded_capacity_for_dos_target'))
+  const noteStillApplies = stored.has('recently_ordered')
+    || (!l.is_override && !qty0 && (stored.has('rounded_to_bulk_minimum') || after.includes('exceeded_capacity_for_dos_target')))
   return {
     before: before.map((k) => TAG_DEFS[k]),
     after: after.map((k) => TAG_DEFS[k]),

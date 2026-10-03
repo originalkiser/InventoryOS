@@ -410,6 +410,15 @@ export function OrdersV2Landing() {
           draftId={statsDraft.id}
           vendorId={statsDraft.vendor_id}
           settingsSnapshot={statsDraft.settings_snapshot}
+          details={{
+            vendorName: vendorName(statsDraft.vendor_id),
+            orderDate: statsDraft.order_date,
+            createdAt: statsDraft.created_at,
+            orderType: orderTypeLabel(statsDraft, vendorName(statsDraft.vendor_id)),
+            orderDay: orderDayLabel(statsDraft.settings_snapshot),
+            current: statsDraft,
+            allDrafts: drafts,
+          }}
           open={!!statsDraft}
           onClose={() => setStatsDraft(null)}
           editPath={statusRoute(statsDraft)}
