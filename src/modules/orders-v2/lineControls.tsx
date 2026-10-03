@@ -8,7 +8,16 @@ import type { DraftLineRow } from './useOrdersV2'
 
 // ── Qty stepper ─────────────────────────────────────────────────────────
 
-const STEP_BTN = 'w-5 h-6 flex-shrink-0 flex items-center justify-center rounded border border-navy/25 text-inky leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none'
+// Same height as the number box (the row is items-stretch) and twice the old 20px width, so they're easy to hit.
+const STEP_BTN = 'w-10 flex-shrink-0 flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none'
+
+/** Enter in a qty box moves to the next row's qty box (Shift+Enter goes back up) within the same table. */
+function moveToNextQty(el: HTMLInputElement, backwards: boolean) {
+  const scope: ParentNode = el.closest('table') ?? document
+  const inputs = Array.from(scope.querySelectorAll<HTMLInputElement>('input[data-qty-input]'))
+  const next = inputs[inputs.indexOf(el) + (backwards ? -1 : 1)]
+  if (next) { next.focus(); next.select() } else el.blur()
+}
 // Hides the native spinner arrows — the − / + buttons replace them.
 const NO_SPINNER = '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'
 
@@ -50,10 +59,11 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
   const bump = (delta: number) => commit(Math.max(0, Math.round(((Number(text) || 0) + delta) * 100) / 100))
 
   return (
-    <div className="inline-flex items-center gap-0.5">
+    <div className="inline-flex items-stretch gap-0.5">
       <button type="button" title="Decrease by 1" disabled={(Number(text) || 0) <= 0} onClick={() => bump(-1)} className={STEP_BTN}>−</button>
       <input
-        type="number" min={0} step={bulk ? 0.1 : 1} value={text} placeholder="0"
+        type="number" min={0} step={bulk ? 0.1 : 1} value={text} placeholder="0" data-qty-input
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); moveToNextQty(e.currentTarget, e.shiftKey) } }}
         onChange={(e) => {
           setText(e.target.value)
           if (commitOn === 'change') {
@@ -110,7 +120,7 @@ export function ZeroReasonButtons({ line, onChange }: {
   const [note, setNote] = useState(line.zero_reason_note ?? '')
   useEffect(() => { setNote(line.zero_reason_note ?? '') }, [line.zero_reason_note])
   const btn = (active: boolean) =>
-    `text-[9px] rounded border px-1 py-0.5 whitespace-nowrap ${active ? 'bg-sky text-navy border-sky' : 'border-navy/25 text-inky hover:border-navy'}`
+    `text-[9px] rounded border px-1 py-0.5 whitespace-nowrap ${active ? 'bg-sb-sky text-sb-navy border-sb-sky font-bold' : 'border-navy/25 text-inky hover:border-navy'}`
   return (
     <div className="flex flex-col gap-1 mt-1">
       <div className="flex items-center gap-1 flex-wrap">

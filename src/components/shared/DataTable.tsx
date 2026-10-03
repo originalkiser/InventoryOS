@@ -516,7 +516,7 @@ export function DataTable<T>({
       {/* Table */}
       <div className={`overflow-auto rounded border border-inky/20 ${bodyMaxHeightClass ?? 'max-h-[calc(100vh-300px)]'}${mobileCards ? ' hidden sm:block' : ''}`}>
         <table
-          className={`text-xs font-body table-fixed${hasFill ? ' w-full' : ''}`}
+          className={`text-xs font-body table-fixed border-separate border-spacing-0${hasFill ? ' w-full' : ''}`}
           style={hasFill ? { minWidth: table.getTotalSize() + SEL_W } : { width: table.getTotalSize() + SEL_W }}
         >
           <thead className="sticky top-0 z-20">
@@ -525,7 +525,7 @@ export function DataTable<T>({
                 {/* Select-all checkbox — frozen to the left like the pinned columns */}
                 <th
                   style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 30 }}
-                  className="px-2 py-2 text-center bg-[#002745]"
+                  className="px-2 py-2 text-center bg-[#002745] border-b border-b-inky/20"
                 >
                   <input
                     ref={selectAllRef}
@@ -548,7 +548,7 @@ export function DataTable<T>({
                         : { position: 'relative' }),
                     }}
                     className={[
-                      'px-3 py-2 text-left text-[#F2F1E6] font-heading text-sm uppercase tracking-wide overflow-hidden',
+                      'px-3 py-2 text-left text-[#F2F1E6] font-heading text-sm uppercase tracking-wide overflow-hidden border-b border-b-inky/20',
                       header.column.getIsPinned() === 'left' ? 'bg-[#002745] border-r-2 border-r-inky/40' : '',
                     ].join(' ')}
                   >
@@ -592,7 +592,12 @@ export function DataTable<T>({
                 // zebra stripe's place — selection still wins over it, same
                 // as it already won over the plain stripe.
                 const tint = getRowClassName?.(row.original) ?? ''
-                const bandClass = selected ? 'bg-sky/15' : tint || (i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]')
+                const zebraClass = i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'
+                const bandClass = selected ? 'bg-sky/15' : tint || zebraClass
+                // Pinned cells must be fully opaque or scrolled columns show through them. The row's tint
+                // (selection, status color, ...) is often translucent, so a pinned cell gets the opaque zebra
+                // color as its own background and the tint is laid over it as a click-through overlay.
+                const pinnedOverlay = selected ? 'bg-sky/15' : tint
                 const expandedContent = expandedRowRender?.(row.original)
                 return (
                   <Fragment key={row.id}>
@@ -609,7 +614,7 @@ export function DataTable<T>({
                       onRowClick(row.original)
                     } : undefined}
                     className={[
-                      'hover:bg-sky/10 transition-colors',
+                      'group hover:bg-sky/10 transition-colors',
                       onRowClick ? 'cursor-pointer' : '',
                       bandClass,
                     ].join(' ')}
@@ -626,8 +631,9 @@ export function DataTable<T>({
                         renders consistently and correctly across every column. */}
                     <td
                       style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 10 }}
-                      className={['px-2 py-2 text-center border-b border-inky/10', bandClass].join(' ')}
+                      className={['px-2 py-2 text-center border-b border-inky/10', zebraClass].join(' ')}
                     >
+                      <span aria-hidden className={`pointer-events-none absolute inset-0 group-hover:bg-sky/10 ${pinnedOverlay}`} />
                       <input
                         type="checkbox"
                         checked={selected}
@@ -654,9 +660,12 @@ export function DataTable<T>({
                           className={[
                             'px-3 py-2 text-navy border-b border-inky/10',
                             noClip ? '' : 'whitespace-nowrap',
-                            cell.column.getIsPinned() === 'left' ? `${bandClass} border-r-2 border-r-inky/20` : '',
+                            cell.column.getIsPinned() === 'left' ? `${zebraClass} border-r-2 border-r-inky/20` : '',
                           ].join(' ')}
                         >
+                          {cell.column.getIsPinned() === 'left' && (
+                            <span aria-hidden className={`pointer-events-none absolute inset-0 group-hover:bg-sky/10 ${pinnedOverlay}`} />
+                          )}
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
                       )

@@ -6,7 +6,7 @@ interface ModalProps {
   onClose: () => void
   title?: string
   children: React.ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'wide'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'wide' | 'wide90'
 }
 
 const sizeClasses = {
@@ -21,6 +21,8 @@ const sizeClasses = {
   // max-w-* step): a viewport-relative cap rather than another fixed
   // breakpoint, since "workspace width" varies by sidebar state/window size.
   wide: 'max-w-[60vw]',
+  // 90% of the visible width — for a modal that's really a working table (Orders v2's shop product list).
+  wide90: 'max-w-[90vw]',
 }
 
 export function Modal({ open, onClose, title, children, size = 'md' }: ModalProps) {

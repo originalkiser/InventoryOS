@@ -689,8 +689,17 @@ export function useGenerationData() {
 
     const [rules, usage, vendorParts, uomMappings, globalProducts, tankOnHand, poItems, exceptions, schedRows, calRows, history] = await Promise.all([
       step(fetchAll<ProductRule & { id: string }>('inventory', 'ov2_product_rules', '*', companyId)),
-      step(fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId,
-        familyList.length ? (q: any) => q.or(familyList.map((f) => `product_id.ilike.${escapeIlike(f)}%`).join(',')) : undefined)),
+      // One set-based RPC (trigram index, ~0.3s) instead of ~60 ORed ILIKEs paged by ORDER BY id + OFFSET,
+      // which scanned ~all of product_usage on every page and was the "stuck at 14 of 16" hang
+      // (migration 20260930co). Falls back to the old paged fetch if the RPC isn't available.
+      step((async (): Promise<UsageRow[]> => {
+        if (familyList.length) {
+          const { data, error } = await sb().rpc('get_ov2_usage_for_families', { p_families: familyList })
+          if (!error && Array.isArray(data)) return data as UsageRow[]
+        }
+        return fetchAll<UsageRow>('inventory', 'product_usage', 'location_id, product_id, on_hands, daily_usage', companyId,
+          familyList.length ? (q: any) => q.or(familyList.map((f) => `product_id.ilike.${escapeIlike(f)}%`).join(',')) : undefined)
+      })()),
       // Cost + package size come from here, not from ov2_product_rules (that
       // table has no editing UI and is empty in practice) — see
       // resolveVendorPart below. min_on_hand_qty is the Orders v2 critical

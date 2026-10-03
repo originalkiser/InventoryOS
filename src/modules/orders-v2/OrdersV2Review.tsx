@@ -1042,7 +1042,7 @@ export function OrdersV2Review() {
         // modal") — this is the one modal in this feature that actually
         // shows a multi-column table, unlike Add Non-Configured Product's
         // plain form.
-        <Modal open={!!popupShopId} onClose={() => setPopupShopId(null)} title={shopLabel(popupShopId)} size="wide">
+        <Modal open={!!popupShopId} onClose={() => setPopupShopId(null)} title={shopLabel(popupShopId)} size="wide90">
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] font-mono uppercase tracking-widest text-inky/60">
@@ -1911,7 +1911,7 @@ export function PoDecisionButtons({ line, onOverride, onExclude, onCombine }: {
   const flags = (line.flags ?? []) as LineFlag[]
   const chosen = PO_DECISION_FLAGS.find((f) => flags.includes(f))
   const btnCls = (active: boolean) =>
-    `text-[9px] rounded border px-1 py-0.5 whitespace-nowrap ${active ? 'bg-sky text-navy border-sky' : 'border-navy/25 text-inky hover:border-navy'}`
+    `text-[9px] rounded border px-1 py-0.5 whitespace-nowrap ${active ? 'bg-sb-sky text-sb-navy border-sb-sky font-bold' : 'border-navy/25 text-inky hover:border-navy'}`
   return (
     <div className="flex gap-1 mt-1 flex-wrap">
       <button title="Order the full suggested quantity anyway" className={btnCls(chosen === 'po_decision_override')} onClick={() => onOverride(line)}>
