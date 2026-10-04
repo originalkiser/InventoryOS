@@ -121,7 +121,7 @@ export function OrdersV2Review() {
   const vendors = useVendors()
   const { settings, loading: settingsLoading, save: saveOrderSettings } = useOrderSettings()
   const { rulesFor } = useVendorRules()
-  const { fetchInputs } = useGenerationData()
+  const { fetchInputs, fetchDeliveryLookup } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
   // This page sits behind KeepAlivePages once visited more than once (see
   // its own doc comment) — bouncing here from Final Review/Export after
@@ -223,6 +223,15 @@ export function OrdersV2Review() {
   const [deliveryLookup, setDeliveryLookup] = useState<{
     schedules: Map<string, DeliverySchedule>; calendar: WeekCalendar; deliveryDow: Map<string, number | null>
   }>({ schedules: new Map(), calendar: new Map(), deliveryDow: new Map() })
+  // Delivery dates are needed the moment the table renders — load them straight away (small queries) rather than
+  // waiting for the full candidate load below, which is what used to leave the Delivery column blank until later.
+  useEffect(() => {
+    if (!draft?.id) return
+    let cancelled = false
+    fetchDeliveryLookup(draft.vendor_id).then((r) => { if (!cancelled && r) setDeliveryLookup(r) }).catch(() => { /* the full load below retries */ })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.id, draft?.vendor_id, fetchDeliveryLookup])
   const deliveryFor = useCallback((locationId: string | null, fromDate: string): string | null => {
     const sched = deliveryLookup.schedules.get(locationId ?? '')
     return sched
@@ -258,7 +267,7 @@ export function OrdersV2Review() {
   // popupAddNonConfigOpen is the "Add Non-Configured Product" modal opened
   // FROM inside the popup, pre-scoped to popupShopId.
   // Now a per-user setting (Order Settings > User Order Settings) instead of a toolbar toggle.
-  const [shopExpandPref] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'dropdown')
+  const [shopExpandPref] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'popup')
   const shopExpandMode: 'dropdown' | 'popup' = shopExpandPref === 'popup' ? 'popup' : 'dropdown'
   const [popupShopId, setPopupShopId] = useState<string | null>(null)
   const [popupAddNonConfigOpen, setPopupAddNonConfigOpen] = useState(false)

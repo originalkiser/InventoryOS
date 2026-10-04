@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
-import { OV2_COMBINED_MODE_KEY, OV2_DOS_STYLE_KEY, OV2_HIDDEN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, OV2_SHOP_EXPAND_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
+import { OV2_COMBINED_MODE_KEY, OV2_DOS_STYLE_KEY, OV2_SHOWN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_SHOWN_QUICK, DEFAULT_HIDE_DOS_NOW, OV2_SHOP_EXPAND_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
 import { ROW_TONE_META, TAG_DEFS, type RowTone } from './lineFlags'
 import { tagKey, toneKey } from './quickFilters'
 import { Button, Card, CardBody, Input, SbLoader, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toggle } from '@/components/ui'
@@ -184,21 +184,35 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
 function UserOrderSettings() {
   const [useOld, setUseOld] = useProfilePref<boolean | number>(OV2_USE_OLD_TABLE_KEY, false)
   const [dosStyle, setDosStyle] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
-  const [expandMode, setExpandMode] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'dropdown')
+  const [expandMode, setExpandMode] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'popup')
   const [combinedMode, setCombinedMode] = useProfilePref<string>(OV2_COMBINED_MODE_KEY, 'hidden')
-  const [hideDosNow, setHideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, false)
-  const [hiddenQuickRaw, setHiddenQuick] = useProfilePref<string[]>(OV2_HIDDEN_QUICK_KEY, [])
-  const hiddenQuick = new Set(Array.isArray(hiddenQuickRaw) ? hiddenQuickRaw : [])
+  const [hideDosNow, setHideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_HIDE_DOS_NOW)
+  const [shownQuickRaw, setShownQuick] = useProfilePref<string[]>(OV2_SHOWN_QUICK_KEY, DEFAULT_SHOWN_QUICK)
+  const shownQuick = new Set(Array.isArray(shownQuickRaw) ? shownQuickRaw : DEFAULT_SHOWN_QUICK)
+  const defaultQuick = new Set(DEFAULT_SHOWN_QUICK)
   const toggleQuick = (key: string) => {
-    const next = new Set(hiddenQuick)
+    const next = new Set(shownQuick)
     if (next.has(key)) next.delete(key); else next.add(key)
-    setHiddenQuick([...next])
+    setShownQuick([...next])
+  }
+  // Hovering "Reset to default" outlines the buttons that would be shown by default; clicking it asks once more.
+  const [resetHover, setResetHover] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+  function doReset() {
+    setShownQuick([...DEFAULT_SHOWN_QUICK])
+    setHideDosNow(DEFAULT_HIDE_DOS_NOW)
+    setConfirmReset(false); setResetHover(false)
+  }
+  const TONE_DESCRIPTIONS: Record<string, string> = {
+    below_min: 'Lines in a shop whose order is still under its order minimum (the whole row turns red).',
+    over_capacity_target: 'Lines ordered past the shop\'s configured capacity on purpose to reach the DOS target (the row turns orange).',
+    excluded: 'Lines left off the order (the row is grayed out).',
   }
   // Every filter button the Review table can show (it still only shows the ones present in the current order).
-  const quickChoices: { group: string; items: { key: string; label: string; color: string }[] }[] = [
-    { group: 'Row colors', items: (Object.keys(ROW_TONE_META) as RowTone[]).map((t) => ({ key: toneKey(t), label: ROW_TONE_META[t].label, color: ROW_TONE_META[t].color })) },
-    { group: 'Flags – Before', items: Object.values(TAG_DEFS).filter((d) => d.group === 'before').map((d) => ({ key: tagKey(d.key), label: d.label, color: d.color })) },
-    { group: 'Flags – After', items: Object.values(TAG_DEFS).filter((d) => d.group === 'after').map((d) => ({ key: tagKey(d.key), label: d.label, color: d.color })) },
+  const quickChoices: { group: string; items: { key: string; label: string; color: string; description: string }[] }[] = [
+    { group: 'Row colors', items: (Object.keys(ROW_TONE_META) as RowTone[]).map((t) => ({ key: toneKey(t), label: ROW_TONE_META[t].label, color: ROW_TONE_META[t].color, description: TONE_DESCRIPTIONS[t] ?? '' })) },
+    { group: 'Flags – Before', items: Object.values(TAG_DEFS).filter((d) => d.group === 'before').map((d) => ({ key: tagKey(d.key), label: d.label, color: d.color, description: d.description })) },
+    { group: 'Flags – After', items: Object.values(TAG_DEFS).filter((d) => d.group === 'after').map((d) => ({ key: tagKey(d.key), label: d.label, color: d.color, description: d.description })) },
   ]
   return (
     <div className="flex flex-col gap-4">
@@ -215,24 +229,41 @@ function UserOrderSettings() {
         </p>
       </CardBody></Card>
       <Card><CardBody className="flex flex-col gap-2">
-        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Flag Filter Buttons</h3>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Flag Filter Buttons</h3>
+          {confirmReset ? (
+            <span className="flex items-center gap-2 text-[11px] font-mono text-navy">
+              Reset your filter buttons to the default?
+              <Button size="sm" variant="danger" onClick={doReset}>Yes, reset</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setConfirmReset(false); setResetHover(false) }}>Cancel</Button>
+            </span>
+          ) : (
+            <Button size="sm" variant="secondary" onMouseEnter={() => setResetHover(true)} onMouseLeave={() => setResetHover(false)}
+              onClick={() => setConfirmReset(true)}>Reset to default</Button>
+          )}
+        </div>
         <label className="flex items-center gap-2 text-xs font-mono text-navy">
           <Toggle checked={!!hideDosNow} onChange={(v) => setHideDosNow(v)} size="sm" />
           Only show DOS filter buttons for after the order (hide "DOS Now")
         </label>
         <p className="text-[11px] font-mono text-inky/60">
-          The buttons above the Review table filter it to lines with that flag. Uncheck any you never use to hide it.
+          The buttons above the Review table filter it to lines with that flag. Checked buttons are shown (when that flag is
+          in the order); uncheck any you never use.
         </p>
         <div className="flex flex-col gap-2">
           {quickChoices.map((g) => (
             <div key={g.group}>
               <div className="text-[10px] font-mono uppercase tracking-wide text-navy/75 mb-0.5">{g.group}</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
                 {g.items.map((it) => (
-                  <label key={it.key} className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
-                    <input type="checkbox" className="accent-inky" checked={!hiddenQuick.has(it.key)} onChange={() => toggleQuick(it.key)} />
-                    <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: it.color }} />
-                    {it.label}
+                  <label key={it.key}
+                    className={`flex items-start gap-2 text-xs font-mono text-navy cursor-pointer rounded px-1 py-0.5 ${resetHover && defaultQuick.has(it.key) ? 'outline outline-2 outline-sky' : ''}`}>
+                    <input type="checkbox" className="accent-inky mt-0.5" checked={shownQuick.has(it.key)} onChange={() => toggleQuick(it.key)} />
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0 mt-0.5" style={{ background: it.color }} />
+                    <span className="flex flex-col">
+                      <span>{it.label}</span>
+                      <span className="text-[10px] text-inky/60 leading-snug">{it.description}</span>
+                    </span>
                   </label>
                 ))}
               </div>

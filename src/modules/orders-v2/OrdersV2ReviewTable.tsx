@@ -22,7 +22,7 @@ import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { PoDecisionButtons } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
-import { dos, money, num, dShort, OV2_DOS_STYLE_KEY, OV2_HIDDEN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY } from './shared'
+import { dos, money, num, dShort, OV2_DOS_STYLE_KEY, OV2_SHOWN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_SHOWN_QUICK, DEFAULT_HIDE_DOS_NOW } from './shared'
 import { uomDisplayLabel, } from './types'
 import { matchesAnyQuick, quickCounts, tagKey, toneKey } from './quickFilters'
 import type { LineTagMap } from './useLineTagMap'
@@ -81,6 +81,21 @@ function NoteLine({ text }: { text: string }) {
 }
 
 /** Rough pixel width of a row of tag chips, so a Flags/Tags column can be sized to fit them (no overlap into the next column). */
+/**
+ * Splits a button label over exactly two lines at the word break that makes the wider line as narrow as possible
+ * (the count rides on the second line). A single word keeps line 1 and leaves line 2 for the count.
+ */
+function twoLines(label: string, count: number): [string, string] {
+  const words = label.split(' ')
+  if (words.length < 2) return [label, '']
+  let best = 1, bestW = Infinity
+  for (let i = 1; i < words.length; i++) {
+    const w = Math.max(words.slice(0, i).join(' ').length, words.slice(i).join(' ').length + 1 + String(count).length)
+    if (w < bestW) { bestW = w; best = i }
+  }
+  return [words.slice(0, best).join(' '), words.slice(best).join(' ')]
+}
+
 const chipsWidth = (tags: TagDef[]) => tags.reduce((s, t) => s + t.label.length * 5.4 + 28, 0)
 
 // ── Table ───────────────────────────────────────────────────────────────────
@@ -148,8 +163,8 @@ export function OrdersV2ReviewTable({
   const dosStyle = dosStylePref === 'text' ? 'text' : 'badge'
   const isOrderTable = variant === 'order'
   const tableKey = variant === 'order' ? TABLE_KEY : `${TABLE_KEY}-${variant}`
-  const [hiddenQuick] = useProfilePref<string[]>(OV2_HIDDEN_QUICK_KEY, [])
-  const [hideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, false)
+  const [shownQuick] = useProfilePref<string[]>(OV2_SHOWN_QUICK_KEY, DEFAULT_SHOWN_QUICK)
+  const [hideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_HIDE_DOS_NOW)
   const [ownQuick, setOwnQuick] = useState<Set<string>>(new Set())
   const quick = quickFilters ?? ownQuick
   const setQuick = onQuickFiltersChange ?? setOwnQuick
@@ -174,10 +189,10 @@ export function OrdersV2ReviewTable({
         if (c > 0) out.push({ key: tagKey(def.key), label: def.label, color: def.color, description: def.description, count: c })
       }
     }
-    // User settings: hide chosen buttons, and optionally every "DOS Now" one (only the after-order ones remain).
-    const hidden = new Set(Array.isArray(hiddenQuick) ? hiddenQuick : [])
-    return out.filter((b) => !hidden.has(b.key) && !(hideDosNow && (b.key === tagKey('dos_now_low') || b.key === tagKey('dos_now_below_target'))))
-  }, [counts, hiddenQuick, hideDosNow])
+    // User settings: only the chosen buttons, and optionally never a "DOS Now" one (only the after-order ones remain).
+    const shown = new Set(Array.isArray(shownQuick) ? shownQuick : DEFAULT_SHOWN_QUICK)
+    return out.filter((b) => shown.has(b.key) && !(hideDosNow && (b.key === tagKey('dos_now_low') || b.key === tagKey('dos_now_below_target'))))
+  }, [counts, shownQuick, hideDosNow])
   const shownLines = useMemo(
     () => (quick.size ? lines.filter((l) => matchesAnyQuick(quick, l, tagMap.get(l.id), thresholds)) : lines),
     [lines, tagMap, quick, thresholds],
@@ -357,11 +372,11 @@ export function OrdersV2ReviewTable({
         cell: (i) => <div>{i.getValue()}</div>,
       }),
       col.accessor((l) => Number(l.qty), {
-        id: 'qty', header: 'Order Qty', enableSorting: false, size: 224, minSize: 224, enableResizing: false,
+        id: 'qty', header: 'Order Qty', enableSorting: false, size: 224, minSize: 224,
         meta: {
           numeric: true,
           // The orange "edited by hand" bar runs the full height of the cell, not just the content.
-          cellClassName: (l: DraftLineRow) => (l.is_override ? 'shadow-[inset_3px_0_0_#E67E22] pl-3' : ''),
+          cellClassName: (l: DraftLineRow) => (l.is_override ? 'shadow-[inset_3px_0_0_#E67E22]' : ''),
         },
         cell: (i) => {
           const l = i.row.original
@@ -572,9 +587,11 @@ export function OrdersV2ReviewTable({
                 <HoverTip key={b.key} content={<SwatchTipBody color={b.color} title={b.label}
                   description={`${b.description} ${active ? 'Click to stop filtering to these lines.' : 'Click to show only these lines.'}`} />}>
                   <button type="button" onClick={() => toggleQuick(b.key)}
-                    className={`h-[38px] max-w-[9.5rem] inline-flex items-center gap-1.5 rounded border px-2 text-[10px] font-mono leading-tight text-left ${active ? 'border-navy bg-navy/10 text-navy font-bold' : 'border-navy/30 text-navy hover:border-navy'}`}>
+                    className={`h-[38px] inline-flex items-center gap-1.5 rounded border px-2 text-[10px] font-mono leading-tight text-left ${active ? 'border-navy bg-navy/10 text-navy font-bold' : 'border-navy/30 text-navy hover:border-navy'}`}>
                     <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: b.color }} />
-                    <span className="whitespace-normal">{b.label} <span className="text-navy/75">{b.count}</span></span>
+                    <span className="flex flex-col whitespace-nowrap leading-tight">
+                      {(() => { const [l1, l2] = twoLines(b.label, b.count); return (<><span>{l1}</span><span>{l2} <span className="text-navy/75">{b.count}</span></span></>) })()}
+                    </span>
                   </button>
                 </HoverTip>
               )

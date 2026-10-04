@@ -791,7 +791,33 @@ export function useGenerationData() {
     return { configs, rules, usage, productMappings, vendorParts, uomMappings, globalProducts, tankOnHand, openPurchaseOrders, poItems, exceptions, days, schedules, calendar, history: historyFacts }
   }, [companyId])
 
-  return { fetchInputs }
+  /**
+   * Just the delivery-date inputs (per-shop schedules, the A/B week calendar, each shop's RelaDyne delivery weekday) —
+   * small and fast, so the Review table's Delivery column (and the lead-day math behind On Hand After) is filled in as soon
+   * as the draft opens instead of waiting for the full candidate load that fetchInputs does.
+   */
+  const fetchDeliveryLookup = useCallback(async (vendorId: string | null) => {
+    if (!companyId) return null
+    const [locRows, schedRows, calRows] = await Promise.all([
+      fetchAll<any>('core', 'locations', 'id, reladyne_delivery_day', companyId),
+      fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
+      fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined),
+    ])
+    const schedules = new Map<string, DeliverySchedule>()
+    for (const r of (schedRows ?? [])) {
+      schedules.set(r.location_id, {
+        type: r.schedule_type, delivery_dow: r.delivery_dow,
+        week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+        biweekly_anchor_date: r.biweekly_anchor_date ?? null,
+        lead_business_days: Number(r.lead_business_days ?? 4),
+      })
+    }
+    const calendar: WeekCalendar = new Map((calRows ?? []).map((c: any) => [String(c.week_start).slice(0, 10), c.week_label as 'A' | 'B']))
+    const deliveryDow = new Map<string, number | null>((locRows ?? []).map((l: any) => [l.id, parseWeekday(l.reladyne_delivery_day)]))
+    return { schedules, calendar, deliveryDow }
+  }, [companyId])
+
+  return { fetchInputs, fetchDeliveryLookup }
 }
 
 /** Merge config + rules + usage into engine inputs (config is the gate). */

@@ -89,9 +89,18 @@ export const OV2_SHOP_EXPAND_KEY = 'ov2_review_shop_expand_mode'
 /** Per-user pref: 'hidden' shows only the combined on-hand total (math on hover); 'listed' writes each combined product out. */
 export const OV2_COMBINED_MODE_KEY = 'ov2_review_combined_mode'
 
-/** Per-user prefs for the flag filter buttons above the Review table: keys the user hid, and "hide the DOS Now ones". */
-export const OV2_HIDDEN_QUICK_KEY = 'ov2_review_hidden_quick_buttons'
+/**
+ * Per-user prefs for the flag filter buttons above the Review table: which buttons to show, and "hide the DOS Now ones".
+ * Defaults (set 2026-10-04, for every user who hasn't customized): the three row colors plus Repeat ordering, DOS After:
+ * low, DOS After: below target and Ordered recently. A button not in the list stays hidden, so newly added flags start off.
+ */
+export const OV2_SHOWN_QUICK_KEY = 'ov2_review_shown_quick_buttons'
 export const OV2_HIDE_DOS_NOW_BUTTONS_KEY = 'ov2_review_hide_dos_now_buttons'
+export const DEFAULT_SHOWN_QUICK: string[] = [
+  'tone:below_min', 'tone:over_capacity_target', 'tone:excluded',
+  'tag:repeat_ordering', 'tag:dos_after_low', 'tag:dos_after_below_target', 'tag:recently_ordered',
+]
+export const DEFAULT_HIDE_DOS_NOW = true
 
 /** Amber treatment marking a user override, used everywhere edits are shown. */
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'
