@@ -297,6 +297,11 @@ export interface DraftRow {
   created_at: string
   last_edited_by: string | null
   updated_at: string
+  // Cancel keeps the order in the list (status 'cancelled', remembering what it was); delete is a soft delete that
+  // keeps the order in the Deleted list for 90 days (migration 20261004a).
+  deleted_at?: string | null
+  deleted_by?: string | null
+  status_before_cancel?: string | null
 }
 
 export interface DraftLineRow extends GeneratedLine {
@@ -319,7 +324,7 @@ export function useDrafts() {
     if (!companyId) { setLoading(false); return }
     setLoading(true)
     const { data } = await sb().schema('inventory').from('ov2_order_drafts')
-      .select('*').eq('company_id', companyId).order('updated_at', { ascending: false })
+      .select('*').eq('company_id', companyId).is('deleted_at', null).order('updated_at', { ascending: false })
     setDrafts((data ?? []) as DraftRow[])
     setLoading(false)
   }, [companyId])
@@ -359,13 +364,61 @@ export function useDrafts() {
     return data.id as string
   }
 
+  /** Soft delete: the order (and its lines) stays restorable from the Deleted list for 90 days, then is purged nightly. */
   async function deleteDraft(id: string) {
-    const { error } = await sb().schema('inventory').from('ov2_order_drafts').delete().eq('id', id)
+    const { error } = await sb().schema('inventory').from('ov2_order_drafts')
+      .update({ deleted_at: new Date().toISOString(), deleted_by: profile?.id ?? null }).eq('id', id)
     if (error) { toast.error(error.message); return }
-    toast.success('Draft deleted'); load()
+    toast.success('Order moved to Deleted — it can be restored for 90 days'); load()
   }
 
-  return { drafts, loading, createDraft, deleteDraft, reload: load }
+  /** Cancel keeps the order in the list (shown red, struck through) and remembers the step it was on. */
+  async function cancelDraft(id: string) {
+    const d = drafts.find((x) => x.id === id)
+    if (!d) return
+    const { error } = await sb().schema('inventory').from('ov2_order_drafts')
+      .update({ status: 'cancelled', status_before_cancel: d.status, last_edited_by: profile?.id ?? null, updated_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Order cancelled'); load()
+  }
+
+  async function uncancelDraft(id: string) {
+    const d = drafts.find((x) => x.id === id)
+    if (!d) return
+    const back = d.status_before_cancel && d.status_before_cancel !== 'cancelled' ? d.status_before_cancel : 'review'
+    const { error } = await sb().schema('inventory').from('ov2_order_drafts')
+      .update({ status: back, status_before_cancel: null, last_edited_by: profile?.id ?? null, updated_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Order un-cancelled'); load()
+  }
+
+  return { drafts, loading, createDraft, deleteDraft, cancelDraft, uncancelDraft, reload: load }
+}
+
+/** Orders deleted in the last 90 days (see useDrafts().deleteDraft), newest first, with a restore action. */
+export function useDeletedDrafts(onRestored?: () => void) {
+  const { profile } = useAuthStore()
+  const companyId = profile?.company_id ?? null
+  const [drafts, setDrafts] = useState<DraftRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const load = useCallback(async () => {
+    if (!companyId) { setLoading(false); return }
+    setLoading(true)
+    const since = new Date(Date.now() - 90 * 86400000).toISOString()
+    const { data } = await sb().schema('inventory').from('ov2_order_drafts')
+      .select('*').eq('company_id', companyId).not('deleted_at', 'is', null).gte('deleted_at', since)
+      .order('deleted_at', { ascending: false })
+    setDrafts((data ?? []) as DraftRow[])
+    setLoading(false)
+  }, [companyId])
+  useEffect(() => { load() }, [load])
+  async function restoreDraft(id: string) {
+    const { error } = await sb().schema('inventory').from('ov2_order_drafts')
+      .update({ deleted_at: null, deleted_by: null, updated_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast.error(error.message); return }
+    toast.success('Order restored'); await load(); onRestored?.()
+  }
+  return { drafts, loading, restoreDraft, reload: load }
 }
 
 export interface DraftAggregate { products: number; gallons: number; cost: number }

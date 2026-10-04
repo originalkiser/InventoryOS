@@ -52,7 +52,10 @@ const SETTING_ROWS: { key: string; label: string; fmt?: (v: unknown) => string }
  * new schema — the point is surfacing decisions that are already there but
  * were never summarized anywhere, to help tune settings/logic over time.
  */
-export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onClose, editPath, onDelete, details }: {
+export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onClose, editPath, onDelete, details, cancelled, onCancelToggle }: {
+  /** Orders tab: this order is cancelled — the button below un-cancels it. */
+  cancelled?: boolean
+  onCancelToggle?: () => void
   /** Orders tab: vendor / dates / order type for the header, plus every draft (to show "unchanged in N orders"). */
   details?: { vendorName: string; orderDate: string; createdAt: string; orderType: string; orderDay: string | null; current: StreakDraft; allDrafts: StreakDraft[] }
   draftId: string
@@ -194,8 +197,11 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
         <div className="flex items-center justify-between gap-2 pt-2 border-t border-navy/10">
           <div className="flex items-center gap-2">
             <Button size="sm" variant="secondary" onClick={() => setFullSummaryOpen(true)}>View Full Summary</Button>
+            {onCancelToggle && (
+              <Button size="sm" variant="secondary" onClick={onCancelToggle}>{cancelled ? 'Un-cancel Order' : 'Cancel Order'}</Button>
+            )}
             {onDelete && (
-              <button onClick={onDelete} title="Delete draft" className="text-inky/40 hover:text-[#C0392B]">
+              <button onClick={onDelete} title="Delete order" className="text-inky/40 hover:text-[#C0392B]">
                 <Trash2 className="w-4 h-4" />
               </button>
             )}

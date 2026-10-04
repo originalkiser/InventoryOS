@@ -9,7 +9,7 @@ import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useLocations } from '@/hooks/useLocations'
 import { useAuthStore } from '@/stores/authStore'
-import { useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, draftAdHocLocationIds, draftOrderDow, isReladyne, isValvoline, type DraftRow } from './useOrdersV2'
+import { useDeletedDrafts, useDrafts, useDraftAggregates, useOrderSettings, useOrderDayCoverage, draftAdHocLocationIds, draftOrderDow, isReladyne, isValvoline, type DraftRow } from './useOrdersV2'
 import { useRdReports } from './useRdReports'
 import { RdReportsTab } from './RdReportsTab'
 import { ValvolineOrderDatabaseTab } from './ValvolineOrderDatabaseTab'
@@ -30,6 +30,9 @@ function isToday(iso: string | null): boolean {
   return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
 }
 
+// A cancelled order stays in the list: red, with the shop count, product count, gallons and cost struck through.
+const STRIKE_WHEN_CANCELLED = { cellClassName: (d: DraftRow) => (d.status === 'cancelled' ? 'line-through text-[#C0392B]' : '') }
+
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 // Distinct color per status for the unified table's pill (direct ask
@@ -42,7 +45,7 @@ const STATUS_COLOR: Record<DraftStatus, string> = {
   review: 'bg-sky/25 text-navy',
   final_review: 'bg-[#E67E22]/20 text-[#E67E22]',
   exported: 'bg-[#2ECC71]/20 text-[#2ECC71]',
-  cancelled: 'bg-inky/15 text-inky',
+  cancelled: 'bg-[#C0392B]/20 text-[#C0392B]',
 }
 
 /**
@@ -59,7 +62,9 @@ export function OrdersV2Landing() {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const { settings } = useOrderSettings()
-  const { drafts, loading, createDraft, deleteDraft } = useDrafts()
+  const { drafts, loading, createDraft, deleteDraft, cancelDraft, uncancelDraft, reload: reloadDrafts } = useDrafts()
+  const deleted = useDeletedDrafts(() => reloadDrafts())
+  const [deleteTarget, setDeleteTarget] = useState<DraftRow | null>(null)
   const vendors = useVendors()
   const names = useUserNames()
   const rd = useRdReports()
@@ -157,16 +162,16 @@ export function OrdersV2Landing() {
       cell: (i) => <span className={`rounded-full px-2 py-0.5 text-[11px] font-heading uppercase tracking-wide ${STATUS_COLOR[i.getValue()]}`}>{STATUS_LABEL[i.getValue()]}</span>,
     }),
     col.display({
-      id: 'shops', header: 'Shops', enableSorting: false,
+      id: 'shops', header: 'Shops', enableSorting: false, meta: STRIKE_WHEN_CANCELLED,
       cell: (i) => (i.row.original.settings_snapshot as any)?.__shop_count ?? '—',
     }),
     col.accessor((d) => orderDayLabel(d.settings_snapshot), { id: 'order_day', header: 'Order Day' }),
     // Direct ask 2026-10-02: any ad hoc order says so; a regular RelaDyne order
     // shows its weekday; a regular Valvoline order is 'Weekly'.
     col.accessor((d) => orderTypeLabel(d, vendorName(d.vendor_id)), { id: 'order_type', header: 'Order Type' }),
-    col.display({ id: 'products', header: 'Products', enableSorting: false, cell: (i) => aggregates[i.row.original.id]?.products ?? '—' }),
-    col.display({ id: 'gallons', header: 'Gallons', enableSorting: false, cell: (i) => gallons(aggregates[i.row.original.id]?.gallons) }),
-    col.display({ id: 'cost', header: 'Cost', enableSorting: false, cell: (i) => <span className="text-right block">{money(aggregates[i.row.original.id]?.cost)}</span> }),
+    col.display({ id: 'products', header: 'Products', enableSorting: false, meta: STRIKE_WHEN_CANCELLED, cell: (i) => aggregates[i.row.original.id]?.products ?? '—' }),
+    col.display({ id: 'gallons', header: 'Gallons', enableSorting: false, meta: STRIKE_WHEN_CANCELLED, cell: (i) => gallons(aggregates[i.row.original.id]?.gallons) }),
+    col.display({ id: 'cost', header: 'Cost', enableSorting: false, meta: STRIKE_WHEN_CANCELLED, cell: (i) => <span className="text-right block">{money(aggregates[i.row.original.id]?.cost)}</span> }),
     col.accessor('updated_at', { id: 'updated_at', header: 'Last Edited', cell: (i) => dTime(i.getValue()) }),
     col.accessor((d) => names.nameOf(d.last_edited_by ?? d.created_by), { id: 'by', header: 'By' }),
   ], [col, vendors, aggregates, names])
@@ -234,6 +239,7 @@ export function OrdersV2Landing() {
             <TabsTrigger value="products_ordered">Products Ordered</TabsTrigger>
             <TabsTrigger value="rd_reports">RD Reports</TabsTrigger>
             <TabsTrigger value="valvoline_db">Valvoline Order Database</TabsTrigger>
+            <TabsTrigger value="deleted">Deleted ({deleted.drafts.length})</TabsTrigger>
           </TabsList>
           {/* Direct ask 2026-09-29: the RD report upload buttons move onto
               this same row instead of living inside the RD Reports tab. */}
@@ -256,6 +262,7 @@ export function OrdersV2Landing() {
                 globalFilter={globalFilter}
                 onGlobalFilterChange={setGlobalFilter}
                 onRowClick={(d) => setStatsDraft(d)}
+                getRowTone={(d) => (d.status === 'cancelled' ? '#C0392B26' : null)}
               />
             )}
         </TabsContent>
@@ -270,6 +277,41 @@ export function OrdersV2Landing() {
 
         <TabsContent value="valvoline_db">
           <ValvolineOrderDatabaseTab />
+        </TabsContent>
+
+        <TabsContent value="deleted">
+          <p className="text-[11px] font-mono text-navy/75 mb-2">Deleted orders are kept for 90 days, then removed for good. Restore one to put it back in the Orders list.</p>
+          {deleted.loading ? <div className="py-8 flex justify-center"><SbLoader size={28} /></div>
+            : deleted.drafts.length === 0 ? <p className="text-xs font-mono text-navy/75 py-6">Nothing deleted in the last 90 days.</p>
+            : (
+              <div className="overflow-auto rounded border border-navy/25">
+                <table className="w-full text-xs font-mono">
+                  <thead className="bg-[#002745] text-[#F2F1E6] uppercase tracking-wide">
+                    <tr>
+                      <th className="text-left px-3 py-2">Vendor</th><th className="text-left px-3 py-2">Order Date</th>
+                      <th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Deleted</th>
+                      <th className="text-left px-3 py-2">By</th><th className="text-right px-3 py-2">Days left</th><th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deleted.drafts.map((d, i) => {
+                      const left = Math.max(0, 90 - Math.floor((Date.now() - new Date(d.deleted_at ?? Date.now()).getTime()) / 86400000))
+                      return (
+                        <tr key={d.id} className={`border-b border-navy/10 ${i % 2 ? 'bg-navy/[0.04]' : ''}`}>
+                          <td className="px-3 py-1.5 text-navy">{vendorName(d.vendor_id)}</td>
+                          <td className="px-3 py-1.5 text-navy">{dShort(d.order_date)}</td>
+                          <td className="px-3 py-1.5 text-navy">{STATUS_LABEL[d.status]}</td>
+                          <td className="px-3 py-1.5 text-navy">{dTime(d.deleted_at ?? d.updated_at)}</td>
+                          <td className="px-3 py-1.5 text-navy">{names.nameOf(d.deleted_by)}</td>
+                          <td className="px-3 py-1.5 text-right text-navy">{left}</td>
+                          <td className="px-3 py-1.5 text-right"><Button size="sm" variant="secondary" onClick={() => void deleted.restoreDraft(d.id)}>Restore</Button></td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
         </TabsContent>
       </Tabs>
 
@@ -414,11 +456,30 @@ export function OrdersV2Landing() {
           open={!!statsDraft}
           onClose={() => setStatsDraft(null)}
           editPath={statusRoute(statsDraft)}
-          onDelete={statsDraft.status !== 'exported' ? () => {
-            if (confirm('Delete this draft order? Its lines are removed too.')) { deleteDraft(statsDraft.id); setStatsDraft(null) }
-          } : undefined}
+          cancelled={statsDraft.status === 'cancelled'}
+          onCancelToggle={() => {
+            if (statsDraft.status === 'cancelled') { void uncancelDraft(statsDraft.id); setStatsDraft(null); return }
+            if (confirm('Cancel this order? It stays in the list, shown in red with its amounts struck through, and can be un-cancelled.')) {
+              void cancelDraft(statsDraft.id); setStatsDraft(null)
+            }
+          }}
+          onDelete={() => setDeleteTarget(statsDraft)}
         />
       )}
+
+      {/* Delete asks first: the order isn't gone for good — it moves to the Deleted tab for 90 days. */}
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete this order?" size="sm">
+        <div className="flex flex-col gap-3">
+          <p className="text-sm font-body text-navy">
+            {deleteTarget ? `${vendorName(deleteTarget.vendor_id)} order for ${dShort(deleteTarget.order_date)}` : ''} will move to the Deleted tab.
+            It's kept there for 90 days and can be restored; after that it's removed for good. (To keep it in the list instead, use Cancel Order.)
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(null)}>Keep it</Button>
+            <Button size="sm" variant="danger" onClick={async () => { const t = deleteTarget; setDeleteTarget(null); setStatsDraft(null); if (t) { await deleteDraft(t.id); await deleted.reload() } }}>Yes, delete</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
