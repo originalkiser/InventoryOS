@@ -75,6 +75,8 @@ interface DataTableProps<T> {
   leadingActions?: React.ReactNode
   /** Show the Export button only while at least one row is checked. */
   exportOnlyWhenSelected?: boolean
+  /** Minimum height (px) of every body row, so rows with and without multi-line cells line up. */
+  rowMinHeight?: number
   /** 'compact' = ~25% shorter rows (tighter cell padding). Default 'normal'. */
   density?: 'normal' | 'compact'
   /**
@@ -189,6 +191,7 @@ export function DataTable<T>({
   density = 'normal',
   leadingActions,
   exportOnlyWhenSelected,
+  rowMinHeight,
   expandedRowRender,
 }: DataTableProps<T>) {
   // ── Selection state (keyed by row's `id` field, so it persists across pages)
@@ -646,6 +649,7 @@ export function DataTable<T>({
                       if ((e.target as HTMLElement).closest('input, button, a, select, textarea, label, [contenteditable="true"]')) return
                       onRowClick(row.original)
                     } : undefined}
+                    style={rowMinHeight ? { height: rowMinHeight } : undefined}
                     className={[
                       'group hover:bg-sky/10 transition-colors',
                       onRowClick ? 'cursor-pointer' : '',

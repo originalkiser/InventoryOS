@@ -12,6 +12,7 @@ import { createColumnHelper } from '@tanstack/react-table'
 import { AlertTriangle, ChevronDown, ChevronRight, Flag } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
 import { HoverTip, SwatchTipBody } from '@/components/ui/HoverTip'
+import { DosCell } from './DosCell'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
@@ -21,7 +22,7 @@ import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { PoDecisionButtons } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
-import { dos, money, num, dShort, OV2_DOS_STYLE_KEY } from './shared'
+import { dos, money, num, dShort, OV2_DOS_STYLE_KEY, OV2_HIDDEN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY } from './shared'
 import { uomDisplayLabel, } from './types'
 import { matchesAnyQuick, quickCounts, tagKey, toneKey } from './quickFilters'
 import type { LineTagMap } from './useLineTagMap'
@@ -76,22 +77,6 @@ function NoteLine({ text }: { text: string }) {
         <button type="button" onClick={() => setOpen((v) => !v)} className="not-italic text-sky hover:underline flex-shrink-0">{open ? 'less' : 'more'}</button>
       )}
     </div>
-  )
-}
-
-/** A DOS value with the yellow/red-scale conditional formatting and a hover explanation. */
-function DosCell({ v, thresholds, style }: { v: number | null | undefined; thresholds: DosThresholds | null; style: 'badge' | 'text' }) {
-  const tone = thresholds ? dosTone(v ?? null, thresholds) : null
-  if (!tone) return <span className="block text-right">{dos(v)}</span>
-  const color = DOS_TONE_COLOR[tone]
-  return (
-    <span className="block text-right">
-      <HoverTip content={<SwatchTipBody color={color} title={DOS_TONE_LABEL[tone]} />}>
-        {style === 'text'
-          ? <span className="font-bold" style={{ color }}>{dos(v)}</span>
-          : <span className="inline-block rounded px-1 font-bold text-navy" style={{ background: `${color}40`, boxShadow: `inset 0 -2px 0 ${color}` }}>{dos(v)}</span>}
-      </HoverTip>
-    </span>
   )
 }
 
@@ -163,6 +148,8 @@ export function OrdersV2ReviewTable({
   const dosStyle = dosStylePref === 'text' ? 'text' : 'badge'
   const isOrderTable = variant === 'order'
   const tableKey = variant === 'order' ? TABLE_KEY : `${TABLE_KEY}-${variant}`
+  const [hiddenQuick] = useProfilePref<string[]>(OV2_HIDDEN_QUICK_KEY, [])
+  const [hideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, false)
   const [ownQuick, setOwnQuick] = useState<Set<string>>(new Set())
   const quick = quickFilters ?? ownQuick
   const setQuick = onQuickFiltersChange ?? setOwnQuick
@@ -187,8 +174,10 @@ export function OrdersV2ReviewTable({
         if (c > 0) out.push({ key: tagKey(def.key), label: def.label, color: def.color, description: def.description, count: c })
       }
     }
-    return out
-  }, [counts])
+    // User settings: hide chosen buttons, and optionally every "DOS Now" one (only the after-order ones remain).
+    const hidden = new Set(Array.isArray(hiddenQuick) ? hiddenQuick : [])
+    return out.filter((b) => !hidden.has(b.key) && !(hideDosNow && (b.key === tagKey('dos_now_low') || b.key === tagKey('dos_now_below_target'))))
+  }, [counts, hiddenQuick, hideDosNow])
   const shownLines = useMemo(
     () => (quick.size ? lines.filter((l) => matchesAnyQuick(quick, l, tagMap.get(l.id), thresholds)) : lines),
     [lines, tagMap, quick, thresholds],
@@ -304,10 +293,10 @@ export function OrdersV2ReviewTable({
               </div>,
             )
           }
-          const numEl = <span className={`${outOfStock || critical ? 'font-bold text-[#C0392B]' : ''}${combined.length > 0 && !combinedListed ? ' underline decoration-dotted decoration-sky underline-offset-2' : ''}`}>{num(onHandOf(l))}</span>
+          const numEl = <span className={`ml-auto ${outOfStock || critical ? 'font-bold text-[#C0392B]' : ''}${combined.length > 0 && !combinedListed ? ' underline decoration-dotted decoration-sky underline-offset-2' : ''}`}>{num(onHandOf(l))}</span>
           return (
             <div>
-             <div className="flex items-center justify-end gap-1.5">
+             <div className="flex items-center gap-1.5">
               {iconStrip(before, off && (
                 <HoverTip content={<SwatchTipBody color="#C0392B" title="On hand may be off"
                   description={`Based on the last delivery, on hand was expected to be roughly ${num(off.expected)} (${num(off.low)}–${num(off.high)}).`} />}>
@@ -315,7 +304,7 @@ export function OrdersV2ReviewTable({
                 </HoverTip>
               ))}
               {reasons.length > 0
-                ? <HoverTip placement="bottom" content={<div className="flex flex-col gap-2">{reasons}</div>}>{numEl}</HoverTip>
+                ? <HoverTip className="ml-auto" placement="bottom" content={<div className="flex flex-col gap-2">{reasons}</div>}>{numEl}</HoverTip>
                 : numEl}
              </div>
               {combined.length > 0 && combinedListed && (
@@ -380,12 +369,12 @@ export function OrdersV2ReviewTable({
           return (
             // Fixed layout so every row lines up: the quarts figure in a fixed-width slot, then the stepper with a box
             // sized for 4+ digits, the whole group pushed to the right edge of the cell.
-            <div className="flex items-center justify-end gap-2 flex-nowrap">
+            <div className="flex items-center justify-between gap-2 flex-nowrap">
+              <QtyStepper compact inputClassName="w-16" value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
+                onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
               <span className="text-[10px] text-navy/75 whitespace-nowrap w-[3.6rem] text-right flex-shrink-0">
                 {l.quarts_per_unit != null ? (isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`) : ''}
               </span>
-              <QtyStepper compact inputClassName="w-16" value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
-                onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
             </div>
           )
         },
@@ -397,9 +386,9 @@ export function OrdersV2ReviewTable({
           // Only the capacity-related tags belong above this number; the rest read in the Tags column.
           const capTags = after.filter((t) => t.key === 'capacity_capped' || t.key === 'exceeded_capacity_for_dos_target')
           return (
-            <div className="flex items-center justify-end gap-1.5">
+            <div className="flex items-center gap-1.5">
               {iconStrip(capTags)}
-              <span>{num(i.getValue())}</span>
+              <span className="ml-auto">{num(i.getValue())}</span>
             </div>
           )
         },
@@ -536,6 +525,7 @@ export function OrdersV2ReviewTable({
       <DataTable
         table={table}
         density="compact"
+        rowMinHeight={46}
         exportOnlyWhenSelected
         leadingActions={<button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>}
         globalFilter={globalFilter}

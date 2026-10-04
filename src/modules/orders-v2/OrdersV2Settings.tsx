@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
-import { OV2_COMBINED_MODE_KEY, OV2_DOS_STYLE_KEY, OV2_SHOP_EXPAND_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
+import { OV2_COMBINED_MODE_KEY, OV2_DOS_STYLE_KEY, OV2_HIDDEN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, OV2_SHOP_EXPAND_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
+import { ROW_TONE_META, TAG_DEFS, type RowTone } from './lineFlags'
+import { tagKey, toneKey } from './quickFilters'
 import { Button, Card, CardBody, Input, SbLoader, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toggle } from '@/components/ui'
 import { useOrderSettings } from './useOrdersV2'
 import { useVendors } from './useLookups'
@@ -184,6 +186,20 @@ function UserOrderSettings() {
   const [dosStyle, setDosStyle] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
   const [expandMode, setExpandMode] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'dropdown')
   const [combinedMode, setCombinedMode] = useProfilePref<string>(OV2_COMBINED_MODE_KEY, 'hidden')
+  const [hideDosNow, setHideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, false)
+  const [hiddenQuickRaw, setHiddenQuick] = useProfilePref<string[]>(OV2_HIDDEN_QUICK_KEY, [])
+  const hiddenQuick = new Set(Array.isArray(hiddenQuickRaw) ? hiddenQuickRaw : [])
+  const toggleQuick = (key: string) => {
+    const next = new Set(hiddenQuick)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    setHiddenQuick([...next])
+  }
+  // Every filter button the Review table can show (it still only shows the ones present in the current order).
+  const quickChoices: { group: string; items: { key: string; label: string; color: string }[] }[] = [
+    { group: 'Row colors', items: (Object.keys(ROW_TONE_META) as RowTone[]).map((t) => ({ key: toneKey(t), label: ROW_TONE_META[t].label, color: ROW_TONE_META[t].color })) },
+    { group: 'Flags – Before', items: Object.values(TAG_DEFS).filter((d) => d.group === 'before').map((d) => ({ key: tagKey(d.key), label: d.label, color: d.color })) },
+    { group: 'Flags – After', items: Object.values(TAG_DEFS).filter((d) => d.group === 'after').map((d) => ({ key: tagKey(d.key), label: d.label, color: d.color })) },
+  ]
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[11px] font-mono text-inky/70">These only affect your own login (and follow you to other devices).</p>
@@ -197,6 +213,32 @@ function UserOrderSettings() {
           The Review Order step opens the newer table by default (sortable, filterable, resizable, with Flags before and after).
           Turn this on to use the original table instead.
         </p>
+      </CardBody></Card>
+      <Card><CardBody className="flex flex-col gap-2">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Flag Filter Buttons</h3>
+        <label className="flex items-center gap-2 text-xs font-mono text-navy">
+          <Toggle checked={!!hideDosNow} onChange={(v) => setHideDosNow(v)} size="sm" />
+          Only show DOS filter buttons for after the order (hide "DOS Now")
+        </label>
+        <p className="text-[11px] font-mono text-inky/60">
+          The buttons above the Review table filter it to lines with that flag. Uncheck any you never use to hide it.
+        </p>
+        <div className="flex flex-col gap-2">
+          {quickChoices.map((g) => (
+            <div key={g.group}>
+              <div className="text-[10px] font-mono uppercase tracking-wide text-navy/75 mb-0.5">{g.group}</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5">
+                {g.items.map((it) => (
+                  <label key={it.key} className="flex items-center gap-2 text-xs font-mono text-navy cursor-pointer">
+                    <input type="checkbox" className="accent-inky" checked={!hiddenQuick.has(it.key)} onChange={() => toggleQuick(it.key)} />
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: it.color }} />
+                    {it.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </CardBody></Card>
       <Card><CardBody className="flex flex-col gap-2">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Shop Products</h3>

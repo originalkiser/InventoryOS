@@ -23,7 +23,9 @@ const STEPS: { key: OrderStep; n: number; label: string; path: (id: string) => s
  * whole strip is centered to roughly the middle third of the page instead
  * of stretching edge to edge.
  */
-export function OrderStepper({ draftId, current, onBeforeNavigate }: {
+export function OrderStepper({ draftId, current, onBeforeNavigate, compact = false }: {
+  /** Hide the step labels (just the numbered circles) — used once the page is scrolled. */
+  compact?: boolean
   draftId: string
   current: OrderStep
   /** Return false to cancel the navigation (Review uses this to hold the user until they've seen the last row). */
@@ -67,12 +69,12 @@ export function OrderStepper({ draftId, current, onBeforeNavigate }: {
                 ].join(' ')}>
                   {isPassed ? <Check className="w-3.5 h-3.5" /> : step.n}
                 </span>
-                <span className={[
+                {!compact && <span className={[
                   'text-[10px] font-mono uppercase tracking-wide whitespace-nowrap transition-colors',
                   isPassed ? 'text-[#2ECC71] font-bold' : isCurrent ? 'text-sky font-bold' : 'text-inky/60 group-hover:text-sky',
                 ].join(' ')}>
                   {step.label}
-                </span>
+                </span>}
               </button>
               {i < STEPS.length - 1 && (
                 <div className={`h-px flex-1 min-w-[24px] ${i < currentIdx ? 'bg-[#2ECC71]/50' : 'bg-navy/15'}`} />

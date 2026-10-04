@@ -7,13 +7,15 @@ interface ModalProps {
   onClose: () => void
   title?: string
   children: React.ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'wide' | 'wide90'
+  size?: 'sm' | 'md' | 'lg' | 'lgplus' | 'xl' | '2xl' | 'wide' | 'wide90'
 }
 
 const sizeClasses = {
   sm: 'max-w-sm',
   md: 'max-w-md',
   lg: 'max-w-2xl',
+  // 20% wider than 'lg' (42rem -> 50.4rem): a compact working table that needs a little more room than its parent modal.
+  lgplus: 'max-w-[50.4rem]',
   xl: 'max-w-4xl',
   '2xl': 'max-w-6xl',
   // Direct ask 2026-09-30 — "up to 60% of the available width of the

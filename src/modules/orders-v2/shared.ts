@@ -89,6 +89,10 @@ export const OV2_SHOP_EXPAND_KEY = 'ov2_review_shop_expand_mode'
 /** Per-user pref: 'hidden' shows only the combined on-hand total (math on hover); 'listed' writes each combined product out. */
 export const OV2_COMBINED_MODE_KEY = 'ov2_review_combined_mode'
 
+/** Per-user prefs for the flag filter buttons above the Review table: keys the user hid, and "hide the DOS Now ones". */
+export const OV2_HIDDEN_QUICK_KEY = 'ov2_review_hidden_quick_buttons'
+export const OV2_HIDE_DOS_NOW_BUTTONS_KEY = 'ov2_review_hide_dos_now_buttons'
+
 /** Amber treatment marking a user override, used everywhere edits are shown. */
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'
 

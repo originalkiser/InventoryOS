@@ -7,7 +7,13 @@ import { useLocations } from '@/hooks/useLocations'
 import { MINIMUM_TYPE_LABELS, type MinimumType } from './types'
 import { OrderFullSummaryModal } from './OrderFullSummaryModal'
 import { unchangedStreak, type StreakDraft } from './settingsStreak'
-import { dShort } from './shared'
+import { dShort, OV2_DOS_STYLE_KEY } from './shared'
+import { createColumnHelper } from '@tanstack/react-table'
+import { DataTable } from '@/components/shared/DataTable'
+import { useTable } from '@/hooks/useTable'
+import { useProfilePref } from '@/hooks/useProfilePrefs'
+import { DosCell } from './DosCell'
+import type { DosThresholds } from './lineFlags'
 
 const sb = () => supabase as any
 const PAGE = 1000
@@ -103,6 +109,12 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
     const added = lines.filter((l) => l.included && l.system_qty <= EPS && l.qty > EPS)
     return { up, down, removed, added }
   }, [lines])
+
+  const thresholds: DosThresholds | null = useMemo(() => {
+    const t = Number(settingsSnapshot?.days_of_supply_target), m = Number(settingsSnapshot?.days_of_supply_min_trigger), x = Number(settingsSnapshot?.days_of_supply_max)
+    return Number.isFinite(t) && Number.isFinite(m) && Number.isFinite(x) && settingsSnapshot?.days_of_supply_target != null
+      ? { target: t, minTrigger: m, max: x } : null
+  }, [settingsSnapshot])
 
   const TILES: { key: keyof typeof buckets; label: string; color: string }[] = [
     { key: 'up', label: 'Adjusted Up', color: 'text-[#2ECC71]' },
@@ -206,7 +218,7 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
             //   />
             // </svg>
             <div className="relative inline-block">
-              <Button size="sm" onClick={() => navigate(editPath)}
+              <Button size="sm" onClick={() => { onClose(); navigate(editPath) }}
                 className="relative z-10 rounded-lg ov2-glow-pulse">
                 Edit Order →
               </Button>
@@ -215,43 +227,61 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
         </div>
       </div>
 
-      {/* Click a tile above: every line in that bucket, compactly. */}
-      <Modal open={!!expanded} onClose={() => setExpanded(null)} title={TILES.find((t) => t.key === expanded)?.label ?? ''} size="wide90">
+      {/* Click a tile above: every line in that bucket, as the same kind of table the Review step uses. */}
+      <Modal open={!!expanded} onClose={() => setExpanded(null)} title={TILES.find((t) => t.key === expanded)?.label ?? ''} size="lgplus">
         {expanded && (
-          <div className="overflow-auto max-h-[70vh] rounded border border-navy/25">
-            <table className="w-full text-[11px] font-mono">
-              <thead className="sticky top-0 bg-[#002745] text-[#F2F1E6]">
-                <tr className="uppercase tracking-wide">
-                  <th className="text-left px-2 py-1.5">Shop</th>
-                  <th className="text-left px-2 py-1.5">Product</th>
-                  <th className="text-right px-2 py-1.5">On Hand</th>
-                  <th className="text-right px-2 py-1.5">DOS</th>
-                  <th className="text-right px-2 py-1.5">Suggested</th>
-                  <th className="text-right px-2 py-1.5">Order Qty</th>
-                  <th className="text-right px-2 py-1.5">On Hand After</th>
-                  <th className="text-right px-2 py-1.5">DOS After</th>
-                </tr>
-              </thead>
-              <tbody>
-                {buckets[expanded as keyof typeof buckets].map((l, i) => (
-                  <tr key={l.id} className={`border-b border-navy/10 ${i % 2 ? 'bg-navy/[0.04]' : ''}`}>
-                    <td className="px-2 py-1 text-navy">{shopLabel(l.location_id)}</td>
-                    <td className="px-2 py-1 text-navy">{l.product_id}</td>
-                    <td className="px-2 py-1 text-right text-navy">{l.on_hand == null ? '—' : Number(l.on_hand).toFixed(1)}</td>
-                    <td className="px-2 py-1 text-right text-navy">{fmt1(l.dos_before)}</td>
-                    <td className="px-2 py-1 text-right text-navy/75">{l.system_qty}</td>
-                    <td className="px-2 py-1 text-right text-navy font-bold">{l.qty}</td>
-                    <td className="px-2 py-1 text-right text-navy">{l.on_hand == null ? '—' : (Number(l.on_hand) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)).toFixed(1)}</td>
-                    <td className="px-2 py-1 text-right text-navy">{fmt1(l.dos_after)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <StatsDetailTable
+            lines={buckets[expanded as keyof typeof buckets]}
+            shopLabel={shopLabel}
+            thresholds={thresholds}
+            exportName={`Order ${TILES.find((t) => t.key === expanded)?.label ?? 'lines'}`}
+          />
         )}
       </Modal>
 
       <OrderFullSummaryModal draftId={draftId} vendorId={vendorId ?? null} open={fullSummaryOpen} onClose={() => setFullSummaryOpen(false)} />
     </Modal>
+  )
+}
+
+/** Compact Review-style table (sortable, filterable) with the same DOS conditional formatting as the Review step. */
+function StatsDetailTable({ lines, shopLabel, thresholds, exportName }: {
+  lines: StatLine[]
+  shopLabel: (id: string | null) => string | null
+  thresholds: DosThresholds | null
+  exportName: string
+}) {
+  const [dosStylePref] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
+  const style = dosStylePref === 'text' ? 'text' : 'badge'
+  const col = useMemo(() => createColumnHelper<StatLine>(), [])
+  const columns = useMemo(() => {
+    const num = { numeric: true }
+    const onHandAfter = (l: StatLine) => (l.on_hand == null ? null : Number(l.on_hand) + Number(l.qty) * Number(l.quarts_per_unit ?? 1))
+    const right = (v: number | null | undefined, d = 1) => <span className="block text-right">{v == null ? '—' : Number(v).toFixed(d)}</span>
+    return [
+      col.accessor((l) => shopLabel(l.location_id) ?? '—', { id: 'shop', header: 'Shop', size: 130 }),
+      col.accessor('product_id', { id: 'product', header: 'Product', size: 150 }),
+      col.accessor((l) => (l.on_hand == null ? null : Number(l.on_hand)), {
+        id: 'on_hand', header: 'On Hand', size: 80, meta: num,
+        cell: (i) => <span className={`block text-right ${(i.getValue() ?? 1) <= 0 ? 'font-bold text-[#C0392B]' : ''}`}>{i.getValue() == null ? '—' : Number(i.getValue()).toFixed(1)}</span>,
+      }),
+      col.accessor('dos_before', { id: 'dos', header: 'DOS', size: 70, meta: num, cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} style={style} /> }),
+      col.accessor('system_qty', { id: 'suggested', header: 'Suggested', size: 85, meta: num, cell: (i) => right(i.getValue(), 0) }),
+      col.accessor('qty', { id: 'qty', header: 'Order Qty', size: 85, meta: num, cell: (i) => <span className="block text-right font-bold">{i.getValue()}</span> }),
+      col.accessor((l) => onHandAfter(l), { id: 'on_hand_after', header: 'On Hand After', size: 100, meta: num, cell: (i) => right(i.getValue()) }),
+      col.accessor('dos_after', { id: 'dos_after', header: 'DOS After', size: 80, meta: num, cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} style={style} /> }),
+    ]
+  }, [col, shopLabel, thresholds, style])
+  const { table, globalFilter, setGlobalFilter } = useTable(lines, columns, { initialPageSize: 999999, initialSorting: [{ id: 'shop', desc: false }] })
+  return (
+    <DataTable
+      table={table}
+      density="compact"
+      globalFilter={globalFilter}
+      onGlobalFilterChange={setGlobalFilter}
+      exportFilename={exportName}
+      hideColumnControl
+      bodyMaxHeightClass="max-h-[60vh]"
+    />
   )
 }

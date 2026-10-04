@@ -300,6 +300,15 @@ export function OrdersV2Review() {
   const [quickFilters, setQuickFilters] = useState<Set<string>>(new Set())
   const toggleQuickFilter = (k: string) => setQuickFilters((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
   const [overridesOpen, setOverridesOpen] = useState(false)
+  const headerSentinelRef = useRef<HTMLDivElement>(null)
+  const [headerScrolled, setHeaderScrolled] = useState(false)
+  useEffect(() => {
+    const el = headerSentinelRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver(([e]) => setHeaderScrolled(!e.isIntersecting))
+    io.observe(el)
+    return () => io.disconnect()
+  }, [loading, draft?.id])
   // Real bug found live 2026-09-29: this page sits behind KeepAlivePages
   // (see the usePageRevisit(reload) call above) — clicking "Final Review →"
   // sets movingToFinal true and navigates away, but since this component
@@ -1024,7 +1033,9 @@ export function OrdersV2Review() {
           so TopBar/Sidebar chrome is unaffected. "← Orders v2" already
           lived here; Final Review/Export get their own copy of this same
           block below. */}
-      <div className="sticky top-0 z-20 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
+      {/* 1px sentinel: once it scrolls out of view the pinned header hides the step labels to save room. */}
+      <div ref={headerSentinelRef} aria-hidden className="h-px -mb-4" />
+      <div className="sticky top-0 z-40 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
       {/* Back button + page-level actions live above the step bar (direct
           ask 2026-09-29) — the step bar itself is centered below, and the
           page's own title/subtext moved further down, past the DOS-targets
@@ -1033,7 +1044,7 @@ export function OrdersV2Review() {
         <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
           className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
         <div className="flex-1 flex justify-center min-w-[18rem]">
-          <OrderStepper draftId={draft.id} current="review" onBeforeNavigate={(target) => {
+          <OrderStepper compact={headerScrolled} draftId={draft.id} current="review" onBeforeNavigate={(target) => {
             if (target === 'review') return true
             if (promptIfUnseen()) return false
             return true
@@ -2123,7 +2134,8 @@ function DosLegend({ kind, counts, active, onToggle }: {
   }
   return (
     <span className="relative block h-0 w-16 mx-auto">
-      <span className="absolute left-0 right-0 top-0.5 flex items-center justify-between">
+      {/* Three swatches: the outer two sit 10% of the way in from the box edges toward the center one. Two: on the inside thirds. */}
+      <span className={`absolute left-0 right-0 top-0.5 flex items-center ${sp.before ? 'justify-between px-[3px]' : 'justify-evenly'}`}>
         {sp.before && sw(tagKey(sp.before), TAG_DEFS[sp.before].color, `Flag – Before: ${TAG_DEFS[sp.before].label}`, TAG_DEFS[sp.before].description)}
         {sw(tagKey(sp.after), TAG_DEFS[sp.after].color, `Flag – After: ${TAG_DEFS[sp.after].label}`, TAG_DEFS[sp.after].description)}
         {sw(cellKey(sp.format), DOS_TONE_COLOR[sp.format], 'Cell color', sp.formatText, true)}
