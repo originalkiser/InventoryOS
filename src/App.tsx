@@ -11,6 +11,7 @@ import { LoginPage } from '@/pages/Login'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { PublicFormPage } from '@/pages/PublicFormPage'
 import { PublicSubmissionSharePage } from '@/pages/PublicSubmissionSharePage'
+import { PublicTankPage } from '@/modules/tanks/PublicTankPage'
 import { PublicFranchiseMenuBoardPage } from '@/pages/PublicFranchiseMenuBoardPage'
 import { PublicFranchiseSetupPage } from '@/pages/PublicFranchiseSetupPage'
 import { PublicMenuBoardPage } from '@/modules/marketing/menuboard/PublicMenuBoardPage'
@@ -231,6 +232,10 @@ export default function App() {
             needed: "/results/:token" doesn't collide with any real app
             route, unlike a bare "/:slug". */}
         <Route path="/results/:token" element={<PublicSubmissionSharePage />} />
+
+        {/* Public, no-login Tank Calculator for one shop (2026-10-04) — the shop's share link, /tanks/<slug>. Like
+            "/results/:token" it needs no new subdomain: the path doesn't collide with any real app route. */}
+        <Route path="/tanks/:slug" element={<PublicTankPage />} />
 
         {/* Unreachable in practice — "/*" above already matches anything
             that isn't one of the explicit paths higher up (which rank

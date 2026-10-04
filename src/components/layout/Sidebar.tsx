@@ -32,7 +32,7 @@ import sbIcon from '@/assets/SBOC-IconCream.png'
 import droptopLogo from '@/assets/droptop-logo.png'
 import reladyneLogo from '@/assets/reladyne-logo.svg'
 import {
-  Package, Settings, Building2, DollarSign, TrendingUp, Megaphone,
+  Package, Settings, Building2, DollarSign, TrendingUp, Megaphone, Wrench, QrCode,
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
   Database, Users, AlertTriangle, MessageSquare, Lightbulb,
   CheckCircle2, FileText, MapPin, GripVertical, ChevronRight,
@@ -74,6 +74,8 @@ export const ICONS: Record<string, JSX.Element> = {
   'location-comms': <MessageSquare className="w-4 h-4 flex-shrink-0" />,
   'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
   'customer-heatmap': <GrMap className="w-4 h-4 flex-shrink-0" />,
+  'tank-links': <QrCode className="w-4 h-4 flex-shrink-0" />,
+  'tank-review': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
   'droptop-orders': <FileText className="w-4 h-4 flex-shrink-0" />,
   'droptop-vehicles': <Car className="w-4 h-4 flex-shrink-0" />,
   'droptop-packages': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
@@ -93,6 +95,7 @@ export const ICONS: Record<string, JSX.Element> = {
 const SECTION_ICONS: Record<string, JSX.Element> = {
   inventory: <Package className="w-5 h-5 flex-shrink-0 text-sky" />,
   droptop: <img src={droptopLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
+  'shop-tools': <Wrench className="w-5 h-5 flex-shrink-0 text-sky" />,
   reladyne: <img src={reladyneLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
   'data-connections': <GrDatabase className="w-5 h-5 flex-shrink-0 text-sky" />,
   'global-config': <Settings className="w-5 h-5 flex-shrink-0 text-chrome-fg/70" />,
@@ -115,6 +118,7 @@ const SECTION_ACCENT: Record<string, string> = {
   // Config, and every other brand color is already spoken for) rather than
   // sitting inky-on-inky next to Droptop above it.
   'data-connections': 'bg-sky/15 border-l-2 border-sky',
+  'shop-tools': 'bg-sky/15 border-l-2 border-sky',
   // Same reuse-sky precedent as data-connections above — reladyne-logo.svg
   // already carries its own brand color (blue/orange), so this section's
   // own accent doesn't need to be visually distinct from sky the way the
@@ -158,6 +162,10 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'exception-reporting', label: 'Exception Reporting', to: '/exception-reporting' },
     { key: 'location-comms', label: 'Location Comms', to: '/location-comms' },
   ],
+  'shop-tools': [
+    { key: 'tank-links', label: 'Tank Calculator Links', to: '/tank-links' },
+    { key: 'tank-review', label: 'Tank Count Review', to: '/tank-review' },
+  ],
   droptop: [
     { key: 'customer-heatmap', label: 'Customer Heatmap', to: '/customer-heatmap' },
     { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
@@ -193,6 +201,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
 const SECTION_META: Record<string, { label: string }> = {
   inventory: { label: 'Inventory' },
   droptop: { label: 'Droptop' },
+  'shop-tools': { label: 'Shop Tools' },
   'data-connections': { label: 'Data Connections' },
   reladyne: { label: 'RelaDyne' },
   'global-config': { label: 'Configuration' },

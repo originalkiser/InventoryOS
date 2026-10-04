@@ -25,6 +25,8 @@ import { CustomShopConfigPage } from '@/modules/locations/CustomShopConfigPage'
 import { ProcurementDeckPage } from '@/modules/inventory/ProcurementDeckPage'
 import { AmRdLookupPage } from '@/modules/locations/AmRdLookupPage'
 import { TankMonitorsPage } from '@/modules/locations/TankMonitorsPage'
+import { TankLinksPage } from '@/modules/tanks/TankLinksPage'
+import { TankReviewPage } from '@/modules/tanks/TankReviewPage'
 import { InventoryAlertsPage } from '@/modules/inventory/InventoryAlertsPage'
 import { ExceptionReportingPage } from '@/modules/exceptions/ExceptionReportingPage'
 import { LocationCommsPage } from '@/modules/comms/LocationCommsPage'
@@ -123,6 +125,8 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="custom-shop-config" element={<CustomShopConfigPage />} />
     <Route path="am-rd-lookup" element={<AmRdLookupPage />} />
     <Route path="tank-monitors" element={<TankMonitorsPage />} />
+    <Route path="tank-links" element={<TankLinksPage />} />
+    <Route path="tank-review" element={<TankReviewPage />} />
     <Route path="procurement-deck" element={<ProcurementDeckPage />} />
     <Route path="inventory-alerts" element={<InventoryAlertsPage />} />
     <Route path="exception-reporting" element={<ExceptionReportingPage />} />
