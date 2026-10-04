@@ -9,7 +9,7 @@
 // pure lineFlags.ts from each line's CURRENT values, so they update live as quantities are edited.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createColumnHelper } from '@tanstack/react-table'
-import { AlertTriangle, ChevronDown, ChevronRight, Flag } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Columns3, Flag, Pencil } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
 import { HoverTip, SwatchTipBody } from '@/components/ui/HoverTip'
 import { DosCell } from './DosCell'
@@ -586,7 +586,16 @@ export function OrdersV2ReviewTable({
         density="compact"
         rowMinHeight={46}
         exportOnlyWhenSelected
-        leadingActions={<button onClick={() => setColumnManagerOpen(true)} className="text-xs font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">Manage Columns</button>}
+        // 30% narrower than the default search box, so the flag filter buttons and Add non-configured fit on one line.
+        searchClassName="w-full sm:w-36"
+        leadingActions={
+          <HoverTip content={<span className="text-xs font-mono">Manage Columns</span>}>
+            <button onClick={() => setColumnManagerOpen(true)} aria-label="Manage Columns"
+              className="inline-flex items-center gap-0.5 h-[38px] px-2 text-navy border border-navy/30 rounded hover:border-navy">
+              <Pencil className="w-3 h-3" /><Columns3 className="w-4 h-4" />
+            </button>
+          </HoverTip>
+        }
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         exportFilename={`Order Review - ${draft.order_date}`}

@@ -71,6 +71,8 @@ interface DataTableProps<T> {
    * Selection still wins. (Orders v2 Review's below-minimum / excluded / over-capacity rows.)
    */
   getRowTone?: (original: T) => string | null
+  /** Classes for the search box (default is a 13rem box on larger screens). */
+  searchClassName?: string
   /** Controls rendered right after the search box, where the Export button normally sits. */
   leadingActions?: React.ReactNode
   /** Show the Export button only while at least one row is checked. */
@@ -190,6 +192,7 @@ export function DataTable<T>({
   getRowTone,
   density = 'normal',
   leadingActions,
+  searchClassName,
   exportOnlyWhenSelected,
   rowMinHeight,
   expandedRowRender,
@@ -409,7 +412,7 @@ export function DataTable<T>({
           placeholder="Search..."
           value={globalFilter}
           onChange={(e) => onGlobalFilterChange(e.target.value)}
-          className="w-full sm:w-52"
+          className={searchClassName ?? 'w-full sm:w-52'}
         />
 
         {/* Manage Columns — drag-reorder/pin/reset modal, same as Orders v2's

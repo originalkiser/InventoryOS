@@ -176,7 +176,7 @@ export function MobileReview({
           <span className="flex-shrink-0 font-bold text-navy">Order total {money(orderTotal)}</span>
         </div>
         <div className="flex items-center justify-between gap-2 px-3 pb-2">
-          <ToggleButton checked={showVmi} onChange={onShowVmi} onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+          <ToggleButton checked={showVmi} onChange={onShowVmi} onLabel="VMI Shown" offLabel="VMI Hidden"
             onTooltip="Tap to hide VMI/keep-fill products" offTooltip="Tap to also show VMI/keep-fill products" />
           <Button size="sm" variant="secondary" disabled={!shopId} onClick={() => shopId && onAddNonConfigured(shopId)}>
             <Plus className="w-3.5 h-3.5 mr-0.5" /> Add product

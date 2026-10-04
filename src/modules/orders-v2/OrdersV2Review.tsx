@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Smartphone, RefreshCw, ChevronRight, ChevronDown, ChevronUp, Settings, Plus, Pencil } from 'lucide-react'
+import { Droplet, Smartphone, RefreshCw, ChevronRight, ChevronDown, ChevronUp, Settings, Plus, Pencil } from 'lucide-react'
 import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
@@ -1056,7 +1056,7 @@ export function OrdersV2Review() {
   }
   const shopVmiToggle = (
     <ToggleButton checked={showConfigVmi} onChange={setShowConfigVmi}
-      onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+      onLabel="VMI Shown" offLabel="VMI Hidden"
       onTooltip="Click to hide VMI/keep-fill products" offTooltip="Click to also show VMI/keep-fill products" />
   )
 
@@ -1070,7 +1070,7 @@ export function OrdersV2Review() {
   const toolbarToggles = (
     <>
       <ToggleButton checked={showVmi} onChange={setShowVmi}
-        onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+        onLabel="VMI Shown" offLabel="VMI Hidden"
         onTooltip="Click to hide VMI/keep-fill lines" offTooltip="Click to also show VMI/keep-fill lines" />
       {isAdHoc && (
         <span className="rounded px-1.5 py-0.5 bg-sky/20 text-navy border border-sky/40 text-xs font-mono">
@@ -1080,9 +1080,18 @@ export function OrdersV2Review() {
       {/* Direct ask 2026-09-30: matches Order Settings' own button style
           (solid secondary background) instead of the plain bordered-only
           look every other small toolbar button here uses. */}
-      <Button size="sm" variant="secondary" className="ml-auto" onClick={() => setAddNonConfiguredOpen(true)}>
-        <Plus className="w-3.5 h-3.5 mr-1" /> Add Non-Configured Product
-      </Button>
+      <span className="ml-auto">
+        <HoverTip content={<span className="text-xs font-mono">Add non-configured product to order</span>}>
+          <Button size="sm" variant="secondary" onClick={() => setAddNonConfiguredOpen(true)} className="!gap-1" aria-label="Add non-configured product to order">
+            {/* The oil droplet with a small plus, same mark as Start New Order. */}
+            <span className="relative inline-flex w-4 h-4 flex-shrink-0">
+              <Droplet className="w-4 h-4" />
+              <Plus className="w-2 h-2 absolute -top-0.5 -right-0.5" strokeWidth={3.5} />
+            </span>
+            non-configured
+          </Button>
+        </HoverTip>
+      </span>
     </>
   )
 
@@ -1807,7 +1816,7 @@ export function OrdersV2Review() {
                 inputByLineKey={inputByLineKey}
                 toolbarExtra={
                   <ToggleButton checked={showConfigVmi} onChange={setShowConfigVmi}
-                    onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+                    onLabel="VMI Shown" offLabel="VMI Hidden"
                     onTooltip="Click to hide VMI/keep-fill products" offTooltip="Click to also show VMI/keep-fill products" />
                 }
               />
