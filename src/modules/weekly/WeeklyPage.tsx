@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useWeeklyStore } from '@/stores/weeklyStore'
 import { DataTable } from '@/components/shared/DataTable'
 import { NotSubmittedPanel } from '@/components/shared/NotSubmittedPanel'
+import { WeeklyStatusTab } from './WeeklyStatusTab'
 import { useTable } from '@/hooks/useTable'
 import { useColumnPrefs } from '@/hooks/useColumnPrefs'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -15,7 +16,7 @@ import type { Location, WeeklyCount } from '@/types'
 import { startOfWeek, addDays, format } from 'date-fns'
 import toast from 'react-hot-toast'
 
-// weekStart is a Monday 'yyyy-MM-dd'. Range = [weekStart, weekStart+7).
+// weekStart is a Sunday 'yyyy-MM-dd' (weeks run Sunday–Saturday). Range = [weekStart, weekStart+7).
 function weekRange(weekStart: string) {
   const start = new Date(`${weekStart}T00:00:00`)
   const endExclusive = addDays(start, 7)
@@ -237,7 +238,7 @@ export function WeeklyPage() {
 
   function shiftWeek(deltaDays: number) {
     const d = addDays(new Date(`${selectedWeek}T00:00:00`), deltaDays)
-    setSelectedWeek(format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd'))
+    setSelectedWeek(format(startOfWeek(d, { weekStartsOn: 0 }), 'yyyy-MM-dd'))
   }
 
   // Effective locations after all filters
@@ -271,7 +272,7 @@ export function WeeklyPage() {
               value={selectedWeek}
               onChange={(e) => {
                 if (!e.target.value) return
-                setSelectedWeek(format(startOfWeek(new Date(`${e.target.value}T00:00:00`), { weekStartsOn: 1 }), 'yyyy-MM-dd'))
+                setSelectedWeek(format(startOfWeek(new Date(`${e.target.value}T00:00:00`), { weekStartsOn: 0 }), 'yyyy-MM-dd'))
               }}
               className={inputCls}
             />
@@ -350,11 +351,16 @@ export function WeeklyPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="counts">
+      <Tabs defaultValue="status">
         <TabsList>
+          <TabsTrigger value="status">Week Status</TabsTrigger>
           <TabsTrigger value="counts">Counts</TabsTrigger>
           <TabsTrigger value="not_submitted">Not Submitted</TabsTrigger>
         </TabsList>
+        <TabsContent value="status">
+          <WeeklyStatusTab effectiveLocations={effectiveLocations} startISO={weekRange(selectedWeek).startISO}
+            endExclusiveISO={weekRange(selectedWeek).endExclusiveISO} label={label} />
+        </TabsContent>
         <TabsContent value="counts">
           <WeeklyCountsTab effectiveLocations={effectiveLocations} windowFilters={windowFilters} />
         </TabsContent>

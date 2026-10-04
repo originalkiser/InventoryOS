@@ -3,7 +3,7 @@ import { startOfWeek, format } from 'date-fns'
 import type { WeeklyCount } from '@/types'
 
 interface WeeklyState {
-  // Monday-start week, stored as the week-start date ('YYYY-MM-DD')
+  // Sunday-start week (Sunday–Saturday), stored as the week-start date ('YYYY-MM-DD')
   selectedWeek: string
   loadedData: WeeklyCount[]
 
@@ -11,7 +11,7 @@ interface WeeklyState {
   setLoadedData: (data: WeeklyCount[]) => void
 }
 
-const thisWeekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+const thisWeekStart = format(startOfWeek(new Date(), { weekStartsOn: 0 }), 'yyyy-MM-dd')
 
 export const useWeeklyStore = create<WeeklyState>((set) => ({
   selectedWeek: thisWeekStart,
