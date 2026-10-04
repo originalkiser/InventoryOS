@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Muted label/helper text used to be inky at 50-60% — a pale blue-grey that was hard to read, especially in dark
+   mode (direct ask 2026-10-04). Both now use the same, easier-to-read grey as the Orders v2 card labels (the theme's
+   navy token at 75%, which flips with dark mode). Hover/placeholder variants are left alone. */
+.text-inky\/50, .text-inky\/60 { color: rgb(var(--color-navy) / 0.75); }
+
 /* Dark-mode approximation for plain OpenStreetMap raster tiles (no native
    dark style, unlike the CartoDB tiles this replaced — CartoDB's raster
    basemaps now require a paid-tier-adjacent API key and are being retired

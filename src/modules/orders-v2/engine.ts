@@ -345,8 +345,9 @@ export function recentOrderCheck(input: GenerationInput, ctx: GenerationContext)
     && daysBetween(h.order_date, ctx.orderDate) <= RECENT_ORDER_DAYS)
   if (recent.length === 0) return null
   const usage = n(input.daily_usage)
-  const orderedDos = recent.reduce((s, h) => s + n(h.dos_ordered), 0)
-  const effectiveOnHand = n(input.on_hand) + orderedDos * usage
+  // Quarts those orders added: the stored quarts when known, else the days of supply they added times today's usage.
+  const orderedQuarts = recent.reduce((s, h) => s + (h.quarts != null ? n(h.quarts) : n(h.dos_ordered) * usage), 0)
+  const effectiveOnHand = n(input.on_hand) + orderedQuarts
   const effectiveDos = usage > 0 ? effectiveOnHand / usage : null
   const critical = input.rule.min_on_hand_qty != null && input.rule.min_on_hand_qty > 0
   const stillNeeded = (effectiveDos != null && effectiveDos < ctx.settings.days_of_supply_min_trigger)

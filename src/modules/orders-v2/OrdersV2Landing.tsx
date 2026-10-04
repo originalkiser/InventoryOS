@@ -19,6 +19,7 @@ import { useVendors, useUserNames } from './useLookups'
 import { SegmentedSlider, AnimatedHeight } from './controls'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 import type { DraftStatus } from './types'
+import { orderTypeLabel } from './draftLabels'
 
 // True when an ISO timestamp falls on today's calendar date (local time) —
 // drives the upload buttons' "glow orange, needs a fresh upload" state.
@@ -27,15 +28,6 @@ function isToday(iso: string | null): boolean {
   const d = new Date(iso)
   const now = new Date()
   return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
-}
-
-/** What kind of order a draft is — see the Order Type column. */
-function orderTypeLabel(d: DraftRow, vendor: string): string {
-  if (typeof (d.settings_snapshot as any)?.__resend_for_date === 'string') return 'Re-send (missed items)'
-  if (draftAdHocLocationIds(d)) return 'Ad hoc order'
-  if (isReladyne(vendor)) return DOW[draftOrderDow(d)]
-  if (isValvoline(vendor)) return 'Weekly'
-  return 'Regular'
 }
 
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']

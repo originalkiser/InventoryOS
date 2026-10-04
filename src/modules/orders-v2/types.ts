@@ -367,6 +367,8 @@ export interface HistoryFact {
   // then rather than recomputed, since usage moves.
   dos_ordered: number | null
   qty: number
+  // Quarts that order added (qty x quarts per unit) — present even when DOS couldn't be computed (no usage on file).
+  quarts?: number | null
 }
 
 export interface GenerationContext {

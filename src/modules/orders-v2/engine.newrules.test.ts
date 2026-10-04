@@ -491,6 +491,12 @@ describe('recently ordered (2026-10-03)', () => {
     expect(res.lines[0].qty).toBeGreaterThan(0)
     expect(res.lines[0].flags).not.toContain('recently_ordered')
   })
+  it('uses the ordered quarts when days of supply were never recorded', () => {
+    const h = { ...hist(5, 0), dos_ordered: null, quarts: 40 } // 40 quarts at 1/day = 40 days
+    const res = generateOrder([due()], ctx({ history: [h] }))
+    expect(res.lines[0].qty).toBe(0)
+    expect(res.lines[0].flags).toContain('recently_ordered')
+  })
   it('ignores an order older than 8 days', () => {
     const res = generateOrder([due()], ctx({ history: [hist(9, 30)] }))
     expect(res.lines[0].qty).toBeGreaterThan(0)

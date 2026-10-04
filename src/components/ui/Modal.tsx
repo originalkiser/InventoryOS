@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 
 interface ModalProps {
@@ -51,7 +52,9 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
 
   if (!open) return null
 
-  return (
+  // Portalled to <body>: a modal rendered inside a sticky/z-indexed ancestor (Orders v2 Review's pinned header, say)
+  // used to be trapped in that ancestor's stacking context and slide UNDER sticky table headers.
+  return createPortal(
     <div className="fixed top-0 left-0 bottom-0 z-[100] flex items-center justify-center" style={{ right: dockedWidth }}>
       <div
         className="absolute inset-0 bg-black/60"
@@ -80,6 +83,7 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
         )}
         <div className="px-4 sm:px-6 py-4 overflow-y-auto">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

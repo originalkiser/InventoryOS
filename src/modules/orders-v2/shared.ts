@@ -84,6 +84,11 @@ export const OV2_USE_OLD_TABLE_KEY = 'ov2_review_use_old_table'
 /** Per-user profile pref: how DOS Now / DOS After are conditionally formatted — 'badge' (shaded + underlined, default) or 'text' (colored text only). */
 export const OV2_DOS_STYLE_KEY = 'ov2_review_dos_style'
 
+/** Per-user pref: clicking a shop name on Review opens a popup ('popup') or expands the row inline ('dropdown'). */
+export const OV2_SHOP_EXPAND_KEY = 'ov2_review_shop_expand_mode'
+/** Per-user pref: 'hidden' shows only the combined on-hand total (math on hover); 'listed' writes each combined product out. */
+export const OV2_COMBINED_MODE_KEY = 'ov2_review_combined_mode'
+
 /** Amber treatment marking a user override, used everywhere edits are shown. */
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'
 

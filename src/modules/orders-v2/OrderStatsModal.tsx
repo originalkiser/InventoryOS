@@ -12,7 +12,12 @@ import { dShort } from './shared'
 const sb = () => supabase as any
 const PAGE = 1000
 
-interface StatLine { id: string; location_id: string | null; product_id: string; system_qty: number; qty: number; included: boolean }
+interface StatLine {
+  id: string; location_id: string | null; product_id: string; system_qty: number; qty: number; included: boolean
+  on_hand: number | null; dos_before: number | null; dos_after: number | null; quarts_per_unit: number | null
+}
+
+const fmt1 = (v: number | null | undefined) => (v == null ? '∞' : Number(v).toFixed(1))
 
 // Curated subset of settings_snapshot worth showing — the full blob also
 // carries internal bookkeeping keys (__order_dow, __adhoc_location_ids,
@@ -72,7 +77,7 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
       let from = 0
       for (;;) {
         const { data, error } = await sb().schema('inventory').from('ov2_order_draft_lines')
-          .select('id, location_id, product_id, system_qty, qty, included').eq('draft_id', draftId)
+          .select('id, location_id, product_id, system_qty, qty, included, on_hand, dos_before, dos_after, quarts_per_unit').eq('draft_id', draftId)
           .order('id', { ascending: true }).range(from, from + PAGE - 1)
         if (error || cancelled) break
         const batch = (data ?? []) as StatLine[]
@@ -154,11 +159,10 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {TILES.map((t) => {
                 const rows = buckets[t.key]
-                const isOpen = expanded === t.key
                 return (
                   <div key={t.key} className="rounded border border-navy/25">
                     <button
-                      onClick={() => setExpanded(isOpen ? null : t.key)}
+                      onClick={() => setExpanded(t.key)}
                       disabled={rows.length === 0}
                       className="w-full flex items-center justify-between gap-1 px-2 py-2 text-left disabled:cursor-default"
                     >
@@ -166,28 +170,8 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
                         <div className="text-[9px] font-mono uppercase tracking-widest text-navy/75">{t.label}</div>
                         <div className={`text-xl font-heading font-bold ${t.color}`}>{rows.length}</div>
                       </div>
-                      {rows.length > 0 && (isOpen ? <ChevronDown className="w-3.5 h-3.5 text-inky/50" /> : <ChevronRight className="w-3.5 h-3.5 text-inky/50" />)}
+                      {rows.length > 0 && <ChevronRight className="w-3.5 h-3.5 text-navy/75" />}
                     </button>
-                    {isOpen && (
-                      <div className="border-t border-navy/15 max-h-40 overflow-auto">
-                        <table className="w-full text-[10px] font-mono">
-                          <thead><tr className="bg-cream text-inky uppercase border-b border-navy/10">
-                            <th className="text-left px-1.5 py-1">Shop</th><th className="text-left px-1.5 py-1">Product</th>
-                            <th className="text-right px-1.5 py-1">Suggested</th><th className="text-right px-1.5 py-1">Actual</th>
-                          </tr></thead>
-                          <tbody>
-                            {rows.map((l) => (
-                              <tr key={l.id} className="border-b border-navy/5">
-                                <td className="px-1.5 py-1 text-navy">{shopLabel(l.location_id)}</td>
-                                <td className="px-1.5 py-1 text-navy">{l.product_id}</td>
-                                <td className="px-1.5 py-1 text-right text-inky/60">{l.system_qty}</td>
-                                <td className="px-1.5 py-1 text-right text-navy">{l.qty}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
                   </div>
                 )
               })}
@@ -230,6 +214,42 @@ export function OrderStatsModal({ draftId, vendorId, settingsSnapshot, open, onC
           )}
         </div>
       </div>
+
+      {/* Click a tile above: every line in that bucket, compactly. */}
+      <Modal open={!!expanded} onClose={() => setExpanded(null)} title={TILES.find((t) => t.key === expanded)?.label ?? ''} size="wide90">
+        {expanded && (
+          <div className="overflow-auto max-h-[70vh] rounded border border-navy/25">
+            <table className="w-full text-[11px] font-mono">
+              <thead className="sticky top-0 bg-[#002745] text-[#F2F1E6]">
+                <tr className="uppercase tracking-wide">
+                  <th className="text-left px-2 py-1.5">Shop</th>
+                  <th className="text-left px-2 py-1.5">Product</th>
+                  <th className="text-right px-2 py-1.5">On Hand</th>
+                  <th className="text-right px-2 py-1.5">DOS</th>
+                  <th className="text-right px-2 py-1.5">Suggested</th>
+                  <th className="text-right px-2 py-1.5">Order Qty</th>
+                  <th className="text-right px-2 py-1.5">On Hand After</th>
+                  <th className="text-right px-2 py-1.5">DOS After</th>
+                </tr>
+              </thead>
+              <tbody>
+                {buckets[expanded as keyof typeof buckets].map((l, i) => (
+                  <tr key={l.id} className={`border-b border-navy/10 ${i % 2 ? 'bg-navy/[0.04]' : ''}`}>
+                    <td className="px-2 py-1 text-navy">{shopLabel(l.location_id)}</td>
+                    <td className="px-2 py-1 text-navy">{l.product_id}</td>
+                    <td className="px-2 py-1 text-right text-navy">{l.on_hand == null ? '—' : Number(l.on_hand).toFixed(1)}</td>
+                    <td className="px-2 py-1 text-right text-navy">{fmt1(l.dos_before)}</td>
+                    <td className="px-2 py-1 text-right text-navy/75">{l.system_qty}</td>
+                    <td className="px-2 py-1 text-right text-navy font-bold">{l.qty}</td>
+                    <td className="px-2 py-1 text-right text-navy">{l.on_hand == null ? '—' : (Number(l.on_hand) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)).toFixed(1)}</td>
+                    <td className="px-2 py-1 text-right text-navy">{fmt1(l.dos_after)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
 
       <OrderFullSummaryModal draftId={draftId} vendorId={vendorId ?? null} open={fullSummaryOpen} onClose={() => setFullSummaryOpen(false)} />
     </Modal>

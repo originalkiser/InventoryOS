@@ -21,20 +21,21 @@ import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { PoDecisionButtons } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
-import { ToggleButton } from './controls'
 import { dos, money, num, dShort, OV2_DOS_STYLE_KEY } from './shared'
-import { uomDisplayLabel } from './types'
+import { uomDisplayLabel, } from './types'
+import { matchesAnyQuick, quickCounts, tagKey, toneKey } from './quickFilters'
+import type { LineTagMap } from './useLineTagMap'
 import { QtyStepper, type ZeroReason } from './lineControls'
 import {
-  computeLineTags, combinedSuffix, dosTone, rowToneOf, DOS_TONE_COLOR, DOS_TONE_LABEL, ROW_TONE_META,
-  type DosThresholds, type LineTags, type RowTone, type TagDef,
+  combinedSuffix, dosTone, DOS_TONE_COLOR, DOS_TONE_LABEL, ROW_TONE_META, TAG_DEFS,
+  type DosThresholds, type RowTone, type TagDef,
 } from './lineFlags'
 import type { GenerationInput } from './types'
 
 const TABLE_KEY = 'orders-v2.review-lines'
 const DEFAULT_PINNED = ['shop']
 const COMBINED_MODE_KEY = 'ov2_review_combined_mode'
-const NO_THRESHOLDS: DosThresholds = { target: 0, minTrigger: 0, max: Number.POSITIVE_INFINITY }
+const PAGE_SIZE_KEY = 'ov2_review_page_size'
 const TONE_ORDER: RowTone[] = ['below_min', 'over_capacity_target', 'excluded']
 // Row tones are drawn as translucent washes of their color over the plain cream row (alpha 0x2B ≈ 17%).
 const toneWash = (t: RowTone) => `${ROW_TONE_META[t].color}2B`
@@ -105,9 +106,18 @@ export function OrdersV2ReviewTable({
   decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
   inputByLineKey, toolbarExtra, onRowRef, onLastRowKey, isSeen, jumpNonce, variant = 'order',
+  tagMap, quickFilters, onQuickFiltersChange,
 }: {
-  /** 'noOrders' = the second table of every product for shops that ended up with no order: no shop expand, no tone filters. */
-  variant?: 'order' | 'noOrders'
+  /**
+   * 'order' = the main Review table. 'noOrders' = every product for shops that ended up with no order (no shop
+   * button). 'overrides' = the lines edited by hand, in a modal; the shop button opens the shop-products popup.
+   */
+  variant?: 'order' | 'noOrders' | 'overrides'
+  /** Live Flags/Tags for these lines (see useLineTagMap). */
+  tagMap: LineTagMap
+  /** Selected quick filters (flag/tag buttons, DOS legend). Controlled when onQuickFiltersChange is given. */
+  quickFilters?: Set<string>
+  onQuickFiltersChange?: (next: Set<string>) => void
   /** Has this row key been on screen (see rowSeen.ts)? With jumpNonce, lets the table page/scroll to the first unseen row. */
   isSeen?: (key: string) => boolean
   jumpNonce?: number
@@ -152,35 +162,36 @@ export function OrdersV2ReviewTable({
   const [dosStylePref] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
   const dosStyle = dosStylePref === 'text' ? 'text' : 'badge'
   const isOrderTable = variant === 'order'
-  const tableKey = isOrderTable ? TABLE_KEY : `${TABLE_KEY}-noorders`
-  const [toneFilter, setToneFilter] = useState<Set<RowTone>>(new Set())
+  const tableKey = variant === 'order' ? TABLE_KEY : `${TABLE_KEY}-${variant}`
+  const [ownQuick, setOwnQuick] = useState<Set<string>>(new Set())
+  const quick = quickFilters ?? ownQuick
+  const setQuick = onQuickFiltersChange ?? setOwnQuick
+  const toggleQuick = (k: string) => { const n = new Set(quick); if (n.has(k)) n.delete(k); else n.add(k); setQuick(n) }
 
-  // Live Flags/Tags per line — recomputed whenever any line or the thresholds change.
-  const th = thresholds ?? NO_THRESHOLDS
-  const tagMap = useMemo(() => {
-    const ctx = {
-      thresholds: th,
-      onHandAfter: (l: DraftLineRow) => onHandAfterAtDelivery(l),
-      belowMinimum: (l: DraftLineRow) => groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false,
-    }
-    const m = new Map<string, { tags: LineTags; tone: RowTone | null }>()
-    for (const l of lines) {
-      const tags = computeLineTags(l as any, ctx)
-      m.set(l.id, { tags, tone: rowToneOf(l, tags) })
-    }
-    return m
-  }, [lines, th, onHandAfterAtDelivery, groupMinimumStatus])
   const tagsOf = useCallback((l: DraftLineRow) => tagMap.get(l.id)?.tags ?? { before: [], after: [], note: null }, [tagMap])
   const toneOf = useCallback((l: DraftLineRow) => tagMap.get(l.id)?.tone ?? null, [tagMap])
 
-  const toneCounts = useMemo(() => {
-    const c: Record<RowTone, number> = { below_min: 0, over_capacity_target: 0, excluded: 0 }
-    for (const l of lines) { const t = tagMap.get(l.id)?.tone; if (t) c[t]++ }
-    return c
-  }, [lines, tagMap])
+  // One button per flag/tag that is actually present somewhere in this table (plus the three row tones) — click to
+  // show only those lines; several selected show any of them.
+  const counts = useMemo(() => quickCounts(lines, tagMap, thresholds), [lines, tagMap, thresholds])
+  const quickButtons = useMemo(() => {
+    const out: { key: string; label: string; color: string; description: string; count: number }[] = []
+    for (const t of TONE_ORDER) {
+      const c = counts.get(toneKey(t)) ?? 0
+      if (c > 0) out.push({ key: toneKey(t), label: ROW_TONE_META[t].label, color: ROW_TONE_META[t].color, description: `Rows colored "${ROW_TONE_META[t].label}".`, count: c })
+    }
+    for (const group of ['before', 'after'] as const) {
+      for (const def of Object.values(TAG_DEFS)) {
+        if (def.group !== group) continue
+        const c = counts.get(tagKey(def.key)) ?? 0
+        if (c > 0) out.push({ key: tagKey(def.key), label: def.label, color: def.color, description: def.description, count: c })
+      }
+    }
+    return out
+  }, [counts])
   const shownLines = useMemo(
-    () => (toneFilter.size ? lines.filter((l) => { const t = tagMap.get(l.id)?.tone; return !!t && toneFilter.has(t) }) : lines),
-    [lines, tagMap, toneFilter],
+    () => (quick.size ? lines.filter((l) => matchesAnyQuick(quick, l, tagMap.get(l.id), thresholds)) : lines),
+    [lines, tagMap, quick, thresholds],
   )
 
   const col = useMemo(() => createColumnHelper<DraftLineRow>(), [])
@@ -198,13 +209,24 @@ export function OrdersV2ReviewTable({
       return ozProductIds.has(l.product_id) ? v * 32 : v
     }
     const infoOf = (l: DraftLineRow) => lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
+    // Date on the first line; quantity + unit on the second, with the unit named the same way as the UOM column
+    // ("Bulk", not "large_tanks").
+    const lastOrderedQty = (l: DraftLineRow) => {
+      const info = infoOf(l)
+      return info.lastOrderDate ? `${num(info.lastOrderQty, 1)} ${uomDisplayLabel(info.lastOrderUom)}` : ''
+    }
     const lastOrderedText = (l: DraftLineRow) => {
       const info = infoOf(l)
-      return info.lastOrderDate ? `${dShort(info.lastOrderDate)} · ${num(info.lastOrderQty, 1)}${info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}` : '—'
+      return info.lastOrderDate ? `${dShort(info.lastOrderDate)} · ${lastOrderedQty(l)}` : '—'
+    }
+    const lastDeliveredQty = (l: DraftLineRow) => {
+      const info = infoOf(l)
+      if (!info.lastDeliveredDate) return ''
+      return `${num(info.lastDeliveredAmount, 1)} ${info.lastDeliveredUnit === 'gal' ? 'gal' : uomDisplayLabel(info.lastOrderUom)}`
     }
     const lastDeliveredText = (l: DraftLineRow) => {
       const info = infoOf(l)
-      return info.lastDeliveredDate ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}` : '—'
+      return info.lastDeliveredDate ? `${dShort(info.lastDeliveredDate)} · ${lastDeliveredQty(l)}` : '—'
     }
     const deliveryText = (l: DraftLineRow) => {
       const dd = deliveryFor(l.location_id, draft.order_date)
@@ -224,10 +246,10 @@ export function OrdersV2ReviewTable({
     }
     flagsBeforeSize = Math.min(flagsBeforeSize, 640); tagsAfterSize = Math.min(tagsAfterSize, 640)
 
-    // Tiny colored flags sit in the cell's top margin, inline (never stacked), each with a styled hover tooltip.
+    // Tiny colored flags sit to the LEFT of the number, inline (never stacked), each with a styled hover tooltip.
     const iconStrip = (tags: TagDef[], extra?: React.ReactNode) =>
       (tags.length > 0 || extra) ? (
-        <span className="absolute -top-1.5 -right-1.5 inline-flex items-center gap-0.5 leading-none">{extra}{tags.map((t) => <TagIcon key={t.key} tag={t} />)}</span>
+        <span className="inline-flex items-center gap-0.5 leading-none flex-shrink-0">{extra}{tags.map((t) => <TagIcon key={t.key} tag={t} />)}</span>
       ) : null
 
     return [
@@ -237,7 +259,7 @@ export function OrdersV2ReviewTable({
           const l = i.row.original
           const locId = l.location_id ?? ''
           const open = expanded.has(locId)
-          if (!isOrderTable) return <span>{i.getValue()}</span>
+          if (variant === 'noOrders') return <span>{i.getValue()}</span>
           return (
             <button onClick={() => onToggleExpand(locId)} title="Show every product configured for this shop"
               className="inline-flex items-center gap-1 hover:underline hover:text-sky">
@@ -284,7 +306,8 @@ export function OrdersV2ReviewTable({
           }
           const numEl = <span className={`${outOfStock || critical ? 'font-bold text-[#C0392B]' : ''}${combined.length > 0 && !combinedListed ? ' underline decoration-dotted decoration-sky underline-offset-2' : ''}`}>{num(onHandOf(l))}</span>
           return (
-            <div className="relative pt-2 text-right">
+            <div>
+             <div className="flex items-center justify-end gap-1.5">
               {iconStrip(before, off && (
                 <HoverTip content={<SwatchTipBody color="#C0392B" title="On hand may be off"
                   description={`Based on the last delivery, on hand was expected to be roughly ${num(off.expected)} (${num(off.low)}–${num(off.high)}).`} />}>
@@ -294,8 +317,9 @@ export function OrdersV2ReviewTable({
               {reasons.length > 0
                 ? <HoverTip placement="bottom" content={<div className="flex flex-col gap-2">{reasons}</div>}>{numEl}</HoverTip>
                 : numEl}
+             </div>
               {combined.length > 0 && combinedListed && (
-                <div className="text-[9px] text-inky/60 leading-tight font-normal whitespace-nowrap">
+                <div className="text-[9px] text-navy/75 leading-tight font-normal whitespace-nowrap text-right">
                   <span title={l.product_id}>{combinedSuffix(l.product_id)}</span> {num(toOz(input?.own_on_hand ?? 0))}
                   {combined.map((e) => <span key={e.product_id} title={e.product_id}> · {combinedSuffix(e.product_id)} {num(toOz(e.on_hand))}</span>)}
                 </div>
@@ -314,23 +338,37 @@ export function OrdersV2ReviewTable({
       col.accessor((l) => lastOrderedText(l), {
         id: 'last_ordered', header: 'Last Ordered', enableSorting: false, meta: { noClip: true },
         cell: (i) => {
-          const info = infoOf(i.row.original)
+          const l = i.row.original
+          const info = infoOf(l)
           return info.lastOrderDate ? (
-            <>
-              <div>{i.getValue()}</div>
-              {info.eta && <div className="text-[9px] text-inky/50 leading-tight">ETA {dShort(info.eta)}</div>}
-            </>
+            <div className="leading-tight">
+              <div>{dShort(info.lastOrderDate)}</div>
+              <div className="text-[10px] text-navy/75">{lastOrderedQty(l)}</div>
+              {info.eta && <div className="text-[9px] text-navy/75">ETA {dShort(info.eta)}</div>}
+            </div>
           ) : '—'
         },
       }),
-      col.accessor((l) => lastDeliveredText(l), { id: 'last_delivered', header: 'Last Delivered', enableSorting: false, meta: { noClip: true } }),
+      col.accessor((l) => lastDeliveredText(l), {
+        id: 'last_delivered', header: 'Last Delivered', enableSorting: false, meta: { noClip: true },
+        cell: (i) => {
+          const l = i.row.original
+          const info = infoOf(l)
+          return info.lastDeliveredDate ? (
+            <div className="leading-tight">
+              <div>{dShort(info.lastDeliveredDate)}</div>
+              <div className="text-[10px] text-navy/75">{lastDeliveredQty(l)}</div>
+            </div>
+          ) : '—'
+        },
+      }),
       col.accessor((l) => deliveryText(l), {
         id: 'delivery_date', header: 'Delivery', enableSorting: false, meta: { noClip: true },
         // Just the date and weekday — no "(RelaDyne delivery day)" schedule text.
         cell: (i) => <div>{i.getValue()}</div>,
       }),
       col.accessor((l) => Number(l.qty), {
-        id: 'qty', header: 'Order Qty', enableSorting: false, size: 190, minSize: 96,
+        id: 'qty', header: 'Order Qty', enableSorting: false, size: 224, minSize: 224, enableResizing: false,
         meta: {
           numeric: true,
           // The orange "edited by hand" bar runs the full height of the cell, not just the content.
@@ -340,16 +378,14 @@ export function OrdersV2ReviewTable({
           const l = i.row.original
           const isOz = ozProductIds.has(l.product_id)
           return (
-            <div className="flex items-center gap-1.5 min-w-0 flex-nowrap">
-              <div className="flex-1 min-w-0">
-                <QtyStepper fluid value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
-                  onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
-              </div>
-              {l.quarts_per_unit != null && (
-                <span className="text-[10px] text-inky/50 whitespace-nowrap flex-shrink-[4] min-w-0 truncate text-left">
-                  {isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`}
-                </span>
-              )}
+            // Fixed layout so every row lines up: the quarts figure in a fixed-width slot, then the stepper with a box
+            // sized for 4+ digits, the whole group pushed to the right edge of the cell.
+            <div className="flex items-center justify-end gap-2 flex-nowrap">
+              <span className="text-[10px] text-navy/75 whitespace-nowrap w-[3.6rem] text-right flex-shrink-0">
+                {l.quarts_per_unit != null ? (isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`) : ''}
+              </span>
+              <QtyStepper compact inputClassName="w-16" value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
+                onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
             </div>
           )
         },
@@ -361,9 +397,9 @@ export function OrdersV2ReviewTable({
           // Only the capacity-related tags belong above this number; the rest read in the Tags column.
           const capTags = after.filter((t) => t.key === 'capacity_capped' || t.key === 'exceeded_capacity_for_dos_target')
           return (
-            <div className="relative pt-2 text-right">
+            <div className="flex items-center justify-end gap-1.5">
               {iconStrip(capTags)}
-              {num(i.getValue())}
+              <span>{num(i.getValue())}</span>
             </div>
           )
         },
@@ -396,7 +432,7 @@ export function OrdersV2ReviewTable({
         },
       }),
       col.accessor((l) => tagsOf(l).after.map((t) => t.label).join(', '), {
-        id: 'tags_after', header: 'Tags – After', enableSorting: false, minSize: 90, size: tagsAfterSize,
+        id: 'tags_after', header: 'Flags – After', enableSorting: false, minSize: 90, size: tagsAfterSize,
         meta: { multiValue: (l: DraftLineRow) => tagsOf(l).after.map((t) => t.label) },
         cell: (i) => {
           const { after, note } = tagsOf(i.row.original)
@@ -413,15 +449,27 @@ export function OrdersV2ReviewTable({
     ]
   }, [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, draft.order_date,
       patchQty, thresholds, tagsOf, onHandAfterAtDelivery, combinedListed, decidePoOverride, decidePoExclude,
-      decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, isOrderTable, lines, tagMap])
+      decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, variant, lines, tagMap])
 
+  // Under 200 rows everything shows on one page; with more, the page size the user last picked (default 50).
+  const initialPageSize = useRef<number>(0)
+  if (!initialPageSize.current) {
+    let saved = 0
+    try { saved = Number(localStorage.getItem(`${PAGE_SIZE_KEY}:${variant}`)) || 0 } catch { /* ignore */ }
+    initialPageSize.current = lines.length < 200 ? 999999 : (saved || 50)
+  }
   const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(shownLines, columns, {
     persistKey: tableKey,
-    initialPageSize: 50,
+    initialPageSize: initialPageSize.current,
     initialSorting: [{ id: 'shop', desc: false }],
     initialColumnPinning: { left: DEFAULT_PINNED, right: [] },
   })
   useColumnPrefs(tableKey, table, columnVisibility, columnOrder, setColumnOrder)
+  const pageSizeNow = table.getState().pagination.pageSize
+  useEffect(() => {
+    if (pageSizeNow === initialPageSize.current) return
+    try { localStorage.setItem(`${PAGE_SIZE_KEY}:${variant}`, String(pageSizeNow)) } catch { /* ignore */ }
+  }, [pageSizeNow, variant])
 
   const allColItems: ColItem[] = useMemo(
     () => table.getAllLeafColumns().map((c) => ({ id: c.id, label: String(c.columnDef.header ?? c.id) })),
@@ -528,25 +576,19 @@ export function OrdersV2ReviewTable({
         }}
         actions={
           <>
-            {isOrderTable && TONE_ORDER.map((t) => {
-              const active = toneFilter.has(t)
+            {quickButtons.map((b) => {
+              const active = quick.has(b.key)
               return (
-                <HoverTip key={t} content={<SwatchTipBody color={ROW_TONE_META[t].color} title={ROW_TONE_META[t].label}
-                  description={active ? 'Click to stop filtering to these rows.' : 'Click to show only rows with this color.'} />}>
-                  <button type="button"
-                    onClick={() => setToneFilter((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n })}
-                    className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs font-mono ${active ? 'border-navy bg-navy/10 text-navy font-bold' : 'border-navy/30 text-inky hover:border-navy'}`}>
-                    <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: ROW_TONE_META[t].color }} />
-                    {ROW_TONE_META[t].label}
-                    <span className="text-inky/60">{toneCounts[t]}</span>
+                <HoverTip key={b.key} content={<SwatchTipBody color={b.color} title={b.label}
+                  description={`${b.description} ${active ? 'Click to stop filtering to these lines.' : 'Click to show only these lines.'}`} />}>
+                  <button type="button" onClick={() => toggleQuick(b.key)}
+                    className={`h-[38px] max-w-[9.5rem] inline-flex items-center gap-1.5 rounded border px-2 text-[10px] font-mono leading-tight text-left ${active ? 'border-navy bg-navy/10 text-navy font-bold' : 'border-navy/30 text-navy hover:border-navy'}`}>
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: b.color }} />
+                    <span className="whitespace-normal">{b.label} <span className="text-navy/75">{b.count}</span></span>
                   </button>
                 </HoverTip>
               )
             })}
-            <ToggleButton checked={combinedListed} onChange={(v) => setCombinedModePref(v ? 'listed' : 'hidden')}
-              onLabel="Combined – Listed" offLabel="Combined – Hidden"
-              onTooltip="Click to hide the per-product breakdown of combined on hands (shown on hover instead)"
-              offTooltip="Click to list each combined product's on hand in the cell" />
             {toolbarExtra}
           </>
         }

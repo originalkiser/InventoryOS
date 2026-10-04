@@ -10,6 +10,10 @@ import { OrderStepper } from './OrderStepper'
 import { ToggleButton, SegmentedSlider, SlideChip } from './controls'
 import { dosTone, DOS_TONE_COLOR, TAG_DEFS, type TagKey } from './lineFlags'
 import { candidateLine, isCandidateLine } from './candidateLine'
+import { useLineTagMap } from './useLineTagMap'
+import { quickCounts, tagKey, cellKey } from './quickFilters'
+import { orderTypeLabel } from './draftLabels'
+import { useDrafts } from './useOrdersV2'
 import { HoverTip, SwatchTipBody } from '@/components/ui/HoverTip'
 import { ExceptionEditModal } from './ExceptionEditModal'
 import { useProductExceptions } from './useProductExceptions'
@@ -30,7 +34,7 @@ import {
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
-import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
+import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, OV2_SHOP_EXPAND_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { uomDisplayLabel } from './types'
@@ -48,10 +52,6 @@ import type { LineFlag, GenerationInput, OrderType, DeliverySchedule, WeekCalend
 // Shop-expand mode toggle (direct ask 2026-09-30) — same per-browser
 // persistence as the new-table beta toggle above: a personal viewing
 // preference, not something that should change for every other user.
-const SHOP_EXPAND_MODE_KEY = 'ov2_review_shop_expand_mode'
-function loadShopExpandModePref(): 'dropdown' | 'popup' {
-  try { return localStorage.getItem(SHOP_EXPAND_MODE_KEY) === 'popup' ? 'popup' : 'dropdown' } catch { return 'dropdown' }
-}
 
 type SortKey = 'location' | 'capacity' | 'product' | 'qty' | 'dollars' | 'dos_after'
 
@@ -257,11 +257,9 @@ export function OrdersV2Review() {
   // popupShopId is which shop's popup is currently open (null = closed);
   // popupAddNonConfigOpen is the "Add Non-Configured Product" modal opened
   // FROM inside the popup, pre-scoped to popupShopId.
-  const [shopExpandMode, setShopExpandModeState] = useState(loadShopExpandModePref)
-  function setShopExpandMode(v: 'dropdown' | 'popup') {
-    setShopExpandModeState(v)
-    try { localStorage.setItem(SHOP_EXPAND_MODE_KEY, v) } catch { /* ignore */ }
-  }
+  // Now a per-user setting (Order Settings > User Order Settings) instead of a toolbar toggle.
+  const [shopExpandPref] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'dropdown')
+  const shopExpandMode: 'dropdown' | 'popup' = shopExpandPref === 'popup' ? 'popup' : 'dropdown'
   const [popupShopId, setPopupShopId] = useState<string | null>(null)
   const [popupAddNonConfigOpen, setPopupAddNonConfigOpen] = useState(false)
   // Single handler for every "shop name clicked" spot (old table's own row,
@@ -298,6 +296,10 @@ export function OrdersV2Review() {
   const [seenWarningCount, setSeenWarningCount] = useState(0)
   const [jumpNonce, setJumpNonce] = useState(0)
   const [regenModalOpen, setRegenModalOpen] = useState(false)
+  // Quick filters shared by the flag/tag buttons above the table and the DOS legend swatches (see quickFilters.ts).
+  const [quickFilters, setQuickFilters] = useState<Set<string>>(new Set())
+  const toggleQuickFilter = (k: string) => setQuickFilters((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
+  const [overridesOpen, setOverridesOpen] = useState(false)
   // Real bug found live 2026-09-29: this page sits behind KeepAlivePages
   // (see the usePageRevisit(reload) call above) — clicking "Final Review →"
   // sets movingToFinal true and navigates away, but since this component
@@ -952,6 +954,12 @@ export function OrdersV2Review() {
     return remaining + Number(l.qty) * Number(l.quarts_per_unit ?? 1)
   }, [draft, deliveryFor])
 
+  const lineTagMap = useLineTagMap(lines, dosThresholds, onHandAfterCb, groupMinimumStatus)
+  const noOrdersTagMap = useLineTagMap(noOrderLines, dosThresholds, onHandAfterCb, groupMinimumStatus)
+  const legendCounts = useMemo(() => quickCounts(lines, lineTagMap, dosThresholds), [lines, lineTagMap, dosThresholds])
+  const overrideLines = useMemo(() => lines.filter((l) => l.is_override), [lines])
+  const { drafts: allDrafts } = useDrafts()
+
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>
   if (!draft) return <p className="text-xs font-mono text-inky/60 py-8">Draft not found. It may have been deleted.</p>
 
@@ -993,12 +1001,6 @@ export function OrdersV2Review() {
       <ToggleButton checked={showVmi} onChange={setShowVmi}
         onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
         onTooltip="Click to hide VMI/keep-fill lines" offTooltip="Click to also show VMI/keep-fill lines" />
-      <ToggleButton checked={showOnlyOverCapacity} onChange={setShowOnlyOverCapacity}
-        onLabel="Showing Over-Capacity Only" offLabel="Showing All Lines"
-        onTooltip="Click to show every line again" offTooltip="Click to show only lines ordered past their configured capacity" />
-      <ToggleButton checked={shopExpandMode === 'popup'} onChange={(v) => setShopExpandMode(v ? 'popup' : 'dropdown')}
-        onLabel="Popup" offLabel="Dropdown"
-        onTooltip="Click to expand a shop's products inline instead" offTooltip="Click to open a shop's products in a popup instead" />
       {isAdHoc && (
         <span className="rounded px-1.5 py-0.5 bg-sky/20 text-navy border border-sky/40 text-xs font-mono">
           Ad hoc · {eligibleLocationIds?.size ?? 0} shop{(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}
@@ -1007,7 +1009,7 @@ export function OrdersV2Review() {
       {/* Direct ask 2026-09-30: matches Order Settings' own button style
           (solid secondary background) instead of the plain bordered-only
           look every other small toolbar button here uses. */}
-      <Button size="sm" variant="secondary" onClick={() => setAddNonConfiguredOpen(true)}>
+      <Button size="sm" variant="secondary" className="ml-auto" onClick={() => setAddNonConfiguredOpen(true)}>
         <Plus className="w-3.5 h-3.5 mr-1" /> Add Non-Configured Product
       </Button>
     </>
@@ -1030,6 +1032,13 @@ export function OrdersV2Review() {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
           className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
+        <div className="flex-1 flex justify-center min-w-[18rem]">
+          <OrderStepper draftId={draft.id} current="review" onBeforeNavigate={(target) => {
+            if (target === 'review') return true
+            if (promptIfUnseen()) return false
+            return true
+          }} />
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
@@ -1074,6 +1083,47 @@ export function OrdersV2Review() {
         </div>
       </Modal>
 
+      <Modal open={overridesOpen} onClose={() => setOverridesOpen(false)} title={`Overrides (${overrideLines.length})`} size="wide90">
+        <div className="flex flex-col gap-2">
+          <p className="text-[11px] font-mono text-navy/75">
+            Lines you changed by hand. Adjust them here (setting a line back to its suggested quantity removes it from this list), or
+            click a shop to see every product configured for it and add to the order.
+          </p>
+          {overrideLines.length === 0 ? (
+            <p className="text-xs font-mono text-navy/75 py-6">No overrides.</p>
+          ) : (
+            <OrdersV2ReviewTable
+              variant="overrides"
+              lines={overrideLines}
+              tagMap={lineTagMap}
+              draft={draft}
+              shopLabel={shopLabel}
+              ozProductIds={ozProductIds}
+              lastOrderedInfo={lastOrderedInfo}
+              deliveryFor={deliveryFor}
+              describeSchedule={describeSchedule}
+              thresholds={dosThresholds}
+              onHandAfterAtDelivery={onHandAfterCb}
+              groupMinimumStatus={groupMinimumStatus}
+              patchQty={patchQty}
+              exceptionFor={exceptionFor}
+              onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
+              decidePoOverride={decidePoOverride}
+              decidePoExclude={decidePoExclude}
+              decidePoCombine={decidePoCombine}
+              onZeroReason={setZeroReason}
+              expanded={noExpandedShops}
+              onToggleExpand={(locId) => setPopupShopId(locId)}
+              shopRows={shopRows}
+              onAddConfiguredProduct={addConfiguredProduct}
+              showConfigVmi={showConfigVmi}
+              leadDaysFor={leadDaysFor}
+              inputByLineKey={inputByLineKey}
+            />
+          )}
+        </div>
+      </Modal>
+
       <Modal open={regenModalOpen} onClose={() => setRegenModalOpen(false)} title="Regenerate this order?" size="md">
         <div className="flex flex-col gap-3">
           <p className="text-sm font-body text-navy">Regenerating rebuilds the suggested quantities from the latest on hands, usage and settings.</p>
@@ -1091,11 +1141,6 @@ export function OrdersV2Review() {
         </div>
       </Modal>
 
-      <OrderStepper draftId={draft.id} current="review" onBeforeNavigate={(target) => {
-        if (target === 'review') return true
-        if (promptIfUnseen()) return false
-        return true
-      }} />
       </div>
 
       {/* Product Exceptions moved into Order Settings (direct ask
@@ -1108,6 +1153,15 @@ export function OrdersV2Review() {
         draftId={draft.id}
         vendorId={draft.vendor_id}
         settingsSnapshot={draft.settings_snapshot}
+        details={{
+          vendorName,
+          orderDate: draft.order_date,
+          createdAt: draft.created_at,
+          orderType: orderTypeLabel(draft, vendorName),
+          orderDay: null,
+          current: draft,
+          allDrafts,
+        }}
         open={statsModalOpen}
         onClose={() => setStatsModalOpen(false)}
       />
@@ -1213,15 +1267,29 @@ export function OrdersV2Review() {
           items-start) so the single-line DOS/Regenerate cluster centers
           vertically against the two-line title block instead of aligning
           to its top edge. */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Review Order</h1>
           <p className="text-xs text-inky mt-0.5">
             {vendorName} · {draft.order_date}{isAdHoc ? ' · Ad hoc' : (usesOrderDays ? ` · ${DOW[orderDow]} shops` : '')} · {groups.size} shop/type group{groups.size !== 1 ? 's' : ''}
           </p>
+          <div className="mt-1.5 flex items-center gap-3 text-xs font-mono text-navy min-h-[1.75rem] flex-wrap">
+            <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
+            <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
+            <span>{num(totalQtyOrdered, 0)} qty ordered</span>
+            <SlideChip show={overrideCount > 0} className="rounded bg-[#E67E22]/15 text-[#E67E22] border border-[#E67E22]/40">
+              <button type="button" onClick={() => setOverridesOpen(true)} title="Review and adjust the lines you edited by hand"
+                className="px-1.5 py-0.5 hover:bg-[#E67E22]/25 rounded">
+                {overrideCount} override{overrideCount !== 1 ? 's' : ''}
+              </button>
+            </SlideChip>
+            <span className="font-bold">
+              Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
+            </span>
+          </div>
         </div>
         {dosOverride && (
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap pb-3">
             {/* Direct ask 2026-09-30: labels centered over their own
                 input/select box (items-center on each flex-col label, text-
                 center on the label text) instead of left-aligned above a
@@ -1231,21 +1299,21 @@ export function OrdersV2Review() {
               <input type="number" min={0} value={dosOverride.target}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, target: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.target !== settings.days_of_supply_target ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
-              <DosLegend kind="target" />
+              <DosLegend kind="target" counts={legendCounts} active={quickFilters} onToggle={toggleQuickFilter} />
             </label>
             <label className="flex flex-col gap-0.5 items-center">
               <span className={`text-[9px] font-mono text-center ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Min Trigger</span>
               <input type="number" min={0} value={dosOverride.trigger}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, trigger: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.trigger !== settings.days_of_supply_min_trigger ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
-              <DosLegend kind="trigger" />
+              <DosLegend kind="trigger" counts={legendCounts} active={quickFilters} onToggle={toggleQuickFilter} />
             </label>
             <label className="flex flex-col gap-0.5 items-center">
               <span className={`text-[9px] font-mono text-center ${dosOverride.max !== settings.days_of_supply_max ? 'text-[#E67E22]' : 'text-inky/50'}`}>DOS Max</span>
               <input type="number" min={0} value={dosOverride.max}
                 onChange={(e) => { setDosOverride((d) => (d ? { ...d, max: Number(e.target.value) || 0 } : d)); setNeedsRegenerate(true) }}
                 className={`w-16 bg-transparent border rounded px-1.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-sky ${dosOverride.max !== settings.days_of_supply_max ? 'border-[#E67E22] text-[#E67E22]' : 'border-navy/25 text-navy'}`} />
-              <DosLegend kind="max" />
+              <DosLegend kind="max" counts={legendCounts} active={quickFilters} onToggle={toggleQuickFilter} />
             </label>
             {usesOrderDays && !isAdHoc && (
               <label className="flex flex-col gap-0.5 items-center">
@@ -1305,7 +1373,7 @@ export function OrdersV2Review() {
           component as `toolbarExtra` (below) and rendered inside its own
           DataTable's `actions` slot, right next to Manage Columns — this
           row only ever renders them for the OLD table now. */}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className={useNewTable ? 'hidden' : 'flex items-center gap-2 flex-wrap'}>
         {!useNewTable && (
           <>
             <Input placeholder="Search shop or product…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-44" />
@@ -1318,17 +1386,7 @@ export function OrdersV2Review() {
             </button>
           </>
         )}
-        <div className="ml-auto flex items-center gap-3 text-xs font-mono text-navy min-h-[1.75rem]">
-          <span>{shopCountOrdered} shop{shopCountOrdered !== 1 ? 's' : ''}</span>
-          <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
-          <span>{num(totalQtyOrdered, 0)} qty ordered</span>
-          <SlideChip show={overrideCount > 0} className="rounded px-1.5 py-0.5 bg-[#E67E22]/15 text-[#E67E22] border border-[#E67E22]/40">
-            {overrideCount} override{overrideCount !== 1 ? 's' : ''}
-          </SlideChip>
-          <span className="font-bold">
-            Order total {money(lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0))}
-          </span>
-        </div>
+
       </div>
 
       <ColumnCustomizeModal
@@ -1413,6 +1471,9 @@ export function OrdersV2Review() {
           onLastRowKey={setBetaLastRowKey}
           isSeen={rowSeen.isSeen}
           jumpNonce={jumpNonce}
+          tagMap={lineTagMap}
+          quickFilters={quickFilters}
+          onQuickFiltersChange={setQuickFilters}
         />
       )}
 
@@ -1625,6 +1686,7 @@ export function OrdersV2Review() {
               </p>
               <OrdersV2ReviewTable
                 variant="noOrders"
+                tagMap={noOrdersTagMap}
                 lines={noOrderLines}
                 draft={draft}
                 shopLabel={shopLabel}
@@ -2032,27 +2094,40 @@ export function LastOrderedDeliveredCells({ info }: { info: ReturnType<LastInfoF
 
 /**
  * Tiny color swatches under a DOS input showing what its threshold paints: the "Flag – Before" (DOS Now), the
- * "Tag – After" (DOS After) and the cell color in the DOS columns — each with a hover explanation.
+ * "Flag – After" (DOS After) and the cell color in the DOS columns. Hover for how many lines each matches; click to
+ * filter the table to them. Spread edge to edge under the input so the outer swatches line up with its borders.
  */
-function DosLegend({ kind }: { kind: 'target' | 'trigger' | 'max' }) {
+function DosLegend({ kind, counts, active, onToggle }: {
+  kind: 'target' | 'trigger' | 'max'
+  counts: Map<string, number>
+  active: Set<string>
+  onToggle: (key: string) => void
+}) {
   const spec: Record<typeof kind, { before?: TagKey; after: TagKey; format: keyof typeof DOS_TONE_COLOR; formatText: string }> = {
     target: { before: 'dos_now_below_target', after: 'dos_after_below_target', format: 'yellow', formatText: 'DOS cells below the target (but at or above the min trigger) are shaded yellow.' },
     trigger: { before: 'dos_now_low', after: 'dos_after_low', format: 'red', formatText: 'DOS cells below the min trigger are shaded red.' },
     max: { after: 'over_dos_max', format: 'orange', formatText: 'DOS cells above the max are shaded orange.' },
   }
   const sp = spec[kind]
-  const sw = (color: string, title: string, description: string, round = false) => (
-    <HoverTip content={<SwatchTipBody color={color} title={title} description={description} />}>
-      <span className={`inline-block w-2.5 h-2.5 border border-navy/20 ${round ? 'rounded-full' : 'rounded-sm'}`} style={{ background: color }} />
-    </HoverTip>
-  )
+  const sw = (key: string, color: string, title: string, description: string, round = false) => {
+    const n = counts.get(key) ?? 0
+    const on = active.has(key)
+    return (
+      <HoverTip key={key} content={<SwatchTipBody color={color} title={title}
+        description={`${description} ${n} line${n === 1 ? '' : 's'} right now. ${on ? 'Click to stop filtering.' : 'Click to show only those lines.'}`} />}>
+        <button type="button" onClick={() => onToggle(key)} aria-pressed={on}
+          className={`block w-2.5 h-2.5 border ${round ? 'rounded-full' : 'rounded-sm'} ${on ? 'border-navy ring-2 ring-navy/60' : 'border-navy/20'}`}
+          style={{ background: color }} />
+      </HoverTip>
+    )
+  }
   return (
-    <span className="relative block h-0 w-full">
-     <span className="absolute left-1/2 -translate-x-1/2 top-1 inline-flex items-center gap-1 whitespace-nowrap">
-      {sp.before && sw(TAG_DEFS[sp.before].color, `Flag – Before: ${TAG_DEFS[sp.before].label}`, TAG_DEFS[sp.before].description)}
-      {sw(TAG_DEFS[sp.after].color, `Tag – After: ${TAG_DEFS[sp.after].label}`, TAG_DEFS[sp.after].description)}
-      {sw(DOS_TONE_COLOR[sp.format], 'Cell color', sp.formatText, true)}
-     </span>
+    <span className="relative block h-0 w-16 mx-auto">
+      <span className="absolute left-0 right-0 top-0.5 flex items-center justify-between">
+        {sp.before && sw(tagKey(sp.before), TAG_DEFS[sp.before].color, `Flag – Before: ${TAG_DEFS[sp.before].label}`, TAG_DEFS[sp.before].description)}
+        {sw(tagKey(sp.after), TAG_DEFS[sp.after].color, `Flag – After: ${TAG_DEFS[sp.after].label}`, TAG_DEFS[sp.after].description)}
+        {sw(cellKey(sp.format), DOS_TONE_COLOR[sp.format], 'Cell color', sp.formatText, true)}
+      </span>
     </span>
   )
 }

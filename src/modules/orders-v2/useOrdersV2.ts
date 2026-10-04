@@ -739,7 +739,7 @@ export function useGenerationData() {
       step(fetchAll<ExceptionRow>('inventory', 'ov2_product_exceptions', 'location_id, product_id, floor_qty, ceiling_qty, ceiling_unit', companyId)),
       step(fetchAll<any>('inventory', 'ov2_location_schedules', '*', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
       step(fetchAll<any>('inventory', 'ov2_delivery_calendar', 'week_start, week_label', companyId, vendorId ? (q: any) => q.eq('vendor_id', vendorId) : undefined)),
-      step(fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, order_id', companyId)),
+      step(fetchAll<any>('inventory', 'ov2_order_history_lines', 'location_id, product_id, qty, dos_before, dos_after, quarts_per_unit, order_id', companyId)),
     ])
 
     // History lines carry no date of their own; join the header dates in.
@@ -756,6 +756,7 @@ export function useGenerationData() {
         // How many days of supply that order added — dos_after minus dos_before.
         dos_ordered: h.dos_after != null && h.dos_before != null ? Number(h.dos_after) - Number(h.dos_before) : null,
         qty: Number(h.qty),
+        quarts: h.quarts_per_unit != null ? Number(h.qty) * Number(h.quarts_per_unit) : null,
       }))
 
     // Order day = RelaDyne delivery day − 3 business days (lib/orderDay).

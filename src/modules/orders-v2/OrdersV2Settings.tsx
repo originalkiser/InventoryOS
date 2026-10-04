@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
-import { OV2_DOS_STYLE_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
+import { OV2_COMBINED_MODE_KEY, OV2_DOS_STYLE_KEY, OV2_SHOP_EXPAND_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
 import { Button, Card, CardBody, Input, SbLoader, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toggle } from '@/components/ui'
 import { useOrderSettings } from './useOrdersV2'
 import { useVendors } from './useLookups'
@@ -182,6 +182,8 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
 function UserOrderSettings() {
   const [useOld, setUseOld] = useProfilePref<boolean | number>(OV2_USE_OLD_TABLE_KEY, false)
   const [dosStyle, setDosStyle] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
+  const [expandMode, setExpandMode] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'dropdown')
+  const [combinedMode, setCombinedMode] = useProfilePref<string>(OV2_COMBINED_MODE_KEY, 'hidden')
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[11px] font-mono text-inky/70">These only affect your own login (and follow you to other devices).</p>
@@ -192,8 +194,30 @@ function UserOrderSettings() {
           Use old table
         </label>
         <p className="text-[11px] font-mono text-inky/60">
-          The Review Order step opens the newer table by default (sortable, filterable, resizable, with Flags and Tags).
+          The Review Order step opens the newer table by default (sortable, filterable, resizable, with Flags before and after).
           Turn this on to use the original table instead.
+        </p>
+      </CardBody></Card>
+      <Card><CardBody className="flex flex-col gap-2">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Shop Products</h3>
+        <label className="flex items-center gap-2 text-xs font-mono text-navy">
+          <Toggle checked={expandMode === 'popup'} onChange={(v) => setExpandMode(v ? 'popup' : 'dropdown')} size="sm" />
+          Open a shop's products in a popup
+        </label>
+        <p className="text-[11px] font-mono text-inky/60">
+          Clicking a shop name on Review shows every product configured for that shop. Off (default): it expands under
+          the row. On: it opens in a popup.
+        </p>
+      </CardBody></Card>
+      <Card><CardBody className="flex flex-col gap-2">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Combined On Hands</h3>
+        <label className="flex items-center gap-2 text-xs font-mono text-navy">
+          <Toggle checked={combinedMode === 'listed'} onChange={(v) => setCombinedMode(v ? 'listed' : 'hidden')} size="sm" />
+          List each combined product in the On Hand cell
+        </label>
+        <p className="text-[11px] font-mono text-inky/60">
+          Off (default): On Hand shows just the combined total, with the math on hover. On: each combined product's
+          on hand is written out under the total.
         </p>
       </CardBody></Card>
       <Card><CardBody className="flex flex-col gap-2">
