@@ -11,6 +11,7 @@ import { VendorRulesCard } from './VendorRulesCard'
 import { VendorPartRulesCard } from './VendorPartRulesCard'
 import { VendorVisibilityCard } from './VendorVisibilityCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
+import { RdDistributorTimingCard } from './RdDistributorTimingCard'
 import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
 
@@ -174,6 +175,7 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
       <ProductExceptionsManager onChanged={onExceptionChanged} />
       <OrderDaysCard />
       <DeliverySchedulesCard />
+      <RdDistributorTimingCard />
     </div>
       </TabsContent>
     </Tabs>

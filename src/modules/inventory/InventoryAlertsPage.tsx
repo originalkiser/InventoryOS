@@ -5,11 +5,28 @@ import { Card, CardBody, SbLoader, Button, Badge } from '@/components/ui'
 import { useInventoryAlerts, type AlertGroup } from '@/hooks/useInventoryAlerts'
 import { usePageRevisit } from '@/hooks/usePageActive'
 import { DataConnectionUpdatesSection } from './DataConnectionUpdatesSection'
+import { useAuthStore } from '@/stores/authStore'
+import { useOrderSettings } from '@/modules/orders-v2/useOrdersV2'
+import { openVmiMissOrder } from '@/modules/orders-v2/vmiMissOrder'
+import toast from 'react-hot-toast'
 
 export function InventoryAlertsPage() {
-  const { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, rdOrderCheck, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
-  const totalAlerts = count + connectionIssueCount + (rdOrderCheck ? 1 : 0)
+  const { groups, ignoredGroups, count, ignoredCount, connectionIssueCount, rdOrderCheck, vmiMiss, loaded, loading, reload, ignore, unignore } = useInventoryAlerts()
+  const totalAlerts = count + connectionIssueCount + (rdOrderCheck ? 1 : 0) + (vmiMiss ? 1 : 0)
   const navigate = useNavigate()
+  const { profile } = useAuthStore()
+  const { settings: orderSettings } = useOrderSettings()
+  const [openingVmi, setOpeningVmi] = useState(false)
+  // Opens today's "Possible VMI misses" order — or creates it, if nobody has yet. A second person clicking lands on the same one.
+  async function openVmi() {
+    if (!vmiMiss || !profile?.company_id) return
+    setOpeningVmi(true)
+    try {
+      const r = await openVmiMissOrder(profile.company_id, profile.id ?? null, vmiMiss as any, orderSettings)
+      if (r) navigate(`/orders-v2/draft/${r.id}`)
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Could not open the order') }
+    setOpeningVmi(false)
+  }
   const [showIgnored, setShowIgnored] = useState(false)
 
   // Catch up on alerts someone else already resolved as soon as this page
@@ -40,6 +57,23 @@ export function InventoryAlertsPage() {
         <div className="py-12 flex justify-center"><SbLoader size={40} /></div>
       ) : (
         <div className="flex flex-col gap-4">
+          {vmiMiss && (
+            <Card className="border-[#C0392B]/40">
+              <CardBody className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-sm font-heading font-bold text-navy">Possible VMI misses</span>
+                  <Badge color="red">{vmiMiss.count}</Badge>
+                </div>
+                <p className="text-[11px] font-mono text-inky/70">
+                  {vmiMiss.count} shop{vmiMiss.count === 1 ? '' : 's'} will run out of a VMI / keep-fill product before their delivery after next, with no bulk order in the
+                  system near the time RelaDyne normally processes theirs ({vmiMiss.date}).
+                </p>
+                <div>
+                  <Button size="sm" loading={openingVmi} onClick={() => void openVmi()}>Review &amp; create the order</Button>
+                </div>
+              </CardBody>
+            </Card>
+          )}
           {rdOrderCheck && (
             <Card className="border-[#C0392B]/40">
               <CardBody className="flex flex-col gap-2">

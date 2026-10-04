@@ -302,6 +302,8 @@ export interface DraftRow {
   deleted_at?: string | null
   deleted_by?: string | null
   status_before_cancel?: string | null
+  /** '' for a regular order; 'possible_vmi_miss' for the order built from the VMI-miss Inventory Alert (migration 20261004c). */
+  order_kind?: string
 }
 
 export interface DraftLineRow extends GeneratedLine {

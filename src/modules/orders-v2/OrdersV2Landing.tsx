@@ -20,6 +20,7 @@ import { SegmentedSlider, AnimatedHeight } from './controls'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 import type { DraftStatus } from './types'
 import { orderTypeLabel } from './draftLabels'
+import { useVmiMissCheck } from './useVmiMissCheck'
 
 // True when an ISO timestamp falls on today's calendar date (local time) —
 // drives the upload buttons' "glow orange, needs a fresh upload" state.
@@ -74,9 +75,16 @@ export function OrdersV2Landing() {
   // Bumped when an RD report upload finishes so the RelaDyne Reports tab's order check re-runs against the new data.
   const [rdRefresh, setRdRefresh] = useState(0)
   const prevRdUploading = useRef(rd.uploading)
+  // The "possible VMI misses" check runs after an AFTERNOON Open Sales Order upload (that's the report that shows the day's
+  // orders); it can also be run by hand from the button beside the upload buttons.
+  const vmi = useVmiMissCheck()
   useEffect(() => {
-    if (prevRdUploading.current && !rd.uploading) setRdRefresh((k) => k + 1)
+    if (prevRdUploading.current && !rd.uploading) {
+      setRdRefresh((k) => k + 1)
+      if (prevRdUploading.current === 'orders' && new Date().getHours() >= 12) void vmi.run({ quiet: true })
+    }
     prevRdUploading.current = rd.uploading
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rd.uploading])
   const [statsDraft, setStatsDraft] = useState<DraftRow | null>(null)
   const [soOpen, setSoOpen] = useState(false)
@@ -246,6 +254,7 @@ export function OrdersV2Landing() {
           <div className="flex items-start gap-2">
             <RdReportButton label="Open Sales Order Report" lastUploadedAt={rd.lastOpenOrdersAt} onClick={() => setSoOpen(true)} />
             <RdReportButton label="Open Invoice Report" lastUploadedAt={rd.lastOpenInvoicesAt} onClick={() => setIoOpen(true)} />
+            <Button size="sm" variant="secondary" loading={vmi.running} onClick={() => void vmi.run()} title="Check for shops whose VMI tank will run dry with no bulk order in the system">VMI miss check</Button>
           </div>
         </div>
 

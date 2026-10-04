@@ -283,6 +283,9 @@ export function OrdersV2Export() {
   // below falls back to showing the vendor's regular default so an ad hoc
   // export starts out identical rather than DEFAULT_TEMPLATE's generic shape.
   const isAdHoc = !!draftAdHocLocationIds(draft ?? {})
+  // A special order kind (e.g. possible VMI misses) has its own template row too — it starts as the vendor's regular one.
+  const orderKind = draft?.order_kind ?? ''
+  const tplAdHoc = isAdHoc && !orderKind
   const [hasAdhocOverride, setHasAdhocOverride] = useState(false)
   // Collapsed by default — the column mappings can run long, and the
   // preview below is what you actually came here to check.
@@ -311,7 +314,7 @@ export function OrdersV2Export() {
     const vendorId = draft.vendor_id
     ;(async () => {
       const { data } = await sb().schema('inventory').from('ov2_export_templates')
-        .select('*').eq('company_id', companyId).eq('vendor_id', vendorId).eq('is_adhoc', isAdHoc).maybeSingle()
+        .select('*').eq('company_id', companyId).eq('vendor_id', vendorId).eq('is_adhoc', tplAdHoc).eq('order_kind', orderKind).maybeSingle()
       if (cancelled) return
       if (data) {
         const loaded = mapRowToTemplate(data)
@@ -319,15 +322,15 @@ export function OrdersV2Export() {
         return
       }
       setHasAdhocOverride(false)
-      if (!isAdHoc) { setTpl(DEFAULT_TEMPLATE); setSavedTpl(null); return }
+      if (!isAdHoc && !orderKind) { setTpl(DEFAULT_TEMPLATE); setSavedTpl(null); return }
       const { data: vendorDefault } = await sb().schema('inventory').from('ov2_export_templates')
-        .select('*').eq('company_id', companyId).eq('vendor_id', vendorId).eq('is_adhoc', false).maybeSingle()
+        .select('*').eq('company_id', companyId).eq('vendor_id', vendorId).eq('is_adhoc', false).eq('order_kind', '').maybeSingle()
       if (cancelled) return
       setTpl(vendorDefault ? mapRowToTemplate(vendorDefault) : DEFAULT_TEMPLATE)
       setSavedTpl(null)
     })()
     return () => { cancelled = true }
-  }, [profile?.company_id, draft?.vendor_id, isAdHoc])
+  }, [profile?.company_id, draft?.vendor_id, isAdHoc, orderKind])
 
   // Vendor's own part number/description — matched vendor + our_part_number,
   // resolved through product_id_mappings the same way Orders v2 generation
@@ -504,13 +507,13 @@ export function OrdersV2Export() {
   async function saveTemplate() {
     if (!profile?.company_id || !draft?.vendor_id) { toast.error('Pick a vendor on the draft first'); return }
     const { error } = await sb().schema('inventory').from('ov2_export_templates').upsert({
-      company_id: profile.company_id, vendor_id: draft.vendor_id, is_adhoc: isAdHoc, ...tpl,
+      company_id: profile.company_id, vendor_id: draft.vendor_id, is_adhoc: tplAdHoc, order_kind: orderKind, ...tpl,
       updated_by: profile.id ?? null, updated_at: new Date().toISOString(),
-    }, { onConflict: 'company_id,vendor_id,is_adhoc' })
+    }, { onConflict: 'company_id,vendor_id,is_adhoc,order_kind' })
     if (error) { toast.error(error.message); return }
     setSavedTpl(tpl)
     setHasAdhocOverride(true)
-    toast.success(isAdHoc ? 'Saved as this vendor\'s ad hoc default' : 'Saved as this vendor\'s default')
+    toast.success(orderKind ? 'Saved as this order type\'s default' : isAdHoc ? 'Saved as this vendor\'s ad hoc default' : 'Saved as this vendor\'s default')
   }
 
   if (loading) return <div className="py-16 flex justify-center"><SbLoader size={40} /></div>

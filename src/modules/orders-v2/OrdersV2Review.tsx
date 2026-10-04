@@ -10,6 +10,7 @@ import { OrderStepper } from './OrderStepper'
 import { ToggleButton, SegmentedSlider, SlideChip } from './controls'
 import { dosTone, DOS_TONE_COLOR, TAG_DEFS, type TagKey } from './lineFlags'
 import { candidateLine, isCandidateLine } from './candidateLine'
+import { buildVmiMissLines, ORDER_KIND_SETTINGS_KEY } from './vmiMissOrder'
 import { useLineTagMap } from './useLineTagMap'
 import { ShopProductsPanel } from './ShopProductsPanel'
 import { MobileReview, detectMobile, shortDeliveryText } from './MobileReview'
@@ -373,14 +374,27 @@ export function OrdersV2Review() {
   const saveDosAsDefault = useCallback(async () => {
     if (!dosOverride) return
     setSavingDosDefault(true)
-    await saveOrderSettings({
-      ...settings,
-      days_of_supply_target: dosOverride.target,
-      days_of_supply_min_trigger: dosOverride.trigger,
-      days_of_supply_max: dosOverride.max,
-    })
+    const kind = draft?.order_kind
+    if (kind && profile?.company_id) {
+      // A special order kind keeps its OWN defaults (starting from the regular ones): save only what was changed here to that kind.
+      const sbx = supabase as any
+      const { data: cur } = await sbx.schema('platform').from('app_settings').select('value').eq('company_id', profile.company_id).eq('key', ORDER_KIND_SETTINGS_KEY).maybeSingle()
+      const all = (cur?.value ?? {}) as Record<string, Record<string, unknown>>
+      await sbx.schema('platform').from('app_settings').upsert({
+        company_id: profile.company_id, key: ORDER_KIND_SETTINGS_KEY, updated_at: new Date().toISOString(),
+        value: { ...all, [kind]: { ...(all[kind] ?? {}), days_of_supply_target: dosOverride.target, days_of_supply_min_trigger: dosOverride.trigger, days_of_supply_max: dosOverride.max } },
+      }, { onConflict: 'company_id,key' })
+      toast.success('Saved as this order type\'s defaults')
+    } else {
+      await saveOrderSettings({
+        ...settings,
+        days_of_supply_target: dosOverride.target,
+        days_of_supply_min_trigger: dosOverride.trigger,
+        days_of_supply_max: dosOverride.max,
+      })
+    }
     setSavingDosDefault(false)
-  }, [dosOverride, settings, saveOrderSettings])
+  }, [dosOverride, settings, saveOrderSettings, draft?.order_kind, profile?.company_id])
 
   const shopLabel = useCallback(
     (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—',
@@ -543,7 +557,7 @@ export function OrdersV2Review() {
         ? new Set(adHocIds)
         : eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
       setEligibleLocationIds(eligibleIds)
-      const result = generateOrder(inputs, {
+      const genCtx = {
         settings: effectiveSettings,
         vendor: rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name),
         orderDate: draft.order_date,
@@ -554,7 +568,11 @@ export function OrdersV2Review() {
         // only controls whether they're visible in the table, and they
         // start excluded from the order total regardless (see buildLine).
         includeVmi: true,
-      })
+      }
+      const result = generateOrder(inputs, genCtx)
+      // A "Possible VMI misses" order is only the flagged shop/product pairs, included by default.
+      const vmiItems = (draft.settings_snapshot as any)?.__vmi_miss_items as { location_id: string; product_id: string }[] | undefined
+      const resultLines = Array.isArray(vmiItems) && vmiItems.length ? buildVmiMissLines(result.lines, vmiItems, inputs, genCtx) : result.lines
 
       // Days of supply at delivery uses the shop's configured delivery day.
       const deliveryDow = new Map(days.map((d) => [d.location_id, d.delivery_dow]))
@@ -596,7 +614,7 @@ export function OrdersV2Review() {
       // open PO already has some of this outstanding, take a look."
       const openPoKeys = new Set(inputs.filter((i) => (i.pendingPoQty ?? 0) > 0).map((i) => `${i.location_id}|${i.product_id}`))
 
-      const withDelivery = result.lines.map((l) => {
+      const withDelivery = resultLines.map((l) => {
         const deliver = deliveryFor(l.location_id, draft.order_date)
         const key = `${l.location_id}|${l.product_id}`
         let flags = l.flags
@@ -622,7 +640,7 @@ export function OrdersV2Review() {
           // isn't explicitly carried forward here — __adhoc_location_ids
           // has to be threaded through explicitly or a regenerate silently
           // reverts an ad hoc draft back to the vendor's regular schedule.
-          settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts, __adhoc_location_ids: adHocIds },
+          settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts, __adhoc_location_ids: adHocIds, __vmi_miss_items: vmiItems ?? null },
           // Never downgrade an already-finalized draft back to 'review' —
           // a completed order's own steps are now revisitable (e.g. to
           // regenerate after adding a global product exception, then
