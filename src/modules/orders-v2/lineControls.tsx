@@ -17,6 +17,21 @@ const FLUID_BTN = 'flex-1 basis-0 min-w-[0.9rem] max-w-[2.5rem] flex items-cente
 const COMPACT_BTN = 'w-7 flex-shrink-0 flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none'
 const STEP_BTN = 'w-10 flex-shrink-0 flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none'
 
+/**
+ * Faint "+1" drifting up / "−1" drifting down from where the cursor clicked (see .qty-float-* in index.css). Plain DOM
+ * appended to <body> and removed after the animation: the Review table re-renders (and re-creates its cells) the instant a
+ * quantity changes, which used to throw away a React-state-driven float before it could be seen.
+ */
+function spawnFloat(dir: 1 | -1, x: number, y: number) {
+  const el = document.createElement('span')
+  el.textContent = dir > 0 ? '+1' : '−1'
+  el.setAttribute('aria-hidden', 'true')
+  el.className = `pointer-events-none text-xs font-mono font-bold ${dir > 0 ? 'text-sb-green qty-float-up' : 'text-sb-red qty-float-down'}`
+  el.style.cssText = `position:fixed;left:${x - 8}px;top:${y - 10}px;z-index:500`
+  document.body.appendChild(el)
+  window.setTimeout(() => el.remove(), 1100)
+}
+
 /** Enter in a qty box moves to the next row's qty box (Shift+Enter goes back up) within the same table. */
 function moveToNextQty(el: HTMLInputElement, backwards: boolean) {
   const scope: ParentNode = el.closest('table') ?? document
@@ -71,34 +86,16 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
     lastCommittedRef.current = n
     onChange(n)
   }
-  // Faint "+1" drifting up / "−1" drifting down from wherever the cursor clicked (see .qty-float-* in index.css).
-  // Portalled to <body> at the click's viewport position so the cell's overflow clipping can't cut it off.
-  const [floats, setFloats] = useState<{ id: number; dir: 1 | -1; x: number; y: number }[]>([])
-  const floatSeq = useRef(0)
-  function flash(dir: 1 | -1, x: number, y: number) {
-    const id = ++floatSeq.current
-    setFloats((f) => [...f, { id, dir, x, y }])
-    window.setTimeout(() => setFloats((f) => f.filter((q) => q.id !== id)), 1100)
-  }
   const bump = (delta: number, e: React.MouseEvent) => {
     const next = Math.max(0, Math.round(((Number(text) || 0) + delta) * 100) / 100)
     if (next === (Number(text) || 0)) return
-    flash(delta > 0 ? 1 : -1, e.clientX, e.clientY)
+    spawnFloat(delta > 0 ? 1 : -1, e.clientX, e.clientY)
     commit(next)
   }
   const showZeroReason = !!zeroReason && (Number(text) || 0) === 0 && Number(zeroReason.line.system_qty) > 0
 
   return (
     <div className={fluid ? 'relative flex items-stretch gap-0.5 w-full min-w-0 flex-nowrap' : 'relative inline-flex items-stretch gap-0.5'}>
-      {floats.length > 0 && createPortal(
-        <>{floats.map((f) => (
-          <span key={f.id} aria-hidden style={{ position: 'fixed', left: f.x - 8, top: f.y - 10, zIndex: 500 }}
-            className={`pointer-events-none text-xs font-mono font-bold ${f.dir > 0 ? 'text-sb-green qty-float-up' : 'text-sb-red qty-float-down'}`}>
-            {f.dir > 0 ? '+1' : '−1'}
-          </span>
-        ))}</>,
-        document.body,
-      )}
       {showZeroReason && zeroReason
         ? <ZeroReasonPopoverButton line={zeroReason.line} onChange={zeroReason.onChange} fluid={fluid} compact={compact} />
         : <button type="button" title="Decrease by 1" disabled={(Number(text) || 0) <= 0} onClick={(e) => bump(-1, e)} className={fluid ? FLUID_BTN : compact ? COMPACT_BTN : STEP_BTN}>−</button>}

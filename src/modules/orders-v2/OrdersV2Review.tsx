@@ -11,6 +11,7 @@ import { ToggleButton, SegmentedSlider, SlideChip } from './controls'
 import { dosTone, DOS_TONE_COLOR, TAG_DEFS, type TagKey } from './lineFlags'
 import { candidateLine, isCandidateLine } from './candidateLine'
 import { useLineTagMap } from './useLineTagMap'
+import { ShopProductsPanel } from './ShopProductsPanel'
 import { quickCounts, tagKey, cellKey } from './quickFilters'
 import { orderTypeLabel } from './draftLabels'
 import { useDrafts } from './useOrdersV2'
@@ -1007,6 +1008,21 @@ export function OrdersV2Review() {
     document.querySelector<HTMLElement>(`[data-seen-key="${CSS.escape(first.id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
+  // Everything the shop-products table (popup and inline expand) needs — the same props as the main Review table.
+  const shopPanelBase = {
+    draft, shopLabel, ozProductIds, lastOrderedInfo, deliveryFor, describeSchedule,
+    thresholds: dosThresholds, onHandAfterAtDelivery: onHandAfterCb, groupMinimumStatus,
+    patchQty: patchQtyOrAdd, exceptionFor,
+    onOpenException: (locationId: string, productId: string) => setExceptionTarget({ locationId, productId }),
+    decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason: setZeroReason,
+    shopRows, onAddConfiguredProduct: addConfiguredProduct, showConfigVmi, leadDaysFor, inputByLineKey,
+  }
+  const shopVmiToggle = (
+    <ToggleButton checked={showConfigVmi} onChange={setShowConfigVmi}
+      onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+      onTooltip="Click to hide VMI/keep-fill products" offTooltip="Click to also show VMI/keep-fill products" />
+  )
+
   const vendorName = vendors.byId(draft.vendor_id)?.name ?? 'All vendors'
   const usesOrderDays = rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays
 
@@ -1049,17 +1065,19 @@ export function OrdersV2Review() {
           ask 2026-09-29) — the step bar itself is centered below, and the
           page's own title/subtext moved further down, past the DOS-targets
           bar, so this row is purely navigation/actions. */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
+      {/* Three columns (1fr / auto / 1fr) so the step icons sit in the exact middle of the work area, not between
+          the two button groups (which are different widths). */}
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
         <Button size="sm" variant="ghost" onClick={() => navigate('/orders-v2')}
-          className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky">← Orders v2</Button>
-        <div className="flex-1 flex justify-center min-w-[18rem]">
+          className="rounded-lg border border-sky/50 text-sky hover:bg-sky/10 hover:text-sky justify-self-start">← Orders v2</Button>
+        <div className="flex justify-center">
           <OrderStepper compact={headerScrolled} draftId={draft.id} current="review" onBeforeNavigate={(target) => {
             if (target === 'review') return true
             if (promptIfUnseen()) return false
             return true
           }} />
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>
@@ -1237,20 +1255,7 @@ export function OrdersV2Review() {
               </Button>
             </div>
             {useNewTable ? (
-              <ShopConfiguredProductsDataTable
-                rows={shopRows(popupShopId)}
-                onPatch={patchQty}
-                onAdd={addConfiguredProduct}
-                showVmi={showConfigVmi}
-                ozProductIds={ozProductIds}
-                exceptionFor={exceptionFor}
-                onOpenException={(locationId, productId) => setExceptionTarget({ locationId, productId })}
-                leadDays={leadDaysFor(popupShopId)}
-                lastInfoFor={lastOrderedInfo.infoFor}
-                onZeroReason={setZeroReason}
-                tall
-                dosAfterColorClass={dosAfterColorClass}
-              />
+              <ShopProductsPanel locId={popupShopId} base={shopPanelBase} showConfigVmi={showConfigVmi} toolbarExtra={shopVmiToggle} />
             ) : (
               <ShopConfiguredProductsTable
                 rows={shopRows(popupShopId)}
@@ -1494,6 +1499,7 @@ export function OrdersV2Review() {
           tagMap={lineTagMap}
           quickFilters={quickFilters}
           onQuickFiltersChange={setQuickFilters}
+          renderShopProducts={(locId) => <ShopProductsPanel locId={locId} base={shopPanelBase} showConfigVmi={showConfigVmi} toolbarExtra={shopVmiToggle} />}
         />
       )}
 

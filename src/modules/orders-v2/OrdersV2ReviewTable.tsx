@@ -44,23 +44,26 @@ const toneWash = (t: RowTone) => `${ROW_TONE_META[t].color}2B`
 // ── Small presentational pieces ─────────────────────────────────────────────
 
 /** A tiny colored flag glyph with a styled hover tooltip — used inline above On Hand / On Hand After. */
-function TagIcon({ tag }: { tag: TagDef }) {
+function TagIcon({ tag, onClick, active }: { tag: TagDef; onClick?: () => void; active?: boolean }) {
   return (
-    <HoverTip content={<SwatchTipBody color={tag.color} title={tag.label} description={tag.description} />}>
-      <Flag className="w-3 h-3" style={{ color: tag.color, fill: tag.color }} strokeWidth={1.5} />
+    <HoverTip content={<SwatchTipBody color={tag.color} title={tag.label} description={`${tag.description} Click to filter to lines with this flag.`} />}>
+      <button type="button" onClick={onClick} className={`inline-flex rounded-sm ${active ? 'ring-2 ring-navy/60' : ''}`}>
+        <Flag className="w-3 h-3" style={{ color: tag.color, fill: tag.color }} strokeWidth={1.5} />
+      </button>
     </HoverTip>
   )
 }
 
 /** A tag as an inline, never-stacked chip: color swatch + label. */
-function TagChip({ tag }: { tag: TagDef }) {
+function TagChip({ tag, onClick, active }: { tag: TagDef; onClick?: () => void; active?: boolean }) {
   return (
-    <HoverTip content={<SwatchTipBody color={tag.color} title={tag.label} description={tag.description} />}>
-      <span className="inline-flex items-center gap-1 rounded border px-1 text-[9px] leading-4 whitespace-nowrap text-navy"
+    <HoverTip content={<SwatchTipBody color={tag.color} title={tag.label} description={`${tag.description} Click to filter to lines with this flag.`} />}>
+      <button type="button" onClick={onClick}
+        className={`inline-flex items-center gap-1 rounded border px-1 text-[9px] leading-4 whitespace-nowrap text-navy ${active ? 'ring-2 ring-navy/60' : ''}`}
         style={{ borderColor: `${tag.color}99`, background: `${tag.color}26` }}>
         <span className="inline-block w-1.5 h-1.5 rounded-sm flex-shrink-0" style={{ background: tag.color }} />
         {tag.label}
-      </span>
+      </button>
     </HoverTip>
   )
 }
@@ -96,6 +99,31 @@ function twoLines(label: string, count: number): [string, string] {
   return [words.slice(0, best).join(' '), words.slice(best).join(' ')]
 }
 
+/**
+ * Column objects that never change identity: each accessor, custom cell and meta function delegates to whatever the
+ * latest render's definition says (via the ref), so React keeps the same cell components mounted across edits.
+ */
+function stabilizeColumns(raw: any[], ref: { current: any[] }): any[] {
+  const latest = (id: string) => ref.current.find((c) => c.id === id)
+  return raw.map((def) => {
+    const id = def.id as string
+    const out: any = { ...def }
+    if (def.accessorFn) out.accessorFn = (row: any, i: number) => latest(id)?.accessorFn?.(row, i)
+    if (typeof def.cell === 'function') {
+      const Cell = (props: any) => { const c = latest(id)?.cell; return typeof c === 'function' ? c(props) : null }
+      out.cell = Cell
+    }
+    if (def.meta) {
+      const meta: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(def.meta)) {
+        meta[k] = typeof v === 'function' ? (...args: unknown[]) => (latest(id)?.meta?.[k] as any)?.(...args) : v
+      }
+      out.meta = meta
+    }
+    return out
+  })
+}
+
 const chipsWidth = (tags: TagDef[]) => tags.reduce((s, t) => s + t.label.length * 5.4 + 28, 0)
 
 // ── Table ───────────────────────────────────────────────────────────────────
@@ -106,13 +134,15 @@ export function OrdersV2ReviewTable({
   decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
   inputByLineKey, toolbarExtra, onRowRef, onLastRowKey, isSeen, jumpNonce, variant = 'order',
-  tagMap, quickFilters, onQuickFiltersChange,
+  tagMap, quickFilters, onQuickFiltersChange, renderShopProducts,
 }: {
   /**
    * 'order' = the main Review table. 'noOrders' = every product for shops that ended up with no order (no shop
    * button). 'overrides' = the lines edited by hand, in a modal; the shop button opens the shop-products popup.
    */
-  variant?: 'order' | 'noOrders' | 'overrides'
+  variant?: 'order' | 'noOrders' | 'overrides' | 'shop'
+  /** Renders a shop's "every configured product" table under its row (the inline expand). */
+  renderShopProducts?: (locId: string) => React.ReactNode
   /** Live Flags/Tags for these lines (see useLineTagMap). */
   tagMap: LineTagMap
   /** Selected quick filters (flag/tag buttons, DOS legend). Controlled when onQuickFiltersChange is given. */
@@ -162,6 +192,7 @@ export function OrdersV2ReviewTable({
   const [dosStylePref] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
   const dosStyle = dosStylePref === 'text' ? 'text' : 'badge'
   const isOrderTable = variant === 'order'
+  const defaultPinned = variant === 'shop' ? [] : DEFAULT_PINNED
   const tableKey = variant === 'order' ? TABLE_KEY : `${TABLE_KEY}-${variant}`
   const [shownQuick] = useProfilePref<string[]>(OV2_SHOWN_QUICK_KEY, DEFAULT_SHOWN_QUICK)
   const [hideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_HIDE_DOS_NOW)
@@ -199,7 +230,7 @@ export function OrdersV2ReviewTable({
   )
 
   const col = useMemo(() => createColumnHelper<DraftLineRow>(), [])
-  const columns = useMemo(() => {
+  const rawColumns = useMemo(() => {
     const numericMeta = { numeric: true }
     const dosMeta = (pick: (l: DraftLineRow) => number | null) => ({
       numeric: true,
@@ -253,7 +284,7 @@ export function OrdersV2ReviewTable({
     // Tiny colored flags sit to the LEFT of the number, inline (never stacked), each with a styled hover tooltip.
     const iconStrip = (tags: TagDef[], extra?: React.ReactNode) =>
       (tags.length > 0 || extra) ? (
-        <span className="inline-flex items-center gap-0.5 leading-none flex-shrink-0">{extra}{tags.map((t) => <TagIcon key={t.key} tag={t} />)}</span>
+        <span className="inline-flex items-center gap-0.5 leading-none flex-shrink-0">{extra}{tags.map((t) => <TagIcon key={t.key} tag={t} onClick={() => toggleQuick(tagKey(t.key))} active={quick.has(tagKey(t.key))} />)}</span>
       ) : null
 
     return [
@@ -427,7 +458,7 @@ export function OrdersV2ReviewTable({
           const { before } = tagsOf(l)
           return (
             <div className="flex items-center gap-1 whitespace-nowrap">
-              {before.length === 0 ? <span className="text-inky/25">—</span> : before.map((t) => <TagChip key={t.key} tag={t} />)}
+              {before.length === 0 ? <span className="text-inky/25">—</span> : before.map((t) => <TagChip key={t.key} tag={t} onClick={() => toggleQuick(tagKey(t.key))} active={quick.has(tagKey(t.key))} />)}
               {(l.flags ?? []).includes('covered_by_open_po') && (
                 <PoDecisionButtons line={l} onOverride={decidePoOverride} onExclude={decidePoExclude} onCombine={decidePoCombine} />
               )}
@@ -443,17 +474,30 @@ export function OrdersV2ReviewTable({
           return (
             <div className="flex flex-col gap-0.5">
               <div className="flex items-center gap-1 whitespace-nowrap">
-                {after.length === 0 ? <span className="text-inky/25">—</span> : after.map((t) => <TagChip key={t.key} tag={t} />)}
+                {after.length === 0 ? <span className="text-inky/25">—</span> : after.map((t) => <TagChip key={t.key} tag={t} onClick={() => toggleQuick(tagKey(t.key))} active={quick.has(tagKey(t.key))} />)}
               </div>
               {note && <NoteLine text={note} />}
             </div>
           )
         },
       }),
-    ]
+    ].filter((c: any) => !(variant === 'shop' && c.id === 'shop'))
   }, [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, draft.order_date,
       patchQty, thresholds, tagsOf, onHandAfterAtDelivery, combinedListed, decidePoOverride, decidePoExclude,
-      decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, variant, lines, tagMap])
+      decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, variant, lines, tagMap, quick])
+
+  // The column definitions above are rebuilt whenever anything they read changes, which used to (a) re-create every
+  // cell component on each quantity edit — remounting the quantity box and dropping its focus and any floating +1 —
+  // and (b) leave TanStack's per-row value cache stale when only the inputs changed (e.g. the Delivery column staying
+  // blank until a quantity was edited). So: hand the table STABLE column objects whose accessors / cells / meta
+  // functions just delegate to the latest definitions, and give it a fresh data array whenever they change.
+  const rawRef = useRef(rawColumns)
+  rawRef.current = rawColumns
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const columns = useMemo(() => stabilizeColumns(rawColumns, rawRef), [variant])
+  // Only the things the accessors actually read (not every function prop) trigger a rebuild, so ordinary re-renders stay cheap.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const tableData = useMemo(() => shownLines.slice(), [shownLines, tagMap, thresholds, deliveryFor, lastOrderedInfo.infoFor, ozProductIds, inputByLineKey, onHandAfterAtDelivery, combinedListed, dosStyle])
 
   // Under 200 rows everything shows on one page; with more, the page size the user last picked (default 50).
   const initialPageSize = useRef<number>(0)
@@ -462,11 +506,11 @@ export function OrdersV2ReviewTable({
     try { saved = Number(localStorage.getItem(`${PAGE_SIZE_KEY}:${variant}`)) || 0 } catch { /* ignore */ }
     initialPageSize.current = lines.length < 200 ? 999999 : (saved || 50)
   }
-  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(shownLines, columns, {
+  const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(tableData, columns, {
     persistKey: tableKey,
     initialPageSize: initialPageSize.current,
-    initialSorting: [{ id: 'shop', desc: false }],
-    initialColumnPinning: { left: DEFAULT_PINNED, right: [] },
+    initialSorting: [{ id: variant === 'shop' ? 'product' : 'shop', desc: false }],
+    initialColumnPinning: { left: defaultPinned, right: [] },
   })
   useColumnPrefs(tableKey, table, columnVisibility, columnOrder, setColumnOrder)
   const pageSizeNow = table.getState().pagination.pageSize
@@ -495,7 +539,7 @@ export function OrdersV2ReviewTable({
     setColumnOrder([])
     table.setColumnVisibility({})
     table.setColumnSizing({})
-    setColumnPinning({ left: DEFAULT_PINNED, right: [] })
+    setColumnPinning({ left: defaultPinned, right: [] })
   }
 
   // Same-band-per-shop grouping, computed off the live sorted/filtered row order DataTable is about to render.
@@ -566,16 +610,18 @@ export function OrdersV2ReviewTable({
                   return dd ? <span className="normal-case text-inky/50"> · Delivers {dShort(dd)}{sd ? ` (${sd})` : ''}</span> : null
                 })()}
               </p>
-              <ShopConfiguredProductsDataTable
-                rows={shopRows(locId)}
-                onPatch={patchQty}
-                onAdd={onAddConfiguredProduct}
-                showVmi={showConfigVmi}
-                ozProductIds={ozProductIds}
-                leadDays={leadDaysFor(locId)}
-                lastInfoFor={lastOrderedInfo.infoFor}
-                onZeroReason={onZeroReason}
-              />
+              {renderShopProducts ? renderShopProducts(locId) : (
+                <ShopConfiguredProductsDataTable
+                  rows={shopRows(locId)}
+                  onPatch={patchQty}
+                  onAdd={onAddConfiguredProduct}
+                  showVmi={showConfigVmi}
+                  ozProductIds={ozProductIds}
+                  leadDays={leadDaysFor(locId)}
+                  lastInfoFor={lastOrderedInfo.infoFor}
+                  onZeroReason={onZeroReason}
+                />
+              )}
             </div>
           )
         }}
