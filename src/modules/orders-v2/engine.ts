@@ -356,6 +356,21 @@ export function recentOrderCheck(input: GenerationInput, ctx: GenerationContext)
   return { lastDate: latest.order_date, lastQty: recent.reduce((s, h) => s + n(h.qty), 0), stillNeeded }
 }
 
+// ── Drums ───────────────────────────────────────────────────────────────
+
+/** A drum product is ordered one at a time: never stacked, whatever the DOS target (or a minimum) would call for. */
+const isDrumUom = (uom: string | null | undefined) => String(uom ?? '').trim().toLowerCase() === 'drum'
+const unitCap = (uom: string | null | undefined, physical: number) => (isDrumUom(uom) ? Math.min(1, physical) : physical)
+
+/** The order is still short of its minimum and nothing more could be added — say so on the group's lines. */
+function markNoProductsToAdd(lines: GeneratedLine[]): void {
+  for (const l of lines) {
+    if (!l.flags.includes('no_products_to_meet_min')) l.flags.push('no_products_to_meet_min')
+    const msg = 'no products to add to meet order min'
+    l.note = l.note ? (l.note.includes(msg) ? l.note : `${l.note} · ${msg}`) : msg
+  }
+}
+
 // ── Flags ───────────────────────────────────────────────────────────────
 
 function historyFlags(input: GenerationInput, ctx: GenerationContext): LineFlag[] {
@@ -786,7 +801,7 @@ function applyOrderUnitMinimum(
   const headroom = lines.map((l) => {
     const inp = inputs.get(`${l.location_id}|${l.product_id}`)
     if (!inp) return 0
-    return Math.max(0, capsFor(inp, ctx, { respectDosMax: false }).maxUnits - l.qty)
+    return Math.max(0, unitCap(l.uom, capsFor(inp, ctx, { respectDosMax: false }).maxUnits) - l.qty)
   })
   let guard = 0
   while (total < minimum && guard++ < 10000) {
@@ -825,7 +840,7 @@ function applyOrderUnitMinimum(
       const caps = capsFor(sp, ctx, { respectDosMax: false })
       if (caps.maxUnits <= 0) continue
       const need = minimum - total
-      const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_increment, 'up')
+      const units = roundQty(Math.min(Math.max(need, 1), unitCap(sp.rule.uom, caps.maxUnits)), sp.rule.uom, ctx.settings.bulk_rounding_increment, 'up')
       if (units <= 0) continue
       const line = buildLine(sp, ctx, units, caps)
       line.added_by_smoothing = true
@@ -836,6 +851,7 @@ function applyOrderUnitMinimum(
     }
   }
 
+  if (total < minimum) markNoProductsToAdd(lines)
   return { met: total >= minimum, smoothingApplied: true }
 }
 
@@ -965,7 +981,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       caps = { ...caps, maxUnits: want, capacityBound: false }
     }
 
-    const units = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_increment,
+    const rawUnits = roundQty(Math.min(want, caps.maxUnits), rule.uom, ctx.settings.bulk_rounding_increment,
       // Round down when a hard cap binds so the cap is never exceeded;
       // otherwise round UP toward the target rather than to nearest — a
       // coarse package size (e.g. a 12-quart case against 0.68 qt/day of
@@ -974,6 +990,9 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       // leaving a slow-moving product under its DOS target rather than at
       // or slightly past it.
       want > caps.maxUnits ? 'down' : 'up')
+    // One drum per product, however many the DOS target calls for.
+    const drumNeeded = isDrumUom(rule.uom) && rawUnits > 1 ? rawUnits : null
+    const units = drumNeeded ? 1 : rawUnits
 
     if (units <= 0) {
       // Physical capacity still wins — a product already at/over its hard
@@ -1004,6 +1023,11 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       if (!line.flags.includes('exceeded_capacity_for_dos_target')) line.flags.push('exceeded_capacity_for_dos_target')
       line.note = `Ordered ${units} to reach the ${ctx.settings.days_of_supply_target}-day target`
         + (overBy != null ? ` — exceeds configured capacity by ${Math.round(overBy)} qt` : ' — exceeds configured capacity')
+    }
+    if (drumNeeded) {
+      if (!line.flags.includes('drum_capped')) line.flags.push('drum_capped')
+      const txt = `ordering 1 but ${drumNeeded} needed for dos target`
+      line.note = line.note ? `${line.note} · ${txt}` : txt
     }
     pass1.push(line)
   }
@@ -1152,11 +1176,23 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       // (a) top up existing lines, most efficient first
       // dos_max is a soft target: smoothing may exceed it (flagged), but
       // physical capacity is still hard.
-      const headroom = lines.map((l) => {
+      const hardHeadroomOf = (l: GeneratedLine) => {
         const inp = inputByKey.get(`${l.location_id}|${l.product_id}`)
         if (!inp) return 0
-        return Math.max(0, capsFor(inp, ctx, { respectDosMax: false }).maxUnits - l.qty)
-      })
+        return Math.max(0, unitCap(l.uom, capsFor(inp, ctx, { respectDosMax: false }).maxUnits) - l.qty)
+      }
+      // To keep one product from being stacked, topping up goes in three steps: (1) existing lines only up to the soft DOS
+      // max, (2) other eligible products, (3) only then past the DOS max (flagged), still within physical capacity.
+      const softHeadroomOf = (l: GeneratedLine) => {
+        const hard = hardHeadroomOf(l)
+        const inp = inputByKey.get(`${l.location_id}|${l.product_id}`)
+        const u = n(l.daily_usage)
+        if (!inp || u <= 0) return hard
+        const per = gallonsPerUnit(inp.rule)
+        const toMax = (ctx.settings.days_of_supply_max * u - (n(l.on_hand) + n(l.qty) * per)) / per
+        return Math.max(0, Math.min(hard, toMax))
+      }
+      const topUp = (headroom: number[]) => {
       let guard = 0
       while (dollars < minimum && guard++ < 10000) {
         const i = bestTopUpIndex(lines, headroom, inputByKey)
@@ -1185,6 +1221,8 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
         markOverDosMax(lines[i], ctx)
         dollars = groupDollars(lines, ruleOf)
       }
+      }
+      topUp(lines.map(softHeadroomOf))
 
       // (b) still short — pull in other eligible products from the shop's config
       if (dollars < minimum) {
@@ -1221,7 +1259,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
           // a dollar gap — adding it would just inflate the order for nothing.
           if (unitCost <= 0) continue
           const need = (minimum - dollars) / unitCost
-          const units = roundQty(Math.min(Math.max(need, 1), caps.maxUnits), sp.rule.uom, ctx.settings.bulk_rounding_increment)
+          const units = roundQty(Math.min(Math.max(need, 1), unitCap(sp.rule.uom, caps.maxUnits)), sp.rule.uom, ctx.settings.bulk_rounding_increment)
           if (units <= 0) continue
           const line = buildLine(sp, ctx, units, caps)
           line.added_by_smoothing = true
@@ -1231,6 +1269,11 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
           lines.push(line)
           dollars = groupDollars(lines, ruleOf)
         }
+      }
+      // (c) still short — top up past the DOS max (flagged), within capacity; if even that can't close it, say so.
+      if (dollars < minimum) {
+        topUp(lines.map(hardHeadroomOf))
+        if (dollars < minimum) markNoProductsToAdd(lines)
       }
     }
 

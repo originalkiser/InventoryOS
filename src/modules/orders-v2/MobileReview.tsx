@@ -95,7 +95,12 @@ export function MobileReview({
     const tone = t?.tone ? ROW_TONE_META[t.tone] : null
     const isOz = ozProductIds.has(l.product_id)
     const mult = isOz ? 32 : 1
-    const onHandAfter = l.on_hand == null ? null : (Number(l.on_hand) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)) * mult
+    // Same projection as the table's On Hand After: what's left on the shelf when the delivery lands (usage runs it down over
+    // the lead time), plus what's ordered. DOS after is that figure over daily usage.
+    const afterQts = l.on_hand == null ? null : onHandAfterAtDelivery(l)
+    const onHandAfter = afterQts == null ? null : afterQts * mult
+    const usageQts = Number(l.daily_usage ?? 0)
+    const dosAfter = afterQts == null ? null : usageQts > 0 ? afterQts / usageQts : null
     const out = Number(l.on_hand ?? 0) <= 0
     const cost = Number(l.qty) * Number(l.unit_cost ?? 0)
     const info = lastInfoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
@@ -103,16 +108,19 @@ export function MobileReview({
     return (
       <div key={l.id} className={`rounded-lg border px-3 py-2.5 flex flex-col gap-2 ${muted ? 'opacity-90' : ''} ${orange ? 'border-[#E67E22]/70 shadow-[inset_4px_0_0_#E67E22]' : 'border-navy/25'}`}
         style={tone ? { background: `${tone.color}22`, borderColor: orange ? undefined : `${tone.color}88` } : undefined}>
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-base font-heading font-bold text-navy truncate">{l.product_id}</span>
-          <span className="text-[11px] font-mono text-navy/75 flex-shrink-0">{uomDisplayLabel(l.uom)}{tone ? ` · ${tone.label}` : ''}</span>
+        <div className="flex items-start justify-between gap-2">
+          <span className="text-base font-heading font-bold text-navy break-all leading-tight">{l.product_id}</span>
+          <span className="text-[11px] font-mono text-navy/75 flex-shrink-0 pt-0.5">{uomDisplayLabel(l.uom)}</span>
         </div>
-        <div className="grid grid-cols-4 gap-x-2 text-left">
+        {tone && <div className="text-[11px] font-mono text-navy/75 -mt-1">{tone.label}</div>}
+        <div className="grid grid-cols-3 gap-x-2 gap-y-1.5 text-left">
           {[
             { label: 'On hand', node: <span className={out ? 'font-bold text-[#C0392B]' : ''}>{l.on_hand == null ? '—' : num(Number(l.on_hand) * mult)}</span> },
+            { label: 'Usage/day', node: <span>{l.daily_usage == null ? '—' : num(Number(l.daily_usage) * mult)}</span> },
             { label: 'DOS now', node: <DosCell v={l.dos_before} thresholds={thresholds} style={dosStyle} align="left" /> },
             { label: 'After', node: <span>{onHandAfter == null ? '—' : num(onHandAfter)}</span> },
-            { label: 'DOS after', node: <DosCell v={l.dos_after} thresholds={thresholds} style={dosStyle} align="left" /> },
+            { label: 'DOS @ delivery', node: <DosCell v={l.dos_after_delivery} thresholds={thresholds} style={dosStyle} align="left" /> },
+            { label: 'DOS after', node: <DosCell v={dosAfter} thresholds={thresholds} style={dosStyle} align="left" /> },
           ].map((c) => (
             <div key={c.label} className="min-w-0">
               <div className="text-[10px] font-mono uppercase tracking-wide text-navy/75 leading-4">{c.label}</div>

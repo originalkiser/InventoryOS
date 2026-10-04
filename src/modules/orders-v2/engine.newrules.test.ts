@@ -519,3 +519,25 @@ describe('recently ordered (2026-10-03)', () => {
     expect(res.lines[0].qty).toBeGreaterThan(0)
   })
 })
+
+describe('drums and the minimum callout (2026-10-04)', () => {
+  it('orders one drum per product and says how many the DOS target wanted', () => {
+    const i = input({ on_hand: 0, daily_usage: 10, rule: { uom: 'drum', units_per_uom_gallons: 55 } })
+    const res = generateOrder([i], ctx())
+    expect(res.lines[0].qty).toBe(1)
+    expect(res.lines[0].flags).toContain('drum_capped')
+    expect(res.lines[0].note).toMatch(/^ordering 1 but \d+ needed for dos target/)
+  })
+  it('never smooths a drum past one', () => {
+    const i = input({ on_hand: 0, daily_usage: 10, rule: { uom: 'drum', units_per_uom_gallons: 55, unit_cost: 10 } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: { type: 'dollars', dollars: 5000, qty: null } }, caseTypeMinimums: {}, usesOrderDays: false } })
+    expect(generateOrder([i], c).lines.filter((l) => l.uom === 'drum').every((l) => l.qty <= 1)).toBe(true)
+  })
+  it('calls out "no products to add" when smoothing cannot reach the minimum', () => {
+    const i = input({ on_hand: 45, daily_usage: 5, rule: { unit_cost: 10, max_capacity_gallons: 60 } })
+    const c = ctx({ vendor: { vendor_id: 'V1', minimums: { package: { type: 'dollars', dollars: 99999, qty: null } }, caseTypeMinimums: {}, usesOrderDays: false } })
+    const res = generateOrder([i], c)
+    expect(res.lines[0].flags).toContain('no_products_to_meet_min')
+    expect(res.lines[0].note).toMatch(/no products to add to meet order min/)
+  })
+})

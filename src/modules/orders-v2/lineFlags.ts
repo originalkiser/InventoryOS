@@ -69,6 +69,8 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   def('dos_after_low', 'after', 'DOS After: low', '#E04B3C', 'Days of supply after this order is still below the DOS Min Trigger.'),
   def('dos_after_below_target', 'after', 'DOS After: below target', '#E0B63A', 'Days of supply after this order is below the DOS Target but at or above the DOS Min Trigger.'),
   def('recently_ordered', 'after', 'Ordered recently', '#3E8E9B', 'Ordered in the last 8 days and the on hand plus that order still covers usage — kept on the order at 0. Add a quantity if it should go on anyway.'),
+  def('drum_capped', 'after', 'Drum capped', '#8C6E3F', 'Drums are ordered one per product. More are needed to reach the DOS target — see the note for how many.'),
+  def('no_products_to_meet_min', 'after', 'No products to add', '#6A6AA8', 'The order is still under its minimum and smoothing found no other product to add to meet it.'),
   def('hm0806_solo_min', 'after', 'HM0806 Solo Min', '#8E5BB5', 'HM0806 was the only product due at this shop, so it was ordered at its 2-unit minimum and the order minimum was ignored.'),
   def('case_minimum_topup', 'after', 'Case min', '#B7E0DE', 'Raised to meet the vendor\'s case-type order minimum.'),
   def('alone_default_qty', 'after', 'Alone qty', '#6FB7B2', 'Only line on the order — used its configured "alone" quantity.'),
@@ -83,7 +85,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
 const BEFORE_STORED: LineFlag[] = ['critical_minimum', 'repeat_ordering', 'keepfill_will_run_out', 'covered_by_open_po', 'vmi_keepfill']
 const PO_DECISIONS: LineFlag[] = ['po_decision_override', 'po_decision_exclude', 'po_decision_combine']
 // Tags the engine stamped because of the quantity IT chose — meaningless once someone edits the qty, or sets it to 0.
-const ENGINE_QTY_TAGS: LineFlag[] = ['hm0806_solo_min', 'case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']
+const ENGINE_QTY_TAGS: LineFlag[] = ['no_products_to_meet_min', 'drum_capped', 'hm0806_solo_min', 'case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']
 
 export interface TagLine {
   flags: string[] | null
@@ -142,7 +144,7 @@ export function computeLineTags<L extends TagLine>(l: L, ctx: TagContext): LineT
   for (const f of PO_DECISIONS) if (stored.has(f)) after.push(f)
 
   const noteStillApplies = stored.has('recently_ordered')
-    || (!l.is_override && !qty0 && (stored.has('rounded_to_bulk_minimum') || after.includes('exceeded_capacity_for_dos_target')))
+    || (!l.is_override && !qty0 && (stored.has('rounded_to_bulk_minimum') || stored.has('drum_capped') || stored.has('no_products_to_meet_min') || after.includes('exceeded_capacity_for_dos_target')))
   return {
     before: before.map((k) => TAG_DEFS[k]),
     after: after.map((k) => TAG_DEFS[k]),
