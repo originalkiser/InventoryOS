@@ -14,12 +14,18 @@ export interface ShopTank {
   name: string
   product_label: string | null
   area: TankArea
-  shape: TankShape
+  /** null until the shape is known — a tank pre-loaded from a tank monitor starts without one. */
+  shape: TankShape | null
   dims: TankDims
   capacity_qts: number | null
   monitor_serial: string | null
   sort_order: number
   baseline_variance_qts: number | null
+  /** What the tank monitor reports (pre-loaded tanks): capacity in quarts and inside height in inches. */
+  monitor_capacity_qts: number | null
+  monitor_height_in: number | null
+  monitor_product: string | null
+  source: 'manual' | 'monitor'
   last_log: TankLastLog | null
 }
 export interface ShareShop { name: string | null; shop_city: string | null; address: string | null; city: string | null; state: string | null; zip: string | null }

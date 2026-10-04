@@ -20,7 +20,10 @@ import { SegmentedSlider, AnimatedHeight } from './controls'
 import { STATUS_LABEL, statusRoute, money, gallons, orderDayLabel, dShort, dTime } from './shared'
 import type { DraftStatus } from './types'
 import { orderTypeLabel } from './draftLabels'
-import { useVmiMissCheck } from './useVmiMissCheck'
+import { useVmiMissCheck, type VmiMissSummary } from './useVmiMissCheck'
+import { openVmiMissOrder } from './vmiMissOrder'
+import { usePageRevisit } from '@/hooks/usePageActive'
+import toast from 'react-hot-toast'
 
 // True when an ISO timestamp falls on today's calendar date (local time) —
 // drives the upload buttons' "glow orange, needs a fresh upload" state.
@@ -81,12 +84,35 @@ export function OrdersV2Landing() {
   useEffect(() => {
     if (prevRdUploading.current && !rd.uploading) {
       setRdRefresh((k) => k + 1)
-      if (prevRdUploading.current === 'orders' && new Date().getHours() >= 12) void vmi.run({ quiet: true })
+      if (prevRdUploading.current === 'orders' && new Date().getHours() >= 12) void runVmiAndOffer(true)
     }
     prevRdUploading.current = rd.uploading
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rd.uploading])
   const [statsDraft, setStatsDraft] = useState<DraftRow | null>(null)
+  // Other people (or the Inventory Alert) may have created orders while this page sat in the background.
+  usePageRevisit(() => { void reloadDrafts() })
+
+  /** Opens (or creates) today's "Possible VMI misses" order straight from here — no trip to Inventory Alerts. */
+  async function openVmi(s: VmiMissSummary) {
+    if (!profile?.company_id) return
+    try {
+      const r = await openVmiMissOrder(profile.company_id, profile.id ?? null, s, settings)
+      if (r) { await reloadDrafts(); navigate(`/orders-v2/draft/${r.id}`) }
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Could not open the order') }
+  }
+  /** Runs the check, then offers a one-click jump to the order when it found something. */
+  async function runVmiAndOffer(quiet = false) {
+    const s = await vmi.run({ quiet: true })
+    if (!s) { if (!quiet) toast.error('The VMI check failed'); return }
+    if (s.count === 0) { if (!quiet) toast.success('No possible VMI misses'); return }
+    toast((t) => (
+      <span className="flex items-center gap-3">
+        {s.count} possible VMI miss{s.count === 1 ? '' : 'es'} found
+        <button className="underline font-bold flex-shrink-0" onClick={() => { toast.dismiss(t.id); void openVmi(s) }}>Review &amp; create order</button>
+      </span>
+    ), { duration: 20000 })
+  }
   const [soOpen, setSoOpen] = useState(false)
   const [ioOpen, setIoOpen] = useState(false)
 
@@ -254,7 +280,7 @@ export function OrdersV2Landing() {
           <div className="flex items-start gap-2">
             <RdReportButton label="Open Sales Order Report" lastUploadedAt={rd.lastOpenOrdersAt} onClick={() => setSoOpen(true)} />
             <RdReportButton label="Open Invoice Report" lastUploadedAt={rd.lastOpenInvoicesAt} onClick={() => setIoOpen(true)} />
-            <Button size="sm" variant="secondary" loading={vmi.running} onClick={() => void vmi.run()} title="Check for shops whose VMI tank will run dry with no bulk order in the system">VMI miss check</Button>
+            <Button size="sm" variant="secondary" loading={vmi.running} onClick={() => void runVmiAndOffer()} title="Check for shops whose VMI tank will run dry with no bulk order in the system">VMI miss check</Button>
           </div>
         </div>
 

@@ -12,13 +12,14 @@ import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { Button, Modal, SbLoader } from '@/components/ui'
 import { sanitizeDecimalInput } from '@/lib/decimalInput'
-import { SHAPES, SHAPE_ORDER, dimsComplete, tankQuarts, type TankDims, type TankShape } from './tankMath'
+import { SHAPES, SHAPE_ORDER, depthKey, dimsComplete, tankQuarts, type TankDims, type TankShape } from './tankMath'
 import { TankShapeSvg } from './TankShapeSvg'
 import { AREAS, HOLD_REASON_LABEL, type ShareShop, type ShopTank, type TankArea, type TankEval } from './tankTypes'
 
 const sb = () => supabase as any
 const fmt = (v: number | null | undefined, d = 1) => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d }))
-const fmtDims = (t: { shape: TankShape; dims: TankDims }) => SHAPES[t.shape]?.dims.map((d) => fmt(t.dims[d.key], 1)).join(' × ') + ' in'
+const fmtDims = (t: { shape: TankShape | null; dims: TankDims }) => (t.shape ? SHAPES[t.shape]?.dims.map((d) => fmt(t.dims[d.key], 1)).join(' × ') + ' in' : '')
+const ORANGE = 'border-[#E67E22] bg-[#E67E22]/10'
 
 function ago(iso: string | null): string {
   if (!iso) return ''
@@ -67,7 +68,7 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
   const [name, setName] = useState('')
   const [product, setProduct] = useState('')
   const [area, setArea] = useState<TankArea>(defaultArea)
-  const [shape, setShape] = useState<TankShape>('horizontal_cylinder')
+  const [shape, setShape] = useState<TankShape | ''>('horizontal_cylinder')
   const [dims, setDims] = useState<Record<string, string>>({})
   const [serial, setSerial] = useState('')
   const [unlocked, setUnlocked] = useState(true)
@@ -76,21 +77,30 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
   useEffect(() => {
     if (!open) return
     if (tank) {
-      setName(tank.name); setProduct(tank.product_label ?? ''); setArea(tank.area); setShape(tank.shape); setSerial(tank.monitor_serial ?? '')
+      setName(tank.name); setProduct(tank.product_label ?? ''); setArea(tank.area); setShape(tank.shape ?? ''); setSerial(tank.monitor_serial ?? '')
       setDims(Object.fromEntries(Object.entries(tank.dims ?? {}).map(([k, v]) => [k, String(v)])))
-      setUnlocked(!dimsComplete(tank.shape, tank.dims)) // dimensions already set -> greyed out until Edit is clicked
+      setUnlocked(!tank.shape || !dimsComplete(tank.shape, tank.dims)) // dimensions already set -> greyed out until Edit is clicked
     } else {
       setName(''); setProduct(''); setArea(defaultArea); setShape('horizontal_cylinder'); setDims({}); setSerial(''); setUnlocked(true)
     }
   }, [open, tank, defaultArea])
 
   const numDims: TankDims = useMemo(() => Object.fromEntries(Object.entries(dims).map(([k, v]) => [k, Number(v)])), [dims])
-  const complete = dimsComplete(shape, numDims)
-  const cap = complete ? tankQuarts(shape, numDims, 1e9) : null
-  const def = SHAPES[shape]
+  const complete = !!shape && dimsComplete(shape, numDims)
+  const cap = complete && shape ? tankQuarts(shape, numDims, 1e9) : null
+  const def = shape ? SHAPES[shape] : null
+  // A tank pre-loaded from its monitor knows its capacity and inside height; picking a shape pre-fills that depth.
+  function pickShape(s: TankShape | '') {
+    setShape(s)
+    if (s && tank?.monitor_height_in) {
+      const k = depthKey(s)
+      setDims((p) => (p[k] ? p : { ...p, [k]: String(tank.monitor_height_in) }))
+    }
+  }
 
   async function save() {
     if (!name.trim()) { toast.error('Give the tank a name'); return }
+    if (!shape || !def) { toast.error('Choose the tank type'); return }
     if (!complete) { toast.error('Fill in every dimension'); return }
     setSaving(true)
     const keep: Record<string, number> = {}
@@ -112,9 +122,10 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
     onDeleted(); onClose()
   }
 
-  const dimsChanged = !!tank && (tank.shape !== shape || JSON.stringify(Object.fromEntries(def.dims.map((d) => [d.key, Number(dims[d.key])]))) !== JSON.stringify(Object.fromEntries(SHAPES[tank.shape].dims.map((d) => [d.key, Number(tank.dims[d.key])]))))
+  const dimsChanged = !!tank && !!tank.shape && !!def && (tank.shape !== shape || JSON.stringify(Object.fromEntries(def.dims.map((d) => [d.key, Number(dims[d.key])]))) !== JSON.stringify(Object.fromEntries(SHAPES[tank.shape].dims.map((d) => [d.key, Number(tank.dims[d.key])]))))
   const lockCls = unlocked ? '' : 'opacity-60 bg-navy/10 cursor-not-allowed'
-  const inputCls = 'w-full rounded border border-navy/30 bg-cream px-2 py-1.5 text-sm font-mono text-navy focus:outline-none focus:border-sky'
+  // 16px on a phone (anything smaller makes iOS zoom the page when a field is focused).
+  const inputCls = 'w-full rounded border border-navy/30 bg-cream px-2.5 py-2 text-base sm:text-sm font-mono text-navy focus:outline-none focus:border-sky'
 
   return (
     <Modal open={open} onClose={onClose} title={isNew ? 'Add a tank' : `Tank — ${tank?.name}`} size="lg">
@@ -142,24 +153,34 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
             {!isNew && !unlocked && <Button size="sm" variant="secondary" onClick={() => setUnlocked(true)}><Pencil className="w-3.5 h-3.5 mr-1" />Edit dimensions</Button>}
             {!isNew && unlocked && complete && <span className="text-[10px] font-mono text-[#E67E22]">Editing — Save to lock them again</span>}
           </div>
+          {tank && (tank.monitor_capacity_qts || tank.monitor_height_in) && (
+            <p className="text-[11px] font-mono text-navy/75 rounded border border-navy/20 px-2 py-1.5">
+              Tank monitor{tank.monitor_product ? ` (${tank.monitor_product})` : ''} reports {tank.monitor_capacity_qts ? `${fmt(tank.monitor_capacity_qts / 4, 0)} gal` : 'an unknown capacity'}
+              {tank.monitor_height_in ? ` and ${fmt(tank.monitor_height_in, 1)} in of height` : ''}. Use it as a check on what you measure.
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-3 items-start">
-            <TankShapeSvg shape={shape} fill={0.45} className="w-full max-w-[160px] text-navy" />
+            {shape ? <TankShapeSvg shape={shape} fill={0.45} className="w-full max-w-[160px] text-navy" />
+              : <div className={`w-full max-w-[160px] h-20 rounded border-2 border-dashed grid place-items-center text-2xl text-[#E67E22] ${ORANGE}`}>?</div>}
             <div className="flex flex-col gap-2">
               <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Tank type
-                <select className={`${inputCls} ${lockCls}`} disabled={!unlocked} value={shape} onChange={(e) => setShape(e.target.value as TankShape)}>
+                <select className={`${inputCls} ${!shape ? ORANGE : lockCls}`} disabled={!unlocked} value={shape} onChange={(e) => pickShape(e.target.value as TankShape | '')}>
+                  {!shape && <option value="">Choose the tank type…</option>}
                   {SHAPE_ORDER.map((s) => <option key={s} value={s}>{SHAPES[s].label}</option>)}
                 </select>
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {def.dims.map((d) => (
+                {(def?.dims ?? []).map((d) => (
                   <label key={d.key} className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">{d.label}
-                    <input className={`${inputCls} ${lockCls}`} disabled={!unlocked} inputMode="decimal" value={dims[d.key] ?? ''}
+                    <input className={`${inputCls} ${unlocked && !dims[d.key] ? ORANGE : lockCls}`} disabled={!unlocked} inputMode="decimal" value={dims[d.key] ?? ''}
                       onChange={(e) => setDims((p) => ({ ...p, [d.key]: sanitizeDecimalInput(e.target.value) }))} />
                     {d.hint && <span className="text-[10px] text-navy/60">{d.hint}</span>}
                   </label>
                 ))}
               </div>
-              {cap && <p className="text-xs font-mono text-navy">Holds about <strong>{fmt(cap.capacityQuarts / 4, 1)} gal</strong> ({fmt(cap.capacityQuarts, 0)} qts) when full — {fmt(cap.maxDepth, 1)} in deep inside.</p>}
+              {cap && <p className="text-xs font-mono text-navy">Holds about <strong>{fmt(cap.capacityQuarts / 4, 1)} gal</strong> ({fmt(cap.capacityQuarts, 0)} qts) when full — {fmt(cap.maxDepth, 1)} in deep inside.
+                {tank?.monitor_capacity_qts && Math.abs(cap.capacityQuarts - tank.monitor_capacity_qts) / tank.monitor_capacity_qts > 0.1
+                  ? <span className="text-[#E67E22]"> The tank monitor says {fmt(tank.monitor_capacity_qts / 4, 0)} gal — worth a second look at the measurements.</span> : null}</p>}
             </div>
           </div>
           {dimsChanged && unlocked && <p className="text-[11px] font-mono text-[#E67E22]">Changing the dimensions resets this tank's baseline variance.</p>}
@@ -184,8 +205,9 @@ function TankCard({ tank, slug, onEdit, onChanged, dragHandle }: {
 }) {
   const [depthText, setDepthText] = useState('')
   const depth = Number(depthText)
-  const calc = useMemo(() => (depth > 0 ? tankQuarts(tank.shape, tank.dims, depth) : null), [depth, tank.shape, tank.dims])
-  const maxDepth = useMemo(() => tankQuarts(tank.shape, tank.dims, 1e9).maxDepth, [tank.shape, tank.dims])
+  const ready = !!tank.shape && dimsComplete(tank.shape, tank.dims)
+  const calc = useMemo(() => (ready && tank.shape && depth > 0 ? tankQuarts(tank.shape, tank.dims, depth) : null), [ready, depth, tank.shape, tank.dims])
+  const maxDepth = useMemo(() => (ready && tank.shape ? tankQuarts(tank.shape, tank.dims, 1e9).maxDepth : 0), [ready, tank.shape, tank.dims])
   const over = depth > maxDepth
   const [preview, setPreview] = useState<TankEval | null>(null)
   const [busy, setBusy] = useState(false)
@@ -230,26 +252,34 @@ function TankCard({ tank, slug, onEdit, onChanged, dragHandle }: {
   const v = preview?.variance_qts
 
   return (
-    <div className="rounded-lg border border-navy/30 bg-cream p-2.5 flex flex-col gap-2 min-w-0">
+    <div className={`rounded-lg border p-2.5 flex flex-col gap-2 min-w-0 ${ready ? 'border-navy/30 bg-cream' : 'border-[#E67E22] bg-[#E67E22]/10'}`}>
       <div className="flex items-start justify-between gap-1">
         <div className="flex items-start gap-1 min-w-0">
           {dragHandle}
           <div className="min-w-0">
             <div className="text-sm font-heading font-bold text-navy truncate">{tank.name}</div>
-            <div className="text-[10px] font-mono text-navy/75 truncate">{tank.product_label || SHAPES[tank.shape]?.label}</div>
+            <div className="text-[10px] font-mono text-navy/75 truncate">{tank.product_label || (tank.shape ? SHAPES[tank.shape]?.label : '')}</div>
           </div>
         </div>
         <button type="button" onClick={onEdit} title="Dimensions & details" className="p-1 rounded text-navy/75 hover:text-navy hover:bg-navy/10"><Pencil className="w-3.5 h-3.5" /></button>
       </div>
-      <TankShapeSvg shape={tank.shape} fill={pctFull} className="w-full h-16 text-navy" />
+      {tank.shape ? <TankShapeSvg shape={tank.shape} fill={pctFull} className="w-full h-16 text-navy" />
+        : <div className="w-full h-16 grid place-items-center text-3xl text-[#E67E22]">?</div>}
+      {!ready && (
+        <div className="text-[11px] font-mono text-[#E67E22] leading-snug">
+          <strong>Needs a tank type and dimensions.</strong>
+          {tank.monitor_capacity_qts ? <div className="text-navy/75">Monitor: {fmt(tank.monitor_capacity_qts / 4, 0)} gal{tank.monitor_height_in ? ' · ' + fmt(tank.monitor_height_in, 0) + ' in' : ''}</div> : null}
+          <Button size="sm" className="mt-1.5 w-full" onClick={onEdit}>Set up this tank</Button>
+        </div>
+      )}
       <div className="text-[10px] font-mono text-navy/75 leading-snug">
-        {fmtDims(tank)} · {fmt((tank.capacity_qts ?? 0) / 4, 0)} gal
+        {ready ? `${fmtDims(tank)} · ${fmt((tank.capacity_qts ?? 0) / 4, 0)} gal` : null}
         {tank.last_log && <div>Last: {fmt(tank.last_log.depth_in)} in · {fmt(tank.last_log.volume_qts, 0)} qts · {ago(tank.last_log.logged_at)}{tank.last_log.status === 'held' ? ' · held' : ''}</div>}
       </div>
-      <label className="flex flex-col gap-0.5 text-[10px] font-mono text-navy/75">Filled depth (inches)
+      {ready && <label className="flex flex-col gap-0.5 text-[10px] font-mono text-navy/75">Filled depth (inches)
         <input value={depthText} inputMode="decimal" onChange={(e) => { setDepthText(sanitizeDecimalInput(e.target.value)); setResult(null) }}
-          className={`w-full rounded border px-2 py-1.5 text-base font-mono text-navy bg-cream focus:outline-none ${over ? 'border-[#C0392B]' : 'border-navy/40 focus:border-sky'}`} />
-      </label>
+          className={`w-full rounded border px-2.5 py-2 text-base font-mono text-navy bg-cream focus:outline-none ${over ? 'border-[#C0392B]' : 'border-navy/40 focus:border-sky'}`} />
+      </label>}
       {over && <p className="text-[10px] font-mono text-[#C0392B]">That's deeper than the tank ({fmt(maxDepth, 1)} in).</p>}
       {calc && !over && (
         <div className="text-xs font-mono text-navy">
@@ -264,7 +294,7 @@ function TankCard({ tank, slug, onEdit, onChanged, dragHandle }: {
           ) : <>The tank monitor hasn't reported lately, so there's nothing to compare with.</>}
         </div>
       )}
-      <Button size="sm" disabled={!calc || over} loading={busy} onClick={() => void log(false)}>Log count</Button>
+      {ready && <Button size="sm" className="!py-2.5" disabled={!calc || over} loading={busy} onClick={() => void log(false)}>Log count</Button>}
 
       {result && (
         <div className={`rounded border px-2 py-1.5 text-[11px] font-mono leading-snug ${result.status === 'held' ? 'border-[#E67E22]/60 bg-[#E67E22]/10' : 'border-[#2ECC71]/60 bg-[#2ECC71]/10'} text-navy`}>
@@ -319,6 +349,8 @@ export function PublicTankPage() {
   useHomeScreenManifest(shop?.name ? `Tank Calculator — Shop ${shop.name}` : 'Tank Calculator')
 
   const load = useCallback(async () => {
+    // Pre-load a tank for every tank monitor at this shop that isn't on the list yet (no-op once they all are).
+    await sb().rpc('tank_share_sync_monitors', { p_slug: slug })
     const { data, error } = await sb().rpc('get_tank_share', { p_slug: slug })
     if (error || !data || data.error) { setStatus('notfound'); return }
     setShop(data.shop as ShareShop); setTanks((data.tanks ?? []) as ShopTank[]); setStatus('ok')
@@ -377,7 +409,7 @@ export function PublicTankPage() {
               </div>
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => void onDragEnd(a.key, e)}>
                 <SortableContext items={list.map((t) => t.id)} strategy={rectSortingStrategy}>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="grid grid-cols-1 min-[520px]:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
                     {list.map((t) => <SortableTank key={t.id} tank={t} slug={slug} onEdit={() => setModal({ tank: t, area: t.area })} onChanged={() => void load()} />)}
                   </div>
                 </SortableContext>

@@ -69,6 +69,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   def('dos_after_low', 'after', 'DOS After: low', '#E04B3C', 'Days of supply after this order is still below the DOS Min Trigger.'),
   def('dos_after_below_target', 'after', 'DOS After: below target', '#E0B63A', 'Days of supply after this order is below the DOS Target but at or above the DOS Min Trigger.'),
   def('recently_ordered', 'after', 'Ordered recently', '#3E8E9B', 'Ordered in the last 8 days and the on hand plus that order still covers usage — kept on the order at 0. Add a quantity if it should go on anyway.'),
+  def('hm0806_solo_min', 'after', 'HM0806 Solo Min', '#8E5BB5', 'HM0806 was the only product due at this shop, so it was ordered at its 2-unit minimum and the order minimum was ignored.'),
   def('case_minimum_topup', 'after', 'Case min', '#B7E0DE', 'Raised to meet the vendor\'s case-type order minimum.'),
   def('alone_default_qty', 'after', 'Alone qty', '#6FB7B2', 'Only line on the order — used its configured "alone" quantity.'),
   def('added_for_smoothing', 'after', 'Added: smoothing', '#8FB8D0', 'Pulled onto this order from the shop\'s other products to help it reach its order minimum.'),
@@ -82,7 +83,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
 const BEFORE_STORED: LineFlag[] = ['critical_minimum', 'repeat_ordering', 'keepfill_will_run_out', 'covered_by_open_po', 'vmi_keepfill']
 const PO_DECISIONS: LineFlag[] = ['po_decision_override', 'po_decision_exclude', 'po_decision_combine']
 // Tags the engine stamped because of the quantity IT chose — meaningless once someone edits the qty, or sets it to 0.
-const ENGINE_QTY_TAGS: LineFlag[] = ['case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']
+const ENGINE_QTY_TAGS: LineFlag[] = ['hm0806_solo_min', 'case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']
 
 export interface TagLine {
   flags: string[] | null

@@ -1,18 +1,20 @@
-// Phone layout for the Review step (direct ask 2026-10-04): one shop at a time in a full-screen, compact panel with the
-// shop name at the top left and a "Next shop" button pinned at the top right. Each product is a small card with the
-// same numbers, conditional formatting, flags and quantity controls as the table. Shown automatically on a phone (with a
-// short hint pointing at the spreadsheet button that goes back to the table) and reachable from the phone button next to
-// Order Settings on a larger screen.
+// Phone layout for the Review step: one shop at a time in a full-screen panel. A pinned top bar (shop name and position,
+// when it delivers, table-view / previous / Next shop) stays put while the cards scroll; under it the vendor line with the
+// order total and the VMI toggle / add-product buttons. A shop shows what is being ordered first, then its other configured
+// products to add if needed. "Skip to final review" floats bottom right with room left under it so no card is ever hidden.
+// Shown automatically on a phone (with a short hint beside the table-view button) and from the phone button elsewhere.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Table2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Table2 } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { DosCell } from './DosCell'
 import { TagChip } from './OrdersV2ReviewTable'
 import { QtyStepper, type ZeroReason } from './lineControls'
-import { dShort, num } from './shared'
+import { ToggleButton } from './controls'
+import { dShort, money, num } from './shared'
 import { uomDisplayLabel } from './types'
 import { ROW_TONE_META, type DosThresholds } from './lineFlags'
-import type { LineTagMap } from './useLineTagMap'
+import { useLineTagMap } from './useLineTagMap'
+import type { useLastOrderedInfo } from './useLastOrderedInfo'
 import type { DraftLineRow } from './useOrdersV2'
 
 /** A phone: a mobile user agent, or a narrow touch screen. */
@@ -23,50 +25,60 @@ export function detectMobile(): boolean {
 }
 
 export function MobileReview({
-  lines, shopLabel, tagMap, thresholds, dosStyle, ozProductIds, patchQty, onZeroReason, deliveryText,
-  autoDetected, onTableView, onFinal, markSeen, vendorLine,
+  lines, shopLabel, shopLinesFor, thresholds, dosStyle, ozProductIds, patchQty, onZeroReason, deliveryText, lastInfoFor,
+  onHandAfterAtDelivery, groupMinimumStatus, showVmi, onShowVmi, onAddNonConfigured, onShopChange,
+  autoDetected, onTableView, onFinal, markSeen, vendorLine, orderTotal,
 }: {
+  /** The order's real lines (decides which shops are listed). */
   lines: DraftLineRow[]
   shopLabel: (id: string | null) => string
-  tagMap: LineTagMap
+  /** Every configured product for a shop (real lines plus qty-0 candidates), VMI included. */
+  shopLinesFor: (locId: string) => DraftLineRow[]
   thresholds: DosThresholds | null
   dosStyle: 'badge' | 'text'
   ozProductIds: Set<string>
   patchQty: (l: DraftLineRow, qty: number) => void
   onZeroReason: (l: DraftLineRow, reason: ZeroReason | null, note: string | null) => void
-  /** "Thu Oct 8" for a shop, or null. */
+  /** "Thu Oct 8, 2026" for a shop, or null. */
   deliveryText: (locationId: string | null) => string | null
-  /** Switched here automatically (not by tapping the phone button) — shows the 5-second hint. */
+  lastInfoFor: ReturnType<typeof useLastOrderedInfo>['infoFor']
+  onHandAfterAtDelivery: (l: DraftLineRow) => number
+  groupMinimumStatus: Map<string, boolean>
+  showVmi: boolean
+  onShowVmi: (v: boolean) => void
+  onAddNonConfigured: (locId: string) => void
+  onShopChange: (locId: string | null) => void
   autoDetected: boolean
   onTableView: () => void
-  /** Last shop's button: continue to Final Review (the caller runs its own "all rows seen?" prompt). */
   onFinal: () => void
-  /** Tell the Review page's "rows reviewed" tracker these lines were on screen. */
   markSeen: (keys: string[]) => void
   vendorLine: string
+  orderTotal: number
 }) {
   const shops = useMemo(() => {
-    const m = new Map<string, DraftLineRow[]>()
-    for (const l of lines) {
-      const k = l.location_id ?? ''
-      const arr = m.get(k)
-      if (arr) arr.push(l); else m.set(k, [l])
-    }
-    return [...m.entries()]
-      .sort((a, b) => shopLabel(a[0]).localeCompare(shopLabel(b[0]), undefined, { numeric: true }))
-      .map(([id, ls]) => ({ id, lines: ls.sort((x, y) => x.product_id.localeCompare(y.product_id)) }))
+    const ids = [...new Set(lines.map((l) => l.location_id ?? ''))]
+    return ids.sort((a, b) => shopLabel(a).localeCompare(shopLabel(b), undefined, { numeric: true }))
   }, [lines, shopLabel])
 
   const [idx, setIdx] = useState(0)
   const safeIdx = Math.min(idx, Math.max(0, shops.length - 1))
-  const shop = shops[safeIdx]
+  const shopId = shops[safeIdx] as string | undefined
   const scroller = useRef<HTMLDivElement>(null)
+
+  const all = shopId ? shopLinesFor(shopId) : []
+  const tagMap = useLineTagMap(all, thresholds, onHandAfterAtDelivery, groupMinimumStatus)
+  const visible = all.filter((l) => showVmi || !(l.flags ?? []).includes('vmi_keepfill'))
+  const sortP = (a: DraftLineRow, b: DraftLineRow) => a.product_id.localeCompare(b.product_id)
+  const ordered = visible.filter((l) => Number(l.qty) > 0).sort(sortP)
+  const others = visible.filter((l) => !(Number(l.qty) > 0)).sort(sortP)
+
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0 })
-    if (shop) markSeen(shop.lines.map((l) => l.id))
-  }, [safeIdx, shop?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+    onShopChange(shopId ?? null)
+    markSeen(lines.filter((l) => (l.location_id ?? '') === shopId).map((l) => l.id))
+  }, [safeIdx, shopId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The hint beside the spreadsheet button, shown for 5 seconds after an automatic switch.
+  // The hint beside the table-view button, shown for 5 seconds after an automatic switch.
   const [hint, setHint] = useState(autoDetected)
   useEffect(() => {
     if (!autoDetected) return
@@ -75,87 +87,123 @@ export function MobileReview({
   }, [autoDetected])
 
   const last = safeIdx >= shops.length - 1
+  const delivers = shopId ? deliveryText(shopId) : null
+
+  // A plain render function (not a component), so a card's quantity box keeps its focus while you type.
+  const renderCard = (l: DraftLineRow, muted?: boolean) => {
+    const t = tagMap.get(l.id)
+    const tone = t?.tone ? ROW_TONE_META[t.tone] : null
+    const isOz = ozProductIds.has(l.product_id)
+    const mult = isOz ? 32 : 1
+    const onHandAfter = l.on_hand == null ? null : (Number(l.on_hand) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)) * mult
+    const out = Number(l.on_hand ?? 0) <= 0
+    const cost = Number(l.qty) * Number(l.unit_cost ?? 0)
+    const info = lastInfoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
+    const orange = l.is_override
+    return (
+      <div key={l.id} className={`rounded-lg border px-3 py-2.5 flex flex-col gap-2 ${muted ? 'opacity-90' : ''} ${orange ? 'border-[#E67E22]/70 shadow-[inset_4px_0_0_#E67E22]' : 'border-navy/25'}`}
+        style={tone ? { background: `${tone.color}22`, borderColor: orange ? undefined : `${tone.color}88` } : undefined}>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-base font-heading font-bold text-navy truncate">{l.product_id}</span>
+          <span className="text-[11px] font-mono text-navy/75 flex-shrink-0">{uomDisplayLabel(l.uom)}{tone ? ` · ${tone.label}` : ''}</span>
+        </div>
+        <div className="grid grid-cols-4 gap-x-2 text-left">
+          {[
+            { label: 'On hand', node: <span className={out ? 'font-bold text-[#C0392B]' : ''}>{l.on_hand == null ? '—' : num(Number(l.on_hand) * mult)}</span> },
+            { label: 'DOS now', node: <DosCell v={l.dos_before} thresholds={thresholds} style={dosStyle} align="left" /> },
+            { label: 'After', node: <span>{onHandAfter == null ? '—' : num(onHandAfter)}</span> },
+            { label: 'DOS after', node: <DosCell v={l.dos_after} thresholds={thresholds} style={dosStyle} align="left" /> },
+          ].map((c) => (
+            <div key={c.label} className="min-w-0">
+              <div className="text-[10px] font-mono uppercase tracking-wide text-navy/75 leading-4">{c.label}</div>
+              <div className="text-sm font-mono text-navy leading-5 h-5 flex items-center">{c.node}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-end justify-between gap-2">
+          <QtyStepper compact inputClassName="w-16" value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
+            onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
+          <div className="text-right leading-tight">
+            <div className="text-[11px] font-mono text-navy/75">
+              {l.quarts_per_unit != null ? (isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)} oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`) : ''}
+            </div>
+            <div className="text-sm font-mono font-bold text-navy">{money(cost)}</div>
+          </div>
+        </div>
+        <div className="text-[10px] font-mono text-navy/75 leading-snug">
+          <div>Last ordered: {info.lastOrderDate ? `${dShort(info.lastOrderDate)} · ${num(info.lastOrderQty, 1)} ${uomDisplayLabel(info.lastOrderUom)}${info.eta ? ` · ETA ${dShort(info.eta)}` : ''}` : '—'}</div>
+          <div>Last delivered: {info.lastDeliveredDate ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)} ${info.lastDeliveredUnit === 'gal' ? 'gal' : uomDisplayLabel(info.lastOrderUom)}` : '—'}</div>
+        </div>
+        {t && (t.tags.before.length > 0 || t.tags.after.length > 0) && (
+          <div className="flex flex-wrap gap-1">{[...t.tags.before, ...t.tags.after].map((d) => <TagChip key={d.key} tag={d} />)}</div>
+        )}
+        {t?.tags.note && <div className="text-[10px] font-mono italic text-navy/75">{t.tags.note}</div>}
+      </div>
+    )
+  }
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-cream dark:bg-[#0A1826]">
-      {/* Pinned header: shop name left, Next shop right. */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-navy/20 bg-cream dark:bg-[#0A1826]">
-        <div className="min-w-0 flex items-center gap-2">
+    <div className="fixed inset-x-0 top-0 z-[60] h-[100dvh] flex flex-col bg-cream dark:bg-[#0A1826]">
+      {/* Pinned top bar — never scrolls away. */}
+      <div className="flex-shrink-0 border-b border-navy/20 bg-cream dark:bg-[#0A1826]">
+        <div className="flex items-start justify-between gap-2 px-3 pt-2 pb-1.5">
           <div className="min-w-0">
-            <div className="text-base font-heading font-bold text-navy truncate">{shop ? shopLabel(shop.id) : 'No shops'}</div>
-            <div className="text-[10px] font-mono text-navy/75 truncate">
-              {shops.length ? `Shop ${safeIdx + 1} of ${shops.length}` : ''}{shop && deliveryText(shop.id) ? ` · Delivers ${deliveryText(shop.id)}` : ''}
-            </div>
+            <div className="text-lg font-heading font-bold text-navy truncate leading-tight">{shopId ? shopLabel(shopId) : 'No shops'}</div>
+            <div className="text-[11px] font-mono text-navy/75 leading-snug">{shops.length ? `Shop ${safeIdx + 1} of ${shops.length}` : ''}</div>
+            <div className="text-[11px] font-mono text-navy/75 leading-snug">{delivers ? `Delivers ${delivers}` : ''}</div>
           </div>
-          <div className="relative flex-shrink-0">
-            <button type="button" onClick={onTableView} title="Switch to the table view"
-              className="inline-flex items-center justify-center w-8 h-8 rounded border border-navy/30 text-navy hover:border-navy">
-              <Table2 className="w-4 h-4" />
-            </button>
-            {hint && (
-              <div className="absolute left-0 top-full mt-1.5 z-10 w-52 rounded-lg border border-[#B7E0DE]/40 bg-[#002745] px-3 py-2 text-[11px] font-mono leading-snug text-[#F2F1E6] shadow-xl">
-                Mobile detected, view switched, click here to go to table view.
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <button type="button" disabled={safeIdx === 0} onClick={() => setIdx(safeIdx - 1)} aria-label="Previous shop"
-            className="w-9 h-9 inline-flex items-center justify-center rounded border border-navy/30 text-navy disabled:opacity-30">
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          {last
-            ? <Button size="sm" className="!bg-sb-sky !text-sb-navy" onClick={onFinal}>Final Review →</Button>
-            : <Button size="sm" className="!bg-sb-sky !text-sb-navy" onClick={() => setIdx(safeIdx + 1)}>Next shop <ChevronRight className="w-4 h-4 ml-0.5 inline" /></Button>}
-        </div>
-      </div>
-      <div className="px-3 py-1 text-[10px] font-mono text-navy/75 border-b border-navy/10 truncate">{vendorLine}</div>
-
-      <div ref={scroller} className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-2">
-        {!shop && <p className="text-xs font-mono text-navy/75 py-6">Nothing to review.</p>}
-        {shop?.lines.map((l) => {
-          const t = tagMap.get(l.id)
-          const tone = t?.tone ? ROW_TONE_META[t.tone] : null
-          const isOz = ozProductIds.has(l.product_id)
-          const mult = isOz ? 32 : 1
-          const onHandAfter = l.on_hand == null ? null : (Number(l.on_hand) + Number(l.qty) * Number(l.quarts_per_unit ?? 1)) * mult
-          const out = Number(l.on_hand ?? 0) <= 0
-          return (
-            <div key={l.id} className="rounded-lg border border-navy/25 px-3 py-2 flex flex-col gap-1.5"
-              style={tone ? { background: `${tone.color}22`, borderColor: `${tone.color}88` } : undefined}>
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-sm font-heading font-bold text-navy truncate">{l.product_id}</span>
-                <span className="text-[10px] font-mono text-navy/75 flex-shrink-0">{uomDisplayLabel(l.uom)}{tone ? ` · ${tone.label}` : ''}</span>
-              </div>
-              <div className="grid grid-cols-4 gap-2 text-[10px] font-mono text-navy/75">
-                <div><div>On hand</div><div className={`text-sm ${out ? 'font-bold text-[#C0392B]' : 'text-navy'}`}>{l.on_hand == null ? '—' : num(Number(l.on_hand) * mult)}</div></div>
-                <div><div>DOS now</div><div className="text-sm text-navy"><DosCell v={l.dos_before} thresholds={thresholds} style={dosStyle} /></div></div>
-                <div><div>After</div><div className="text-sm text-navy">{onHandAfter == null ? '—' : num(onHandAfter)}</div></div>
-                <div><div>DOS after</div><div className="text-sm text-navy"><DosCell v={l.dos_after} thresholds={thresholds} style={dosStyle} /></div></div>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <QtyStepper compact inputClassName="w-16" value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
-                  onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
-                <span className="text-[11px] font-mono text-navy/75">
-                  {l.quarts_per_unit != null ? (isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)} oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`) : ''}
-                </span>
-              </div>
-              {t && (t.tags.before.length > 0 || t.tags.after.length > 0) && (
-                <div className="flex flex-wrap gap-1">
-                  {[...t.tags.before, ...t.tags.after].map((d) => <TagChip key={d.key} tag={d} />)}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div className="relative">
+              <button type="button" onClick={onTableView} title="Switch to the table view"
+                className="inline-flex items-center justify-center w-10 h-10 rounded border border-navy/30 text-navy hover:border-navy">
+                <Table2 className="w-4 h-4" />
+              </button>
+              {hint && (
+                <div className="absolute right-0 top-full mt-2 z-10 w-56 rounded-lg border border-[#B7E0DE]/40 bg-[#002745] px-3 py-2 text-[11px] font-mono leading-snug text-[#F2F1E6] shadow-xl">
+                  Mobile detected, view switched, click here to go to table view.
                 </div>
               )}
-              {t?.tags.note && <div className="text-[10px] font-mono italic text-navy/75">{t.tags.note}</div>}
             </div>
-          )
-        })}
-        {shop && (
-          <div className="pt-2 pb-6 flex justify-end">
-            {last
-              ? <Button size="sm" className="!bg-sb-sky !text-sb-navy" onClick={onFinal}>Final Review →</Button>
-              : <Button size="sm" className="!bg-sb-sky !text-sb-navy" onClick={() => setIdx(safeIdx + 1)}>Next shop →</Button>}
+            <button type="button" disabled={safeIdx === 0} onClick={() => setIdx(safeIdx - 1)} aria-label="Previous shop"
+              className="w-10 h-10 inline-flex items-center justify-center rounded border border-navy/30 text-navy disabled:opacity-30"><ChevronLeft className="w-4 h-4" /></button>
+            <Button size="sm" className="!bg-sb-sky !text-sb-navy !h-10" disabled={last} onClick={() => setIdx(safeIdx + 1)}>
+              Next shop <ChevronRight className="w-4 h-4 ml-0.5 inline" />
+            </Button>
           </div>
+        </div>
+        <div className="flex items-center justify-between gap-2 px-3 py-1 border-t border-navy/10 text-[11px] font-mono text-navy/75">
+          <span className="truncate">{vendorLine}</span>
+          <span className="flex-shrink-0 font-bold text-navy">Order total {money(orderTotal)}</span>
+        </div>
+        <div className="flex items-center justify-between gap-2 px-3 pb-2">
+          <ToggleButton checked={showVmi} onChange={onShowVmi} onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
+            onTooltip="Tap to hide VMI/keep-fill products" offTooltip="Tap to also show VMI/keep-fill products" />
+          <Button size="sm" variant="secondary" disabled={!shopId} onClick={() => shopId && onAddNonConfigured(shopId)}>
+            <Plus className="w-3.5 h-3.5 mr-0.5" /> Add product
+          </Button>
+        </div>
+      </div>
+
+      <div ref={scroller} className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-2 flex flex-col gap-2 pb-24">
+        {!shopId && <p className="text-xs font-mono text-navy/75 py-6">Nothing to review.</p>}
+        {shopId && (
+          <>
+            <div className="text-[11px] font-mono uppercase tracking-widest text-navy font-bold">Ordered ({ordered.length})</div>
+            {ordered.length === 0 && <p className="text-xs font-mono text-navy/75">Nothing ordered for this shop.</p>}
+            {ordered.map((l) => renderCard(l))}
+            {others.length > 0 && (
+              <>
+                <div className="text-[11px] font-mono uppercase tracking-widest text-navy/75 font-bold mt-2">Other configured products ({others.length}) — add if needed</div>
+                {others.map((l) => renderCard(l, true))}
+              </>
+            )}
+          </>
         )}
+      </div>
+
+      {/* Always in the bottom-right of the visible screen; the list above leaves room under it. */}
+      <div className="fixed bottom-4 right-4 z-[65] pb-[env(safe-area-inset-bottom)]">
+        <Button size="sm" className="!bg-sb-sky !text-sb-navy shadow-xl" onClick={onFinal}>Skip to final review →</Button>
       </div>
     </div>
   )
@@ -165,5 +213,5 @@ export function MobileReview({
 export const shortDeliveryText = (dd: string | null): string | null => {
   if (!dd) return null
   const dow = new Date(`${dd}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short' })
-  return `${dow} ${dShort(dd)}`
+  return `${dow} ${new Date(`${dd}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
 }

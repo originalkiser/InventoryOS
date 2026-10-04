@@ -95,6 +95,11 @@ export function tankQuarts(shape: TankShape, dims: TankDims, depth: number) {
   return { quarts: cuInToQuarts(c.volumeCuIn), capacityQuarts: cuInToQuarts(c.capacityCuIn), maxDepth: c.maxDepth }
 }
 
+/** Which dimension is the tank's inside depth (what a monitor's "height" corresponds to). */
+export function depthKey(shape: TankShape): DimKey {
+  return shape === 'horizontal_cylinder' || shape === 'horizontal_capsule' || shape === 'horizontal_elliptical' || shape === 'horizontal_dish' ? 'diameter' : 'height'
+}
+
 /** True when every dimension the shape needs has a positive value. */
 export function dimsComplete(shape: TankShape, dims: TankDims): boolean {
   return SHAPES[shape].dims.every((d) => pos(dims[d.key]) > 0)

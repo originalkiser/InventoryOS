@@ -18,7 +18,7 @@ import { HOLD_REASON_LABEL, areaLabel } from './tankTypes'
 const sb = () => supabase as any
 const f1 = (v: number | null | undefined, d = 1) => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d }))
 
-interface Tank { id: string; location_id: string; name: string; area: string; shape: TankShape; dims: TankDims; capacity_qts: number | null; monitor_serial: string | null; baseline_variance_qts: number | null }
+interface Tank { id: string; location_id: string; name: string; area: string; shape: TankShape | null; dims: TankDims; capacity_qts: number | null; monitor_serial: string | null; baseline_variance_qts: number | null }
 interface Log {
   id: string; tank_id: string; location_id: string; logged_at: string; depth_in: number; volume_qts: number; monitor_qts: number | null; monitor_online: boolean | null
   sales_adjust_qts: number | null; variance_qts: number | null; status: string; hold_reasons: string[]; set_baseline: boolean
@@ -106,8 +106,8 @@ export function TankReviewPage() {
     tankCol.accessor('shop', { header: 'Shop', size: 70 }),
     tankCol.accessor('name', { header: 'Tank', size: 140 }),
     tankCol.accessor((t) => areaLabel(t.area), { id: 'area', header: 'Where', size: 100 }),
-    tankCol.accessor((t) => SHAPES[t.shape]?.label ?? t.shape, { id: 'shape', header: 'Shape', size: 170 }),
-    tankCol.accessor((t) => SHAPES[t.shape]?.dims.map((d) => f1(t.dims[d.key])).join(' × ') + ' in', { id: 'dims', header: 'Dimensions', size: 170 }),
+    tankCol.accessor((t) => (t.shape ? SHAPES[t.shape]?.label ?? t.shape : 'Not set up yet'), { id: 'shape', header: 'Shape', size: 170 }),
+    tankCol.accessor((t) => (t.shape ? SHAPES[t.shape]?.dims.map((d) => f1(t.dims[d.key])).join(' × ') + ' in' : '—'), { id: 'dims', header: 'Dimensions', size: 170 }),
     tankCol.accessor((t) => (t.capacity_qts == null ? null : t.capacity_qts / 4), { id: 'cap', header: 'Our capacity (gal)', size: 130, meta: { numeric: true }, cell: (i) => <span className="block text-right">{f1(i.getValue())}</span> }),
     tankCol.accessor('monitor_serial', { header: 'Monitor serial', size: 120, cell: (i) => i.getValue() ?? '—' }),
     tankCol.accessor((t) => (t.mon?.total_capacity == null ? null : Number(t.mon.total_capacity)), { id: 'mcap', header: 'Monitor capacity (gal)', size: 150, meta: { numeric: true }, cell: (i) => <span className="block text-right">{f1(i.getValue())}</span> }),

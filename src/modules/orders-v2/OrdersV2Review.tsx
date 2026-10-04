@@ -310,6 +310,7 @@ export function OrdersV2Review() {
   const autoMobile = useMemo(() => detectMobile(), [])
   const [mobileView, setMobileView] = useState(autoMobile)
   const [mobileAuto, setMobileAuto] = useState(autoMobile)
+  const [mobileShopId, setMobileShopId] = useState<string | null>(null)
   const [hideMobileBtn] = useProfilePref<boolean | number>(OV2_HIDE_MOBILE_BUTTON_KEY, false)
   const [dosStylePref] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
   const [jumpNonce, setJumpNonce] = useState(0)
@@ -319,6 +320,8 @@ export function OrdersV2Review() {
   const toggleQuickFilter = (k: string) => setQuickFilters((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
   const [overridesOpen, setOverridesOpen] = useState(false)
   const headerSentinelRef = useRef<HTMLDivElement>(null)
+  // A "Possible VMI misses" order is made of VMI lines — don't open it with them hidden.
+  useEffect(() => { if (draft?.order_kind) setShowVmi(true) }, [draft?.id, draft?.order_kind]) // eslint-disable-line react-hooks/exhaustive-deps
   const [headerScrolled, setHeaderScrolled] = useState(false)
   useEffect(() => {
     const el = headerSentinelRef.current
@@ -1042,6 +1045,15 @@ export function OrdersV2Review() {
     decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason: setZeroReason,
     shopRows, onAddConfiguredProduct: addConfiguredProduct, showConfigVmi, leadDaysFor, inputByLineKey,
   }
+  // Every configured product for a shop as Review lines — real lines plus qty-0 candidates (phone layout).
+  const mobileShopLines = (locId: string): DraftLineRow[] => {
+    const out: DraftLineRow[] = []
+    for (const r of shopRows(locId)) {
+      if (r.line) out.push(r.line)
+      else if (r.input) out.push(candidateLine(r.input, draft.id, draft.order_date, deliveryFor(locId, draft.order_date)))
+    }
+    return out
+  }
   const shopVmiToggle = (
     <ToggleButton checked={showConfigVmi} onChange={setShowConfigVmi}
       onLabel="Showing VMI/Keepfill" offLabel="VMI/Keepfill Hidden"
@@ -1080,18 +1092,26 @@ export function OrdersV2Review() {
         <MobileReview
           lines={lines}
           shopLabel={shopLabel}
-          tagMap={lineTagMap}
+          shopLinesFor={mobileShopLines}
           thresholds={dosThresholds}
           dosStyle={dosStylePref === 'text' ? 'text' : 'badge'}
           ozProductIds={ozProductIds}
-          patchQty={patchQty}
+          patchQty={patchQtyOrAdd}
           onZeroReason={setZeroReason}
           deliveryText={(locId) => shortDeliveryText(deliveryFor(locId, draft.order_date))}
+          lastInfoFor={lastOrderedInfo.infoFor}
+          onHandAfterAtDelivery={onHandAfterCb}
+          groupMinimumStatus={groupMinimumStatus}
+          showVmi={showVmi}
+          onShowVmi={setShowVmi}
+          onAddNonConfigured={(locId) => { setMobileShopId(locId); setPopupAddNonConfigOpen(true) }}
+          onShopChange={setMobileShopId}
           autoDetected={mobileAuto}
           onTableView={() => setMobileView(false)}
           onFinal={() => { if (promptIfUnseen()) { setMobileView(false); return }; void goToFinal() }}
           markSeen={rowSeen.markSeen}
           vendorLine={`${vendorName} · ${draft.order_date}`}
+          orderTotal={lines.filter((l) => l.included).reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0)}
         />
       )}
       {/* Direct ask 2026-09-30: nav row + step bar stay pinned at the top
@@ -1329,7 +1349,7 @@ export function OrdersV2Review() {
         vendorId={draft.vendor_id}
         settings={settings}
         addLine={addLine}
-        initialLocationId={popupShopId ?? undefined}
+        initialLocationId={popupShopId ?? mobileShopId ?? undefined}
       />
 
       {/* Title + subtext, with Regenerate AND the DOS targets/Order day

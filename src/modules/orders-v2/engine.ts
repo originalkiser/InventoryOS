@@ -1056,6 +1056,21 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     // pool of this shop's other configured-but-not-yet-due products.
     const spares = (eligibleSpare.get(key) ?? []).filter((sp) => resolvedOrderType(sp.rule) === order_type)
 
+    // HM0806 solo rule (2026-10-04): when HM0806 is the ONLY product suggested at a shop (before any smoothing), order it at
+    // its 2-unit minimum and ignore the order minimum entirely — no smoothing, no "under minimum" flag.
+    const due = lines.filter((l) => l.included && n(l.qty) > 0)
+    if (due.length === 1 && /^hm0806$/i.test(due[0].product_id)) {
+      const l = due[0]
+      const per = n(l.quarts_per_unit)
+      const qty = Math.max(2, n(l.qty))
+      l.qty = qty
+      l.system_qty = qty
+      l.dos_after = daysOfSupply(n(l.on_hand) + qty * per, l.daily_usage)
+      if (!l.flags.includes('hm0806_solo_min')) l.flags.push('hm0806_solo_min')
+      groups.push({ location_id, order_type, lines, dollars: groupDollars(lines, ruleOf), minimum: 0, meetsMinimum: true, smoothingApplied: false })
+      continue
+    }
+
     // "units_per_order" is a floor on the whole group's total unit/case
     // count — same shape as the dollar minimum (smooth to close the gap),
     // just counted in units. applyOrderUnitMinimum already implements this

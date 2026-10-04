@@ -469,6 +469,23 @@ describe('never emits a non-finite quantity', () => {
   })
 })
 
+describe('HM0806 solo minimum (2026-10-04)', () => {
+  const hm = (over = {}) => input({ product_id: 'HM0806', on_hand: 2, daily_usage: 1, rule: { unit_cost: 5 }, ...over })
+  const pkgMin = { vendor_id: 'V1', minimums: { package: { type: 'dollars' as const, dollars: 1000, qty: null } }, caseTypeMinimums: {}, usesOrderDays: false }
+  it('orders 2 and ignores the order minimum when HM0806 is the only product due', () => {
+    const res = generateOrder([hm()], ctx({ vendor: pkgMin }))
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBeGreaterThanOrEqual(2)
+    expect(res.lines[0].flags).toContain('hm0806_solo_min')
+    expect(res.lines[0].flags).not.toContain('below_minimum')
+    expect(res.groups[0].meetsMinimum).toBe(true)
+  })
+  it('does nothing special when another product is also due', () => {
+    const res = generateOrder([hm(), input({ product_id: 'OIL', location_id: 'L1', on_hand: 1, daily_usage: 1 })], ctx({ vendor: pkgMin }))
+    expect(res.lines.find((l) => l.product_id === 'HM0806')!.flags).not.toContain('hm0806_solo_min')
+  })
+})
+
 describe('recently ordered (2026-10-03)', () => {
   // on_hand 10 / usage 1 = 10 days (< default min trigger), so the product is due on its own.
   const due = () => input({ on_hand: 10, daily_usage: 1 })

@@ -50,12 +50,13 @@ export const dTime = (d: string | null | undefined) => {
 }
 
 /** Short labels + tone for the flags the engine attaches to a line. */
-export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange' | 'sky'; title: string }> = {
+export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange' | 'sky' | 'purple'; title: string }> = {
   below_minimum: { label: 'Under min', tone: 'red', title: 'Shop is still under its order minimum after smoothing' },
   capacity_capped: { label: 'Over capacity', tone: 'orange', title: 'This quantity would put on-hand for this product past the shop\'s max capacity' },
   case_minimum_topup: { label: 'Case min', tone: 'sky', title: 'Raised to meet the vendor case-type order minimum' },
   repeat_ordering: { label: 'Repeat ordering', tone: 'red', title: 'A lot of supply has already been ordered for this product recently and it still reads low — on-hand may not be reflecting deliveries' },
   over_dos_max: { label: 'Over DOS max', tone: 'orange', title: 'Pushed past the soft days-of-supply ceiling to reach an order minimum' },
+  hm0806_solo_min: { label: 'HM0806 Solo Min', tone: 'purple', title: 'HM0806 was the only product due at this shop, so it was ordered at its 2-unit minimum and the order minimum was ignored' },
   recently_ordered: { label: 'Ordered recently', tone: 'sky', title: 'Ordered within the last 8 days and the on hand plus that order still covers usage — kept on the order at 0. Add a quantity if it should go on anyway.' },
   stocked_out: { label: 'Out of stock', tone: 'red', title: 'No on-hand recorded for this product' },
   critical_minimum: { label: 'Critical min', tone: 'orange', title: 'Ordered because on-hand dropped to/below this product\'s critical minimum (e.g. enough for one oil change), not the usual days-of-supply trigger' },
@@ -72,10 +73,11 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   exceeded_capacity_for_dos_target: { label: 'Over capacity: DOS target', tone: 'orange', title: 'Ordered past this product\'s configured capacity to reach the target days-of-supply — see the note on this line for the real numbers' },
 }
 
-export const FLAG_CLASS: Record<'red' | 'orange' | 'sky', string> = {
+export const FLAG_CLASS: Record<'red' | 'orange' | 'sky' | 'purple', string> = {
   red: 'bg-[#C0392B]/15 text-[#C0392B] border-[#C0392B]/40',
   orange: 'bg-[#E67E22]/15 text-[#E67E22] border-[#E67E22]/40',
   sky: 'bg-sky/25 text-navy border-sky/50',
+  purple: 'bg-[#8E5BB5]/15 text-[#8E5BB5] border-[#8E5BB5]/40',
 }
 
 /** Per-user profile pref (Order Settings): show the ORIGINAL Review table instead of the new default one. */
