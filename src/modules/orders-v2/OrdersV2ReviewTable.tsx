@@ -55,7 +55,7 @@ function TagIcon({ tag, onClick, active }: { tag: TagDef; onClick?: () => void; 
 }
 
 /** A tag as an inline, never-stacked chip: color swatch + label. */
-function TagChip({ tag, onClick, active }: { tag: TagDef; onClick?: () => void; active?: boolean }) {
+export function TagChip({ tag, onClick, active }: { tag: TagDef; onClick?: () => void; active?: boolean }) {
   return (
     <HoverTip content={<SwatchTipBody color={tag.color} title={tag.label} description={`${tag.description} Click to filter to lines with this flag.`} />}>
       <button type="button" onClick={onClick}

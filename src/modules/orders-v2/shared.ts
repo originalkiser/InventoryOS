@@ -102,6 +102,9 @@ export const DEFAULT_SHOWN_QUICK: string[] = [
 ]
 export const DEFAULT_HIDE_DOS_NOW = true
 
+/** Per-user pref: hide the small phone button (next to Order Settings) that switches Review to the mobile layout. */
+export const OV2_HIDE_MOBILE_BUTTON_KEY = 'ov2_review_hide_mobile_button'
+
 /** Amber treatment marking a user override, used everywhere edits are shown. */
 export const OVERRIDE_CELL = 'border-l-2 border-[#E67E22] bg-[#E67E22]/10'
 

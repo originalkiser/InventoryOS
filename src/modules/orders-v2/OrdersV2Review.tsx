@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { RefreshCw, ChevronRight, ChevronDown, ChevronUp, Settings, Plus, Pencil } from 'lucide-react'
+import { Smartphone, RefreshCw, ChevronRight, ChevronDown, ChevronUp, Settings, Plus, Pencil } from 'lucide-react'
 import { Button, Card, CardBody, Input, Modal, SbLoader, Toggle } from '@/components/ui'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { OrdersV2SettingsBody } from './OrdersV2Settings'
@@ -12,6 +12,7 @@ import { dosTone, DOS_TONE_COLOR, TAG_DEFS, type TagKey } from './lineFlags'
 import { candidateLine, isCandidateLine } from './candidateLine'
 import { useLineTagMap } from './useLineTagMap'
 import { ShopProductsPanel } from './ShopProductsPanel'
+import { MobileReview, detectMobile, shortDeliveryText } from './MobileReview'
 import { quickCounts, tagKey, cellKey } from './quickFilters'
 import { orderTypeLabel } from './draftLabels'
 import { useDrafts } from './useOrdersV2'
@@ -35,7 +36,7 @@ import {
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
-import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, OV2_SHOP_EXPAND_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
+import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, OV2_SHOP_EXPAND_KEY, OV2_HIDE_MOBILE_BUTTON_KEY, OV2_DOS_STYLE_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { uomDisplayLabel } from './types'
@@ -304,6 +305,12 @@ export function OrdersV2Review() {
   const [betaLastRowKey, setBetaLastRowKey] = useState<string | null>(null)
   const [seenWarningOpen, setSeenWarningOpen] = useState(false)
   const [seenWarningCount, setSeenWarningCount] = useState(0)
+  // Phone layout: switched to automatically on a phone (with a short hint), or on request via the phone button.
+  const autoMobile = useMemo(() => detectMobile(), [])
+  const [mobileView, setMobileView] = useState(autoMobile)
+  const [mobileAuto, setMobileAuto] = useState(autoMobile)
+  const [hideMobileBtn] = useProfilePref<boolean | number>(OV2_HIDE_MOBILE_BUTTON_KEY, false)
+  const [dosStylePref] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
   const [jumpNonce, setJumpNonce] = useState(0)
   const [regenModalOpen, setRegenModalOpen] = useState(false)
   // Quick filters shared by the flag/tag buttons above the table and the DOS legend swatches (see quickFilters.ts).
@@ -1051,6 +1058,24 @@ export function OrdersV2Review() {
 
   return (
     <div className="flex flex-col gap-4">
+      {mobileView && (
+        <MobileReview
+          lines={lines}
+          shopLabel={shopLabel}
+          tagMap={lineTagMap}
+          thresholds={dosThresholds}
+          dosStyle={dosStylePref === 'text' ? 'text' : 'badge'}
+          ozProductIds={ozProductIds}
+          patchQty={patchQty}
+          onZeroReason={setZeroReason}
+          deliveryText={(locId) => shortDeliveryText(deliveryFor(locId, draft.order_date))}
+          autoDetected={mobileAuto}
+          onTableView={() => setMobileView(false)}
+          onFinal={() => { if (promptIfUnseen()) { setMobileView(false); return }; void goToFinal() }}
+          markSeen={rowSeen.markSeen}
+          vendorLine={`${vendorName} · ${draft.order_date}`}
+        />
+      )}
       {/* Direct ask 2026-09-30: nav row + step bar stay pinned at the top
           of the page regardless of scroll position or which step you're
           on — sticky relative to the page's own scrolling container
@@ -1078,6 +1103,11 @@ export function OrdersV2Review() {
           }} />
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          {(autoMobile || !hideMobileBtn) && (
+            <Button size="sm" variant="secondary" onClick={() => { setMobileAuto(false); setMobileView(true) }} title="Mobile view — one shop at a time">
+              <Smartphone className="w-3.5 h-3.5" />
+            </Button>
+          )}
           <Button size="sm" variant="secondary" onClick={() => setSettingsModalOpen(true)}>
             <Settings className="w-3.5 h-3.5 mr-1" /> Order Settings
           </Button>

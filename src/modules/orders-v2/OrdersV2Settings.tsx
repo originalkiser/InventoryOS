@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
-import { OV2_COMBINED_MODE_KEY, OV2_DOS_STYLE_KEY, OV2_SHOWN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_SHOWN_QUICK, DEFAULT_HIDE_DOS_NOW, OV2_SHOP_EXPAND_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
+import { OV2_COMBINED_MODE_KEY, OV2_DOS_STYLE_KEY, OV2_HIDE_MOBILE_BUTTON_KEY, OV2_SHOWN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_SHOWN_QUICK, DEFAULT_HIDE_DOS_NOW, OV2_SHOP_EXPAND_KEY, OV2_USE_OLD_TABLE_KEY } from './shared'
 import { ROW_TONE_META, TAG_DEFS, type RowTone } from './lineFlags'
 import { tagKey, toneKey } from './quickFilters'
 import { Button, Card, CardBody, Input, SbLoader, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toggle } from '@/components/ui'
@@ -184,6 +184,7 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
 function UserOrderSettings() {
   const [useOld, setUseOld] = useProfilePref<boolean | number>(OV2_USE_OLD_TABLE_KEY, false)
   const [dosStyle, setDosStyle] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
+  const [hideMobileBtn, setHideMobileBtn] = useProfilePref<boolean | number>(OV2_HIDE_MOBILE_BUTTON_KEY, false)
   const [expandMode, setExpandMode] = useProfilePref<string>(OV2_SHOP_EXPAND_KEY, 'popup')
   const [combinedMode, setCombinedMode] = useProfilePref<string>(OV2_COMBINED_MODE_KEY, 'hidden')
   const [hideDosNow, setHideDosNow] = useProfilePref<boolean | number>(OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_HIDE_DOS_NOW)
@@ -226,6 +227,17 @@ function UserOrderSettings() {
         <p className="text-[11px] font-mono text-inky/60">
           The Review Order step opens the newer table by default (sortable, filterable, resizable, with Flags before and after).
           Turn this on to use the original table instead.
+        </p>
+      </CardBody></Card>
+      <Card><CardBody className="flex flex-col gap-2">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Mobile View Button</h3>
+        <label className="flex items-center gap-2 text-xs font-mono text-navy">
+          <Toggle checked={!!hideMobileBtn} onChange={(v) => setHideMobileBtn(v)} size="sm" />
+          Hide the phone button on the Review Order screen
+        </label>
+        <p className="text-[11px] font-mono text-inky/60">
+          On a computer, a small phone button next to Order Settings switches Review to the one-shop-at-a-time phone layout.
+          (A phone switches to that layout on its own.)
         </p>
       </CardBody></Card>
       <Card><CardBody className="flex flex-col gap-2">

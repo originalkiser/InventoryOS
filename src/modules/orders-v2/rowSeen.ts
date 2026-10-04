@@ -39,5 +39,8 @@ export function useRowSeenTracker() {
   /** Strict: has this exact row key been on screen? (hasSeen above is lenient when there's nothing to check.) */
   const isSeen = useCallback((key: string) => seen.current.has(key), [])
 
-  return { observe, hasSeen, isSeen }
+  /** Mark rows as reviewed without an element on screen (the phone view shows one shop's rows at a time). */
+  const markSeen = useCallback((keys: string[]) => { for (const k of keys) seen.current.add(k) }, [])
+
+  return { observe, hasSeen, isSeen, markSeen }
 }
