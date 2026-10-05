@@ -364,7 +364,12 @@ export function OrdersV2ReviewTable({
         },
       }),
       col.accessor((l) => (ozProductIds.has(l.product_id) ? (l.daily_usage ?? 0) * 32 : l.daily_usage), {
-        id: 'usage_day', header: 'Usage/day', enableSorting: false, meta: numericMeta, cell: (i) => <span className="block text-right">{num(i.getValue())}</span>,
+        id: 'usage_day', header: 'Usage/day', enableSorting: false, meta: numericMeta,
+        cell: (i) => {
+          const eq = inputByLineKey.get(`${i.row.original.location_id}|${i.row.original.product_id}`)?.equivalent_usage
+          const title = eq && eq.length ? `Includes usage from ${eq.map((e) => `${e.product_id} (${num(e.daily_usage)}/day)`).join(', ')}` : undefined
+          return <span className={`block text-right${title ? ' underline decoration-dotted decoration-sky underline-offset-2' : ''}`} title={title}>{num(i.getValue())}</span>
+        },
       }),
       col.accessor('dos_before', {
         id: 'dos_now', header: 'DOS Now', enableSorting: false, meta: dosMeta((l) => l.dos_before ?? null),

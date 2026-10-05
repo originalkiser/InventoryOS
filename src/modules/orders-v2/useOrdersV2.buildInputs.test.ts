@@ -50,16 +50,24 @@ describe('buildGenerationInputs — equivalent case types', () => {
     expect(bb.daily_usage).toBe(20) // usage unchanged — sibling has none to add
   })
 
-  it('excludes a sibling entirely when it has zero on-hand — nothing to combine', () => {
+  it('a zero-on-hand sibling adds no stock but its usage IS combined', () => {
     const configs = [config('5W30BB'), config('5W30D')]
     const usageRows = [usage('5W30BB', 100, 20), usage('5W30D', 0, 5)]
     const inputs = buildGenerationInputs(configs, [], usageRows)
 
     const bb = inputs.find((i) => i.product_id === '5W30BB')!
-    expect(bb.on_hand).toBe(100) // unchanged — zero-on-hand sibling contributes nothing
-    expect(bb.daily_usage).toBe(20) // its usage isn't folded in either
-    expect(bb.own_on_hand).toBeUndefined() // no combine happened at all, not just a zero one
-    expect(bb.equivalent_products).toBeUndefined()
+    expect(bb.on_hand).toBe(100) // unchanged — zero-on-hand sibling contributes no stock
+    expect(bb.daily_usage).toBe(25) // 20 + 5: demand moved to the other case type still counts
+    expect(bb.equivalent_products).toBeUndefined() // nothing to list under "combined on hands"
+    expect(bb.equivalent_usage).toEqual([{ product_id: '5W30D', daily_usage: 5 }])
+  })
+
+  it('combines even a small sibling usage when the ordered product has none of its own', () => {
+    const configs = [config('DEXOS-SYN-5W30BB')]
+    const usageRows = [usage('DEXOS-SYN-5W30BB', 72, null), usage('DEXOS-SYN-5W30D', 0, 0.03)]
+    const bb = buildGenerationInputs(configs, [], usageRows).find((i) => i.product_id === 'DEXOS-SYN-5W30BB')!
+    expect(bb.on_hand).toBe(72)
+    expect(bb.daily_usage).toBeCloseTo(0.03)
   })
 
   it('ignores a sibling\'s zero usage figure while still combining its on-hand', () => {

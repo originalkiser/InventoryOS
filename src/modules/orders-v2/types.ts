@@ -225,6 +225,8 @@ export interface GenerationInput {
   // readings combining exists to catch.
   own_on_hand?: number | null
   equivalent_products?: { product_id: string; on_hand: number }[]
+  /** Equivalent case types whose daily usage was folded into daily_usage (with or without stock on hand). */
+  equivalent_usage?: { product_id: string; daily_usage: number }[]
   // Outstanding quantity (quarts) on this product's still-open (not closed/
   // cancelled) Droptop POs for this shop — see buildGenerationInputs. Never
   // folded into on_hand automatically; a line with this set gets the

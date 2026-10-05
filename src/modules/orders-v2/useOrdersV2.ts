@@ -1288,15 +1288,20 @@ export function buildGenerationInputs(
     // A sibling with zero on-hand contributes nothing to the total — showing
     // it under "Combining On Hands" would just be noise implying a combine
     // happened when it didn't. Filtered out entirely, not just zeroed.
-    const siblings = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== b.product_id && s.on_hand > 0)
-    if (siblings.length === 0) {
+    const others = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== b.product_id)
+    const siblings = others.filter((s) => s.on_hand > 0)
+    // Usage combines from EVERY sibling with a real rate — including one with nothing on the shelf right now (it sold
+    // through its stock, which is exactly the case where the ordered case type needs to inherit the demand). Only the
+    // on-hand list is limited to siblings that actually hold stock.
+    const usageSiblings = others.filter((s) => s.daily_usage != null && s.daily_usage > 0)
+    if (siblings.length === 0 && usageSiblings.length === 0) {
       return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
     // A product with no usage record of its own (null on hand) still gets its siblings' stock — it reads as 0 of its own,
-    // not as "unknown", once a real sibling quantity exists.
-    const ownOnHand = b.on_hand ?? 0
+    // not as "unknown", once a real sibling quantity exists. With no sibling stock either it stays unknown.
+    const ownOnHand = b.on_hand ?? (siblings.length > 0 ? 0 : null)
     const equivalent_products = siblings.map((s) => ({ product_id: s.product_id, on_hand: s.on_hand }))
-    const combinedOnHand = ownOnHand + siblings.reduce((sum, s) => sum + s.on_hand, 0)
+    const combinedOnHand = ownOnHand == null ? null : ownOnHand + siblings.reduce((sum, s) => sum + s.on_hand, 0)
     // Same treatment for usage — a sibling recording zero usage of its own
     // adds nothing real, so it's excluded here too rather than folded in as
     // a no-op. Found live 2026-09-22: this used to also require b.daily_usage
@@ -1307,14 +1312,16 @@ export function buildGenerationInputs(
     // (see above), usage should too, whichever side(s) actually have a
     // figure. Only stays null when NEITHER side has any usage recorded —
     // never inventing a rate from nothing.
-    const usageSiblings = siblings.filter((s) => s.daily_usage != null && s.daily_usage > 0)
     const combinedUsage = b.daily_usage != null || usageSiblings.length > 0
       ? Number(b.daily_usage ?? 0) + usageSiblings.reduce((sum, s) => sum + Number(s.daily_usage), 0)
       : null
     return {
       location_id: b.location_id, product_id: b.product_id, rule: b.rule,
       on_hand: combinedOnHand, daily_usage: combinedUsage,
-      own_on_hand: ownOnHand, equivalent_products, pendingPoQty,
+      own_on_hand: ownOnHand ?? undefined,
+      equivalent_products: equivalent_products.length > 0 ? equivalent_products : undefined,
+      equivalent_usage: usageSiblings.length > 0 ? usageSiblings.map((s) => ({ product_id: s.product_id, daily_usage: Number(s.daily_usage) })) : undefined,
+      pendingPoQty,
     }
   })
 }
