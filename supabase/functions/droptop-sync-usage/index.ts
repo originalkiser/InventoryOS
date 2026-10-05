@@ -331,7 +331,12 @@ Deno.serve(async (req) => {
     // (not inferred from daysBack) so a manual daysBack:1 "Run Now" doesn't
     // accidentally start logging — only the Data Connections dispatcher's
     // scheduled daily run sets this.
-    const logDailyActivity = body.logDailyActivity === true && mode !== 'inventory'
+    // Always on for any pull that reads sales (2026-10-05): daily_usage is "sales in the last 30 days / 30", which can
+    // only be right if the ledger holds EVERY sale. A manual pull with its own daysBack (Product Usage's Sync button)
+    // used to consume a window of sales without ledgering it — its sales were then missing from the ledger forever
+    // (shop 81's EURO-SYN-0W20C read 5/day, a 5-qt sale divided by 1 day, with nothing in the ledger to correct it).
+    // The upsert is idempotent per (location, product, date), so logging on every pull is safe.
+    const logDailyActivity = mode !== 'inventory' && mode !== 'inspect' && mode !== 'alerts'
     const matchesCategory = (productType: string | null | undefined): boolean => {
       if (!categories.length) return true
       const pt = (productType ?? '').toLowerCase()
@@ -614,8 +619,10 @@ Deno.serve(async (req) => {
             if (!matchesCategory(change.product_type)) continue
             const pid: string = change.product_id
             if (!pid) continue
-            const ts = change.created_timestamp ? Number(change.created_timestamp) * 1000 : null
-            if (ts == null || isNaN(ts)) continue
+            // An event with no usable timestamp is bucketed to the end of this pull's window rather than dropped —
+            // salesByProduct above counts it either way, so skipping it here left usage and the ledger disagreeing.
+            const rawTs = change.created_timestamp ? Number(change.created_timestamp) * 1000 : NaN
+            const ts = isNaN(rawTs) ? endUnix * 1000 : rawTs
             const activityDate = new Date(ts).toISOString().slice(0, 10)
             const key = pid.toLowerCase()
             const rowKey = `${loc.id}|${key}|${activityDate}`
@@ -824,7 +831,7 @@ Deno.serve(async (req) => {
     // step-5 value (a plain window average, already correct for daysBack
     // >= 30) is left alone.
     let rollingUsageApplied = 0
-    if (mode !== 'inventory' && logDailyActivity && daysBack < 30 && allUpsertRows.length > 0) {
+    if (mode !== 'inventory' && logDailyActivity && daysBack !== 30 && allUpsertRows.length > 0) {
       const windowStart = new Date(endUnix * 1000)
       windowStart.setUTCDate(windowStart.getUTCDate() - 29)
       const rollingStartDate = windowStart.toISOString().slice(0, 10)
@@ -884,8 +891,10 @@ Deno.serve(async (req) => {
         const upsertKeys = new Set(allUpsertRows.map((r) => `${r.location_id}|${String(r.product_id).toLowerCase()}`))
         for (const row of allUpsertRows) {
           const productKey = `${row.location_id}|${String(row.product_id).toLowerCase()}`
-          const sum = productSum.get(productKey)
           const minDate = locationMinDate.get(row.location_id)
+          // A product with no ledger sales in the window sold nothing: its rate is 0, not whatever step 5's single-call
+          // figure was. (Left alone only if the ledger write itself failed — then the ledger can't be trusted.)
+          const sum = productSum.get(productKey) ?? (dailyActivityWarning ? undefined : 0)
           if (sum == null || !minDate) continue // no ledger history yet at this shop — leave step 5's value as-is
           const daysTracked = Math.min(30, Math.max(1, Math.round((Date.parse(todayDate) - Date.parse(minDate)) / msPerDay) + 1))
           const rollingUsage = sum / daysTracked
@@ -934,6 +943,29 @@ Deno.serve(async (req) => {
             updated_at: new Date().toISOString(),
           })
           rollingUsageApplied++
+        }
+
+        // Stale rates: a product with a positive stored rate but NO sales anywhere in a fully-ledgered 30-day window
+        // (nothing sold, or the rate was written by a single-day pull) decays to 0 — days without sales count as days.
+        if (!dailyActivityWarning) {
+          const succeeded = new Set(succeededLocIds)
+          const handled = new Set(allUpsertRows.map((r) => `${r.location_id}|${String(r.product_id).toLowerCase()}`))
+          for (const [productKey, existing] of existingMap) {
+            if (handled.has(productKey) || productSum.has(productKey)) continue
+            const locationId = productKey.slice(0, productKey.indexOf('|'))
+            if (!succeeded.has(locationId)) continue
+            const minDate = locationMinDate.get(locationId)
+            if (!minDate || minDate > rollingStartDate) continue // ledger doesn't cover a full 30 days at this shop yet
+            if (!(Number(existing.daily_usage) > 0)) continue
+            allUpsertRows.push({
+              id: existing.id, company_id: companyId, location_id: locationId, product_id: existing.product_id,
+              category: existing.category ?? null, supplier: existing.supplier ?? null,
+              unit_cost: existing.unit_cost ?? null, unit_retail: existing.unit_retail ?? null,
+              daily_usage: 0, on_hands: existing.on_hands ?? null, days_of_supply: null,
+              last_change_source: 'droptop', updated_at: new Date().toISOString(),
+            })
+            rollingUsageApplied++
+          }
         }
 
         // Re-upsert with the corrected values — step 5's batch already ran
