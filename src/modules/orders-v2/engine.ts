@@ -302,6 +302,13 @@ interface Caps { maxUnits: number; capacityBound: boolean; dosBound: boolean }
  *   - days_of_supply_max is a SOFT target — pass 1 stops there, but smoothing
  *     may go past it when a minimum can't otherwise be met (`soft: false`).
  */
+/**
+ * Smoothing only ever works with products that have real usage. A product with no usage is ordered ONLY when it is at or
+ * below its critical minimum (one case, nothing more) — it is never pulled onto an order, or topped up, to help a shop reach
+ * its order minimum.
+ */
+export const hasUsage = (x: { daily_usage: number | null }): boolean => n(x.daily_usage) > 0
+
 export function capsFor(input: GenerationInput, ctx: GenerationContext, opts?: { respectDosMax?: boolean }): Caps {
   const { rule, on_hand, daily_usage } = input
   const per = gallonsPerUnit(rule)
@@ -634,8 +641,8 @@ function applySpreadCaseTypeMinimum(
   const all = [...existing, ...spareCandidates]
   if (!all.length) return false
 
-  const capOf = (c: Candidate) => capsFor(c.input, ctx, { respectDosMax: false }).maxUnits
   const currentOf = (c: Candidate) => n(c.line?.qty ?? 0)
+  const capOf = (c: Candidate) => (c.line && !hasUsage(c.line) ? currentOf(c) : capsFor(c.input, ctx, { respectDosMax: false }).maxUnits)
   const totalNow = existing.reduce((s, c) => s + currentOf(c), 0)
   const totalMax = all.reduce((s, c) => s + Math.max(currentOf(c), capOf(c)), 0)
   if (totalMax + 1e-9 < minQty) return false // not reachable — leave everything untouched
@@ -714,7 +721,7 @@ function applyCaseTypeMinimums(
       let bestHeadroom = 0
       for (const l of ofType) {
         const inp = inputs.get(`${l.location_id}|${l.product_id}`)
-        if (!inp) continue
+        if (!inp || !hasUsage(l)) continue // a no-usage (critical-minimum) line stays at its one case
         const headroom = capsFor(inp, ctx, { respectDosMax: false }).maxUnits - l.qty
         if (headroom > bestHeadroom) { bestHeadroom = headroom; best = l }
       }
@@ -801,7 +808,7 @@ function applyOrderUnitMinimum(
   // means "least overstocking," unlike bestTopUpIndex's dollars-per-DOS score.
   const headroom = lines.map((l) => {
     const inp = inputs.get(`${l.location_id}|${l.product_id}`)
-    if (!inp) return 0
+    if (!inp || !hasUsage(l)) return 0
     return Math.max(0, unitCap(l.uom, capsFor(inp, ctx, { respectDosMax: false }).maxUnits) - l.qty)
   })
   let guard = 0
@@ -1081,7 +1088,9 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     // Shared across every branch below — case-type minimums (and the
     // units_per_order/dollar "pull in spares" steps) all draw from the same
     // pool of this shop's other configured-but-not-yet-due products.
-    const spares = (eligibleSpare.get(key) ?? []).filter((sp) => resolvedOrderType(sp.rule) === order_type)
+    // Smoothing needs usage: a product with none is never pulled in as a spare (it can still be ordered by the critical
+    // minimum in Pass 1, one case only).
+    const spares = (eligibleSpare.get(key) ?? []).filter((sp) => resolvedOrderType(sp.rule) === order_type && hasUsage(sp))
 
     // HM0806 solo rule (2026-10-04): when HM0806 is the ONLY product suggested at a shop (before any smoothing), order it at
     // its 2-unit minimum and ignore the order minimum entirely — no smoothing, no "under minimum" flag.
@@ -1181,7 +1190,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       // physical capacity is still hard.
       const hardHeadroomOf = (l: GeneratedLine) => {
         const inp = inputByKey.get(`${l.location_id}|${l.product_id}`)
-        if (!inp) return 0
+        if (!inp || !hasUsage(l)) return 0 // smoothing needs usage — a critical-minimum line stays at one case
         return Math.max(0, unitCap(l.uom, capsFor(inp, ctx, { respectDosMax: false }).maxUnits) - l.qty)
       }
       // To keep one product from being stacked, topping up goes in three steps: (1) existing lines only up to the soft DOS

@@ -570,3 +570,34 @@ describe('combined on hands flag', () => {
     expect(res.lines[0].flags).not.toContain('combined_on_hand')
   })
 })
+
+describe('smoothing needs usage; no-usage products order one case at the critical minimum only', () => {
+  const pkgMin = (d: number) => ctx({ vendor: { vendor_id: 'V1', minimums: { package: dollars(d) }, caseTypeMinimums: {}, usesOrderDays: false } })
+
+  it('orders exactly 1 case when usage is 0 and on hand is at/below the critical minimum', () => {
+    const i = input({ on_hand: 3, daily_usage: 0, rule: { min_on_hand_qty: 5 } })
+    const res = generateOrder([i], ctx())
+    expect(res.lines[0].qty).toBe(1)
+    expect(res.lines[0].flags).toContain('critical_minimum')
+  })
+
+  it('does not pull a no-usage product above its critical minimum onto the order for smoothing', () => {
+    const due = input({ product_id: 'P1', on_hand: 45, daily_usage: 5, rule: { unit_cost: 10, max_capacity_gallons: 50 } })
+    const idle = input({ product_id: 'P2', on_hand: 20, daily_usage: 0, rule: { unit_cost: 100, min_on_hand_qty: 5 } })
+    const res = generateOrder([due, idle], pkgMin(600))
+    expect(res.lines.find((l) => l.product_id === 'P2')).toBeUndefined()
+  })
+
+  it('still pulls a product that has usage', () => {
+    const due = input({ product_id: 'P1', on_hand: 45, daily_usage: 5, rule: { unit_cost: 10, max_capacity_gallons: 50 } })
+    const used = input({ product_id: 'P2', on_hand: 100, daily_usage: 5, rule: { unit_cost: 100 } })
+    const res = generateOrder([due, used], pkgMin(600))
+    expect(res.lines.find((l) => l.product_id === 'P2')?.added_by_smoothing).toBe(true)
+  })
+
+  it('never tops a no-usage critical-minimum line up past its one case', () => {
+    const idle = input({ product_id: 'P1', on_hand: 1, daily_usage: 0, rule: { unit_cost: 10, min_on_hand_qty: 5 } })
+    const res = generateOrder([idle], pkgMin(5000))
+    expect(res.lines.find((l) => l.product_id === 'P1')?.qty).toBe(1)
+  })
+})

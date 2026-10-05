@@ -11,6 +11,7 @@ import { VendorRulesCard } from './VendorRulesCard'
 import { VendorPartRulesCard } from './VendorPartRulesCard'
 import { VendorVisibilityCard } from './VendorVisibilityCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
+import { OrderLogicTab } from './OrderLogicTab'
 import { RdDistributorTimingCard } from './RdDistributorTimingCard'
 import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
@@ -61,8 +62,10 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
       <TabsList>
         <TabsTrigger value="shared">Shared Order Settings</TabsTrigger>
         <TabsTrigger value="user">User Order Settings</TabsTrigger>
+        <TabsTrigger value="logic">Order Logic</TabsTrigger>
       </TabsList>
       <TabsContent value="user"><UserOrderSettings /></TabsContent>
+      <TabsContent value="logic"><OrderLogicTab settings={settings} /></TabsContent>
       <TabsContent value="shared">
     <div className="flex flex-col gap-4">
       <Card><CardBody className="flex flex-col gap-3">
