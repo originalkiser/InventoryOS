@@ -9,6 +9,7 @@ export const AREAS: { key: TankArea; label: string }[] = [
 export const areaLabel = (a: string) => AREAS.find((x) => x.key === a)?.label ?? a
 
 export interface TankLastLog { depth_in: number; volume_qts: number; logged_at: string; status: string }
+export interface TankGrid { x: number; y: number; w: number; h: number }
 export interface ShopTank {
   id: string
   name: string
@@ -20,6 +21,8 @@ export interface ShopTank {
   capacity_qts: number | null
   monitor_serial: string | null
   sort_order: number
+  /** Where the shop put this tank on its area's free-form grid (grid units); null until it's been placed. */
+  grid: TankGrid | null
   baseline_variance_qts: number | null
   /** What the tank monitor reports (pre-loaded tanks): capacity in quarts and inside height in inches. */
   monitor_capacity_qts: number | null

@@ -4,17 +4,52 @@
 // All data goes through SECURITY DEFINER RPCs keyed by the slug (migration 20261004b).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { DndContext, PointerSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
-import { SortableContext, arrayMove, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
-import { GripVertical, Pencil, Plus } from 'lucide-react'
+import * as RGL from 'react-grid-layout'
+import 'react-grid-layout/css/styles.css'
+import { GripVertical, LayoutGrid, Pencil, Plus, RotateCcw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { Button, Modal, SbLoader } from '@/components/ui'
 import { sanitizeDecimalInput } from '@/lib/decimalInput'
 import { SHAPES, SHAPE_ORDER, depthKey, dimsComplete, tankQuarts, type TankDims, type TankShape } from './tankMath'
 import { TankShapeSvg } from './TankShapeSvg'
-import { AREAS, HOLD_REASON_LABEL, type ShareShop, type ShopTank, type TankArea, type TankEval } from './tankTypes'
+import { AREAS, HOLD_REASON_LABEL, type ShareShop, type ShopTank, type TankArea, type TankEval, type TankGrid } from './tankTypes'
+
+// Free-form tank grid — the same react-grid-layout setup Location Lookup uses (see the interop note there: `import * as RGL`
+// doesn't give the real class under Vite, it's stashed at `.default`).
+const ReactGridLayout = RGL.WidthProvider((RGL as unknown as { default: typeof RGL }).default)
+const GRID_COLS = 12
+const GRID_ROW_HEIGHT = 28
+const GRID_MARGIN: [number, number] = [10, 10]
+const DEFAULT_W = 3 // four to a row until the shop rearranges them
+const DEFAULT_H = 11
+const MIN_W = 2
+const MIN_H = 6
+
+/** Saved positions where there are some; tanks not placed yet go four-wide underneath whatever's already there. */
+function layoutFor(list: ShopTank[]): RGL.Layout[] {
+  const placed = list.filter((t) => t.grid)
+  let bottom = 0
+  for (const t of placed) bottom = Math.max(bottom, t.grid!.y + t.grid!.h)
+  let n = 0
+  return list.map((t) => {
+    const g = t.grid
+    if (g) return { i: t.id, x: g.x, y: g.y, w: g.w, h: g.h, minW: MIN_W, minH: MIN_H }
+    const i = n++
+    return { i: t.id, x: (i % 4) * DEFAULT_W, y: bottom + Math.floor(i / 4) * DEFAULT_H, w: DEFAULT_W, h: DEFAULT_H, minW: MIN_W, minH: MIN_H }
+  })
+}
+const gridKey = (g: TankGrid | null) => (g ? `${g.x},${g.y},${g.w},${g.h}` : '')
+function useIsNarrow() {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 639px)')
+    const on = () => setNarrow(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return narrow
+}
 
 const sb = () => supabase as any
 const fmt = (v: number | null | undefined, d = 1) => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d }))
@@ -200,8 +235,8 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
 
 // ── One tank: depth in, quarts out, log the count ───────────────────────────────────────────────────────────────────
 
-function TankCard({ tank, slug, onEdit, onChanged, dragHandle }: {
-  tank: ShopTank; slug: string; onEdit: () => void; onChanged: () => void; dragHandle: React.ReactNode
+function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
+  tank: ShopTank; slug: string; onEdit: () => void; onChanged: () => void; editingLayout: boolean
 }) {
   const [depthText, setDepthText] = useState('')
   const depth = Number(depthText)
@@ -252,10 +287,10 @@ function TankCard({ tank, slug, onEdit, onChanged, dragHandle }: {
   const v = preview?.variance_qts
 
   return (
-    <div className={`rounded-lg border p-2.5 flex flex-col gap-2 min-w-0 ${ready ? 'border-navy/30 bg-cream' : 'border-[#E67E22] bg-[#E67E22]/10'}`}>
+    <div className={`rounded-lg border p-2.5 flex flex-col gap-2 min-w-0 h-full overflow-y-auto ${ready ? 'border-navy/30 bg-cream' : 'border-[#E67E22] bg-[#E67E22]/10'} ${editingLayout ? 'ring-2 ring-sky' : ''}`}>
       <div className="flex items-start justify-between gap-1">
         <div className="flex items-start gap-1 min-w-0">
-          {dragHandle}
+          {editingLayout && <span title="Drag to move" className="tank-drag-handle mt-0.5 p-0.5 text-navy/60 hover:text-navy cursor-grab touch-none"><GripVertical className="w-4 h-4" /></span>}
           <div className="min-w-0">
             <div className="text-sm font-heading font-bold text-navy truncate">{tank.name}</div>
             <div className="text-[10px] font-mono text-navy/75 truncate">{tank.product_label || (tank.shape ? SHAPES[tank.shape]?.label : '')}</div>
@@ -327,14 +362,31 @@ function TankCard({ tank, slug, onEdit, onChanged, dragHandle }: {
   )
 }
 
-function SortableTank(props: { tank: ShopTank; slug: string; onEdit: () => void; onChanged: () => void }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.tank.id })
+// One area's free-form grid: tanks can be any width and stacked any way. Drag by the handle, resize from the corner (layout
+// editing only — locked otherwise so typing a depth never nudges a tile).
+function AreaGrid({ list, slug, editing, narrow, onEdit, onChanged, onLayout }: {
+  list: ShopTank[]; slug: string; editing: boolean; narrow: boolean
+  onEdit: (t: ShopTank) => void; onChanged: () => void; onLayout: (l: RGL.Layout[]) => void
+}) {
+  if (narrow) {
+    // A phone is too narrow for a 12-column grid: stack in the order the shop laid them out.
+    const ordered = [...layoutFor(list)].sort((a, b) => a.y - b.y || a.x - b.x).map((l) => list.find((t) => t.id === l.i)!)
+    return (
+      <div className="grid grid-cols-1 min-[520px]:grid-cols-2 gap-2.5">
+        {ordered.map((t) => <TankCard key={t.id} tank={t} slug={slug} editingLayout={false} onEdit={() => onEdit(t)} onChanged={onChanged} />)}
+      </div>
+    )
+  }
   return (
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1, zIndex: isDragging ? 20 : undefined }}>
-      <TankCard {...props} dragHandle={
-        <button type="button" {...attributes} {...listeners} title="Drag to reorder" className="mt-0.5 p-0.5 text-navy/60 hover:text-navy cursor-grab touch-none"><GripVertical className="w-4 h-4" /></button>
-      } />
-    </div>
+    <ReactGridLayout className="layout" layout={layoutFor(list)} cols={GRID_COLS} rowHeight={GRID_ROW_HEIGHT} margin={GRID_MARGIN}
+      isDraggable={editing} isResizable={editing} draggableHandle=".tank-drag-handle" compactType="vertical"
+      onLayoutChange={(l) => { if (editing) onLayout(l) }}>
+      {list.map((t) => (
+        <div key={t.id} className="h-full">
+          <TankCard tank={t} slug={slug} editingLayout={editing} onEdit={() => onEdit(t)} onChanged={onChanged} />
+        </div>
+      ))}
+    </ReactGridLayout>
   )
 }
 
@@ -357,21 +409,43 @@ export function PublicTankPage() {
   }, [slug])
   useEffect(() => { void load() }, [load])
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 6 } }))
+  const [editingLayout, setEditingLayout] = useState(false)
+  const narrow = useIsNarrow()
   const byArea = useMemo(() => {
     const m = new Map<TankArea, ShopTank[]>()
     for (const a of AREAS) m.set(a.key, tanks.filter((t) => t.area === a.key).sort((x, y) => x.sort_order - y.sort_order))
     return m
   }, [tanks])
 
-  async function onDragEnd(area: TankArea, e: DragEndEvent) {
-    if (!e.over || e.active.id === e.over.id) return
-    const list = byArea.get(area) ?? []
-    const from = list.findIndex((t) => t.id === e.active.id), to = list.findIndex((t) => t.id === e.over!.id)
-    if (from < 0 || to < 0) return
-    const next = arrayMove(list, from, to).map((t, i) => ({ ...t, sort_order: i }))
-    setTanks((prev) => [...prev.filter((t) => t.area !== area), ...next])
-    const { error } = await sb().rpc('tank_share_reorder', { p_slug: slug, p_items: next.map((t) => ({ id: t.id, area, sort_order: t.sort_order })) })
+  // Layout changes are saved a moment after the last drag/resize (a drag fires many), all in one call.
+  const pending = useRef(new Map<string, TankGrid>())
+  const saveTimer = useRef<number | undefined>(undefined)
+  function onLayout(l: RGL.Layout[]) {
+    const changed: { id: string; grid: TankGrid }[] = []
+    for (const it of l) {
+      const grid = { x: it.x, y: it.y, w: it.w, h: it.h }
+      const cur = tanks.find((t) => t.id === it.i)
+      if (cur && gridKey(cur.grid) !== gridKey(grid)) changed.push({ id: it.i, grid })
+    }
+    if (changed.length === 0) return
+    const byId = new Map(changed.map((c) => [c.id, c.grid]))
+    setTanks((prev) => prev.map((t) => (byId.has(t.id) ? { ...t, grid: byId.get(t.id)! } : t)))
+    for (const c of changed) pending.current.set(c.id, c.grid)
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(async () => {
+      const items = [...pending.current.entries()].map(([id, g]) => ({ id, ...g }))
+      pending.current.clear()
+      const { error } = await sb().rpc('tank_share_save_layout', { p_slug: slug, p_items: items })
+      if (error) { toast.error("Couldn't save the layout: " + error.message); void load() }
+    }, 600)
+  }
+  useEffect(() => () => window.clearTimeout(saveTimer.current), [])
+
+  async function resetLayout() {
+    if (!window.confirm('Put every tank back in the standard layout (four across)?')) return
+    setTanks((prev) => prev.map((t) => ({ ...t, grid: null })))
+    pending.current.clear()
+    const { error } = await sb().rpc('tank_share_save_layout', { p_slug: slug, p_items: tanks.map((t) => ({ id: t.id })) })
     if (error) { toast.error(error.message); void load() }
   }
 
@@ -395,8 +469,17 @@ export function PublicTankPage() {
       <main className="max-w-6xl mx-auto p-3 sm:p-4 flex flex-col gap-6">
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs font-mono text-navy/75">Enter the filled depth for each tank, then tap Log count. Dimensions are saved — tap the pencil to change them.</p>
-          <Button size="sm" onClick={() => setModal({ tank: null, area: 'bay' })}><Plus className="w-3.5 h-3.5 mr-1" />Add tank</Button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {!narrow && tanks.length > 0 && (editingLayout
+              ? <>
+                  <Button size="sm" variant="ghost" onClick={() => void resetLayout()}><RotateCcw className="w-3.5 h-3.5 mr-1" />Reset layout</Button>
+                  <Button size="sm" onClick={() => setEditingLayout(false)}>Done</Button>
+                </>
+              : <Button size="sm" variant="secondary" onClick={() => setEditingLayout(true)}><LayoutGrid className="w-3.5 h-3.5 mr-1" />Edit layout</Button>)}
+            <Button size="sm" onClick={() => setModal({ tank: null, area: 'bay' })}><Plus className="w-3.5 h-3.5 mr-1" />Add tank</Button>
+          </div>
         </div>
+        {editingLayout && <p className="text-[11px] font-mono text-navy rounded border border-sky bg-sky/20 px-2.5 py-1.5">Layout editing is on — drag a tank by its <GripVertical className="w-3 h-3 inline -mt-0.5" /> handle to move it and drag a tank's bottom-right corner to resize it. Set up the tanks side by side, stacked, or any mix. Tap Done when it looks right (changes save automatically).</p>}
         {tanks.length === 0 && <p className="text-sm font-mono text-navy/75 py-8 text-center">No tanks yet. Tap "Add tank" to enter your first one.</p>}
         {AREAS.map((a) => {
           const list = byArea.get(a.key) ?? []
@@ -407,13 +490,8 @@ export function PublicTankPage() {
                 <h2 className="text-xs font-heading font-bold uppercase tracking-widest text-navy">{a.label}</h2>
                 <button type="button" onClick={() => setModal({ tank: null, area: a.key })} className="text-[11px] font-mono text-navy/75 hover:text-navy underline">+ add here</button>
               </div>
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => void onDragEnd(a.key, e)}>
-                <SortableContext items={list.map((t) => t.id)} strategy={rectSortingStrategy}>
-                  <div className="grid grid-cols-1 min-[520px]:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
-                    {list.map((t) => <SortableTank key={t.id} tank={t} slug={slug} onEdit={() => setModal({ tank: t, area: t.area })} onChanged={() => void load()} />)}
-                  </div>
-                </SortableContext>
-              </DndContext>
+              <AreaGrid list={list} slug={slug} editing={editingLayout} narrow={narrow} onLayout={onLayout}
+                onEdit={(t) => setModal({ tank: t, area: t.area })} onChanged={() => void load()} />
             </section>
           )
         })}
