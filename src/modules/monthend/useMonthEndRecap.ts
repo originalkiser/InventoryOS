@@ -10,6 +10,10 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import toast from 'react-hot-toast'
 import type { GridCell, ListItemRow } from '@/modules/inventory/procurementDeck/types'
+import { ownerBucket } from '@/hooks/useLocationExclusions'
+import { isRealShopLocation } from '@/hooks/useLocations'
+import { ALLOWABLE_TYPE_RULES_KEY, isAllowedCountType, type TypeRule } from './countsShared'
+import { areaCells, computeRecap, dailyCells, dailyNotes, dailyTableKey, trendsCells, type CellRow, type RecapResult } from './monthEndRecapCompute'
 
 const SLIDE_KEY = 'monthend_recap'
 
@@ -167,7 +171,65 @@ export function useMonthEndRecap() {
     await load()
   }
 
+  /**
+   * Computes a month's recap from the app's own data (see monthEndRecapCompute.ts for the definitions) and writes it into the
+   * grids — a new column in Compliance Trends and Recount Compliance by Area, and that month's own Daily Compliance cycle.
+   * Everything written is an ordinary editable cell afterwards. Returns what it computed (and any area managers that needed a
+   * new row) for the caller to report.
+   */
+  async function fillMonth(countMonth: string): Promise<{ result: RecapResult; added: string[]; cycleKey: string } | null> {
+    if (!companyId) return null
+    const sb = supabase as any
+    const lo = new Date(countMonth + 'T00:00:00'); lo.setDate(lo.getDate() - 7)
+    const hi = new Date(countMonth + 'T00:00:00'); hi.setDate(hi.getDate() + 50)
+    const d = (x: Date) => x.toISOString().slice(0, 10)
+    const [locRes, countRes, manualRes, ruleRes, exclRes, recRes] = await Promise.all([
+      sb.schema('core').from('locations').select('id, name, region, director, area_manager, owner, metadata, location_type').eq('company_id', companyId).eq('active', true),
+      sb.schema('inventory').from('counts').select('location_id, count_date, count_type, total_adjustments').eq('company_id', companyId).eq('count_month', countMonth),
+      sb.schema('inventory').from('manual_count_entries').select('location_id, created_at').eq('company_id', companyId).eq('count_period', countMonth),
+      sb.schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', ALLOWABLE_TYPE_RULES_KEY).maybeSingle(),
+      sb.schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', 'monthend_shop_exclusions').maybeSingle(),
+      sb.schema('inventory').from('recount_requests').select('location_id, recount_type, requested_products, request_date, recount_status, completed_flags, completed_dates, updated_at')
+        .eq('company_id', companyId).gte('request_date', d(lo)).lte('request_date', d(hi)),
+    ])
+    for (const r of [locRes, countRes, manualRes, recRes]) if (r.error) { toast.error(r.error.message); return null }
+
+    // The deck tracks the five corporate regions already in the Area grid.
+    const areaRows = gridOf('area_compliance')
+    const labels = new Map<string, number>()
+    for (const c of areaRows) labels.set(c.row_label, c.row_sort)
+    const rowList = [...labels.entries()].map(([label, sort]) => ({ label, sort }))
+    const deckRegions = new Set(rowList.filter((x) => !x.label.startsWith(' ') && x.label !== 'Grand Total').map((x) => x.label.split(' - ')[0].trim().toLowerCase()))
+    const excluded = new Set(((exclRes.data?.value ?? []) as { location_id: string; reason: string }[]).filter((e) => e.reason === 'everything').map((e) => e.location_id))
+    const typeRules = (ruleRes.data?.value ?? {}) as Record<string, TypeRule>
+    const shops = ((locRes.data ?? []) as any[])
+      .filter((l) => isRealShopLocation(l) && l.location_type !== 'car_wash' && ownerBucket(String(l.owner ?? l.metadata?.owner ?? '')) === 'Corporate'
+        && deckRegions.has(String(l.region ?? '').trim().toLowerCase()) && !excluded.has(l.id))
+      .map((l) => ({ id: l.id as string, region: String(l.region).trim(), director: String(l.director ?? ''), areaManager: String(l.area_manager ?? '').trim() || 'Unassigned' }))
+    const counts = ((countRes.data ?? []) as any[]).filter((c) => isAllowedCountType(c.count_type, c.total_adjustments, typeRules))
+
+    const result = computeRecap({ countMonth, shops, counts, manual: (manualRes.data ?? []) as any[], recounts: (recRes.data ?? []) as any[] })
+    if (!result) { toast.error('No counts found for that month yet'); return null }
+    const { cells: areaC, added } = areaCells(result, rowList)
+    const all: CellRow[] = [...dailyCells(result), ...trendsCells(result), ...areaC]
+    const now = new Date().toISOString()
+    const rows = all.map((c) => ({ company_id: companyId, slide_key: SLIDE_KEY, ...c, updated_by: userId, updated_at: now }))
+    for (let i = 0; i < rows.length; i += 400) {
+      const { error } = await sb.schema('inventory').from('monthend_recap_grid_cells')
+        .upsert(rows.slice(i, i + 400), { onConflict: 'company_id,slide_key,table_key,row_label,col_key' })
+      if (error) { toast.error(error.message); return null }
+    }
+    // This cycle's notes are regenerated each time (the user can edit or add to them afterwards).
+    const cycleKey = dailyTableKey(result.monthKey)
+    await sb.schema('inventory').from('monthend_recap_list_items').delete().eq('company_id', companyId).eq('slide_key', SLIDE_KEY).eq('table_key', cycleKey)
+    await sb.schema('inventory').from('monthend_recap_list_items').insert(
+      dailyNotes(result).map((t, i) => ({ company_id: companyId, slide_key: SLIDE_KEY, table_key: cycleKey, item_text: t, sort_order: i + 1, updated_by: userId })))
+    await load()
+    return { result, added, cycleKey }
+  }
+
   return {
+    fillMonth,
     loading, cells, items,
     gridOf, listOf,
     saveCell, deleteGridRow,
