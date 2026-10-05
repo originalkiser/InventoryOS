@@ -541,3 +541,32 @@ describe('drums and the minimum callout (2026-10-04)', () => {
     expect(res.lines[0].note).toMatch(/no products to add to meet order min/)
   })
 })
+
+describe('exceed-capacity-for-DOS-target is package-only; bulk capacity is a hard limit', () => {
+  const vendor = { vendor_id: 'V1', minimums: {}, caseTypeMinimums: {}, usesOrderDays: false, allowExceedCapacityForDosTarget: true }
+  it('lets a package product go past capacity to reach the DOS target', () => {
+    const i = input({ on_hand: 0, daily_usage: 5, rule: { uom: 'case', units_per_uom_gallons: 5, max_capacity_gallons: 40 } })
+    const res = generateOrder([i], ctx({ vendor }))
+    expect(res.lines[0].flags).toContain('exceeded_capacity_for_dos_target')
+    expect(res.lines[0].qty * 5).toBeGreaterThan(40)
+  })
+  it('never lets a bulk product past capacity', () => {
+    const i = input({ on_hand: 0, daily_usage: 5, rule: { uom: 'bulk', units_per_uom_gallons: 4, max_capacity_gallons: 40, order_type_override: 'bulk' } })
+    const res = generateOrder([i], ctx({ vendor }))
+    const l = res.lines[0]
+    expect(l.flags).not.toContain('exceeded_capacity_for_dos_target')
+    expect((l?.qty ?? 0) * 4).toBeLessThanOrEqual(40)
+  })
+})
+
+describe('combined on hands flag', () => {
+  it('flags a line whose on hand is a combined total', () => {
+    const i = { ...input({ on_hand: 1, daily_usage: 5 }), equivalent_products: [{ product_id: 'P1C', on_hand: 0.9 }], own_on_hand: 0.1 }
+    const res = generateOrder([i], ctx())
+    expect(res.lines[0].flags).toContain('combined_on_hand')
+  })
+  it('does not flag a line with nothing combined into it', () => {
+    const res = generateOrder([input({ on_hand: 1, daily_usage: 5 })], ctx())
+    expect(res.lines[0].flags).not.toContain('combined_on_hand')
+  })
+})

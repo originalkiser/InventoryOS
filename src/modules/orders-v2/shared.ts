@@ -63,6 +63,7 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   stocked_out: { label: 'Out of stock', tone: 'red', title: 'No on-hand recorded for this product' },
   critical_minimum: { label: 'Critical min', tone: 'orange', title: 'Ordered because on-hand dropped to/below this product\'s critical minimum (e.g. enough for one oil change), not the usual days-of-supply trigger' },
   alone_default_qty: { label: 'Alone qty', tone: 'sky', title: 'Only line on the order — used its configured alone quantity' },
+  combined_on_hand: { label: 'Combined on hands', tone: 'sky', title: 'On Hand is the combined total of this product and its equivalent case types at this shop (hover the On Hand number for the math)' },
   vmi_keepfill: { label: 'VMI / Keep-fill', tone: 'sky', title: 'Vendor-managed inventory, tracked by tank monitor — excluded from this order\'s total by default since the vendor refills it directly' },
   keepfill_will_run_out: { label: 'Will run dry', tone: 'red', title: 'Tank on-hand and usage won\'t last until this shop\'s delivery after next — may need a vendor keep-fill order before then' },
   added_for_smoothing: { label: 'Added: smoothing', tone: 'sky', title: 'Pulled onto this order from the shop\'s other configured products to help it reach its order minimum' },

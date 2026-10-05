@@ -403,3 +403,15 @@ describe('buildGenerationInputs — shop/product exceptions (floor & ceiling)', 
     expect(inputs.find((i) => i.product_id === 'HM0806')!.on_hand).toBe(200)
   })
 })
+
+describe('buildGenerationInputs — product with no usage row of its own', () => {
+  it('still picks up its sibling case type\'s stock (reads 0 of its own, not unknown)', () => {
+    const configs = [config('EURO-SYN-0W30BB')]
+    const usageRows = [usage('EURO-SYN-0W30C', 0.7, 0.2)]
+    const inputs = buildGenerationInputs(configs, [], usageRows)
+    const bb = inputs.find((i) => i.product_id === 'EURO-SYN-0W30BB')!
+    expect(bb.own_on_hand).toBe(0)
+    expect(bb.on_hand).toBeCloseTo(0.7)
+    expect(bb.equivalent_products).toEqual([{ product_id: 'EURO-SYN-0W30C', on_hand: 0.7 }])
+  })
+})

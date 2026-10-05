@@ -52,7 +52,7 @@ interface PendingRow {
  * a shop needing several unconfigured products doesn't mean reopening this
  * modal repeatedly.
  */
-export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings, addLine, initialLocationId }: {
+export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings, addLine, initialLocationId, allowedLocationIds }: {
   open: boolean
   onClose: () => void
   vendorId: string | null
@@ -63,8 +63,14 @@ export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings
   // "Add Non-Configured Product" button) — still a plain Combobox, not
   // locked, so it can be changed if needed.
   initialLocationId?: string
+  // Only these shops are offered (the shops this order is for) — null/undefined = every shop.
+  allowedLocationIds?: Set<string> | null
 }) {
   const loc = useLocations()
+  const shopOptions = useMemo(
+    () => (allowedLocationIds ? loc.includedOptions.filter((o) => allowedLocationIds.has(o.value) || o.value === initialLocationId) : loc.includedOptions),
+    [loc.includedOptions, allowedLocationIds, initialLocationId],
+  )
   const [locationId, setLocationId] = useState('')
   const [vendorParts, setVendorParts] = useState<VendorPartOpt[]>([])
   const [uomMappings, setUomMappings] = useState<{ from_unit: string; to_unit: string; factor: number; order_type: OrderType | null }[]>([])
@@ -226,7 +232,7 @@ export function AddNonConfiguredProductModal({ open, onClose, vendorId, settings
           can queue up several products (for one shop or different ones) and commit them all at once.
         </p>
 
-        <Combobox label="Shop" options={loc.includedOptions} value={locationId} onChange={setLocationId} placeholder="Select shop…" />
+        <Combobox label="Shop" options={shopOptions} value={locationId} onChange={setLocationId} placeholder="Select shop…" />
         <Combobox label="Product" options={productOptions} value={productId} onChange={setProductId} placeholder="Select product…" />
 
         {productId && (

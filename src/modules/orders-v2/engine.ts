@@ -403,6 +403,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
   const gallons = units * per
   const flags: LineFlag[] = [...historyFlags(input, ctx)]
   if (n(input.on_hand) <= 0) flags.push('stocked_out')
+  if ((input.equivalent_products?.length ?? 0) > 0) flags.push('combined_on_hand')
   if (units > 0 && caps.capacityBound) flags.push('capacity_capped')
   if (rule.vmi_keepfill_enabled) flags.push('vmi_keepfill')
 
@@ -976,7 +977,9 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     // (minimums/smoothing), and different vendors want this on/off
     // independently (e.g. Valvoline on, RelaDyne off).
     let exceedsCapacityForTarget = false
-    if (ctx.vendor.allowExceedCapacityForDosTarget && caps.capacityBound && want > caps.maxUnits) {
+    // Bulk is never allowed past capacity: it goes into a fixed tank (including what the combined on hand already
+    // occupies), so there is nowhere for the extra quarts to go. Only package product can exceed it.
+    if (ctx.vendor.allowExceedCapacityForDosTarget && resolvedOrderType(rule) !== 'bulk' && caps.capacityBound && want > caps.maxUnits) {
       exceedsCapacityForTarget = true
       caps = { ...caps, maxUnits: want, capacityBound: false }
     }

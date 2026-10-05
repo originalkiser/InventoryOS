@@ -193,7 +193,6 @@ export function OrdersV2Review() {
   // below) is a review/audit list, not something that needs to be open on
   // every visit to this page.
   const [noOrdersOpen, setNoOrdersOpen] = useState(false)
-  const [skipped, setSkipped] = useState<{ location_id: string; product_id: string; reason: string }[]>([])
   const [dayCounts, setDayCounts] = useState<number[]>([0, 0, 0, 0, 0, 0, 0])
   // Every candidate the engine considered for this run, not just the ones
   // that made it onto the draft — the smoothing panel needs the shop's
@@ -630,7 +629,6 @@ export function OrdersV2Review() {
       })
 
       await replaceLines(withDelivery, !!opts?.keepOverrides)
-      setSkipped(result.skipped)
       const shops = new Set(withDelivery.map((l) => l.location_id)).size
       // Cache the shop count (and keep-fill alerts) on the header so the
       // landing page / Final Review can read them without loading every
@@ -839,6 +837,15 @@ export function OrdersV2Review() {
   // here, since nothing on it is actually being ordered. null
   // eligibleLocationIds (vendor doesn't use order days) means this
   // distinction is meaningless, so the section doesn't show at all then.
+  // The shops this order is actually for — the order-day / ad hoc shop list, plus anyone who already has a line — so
+  // "Add non-configured product" only offers those (null = no restriction, e.g. a vendor with no order days).
+  const orderShopIds = useMemo(() => {
+    if (!eligibleLocationIds) return null
+    const s = new Set(eligibleLocationIds)
+    for (const l of lines) s.add(l.location_id)
+    return s
+  }, [eligibleLocationIds, lines])
+
   const shopsWithNoOrders = useMemo(() => {
     if (!eligibleLocationIds) return []
     const withOrders = new Set(lines.filter((l) => l.included && Number(l.qty) > 0).map((l) => l.location_id))
@@ -1287,6 +1294,7 @@ export function OrdersV2Review() {
         vendorId={draft.vendor_id}
         settings={settings}
         addLine={addLine}
+        allowedLocationIds={orderShopIds}
       />
 
       {exceptionTarget && (
@@ -1359,6 +1367,7 @@ export function OrdersV2Review() {
         settings={settings}
         addLine={addLine}
         initialLocationId={popupShopId ?? mobileShopId ?? undefined}
+        allowedLocationIds={orderShopIds}
       />
 
       {/* Title + subtext, with Regenerate AND the DOS targets/Order day
@@ -1911,16 +1920,6 @@ export function OrdersV2Review() {
         </CardBody></Card>
       )}
 
-      {skipped.length > 0 && (
-        <Card><CardBody className="flex flex-col gap-1">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Not ordered ({skipped.length})</span>
-          <div className="max-h-40 overflow-auto text-[11px] font-mono text-inky/70">
-            {skipped.slice(0, 300).map((s, i) => (
-              <div key={i}>{shopLabel(s.location_id)} · {s.product_id} — {s.reason.replace(/_/g, ' ')}</div>
-            ))}
-          </div>
-        </CardBody></Card>
-      )}
     </div>
   )
 }

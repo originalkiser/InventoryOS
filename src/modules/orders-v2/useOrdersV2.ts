@@ -1281,7 +1281,7 @@ export function buildGenerationInputs(
       ? null
       : pendingPoMap.get(ruleKey(b.location_id, b.product_id)) ?? null
 
-    if (b.rule.vmi_keepfill_enabled || b.on_hand == null) {
+    if (b.rule.vmi_keepfill_enabled) {
       return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
     const fam = `${b.location_id}|${pkey(baseProductId(b.product_id))}`
@@ -1292,8 +1292,11 @@ export function buildGenerationInputs(
     if (siblings.length === 0) {
       return { location_id: b.location_id, product_id: b.product_id, rule: b.rule, on_hand: b.on_hand, daily_usage: b.daily_usage, pendingPoQty }
     }
+    // A product with no usage record of its own (null on hand) still gets its siblings' stock — it reads as 0 of its own,
+    // not as "unknown", once a real sibling quantity exists.
+    const ownOnHand = b.on_hand ?? 0
     const equivalent_products = siblings.map((s) => ({ product_id: s.product_id, on_hand: s.on_hand }))
-    const combinedOnHand = b.on_hand + siblings.reduce((sum, s) => sum + s.on_hand, 0)
+    const combinedOnHand = ownOnHand + siblings.reduce((sum, s) => sum + s.on_hand, 0)
     // Same treatment for usage — a sibling recording zero usage of its own
     // adds nothing real, so it's excluded here too rather than folded in as
     // a no-op. Found live 2026-09-22: this used to also require b.daily_usage
@@ -1311,7 +1314,7 @@ export function buildGenerationInputs(
     return {
       location_id: b.location_id, product_id: b.product_id, rule: b.rule,
       on_hand: combinedOnHand, daily_usage: combinedUsage,
-      own_on_hand: b.on_hand, equivalent_products, pendingPoQty,
+      own_on_hand: ownOnHand, equivalent_products, pendingPoQty,
     }
   })
 }
