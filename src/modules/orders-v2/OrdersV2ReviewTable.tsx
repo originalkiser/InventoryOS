@@ -205,25 +205,27 @@ export function OrdersV2ReviewTable({
   const toneOf = useCallback((l: DraftLineRow) => tagMap.get(l.id)?.tone ?? null, [tagMap])
 
   // One button per flag/tag that is actually present somewhere in this table (plus the three row tones) — click to
-  // show only those lines; several selected show any of them.
+  // show only those lines; several selected show any of them. A button whose filter is ACTIVE stays listed even when its
+  // count has dropped to 0 (everything got fixed), so the filter can still be switched off instead of leaving a blank table
+  // with no way back; it disappears once the filter is off.
   const counts = useMemo(() => quickCounts(lines, tagMap, thresholds), [lines, tagMap, thresholds])
   const quickButtons = useMemo(() => {
     const out: { key: string; label: string; color: string; description: string; count: number }[] = []
     for (const t of TONE_ORDER) {
       const c = counts.get(toneKey(t)) ?? 0
-      if (c > 0) out.push({ key: toneKey(t), label: ROW_TONE_META[t].label, color: ROW_TONE_META[t].color, description: `Rows colored "${ROW_TONE_META[t].label}".`, count: c })
+      if (c > 0 || quick.has(toneKey(t))) out.push({ key: toneKey(t), label: ROW_TONE_META[t].label, color: ROW_TONE_META[t].color, description: `Rows colored "${ROW_TONE_META[t].label}".`, count: c })
     }
     for (const group of ['before', 'after'] as const) {
       for (const def of Object.values(TAG_DEFS)) {
         if (def.group !== group) continue
         const c = counts.get(tagKey(def.key)) ?? 0
-        if (c > 0) out.push({ key: tagKey(def.key), label: def.label, color: def.color, description: def.description, count: c })
+        if (c > 0 || quick.has(tagKey(def.key))) out.push({ key: tagKey(def.key), label: def.label, color: def.color, description: def.description, count: c })
       }
     }
     // User settings: only the chosen buttons, and optionally never a "DOS Now" one (only the after-order ones remain).
     const shown = new Set(Array.isArray(shownQuick) ? shownQuick : DEFAULT_SHOWN_QUICK)
-    return out.filter((b) => shown.has(b.key) && !(hideDosNow && (b.key === tagKey('dos_now_low') || b.key === tagKey('dos_now_below_target'))))
-  }, [counts, shownQuick, hideDosNow])
+    return out.filter((b) => quick.has(b.key) || (shown.has(b.key) && !(hideDosNow && (b.key === tagKey('dos_now_low') || b.key === tagKey('dos_now_below_target')))))
+  }, [counts, shownQuick, hideDosNow, quick])
   const shownLines = useMemo(
     () => (quick.size ? lines.filter((l) => matchesAnyQuick(quick, l, tagMap.get(l.id), thresholds)) : lines),
     [lines, tagMap, quick, thresholds],
