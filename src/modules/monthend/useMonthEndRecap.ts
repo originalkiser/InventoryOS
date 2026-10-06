@@ -13,7 +13,7 @@ import type { GridCell, ListItemRow } from '@/modules/inventory/procurementDeck/
 import { ownerBucket } from '@/hooks/useLocationExclusions'
 import { isRealShopLocation } from '@/hooks/useLocations'
 import { ALLOWABLE_TYPE_RULES_KEY, isAllowedCountType, type TypeRule } from './countsShared'
-import { areaCells, computeRecap, dailyCells, dailyNotes, dailyTableKey, trendsCells, type CellRow, type RecapResult } from './monthEndRecapCompute'
+import { areaCells, computeRecap, dailyCells, dailyNotes, dailyTableKey, managerNotes, trendsCells, type CellRow, type RecapResult } from './monthEndRecapCompute'
 
 const SLIDE_KEY = 'monthend_recap'
 
@@ -177,14 +177,14 @@ export function useMonthEndRecap() {
    * Everything written is an ordinary editable cell afterwards. Returns what it computed (and any area managers that needed a
    * new row) for the caller to report.
    */
-  async function fillMonth(countMonth: string): Promise<{ result: RecapResult; added: string[]; cycleKey: string } | null> {
+  async function buildMonth(countMonth: string, quiet = false): Promise<{ result: RecapResult; rowList: { label: string; sort: number }[]; shopLabels: Map<string, string> } | null> {
     if (!companyId) return null
     const sb = supabase as any
     const lo = new Date(countMonth + 'T00:00:00'); lo.setDate(lo.getDate() - 7)
     const hi = new Date(countMonth + 'T00:00:00'); hi.setDate(hi.getDate() + 50)
     const d = (x: Date) => x.toISOString().slice(0, 10)
     const [locRes, countRes, manualRes, ruleRes, exclRes, recRes] = await Promise.all([
-      sb.schema('core').from('locations').select('id, name, region, director, area_manager, owner, metadata, location_type').eq('company_id', companyId).eq('active', true),
+      sb.schema('core').from('locations').select('id, name, shop_city, region, director, area_manager, owner, metadata, location_type').eq('company_id', companyId).eq('active', true),
       sb.schema('inventory').from('counts').select('location_id, count_date, count_type, total_adjustments').eq('company_id', companyId).eq('count_month', countMonth),
       sb.schema('inventory').from('manual_count_entries').select('location_id, created_at').eq('company_id', companyId).eq('count_period', countMonth),
       sb.schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', ALLOWABLE_TYPE_RULES_KEY).maybeSingle(),
@@ -209,7 +209,79 @@ export function useMonthEndRecap() {
     const counts = ((countRes.data ?? []) as any[]).filter((c) => isAllowedCountType(c.count_type, c.total_adjustments, typeRules))
 
     const result = computeRecap({ countMonth, shops, counts, manual: (manualRes.data ?? []) as any[], recounts: (recRes.data ?? []) as any[] })
-    if (!result) { toast.error('No counts found for that month yet'); return null }
+    if (!result) { if (!quiet) toast.error('No counts found for that month yet'); return null }
+    const shopLabels = new Map<string, string>(((locRes.data ?? []) as any[]).map((l) => [l.id as string, String(l.shop_city || l.name)]))
+    return { result, rowList, shopLabels }
+  }
+
+  /** The month's recap numbers without writing anything (used by the missing-manager call-outs). */
+  async function computeMonth(countMonth: string) {
+    const b = await buildMonth(countMonth, true)
+    return b ? { result: b.result, shopLabels: b.shopLabels } : null
+  }
+
+  // ── Shops missing a manager for a count period ──────────────────────────────────────────────────────────────────────
+  async function loadMissingManagers(countMonth: string): Promise<{ location_id: string; shop_label: string | null }[]> {
+    if (!companyId) return []
+    const { data, error } = await (supabase as any).schema('inventory').from('monthend_missing_managers')
+      .select('location_id, shop_label').eq('company_id', companyId).eq('count_month', countMonth)
+    if (error) { toast.error(error.message); return [] }
+    return (data ?? []) as { location_id: string; shop_label: string | null }[]
+  }
+
+  /** Reads a shop list (one shop per row — number or "1521-City") and replaces that count period's list with it. */
+  async function uploadMissingManagers(countMonth: string, headers: string[], rows: Record<string, string>[]): Promise<{ saved: number; unmatched: string[] } | null> {
+    if (!companyId) return null
+    const sb = supabase as any
+    const col = headers.find((h) => /shop|store|location|number|#/i.test(h)) ?? headers[0]
+    const { data: locs, error: locErr } = await sb.schema('core').from('locations').select('id, name, shop_city, active').eq('company_id', companyId)
+    if (locErr) { toast.error(locErr.message); return null }
+    const byNumber = new Map<string, { id: string; label: string }>()
+    for (const l of (locs ?? []) as any[]) {
+      const key = String(l.name ?? '').trim().replace(/^0+(?=\d)/, '')
+      if (!key) continue
+      if (!byNumber.has(key) || l.active) byNumber.set(key, { id: l.id, label: String(l.shop_city || l.name) })
+    }
+    const matched = new Map<string, string>()
+    const unmatched: string[] = []
+    for (const r of rows) {
+      const raw = String(r[col] ?? '').trim()
+      if (!raw) continue
+      const num = (raw.match(/\d+/)?.[0] ?? raw).replace(/^0+(?=\d)/, '')
+      const hit = byNumber.get(num) ?? byNumber.get(raw)
+      if (hit) matched.set(hit.id, hit.label); else unmatched.push(raw)
+    }
+    if (matched.size === 0) { toast.error('No shops in that file matched a location'); return { saved: 0, unmatched } }
+    const del = await sb.schema('inventory').from('monthend_missing_managers').delete().eq('company_id', companyId).eq('count_month', countMonth)
+    if (del.error) { toast.error(del.error.message); return null }
+    const payload = [...matched.entries()].map(([location_id, shop_label]) => ({ company_id: companyId, count_month: countMonth, location_id, shop_label, created_by: userId }))
+    const ins = await sb.schema('inventory').from('monthend_missing_managers').insert(payload)
+    if (ins.error) { toast.error(ins.error.message); return null }
+    toast.success(`Saved ${payload.length} shop${payload.length === 1 ? '' : 's'} missing a manager`)
+    return { saved: payload.length, unmatched }
+  }
+
+  async function clearMissingManagers(countMonth: string) {
+    if (!companyId) return
+    const { error } = await (supabase as any).schema('inventory').from('monthend_missing_managers').delete().eq('company_id', companyId).eq('count_month', countMonth)
+    if (error) { toast.error(error.message); return }
+    toast.success('Cleared')
+  }
+
+  /**
+   * Computes a month's recap from the app's own data (see monthEndRecapCompute.ts for the definitions) and writes it into the
+   * grids — a new column in Compliance Trends and Recount Compliance by Area, and that month's own Daily Compliance cycle.
+   * Everything written is an ordinary editable cell afterwards. Returns what it computed (and any area managers that needed a
+   * new row) for the caller to report.
+   */
+  async function fillMonth(countMonth: string): Promise<{ result: RecapResult; added: string[]; cycleKey: string } | null> {
+    if (!companyId) return null
+    const sb = supabase as any
+    const built = await buildMonth(countMonth)
+    if (!built) return null
+    const { result, rowList, shopLabels } = built
+    const missing = await loadMissingManagers(countMonth)
+    const missingIds = new Set(missing.map((m) => m.location_id))
     const { cells: areaC, added } = areaCells(result, rowList)
     // One row per conflict key — a repeat in a single upsert makes Postgres reject the whole statement.
     const dedup = new Map<string, CellRow>()
@@ -226,13 +298,13 @@ export function useMonthEndRecap() {
     const cycleKey = dailyTableKey(result.monthKey)
     await sb.schema('inventory').from('monthend_recap_list_items').delete().eq('company_id', companyId).eq('slide_key', SLIDE_KEY).eq('table_key', cycleKey)
     await sb.schema('inventory').from('monthend_recap_list_items').insert(
-      dailyNotes(result).map((t, i) => ({ company_id: companyId, slide_key: SLIDE_KEY, table_key: cycleKey, item_text: t, sort_order: i + 1, updated_by: userId })))
+      dailyNotes(result, managerNotes(result, missingIds, (id) => shopLabels.get(id) ?? missing.find((m) => m.location_id === id)?.shop_label ?? id)).map((t, i) => ({ company_id: companyId, slide_key: SLIDE_KEY, table_key: cycleKey, item_text: t, sort_order: i + 1, updated_by: userId })))
     await load()
     return { result, added, cycleKey }
   }
 
   return {
-    fillMonth,
+    fillMonth, computeMonth, loadMissingManagers, uploadMissingManagers, clearMissingManagers,
     loading, cells, items,
     gridOf, listOf,
     saveCell, deleteGridRow,

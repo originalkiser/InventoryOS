@@ -5,9 +5,9 @@ export type ValueFormat = 'currency' | 'percent' | 'number' | 'gallons000'
 // the value is >= 1000 — toLocaleString's default grouping already does
 // the comma, minimumFractionDigits pins it to always show the .0 rather
 // than only "up to" 1 decimal.
-export function formatValue(v: number | null | undefined, format: ValueFormat): string {
+export function formatValue(v: number | null | undefined, format: ValueFormat, decimals = 1): string {
   if (v == null || Number.isNaN(v)) return '—'
-  const opts = { minimumFractionDigits: 1, maximumFractionDigits: 1 }
+  const opts = { minimumFractionDigits: decimals, maximumFractionDigits: decimals }
   switch (format) {
     case 'currency': return `$${v.toLocaleString(undefined, opts)}`
     case 'percent': return `${(v * 100).toLocaleString(undefined, opts)}%`

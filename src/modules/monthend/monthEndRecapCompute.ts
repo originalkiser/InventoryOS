@@ -67,6 +67,8 @@ export interface RecapResult {
   monthKey: string
   monthLabel: string
   daily: { shopsSubmitted: number[]; shopsComplete: number[]; notSubmitted: number[]; partialProducts: number[]; percentComplete: number[]; dates: string[] }
+  /** Each shop's own outcome — first count date (null = never submitted) and its recount kind, for manager call-outs. */
+  perShop: { id: string; submitted: string | null; kind: 'recount' | 'partial' | null }[]
   trends: { complete: number; recount: number; partial: number; notSubmitted: number }
   areaPct: Map<string, number> // keyed by `region|areaManager`, `region`, and 'ALL'
   areaCounts: Map<string, { flagged: number; total: number }>
@@ -89,7 +91,12 @@ export function computeRecap(args: {
   const start = cycleStartOf([...submitted.values()])
   if (!start || shops.length === 0) return null
 
-  const dates = Array.from({ length: 8 }, (_, i) => addDaysIso(start, i))
+  // From the count day through the END of the count month (never fewer than Day +7).
+  const [cy, cmo] = args.countMonth.split('-').map(Number)
+  const monthEnd = iso(new Date(cy, cmo, 0))
+  const span = Math.round((parse(monthEnd).getTime() - parse(start).getTime()) / 86_400_000) + 1
+  const dayCount = Math.min(31, Math.max(8, span))
+  const dates = Array.from({ length: dayCount }, (_, i) => addDaysIso(start, i))
   const windowEnd = addDaysIso(start, 14)
   const windowStart = addDaysIso(start, -3)
   // The latest recount request per flagged shop decides its outcome; partial products are counted per request.
@@ -150,6 +157,7 @@ export function computeRecap(args: {
     cycleStart: start, totalShops: shops.length,
     monthKey: `${y}-${String(m).padStart(2, '0')}`, monthLabel: `${MON[m - 1]}-${String(y).slice(2)}`,
     daily: { shopsSubmitted, shopsComplete, notSubmitted, partialProducts, percentComplete, dates },
+    perShop: shops.map((s) => ({ id: s.id, submitted: submitted.get(s.id) ?? null, kind: shopKind.get(s.id) ?? null })),
     trends: { complete, recount, partial, notSubmitted: notSub },
     areaPct, areaCounts, daysTo100,
   }
@@ -246,7 +254,38 @@ export function areaCells(r: RecapResult, existingRows: { label: string; sort: n
   return { cells, added }
 }
 
-export function dailyNotes(r: RecapResult): string[] {
+export interface ManagerCallouts {
+  /** Missing a manager and no count in by end of day Monday (the count day) — never submitted, or submitted later. */
+  late: { id: string; submitted: string | null }[]
+  /** Missing a manager and asked for a recount. */
+  recount: { id: string; kind: 'recount' | 'partial' }[]
+}
+
+/** Which of the shops missing a manager this count period need calling out. */
+export function managerCallouts(r: RecapResult, missing: Set<string>): ManagerCallouts {
+  const mine = r.perShop.filter((s) => missing.has(s.id))
+  return {
+    late: mine.filter((s) => !s.submitted || s.submitted > r.cycleStart).map((s) => ({ id: s.id, submitted: s.submitted })),
+    recount: mine.filter((s) => s.kind).map((s) => ({ id: s.id, kind: s.kind as 'recount' | 'partial' })),
+  }
+}
+
+/** Notes lines for the manager call-outs (empty when no list was uploaded). */
+export function managerNotes(r: RecapResult, missing: Set<string>, labelOf: (id: string) => string): string[] {
+  if (missing.size === 0) return []
+  const c = managerCallouts(r, missing)
+  const names = (ids: string[]) => ids.map(labelOf).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(', ')
+  const out: string[] = []
+  out.push(c.late.length
+    ? `${c.late.length} shop${c.late.length === 1 ? '' : 's'} without a manager had not submitted a count by end of day Monday (${md(r.cycleStart)}): ${names(c.late.map((x) => x.id))}`
+    : `Every shop without a manager submitted its count by end of day Monday (${md(r.cycleStart)})`)
+  out.push(c.recount.length
+    ? `${c.recount.length} shop${c.recount.length === 1 ? '' : 's'} that required a recount ${c.recount.length === 1 ? 'was' : 'were'} missing a manager: ${names(c.recount.map((x) => x.id))}`
+    : 'No shop that required a recount was missing a manager')
+  return out
+}
+
+export function dailyNotes(r: RecapResult, extra: string[] = []): string[] {
   const d0 = r.daily.dates[0]
   const day = (s: string) => parse(s).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
   const notes = [
@@ -257,8 +296,9 @@ export function dailyNotes(r: RecapResult): string[] {
     notes.push(r.daysTo100 === 0 ? 'Every shop completed on the day of the count'
       : `It took ${r.daysTo100} days to reach 100% compliance on completed shops (last shop completed on ${md(r.daily.dates[r.daysTo100])})`)
   } else {
-    const last = r.daily.shopsComplete[7]
-    notes.push(`By Day +7 (${md(r.daily.dates[7])}), ${last} of ${r.totalShops} shops (${Math.round((last / r.totalShops) * 100)}%) were complete`)
+    const li = r.daily.dates.length - 1
+    const last = r.daily.shopsComplete[li]
+    notes.push(`By Day +${li} (${md(r.daily.dates[li])}), ${last} of ${r.totalShops} shops (${Math.round((last / r.totalShops) * 100)}%) were complete`)
   }
-  return notes
+  return [...notes, ...extra]
 }

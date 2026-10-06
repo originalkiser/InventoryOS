@@ -21,6 +21,8 @@ import { Card, CardBody } from '@/components/ui'
 import { GridSection } from '@/modules/inventory/procurementDeck/GridSection'
 import { ListSection } from '@/modules/inventory/procurementDeck/ListSection'
 import { useMonthEndRecap } from './useMonthEndRecap'
+import { MissingManagersCard } from './MissingManagersCard'
+import { dailyTableKey } from './monthEndRecapCompute'
 
 const REGION_ROWS = [
   'Central - Ryan Bolden',
@@ -75,7 +77,18 @@ export function RecapTab() {
     if (recap.loading || autoFilled.current) return
     autoFilled.current = true
     const key = defaultMonth()
-    if (recap.gridOf('trends').some((c) => c.col_key === key)) return
+    const filled = recap.gridOf('trends').some((c) => c.col_key === key)
+    // A month filled before the daily table ran to the end of the month has too few day columns — fill it again.
+    const daily = recap.gridOf(dailyTableKey(key))
+    const first = daily.find((c) => c.col_key === 'd0')?.col_label.match(/(\d+)\/(\d+)/)
+    let stale = false
+    if (filled && first) {
+      const [y, m] = key.split('-').map(Number)
+      const startDay = new Date(y, Number(first[1]) - 1, Number(first[2]))
+      const expected = Math.round((new Date(y, m, 0).getTime() - startDay.getTime()) / 86_400_000) + 1
+      stale = new Set(daily.map((c) => c.col_key)).size < Math.max(8, Math.min(31, expected))
+    }
+    if (filled && !stale) return
     void fill()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recap.loading])
@@ -124,10 +137,12 @@ export function RecapTab() {
           onSave={recap.saveListItem} onDelete={recap.deleteListItem}
           onMove={(id, dir) => recap.moveListItem(activeCycle, id, dir)} />
         <GridSection key={activeCycle} title="Daily Month-End Count Compliance" slideKey="monthend_recap" tableKey={activeCycle}
-          cells={recap.gridOf(activeCycle)} format="number"
+          cells={recap.gridOf(activeCycle)} format="number" decimals={0} compact
           rowFormats={{ 'Percent Complete': 'percent' }}
           onSaveCell={saveCell(activeCycle)} onDeleteRow={deleteRow(activeCycle)} onUpload={upload(activeCycle)} />
       </CardBody></Card>
+
+      <MissingManagersCard recap={recap} month={month} />
 
       <Card><CardBody className="flex flex-col gap-4">
         <div>

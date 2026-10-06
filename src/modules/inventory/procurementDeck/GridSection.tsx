@@ -34,6 +34,10 @@ export interface GridSectionProps {
   columnFormats?: Record<string, ValueFormat>
   chart?: { rows: string[]; stacked?: boolean; lineRows?: string[]; referenceLines?: { label: string; value: number }[] }
   allowAddRow?: boolean
+  /** Decimal places shown in the cells (default 1). */
+  decimals?: number
+  /** Tight layout for wide grids: header labels wrap ("Day +1" over "(Tue 9/22)") and cells shrink so every column fits without scrolling. */
+  compact?: boolean
   onSaveCell: (rowLabel: string, rowSort: number, colKey: string, colLabel: string, colSort: number, value: number | null) => void
   onDeleteRow: (rowLabel: string) => void
   onUpload: (headers: string[], rows: Record<string, string>[]) => void
@@ -41,7 +45,7 @@ export interface GridSectionProps {
   historyOf?: (row: string, col: string) => FieldHistoryEntry[]
 }
 
-export function GridSection({ title, slideKey, tableKey, cells, format, rowFormats, columnFormats, chart, allowAddRow, onSaveCell, onDeleteRow, onUpload, isChanged, historyOf }: GridSectionProps) {
+export function GridSection({ title, slideKey, tableKey, cells, format, rowFormats, columnFormats, chart, allowAddRow, decimals = 1, compact = false, onSaveCell, onDeleteRow, onUpload, isChanged, historyOf }: GridSectionProps) {
   const formatFor = (row: string, colKey: string): ValueFormat => rowFormats?.[row] ?? columnFormats?.[colKey] ?? format
   const [showUpload, setShowUpload] = useState(false)
   const [newRow, setNewRow] = useState('')
@@ -81,7 +85,7 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
   // real table into PowerPoint/Word/Excel — and tab-separated text for anything that only takes plain text.
   async function copyTable() {
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const body = rowLabels.map((row) => [row, ...cols.map((c) => formatValue(cellFor(row, c.key)?.value_num, formatFor(row, c.key)))])
+    const body = rowLabels.map((row) => [row, ...cols.map((c) => formatValue(cellFor(row, c.key)?.value_num, formatFor(row, c.key), decimals))])
     const head = ['', ...cols.map((c) => c.label)]
     const tsv = [head, ...body].map((r) => r.join('\t')).join('\n')
     const cell = (tag: 'th' | 'td', v: string, left: boolean) => {
@@ -167,7 +171,9 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
             <thead>
               <tr>
                 <th className="px-2 py-2 text-left font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30 bg-cream sticky left-0 z-10">Row</th>
-                {cols.map((c) => <th key={c.key} className="px-2 py-2 text-right font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30 bg-cream">{c.label}</th>)}
+                {cols.map((c) => compact
+                  ? <th key={c.key} className="px-1 py-2 text-center font-mono uppercase tracking-wide text-inky leading-tight whitespace-pre-line border-b border-navy/30 bg-cream">{c.label.replace(' (', '\n(')}</th>
+                  : <th key={c.key} className="px-2 py-2 text-right font-mono uppercase tracking-wide text-inky whitespace-nowrap border-b border-navy/30 bg-cream">{c.label}</th>)}
                 <th className="px-2 py-2 border-b border-navy/30 bg-cream" />
               </tr>
             </thead>
@@ -183,12 +189,12 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
                       const changed = isChanged?.(row, c.key) ?? false
                       const fieldHistory = historyOf?.(row, c.key) ?? []
                       return (
-                        <td key={c.key} className="px-2 py-1 border-b border-navy/15 text-right">
-                          <div className="flex items-center justify-end gap-1">
+                        <td key={c.key} className={`${compact ? 'px-0.5' : 'px-2'} py-1 border-b border-navy/15 text-right`}>
+                          <div className={`flex items-center gap-1 ${compact ? 'justify-center' : 'justify-end'}`}>
                             <input
                               type="text"
                               inputMode="decimal"
-                              defaultValue={formatValue(cell?.value_num, fmt)}
+                              defaultValue={formatValue(cell?.value_num, fmt, decimals)}
                               onFocus={(e) => { e.target.value = toInputValue(cell?.value_num, fmt) }}
                               onBlur={(e) => {
                                 const v = fromInputValue(e.target.value, fmt)
@@ -197,9 +203,9 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
                                 // Redisplay formatted ($/%/comma) now that editing is done — this is an
                                 // uncontrolled input (defaultValue only applies on mount), so the DOM
                                 // value has to be set back explicitly rather than relying on a re-render.
-                                e.target.value = formatValue(v, fmt)
+                                e.target.value = formatValue(v, fmt, decimals)
                               }}
-                              className={`w-24 bg-transparent border rounded px-1 py-0.5 text-right text-navy focus:border-sky focus:bg-white ${changed ? CHANGED_INPUT : 'border-transparent hover:border-navy/30'}`}
+                              className={`${compact ? 'w-12 text-center' : 'w-24 text-right'} bg-transparent border rounded px-1 py-0.5 text-navy focus:border-sky focus:bg-white ${changed ? CHANGED_INPUT : 'border-transparent hover:border-navy/30'}`}
                             />
                             <FieldHistoryButton label={`${row} — ${c.label}`} entries={fieldHistory} format={fmt}
                               onRevert={(value) => onSaveCell(row, rowMap.get(row) ?? 0, c.key, c.label, c.sort, value)} />
