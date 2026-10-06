@@ -14,7 +14,7 @@
 // RecountLogicTab's own median-variance rule and counts.uploaded_at
 // granularity exactly) is a bigger follow-up; for now, new months are
 // entered/edited the same way any seeded cell is.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { SbLoader, Button } from '@/components/ui'
 import toast from 'react-hot-toast'
 import { Card, CardBody } from '@/components/ui'
@@ -67,6 +67,18 @@ export function RecapTab() {
     )
     toast.success(`Filled in ${r.result.monthLabel} from the app's data`)
   }
+
+  // The previous month is filled in automatically the first time this tab opens without it — nobody should have to remember
+  // to click the button for the month everyone is about to recap. The button stays for re-filling or picking another month.
+  const autoFilled = useRef(false)
+  useEffect(() => {
+    if (recap.loading || autoFilled.current) return
+    autoFilled.current = true
+    const key = defaultMonth()
+    if (recap.gridOf('trends').some((c) => c.col_key === key)) return
+    void fill()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recap.loading])
 
   const saveCell = (tableKey: string) =>
     (rowLabel: string, rowSort: number, colKey: string, colLabel: string, colSort: number, value: number | null) =>

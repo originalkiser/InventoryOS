@@ -211,7 +211,10 @@ export function useMonthEndRecap() {
     const result = computeRecap({ countMonth, shops, counts, manual: (manualRes.data ?? []) as any[], recounts: (recRes.data ?? []) as any[] })
     if (!result) { toast.error('No counts found for that month yet'); return null }
     const { cells: areaC, added } = areaCells(result, rowList)
-    const all: CellRow[] = [...dailyCells(result), ...trendsCells(result), ...areaC]
+    // One row per conflict key — a repeat in a single upsert makes Postgres reject the whole statement.
+    const dedup = new Map<string, CellRow>()
+    for (const c of [...dailyCells(result), ...trendsCells(result), ...areaC]) dedup.set(`${c.table_key}|${c.row_label}|${c.col_key}`, c)
+    const all: CellRow[] = [...dedup.values()]
     const now = new Date().toISOString()
     const rows = all.map((c) => ({ company_id: companyId, slide_key: SLIDE_KEY, ...c, updated_by: userId, updated_at: now }))
     for (let i = 0; i < rows.length; i += 400) {

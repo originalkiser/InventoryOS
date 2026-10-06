@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Upload, Trash2, Plus, ChevronDown, ChevronUp } from 'lucide-react'
+import { Upload, Trash2, Plus, ChevronDown, ChevronUp, Copy } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { FileUploadZone } from '@/components/upload/FileUploadZone'
 import { Button } from '@/components/ui'
 import type { GridCell, FieldHistoryEntry } from './types'
@@ -76,6 +77,31 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
     return cells.find((c) => c.row_label === row && c.col_key === colKey) ?? null
   }
 
+  // Copies the table exactly as displayed (formatted values, the visible period) as both an HTML table — which pastes as a
+  // real table into PowerPoint/Word/Excel — and tab-separated text for anything that only takes plain text.
+  async function copyTable() {
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const body = rowLabels.map((row) => [row, ...cols.map((c) => formatValue(cellFor(row, c.key)?.value_num, formatFor(row, c.key)))])
+    const head = ['', ...cols.map((c) => c.label)]
+    const tsv = [head, ...body].map((r) => r.join('\t')).join('\n')
+    const cell = (tag: 'th' | 'td', v: string, left: boolean) => {
+      const indent = left && /^\s/.test(v) ? '&nbsp;&nbsp;&nbsp;&nbsp;' : ''
+      return `<${tag} style="border:1px solid #999;padding:3px 8px;text-align:${left ? 'left' : 'right'}">${indent}${esc(v.trim())}</${tag}>`
+    }
+    const html = `<table style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:12px"><tr>${head.map((v, i) => cell('th', v, i === 0)).join('')}</tr>${
+      body.map((r) => `<tr>${r.map((v, i) => cell('td', v, i === 0)).join('')}</tr>`).join('')}</table>`
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([tsv], { type: 'text/plain' }) })])
+      } else {
+        await navigator.clipboard.writeText(tsv)
+      }
+      toast.success('Table copied')
+    } catch {
+      toast.error("Couldn't copy the table")
+    }
+  }
+
   function addRow() {
     const label = newRow.trim()
     if (!label) return
@@ -113,9 +139,15 @@ export function GridSection({ title, slideKey, tableKey, cells, format, rowForma
             </>
           )}
         </div>
-        <button onClick={() => setShowUpload((s) => !s)} className="inline-flex items-center gap-1 text-[11px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">
-          <Upload className="w-3 h-3" /> Upload to update {showUpload ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => void copyTable()} disabled={cols.length === 0 || rowLabels.length === 0} title="Copy this table (paste into PowerPoint, Word or Excel)"
+            className="inline-flex items-center gap-1 text-[11px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy disabled:opacity-40">
+            <Copy className="w-3 h-3" /> Copy table
+          </button>
+          <button onClick={() => setShowUpload((s) => !s)} className="inline-flex items-center gap-1 text-[11px] font-mono text-inky border border-navy/30 rounded px-2 py-1 hover:border-navy">
+            <Upload className="w-3 h-3" /> Upload to update {showUpload ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
+        </div>
       </div>
 
       {showUpload && (

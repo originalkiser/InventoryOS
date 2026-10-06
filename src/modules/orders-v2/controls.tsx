@@ -21,23 +21,32 @@ import { useEffect, useRef, useState } from 'react'
 export function AnimatedHeight({ children, className }: { children: React.ReactNode; className?: string }) {
   const innerRef = useRef<HTMLDivElement>(null)
   const [height, setHeight] = useState<number | null>(null)
+  // Content is only clipped WHILE the height is animating — once settled it is visible again so a dropdown opening inside
+  // (e.g. the ad hoc shop picker) can extend past the bottom edge instead of being cut off behind the text under it.
+  const [animating, setAnimating] = useState(false)
+  const settleTimer = useRef<number | undefined>(undefined)
   const firstMeasure = useRef(true)
   useEffect(() => {
     const el = innerRef.current
     if (!el) return
     const measure = () => {
+      if (!firstMeasure.current) {
+        setAnimating(true)
+        window.clearTimeout(settleTimer.current)
+        settleTimer.current = window.setTimeout(() => setAnimating(false), 320)
+      }
       firstMeasure.current = false
       setHeight(el.scrollHeight)
     }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
+    return () => { ro.disconnect(); window.clearTimeout(settleTimer.current) }
   }, [])
   return (
     <div
       className={className}
-      style={{ height: height ?? undefined, overflow: 'hidden', transition: firstMeasure.current ? undefined : 'height 280ms ease' }}
+      style={{ height: height ?? undefined, overflow: animating ? 'hidden' : 'visible', transition: firstMeasure.current ? undefined : 'height 280ms ease' }}
     >
       <div ref={innerRef}>{children}</div>
     </div>

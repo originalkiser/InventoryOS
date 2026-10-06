@@ -220,6 +220,9 @@ export function areaCells(r: RecapResult, existingRows: { label: string; sort: n
     if (!row) continue // a region the deck doesn't track
     put(row.label, row.sort, r.areaPct.get(region) ?? 0)
     let extra = 0
+    // Two app names can land on the same deck row (e.g. "Brock Rhymer" and "Brock Rhymer (acting AM)") — their shops are
+    // pooled into that one row rather than written twice (a duplicate key makes the whole upsert fail).
+    const byRow = new Map<string, { label: string; sort: number; flagged: number; total: number }>()
     for (const key of [...r.areaCounts.keys()].filter((k) => k.startsWith(`${region}|`)).sort()) {
       const am = key.slice(region.length + 1)
       const n = normName(am)
@@ -227,15 +230,18 @@ export function areaCells(r: RecapResult, existingRows: { label: string; sort: n
       const lo = row.sort, hi = row.sort + 99
       const pool = amRows.filter((x) => x.sort > lo && x.sort <= hi)
       const hit = pool.find((x) => normName(x.label) === n) ?? pool.find((x) => lev(normName(x.label), n) <= 2)
-      if (hit) put(hit.label, hit.sort, r.areaPct.get(key) ?? 0)
-      else {
-        extra++
-        const label = `${indent}${am}`
-        const sort = row.sort + 50 + extra
-        put(label, sort, r.areaPct.get(key) ?? 0)
-        added.push(`${am} (${region})`)
+      const counts = r.areaCounts.get(key) ?? { flagged: 0, total: 0 }
+      let target = hit ? { label: hit.label, sort: hit.sort } : null
+      if (!target) {
+        const sameNew = [...byRow.values()].find((v) => normName(v.label) === n)
+        if (sameNew) target = { label: sameNew.label, sort: sameNew.sort }
+        else { extra++; target = { label: `${indent}${am}`, sort: row.sort + 50 + extra }; added.push(`${am} (${region})`) }
       }
+      const cur = byRow.get(target.label) ?? { ...target, flagged: 0, total: 0 }
+      cur.flagged += counts.flagged; cur.total += counts.total
+      byRow.set(target.label, cur)
     }
+    for (const v of byRow.values()) put(v.label, v.sort, v.total ? Math.round((v.flagged / v.total) * 1000) / 1000 : 0)
   }
   return { cells, added }
 }

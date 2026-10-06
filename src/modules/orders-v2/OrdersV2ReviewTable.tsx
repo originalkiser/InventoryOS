@@ -366,9 +366,30 @@ export function OrdersV2ReviewTable({
       col.accessor((l) => (ozProductIds.has(l.product_id) ? (l.daily_usage ?? 0) * 32 : l.daily_usage), {
         id: 'usage_day', header: 'Usage/day', enableSorting: false, meta: numericMeta,
         cell: (i) => {
-          const eq = inputByLineKey.get(`${i.row.original.location_id}|${i.row.original.product_id}`)?.equivalent_usage
-          const title = eq && eq.length ? `Includes usage from ${eq.map((e) => `${e.product_id} (${num(e.daily_usage)}/day)`).join(', ')}` : undefined
-          return <span className={`block text-right${title ? ' underline decoration-dotted decoration-sky underline-offset-2' : ''}`} title={title}>{num(i.getValue())}</span>
+          const l = i.row.original
+          const input = inputByLineKey.get(`${l.location_id}|${l.product_id}`)
+          const eq = input?.equivalent_usage ?? []
+          if (eq.length === 0) return <span className="block text-right">{num(i.getValue())}</span>
+          // Same hover as "Combined on hand": this product's own usage plus each sibling's, then the total.
+          const isOz = ozProductIds.has(l.product_id)
+          const toOz = (v: number) => (isOz ? v * 32 : v)
+          const unit = isOz ? 'oz' : 'qt'
+          const total = Number(l.daily_usage ?? 0)
+          const own = Math.max(0, total - eq.reduce((s, e) => s + e.daily_usage, 0))
+          return (
+            <div className="flex">
+            <HoverTip className="ml-auto" placement="bottom" content={
+              <div className="flex flex-col gap-0.5 text-[11px] font-mono">
+                <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">Combined usage per day</span>
+                <span>{l.product_id} {num(toOz(own))} {unit} +</span>
+                {eq.map((e, idx) => <span key={e.product_id}>{e.product_id} {num(toOz(e.daily_usage))} {unit} {idx === eq.length - 1 ? '=' : '+'}</span>)}
+                <span className="font-bold">Total {num(i.getValue() as number)} {unit}/day</span>
+              </div>
+            }>
+              <span className="ml-auto underline decoration-dotted decoration-sky underline-offset-2">{num(i.getValue())}</span>
+            </HoverTip>
+            </div>
+          )
         },
       }),
       col.accessor('dos_before', {
@@ -408,7 +429,7 @@ export function OrdersV2ReviewTable({
         cell: (i) => <div>{i.getValue()}</div>,
       }),
       col.accessor((l) => Number(l.qty), {
-        id: 'qty', header: 'Order Qty', enableSorting: false, size: 224, minSize: 224,
+        id: 'qty', header: 'Order Qty', enableSorting: false, size: 196, minSize: 196,
         meta: {
           numeric: true,
           // The orange "edited by hand" bar runs the full height of the cell, not just the content.
@@ -421,10 +442,10 @@ export function OrdersV2ReviewTable({
             // Fixed layout so every row lines up: the quarts figure in a fixed-width slot, then the stepper with a box
             // sized for 4+ digits, the whole group pushed to the right edge of the cell.
             <div className="flex items-center justify-between gap-2 flex-nowrap">
-              <QtyStepper compact inputClassName="w-16" value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
+              <QtyStepper compact inputClassName="w-14" value={Number(l.qty)} bulk={l.uom === 'bulk'} align="text-right"
                 onChange={(n) => patchQty(l, n)} zeroReason={{ line: l, onChange: (r, n) => onZeroReason(l, r, n) }} />
-              <span className="text-[10px] text-navy/75 whitespace-nowrap w-[3.6rem] text-right flex-shrink-0">
-                {l.quarts_per_unit != null ? (isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)}oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`) : ''}
+              <span className="text-[10px] text-navy/75 whitespace-nowrap w-[3.2rem] text-right flex-shrink-0">
+                {l.quarts_per_unit != null ? (isOz ? `${num(Number(l.qty) * l.quarts_per_unit * 32, 0)} oz` : `${num(Number(l.qty) * l.quarts_per_unit, 1)} qt`) : ''}
               </span>
             </div>
           )
