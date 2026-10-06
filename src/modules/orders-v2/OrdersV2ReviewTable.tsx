@@ -134,8 +134,10 @@ export function OrdersV2ReviewTable({
   decidePoOverride, decidePoExclude, decidePoCombine, onZeroReason,
   expanded, onToggleExpand, shopRows, onAddConfiguredProduct, showConfigVmi, leadDaysFor,
   inputByLineKey, toolbarExtra, onRowRef, onLastRowKey, isSeen, jumpNonce, variant = 'order',
-  tagMap, quickFilters, onQuickFiltersChange, renderShopProducts,
+  tagMap, quickFilters, onQuickFiltersChange, renderShopProducts, showSchedule,
 }: {
+  /** Valvoline: show each shop's order/delivery schedule written out, so the delivery dates make sense at a glance. */
+  showSchedule?: boolean
   /**
    * 'order' = the main Review table. 'noOrders' = every product for shops that ended up with no order (no shop
    * button). 'overrides' = the lines edited by hand, in a modal; the shop button opens the shop-products popup.
@@ -430,6 +432,10 @@ export function OrdersV2ReviewTable({
         // Just the date and weekday — no "(RelaDyne delivery day)" schedule text.
         cell: (i) => <div>{i.getValue()}</div>,
       }),
+      ...(showSchedule ? [col.accessor((l) => describeSchedule(l.location_id) ?? '', {
+        id: 'delivery_schedule', header: 'Delivery Schedule', enableSorting: false, meta: { noClip: true },
+        cell: (i) => <div className="text-[11px] leading-tight text-navy/85 min-w-[11rem]">{i.getValue() || '—'}</div>,
+      })] : []),
       col.accessor((l) => Number(l.qty), {
         id: 'qty', header: 'Order Qty', enableSorting: false, size: 196, minSize: 196,
         meta: {
@@ -510,7 +516,7 @@ export function OrdersV2ReviewTable({
         },
       }),
     ].filter((c: any) => !(variant === 'shop' && c.id === 'shop'))
-  }, [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, draft.order_date,
+  }, [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, showSchedule, draft.order_date,
       patchQty, thresholds, tagsOf, onHandAfterAtDelivery, combinedListed, decidePoOverride, decidePoExclude,
       decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, variant, lines, tagMap, quick])
 

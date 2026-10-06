@@ -8,7 +8,7 @@ import type { GenerationInput } from './types'
 export const CANDIDATE_PREFIX = 'cand:'
 export const isCandidateLine = (l: Pick<DraftLineRow, 'id'>) => l.id.startsWith(CANDIDATE_PREFIX)
 
-export function candidateLine(input: GenerationInput, draftId: string, orderDate: string, deliveryDate: string | null): DraftLineRow {
+export function candidateLine(input: GenerationInput, draftId: string, orderDate: string, deliveryDate: string | null, projectDosAfter = false): DraftLineRow {
   const { rule } = input
   const dos = daysOfSupply(input.on_hand, input.daily_usage)
   return {
@@ -25,7 +25,8 @@ export function candidateLine(input: GenerationInput, draftId: string, orderDate
     on_hand: input.on_hand,
     daily_usage: input.daily_usage,
     dos_before: dos,
-    dos_after: dos,
+    // Valvoline: with nothing ordered, DOS After is what's left once the truck would land (= DOS @ Delivery).
+    dos_after: projectDosAfter ? dosAfterDelivery(input.on_hand, input.daily_usage, orderDate, deliveryDate) : dos,
     dos_after_delivery: dosAfterDelivery(input.on_hand, input.daily_usage, orderDate, deliveryDate),
     max_capacity_gallons: rule.max_capacity_gallons,
     included: false,

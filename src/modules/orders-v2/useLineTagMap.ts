@@ -18,7 +18,8 @@ export function useLineTagMap(
     const ctx = {
       thresholds: thresholds ?? NO_THRESHOLDS,
       onHandAfter: (l: DraftLineRow) => onHandAfterAtDelivery(l),
-      belowMinimum: (l: DraftLineRow) => groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false,
+      // 'exempt:<line id>' marks a line that is allowed by an exception (HM0806 solo, a Valvoline drum) — never "under min".
+      belowMinimum: (l: DraftLineRow) => groupMinimumStatus.get(`exempt:${l.id}`) !== true && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false,
     }
     const m: LineTagMap = new Map()
     for (const l of lines) {

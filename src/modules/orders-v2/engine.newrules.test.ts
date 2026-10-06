@@ -601,3 +601,49 @@ describe('smoothing needs usage; no-usage products order one case at the critica
     expect(res.lines.find((l) => l.product_id === 'P1')?.qty).toBe(1)
   })
 })
+
+describe('Valvoline: drum ordered alone, delivery-aware ordering', () => {
+  const val = { vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: { bay_box: 6 }, usesOrderDays: false, drumOrderedAlone: true, alwaysListConfiguredProducts: true, spreadCaseTypeMinimum: true }
+  const drum = (over = {}) => input({ product_id: 'DRUM', on_hand: 23, daily_usage: 2, rule: { uom: 'drum', units_per_uom_gallons: 220, unit_cost: 500, ...over } })
+  const box = (id: string, over: Omit<Partial<GenerationInput>, 'rule'> & { rule?: Partial<ProductRule> } = {}) =>
+    input({ product_id: id, on_hand: 200, daily_usage: 2, ...over, rule: { uom: 'bay_box', units_per_uom_gallons: 20, unit_cost: 60, max_capacity_gallons: 400, ...(over.rule ?? {}) } })
+
+  it('a drum alone is not under minimum and does not drag bay boxes onto the order', () => {
+    const res = generateOrder([drum(), box('B1'), box('B2')], ctx({ vendor: val }))
+    const d = res.lines.find((l) => l.product_id === 'DRUM')!
+    expect(d.qty).toBe(1)
+    expect(d.flags).toContain('drum_alone')
+    expect(d.flags).not.toContain('below_minimum')
+    expect(res.lines.filter((l) => l.uom === 'bay_box' && l.qty > 0)).toHaveLength(0)
+    expect(res.groups[0].meetsMinimum).toBe(true)
+  })
+
+  it('with bay boxes also ordered, only the bay boxes carry the under-minimum flag', () => {
+    const res = generateOrder([drum(), box('B1', { on_hand: 10, daily_usage: 5, rule: { max_capacity_gallons: 40 } })], ctx({ vendor: val }))
+    const d = res.lines.find((l) => l.product_id === 'DRUM')!
+    expect(d.flags).not.toContain('below_minimum')
+    expect(d.flags).not.toContain('drum_alone')
+    const b = res.lines.find((l) => l.product_id === 'B1')!
+    expect(b.qty).toBeGreaterThan(0)
+  })
+
+  it('without the Valvoline flag a drum alone is judged like any other line', () => {
+    const res = generateOrder([drum()], ctx({ vendor: { ...val, drumOrderedAlone: false } }))
+    expect(res.lines.find((l) => l.product_id === 'DRUM')!.flags).not.toContain('drum_alone')
+  })
+
+  it('plans for what the shop will have on delivery: DOS now is fine but it runs out before the truck lands', () => {
+    // 47.1 qt at 2.97/day = 15.9 days now (above the 14-day trigger); delivery is 15 days out, so ~0.9 days remain on arrival.
+    const base = box('B', { on_hand: 47.1, daily_usage: 2.97, rule: { max_capacity_gallons: 120 } })
+    const withLead = generateOrder([{ ...base, lead_days: 15 }], ctx({ vendor: { ...val, caseTypeMinimums: {} } }))
+    const l = withLead.lines.find((x) => x.product_id === 'B')!
+    expect(l.qty).toBeGreaterThan(0)
+    expect(l.on_hand).toBeCloseTo(47.1) // today's actual stays on the line
+    expect(l.dos_before).toBeCloseTo(47.1 / 2.97)
+    const projected = Math.max(0, 47.1 - 2.97 * 15)
+    expect(l.dos_after).toBeCloseTo((projected + l.qty * 20) / 2.97)
+    // Without a lead time (RelaDyne/Mighty) nothing is ordered for the same product.
+    const noLead = generateOrder([base], ctx({ vendor: { ...val, caseTypeMinimums: {} } }))
+    expect(noLead.lines.find((x) => x.product_id === 'B' && x.qty > 0)).toBeUndefined()
+  })
+})

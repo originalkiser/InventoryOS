@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Copy, Download, Settings } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -14,7 +14,7 @@ import { usePageRevisit } from '@/hooks/usePageActive'
 import { useAuthStore } from '@/stores/authStore'
 import { parseWeekday, orderDayFromDelivery } from '@/lib/orderDay'
 import { supabase } from '@/lib/supabase'
-import { useDraft, useOrderSettings, useVendorRules, isOunceUnit, type DraftLineRow } from './useOrdersV2'
+import { useDraft, useOrderSettings, useVendorRules, isOunceUnit, isValvoline, type DraftLineRow } from './useOrdersV2'
 import { useVendors } from './useLookups'
 import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { Flags } from './OrdersV2Review'
@@ -153,9 +153,12 @@ export function OrdersV2FinalReview() {
   // VMI/keep-fill line — see OrdersV2Review.tsx's own patchQty for the full
   // reasoning (found live 2026-09-24 from Valvoline's new always-list-every-
   // configured-product qty:0/included:false placeholder rows).
+  // Valvoline: DOS After counts days of supply once the delivery lands — the lead time is read through a ref since the
+  // delivery lookup is defined further down this component.
+  const leadRef = useRef<(locId: string | null) => number>(() => 0)
   const patchQty = useCallback((l: DraftLineRow, qty: number) => {
     const isVmi = l.flags?.includes('vmi_keepfill')
-    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty), ...(isVmi ? {} : { included: qty > 0 }) })
+    patchLine(l.id, { qty, dos_after: dosAfterForQty(l, qty, leadRef.current(l.location_id)), ...(isVmi ? {} : { included: qty > 0 }) })
   }, [patchLine])
 
   const vendorRules = useMemo(() => rulesFor(draft?.vendor_id ?? null, settings, vendors.byId(draft?.vendor_id ?? null)?.name),
@@ -235,6 +238,11 @@ export function OrdersV2FinalReview() {
       ? resolveDeliveryDate(fromDate, sched, scheduleLookup.calendar)
       : nextDeliveryDate(fromDate, deliveryDowOf(locationId))
   }, [scheduleLookup, deliveryDowOf])
+  leadRef.current = (locId) => {
+    if (!draft || !isValvoline(vendors.byId(draft.vendor_id)?.name)) return 0
+    const dd = deliveryFor(locId, draft.order_date)
+    return dd ? Math.max(0, daysBetween(draft.order_date, dd)) : 0
+  }
 
   // Same delivery-projected On Hand After formula as OrdersV2Review.tsx's
   // own onHandAfterAtDelivery (direct ask 2026-09-29 — the per-shop modal

@@ -245,6 +245,7 @@ export function useVendorRules() {
       usesOrderDays: isReladyne(vendorName),
       alwaysListConfiguredProducts: isValvoline(vendorName),
       spreadCaseTypeMinimum: isValvoline(vendorName),
+      drumOrderedAlone: isValvoline(vendorName),
       // Per-vendor opt-in (2026-09-25) — unlike the 3 flags above, this one
       // isn't a hardcoded vendor-name check; it's a real per-vendor setting
       // (Order Settings screen), resolved here the same way a vendor's

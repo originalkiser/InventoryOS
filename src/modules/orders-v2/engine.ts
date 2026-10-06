@@ -409,7 +409,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
   const units = Number.isFinite(rawUnits) ? Math.max(0, rawUnits) : 0
   const gallons = units * per
   const flags: LineFlag[] = [...historyFlags(input, ctx)]
-  if (n(input.on_hand) <= 0) flags.push('stocked_out')
+  if (n(input.actual_on_hand ?? input.on_hand) <= 0) flags.push('stocked_out')
   if ((input.equivalent_products?.length ?? 0) > 0) flags.push('combined_on_hand')
   if (units > 0 && caps.capacityBound) flags.push('capacity_capped')
   if (rule.vmi_keepfill_enabled) flags.push('vmi_keepfill')
@@ -900,7 +900,27 @@ function bestTopUpIndex(
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
-export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext): GenerationResult {
+/**
+ * Delivery-aware generation (Valvoline only — only these inputs carry lead_days). The order lands lead_days from now, so what
+ * matters is what the shop will have THEN: on hand run down by usage over the lead time. Trigger, sizing, capacity and DOS After
+ * all work from that; the lines still show today's actual on hand and DOS Now (restored at the end of generateOrder).
+ */
+function projectToDelivery(i: GenerationInput): GenerationInput {
+  const lead = n(i.lead_days), u = n(i.daily_usage)
+  if (lead <= 0 || u <= 0 || i.on_hand == null || i.rule.vmi_keepfill_enabled) return i
+  return { ...i, actual_on_hand: i.on_hand, on_hand: Math.max(0, i.on_hand - u * lead) }
+}
+
+/** Under-minimum flag for a whole group — except a Valvoline drum, which is allowed on its own. */
+function markBelowMin(lines: GeneratedLine[], ctx: GenerationContext): void {
+  for (const l of lines) {
+    if (ctx.vendor.drumOrderedAlone && isDrumUom(l.uom)) continue
+    if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
+  }
+}
+
+export function generateOrder(rawInputs: GenerationInput[], ctx: GenerationContext): GenerationResult {
+  const inputs = rawInputs.map(projectToDelivery)
   const skipped: GenerationResult['skipped'] = []
   const inputByKey = new Map<string, GenerationInput>()
   for (const i of inputs) inputByKey.set(`${i.location_id}|${i.product_id}`, i)
@@ -1092,6 +1112,17 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     // minimum in Pass 1, one case only).
     const spares = (eligibleSpare.get(key) ?? []).filter((sp) => resolvedOrderType(sp.rule) === order_type && hasUsage(sp))
 
+    // Valvoline drum alone: a group whose ordered lines are all drums is complete as it stands — no bay-box floor, no smoothing,
+    // no "under minimum" (the bay boxes at this shop simply aren't being ordered).
+    if (ctx.vendor.drumOrderedAlone) {
+      const ordered = lines.filter((l) => l.included && n(l.qty) > 0)
+      if (ordered.length > 0 && ordered.every((l) => isDrumUom(l.uom))) {
+        for (const l of ordered) if (!l.flags.includes('drum_alone')) l.flags.push('drum_alone')
+        groups.push({ location_id, order_type, lines, dollars: groupDollars(lines, ruleOf), minimum: 0, meetsMinimum: true, smoothingApplied: false })
+        continue
+      }
+    }
+
     // HM0806 solo rule (2026-10-04): when HM0806 is the ONLY product suggested at a shop (before any smoothing), order it at
     // its 2-unit minimum and ignore the order minimum entirely — no smoothing, no "under minimum" flag.
     const due = lines.filter((l) => l.included && n(l.qty) > 0)
@@ -1119,7 +1150,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       const result = applyOrderUnitMinimum(lines, n(min.qty), ctx, inputByKey, ruleOf, spares)
       const caseTypesMet = applyCaseTypeMinimums(lines, ctx, inputByKey, spares)
       const met = result.met && caseTypesMet
-      if (!met) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
+      if (!met) markBelowMin(lines, ctx)
       groups.push({
         location_id, order_type, lines, dollars: groupDollars(lines, ruleOf),
         minimum: n(min.qty), meetsMinimum: met, smoothingApplied: result.smoothingApplied,
@@ -1143,7 +1174,7 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
       }
       const caseTypesMet = applyCaseTypeMinimums(lines, ctx, inputByKey, spares)
       met = met && caseTypesMet
-      if (!met) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
+      if (!met) markBelowMin(lines, ctx)
       groups.push({
         location_id, order_type, lines, dollars: groupDollars(lines, ruleOf),
         minimum: n(min.qty), meetsMinimum: met, smoothingApplied: false,
@@ -1294,11 +1325,22 @@ export function generateOrder(inputs: GenerationInput[], ctx: GenerationContext)
     dollars = groupDollars(lines, ruleOf)
 
     const meetsMinimum = dollars >= minimum && caseTypesMet
-    if (!meetsMinimum) for (const l of lines) if (!l.flags.includes('below_minimum')) l.flags.push('below_minimum')
+    if (!meetsMinimum) markBelowMin(lines, ctx)
 
     groups.push({ location_id, order_type, lines, dollars, minimum, meetsMinimum, smoothingApplied })
   }
 
+  // Put today's actual on hand / DOS Now back on the lines of any delivery-projected input (DOS After stays projected).
+  const actualByKey = new Map<string, number>()
+  for (const i of inputs) if (i.actual_on_hand != null) actualByKey.set(`${i.location_id}|${i.product_id}`, i.actual_on_hand)
+  if (actualByKey.size > 0) {
+    for (const l of [...groups.flatMap((g) => g.lines), ...recentLines]) {
+      const actual = actualByKey.get(`${l.location_id}|${l.product_id}`)
+      if (actual == null) continue
+      l.on_hand = actual
+      l.dos_before = daysOfSupply(actual, l.daily_usage)
+    }
+  }
   return { lines: [...groups.flatMap((g) => g.lines), ...recentLines], groups, skipped }
 }
 

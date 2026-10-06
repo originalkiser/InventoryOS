@@ -159,7 +159,15 @@ export function OrderLogicTab({ settings: s }: { settings: OrderSettings }) {
         <li><strong>Package per-product minimum</strong> always rounds up to the floor (capacity still wins).</li>
         <li><strong>Case-type minimums</strong> (e.g. N bay boxes per order for Valvoline) top up existing lines that have usage, then pull in spares with usage.</li>
         <li><strong>Ordered alone:</strong> a product set to "ignore minimum when ordered alone" orders its configured alone-quantity instead of being inflated.</li>
-        <li><strong>HM0806 solo:</strong> if HM0806 is the only product suggested at a shop, it orders 2 and the order minimum is ignored (no smoothing).</li>
+        <li><strong>HM0806 solo:</strong> if HM0806 is the only product suggested at a shop, it orders 2 and the order minimum is ignored (no smoothing). It carries its own "HM0806 Solo Min" flag and is never shown as under minimum.</li>
+      </Rule>
+
+      <Rule title="Valvoline differences" summary="Valvoline delivers on a per-shop weekly / biweekly schedule, so its orders plan for the delivery date and treat drums specially."
+        flags={['drum_alone']}>
+        <li><strong>Planned for delivery:</strong> an order placed today can land 2+ weeks out. For Valvoline, due / how much / capacity all use what the shop will have <em>on delivery</em> (on hand run down by usage over the lead time). A product at 15.9 days now but 0.9 days when the truck lands is due.</li>
+        <li><strong>DOS Now</strong> is today's actual. <strong>DOS @ Delivery</strong> is the shop's existing stock only, when the truck lands. <strong>DOS After</strong> is that plus what you're ordering, so with nothing ordered DOS After = DOS @ Delivery. The <strong>Delivery Schedule</strong> column writes out each shop's order/delivery schedule.</li>
+        <li><strong>Drum alone:</strong> a drum can be ordered by itself — it skips the bay-box minimum, isn't flagged "Under min", and doesn't pull bay boxes onto the order. Bay boxes ordered at the same shop still need to reach their 6-box case-type minimum; the drum is never flagged either way.</li>
+        <li>RelaDyne and Mighty orders are not affected by any of this.</li>
       </Rule>
 
       <Phase n="STEP 4" title="Flag the result" blurb="Nothing is sent automatically — every order is reviewed first." />

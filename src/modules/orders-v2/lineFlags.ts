@@ -72,6 +72,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   def('recently_ordered', 'after', 'Ordered recently', '#3E8E9B', 'Ordered in the last 8 days and the on hand plus that order still covers usage — kept on the order at 0. Add a quantity if it should go on anyway.'),
   def('drum_capped', 'after', 'Drum capped', '#8C6E3F', 'Drums are ordered one per product. More are needed to reach the DOS target — see the note for how many.'),
   def('no_products_to_meet_min', 'after', 'No products to add', '#6A6AA8', 'The order is still under its minimum and smoothing found no other product to add to meet it.'),
+  def('drum_alone', 'after', 'Drum alone', '#9B6BC2', 'A drum ordered on its own (Valvoline) — allowed without the bay-box order minimum, so this is not an under-minimum order.'),
   def('hm0806_solo_min', 'after', 'HM0806 Solo Min', '#8E5BB5', 'HM0806 was the only product due at this shop, so it was ordered at its 2-unit minimum and the order minimum was ignored.'),
   def('case_minimum_topup', 'after', 'Case min', '#B7E0DE', 'Raised to meet the vendor\'s case-type order minimum.'),
   def('alone_default_qty', 'after', 'Alone qty', '#6FB7B2', 'Only line on the order — used its configured "alone" quantity.'),
@@ -86,7 +87,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
 const BEFORE_STORED: LineFlag[] = ['combined_on_hand', 'critical_minimum', 'repeat_ordering', 'keepfill_will_run_out', 'covered_by_open_po', 'vmi_keepfill']
 const PO_DECISIONS: LineFlag[] = ['po_decision_override', 'po_decision_exclude', 'po_decision_combine']
 // Tags the engine stamped because of the quantity IT chose — meaningless once someone edits the qty, or sets it to 0.
-const ENGINE_QTY_TAGS: LineFlag[] = ['no_products_to_meet_min', 'drum_capped', 'hm0806_solo_min', 'case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']
+const ENGINE_QTY_TAGS: LineFlag[] = ['drum_alone', 'no_products_to_meet_min', 'drum_capped', 'hm0806_solo_min', 'case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']
 
 export interface TagLine {
   flags: string[] | null

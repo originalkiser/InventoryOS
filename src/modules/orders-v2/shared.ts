@@ -64,6 +64,7 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   critical_minimum: { label: 'Critical min', tone: 'orange', title: 'Ordered because on-hand dropped to/below this product\'s critical minimum (e.g. enough for one oil change), not the usual days-of-supply trigger' },
   alone_default_qty: { label: 'Alone qty', tone: 'sky', title: 'Only line on the order — used its configured alone quantity' },
   combined_on_hand: { label: 'Combined on hands', tone: 'sky', title: 'On Hand is the combined total of this product and its equivalent case types at this shop (hover the On Hand number for the math)' },
+  drum_alone: { label: 'Drum alone', tone: 'purple', title: 'A drum ordered on its own — allowed without the bay-box minimum, so it is not under minimum' },
   vmi_keepfill: { label: 'VMI / Keep-fill', tone: 'sky', title: 'Vendor-managed inventory, tracked by tank monitor — excluded from this order\'s total by default since the vendor refills it directly' },
   keepfill_will_run_out: { label: 'Will run dry', tone: 'red', title: 'Tank on-hand and usage won\'t last until this shop\'s delivery after next — may need a vendor keep-fill order before then' },
   added_for_smoothing: { label: 'Added: smoothing', tone: 'sky', title: 'Pulled onto this order from the shop\'s other configured products to help it reach its order minimum' },
@@ -133,11 +134,14 @@ export const DOS_COLOR_LEGEND = 'Red = under target · Green = at target · Oran
 export function dosAfterForQty(
   line: { on_hand: number | null; daily_usage: number | null; quarts_per_unit: number | null },
   qty: number,
+  /** Days until delivery. When > 0 the shelf runs down by usage first (Valvoline: DOS After = days of supply once it lands). */
+  leadDays = 0,
 ): number | null {
   const u = Number(line.daily_usage ?? 0)
   if (!(u > 0)) return null
   const per = Number(line.quarts_per_unit ?? 1)
-  return (Number(line.on_hand ?? 0) + qty * per) / u
+  const onHand = leadDays > 0 ? Math.max(0, Number(line.on_hand ?? 0) - u * leadDays) : Number(line.on_hand ?? 0)
+  return (onHand + qty * per) / u
 }
 
 /** One column of a copyable/exportable table — `get` reads the plain-text cell value. */

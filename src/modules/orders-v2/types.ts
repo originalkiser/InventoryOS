@@ -227,6 +227,14 @@ export interface GenerationInput {
   equivalent_products?: { product_id: string; on_hand: number }[]
   /** Equivalent case types whose daily usage was folded into daily_usage (with or without stock on hand). */
   equivalent_usage?: { product_id: string; daily_usage: number }[]
+  /**
+   * Days between the order date and this shop's delivery. When set (Valvoline only), generation works from what the shop
+   * will have ON DELIVERY — on hand run down by usage over this many days — to decide what is due, how much to order and
+   * what fits. The displayed On Hand / DOS Now stay today's actual figures (see actual_on_hand).
+   */
+  lead_days?: number | null
+  /** Set by generateOrder when it replaced on_hand with the delivery-projected figure. */
+  actual_on_hand?: number | null
   // Outstanding quantity (quarts) on this product's still-open (not closed/
   // cancelled) Droptop POs for this shop — see buildGenerationInputs. Never
   // folded into on_hand automatically; a line with this set gets the
@@ -301,6 +309,12 @@ export interface VendorRules {
   // product's own hard capacity could even reach the minimum; if not, makes
   // no changes at all rather than forcing a partial, arbitrary-looking bump.
   spreadCaseTypeMinimum?: boolean
+  /**
+   * Valvoline-only: a drum may be ordered on its own. A group whose ordered lines are all drums skips the case-type minimum
+   * (the 6-bay-box floor) entirely and is never flagged under minimum; a drum ordered alongside bay boxes is never flagged
+   * either — only the bay boxes still have to reach their floor.
+   */
+  drumOrderedAlone?: boolean
   // Resolved from OrderSettings.allow_exceed_capacity_for_dos_target_vendors
   // for this specific vendor_id (2026-09-25, widened from a single global
   // flag) — see that field's own comment. Optional/falsy-means-off, same
@@ -330,6 +344,7 @@ export type LineFlag =
   | 'rounded_to_bulk_minimum' // bulk per-product minimum: raised to the drum minimum, see GeneratedLine.note for the real calculated amount
   | 'drum_capped'            // a drum product: ordering 1 even though more are needed for the DOS target — see GeneratedLine.note
   | 'no_products_to_meet_min' // still under the order minimum and smoothing found nothing more to add — see GeneratedLine.note
+  | 'drum_alone'             // Valvoline: a drum ordered on its own — exempt from the bay-box order minimum, not "under min"
   | 'hm0806_solo_min'        // HM0806 was the only product due at this shop — ordered the 2-unit minimum, order minimum ignored
   | 'recently_ordered'       // ordered within RECENT_ORDER_DAYS and the product doesn't need another yet — kept on the order at 0, see GeneratedLine.note
   | 'exceeded_capacity_for_dos_target' // ordered past configured capacity to reach the DOS target after delivery — see GeneratedLine.note for the real numbers

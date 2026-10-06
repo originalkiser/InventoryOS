@@ -32,7 +32,7 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import {
   useDraft, useGenerationData, useOrderSettings, useVendorRules,
-  buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, isOunceUnit,
+  buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, isOunceUnit, isValvoline,
   GLOBAL_EXCEPTION_LOCATION_ID, type DraftLineRow,
 } from './useOrdersV2'
 import { useVendors } from './useLookups'
@@ -421,14 +421,21 @@ export function OrdersV2Review() {
   // 2026-09-24: a shop's not-yet-due product could be typed into (a real
   // qty) while the row stayed dimmed, since only the explicit Include
   // toggle used to flip that flag.
+  // Valvoline: DOS After is days of supply once the delivery lands (shelf run down by usage first) — other vendors unchanged.
+  const isValvolineDraft = isValvoline(vendors.byId(draft?.vendor_id ?? null)?.name)
+  const projectLead = useCallback((locId: string | null): number => {
+    if (!draft || !isValvolineDraft) return 0
+    const dd = deliveryFor(locId, draft.order_date)
+    return dd ? Math.max(0, daysBetween(draft.order_date, dd)) : 0
+  }, [draft, isValvolineDraft, deliveryFor])
   const patchQty = useCallback((l: DraftLineRow, qty: number) => {
     const isVmi = l.flags?.includes('vmi_keepfill')
     patchLine(l.id, {
-      qty, dos_after: dosAfterForQty(l, qty), ...(isVmi ? {} : { included: qty > 0 }),
+      qty, dos_after: dosAfterForQty(l, qty, projectLead(l.location_id)), ...(isVmi ? {} : { included: qty > 0 }),
       // A line back above zero no longer needs its "why zero" tag.
       ...(qty > 0 && (l.zero_reason || l.zero_reason_note) ? { zero_reason: null, zero_reason_note: null } : {}),
     })
-  }, [patchLine])
+  }, [patchLine, projectLead])
   // Optional reason tag on a line adjusted to zero (see lineControls.tsx) —
   // never marks the line as a qty override, it's just an annotation.
   const setZeroReason = useCallback((l: DraftLineRow, reason: ZeroReason | null, note: string | null) => {
@@ -571,7 +578,18 @@ export function OrdersV2Review() {
         // start excluded from the order total regardless (see buildLine).
         includeVmi: true,
       }
-      const result = generateOrder(inputs, genCtx)
+      // Valvoline plans for what the shop will have ON DELIVERY (weekly/biweekly schedules mean delivery can be 2+ weeks out):
+      // each input carries its lead time and the engine works from the delivery-projected on hand. RelaDyne/Mighty untouched.
+      const genDeliveryDow = new Map(days.map((d) => [d.location_id, d.delivery_dow]))
+      const genInputs = isValvoline(vendors.byId(draft.vendor_id)?.name)
+        ? inputs.map((i) => {
+            const sched = schedules.get(i.location_id ?? '')
+            const dd = sched ? resolveDeliveryDate(draft.order_date, sched, calendar) : nextDeliveryDate(draft.order_date, genDeliveryDow.get(i.location_id ?? '') ?? null)
+            const lead = dd ? Math.max(0, daysBetween(draft.order_date, dd)) : 0
+            return lead > 0 ? { ...i, lead_days: lead } : i
+          })
+        : inputs
+      const result = generateOrder(genInputs, genCtx)
       // A "Possible VMI misses" order is only the flagged shop/product pairs, included by default.
       const vmiItems = (draft.settings_snapshot as any)?.__vmi_miss_items as { location_id: string; product_id: string }[] | undefined
       const resultLines = Array.isArray(vmiItems) && vmiItems.length ? buildVmiMissLines(result.lines, vmiItems, inputs, genCtx) : result.lines
@@ -738,6 +756,12 @@ export function OrdersV2Review() {
       }
       const included = groupLines.filter((l) => l.included)
       let meets = true
+      // Exceptions that are allowed, not wrong: HM0806 solo (RelaDyne) and a Valvoline drum. Those lines are never "under min",
+      // and a group made up only of them has nothing left to satisfy.
+      const exempt = (l: DraftLineRow) => (l.flags ?? []).includes('hm0806_solo_min' as LineFlag) || (isValvolineDraft && String(l.uom ?? '').toLowerCase() === 'drum')
+      for (const l of groupLines) if (exempt(l)) m.set(`exempt:${l.id}`, true)
+      const orderedHere = included.filter((l) => Number(l.qty) > 0)
+      if (orderedHere.length > 0 && orderedHere.every(exempt)) { m.set(key, true); continue }
       if (min.type === 'dollars') {
         meets = included.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost ?? 0), 0) >= min.dollars
       } else if (min.type === 'units_per_order') {
@@ -754,7 +778,7 @@ export function OrdersV2Review() {
       m.set(key, meets)
     }
     return m
-  }, [groups, draft, settings, rulesFor, vendors])
+  }, [groups, draft, settings, rulesFor, vendors, isValvolineDraft])
 
   // Live per-line flags, replacing the two the engine only ever computed
   // once at generation time:
@@ -768,7 +792,7 @@ export function OrdersV2Review() {
     let flags: LineFlag[] = ((l.flags ?? []) as LineFlag[]).filter((f) => f !== 'capacity_capped' && f !== 'below_minimum')
     const onHandAfter = onHandAfterAtDelivery(l)
     if (l.max_capacity_gallons != null && onHandAfter > l.max_capacity_gallons) flags = [...flags, 'capacity_capped']
-    if (l.included && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false) flags = [...flags, 'below_minimum']
+    if (l.included && groupMinimumStatus.get(`exempt:${l.id}`) !== true && groupMinimumStatus.get(`${l.location_id}|${l.order_type}`) === false) flags = [...flags, 'below_minimum']
     return flags
   }, [groupMinimumStatus])
 
@@ -900,7 +924,7 @@ export function OrdersV2Review() {
     // (see engine.ts) — a coarse package size should bias toward meeting
     // the target here too, not just on the initial generation.
     const newQty = roundQty(Math.min(want, caps.maxUnits), l.uom, settings.bulk_rounding_increment, want > caps.maxUnits ? 'down' : 'up')
-    patchLine(l.id, { qty: newQty, dos_after: dosAfterForQty(l, newQty), flags: withPoDecision(l.flags, 'po_decision_combine'), included: newQty > 0 })
+    patchLine(l.id, { qty: newQty, dos_after: dosAfterForQty(l, newQty, projectLead(l.location_id)), flags: withPoDecision(l.flags, 'po_decision_combine'), included: newQty > 0 })
   }
 
   async function addConfiguredProduct(input: GenerationInput, qty: number) {
@@ -916,7 +940,7 @@ export function OrdersV2Review() {
       // afterward (via patchQty), so a freshly-added product showed a blank
       // DOS After until then even though everything needed to compute it
       // was already known at add time.
-      dos_after: dosAfterForQty({ on_hand: input.on_hand, daily_usage: input.daily_usage, quarts_per_unit: quartsPerUnit }, qty),
+      dos_after: dosAfterForQty({ on_hand: input.on_hand, daily_usage: input.daily_usage, quarts_per_unit: quartsPerUnit }, qty, projectLead(input.location_id)),
       max_capacity_gallons: input.rule.max_capacity_gallons, quarts_per_unit: quartsPerUnit,
     })
   }
@@ -951,7 +975,7 @@ export function OrdersV2Review() {
       for (const r of shopRows(locId)) {
         if (!showConfigVmi && (r.input?.rule.vmi_keepfill_enabled || r.line?.flags?.includes('vmi_keepfill'))) continue
         if (r.line) { out.push(r.line); continue }
-        if (r.input) out.push(candidateLine(r.input, draft.id, draft.order_date, deliveryFor(locId, draft.order_date)))
+        if (r.input) out.push(candidateLine(r.input, draft.id, draft.order_date, deliveryFor(locId, draft.order_date), isValvolineDraft))
       }
     }
     return out
@@ -1057,7 +1081,7 @@ export function OrdersV2Review() {
     const out: DraftLineRow[] = []
     for (const r of shopRows(locId)) {
       if (r.line) out.push(r.line)
-      else if (r.input) out.push(candidateLine(r.input, draft.id, draft.order_date, deliveryFor(locId, draft.order_date)))
+      else if (r.input) out.push(candidateLine(r.input, draft.id, draft.order_date, deliveryFor(locId, draft.order_date), isValvolineDraft))
     }
     return out
   }
@@ -1224,6 +1248,7 @@ export function OrdersV2Review() {
               lastOrderedInfo={lastOrderedInfo}
               deliveryFor={deliveryFor}
               describeSchedule={describeSchedule}
+              showSchedule={isValvolineDraft}
               thresholds={dosThresholds}
               onHandAfterAtDelivery={onHandAfterCb}
               groupMinimumStatus={groupMinimumStatus}
