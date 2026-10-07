@@ -9,6 +9,13 @@ export const AREAS: { key: TankArea; label: string }[] = [
 export const areaLabel = (a: string) => AREAS.find((x) => x.key === a)?.label ?? a
 
 export interface TankLastLog { depth_in: number; volume_qts: number; logged_at: string; status: string }
+/** The tank monitor's latest report for this tank's serial (see get_tank_share). */
+export interface TankMonitorInfo {
+  serial: string | null; system_tank_id: string | null; product_id: string | null
+  on_hand_gal: number | null; total_capacity_gal: number | null; available_capacity_gal: number | null
+  level_in: number | null; height_in: number | null; battery_pct: number | null
+  alarm: string | null; note: string | null; read_at: string | null; keep_fill: boolean | null
+}
 export interface TankGrid { x: number; y: number; w: number; h: number }
 export interface ShopTank {
   id: string
@@ -28,6 +35,7 @@ export interface ShopTank {
   monitor_capacity_qts: number | null
   monitor_height_in: number | null
   monitor_product: string | null
+  monitor: TankMonitorInfo | null
   source: 'manual' | 'monitor'
   last_log: TankLastLog | null
 }

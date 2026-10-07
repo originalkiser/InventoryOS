@@ -18,6 +18,13 @@ const BODIES: Record<TankShape, Body> = {
   rectangle: { kind: 'rect', x: 20, y: 14, w: 80, h: 52, rx: 2 },
 }
 
+// The oil's surface is a gentle wave rather than a ruler-straight line. Empty and full tanks stay flat (nothing to wave at).
+function liquidPath(top: number, f: number): string {
+  if (f <= 0.001 || f >= 0.999) return `M0 ${top} H120 V80 H0 Z`
+  const a = 1.8 // wave height in the 120 x 80 drawing
+  return `M0 ${top} q 7.5 -${a} 15 0${' t 15 0'.repeat(7)} V80 H0 Z`
+}
+
 export function TankShapeSvg({ shape, fill = 0, className = '' }: { shape: TankShape; fill?: number; className?: string }) {
   const id = useId().replace(/:/g, '')
   const b = BODIES[shape] ?? BODIES.rectangle
@@ -33,7 +40,7 @@ export function TankShapeSvg({ shape, fill = 0, className = '' }: { shape: TankS
   return (
     <svg viewBox="0 0 120 80" className={className} role="img" aria-label={shape.replace(/_/g, ' ')}>
       <defs><clipPath id={`tank-${id}`}>{clip}</clipPath></defs>
-      <rect x={0} y={liquidTop} width={120} height={80} clipPath={`url(#tank-${id})`} fill="#B7E0DE" opacity={0.85} />
+      <path d={liquidPath(liquidTop, f)} clipPath={`url(#tank-${id})`} fill="#B7E0DE" opacity={0.85} />
       {stroke}
     </svg>
   )
