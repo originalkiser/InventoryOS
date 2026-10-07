@@ -628,14 +628,19 @@ export function DataTable<T>({
                 // zebra stripe's place — selection still wins over it, same
                 // as it already won over the plain stripe.
                 const tone = selected ? null : (getRowTone?.(row.original) ?? null)
-                const tint = tone ? '' : (getRowClassName?.(row.original) ?? '')
-                const zebraClass = tone || i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'
+                // The caller's row class (e.g. Orders v2's per-shop band) is kept even under a full-row tone, so a toned row
+                // (excluded, under minimum, ...) still sits in its shop's band — the tone is laid over it, not instead of it.
+                const rawTint = getRowClassName?.(row.original) ?? ''
+                const tint = tone ? '' : rawTint
+                // A row with its own tint sits on a plain base: the zebra shade alternates by row, and a translucent tint
+                // over an alternating base would shift color row to row (visibly in the pinned columns).
+                const zebraClass = tone || rawTint || i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'
                 const bandClass = selected ? 'bg-sky/15' : tone ? 'bg-cream' : tint || zebraClass
                 const padClass = density === 'compact' ? 'px-2 py-0.5' : 'px-3 py-2'
                 // Pinned cells must be fully opaque or scrolled columns show through them. The row's tint
                 // (selection, status color, ...) is often translucent, so a pinned cell gets the opaque zebra
                 // color as its own background and the tint is laid over it as a click-through overlay.
-                const pinnedOverlay = selected ? 'bg-sky/15' : tint
+                const pinnedOverlay = selected ? 'bg-sky/15' : rawTint
                 const expandedContent = expandedRowRender?.(row.original)
                 return (
                   <Fragment key={row.id}>

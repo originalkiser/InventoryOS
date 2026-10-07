@@ -22,7 +22,7 @@ import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { PoDecisionButtons } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
-import { dos, money, num, dShort, OV2_DOS_STYLE_KEY, OV2_SHOWN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_SHOWN_QUICK, DEFAULT_HIDE_DOS_NOW } from './shared'
+import { SHOP_BAND_CLASS, dos, money, num, dShort, OV2_DOS_STYLE_KEY, OV2_SHOWN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_SHOWN_QUICK, DEFAULT_HIDE_DOS_NOW } from './shared'
 import { uomDisplayLabel, } from './types'
 import { matchesAnyQuick, quickCounts, tagKey, toneKey } from './quickFilters'
 import type { LineTagMap } from './useLineTagMap'
@@ -639,7 +639,7 @@ export function OrdersV2ReviewTable({
         // A toned row (excluded / under order minimum / over capacity to reach the DOS target) drops the zebra and
         // shop banding entirely and shows its one tone color across the whole row; every other row is banded per shop.
         getRowTone={(l) => { const t = toneOf(l); return t ? toneWash(t) : null }}
-        getRowClassName={(l) => (bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : 'bg-cream')}
+        getRowClassName={(l) => (bandOf.get(l.id) ? SHOP_BAND_CLASS : 'bg-cream')}
         expandedRowRender={(l) => {
           const locId = l.location_id ?? ''
           if (!isOrderTable || !expanded.has(locId) || !isLastOfShop.get(l.id)) return null

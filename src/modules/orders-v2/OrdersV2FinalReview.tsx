@@ -20,7 +20,7 @@ import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { Flags } from './OrdersV2Review'
 import { OrderStepper } from './OrderStepper'
 import { daysOfSupply, daysBetween, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription } from './engine'
-import { OVERRIDE_CELL, dos, dShort, money, num, copyTableToClipboard, exportTableCsv, dosAfterForQty, type TableCol } from './shared'
+import { SHOP_BAND_CLASS, OVERRIDE_CELL, dos, dShort, money, num, copyTableToClipboard, exportTableCsv, dosAfterForQty, type TableCol } from './shared'
 import { uomDisplayLabel } from './types'
 import type { LineFlag, OrderType, DeliverySchedule, WeekCalendar } from './types'
 
@@ -789,7 +789,7 @@ export function OrdersV2FinalReview() {
         // rows read via a muted background rather than faded text, a fair
         // trade-off since many cell renderers set their own explicit
         // `text-navy`, which a row-level text-opacity class can't reach.
-        getRowClassName={(l) => (!l.included ? 'bg-[#E4E4DC] dark:bg-[#16222E]' : bandOf.get(l.id) ? 'bg-[#EAEBDF] dark:bg-[#15283C]' : '')}
+        getRowClassName={(l) => (!l.included ? 'bg-[#E4E4DC] dark:bg-[#16222E]' : bandOf.get(l.id) ? SHOP_BAND_CLASS : '')}
         hideColumnControl
         actions={
           <div className="flex items-center gap-3">
