@@ -161,7 +161,6 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'am-rd-lookup', label: 'AM/RD Lookup', to: '/am-rd-lookup' },
     { key: 'tank-monitors', label: 'Tank Monitors', to: '/tank-monitors' },
     { key: 'procurement-deck', label: 'Procurement Deck', to: '/procurement-deck' },
-    { key: 'grni', label: 'GRNI', to: '/grni' },
     { key: 'count-sheet', label: 'Count Sheet', to: '/count-sheet' },
     { key: 'inventory-alerts', label: 'Inventory Alerts', to: '/inventory-alerts' },
     { key: 'exception-reporting', label: 'Exception Reporting', to: '/exception-reporting' },
@@ -195,7 +194,10 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'outlier-am', label: 'AM Dashboard', to: '/operations/outlier/am-dashboard' },
     { key: 'outlier-leadership', label: 'Leadership', to: '/operations/outlier/leadership' },
   ],
-  finance: [{ key: 'cogs-price-check', label: 'COGS Price Check', to: '/cogs-price-check' }],
+  finance: [
+    { key: 'grni', label: 'GRNI', to: '/grni' },
+    { key: 'cogs-price-check', label: 'COGS Price Check', to: '/cogs-price-check' },
+  ],
   accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
   marketing: [
     { key: 'marketing-planner', label: 'Marketing Planner', to: '/marketing-planner' },
