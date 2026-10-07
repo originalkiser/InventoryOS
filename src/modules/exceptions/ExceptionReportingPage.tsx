@@ -12,7 +12,7 @@ import { mappedValue } from '@/lib/columnTransform'
 import { applyTransforms } from '@/lib/transforms'
 import type { ColumnMapping } from '@/types'
 import {
-  parseContacted, isYesResponse, isRdAdded, rdCell, isExceptionStale,
+  parseContacted, isYesResponse, isRdAdded, rdCell, isExceptionStale, isTestAutoException,
   type ExceptionReport, type ExceptionConfig,
 } from './exceptions'
 import { useExceptionConfig } from './useExceptionConfig'
@@ -62,6 +62,8 @@ export function ExceptionReportingPage() {
   // Local mirror so inline edits apply instantly without waiting on a reload.
   const [rowsAll, setRowsAll] = useState<ExceptionReport[]>([])
   useEffect(() => { setRowsAll(data) }, [data])
+  // Test auto-exceptions (the RelaDyne reconciliation check) stay in their own tab — Reports, Alerts and Summary only see everything else.
+  const reportRowsAll = useMemo(() => rowsAll.filter((r) => !isTestAutoException(r)), [rowsAll])
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Partial<ExceptionReport> | null>(null)
@@ -103,13 +105,13 @@ export function ExceptionReportingPage() {
 
   const statusChips = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const r of rowsAll) { const s = r.status || 'No Status'; counts.set(s, (counts.get(s) ?? 0) + 1) }
+    for (const r of reportRowsAll) { const s = r.status || 'No Status'; counts.set(s, (counts.get(s) ?? 0) + 1) }
     const idx = (s: string) => { const i = config.statuses.indexOf(s); return i === -1 ? 999 : i }
     const present = [...counts.keys()].sort((a, b) => idx(a) - idx(b))
-    return [{ key: 'All', count: rowsAll.length }, ...present.map((s) => ({ key: s, count: counts.get(s)! }))]
-  }, [rowsAll, config.statuses])
+    return [{ key: 'All', count: reportRowsAll.length }, ...present.map((s) => ({ key: s, count: counts.get(s)! }))]
+  }, [reportRowsAll, config.statuses])
 
-  const rows = useMemo(() => (statusFilter === 'All' ? rowsAll : rowsAll.filter((r) => (r.status || 'No Status') === statusFilter)), [rowsAll, statusFilter])
+  const rows = useMemo(() => (statusFilter === 'All' ? reportRowsAll : reportRowsAll.filter((r) => (r.status || 'No Status') === statusFilter)), [reportRowsAll, statusFilter])
 
   // System-generated flags from run-automated-checks — same table, marked by
   // metadata.source, kept in their own tab rather than mixed into Reports.
@@ -124,7 +126,7 @@ export function ExceptionReportingPage() {
   // metadata.source so these stay out of both Reports and the real
   // Automated Checks tab while the matching logic is still being proven
   // out. Same table component, no separate settings panel yet.
-  const testAutoRows = useMemo(() => rowsAll.filter((r) => (r.metadata as any)?.source === 'po_reconciliation_test'), [rowsAll])
+  const testAutoRows = useMemo(() => rowsAll.filter(isTestAutoException), [rowsAll])
   const testAutoOpenCount = useMemo(
     () => testAutoRows.filter((r) => !(r.status ?? '').toLowerCase().includes('closed')).length,
     [testAutoRows],
@@ -133,8 +135,8 @@ export function ExceptionReportingPage() {
   // Same predicate the nav badge counts, so the Alerts tab and the sidebar
   // number can never disagree.
   const alertRows = useMemo(
-    () => rowsAll.filter((r) => isExceptionStale(r, config.staleDays, config.responseDays)),
-    [rowsAll, config.staleDays, config.responseDays],
+    () => reportRowsAll.filter((r) => isExceptionStale(r, config.staleDays, config.responseDays)),
+    [reportRowsAll, config.staleDays, config.responseDays],
   )
 
   async function handleImport(inRows: Record<string, string>[], maps: ColumnMapping[], mode: ImportMode) {
@@ -220,7 +222,7 @@ export function ExceptionReportingPage() {
         </TabsContent>
 
         <TabsContent value="summary">
-          <SummaryView data={rowsAll} config={config} />
+          <SummaryView data={reportRowsAll} config={config} />
         </TabsContent>
 
         <TabsContent value="reports">

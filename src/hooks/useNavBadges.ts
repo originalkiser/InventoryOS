@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useInventoryAlertsStore } from './useInventoryAlerts'
 import { isStaleRecord } from '@/lib/staleness'
 import { buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket, monitorIgnoreKey, DEFAULT_EMAIL_SKIP_DAYS } from '@/modules/locations/tankEmail'
-import { DEFAULT_EXCEPTION_CONFIG, isExceptionStale } from '@/modules/exceptions/exceptions'
+import { DEFAULT_EXCEPTION_CONFIG, isExceptionStale, isTestAutoException } from '@/modules/exceptions/exceptions'
 import { DEFAULT_COMMS_CONFIG } from '@/modules/comms/comms'
 
 // Count badges shown on nav items (sidebar / dashboard / top bar). Loaded once
@@ -153,7 +153,8 @@ async function computeBadges(companyId: string): Promise<Record<string, number>>
   return {
     // Only rows that still need action: not closed, and stale (old enough,
     // not currently bumped) — matches the red-highlight rows on each page.
-    'exception-reporting': ((excRes.data ?? []) as any[]).filter((r) => isExceptionStale(r, excStaleDays, excResponseDays)).length,
+    // Test auto-exceptions live only in their own tab, so they never count toward the badge.
+    'exception-reporting': ((excRes.data ?? []) as any[]).filter((r) => !isTestAutoException(r) && isExceptionStale(r, excStaleDays, excResponseDays)).length,
     'location-comms': ((commRes.data ?? []) as any[]).filter((r) => isStaleRecord(r.status, r.comm_date, r.metadata, commStaleDays)).length,
     issues: ((issRes.data ?? []) as any[]).filter((r) => !isClosed(statusName[r.status_id] ?? '')).length,
     'tank-monitors': tankOffline,

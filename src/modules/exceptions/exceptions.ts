@@ -192,6 +192,13 @@ export function responseWindowStart(
  * This is the single source of truth for the highlight, the Alerts tab and the
  * sidebar count — they read it rather than re-deriving the rule.
  */
+/** Findings from the RelaDyne reconciliation check that are still being proven out — they live only in the "Test - AutoExceptions" tab
+ *  and stay out of Reports, Alerts, Summary, the sidebar count and Location Lookup until someone promotes them. */
+export const TEST_AUTO_SOURCE = 'po_reconciliation_test'
+export function isTestAutoException(r: { metadata?: Record<string, unknown> | null }): boolean {
+  return (r.metadata as { source?: unknown } | null | undefined)?.source === TEST_AUTO_SOURCE
+}
+
 export function isExceptionStale(
   r: { status: string | null; date_of_finding: string | null; metadata: Record<string, unknown> | null },
   staleDays: number,

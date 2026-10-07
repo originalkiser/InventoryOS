@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { MapPin, Settings, Grip, ChevronDown } from 'lucide-react'
+import { MapPin, Settings, Grip, ChevronDown, Plus } from 'lucide-react'
 import * as RGL from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -12,10 +12,10 @@ import { usePersistedColumnLayout, usePersistedJson } from '@/hooks/useColumnPre
 import { useCustomFields } from '@/hooks/useCustomFields'
 import { SCHEMA_FIELDS as LOCATION_SCHEMA_FIELDS } from '@/modules/config/tabs/LocationsTab'
 import { ColumnManagerModal, type ColItem } from './ColumnManagerModal'
-import { Badge, Button, Card, CardBody, Combobox, Modal, SbLoader, Toggle } from '@/components/ui'
+import { Badge, Button, Card, CardBody, Combobox, HoverTip, Modal, SbLoader, Toggle } from '@/components/ui'
 import { IssueFormModal } from '@/modules/issues/IssueFormModal'
 import { ExceptionReportModal } from '@/modules/exceptions/ExceptionReportModal'
-import type { ExceptionReport } from '@/modules/exceptions/exceptions'
+import { isTestAutoException, type ExceptionReport } from '@/modules/exceptions/exceptions'
 import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
@@ -82,7 +82,10 @@ interface IssueRow {
 // and order-config-column hide/reorder moved to the cross-device,
 // per-user usePersistedColumnLayout below (2026-09-25) — tank monitor
 // columns and the other options here are unchanged and stay device-local.
-interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean; boxesSideBySide?: boolean }
+/** How the order config table shows a combined on hand / usage: the number marked (bold, dotted underline) with the math on hover, or the combined products listed under it. */
+type CombinedDisplay = 'hover' | 'listed'
+interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean; boxesSideBySide?: boolean; combinedDisplay?: CombinedDisplay }
+const CombinedDisplayContext = createContext<CombinedDisplay>('hover')
 
 // A tank monitor not reporting in > 2 days reads as offline (⚠ marker,
 // offline-email eligibility, and the On Hand view's per-product callout).
@@ -699,13 +702,32 @@ const CONFIG_META_EXCLUDE = new Set(['vmi', 'uom', 'vendor_id', 'location_id', '
 // feedback 2026-09-25 (first for On Hand, then the same treatment
 // requested for Daily Usage): "have that like-product listed and amount
 // ... underneath."
-function CombinedBreakdownValue({ value, label, siblings, pick }: {
-  value: string
+function CombinedBreakdownValue({ total, label, ownId, siblings, pick }: {
+  total: number
   label: string
+  ownId: string | null
   siblings?: { product_id: string; on_hand: number; daily_usage: number | null }[]
   pick: (s: { product_id: string; on_hand: number; daily_usage: number | null }) => number | null
 }) {
+  const mode = useContext(CombinedDisplayContext)
+  const value = num(total)
   if (!siblings?.length) return <>{value}</>
+  if (mode === 'hover') {
+    // Same marker Orders v2's tables use for a combined figure: the number is bold with a dotted sky underline, math on hover.
+    const own = Math.max(0, total - siblings.reduce((s, x) => s + Number(pick(x) ?? 0), 0))
+    return (
+      <HoverTip className="ml-auto" placement="bottom" content={
+        <div className="flex flex-col gap-0.5 text-[11px] font-mono">
+          <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">{label}</span>
+          <span>{ownId ?? 'This product'} {num(own)} +</span>
+          {siblings.map((s, idx) => <span key={s.product_id}>{s.product_id} {num(pick(s))} {idx === siblings.length - 1 ? '=' : '+'}</span>)}
+          <span className="font-bold">Total {value}</span>
+        </div>
+      }>
+        <span className="font-bold underline decoration-dotted decoration-sky underline-offset-2">{value}</span>
+      </HoverTip>
+    )
+  }
   return (
     <div className="flex flex-col items-end gap-0.5">
       <span>{value}</span>
@@ -717,8 +739,8 @@ function CombinedBreakdownValue({ value, label, siblings, pick }: {
   )
 }
 const USAGE_COLS: Col<ConfigRow>[] = [
-  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? <CombinedBreakdownValue value={num(r.usage.on_hands)} label="Combining On Hands" siblings={r.usage.equivalent_products} pick={(s) => s.on_hand} /> : '—'), sort: (r) => r.usage?.on_hands ?? null },
-  { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? <CombinedBreakdownValue value={num(r.usage.daily_usage)} label="Combining Usage" siblings={r.usage.equivalent_products} pick={(s) => s.daily_usage} /> : '—'), sort: (r) => r.usage?.daily_usage ?? null },
+  { id: 'on_hand', label: 'On Hand', align: 'right', width: 'w-20', tint: true, render: (r) => (r.usage?.on_hands != null ? <CombinedBreakdownValue total={Number(r.usage.on_hands)} label="Combining On Hands" ownId={r.product_id} siblings={r.usage.equivalent_products} pick={(s) => s.on_hand} /> : '—'), sort: (r) => r.usage?.on_hands ?? null },
+  { id: 'daily_usage', label: 'Daily Usage', align: 'right', width: 'w-24', tint: true, render: (r) => (r.usage?.daily_usage != null ? <CombinedBreakdownValue total={Number(r.usage.daily_usage)} label="Combining Usage" ownId={r.product_id} siblings={r.usage.equivalent_products} pick={(s) => s.daily_usage} /> : '—'), sort: (r) => r.usage?.daily_usage ?? null },
   {
     id: 'days_of_supply', label: 'Days of Supply', align: 'right', width: 'w-24', tint: true,
     render: (r) => {
@@ -902,9 +924,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
     try {
       const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}')
-      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false, boxesSideBySide: p.boxesSideBySide ?? false }
+      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false, boxesSideBySide: p.boxesSideBySide ?? false, combinedDisplay: p.combinedDisplay === 'listed' ? 'listed' : 'hover' }
     }
-    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false, boxesSideBySide: false } }
+    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false, boxesSideBySide: false, combinedDisplay: 'hover' } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
   const toggleTankHidden = (id: string) =>
@@ -1003,8 +1025,12 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       const usageIdSet = new Set<string>()
       for (const c of configProducts) if (c.product_id) usageIdSet.add(c.product_id)
       for (const t of tankProducts) if (t.product_id) usageIdSet.add(t.product_id)
+      // A retired id counts when its replacement lands anywhere in a configured product's FAMILY, not only on the exact configured id —
+      // e.g. R1540 (bulk) maps to ROT-T4-15W40, which is a case-type sibling of the configured ROT-T4-15W40BB; matching only the exact
+      // id left the 600+ qts on R1540 unfetched, so the row read 0 on hand.
+      const neededFamilies = new Set([...neededPkeys].map((k) => pkey(baseProductId(k))))
       for (const m of ((mapRes?.data ?? []) as any[])) {
-        if (m.old_product_id && m.new_product_id && neededPkeys.has(pkey(m.new_product_id))) usageIdSet.add(m.old_product_id)
+        if (m.old_product_id && m.new_product_id && (neededPkeys.has(pkey(m.new_product_id)) || neededFamilies.has(pkey(baseProductId(m.new_product_id))))) usageIdSet.add(m.old_product_id)
       }
       const usageIdList = [...usageIdSet]
       // Widened from an exact-id list to a family-prefix match (same
@@ -1143,11 +1169,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         if (!r.product_id) return null
         const ownKey = resolvedKey(r.product_id)
         const own = usageByProduct.get(ownKey) ?? null
-        // Keep-fill/VMI on-hand comes from its own tank monitor reading, not
-        // another case type's Droptop figure — never a combine target,
-        // matching Orders v2's own vmiKeys exclusion.
-        const isVmi = String((r.metadata as any)?.vmi ?? '').trim().toLowerCase() === 'yes'
-        if (isVmi) return own
+        // VMI rows combine too (2026-10-07): this table shows Droptop's own on hand/usage, and a VMI product's stock is often booked under
+        // a sibling SKU (e.g. a ROT-T4-15W40BB row VMI-flagged while its 600+ qts sit on R1540 bulk), which read as 0 when VMI rows were skipped.
         const fam = pkey(baseProductId(ownKey))
         const siblings = (familyMembers.get(fam) ?? []).filter((s) => s.product_id !== ownKey)
         if (siblings.length === 0) return own
@@ -1208,7 +1231,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       setIssues((issRes.data ?? []) as IssueRow[])
       setStatusNames(Object.fromEntries(((statRes.data ?? []) as any[]).map((s) => [s.id, s.name])))
       setSupplemental((supRes?.data?.data ?? null) as Record<string, string> | null)
-      setExceptions((excRes?.data ?? []) as ExceptionReport[])
+      // Test auto-exceptions stay in their own Exception Reporting tab until promoted.
+      setExceptions(((excRes?.data ?? []) as ExceptionReport[]).filter((e) => !isTestAutoException(e)))
       setComms((commRes?.data ?? []) as LocationComm[])
       setMentionedProjects((projRes?.data ?? []) as Project[])
       setMentionedMeetings((meetRes?.data ?? []) as MeetingNote[])
@@ -1929,6 +1953,15 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                 <input type="checkbox" checked={!!prefs.nonVmiOfflineBtn} onChange={() => setPrefs((p) => ({ ...p, nonVmiOfflineBtn: !p.nonVmiOfflineBtn }))} className="accent-sky" />
                 Use non-VMI tanks for offline email button
               </label>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-body text-navy">Combined on hand / usage (order config)</span>
+                {([['hover', 'Bold with dots — show the combined products on hover'], ['listed', 'Show the combined products under the number']] as const).map(([val, text]) => (
+                  <label key={val} className="flex items-center gap-2 text-xs font-body text-navy/80 cursor-pointer pl-2">
+                    <input type="radio" name="combined-display" checked={(prefs.combinedDisplay ?? 'hover') === val} onChange={() => setPrefs((p) => ({ ...p, combinedDisplay: val }))} className="accent-sky" />
+                    {text}
+                  </label>
+                ))}
+              </div>
               {(embedded || isMobile) && (
                 <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms / Issues as a row instead of stacked">
                   <input type="checkbox" checked={!!prefs.boxesSideBySide} onChange={() => setPrefs((p) => ({ ...p, boxesSideBySide: !p.boxesSideBySide }))} className="accent-sky" />
@@ -2129,11 +2162,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         const emptyOrderConfigCard = <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
         const orderConfigBlocksByVendor: [string, ReactNode][] = configsByVendor.map(([vendor, rows]) => [
           vendor,
-          <OrderConfigBlock key={vendor} vendor={vendor} vendorId={rows[0]?.vendor_id ?? null} shopId={shopId} rows={rows} order={configShownIds} sizing={configLayout.sizing}
-            onResize={handleConfigResize}
-            onOpenConfig={() => navigate('/config?tab=order-config')}
-            onExceptionClick={setExceptionModalRow}
-          />,
+          <CombinedDisplayContext.Provider key={vendor} value={prefs.combinedDisplay ?? 'hover'}>
+            <OrderConfigBlock vendor={vendor} vendorId={rows[0]?.vendor_id ?? null} shopId={shopId} rows={rows} order={configShownIds} sizing={configLayout.sizing}
+              onResize={handleConfigResize}
+              onOpenConfig={() => navigate('/config?tab=order-config')}
+              onExceptionClick={setExceptionModalRow}
+            />
+          </CombinedDisplayContext.Provider>,
         ])
         widgetContent.order_config = orderConfigBlocksByVendor.length === 0 ? emptyOrderConfigCard : (
           // w-fit on this wrapper (not each Card) is what makes every
@@ -2463,6 +2498,18 @@ function IssuesColumn({ pending, resolved, onManage, framed }: { pending: IssueR
   )
 }
 
+/** Small plus next to a card's title — the way to add a record to that card; the tooltip names what it adds. */
+function AddIconButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <HoverTip content={label}>
+      <button type="button" onClick={onClick} aria-label={label}
+        className="inline-flex items-center justify-center w-5 h-5 rounded border border-navy/25 text-navy/70 hover:text-navy hover:bg-navy/10 hover:border-navy/50 transition-colors">
+        <Plus className="w-3 h-3" />
+      </button>
+    </HoverTip>
+  )
+}
+
 function ExceptionsBox({ exceptions, onAdd, onEdit, framed }: { exceptions: ExceptionReport[]; onAdd: () => void; onEdit: (e: ExceptionReport) => void; framed?: boolean }) {
   const isClosed = (s: string | null) => (s ?? '').toLowerCase().includes('closed')
   const open = exceptions.filter((e) => !isClosed(e.status))
@@ -2473,7 +2520,10 @@ function ExceptionsBox({ exceptions, onAdd, onEdit, framed }: { exceptions: Exce
   return (
     <div className={[outerClass, bg].join(' ')}>
       <div className={['sticky top-0 z-10 flex items-center justify-between px-4 py-1.5', headerRoundClass, headerBg].join(' ')}>
-        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Exception Reports</span>
+        <span className="flex items-center gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Exception Reports</span>
+          <AddIconButton label="Add exception" onClick={onAdd} />
+        </span>
         <span className={['text-lg font-heading font-bold', open.length ? 'text-[#C0392B]' : 'text-navy'].join(' ')}>{open.length}</span>
       </div>
       <div className="flex flex-col gap-2 px-4 pb-3">
@@ -2488,7 +2538,6 @@ function ExceptionsBox({ exceptions, onAdd, onEdit, framed }: { exceptions: Exce
             <div className="text-[10px] font-mono text-inky/60 mt-0.5">Found {dateShort(e.date_of_finding)}</div>
           </button>
         ))}
-        <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Exception</button>
       </div>
     </div>
   )
@@ -2500,7 +2549,10 @@ function CommsBox({ comms, onAdd, onEdit, framed }: { comms: LocationComm[]; onA
   return (
     <div className={framed ? 'flex flex-col bg-cream' : 'rounded-lg border border-navy/20 bg-cream flex flex-col'}>
       <div className={framed ? 'sticky top-0 z-10 bg-cream flex items-center justify-between px-4 py-1.5' : 'sticky top-0 z-10 rounded-t-lg bg-cream flex items-center justify-between px-4 py-1.5'}>
-        <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Location Comms / Issues</span>
+        <span className="flex items-center gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-inky/60">Location Comms / Issues</span>
+          <AddIconButton label="Add communication" onClick={onAdd} />
+        </span>
         <span className="text-lg font-heading font-bold text-navy">{open.length}</span>
       </div>
       <div className="flex flex-col gap-2 px-4 pb-3">
@@ -2515,7 +2567,6 @@ function CommsBox({ comms, onAdd, onEdit, framed }: { comms: LocationComm[]; onA
             <div className="text-[10px] font-mono text-inky/60 mt-0.5">{dateShort(c.comm_date)}{(c.products ?? []).length ? ` · ${(c.products ?? []).length} product(s)` : ''}</div>
           </button>
         ))}
-        <button onClick={onAdd} className="text-[10px] font-mono text-sky text-left hover:underline">+ Add Communication</button>
       </div>
     </div>
   )
