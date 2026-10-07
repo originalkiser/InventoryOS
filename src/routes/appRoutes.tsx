@@ -66,6 +66,7 @@ import { OrdersV2Settings } from '@/modules/orders-v2/OrdersV2Settings'
 import { OrdersV2History } from '@/modules/orders-v2/OrdersV2History'
 import { PoStatusPage } from '@/modules/orders-v2/PoStatusPage'
 import { GrniPage } from '@/modules/grni/GrniPage'
+import { CogsPriceCheckPage } from '@/modules/cogs/CogsPriceCheckPage'
 import { CountSheetPage } from '@/modules/countsheet/CountSheetPage'
 import { UsersPage } from '@/modules/admin/UsersPage'
 import { FeatureRequestsPage } from '@/modules/feature-requests/FeatureRequestsPage'
@@ -131,6 +132,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="tank-review" element={<TankReviewPage />} />
     <Route path="procurement-deck" element={<ProcurementDeckPage />} />
     <Route path="grni" element={<GrniPage />} />
+    <Route path="cogs-price-check" element={<CogsPriceCheckPage />} />
     <Route path="count-sheet" element={<CountSheetPage />} />
     <Route path="inventory-alerts" element={<InventoryAlertsPage />} />
     <Route path="exception-reporting" element={<ExceptionReportingPage />} />

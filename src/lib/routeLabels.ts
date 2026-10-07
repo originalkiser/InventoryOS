@@ -18,6 +18,7 @@ export const ROUTE_LABELS: Record<string, string> = {
   '/am-rd-lookup': 'AM/RD Lookup',
   '/tank-monitors': 'Tank Monitors',
   '/grni': 'GRNI',
+  '/cogs-price-check': 'COGS Price Check',
   '/count-sheet': 'Count Sheet',
   '/tank-links': 'Tank Calculator Links',
   '/tank-review': 'Tank Count Review',

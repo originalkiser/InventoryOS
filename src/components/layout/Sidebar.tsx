@@ -70,6 +70,7 @@ export const ICONS: Record<string, JSX.Element> = {
   'tank-monitors': <BiRuler className="w-4 h-4 flex-shrink-0" />,
   'procurement-deck': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
   grni: <DollarSign className="w-4 h-4 flex-shrink-0" />,
+  'cogs-price-check': <DollarSign className="w-4 h-4 flex-shrink-0" />,
   'count-sheet': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
   'inventory-alerts': <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
   'exception-reporting': <BiCommentError className="w-4 h-4 flex-shrink-0" />,
@@ -194,7 +195,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'outlier-am', label: 'AM Dashboard', to: '/operations/outlier/am-dashboard' },
     { key: 'outlier-leadership', label: 'Leadership', to: '/operations/outlier/leadership' },
   ],
-  finance: [{ key: 'finance-soon', label: 'Coming Soon', to: null }],
+  finance: [{ key: 'cogs-price-check', label: 'COGS Price Check', to: '/cogs-price-check' }],
   accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
   marketing: [
     { key: 'marketing-planner', label: 'Marketing Planner', to: '/marketing-planner' },
