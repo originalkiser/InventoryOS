@@ -98,6 +98,14 @@ function useHomeScreenManifest(title: string) {
   }, [title])
 }
 
+/** The shop's own label for a tank. (Tanks pre-loaded from a monitor used to store the monitor's product text here — that isn't a label.) */
+const shopLabelOf = (t: ShopTank): string | null => {
+  const l = (t.product_label ?? '').trim()
+  if (!l) return null
+  const mon = (t.monitor?.product_id ?? t.monitor_product ?? '').trim().toLowerCase()
+  return mon && l.toLowerCase() === mon ? null : l
+}
+
 const isAlarm = (a: string | null | undefined) => !!a && !/^(ok|normal|none|clear)$/i.test(a.trim())
 
 /** "Monitor: 33.2 in · 666 qts (5 hr ago)" — what the tank monitor itself says, inches first. */
@@ -116,7 +124,8 @@ function CardHeader({ tank, editingLayout, onEdit }: { tank: ShopTank; editingLa
   const alarm = m && isAlarm(m.alarm) ? m.alarm : null
   const lowBattery = m?.battery_pct != null && m.battery_pct < 25
   // The monitor's own product text appears once, under the id it maps to — never repeated elsewhere on the card.
-  const monitorText = tank.internal_product ? (m?.product_id ?? tank.monitor_product ?? tank.product_label) : null
+  const monitorText = tank.internal_product ? (m?.product_id ?? tank.monitor_product) : null
+  const label = shopLabelOf(tank)
   return (
     <div className="flex flex-col gap-0.5 flex-shrink-0">
       <div className="flex items-start justify-between gap-1.5">
@@ -132,6 +141,7 @@ function CardHeader({ tank, editingLayout, onEdit }: { tank: ShopTank; editingLa
         </div>
       </div>
       {monitorText && <div className="text-[10px] font-mono text-navy/75 truncate" title={monitorText}>{monitorText}</div>}
+      {label && <div className="text-[10px] font-mono text-navy/90 truncate" title={label}>“{label}”</div>}
       {alarm && <div className="text-[10px] font-mono font-bold text-[#C0392B] truncate" title={alarm}>Alarm: {alarm}</div>}
       {lowBattery && <div className="text-[10px] font-mono font-bold text-[#C0392B]">Battery low: {fmt(m!.battery_pct, 0)}%</div>}
     </div>
@@ -163,6 +173,9 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
   onSaved: () => void; onDeleted: () => void
 }) {
   const isNew = !tank
+  // A tank with a monitor is named by the monitor (its product text, plus the #serial tail when two tanks share a product) — not editable.
+  const nameLocked = !!tank?.monitor
+  const monitorName = tank ? (tank.source === 'monitor' ? tank.name : tank.monitor?.product_id ?? tank.name) : ''
   const [name, setName] = useState('')
   const [product, setProduct] = useState('')
   const [area, setArea] = useState<TankArea>(defaultArea)
@@ -171,17 +184,24 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
   const [serial, setSerial] = useState('')
   const [unlocked, setUnlocked] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  // What the window opened with — anything that differs is outlined in orange and listed for confirmation on Save.
+  const [init, setInit] = useState<{ name: string; label: string; area: TankArea; shape: TankShape | ''; serial: string; dims: Record<string, number> } | null>(null)
 
   useEffect(() => {
     if (!open) return
+    setConfirmOpen(false)
     if (tank) {
-      setName(tank.name); setProduct(tank.product_label ?? ''); setArea(tank.area); setShape(tank.shape ?? ''); setSerial(tank.monitor_serial ?? '')
-      setDims(Object.fromEntries(Object.entries(tank.dims ?? {}).map(([k, v]) => [k, String(v)])))
+      const nm = nameLocked ? monitorName : tank.name
+      const dm = Object.fromEntries(Object.entries(tank.dims ?? {}).map(([k, v]) => [k, String(v)]))
+      setName(nm); setProduct(shopLabelOf(tank) ?? ''); setArea(tank.area); setShape(tank.shape ?? ''); setSerial(tank.monitor_serial ?? '')
+      setDims(dm)
       setUnlocked(!tank.shape || !dimsComplete(tank.shape, tank.dims)) // dimensions already set -> greyed out until Edit is clicked
+      setInit({ name: tank.name, label: shopLabelOf(tank) ?? '', area: tank.area, shape: tank.shape ?? '', serial: tank.monitor_serial ?? '', dims: Object.fromEntries(Object.entries(tank.dims ?? {}).map(([k, v]) => [k, Number(v)])) })
     } else {
-      setName(''); setProduct(''); setArea(defaultArea); setShape('rectangle'); setDims({}); setSerial(''); setUnlocked(true)
+      setName(''); setProduct(''); setArea(defaultArea); setShape('rectangle'); setDims({}); setSerial(''); setUnlocked(true); setInit(null)
     }
-  }, [open, tank, defaultArea])
+  }, [open, tank, defaultArea]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const numDims: TankDims = useMemo(() => Object.fromEntries(Object.entries(dims).map(([k, v]) => [k, Number(v)])), [dims])
   const complete = !!shape && dimsComplete(shape, numDims)
@@ -196,16 +216,51 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
     }
   }
 
+  // Edits to an existing tank, field by field (a new tank has nothing to compare with).
+  const changed = {
+    name: !!init && (nameLocked ? monitorName : name.trim()) !== init.name,
+    label: !!init && product.trim() !== init.label,
+    area: !!init && area !== init.area,
+    serial: !!init && serial.trim() !== init.serial,
+    shape: !!init && shape !== init.shape,
+  }
+  const dimChanged = (k: string) => !!init && (Number(dims[k]) || 0) !== (init.dims[k] ?? 0)
+  const changeList: { what: string; from: string; to: string }[] = []
+  if (init) {
+    const show = (v: string) => v || '(none)'
+    if (changed.name) changeList.push({ what: 'Tank name', from: show(init.name), to: show(nameLocked ? monitorName : name.trim()) })
+    if (changed.label) changeList.push({ what: 'Optional label', from: show(init.label), to: show(product.trim()) })
+    if (changed.area) changeList.push({ what: 'Where is it?', from: AREAS.find((a) => a.key === init.area)?.label ?? init.area, to: AREAS.find((a) => a.key === area)?.label ?? area })
+    if (changed.serial) changeList.push({ what: 'Tank monitor serial number', from: show(init.serial), to: show(serial.trim()) })
+    if (changed.shape) changeList.push({ what: 'Tank type', from: init.shape ? SHAPES[init.shape]?.label ?? init.shape : '(not set up yet)', to: shape ? SHAPES[shape].label : '(none)' })
+    for (const d of def?.dims ?? []) if (dimChanged(d.key)) changeList.push({ what: d.label, from: init.dims[d.key] != null ? fmt(init.dims[d.key], 2) : '(not set)', to: dims[d.key] ? fmt(Number(dims[d.key]), 2) : '(none)' })
+  }
+  const outline = (isChanged: boolean) => (isChanged ? 'border-[#E67E22] ring-2 ring-[#E67E22]/40' : '')
+
+  /** Save tank: an edit to an existing tank first lists what changed and waits for the shop to confirm. */
+  function requestSave() {
+    if (!name.trim()) { toast.error('Give the tank a name'); return }
+    if (!shape || !def) { toast.error('Choose the tank type'); return }
+    if (!complete) { toast.error('Fill in every dimension'); return }
+    if (init) {
+      if (changeList.length === 0) { onClose(); return }
+      setConfirmOpen(true)
+      return
+    }
+    void save()
+  }
+
   async function save() {
     if (!name.trim()) { toast.error('Give the tank a name'); return }
     if (!shape || !def) { toast.error('Choose the tank type'); return }
     if (!complete) { toast.error('Fill in every dimension'); return }
+    setConfirmOpen(false)
     setSaving(true)
     const keep: Record<string, number> = {}
     for (const d of def.dims) keep[d.key] = Number(dims[d.key])
     const { error } = await sb().rpc('tank_share_upsert', {
       p_slug: slug,
-      p_tank: { id: tank?.id ?? null, name: name.trim(), product_label: product.trim() || null, area, shape, dims: keep, capacity_qts: cap?.capacityQuarts ?? null, monitor_serial: serial.trim() || null },
+      p_tank: { id: tank?.id ?? null, name: (nameLocked ? monitorName : name).trim(), product_label: product.trim() || null, area, shape, dims: keep, capacity_qts: cap?.capacityQuarts ?? null, monitor_serial: serial.trim() || null },
     })
     setSaving(false)
     if (error) { toast.error(error.message); return }
@@ -230,18 +285,20 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
       <div className="flex flex-col gap-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Tank name
-            <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 5W-30 bulk" />
+            <input className={`${inputCls} ${nameLocked ? 'opacity-60 bg-navy/10 cursor-not-allowed ' : ''}${outline(changed.name)}`} value={nameLocked ? monitorName : name} disabled={nameLocked}
+              onChange={(e) => setName(e.target.value)} placeholder="e.g. 5W-30 bulk" />
+            {nameLocked && <span className="text-[10px] text-navy/60">Named by the tank monitor — it can't be changed here.</span>}
           </label>
-          <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Product (optional)
-            <input className={inputCls} value={product} onChange={(e) => setProduct(e.target.value)} placeholder="e.g. Syn 5W-30" />
+          <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Optional Label
+            <input className={`${inputCls} ${outline(changed.label)}`} value={product} onChange={(e) => setProduct(e.target.value)} placeholder="Your own name for this tank, if you want one" />
           </label>
           <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Where is it?
-            <select className={inputCls} value={area} onChange={(e) => setArea(e.target.value as TankArea)}>
+            <select className={`${inputCls} ${outline(changed.area)}`} value={area} onChange={(e) => setArea(e.target.value as TankArea)}>
               {AREAS.map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Tank monitor serial number
-            <input className={inputCls} value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="Leave blank if there's no monitor" inputMode="numeric" />
+            <input className={`${inputCls} ${outline(changed.serial)}`} value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="Leave blank if there's no monitor" inputMode="numeric" />
           </label>
         </div>
 
@@ -262,7 +319,7 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
               : <div className={`w-full max-w-[160px] h-20 rounded border-2 border-dashed grid place-items-center text-2xl text-[#E67E22] ${ORANGE}`}>?</div>}
             <div className="flex flex-col gap-2">
               <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Tank type
-                <select className={`${inputCls} ${!shape ? ORANGE : lockCls}`} disabled={!unlocked} value={shape} onChange={(e) => pickShape(e.target.value as TankShape | '')}>
+                <select className={`${inputCls} ${!shape ? ORANGE : lockCls} ${outline(changed.shape)}`} disabled={!unlocked} value={shape} onChange={(e) => pickShape(e.target.value as TankShape | '')}>
                   {!shape && <option value="">Choose the tank type…</option>}
                   {(shape && !SHAPE_ORDER.includes(shape) ? [shape, ...SHAPE_ORDER] : SHAPE_ORDER).map((s) => <option key={s} value={s}>{SHAPES[s].label}</option>)}
                 </select>
@@ -270,7 +327,7 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {(def?.dims ?? []).map((d) => (
                   <label key={d.key} className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">{d.label}
-                    <input className={`${inputCls} ${unlocked && !dims[d.key] ? ORANGE : lockCls}`} disabled={!unlocked} inputMode="decimal" value={dims[d.key] ?? ''}
+                    <input className={`${inputCls} ${unlocked && !dims[d.key] ? ORANGE : lockCls} ${outline(dimChanged(d.key))}`} disabled={!unlocked} inputMode="decimal" value={dims[d.key] ?? ''}
                       onChange={(e) => setDims((p) => ({ ...p, [d.key]: sanitizeDecimalInput(e.target.value) }))} />
                     {d.hint && <span className="text-[10px] text-navy/60">{d.hint}</span>}
                     {shape && d.key === depthKey(shape) && <span className="text-[10px] text-navy/75 leading-snug">{MEASURE_HEIGHT_HELP}</span>}
@@ -289,10 +346,28 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
           {!isNew ? <button type="button" onClick={() => void remove()} className="text-xs font-mono text-[#C0392B] hover:underline">Remove tank</button> : <span />}
           <div className="flex gap-2">
             <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button size="sm" loading={saving} onClick={() => void save()}>Save tank</Button>
+            <Button size="sm" loading={saving} onClick={requestSave}>Save tank</Button>
           </div>
         </div>
       </div>
+      <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Keep these changes?" size="md">
+        <div className="flex flex-col gap-3">
+          <p className="text-sm font-body text-navy">You changed {changeList.length === 1 ? 'one thing' : `${changeList.length} things`} on this tank. Check them, then confirm you want to keep them.</p>
+          <ul className="flex flex-col gap-1.5">
+            {changeList.map((c) => (
+              <li key={c.what} className="rounded border border-[#E67E22] ring-1 ring-[#E67E22]/30 px-2.5 py-1.5 text-xs font-mono text-navy">
+                <div className="text-[10px] uppercase tracking-wide text-navy/60">{c.what}</div>
+                <div><span className="text-navy/60 line-through">{c.from}</span> <span className="text-navy/60">→</span> <strong>{c.to}</strong></div>
+              </li>
+            ))}
+          </ul>
+          {dimsChanged && <p className="text-[11px] font-mono text-[#E67E22]">New dimensions reset this tank's baseline variance (you can undo that from the first count you log).</p>}
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setConfirmOpen(false)}>Go back</Button>
+            <Button size="sm" loading={saving} onClick={() => void save()}>Yes, keep these changes</Button>
+          </div>
+        </div>
+      </Modal>
     </Modal>
   )
 }
