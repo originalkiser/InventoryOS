@@ -11,9 +11,12 @@ import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { Button, Modal, SbLoader } from '@/components/ui'
 import { sanitizeDecimalInput } from '@/lib/decimalInput'
-import { SHAPES, SHAPE_ORDER, depthKey, dimsComplete, tankQuarts, type TankDims, type TankShape } from './tankMath'
+import { MEASURE_HEIGHT_HELP, SHAPES, SHAPE_ORDER, depthKey, dimsComplete, tankQuarts, type TankDims, type TankShape } from './tankMath'
 import { TankShapeSvg } from './TankShapeSvg'
 import { AREAS, HOLD_REASON_LABEL, type ShareShop, type ShopTank, type TankArea, type TankEval, type TankGrid } from './tankTypes'
+
+/** A shop count more than this many quarts from what the tank monitor says is "off": variance shows red and the drawing shades the gap. */
+const VARIANCE_ALLOWANCE_QTS = 50
 
 // Free-form tank grid — the same react-grid-layout setup Location Lookup uses (see the interop note there: `import * as RGL`
 // doesn't give the real class under Vite, it's stashed at `.default`).
@@ -22,7 +25,7 @@ const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 28
 const GRID_MARGIN: [number, number] = [10, 10]
 const DEFAULT_W = 3 // four to a row until the shop rearranges them
-const DEFAULT_H = 9 // a set-up tank's card; one still waiting for its type/dimensions is shorter (below)
+const DEFAULT_H = 10 // a set-up tank's card; one still waiting for its type/dimensions is shorter (below)
 const DEFAULT_H_SETUP = 7
 const MIN_W = 2
 const MIN_H = 6
@@ -95,31 +98,60 @@ function useHomeScreenManifest(title: string) {
   }, [title])
 }
 
-// The tank monitor's own details — serial, tank id, current reading, capacity, level, battery — so a shop can tell which physical
-// tank a monitor belongs to when it first sets the tank up. `compact` (a tank that's already set up) keeps just the serial and reading.
-function MonitorInfo({ tank, compact = false }: { tank: ShopTank; compact?: boolean }) {
+const isAlarm = (a: string | null | undefined) => !!a && !/^(ok|normal|none|clear)$/i.test(a.trim())
+
+/** "Monitor: 33.2 in · 666 qts (5 hr ago)" — what the tank monitor itself says, inches first. */
+function monitorLine(tank: ShopTank, preview?: TankEval | null): string | null {
+  const m = tank.monitor
+  const qts = preview?.monitor_qts ?? (m?.on_hand_gal != null ? m.on_hand_gal * 4 : null)
+  const readAt = preview?.monitor_read_at ?? m?.read_at ?? null
+  if (m?.level_in == null && qts == null) return null
+  return `Monitor: ${m?.level_in != null ? `${fmt(m.level_in, 1)} in` : ''}${m?.level_in != null && qts != null ? ' · ' : ''}${qts != null ? `${fmt(qts, 1)} qts` : ''}${readAt ? ` (${ago(readAt)})` : ''}`
+}
+
+/** Card top: our internal product id (or the tank's own name) with the serial across from it, then alarm / low-battery call-outs. */
+function CardHeader({ tank, editingLayout, onEdit }: { tank: ShopTank; editingLayout: boolean; onEdit: () => void }) {
   const m = tank.monitor
   const serial = tank.monitor_serial ?? m?.serial ?? null
-  if (!serial && !m) return <div className="text-[10px] font-mono text-navy/60">No tank monitor assigned</div>
+  const alarm = m && isAlarm(m.alarm) ? m.alarm : null
+  const lowBattery = m?.battery_pct != null && m.battery_pct < 25
+  // The monitor's own product text appears once, under the id it maps to — never repeated elsewhere on the card.
+  const monitorText = tank.internal_product ? (m?.product_id ?? tank.monitor_product ?? tank.product_label) : null
+  return (
+    <div className="flex flex-col gap-0.5 flex-shrink-0">
+      <div className="flex items-start justify-between gap-1.5">
+        <div className="flex items-start gap-1 min-w-0">
+          {editingLayout && <span title="Drag to move" className="tank-drag-handle mt-0.5 p-0.5 text-navy/60 hover:text-navy cursor-grab touch-none"><GripVertical className="w-4 h-4" /></span>}
+          <div className="text-sm font-heading font-bold text-navy truncate min-w-0" title={tank.internal_product ?? tank.name}>
+            {tank.internal_product ? <><span className="font-normal text-navy/75">Product ID: </span>{tank.internal_product}</> : tank.name}
+          </div>
+        </div>
+        <div className="flex items-start gap-1 flex-shrink-0">
+          {serial && <span className="text-[10px] font-mono text-navy/75 pt-[3px]">S/N <strong className="text-navy">{serial}</strong></span>}
+          <button type="button" onClick={onEdit} title="Dimensions & details" className="p-1 -m-0.5 rounded text-navy/75 hover:text-navy hover:bg-navy/10"><Pencil className="w-3.5 h-3.5" /></button>
+        </div>
+      </div>
+      {monitorText && <div className="text-[10px] font-mono text-navy/75 truncate" title={monitorText}>{monitorText}</div>}
+      {alarm && <div className="text-[10px] font-mono font-bold text-[#C0392B] truncate" title={alarm}>Alarm: {alarm}</div>}
+      {lowBattery && <div className="text-[10px] font-mono font-bold text-[#C0392B]">Battery low: {fmt(m!.battery_pct, 0)}%</div>}
+    </div>
+  )
+}
+
+// The monitor's identity and reading, for the setup window (the card itself shows these in its own layout).
+function MonitorSummary({ tank }: { tank: ShopTank }) {
+  const m = tank.monitor
+  const serial = tank.monitor_serial ?? m?.serial ?? null
   const cap = m?.total_capacity_gal ?? (tank.monitor_capacity_qts ? tank.monitor_capacity_qts / 4 : null)
   const height = m?.height_in ?? tank.monitor_height_in
-  const alarm = m?.alarm && !/^(ok|normal|none|clear)$/i.test(m.alarm.trim()) ? m.alarm : null
+  const line = monitorLine(tank)
   return (
-    <div className="text-[10px] font-mono text-navy/80 leading-snug flex flex-col gap-px min-w-0">
-      <div className="truncate"><span className="text-navy/60">S/N</span> <strong className="text-navy">{serial}</strong>
-        {m?.system_tank_id ? <> · <span className="text-navy/60">Tank ID</span> <strong className="text-navy">{m.system_tank_id}</strong></> : null}</div>
-      {m?.on_hand_gal != null && (
-        <div className="truncate">Reads <strong className="text-navy">{fmt(m.on_hand_gal, 0)} gal</strong>{cap ? ` of ${fmt(cap, 0)} gal` : ''}{m.read_at ? ` · ${ago(m.read_at)}` : ''}</div>
-      )}
-      {!compact && (
-        <>
-          {(cap != null && m?.on_hand_gal == null) && <div>Capacity {fmt(cap, 0)} gal{height ? ` · ${fmt(height, 0)} in tall` : ''}</div>}
-          {m?.on_hand_gal != null && (m?.level_in != null || height) && <div className="truncate">{m?.level_in != null ? `Level ${fmt(m.level_in, 1)} in` : ''}{height ? `${m?.level_in != null ? ' of ' : 'Height '}${fmt(height, 0)} in` : ''}{m?.battery_pct != null ? ` · battery ${fmt(m.battery_pct, 0)}%` : ''}</div>}
-          {m?.product_id && <div className="truncate">Monitor product: {m.product_id}</div>}
-          {alarm && <div className="text-[#C0392B] truncate">Alarm: {alarm}</div>}
-          {m?.note && <div className="truncate" title={m.note}>Note: {m.note}</div>}
-        </>
-      )}
+    <div className="text-[11px] font-mono text-navy/80 leading-snug flex flex-col gap-px">
+      {serial && <div><span className="text-navy/60">S/N</span> <strong className="text-navy">{serial}</strong>{tank.internal_product ? <> · <span className="text-navy/60">Product ID</span> <strong className="text-navy">{tank.internal_product}</strong></> : null}</div>}
+      {(m?.product_id ?? tank.monitor_product) && <div>Monitor product: {m?.product_id ?? tank.monitor_product}</div>}
+      {line && <div>{line}</div>}
+      {(cap != null || height) && <div>Monitor capacity {cap != null ? `${fmt(cap, 0)} gal` : '—'}{height ? ` · ${fmt(height, 0)} in tall` : ''}</div>}
+      {m?.note && <div>Note: {m.note}</div>}
     </div>
   )
 }
@@ -134,7 +166,7 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
   const [name, setName] = useState('')
   const [product, setProduct] = useState('')
   const [area, setArea] = useState<TankArea>(defaultArea)
-  const [shape, setShape] = useState<TankShape | ''>('horizontal_cylinder')
+  const [shape, setShape] = useState<TankShape | ''>('rectangle')
   const [dims, setDims] = useState<Record<string, string>>({})
   const [serial, setSerial] = useState('')
   const [unlocked, setUnlocked] = useState(true)
@@ -147,7 +179,7 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
       setDims(Object.fromEntries(Object.entries(tank.dims ?? {}).map(([k, v]) => [k, String(v)])))
       setUnlocked(!tank.shape || !dimsComplete(tank.shape, tank.dims)) // dimensions already set -> greyed out until Edit is clicked
     } else {
-      setName(''); setProduct(''); setArea(defaultArea); setShape('horizontal_cylinder'); setDims({}); setSerial(''); setUnlocked(true)
+      setName(''); setProduct(''); setArea(defaultArea); setShape('rectangle'); setDims({}); setSerial(''); setUnlocked(true)
     }
   }, [open, tank, defaultArea])
 
@@ -219,13 +251,12 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
             {!isNew && !unlocked && <Button size="sm" variant="secondary" onClick={() => setUnlocked(true)}><Pencil className="w-3.5 h-3.5 mr-1" />Edit dimensions</Button>}
             {!isNew && unlocked && complete && <span className="text-[10px] font-mono text-[#E67E22]">Editing — Save to lock them again</span>}
           </div>
-          {tank && (tank.monitor_capacity_qts || tank.monitor_height_in) && (
-            <p className="text-[11px] font-mono text-navy/75 rounded border border-navy/20 px-2 py-1.5">
-              Tank monitor{tank.monitor_product ? ` (${tank.monitor_product})` : ''} reports {tank.monitor_capacity_qts ? `${fmt(tank.monitor_capacity_qts / 4, 0)} gal` : 'an unknown capacity'}
-              {tank.monitor_height_in ? ` and ${fmt(tank.monitor_height_in, 1)} in of height` : ''}. Use it as a check on what you measure.
-            </p>
+          {tank?.monitor_serial && (
+            <div className="rounded border border-navy/20 px-2 py-1.5 flex flex-col gap-1">
+              <MonitorSummary tank={tank} />
+              <p className="text-[10px] font-mono text-navy/60">Use the monitor as a check on what you measure.</p>
+            </div>
           )}
-          {tank?.monitor_serial && <div className="rounded border border-navy/20 px-2 py-1.5"><MonitorInfo tank={tank} /></div>}
           <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-3 items-start">
             {shape ? <TankShapeSvg shape={shape} fill={0.45} className="w-full max-w-[160px] text-navy" />
               : <div className={`w-full max-w-[160px] h-20 rounded border-2 border-dashed grid place-items-center text-2xl text-[#E67E22] ${ORANGE}`}>?</div>}
@@ -233,7 +264,7 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
               <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Tank type
                 <select className={`${inputCls} ${!shape ? ORANGE : lockCls}`} disabled={!unlocked} value={shape} onChange={(e) => pickShape(e.target.value as TankShape | '')}>
                   {!shape && <option value="">Choose the tank type…</option>}
-                  {SHAPE_ORDER.map((s) => <option key={s} value={s}>{SHAPES[s].label}</option>)}
+                  {(shape && !SHAPE_ORDER.includes(shape) ? [shape, ...SHAPE_ORDER] : SHAPE_ORDER).map((s) => <option key={s} value={s}>{SHAPES[s].label}</option>)}
                 </select>
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -242,6 +273,7 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
                     <input className={`${inputCls} ${unlocked && !dims[d.key] ? ORANGE : lockCls}`} disabled={!unlocked} inputMode="decimal" value={dims[d.key] ?? ''}
                       onChange={(e) => setDims((p) => ({ ...p, [d.key]: sanitizeDecimalInput(e.target.value) }))} />
                     {d.hint && <span className="text-[10px] text-navy/60">{d.hint}</span>}
+                    {shape && d.key === depthKey(shape) && <span className="text-[10px] text-navy/75 leading-snug">{MEASURE_HEIGHT_HELP}</span>}
                   </label>
                 ))}
               </div>
@@ -316,68 +348,77 @@ function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
   }
 
   const pctFull = calc ? Math.min(1, calc.quarts / Math.max(1, calc.capacityQuarts)) : tank.last_log && tank.capacity_qts ? Math.min(1, tank.last_log.volume_qts / tank.capacity_qts) : 0
-  const v = preview?.variance_qts
+  const v = preview?.online ? preview.variance_qts : null
+  const overAllowance = v != null && Math.abs(v) > VARIANCE_ALLOWANCE_QTS
+  // Where the monitor says the level is, as a share of this tank's inside depth — drawn once a depth has been entered.
+  const m = tank.monitor
+  const monitorFill = calc && !over
+    ? (m?.level_in != null && maxDepth > 0 ? m.level_in / maxDepth : preview?.monitor_qts != null ? preview.monitor_qts / Math.max(1, calc.capacityQuarts) : null)
+    : null
+  const mLine = monitorLine(tank, calc && !over ? preview : null)
 
   return (
-    <div className={`rounded-lg border p-2.5 flex flex-col gap-2 min-w-0 h-full overflow-y-auto ${ready ? 'border-navy/30 bg-cream' : 'border-[#E67E22] bg-[#E67E22]/10'} ${editingLayout ? 'ring-2 ring-sky' : ''}`}>
-      <div className="flex items-start justify-between gap-1">
-        <div className="flex items-start gap-1 min-w-0">
-          {editingLayout && <span title="Drag to move" className="tank-drag-handle mt-0.5 p-0.5 text-navy/60 hover:text-navy cursor-grab touch-none"><GripVertical className="w-4 h-4" /></span>}
-          <div className="min-w-0">
-            <div className="text-sm font-heading font-bold text-navy truncate">{tank.name}</div>
-            <div className="text-[10px] font-mono text-navy/75 truncate">{tank.product_label || (tank.shape ? SHAPES[tank.shape]?.label : '')}</div>
-          </div>
-        </div>
-        <button type="button" onClick={onEdit} title="Dimensions & details" className="p-1 rounded text-navy/75 hover:text-navy hover:bg-navy/10"><Pencil className="w-3.5 h-3.5" /></button>
-      </div>
-      {tank.shape ? <TankShapeSvg shape={tank.shape} fill={pctFull} className="w-full h-12 text-navy" />
-        : <div className="w-full h-8 grid place-items-center text-2xl text-[#E67E22] leading-none">?</div>}
-      {!ready && (
-        <div className="flex flex-col gap-1.5">
-          <div className="text-[11px] font-mono text-[#E67E22] leading-snug"><strong>Needs a tank type and dimensions.</strong></div>
-          <MonitorInfo tank={tank} />
-          <Button size="sm" className="w-full" onClick={onEdit}>Set up this tank</Button>
-        </div>
-      )}
-      {ready && (
-        <div className="text-[10px] font-mono text-navy/75 leading-snug">
-          {`${fmtDims(tank)} · ${fmt((tank.capacity_qts ?? 0) / 4, 0)} gal`}
-          {tank.last_log && <div>Last: {fmt(tank.last_log.depth_in)} in · {fmt(tank.last_log.volume_qts, 0)} qts · {ago(tank.last_log.logged_at)}{tank.last_log.status === 'held' ? ' · held' : ''}</div>}
-        </div>
-      )}
-      {ready && <MonitorInfo tank={tank} compact />}
-      {ready && <label className="flex flex-col gap-0.5 text-[10px] font-mono text-navy/75">Filled depth (inches)
-        <input value={depthText} inputMode="decimal" onChange={(e) => { setDepthText(sanitizeDecimalInput(e.target.value)); setResult(null) }}
-          className={`w-full rounded border px-2.5 py-2 text-base font-mono text-navy bg-cream focus:outline-none ${over ? 'border-[#C0392B]' : 'border-navy/40 focus:border-sky'}`} />
-      </label>}
-      {over && <p className="text-[10px] font-mono text-[#C0392B]">That's deeper than the tank ({fmt(maxDepth, 1)} in).</p>}
-      {calc && !over && (
-        <div className="text-xs font-mono text-navy">
-          <strong>{fmt(calc.quarts, 1)} qts</strong> <span className="text-navy/75">({fmt(calc.quarts / 4, 1)} gal · {fmt(pctFull * 100, 0)}%)</span>
-        </div>
-      )}
-      {preview?.monitor_found && calc && !over && (
-        <div className="text-[10px] font-mono text-navy/75 leading-snug">
-          {preview.online ? (
-            <>Monitor: {fmt(preview.monitor_qts, 1)} qts ({ago(preview.monitor_read_at)}){preview.sales_adjust_qts ? `, less ~${fmt(preview.sales_adjust_qts, 1)} sold since` : ''}.
-              Variance <strong className={Math.abs(v ?? 0) > 50 ? 'text-[#C0392B]' : 'text-navy'}>{v == null ? '—' : `${v > 0 ? '+' : ''}${fmt(v, 1)} qts`}</strong></>
-          ) : <>The tank monitor hasn't reported lately, so there's nothing to compare with.</>}
-        </div>
-      )}
-      {ready && <Button size="sm" className="!py-2.5" disabled={!calc || over} loading={busy} onClick={() => void log(false)}>Log count</Button>}
+    <div className={`rounded-lg border p-2.5 flex flex-col gap-1.5 min-w-0 h-full overflow-y-auto ${ready ? 'border-navy/30 bg-cream' : 'border-[#E67E22] bg-[#E67E22]/10'} ${editingLayout ? 'ring-2 ring-sky' : ''}`}>
+      <CardHeader tank={tank} editingLayout={editingLayout} onEdit={onEdit} />
 
-      {result && (
-        <div className={`rounded border px-2 py-1.5 text-[11px] font-mono leading-snug ${result.status === 'held' ? 'border-[#E67E22]/60 bg-[#E67E22]/10' : 'border-[#2ECC71]/60 bg-[#2ECC71]/10'} text-navy`}>
-          {result.status === 'held' ? (
-            <>Saved, but held for review before it's used for variance tracking: {(result.hold_reasons ?? []).map((r) => HOLD_REASON_LABEL[r] ?? r).join('; ')}.</>
-          ) : (
-            <>Count logged.</>
-          )}
-          {result.new_baseline && (
-            <div className="mt-1">A new baseline variance of {fmt(result.variance_qts, 1)} qts has been set for this tank.
-              <button type="button" onClick={() => void undo()} className="ml-2 underline font-bold">Undo</button></div>
-          )}
-        </div>
+      {!ready ? (
+        <>
+          <div className="flex-1 min-h-[2rem] grid place-items-center text-4xl text-[#E67E22] leading-none select-none">?</div>
+          <div className="flex flex-col gap-0.5 flex-shrink-0">
+            <div className="text-[11px] font-mono text-[#E67E22] leading-snug"><strong>Needs a tank type and dimensions.</strong></div>
+            {mLine && <div className="text-[10px] font-mono text-navy/80 leading-snug">{mLine}</div>}
+            {(m?.total_capacity_gal != null || tank.monitor_capacity_qts) && (
+              <div className="text-[10px] font-mono text-navy/80 leading-snug">Monitor capacity {fmt(m?.total_capacity_gal ?? (tank.monitor_capacity_qts ?? 0) / 4, 0)} gal{(m?.height_in ?? tank.monitor_height_in) ? ` · ${fmt((m?.height_in ?? tank.monitor_height_in) as number, 0)} in tall` : ''}</div>
+            )}
+          </div>
+          <Button size="sm" className="w-full flex-shrink-0" onClick={onEdit}>Set up this tank</Button>
+        </>
+      ) : (
+        <>
+          <TankShapeSvg shape={tank.shape as TankShape} fill={pctFull} monitorFill={monitorFill} overAllowance={overAllowance} className="w-full h-14 text-navy flex-shrink-0" />
+          <div className="flex flex-col gap-0.5 flex-shrink-0">
+            {calc && !over && (
+              <div className="text-xs font-mono text-navy">
+                <strong>{fmt(calc.quarts, 1)} qts</strong> <span className="text-navy/75">({fmt(calc.quarts / 4, 1)} gal · {fmt(pctFull * 100, 0)}%)</span>
+              </div>
+            )}
+            {mLine && <div className="text-[10px] font-mono text-navy/80 leading-snug">{mLine}{calc && !over && preview?.sales_adjust_qts ? `, less ~${fmt(preview.sales_adjust_qts, 1)} sold since` : ''}</div>}
+            {calc && !over && preview?.monitor_found && !preview.online && <div className="text-[10px] font-mono text-navy/75 leading-snug">The tank monitor hasn't reported lately, so there's nothing to compare with.</div>}
+            {calc && !over && v != null && (
+              <div className="text-[11px] font-mono text-navy leading-snug">
+                Variance <strong className={overAllowance ? 'text-[#C0392B]' : 'text-navy'}>{`${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v), 1)} qts`}</strong>
+                {overAllowance && <span className="text-[#C0392B]"> — over the {VARIANCE_ALLOWANCE_QTS} qt allowance</span>}
+              </div>
+            )}
+            <div className="text-[10px] font-mono text-navy/75 leading-snug">
+              {`${fmtDims(tank)} · ${fmt((tank.capacity_qts ?? 0) / 4, 0)} gal`}
+              {tank.last_log && !calc && <div>Last: {fmt(tank.last_log.depth_in)} in · {fmt(tank.last_log.volume_qts, 0)} qts · {ago(tank.last_log.logged_at)}{tank.last_log.status === 'held' ? ' · held' : ''}</div>}
+            </div>
+            {result && (
+              <div className={`rounded border px-2 py-1.5 mt-1 text-[11px] font-mono leading-snug ${result.status === 'held' ? 'border-[#E67E22]/60 bg-[#E67E22]/10' : 'border-[#2ECC71]/60 bg-[#2ECC71]/10'} text-navy`}>
+                {result.status === 'held' ? (
+                  <>Saved, but held for review before it's used for variance tracking: {(result.hold_reasons ?? []).map((r) => HOLD_REASON_LABEL[r] ?? r).join('; ')}.</>
+                ) : (
+                  <>Count logged.</>
+                )}
+                {result.new_baseline && (
+                  <div className="mt-1">A new baseline variance of {fmt(result.variance_qts, 1)} qts has been set for this tank.
+                    <button type="button" onClick={() => void undo()} className="ml-2 underline font-bold">Undo</button></div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* locked to the bottom of the card */}
+          <div className="mt-auto flex flex-col gap-1.5 flex-shrink-0 pt-1">
+            <label className="flex flex-col gap-0.5 text-[10px] font-mono text-navy/75">Filled depth (inches)
+              <input value={depthText} inputMode="decimal" onChange={(e) => { setDepthText(sanitizeDecimalInput(e.target.value)); setResult(null) }}
+                className={`w-full rounded border px-2.5 py-2 text-base font-mono text-navy bg-cream focus:outline-none ${over ? 'border-[#C0392B]' : 'border-navy/40 focus:border-sky'}`} />
+            </label>
+            {over && <p className="text-[10px] font-mono text-[#C0392B]">That's deeper than the tank ({fmt(maxDepth, 1)} in).</p>}
+            <Button size="sm" className="!py-2.5" disabled={!calc || over} loading={busy} onClick={() => void log(false)}>Log count</Button>
+          </div>
+        </>
       )}
 
       <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Is this measurement accurate?" size="sm">
@@ -494,16 +535,20 @@ export function PublicTankPage() {
   const address = [shop?.address, [shop?.city, shop?.state].filter(Boolean).join(', '), shop?.zip].filter(Boolean).join(' · ')
   return (
     <div className="min-h-screen bg-cream text-navy">
-      <header className="bg-[#002745] text-[#F2F1E6] px-4 py-3">
+      {/* "Tank Calculator" and the shop stay at the top of the screen; the address scrolls away. (The sticky bar is a direct child of the page — inside a short header it would unstick as soon as the header scrolled off.) */}
+      <div className="sticky top-0 z-30 bg-[#002745] text-[#F2F1E6] px-4 pt-3 pb-2">
         <div className="max-w-6xl mx-auto">
           <div className="text-[10px] font-mono uppercase tracking-widest text-[#B7E0DE]">Tank Calculator</div>
           <h1 className="text-lg font-heading font-bold">Shop {shop?.name}{shop?.shop_city ? ` — ${String(shop.shop_city).replace(/^\d+-/, '')}` : ''}</h1>
-          {address && <div className="text-xs font-mono text-[#F2F1E6]/80">{address}</div>}
         </div>
-      </header>
+      </div>
+      {address && <div className="bg-[#002745] text-[#F2F1E6] px-4 pb-3"><div className="max-w-6xl mx-auto text-xs font-mono text-[#F2F1E6]/80">{address}</div></div>}
       <main className="max-w-6xl mx-auto p-3 sm:p-4 flex flex-col gap-6">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-xs font-mono text-navy/75">Enter the filled depth for each tank, then tap Log count. Dimensions are saved — tap the pencil to change them.</p>
+          <div className="flex flex-col gap-1 min-w-0">
+            <p className="text-xs font-mono text-navy/75">Enter the filled depth for each tank, then tap Log count. This page does not update Droptop automatically, the count still needs to be completed in Droptop. The Inventory Team will use the logged counts to audit and adjust tank monitors for more accurate orders.</p>
+            <p className="text-xs font-mono text-navy/75">Dimensions are saved — tap the pencil to change them.</p>
+          </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             {!narrow && tanks.length > 0 && (editingLayout
               ? <>

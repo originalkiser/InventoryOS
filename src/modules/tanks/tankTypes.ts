@@ -36,6 +36,8 @@ export interface ShopTank {
   monitor_height_in: number | null
   monitor_product: string | null
   monitor: TankMonitorInfo | null
+  /** Our own product id that this tank's monitor product maps to (Tank Monitors product mapping / Vendor Parts), null when unmapped. */
+  internal_product: string | null
   source: 'manual' | 'monitor'
   last_log: TankLastLog | null
 }

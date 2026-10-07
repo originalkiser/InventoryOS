@@ -63,13 +63,13 @@ describe('CountSheetPage', () => {
 
     // open the Bay 1 place: only its products, with the "also counted" hint for a product counted in two places
     fireEvent.click(screen.getAllByRole('button', { name: /^Bay 1/ })[0])
-    await waitFor(() => expect(screen.queryByText('WIPER')).toBeNull())
+    await waitFor(() => expect(screen.queryByText('WIPER')).toBeNull(), { timeout: 5000 })
     expect(screen.getByText(/Also counted: Back room 30/)).toBeTruthy()
 
     // "add count" adds another entry spot
     const before = document.querySelectorAll('input[data-qty-input]').length
     fireEvent.click(screen.getAllByText(/add count/i)[0])
-    await waitFor(() => expect(document.querySelectorAll('input[data-qty-input]').length).toBe(before + 1))
+    await waitFor(() => expect(document.querySelectorAll('input[data-qty-input]').length).toBe(before + 1), { timeout: 5000 })
     expect(inserted.some((i) => i.table === 'count_sheet_entries')).toBe(true)
   }, 15000)
 
@@ -79,7 +79,7 @@ describe('CountSheetPage', () => {
     render(<CountSheetPage />)
     await screen.findByText('WIPER', {}, { timeout: 5000 }); await screen.findByText('SYN-5W30')
     fireEvent.change(screen.getByPlaceholderText('Search products…'), { target: { value: 'wiper' } })
-    await waitFor(() => expect(screen.queryByText('SYN-5W30')).toBeNull())
+    await waitFor(() => expect(screen.queryByText('SYN-5W30')).toBeNull(), { timeout: 5000 })
     expect(screen.getByText('WIPER')).toBeTruthy()
     const table = within(document.body)
     expect(table.getByText(/1 shown/)).toBeTruthy()

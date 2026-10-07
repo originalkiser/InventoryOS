@@ -18,7 +18,7 @@ const D = { key: 'diameter' as const, label: 'Diameter (inches)' }
 export const SHAPES: Record<TankShape, ShapeDef> = {
   horizontal_cylinder: { label: 'Horizontal Cylinder', orientation: 'horizontal', dims: [L, D] },
   vertical_cylinder: { label: 'Vertical Cylinder', orientation: 'vertical', dims: [{ key: 'height', label: 'Height (inches)' }, D] },
-  rectangle: { label: 'Rectangle', orientation: 'box', dims: [L, { key: 'width', label: 'Width (inches)' }, { key: 'height', label: 'Height (inches)' }] },
+  rectangle: { label: 'Rectangle/Tote/Rhino', orientation: 'box', dims: [L, { key: 'width', label: 'Width (inches)' }, { key: 'height', label: 'Height (inches)' }] },
   horizontal_oval: { label: 'Horizontal Oval', orientation: 'horizontal', dims: [L, { key: 'width', label: 'Width (inches)', hint: 'Widest point of the oval' }, { key: 'height', label: 'Height (inches)' }] },
   vertical_oval: { label: 'Vertical Oval', orientation: 'vertical', dims: [{ key: 'height', label: 'Height (inches)' }, { key: 'width', label: 'Width (inches)', hint: 'Long side of the oval' }, { key: 'diameter', label: 'Depth front-to-back (inches)' }] },
   horizontal_capsule: { label: 'Horizontal Capsule', orientation: 'horizontal', dims: [L, D] },
@@ -27,7 +27,10 @@ export const SHAPES: Record<TankShape, ShapeDef> = {
   horizontal_dish: { label: 'Horizontal Dish Ends', orientation: 'horizontal', dims: [L, D, { key: 'dish_depth', label: 'Dish depth (inches)', hint: 'How far each end bows out' }] },
   horizontal_ellipse: { label: 'Horizontal Ellipse', orientation: 'horizontal', dims: [L, { key: 'width', label: 'Width (inches)' }, { key: 'height', label: 'Height (inches)' }] },
 }
-export const SHAPE_ORDER = Object.keys(SHAPES) as TankShape[]
+/** The shapes offered for a NEW tank, in dropdown order. The elliptical / dish-end / ellipse shapes are retired (no longer offered) but stay
+ *  in SHAPES so a tank already saved with one keeps calculating and drawing correctly. */
+export const SHAPE_ORDER: TankShape[] = ['rectangle', 'horizontal_cylinder', 'horizontal_capsule', 'horizontal_oval', 'vertical_cylinder', 'vertical_capsule', 'vertical_oval']
+export const MEASURE_HEIGHT_HELP = 'Measure from the bottom of the tank to the capacity line or top fill line — e.g. on a tote tank, measure from the bottom of the tank to the last line on the tote, not to the top of the tote.'
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const pos = (v: number | undefined) => (Number.isFinite(v) && (v as number) > 0 ? (v as number) : 0)
