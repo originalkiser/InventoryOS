@@ -9,14 +9,14 @@ import 'react-grid-layout/css/styles.css'
 import { GripVertical, LayoutGrid, Pencil, Plus, RotateCcw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
-import { Button, Modal, SbLoader } from '@/components/ui'
+import { Button, HoverTip, Modal, SbLoader } from '@/components/ui'
 import { sanitizeDecimalInput } from '@/lib/decimalInput'
 import { MEASURE_HEIGHT_HELP, SHAPES, SHAPE_ORDER, depthKey, dimsComplete, tankQuarts, type TankDims, type TankShape } from './tankMath'
 import { TankShapeSvg } from './TankShapeSvg'
 import { AREAS, HOLD_REASON_LABEL, type ShareShop, type ShopTank, type TankArea, type TankEval, type TankGrid } from './tankTypes'
 
-/** A shop count more than this many quarts from what the tank monitor says is "off": variance shows red and the drawing shades the gap. */
-const VARIANCE_ALLOWANCE_QTS = 50
+/** Default for the company setting (Tank Calculator Links → Settings): a count more than this many quarts from the tank monitor is "off". */
+const DEFAULT_VARIANCE_ALLOWANCE_QTS = 100
 
 // Free-form tank grid — the same react-grid-layout setup Location Lookup uses (see the interop note there: `import * as RGL`
 // doesn't give the real class under Vite, it's stashed at `.default`).
@@ -25,8 +25,8 @@ const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 28
 const GRID_MARGIN: [number, number] = [10, 10]
 const DEFAULT_W = 3 // four to a row until the shop rearranges them
-const DEFAULT_H = 10 // a set-up tank's card; one still waiting for its type/dimensions is shorter (below)
-const DEFAULT_H_SETUP = 7
+const DEFAULT_H = 13 // a set-up tank's card; one still waiting for its type/dimensions is shorter (below)
+const DEFAULT_H_SETUP = 8
 const MIN_W = 2
 const MIN_H = 6
 
@@ -135,9 +135,9 @@ function CardHeader({ tank, editingLayout, onEdit }: { tank: ShopTank; editingLa
             {tank.internal_product ? <><span className="font-normal text-navy/75">Product ID: </span>{tank.internal_product}</> : tank.name}
           </div>
         </div>
-        <div className="flex items-start gap-1 flex-shrink-0">
-          {serial && <span className="text-[10px] font-mono text-navy/75 pt-[3px]">S/N <strong className="text-navy">{serial}</strong></span>}
+        <div className="flex flex-col items-end flex-shrink-0">
           <button type="button" onClick={onEdit} title="Dimensions & details" className="p-1 -m-0.5 rounded text-navy/75 hover:text-navy hover:bg-navy/10"><Pencil className="w-3.5 h-3.5" /></button>
+          {serial && <span className="text-[10px] font-mono text-navy/75 leading-tight mt-0.5 whitespace-nowrap">S/N <strong className="text-navy">{serial}</strong></span>}
         </div>
       </div>
       {monitorText && <div className="text-[10px] font-mono text-navy/75 truncate" title={monitorText}>{monitorText}</div>}
@@ -372,10 +372,28 @@ function TankModal({ open, onClose, slug, tank, defaultArea, onSaved, onDeleted 
   )
 }
 
+/** Hover callout on the tank drawing: what each color means. */
+function TankLegend({ monitor, allowance }: { monitor: boolean; allowance: number }) {
+  const Row = ({ swatch, title, text }: { swatch: React.ReactNode; title: string; text: string }) => (
+    <div className="flex items-start gap-2">
+      <span className="mt-0.5 w-6 flex-shrink-0 flex justify-center">{swatch}</span>
+      <div><div className="text-[11px] font-mono font-bold">{title}</div><div className="text-[10px] font-mono text-[#F2F1E6]/80 leading-snug">{text}</div></div>
+    </div>
+  )
+  return (
+    <div className="flex flex-col gap-2 w-60">
+      <div className="text-[10px] font-mono uppercase tracking-wide text-[#B7E0DE]">What the drawing shows</div>
+      <Row swatch={<span className="inline-block w-5 h-3 rounded-sm" style={{ background: '#B7E0DE' }} />} title="Light blue" text="The oil level — what you measured once you enter a depth (otherwise the last logged count)." />
+      <Row swatch={<span className="inline-block w-5 border-t-2 border-dashed" style={{ borderColor: '#F2F1E6' }} />} title="Dashed line" text={monitor ? 'Where the tank monitor says the level is right now.' : 'Where the tank monitor says the level is — shown after you enter a depth.'} />
+      <Row swatch={<span className="inline-block w-5 h-3 rounded-sm" style={{ background: '#C0392B' }} />} title="Red" text={`The gap between your measurement and the monitor, shown when they're more than ${fmt(allowance, 0)} qts apart.`} />
+    </div>
+  )
+}
+
 // ── One tank: depth in, quarts out, log the count ───────────────────────────────────────────────────────────────────
 
-function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
-  tank: ShopTank; slug: string; onEdit: () => void; onChanged: () => void; editingLayout: boolean
+function TankCard({ tank, slug, onEdit, onChanged, editingLayout, allowance }: {
+  tank: ShopTank; slug: string; onEdit: () => void; onChanged: () => void; editingLayout: boolean; allowance: number
 }) {
   const [depthText, setDepthText] = useState('')
   const depth = Number(depthText)
@@ -424,7 +442,7 @@ function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
 
   const pctFull = calc ? Math.min(1, calc.quarts / Math.max(1, calc.capacityQuarts)) : tank.last_log && tank.capacity_qts ? Math.min(1, tank.last_log.volume_qts / tank.capacity_qts) : 0
   const v = preview?.online ? preview.variance_qts : null
-  const overAllowance = v != null && Math.abs(v) > VARIANCE_ALLOWANCE_QTS
+  const overAllowance = v != null && Math.abs(v) > allowance
   // Where the monitor says the level is, as a share of this tank's inside depth — drawn once a depth has been entered.
   const m = tank.monitor
   const monitorFill = calc && !over
@@ -450,7 +468,9 @@ function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
         </>
       ) : (
         <>
-          <TankShapeSvg shape={tank.shape as TankShape} fill={pctFull} monitorFill={monitorFill} overAllowance={overAllowance} className="w-full h-14 text-navy flex-shrink-0" />
+          <HoverTip className="flex-1 min-h-[3.5rem] w-full items-center justify-center" placement="top" content={<TankLegend monitor={monitorFill != null} allowance={allowance} />}>
+            <TankShapeSvg shape={tank.shape as TankShape} fill={pctFull} monitorFill={monitorFill} overAllowance={overAllowance} className="w-full h-full max-h-[15rem] text-navy" />
+          </HoverTip>
           <div className="flex flex-col gap-0.5 flex-shrink-0">
             {calc && !over && (
               <div className="text-xs font-mono text-navy">
@@ -462,7 +482,7 @@ function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
             {calc && !over && v != null && (
               <div className="text-[11px] font-mono text-navy leading-snug">
                 Variance <strong className={overAllowance ? 'text-[#C0392B]' : 'text-navy'}>{`${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v), 1)} qts`}</strong>
-                {overAllowance && <span className="text-[#C0392B]"> — over the {VARIANCE_ALLOWANCE_QTS} qt allowance</span>}
+                {overAllowance && <span className="text-[#C0392B]"> — over the {fmt(allowance, 0)} qt allowance</span>}
               </div>
             )}
             <div className="text-[10px] font-mono text-navy/75 leading-snug">
@@ -485,7 +505,7 @@ function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
           </div>
 
           {/* locked to the bottom of the card */}
-          <div className="mt-auto flex flex-col gap-1.5 flex-shrink-0 pt-1">
+          <div className="flex flex-col gap-1.5 flex-shrink-0 pt-1">
             <label className="flex flex-col gap-0.5 text-[10px] font-mono text-navy/75">Filled depth (inches)
               <input value={depthText} inputMode="decimal" onChange={(e) => { setDepthText(sanitizeDecimalInput(e.target.value)); setResult(null) }}
                 className={`w-full rounded border px-2.5 py-2 text-base font-mono text-navy bg-cream focus:outline-none ${over ? 'border-[#C0392B]' : 'border-navy/40 focus:border-sky'}`} />
@@ -515,8 +535,8 @@ function TankCard({ tank, slug, onEdit, onChanged, editingLayout }: {
 
 // One area's free-form grid: tanks can be any width and stacked any way. Drag by the handle, resize from the corner (layout
 // editing only — locked otherwise so typing a depth never nudges a tile).
-function AreaGrid({ list, slug, editing, narrow, onEdit, onChanged, onLayout }: {
-  list: ShopTank[]; slug: string; editing: boolean; narrow: boolean
+function AreaGrid({ list, slug, editing, narrow, allowance, onEdit, onChanged, onLayout }: {
+  list: ShopTank[]; slug: string; editing: boolean; narrow: boolean; allowance: number
   onEdit: (t: ShopTank) => void; onChanged: () => void; onLayout: (l: RGL.Layout[]) => void
 }) {
   if (narrow) {
@@ -524,7 +544,7 @@ function AreaGrid({ list, slug, editing, narrow, onEdit, onChanged, onLayout }: 
     const ordered = [...layoutFor(list)].sort((a, b) => a.y - b.y || a.x - b.x).map((l) => list.find((t) => t.id === l.i)!)
     return (
       <div className="grid grid-cols-1 min-[520px]:grid-cols-2 gap-2.5">
-        {ordered.map((t) => <TankCard key={t.id} tank={t} slug={slug} editingLayout={false} onEdit={() => onEdit(t)} onChanged={onChanged} />)}
+        {ordered.map((t) => <TankCard key={t.id} tank={t} slug={slug} editingLayout={false} allowance={allowance} onEdit={() => onEdit(t)} onChanged={onChanged} />)}
       </div>
     )
   }
@@ -534,7 +554,7 @@ function AreaGrid({ list, slug, editing, narrow, onEdit, onChanged, onLayout }: 
       onLayoutChange={(l) => { if (editing) onLayout(l) }}>
       {list.map((t) => (
         <div key={t.id} className="h-full">
-          <TankCard tank={t} slug={slug} editingLayout={editing} onEdit={() => onEdit(t)} onChanged={onChanged} />
+          <TankCard tank={t} slug={slug} editingLayout={editing} allowance={allowance} onEdit={() => onEdit(t)} onChanged={onChanged} />
         </div>
       ))}
     </ReactGridLayout>
@@ -548,6 +568,7 @@ export function PublicTankPage() {
   const [status, setStatus] = useState<'loading' | 'ok' | 'notfound'>('loading')
   const [shop, setShop] = useState<ShareShop | null>(null)
   const [tanks, setTanks] = useState<ShopTank[]>([])
+  const [allowance, setAllowance] = useState(DEFAULT_VARIANCE_ALLOWANCE_QTS)
   const [modal, setModal] = useState<{ tank: ShopTank | null; area: TankArea } | null>(null)
   useHomeScreenManifest(shop?.name ? `Tank Calculator — Shop ${shop.name}` : 'Tank Calculator')
 
@@ -557,6 +578,8 @@ export function PublicTankPage() {
     const { data, error } = await sb().rpc('get_tank_share', { p_slug: slug })
     if (error || !data || data.error) { setStatus('notfound'); return }
     setShop(data.shop as ShareShop); setTanks((data.tanks ?? []) as ShopTank[]); setStatus('ok')
+    const a = Number(data.settings?.variance_allowance_qts)
+    setAllowance(Number.isFinite(a) && a > 0 ? a : DEFAULT_VARIANCE_ALLOWANCE_QTS)
   }, [slug])
   useEffect(() => { void load() }, [load])
 
@@ -645,7 +668,7 @@ export function PublicTankPage() {
                 <h2 className="text-xs font-heading font-bold uppercase tracking-widest text-navy">{a.label}</h2>
                 <button type="button" onClick={() => setModal({ tank: null, area: a.key })} className="text-[11px] font-mono text-navy/75 hover:text-navy underline">+ add here</button>
               </div>
-              <AreaGrid list={list} slug={slug} editing={editingLayout} narrow={narrow} onLayout={onLayout}
+              <AreaGrid list={list} slug={slug} editing={editingLayout} narrow={narrow} allowance={allowance} onLayout={onLayout}
                 onEdit={(t) => setModal({ tank: t, area: t.area })} onChanged={() => void load()} />
             </section>
           )

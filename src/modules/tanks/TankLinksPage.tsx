@@ -8,6 +8,8 @@ import { Button, Modal, SbLoader } from '@/components/ui'
 import { DataTable } from '@/components/shared/DataTable'
 import { useTable } from '@/hooks/useTable'
 import { useLocations } from '@/hooks/useLocations'
+import { useAppSetting } from '@/hooks/useAppSetting'
+import { isAdminOrDeveloper } from '@/lib/roles'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -24,6 +26,28 @@ interface Row {
 const randSlugPart = () => Math.random().toString(36).slice(2, 6)
 const slugFor = (shop: string) => `${String(shop).toLowerCase().replace(/[^a-z0-9]+/g, '')}-${randSlugPart()}`
 const col = createColumnHelper<Row>()
+
+/** Tank Calculator settings — admins and developers can change them; everyone else sees the current value. */
+function TankCalcSettings({ canEdit }: { canEdit: boolean }) {
+  const [saved, save] = useAppSetting<number>('tank_calc_variance_allowance_qts', 100)
+  const [text, setText] = useState<string | null>(null)
+  const shown = text ?? String(saved)
+  const n = Number(shown)
+  const valid = Number.isFinite(n) && n > 0
+  return (
+    <div className="rounded border border-navy/25 p-3 flex flex-col gap-2 max-w-2xl">
+      <h2 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Tank Calculator settings</h2>
+      <div className="flex items-end gap-2 flex-wrap">
+        <label className="flex flex-col gap-0.5 text-[11px] font-mono text-navy/75">Variance allowance (quarts)
+          <input type="number" min={1} step={5} value={shown} disabled={!canEdit} onChange={(e) => setText(e.target.value)}
+            className="w-32 rounded border border-navy/30 bg-cream px-2.5 py-1.5 text-sm font-mono text-navy disabled:opacity-60 focus:outline-none focus:border-sky" />
+        </label>
+        {canEdit && <Button size="sm" disabled={!valid || n === saved} onClick={() => { save(n); setText(null); toast.success('Saved — shops see it the next time they open their page') }}>Save</Button>}
+      </div>
+      <p className="text-[11px] font-mono text-inky">How far a shop's measurement can be from the tank monitor before its card shows the variance in red and shades the gap on the tank drawing.{!canEdit && ' Only admins and developers can change this.'}</p>
+    </div>
+  )
+}
 
 export function TankLinksPage() {
   const { profile } = useAuthStore()
@@ -144,6 +168,7 @@ export function TankLinksPage() {
         </div>
         <Button size="sm" loading={busy} onClick={() => void createAllMissing()}>Create all missing links</Button>
       </div>
+      <TankCalcSettings canEdit={isAdminOrDeveloper(profile?.role)} />
       {loading ? <div className="py-12 flex justify-center"><SbLoader size={36} /></div> : (
         <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter} exportFilename="Tank calculator links" />
       )}
