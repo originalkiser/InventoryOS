@@ -195,6 +195,24 @@ export function resolveDeliveryDate(
   return null
 }
 
+/**
+ * The UPCOMING delivery on a schedule — the next date it actually delivers, with no lead time applied, today included if today is a
+ * delivery day. Not the same as resolveDeliveryDate(today): that answers "when would an order placed today arrive", which skips every
+ * delivery inside the lead window (a Thursday look-up of a Tuesday schedule with a 4-day lead lands on the delivery AFTER the upcoming one —
+ * the date the VMI miss check wants, but not what "next delivery" means on a shop's detail card).
+ * A plus-N-business-days schedule has no fixed delivery day, so it falls back to the order-based date.
+ */
+export function nextScheduledDelivery(
+  fromDate: string, schedule: DeliverySchedule | null | undefined, calendar?: WeekCalendar,
+): string | null {
+  if (!schedule) return null
+  if (schedule.type === 'plus_business_days') return resolveDeliveryDate(fromDate, schedule, calendar)
+  const d = new Date(fromDate + 'T00:00:00')
+  if (Number.isNaN(d.getTime())) return null
+  d.setDate(d.getDate() - 1) // resolveDeliveryDate looks strictly after its start date
+  return resolveDeliveryDate(toIso(d), { ...schedule, lead_business_days: 0 }, calendar)
+}
+
 // ── Display ─────────────────────────────────────────────────────────────
 
 export const DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -215,7 +233,7 @@ export const DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday'
  */
 export function resolveScheduleDescription(
   schedule: DeliverySchedule | null | undefined,
-  opts?: { orderDate?: string; calendar?: WeekCalendar },
+  opts?: { orderDate?: string; calendar?: WeekCalendar; /** show the upcoming delivery (see nextScheduledDelivery) instead of the delivery for an order placed on orderDate */ upcoming?: boolean },
 ): string {
   if (!schedule) return 'No schedule set'
   const dowName = (d: number | null) => (d == null ? '—' : DOW_NAMES[d])
@@ -242,7 +260,7 @@ export function resolveScheduleDescription(
     ? `${weekAbParts.join(' · ') || 'No delivery day set'} (${schedule.lead_business_days}d lead)`
     : `${dowName(schedule.delivery_dow)}, every other week (${schedule.lead_business_days}d lead)`
   if (!opts?.orderDate) return pattern
-  const next = resolveDeliveryDate(opts.orderDate, schedule, opts.calendar)
+  const next = opts.upcoming ? nextScheduledDelivery(opts.orderDate, schedule, opts.calendar) : resolveDeliveryDate(opts.orderDate, schedule, opts.calendar)
   return next ? `${pattern} — next: ${next}` : `${pattern} — next date unknown`
 }
 

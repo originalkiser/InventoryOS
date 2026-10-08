@@ -21,7 +21,7 @@ import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
 import { isValvoline, isReladyne } from '@/modules/orders-v2/useOrdersV2'
-import { resolveScheduleDescription, resolveDeliveryDate, daysBetween } from '@/modules/orders-v2/engine'
+import { resolveScheduleDescription, nextScheduledDelivery, daysBetween } from '@/modules/orders-v2/engine'
 import type { DeliverySchedule, WeekCalendar } from '@/modules/orders-v2/types'
 import { useLastOrderedInfo } from '@/modules/orders-v2/useLastOrderedInfo'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
@@ -249,7 +249,8 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
     id: 'rd_delivery_day', label: 'RD Delivery Day',
     render: (ctx) => {
       if (ctx.rdSchedule) {
-        const next = resolveDeliveryDate(format(new Date(), 'yyyy-MM-dd'), ctx.rdSchedule, ctx.rdCalendar)
+        // The upcoming delivery, not "when an order placed today would arrive" (that skips the delivery inside the lead window).
+        const next = nextScheduledDelivery(format(new Date(), 'yyyy-MM-dd'), ctx.rdSchedule, ctx.rdCalendar)
         return {
           value: resolveScheduleDescription(ctx.rdSchedule),
           note: next ? `next: ${format(new Date(next + 'T00:00:00'), 'M/d/yyyy')}` : 'next date unknown',
@@ -262,7 +263,7 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
   {
     id: 'valvoline_schedule', label: 'Valvoline Delivery Schedule',
     render: (ctx) => (ctx.valvolineSchedule
-      ? { value: resolveScheduleDescription(ctx.valvolineSchedule, { orderDate: format(new Date(), 'yyyy-MM-dd'), calendar: ctx.valvolineCalendar }) }
+      ? { value: resolveScheduleDescription(ctx.valvolineSchedule, { orderDate: format(new Date(), 'yyyy-MM-dd'), calendar: ctx.valvolineCalendar, upcoming: true }) }
       : null),
   },
   { id: 'address', label: 'Address', render: (ctx) => ({ value: ctx.addressStr, mapQuery: ctx.addressStr || undefined }) },
