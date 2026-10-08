@@ -21,6 +21,22 @@ export interface ColumnPrefs {
 
 const STORAGE_PREFIX = 'sbnet:'
 
+// Every column/layout hook shares ONE jsonb (platform.user_profiles.column_prefs, a key per table). Each hook used to write back the whole
+// object it had read when it mounted, plus its own key — so whichever hook saved last wiped out anything another hook (a column width, a
+// sort, a layout) had saved since, and the next session loaded the wiped copy. Now a save re-reads the current object and changes only its
+// own key, one save at a time.
+let columnPrefsSaveChain: Promise<unknown> = Promise.resolve()
+function saveColumnPref(userId: string, key: string, value: unknown): Promise<unknown> {
+  const run = async () => {
+    const sbx = supabase as any
+    const { data } = await sbx.schema('platform').from('user_profiles').select('column_prefs').eq('id', userId).maybeSingle()
+    const merged = { ...((data?.column_prefs as Record<string, unknown> | null) ?? {}), [key]: value }
+    await sbx.schema('platform').from('user_profiles').update({ column_prefs: merged }).eq('id', userId)
+  }
+  columnPrefsSaveChain = columnPrefsSaveChain.then(run, run).catch(() => undefined)
+  return columnPrefsSaveChain
+}
+
 function localKey(tableKey: string) {
   return `${STORAGE_PREFIX}${tableKey}:column_prefs`
 }
@@ -127,13 +143,7 @@ export function useColumnPrefs(
       localStorage.setItem(localKey(tableKey), str)
 
       if (!user) return
-      const merged = { ...allPrefsRef.current, [tableKey]: prefs }
-      allPrefsRef.current = merged
-      await (supabase as any)
-        .schema('platform')
-        .from('user_profiles')
-        .update({ column_prefs: merged })
-        .eq('id', user.id)
+      await saveColumnPref(user.id, tableKey, prefs)
     }, 800)
 
     return () => clearTimeout(saveTimerRef.current)
@@ -232,13 +242,7 @@ export function usePersistedColumnLayout(tableKey: string) {
       localStorage.setItem(localKey(tableKey), str)
 
       if (!user) return
-      const merged = { ...allPrefsRef.current, [tableKey]: prefs }
-      allPrefsRef.current = merged
-      await (supabase as any)
-        .schema('platform')
-        .from('user_profiles')
-        .update({ column_prefs: merged })
-        .eq('id', user.id)
+      await saveColumnPref(user.id, tableKey, prefs)
     }, 800)
 
     return () => clearTimeout(saveTimerRef.current)
@@ -314,13 +318,7 @@ export function usePersistedJson<T>(tableKey: string, defaultValue: T) {
       localStorage.setItem(localKey(tableKey), str)
 
       if (!user) return
-      const merged = { ...allPrefsRef.current, [tableKey]: value }
-      allPrefsRef.current = merged
-      await (supabase as any)
-        .schema('platform')
-        .from('user_profiles')
-        .update({ column_prefs: merged })
-        .eq('id', user.id)
+      await saveColumnPref(user.id, tableKey, value)
     }, 800)
 
     return () => clearTimeout(saveTimerRef.current)

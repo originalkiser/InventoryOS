@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Input, Modal, Select } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useProductExceptions, caseTypeLabel } from './useProductExceptions'
@@ -35,7 +35,7 @@ export function ExceptionEditModal({
   // check this; everyone else can keep ignoring the argument.
   onSaved?: (locationId?: string) => void
 }) {
-  const { rows, save, remove } = useProductExceptions()
+  const { rows, loading, save, remove } = useProductExceptions()
   const [floorQty, setFloorQty] = useState('')
   const [ceilingQty, setCeilingQty] = useState('')
   const [ceilingUnit, setCeilingUnit] = useState<CeilingUnit>('cases')
@@ -60,15 +60,22 @@ export function ExceptionEditModal({
   // Seed the form from whatever's already saved (if anything) every time the
   // modal opens for a new location/product pair — not on every `rows`
   // refresh, or a save mid-edit would stomp on what's still being typed.
+  // The exception rows load AFTER the modal mounts, so seeding at open time found nothing and an existing exception (an all-shops one in
+  // particular) opened as a blank "Add". Seed once the rows have loaded, once per opening of the modal for a shop + product.
+  const seededFor = useRef<string | null>(null)
   useEffect(() => {
-    if (!open) return
+    if (!open) { seededFor.current = null; return }
+    if (loading) return
+    const k = `${locationId}|${productId}`
+    if (seededFor.current === k) return
+    seededFor.current = k
     setScope(existingShop ? 'shop' : existingGlobal ? 'global' : 'shop')
     setFloorQty(existing?.floor_qty?.toString() ?? '')
     setCeilingQty(existing?.ceiling_qty?.toString() ?? '')
     setCeilingUnit(existing?.ceiling_unit ?? 'cases')
     setNotes(existing?.notes ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, locationId, productId])
+  }, [open, loading, locationId, productId])
 
   useEffect(() => {
     if (!open || caseUnitLabel !== undefined) return
@@ -81,7 +88,7 @@ export function ExceptionEditModal({
 
   const resolvedCaseLabel = caseTypeLabel(caseUnitLabel ?? fetchedUom)
   const ceilingUnitOptions = [
-    { value: 'cases', label: `${resolvedCaseLabel} (this product's own unit)` },
+    { value: 'cases', label: `${resolvedCaseLabel} (product's unit)` },
     { value: 'quarts', label: 'Quarts' },
     { value: 'gallons', label: 'Gallons' },
   ]
@@ -112,7 +119,7 @@ export function ExceptionEditModal({
   const title = [shopLabel, productLabel ?? productId].filter(Boolean).join(' — ')
 
   return (
-    <Modal open={open} onClose={onClose} title={`${existing ? 'Edit' : 'Add'} Exception${title ? ` — ${title}` : ''}`}>
+    <Modal open={open} onClose={onClose} size="lg" title={`${existing ? 'Edit' : 'Add'} Exception${title ? ` — ${title}` : ''}`}>
       <div className="flex flex-col gap-3">
         {existing ? (
           <p className="text-[11px] font-mono text-inky/60">
@@ -132,13 +139,13 @@ export function ExceptionEditModal({
             </div>
           </div>
         )}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1.7fr] gap-3">
           <div className="flex flex-col gap-0.5">
             <Input label="Floor (quarts)" type="number" step={1} value={floorQty} onChange={(e) => setFloorQty(e.target.value)} />
             <span className="text-[10px] font-mono text-inky/50">On-hand at/below this is treated as unusable</span>
           </div>
-          <Input label="Ceiling" type="number" step={1} value={ceilingQty} onChange={(e) => setCeilingQty(e.target.value)} />
-          <Select label="Ceiling unit" value={ceilingUnit} onChange={(e) => setCeilingUnit(e.target.value as CeilingUnit)} options={ceilingUnitOptions} />
+          <Input label="Max" type="number" step={1} value={ceilingQty} onChange={(e) => setCeilingQty(e.target.value)} />
+          <Select label="Max unit" value={ceilingUnit} onChange={(e) => setCeilingUnit(e.target.value as CeilingUnit)} options={ceilingUnitOptions} />
         </div>
         <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional — why this exception exists" />
         <div className="flex justify-between gap-2 pt-1">

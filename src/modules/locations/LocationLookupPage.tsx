@@ -122,30 +122,30 @@ const metaLabel = (k: string) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.
 
 // Newest timestamp across a set of rows (checking several candidate columns),
 // returned as "MM-dd-yyyy" for the "last updated" card callouts. null if none.
-function lastUpdated(rows: Array<Record<string, any>>, keys: string[]): string | null {
+function lastUpdated(rows: Array<Record<string, any>>, keys: string[], fmt = 'MM-dd-yyyy'): string | null {
   let best = 0
   for (const r of rows) for (const k of keys) {
     const v = r?.[k]; if (!v) continue
     const t = new Date(v).getTime(); if (!isNaN(t) && t > best) best = t
   }
   if (!best) return null
-  try { return format(new Date(best), 'MM-dd-yyyy') } catch { return null }
+  try { return format(new Date(best), fmt) } catch { return null }
 }
 
 // Small "Updated MM-DD-YYYY" callout shown under a card header.
-function UpdatedCallout({ date, onOpen, openTitle }: { date: string | null; onOpen?: () => void; openTitle?: string }) {
+function UpdatedCallout({ date, onOpen, openTitle, label = 'Updated' }: { date: string | null; onOpen?: () => void; openTitle?: string; label?: string }) {
   if (!date && !onOpen) return null
   if (!onOpen) {
     return (
       <span className="self-start inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/30 text-navy">
-        Updated {date}
+        {label} {date}
       </span>
     )
   }
   return (
     <button onClick={onOpen} title={openTitle ?? 'Open config'}
       className="group self-start inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky/30 text-navy hover:bg-sky/50 transition-colors">
-      {date ? `Updated ${date}` : 'Open config'}
+      {date ? `${label} ${date}` : 'Open config'}
       <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
     </button>
   )
@@ -670,7 +670,7 @@ function exceptionCellLines(exc: ConfigRow['exception']): string[] {
   if (!exc) return []
   const lines: string[] = []
   if (exc.floor_qty != null) lines.push(`Floor=${num(exc.floor_qty)}qts`)
-  if (exc.ceiling_qty != null) lines.push(`Ceiling=${num(exc.ceiling_qty)}${CEILING_UNIT_ABBR[exc.ceiling_unit ?? ''] ?? exc.ceiling_unit ?? ''}`)
+  if (exc.ceiling_qty != null) lines.push(`Max=${num(exc.ceiling_qty)}${CEILING_UNIT_ABBR[exc.ceiling_unit ?? ''] ?? exc.ceiling_unit ?? ''}`)
   return lines
 }
 
@@ -688,7 +688,6 @@ const CONFIG_FIXED: Col<ConfigRow>[] = [
   { id: 'vendor', label: 'Vendor', align: 'left', render: (r) => r.vendor_name ?? '—', sort: (r) => r.vendor_name ?? '' },
   { id: 'uom', label: 'UOM', align: 'left', render: (r) => String((r.metadata as any)?.uom ?? '—'), sort: (r) => String((r.metadata as any)?.uom ?? '') },
   { id: 'capacity', label: 'Capacity', align: 'right', width: 'w-20', render: (r) => num(r.capacity), sort: (r) => r.capacity },
-  { id: 'max', label: 'Max', align: 'right', width: 'w-16', render: (r) => num(r.order_limit), sort: (r) => r.order_limit },
   { id: 'vmi', label: 'VMI', align: 'center', width: 'w-14', render: (r) => (isVmiRow(r) ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (isVmiRow(r) ? 1 : 0) },
 ]
 // Metadata keys that are plumbing, not config attributes — never shown as columns.
@@ -757,7 +756,6 @@ const USAGE_COLS: Col<ConfigRow>[] = [
     sort: (r) => { const oh = r.usage?.on_hands, du = r.usage?.daily_usage; return oh != null && du != null && du > 0 ? oh / du : null },
   },
 ]
-const USAGE_TINT = 'bg-[#2ECC71]/10'
 
 // Order-config column resizing (2026-09-25) — default pixel widths, used
 // until a user drags a column to its own saved width. Roughly matches the
@@ -2173,7 +2171,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           <CombinedDisplayContext.Provider value={prefs.combinedDisplay ?? 'hover'}>
             <OrderConfigBlock
               groups={configsByVendor.map(([vendor, rows]) => ({ vendor, vendorId: rows[0]?.vendor_id ?? null, rows }))}
-              shopId={shopId} order={configShownIds} sizing={configLayout.sizing}
+              shopId={shopId} order={configShownIds} sizing={configLayout.sizing} framed={embedded || isMobile}
               onResize={handleConfigResize}
               onOpenConfig={() => navigate('/config?tab=order-config')}
               onExceptionClick={setExceptionModalRow}
@@ -2683,28 +2681,36 @@ function VendorInfoProbe({ vendorId, vendor, onInfo }: { vendorId: string | null
   return null
 }
 
-/** The product id as a button: click to add or edit this shop's exceptions/notes for it. An icon marks one that has any, with the details on hover. */
+/**
+ * The product id as a button: click to add or edit exceptions/notes for it at this shop. A product with an exception for THIS shop shows an
+ * orange info icon (details on hover); one covered by an all-shops exception is bold, with the details on hover over the part itself.
+ */
 function ConfigPartCell({ row, onClick }: { row: ConfigRow; onClick: () => void }) {
   const exc = row.exception
   const lines = exceptionCellLines(exc)
   const notes = (exc?.notes ?? '').trim()
   const has = lines.length > 0 || !!notes
+  const isGlobal = exc?.scope === 'global'
+  const tip = (
+    <div className="flex flex-col gap-1 text-[11px] font-mono max-w-[18rem]">
+      <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">{isGlobal ? 'Exception — all shops' : 'Exception — this shop'}</span>
+      {lines.map((l) => <span key={l}>{l}</span>)}
+      {notes && <span className="whitespace-pre-wrap">{notes}</span>}
+      <span className="text-[10px] text-[#B7E0DE]/70">Click the product to edit</span>
+    </div>
+  )
+  const part = (
+    <button type="button" onClick={onClick} title={has ? undefined : 'Click to add or edit exceptions and notes for this product at this shop'}
+      className={`text-left truncate hover:text-sky hover:underline decoration-dotted underline-offset-2 transition-colors ${has && isGlobal ? 'font-bold' : ''}`}>
+      {row.product_id ?? '—'}
+    </button>
+  )
   return (
     <span className="inline-flex items-center gap-1.5 max-w-full">
-      <button type="button" onClick={onClick} title="Click to add or edit exceptions and notes for this product at this shop"
-        className="text-left truncate hover:text-sky hover:underline decoration-dotted underline-offset-2 transition-colors">
-        {row.product_id ?? '—'}
-      </button>
-      {has && (
-        <HoverTip placement="bottom" content={
-          <div className="flex flex-col gap-1 text-[11px] font-mono max-w-[18rem]">
-            <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">{exc?.scope === 'global' ? 'Exception — all shops' : 'Exception — this shop'}</span>
-            {lines.map((l) => <span key={l}>{l}</span>)}
-            {notes && <span className="whitespace-pre-wrap">{notes}</span>}
-            <span className="text-[10px] text-[#B7E0DE]/70">Click the product to edit</span>
-          </div>
-        }>
-          <button type="button" onClick={onClick} aria-label="Exception or notes set" className="flex-shrink-0 text-[#E67E22] hover:text-[#E67E22]/80"><Info className="w-3.5 h-3.5" /></button>
+      {has && isGlobal ? <HoverTip placement="bottom" content={tip}>{part}</HoverTip> : part}
+      {has && !isGlobal && (
+        <HoverTip placement="bottom" content={tip}>
+          <button type="button" onClick={onClick} aria-label="Exception or notes set for this shop" className="flex-shrink-0 text-[#E67E22] hover:text-[#E67E22]/80"><Info className="w-3.5 h-3.5" /></button>
         </HoverTip>
       )}
     </span>
@@ -2715,8 +2721,10 @@ function ConfigPartCell({ row, onClick }: { row: ConfigRow; onClick: () => void 
  * Every vendor's order config for this shop in ONE table (a Vendor column tells them apart). Click a product to add exceptions/notes for it.
  * Last Ordered / ETA come from each vendor's own data (one probe per vendor). The VMI legend sorts VMI products to the top when clicked.
  */
-function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfig, onExceptionClick }: {
+function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfig, onExceptionClick, framed }: {
   groups: ConfigGroup[]; shopId: string
+  // Inside the page grid the widget frame already draws the card's border; a second one read as a thick stroke. true = draw its own.
+  framed: boolean
   // `order` is the shared, user-customizable, already-hidden-filtered column
   // id order (see LocationDetailView's configShownIds). `sizing` is the
   // shared column-width map (px), dragged via each header's ResizeHandle.
@@ -2724,7 +2732,7 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
   onOpenConfig: () => void; onExceptionClick: (row: ConfigRow) => void
 }) {
   const navigate = useNavigate()
-  const [sort, setSort] = usePersistedSort('location-lookup:config-sort:combined')
+  const [sort, setSort] = usePersistedJson<SortState>('location_lookup.config_sort', null)
   const [vmiFirst, setVmiFirst] = usePersistedJson<boolean>('location_lookup.vmi_first', false)
   const [infoFns, setInfoFns] = useState<Record<string, InfoForFn>>({})
   const onInfo = useCallback((id: string, fn: InfoForFn) => setInfoFns((m) => (m[id] === fn ? m : { ...m, [id]: fn })), [])
@@ -2795,14 +2803,14 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
     const base = applySort(rows, columns, sort)
     return vmiFirst ? [...base.filter(isVmiHighlighted), ...base.filter((r) => !isVmiHighlighted(r))] : base
   }, [rows, columns, sort, vmiFirst, isVmiHighlighted])
-  const updated = useMemo(() => lastUpdated(rows as any[], ['updated_at']), [rows])
+  const updated = useMemo(() => lastUpdated(rows as any[], ['updated_at'], 'MMM dd, yyyy'), [rows])
   // Newest inventory.product_usage sync among these products — its own callout since it's a different source/cadence than the config rows.
-  const usageUpdated = useMemo(() => lastUpdated(rows.map((r) => r.usage).filter(Boolean) as any[], ['updated_at']), [rows])
+  const usageUpdated = useMemo(() => lastUpdated(rows.map((r) => r.usage).filter(Boolean) as any[], ['updated_at'], 'MMM dd, yyyy'), [rows])
   const vmiCount = useMemo(() => rows.filter(isVmiHighlighted).length, [rows, isVmiHighlighted])
   const hasReladyne = useMemo(() => rows.some((r) => isReladyne(r.vendor_name ?? '')), [rows])
 
   return (
-    <Card className="w-full">
+    <Card className="w-full" plain={!framed}>
       <CardBody className="flex flex-col gap-2 items-start">
         {groups.map((g) => <VendorInfoProbe key={g.vendorId ?? g.vendor} vendorId={g.vendorId} vendor={g.vendor} onInfo={onInfo} />)}
         {/* Everything below shares the table's own width, so the header row (and the VMI legend at its right end) lines up with the table's edges. */}
@@ -2812,11 +2820,11 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
           </span>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
-              <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle="Open Order Config" />
+              <UpdatedCallout date={updated} label="Config Updated" onOpen={onOpenConfig} openTitle="Open Order Config" />
               {usageUpdated && (
                 <button onClick={() => navigate('/config?tab=product-usage')} title="Open Product Usage config"
                   className="group inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy hover:bg-[#2ECC71]/35 transition-colors">
-                  Updated {usageUpdated}
+                  On Hands &amp; Usage Updated {usageUpdated}
                   <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
                 </button>
               )}
@@ -2840,7 +2848,7 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
                     {columns.map((c) => {
                       const w = configColWidth(c.id, sizing)
                       return (
-                        <th key={c.id} style={{ width: w, minWidth: w }} className={`relative px-3 py-2 whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>
+                        <th key={c.id} style={{ width: w, minWidth: w }} className={`relative px-3 py-2 whitespace-nowrap ${alignCls(c.align)}`}>
                           <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center max-w-full overflow-hidden text-ellipsis">
                             {c.label}{sortArrow(sort, c.id)}
                           </button>
@@ -2862,7 +2870,7 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
                               <ConfigPartCell row={r} onClick={() => onExceptionClick(r)} />
                             </td>
                           ) : (
-                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>{c.render(r)}</td>
+                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${alignCls(c.align)}`}>{c.render(r)}</td>
                           )
                         })}
                       </tr>
