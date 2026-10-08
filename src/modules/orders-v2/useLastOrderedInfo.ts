@@ -250,7 +250,9 @@ export function useLastOrderedInfo(vendorId: string | null, vendorName: string |
       ? { lastDeliveredDate: rc.date, lastDeliveredAmount: rc.qty, lastDeliveredUnit: rc.uom === 'gal' ? ('gal' as const) : null, lastDeliveredUom: rc.uom === 'gal' ? null : rc.uom }
       : null
     if (!lo) return { ...EMPTY_INFO, ...recvFields }
-    const eta = lo.delivery_date ?? deliveryFor(locationId, lo.order_date)
+    // Valvoline Order Database rows carry no usable delivery date (its "Request Delivery Date" is just the PO date), so the ETA is always
+    // worked out from the shop's schedule for an order placed that day.
+    const eta = deliveryFor(locationId, lo.order_date)
     const d = delivered.get(k)
     const sold = soldSince.get(k)
 

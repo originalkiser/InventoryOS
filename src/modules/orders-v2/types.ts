@@ -240,6 +240,12 @@ export interface GenerationInput {
   lead_days?: number | null
   /** Set by generateOrder when it replaced on_hand with the delivery-projected figure. */
   actual_on_hand?: number | null
+  /**
+   * Units (of this product's own order unit) from an EARLIER order that hasn't been delivered yet — its ETA is still in the future and
+   * Droptop shows no receipt. Counted toward the on hand projected to delivery so a product isn't ordered twice (Valvoline only,
+   * alongside lead_days).
+   */
+  inbound_units?: number | null
   // Outstanding quantity (quarts) on this product's still-open (not closed/
   // cancelled) Droptop POs for this shop — see buildGenerationInputs. Never
   // folded into on_hand automatically; a line with this set gets the
@@ -339,6 +345,7 @@ export type LineFlag =
   | 'alone_default_qty'      // sole line, used default_order_amount_if_alone
   | 'vmi_keepfill'           // vendor-managed inventory — excluded from the order total by default
   | 'combined_on_hand'       // On Hand is the combined total of this product plus equivalent case types of the same product
+  | 'inbound_order'          // an earlier order for this product hasn't arrived yet and was counted toward the projected on hand at delivery
   | 'keepfill_will_run_out'  // tank on-hand + usage won't last to this shop's delivery after next
   | 'added_for_smoothing'    // pulled onto the order from the shop's other config to reach the minimum
   | 'smoothing_topped_up'    // this line's own qty was raised to reach the minimum

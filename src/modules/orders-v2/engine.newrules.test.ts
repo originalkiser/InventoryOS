@@ -668,4 +668,17 @@ describe('Valvoline: drum ordered alone, delivery-aware ordering', () => {
     const noLead = generateOrder([base], ctx({ vendor: { ...val, caseTypeMinimums: {} } }))
     expect(noLead.lines.find((x) => x.product_id === 'B' && x.qty > 0)).toBeUndefined()
   })
+
+  it('an earlier order still on its way counts toward what the shop will have on delivery, so it is not ordered twice', () => {
+    const base = box('B', { on_hand: 47.1, daily_usage: 2.97, rule: { max_capacity_gallons: 120 } })
+    const v = { ...val, caseTypeMinimums: {} }
+    // Without the inbound order the shop is due (0.9 days left on arrival)...
+    expect(generateOrder([{ ...base, lead_days: 15 }], ctx({ vendor: v })).lines.find((x) => x.product_id === 'B' && x.qty > 0)).toBeDefined()
+    // ...with 2 boxes (40 qt) already on the way it will have ~14 days on arrival and is not ordered again.
+    const res = generateOrder([{ ...base, lead_days: 15, inbound_units: 2 }], ctx({ vendor: v }))
+    expect(res.lines.find((x) => x.product_id === 'B' && x.qty > 0)).toBeUndefined()
+    // The shop's displayed on hand stays today's actual figure.
+    const shown = res.lines.find((x) => x.product_id === 'B')
+    if (shown) expect(shown.on_hand).toBeCloseTo(47.1)
+  })
 })

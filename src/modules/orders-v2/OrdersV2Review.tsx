@@ -35,7 +35,8 @@ import {
   buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, isOunceUnit, isValvoline,
   GLOBAL_EXCEPTION_LOCATION_ID, type DraftLineRow,
 } from './useOrdersV2'
-import { applyOrderTiming, draftHeldShops } from './orderTiming'
+import { applyOrderTiming, draftHeldShops, addDaysIso } from './orderTiming'
+import { computeInbound, fetchValvolineInboundSources } from './valvolineInbound'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, OV2_SHOP_EXPAND_KEY, OV2_HIDE_MOBILE_BUTTON_KEY, OV2_DOS_STYLE_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
@@ -590,12 +591,29 @@ export function OrdersV2Review() {
       // Valvoline plans for what the shop will have ON DELIVERY (weekly/biweekly schedules mean delivery can be 2+ weeks out):
       // each input carries its lead time and the engine works from the delivery-projected on hand. RelaDyne/Mighty untouched.
       const genDeliveryDow = new Map(days.map((d) => [d.location_id, d.delivery_dow]))
-      const genInputs = isValvoline(vendors.byId(draft.vendor_id)?.name)
+      const isValvolineDraftNow = isValvoline(vendors.byId(draft.vendor_id)?.name)
+      // Orders already on their way (placed earlier, ETA still ahead, no Droptop receipt yet) count toward what the shop will have on
+      // delivery, so a product isn't ordered twice. If the lookup fails the order is still generated, with a warning.
+      let inbound = new Map<string, { units: number; eta: string }>()
+      if (isValvolineDraftNow && profile?.company_id) {
+        try {
+          const src = await fetchValvolineInboundSources(profile.company_id, addDaysIso(draft.order_date, -75))
+          const etaFor = (locId: string, orderedOn: string) => {
+            const sched = schedules.get(locId)
+            return sched ? resolveDeliveryDate(orderedOn, sched, calendar) : nextDeliveryDate(orderedOn, genDeliveryDow.get(locId) ?? null)
+          }
+          inbound = computeInbound({ lines: src.lines, orderDate: draft.order_date, today: draft.order_date, etaFor, received: src.received })
+        } catch (e) {
+          toast.error(`Could not check orders already on their way — generated without them (${e instanceof Error ? e.message : 'unknown error'})`)
+        }
+      }
+      const genInputs = isValvolineDraftNow
         ? inputs.map((i) => {
             const sched = schedules.get(i.location_id ?? '')
             const dd = sched ? resolveDeliveryDate(draft.order_date, sched, calendar) : nextDeliveryDate(draft.order_date, genDeliveryDow.get(i.location_id ?? '') ?? null)
             const lead = dd ? Math.max(0, daysBetween(draft.order_date, dd)) : 0
-            return lead > 0 ? { ...i, lead_days: lead } : i
+            const inboundUnits = inbound.get(`${i.location_id}|${String(i.product_id).toUpperCase()}`)?.units
+            return lead > 0 ? { ...i, lead_days: lead, ...(inboundUnits ? { inbound_units: inboundUnits } : {}) } : i
           })
         : inputs
       const result = generateOrder(genInputs, genCtx)

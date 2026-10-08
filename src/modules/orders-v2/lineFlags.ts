@@ -57,6 +57,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   def('dos_now_low', 'before', 'DOS Now: low', '#E04B3C', 'Days of supply right now is below the DOS Min Trigger.'),
   def('dos_now_below_target', 'before', 'DOS Now: below target', '#E0B63A', 'Days of supply right now is below the DOS Target but at or above the DOS Min Trigger.'),
   def('combined_on_hand', 'before', 'Combined on hands', '#4DB6E8', 'On Hand is the combined total of this product and its equivalent case types at this shop (e.g. 0W30BB plus 0W30C) — hover the On Hand number for the math.'),
+  def('inbound_order', 'before', 'Order inbound', '#4DB6E8', 'An earlier order for this product has not arrived yet (its ETA is still ahead) — it is counted toward the on hand projected to delivery so this is not ordered twice. See Last Ordered.'),
   def('critical_minimum', 'before', 'Critical min', '#E67E22', 'On-hand fell to this product\'s critical minimum (e.g. enough for one oil change), not the usual days-of-supply trigger.'),
   def('repeat_ordering', 'before', 'Repeat ordering', '#9E3326', 'A lot of supply was already ordered recently and it still reads low — on-hand may not be reflecting deliveries.'),
   def('keepfill_will_run_out', 'before', 'Will run dry', '#B5651D', 'Tank on-hand and usage won\'t last until this shop\'s delivery after next — may need a keep-fill order first.'),
@@ -84,7 +85,7 @@ export const TAG_DEFS: Record<TagKey, TagDef> = Object.fromEntries([
   def('po_decision_combine', 'after', 'PO: combined', '#7FDBA6', 'Decided to count the open PO\'s outstanding quantity as on-hand and re-target the order quantity.'),
 ] as [TagKey, TagDef][]) as Record<TagKey, TagDef>
 
-const BEFORE_STORED: LineFlag[] = ['combined_on_hand', 'critical_minimum', 'repeat_ordering', 'keepfill_will_run_out', 'covered_by_open_po', 'vmi_keepfill']
+const BEFORE_STORED: LineFlag[] = ['combined_on_hand', 'inbound_order', 'critical_minimum', 'repeat_ordering', 'keepfill_will_run_out', 'covered_by_open_po', 'vmi_keepfill']
 const PO_DECISIONS: LineFlag[] = ['po_decision_override', 'po_decision_exclude', 'po_decision_combine']
 // Tags the engine stamped because of the quantity IT chose — meaningless once someone edits the qty, or sets it to 0.
 const ENGINE_QTY_TAGS: LineFlag[] = ['drum_alone', 'no_products_to_meet_min', 'drum_capped', 'hm0806_solo_min', 'case_minimum_topup', 'alone_default_qty', 'added_for_smoothing', 'smoothing_topped_up', 'rounded_to_bulk_minimum']

@@ -429,6 +429,7 @@ function buildLine(input: GenerationInput, ctx: GenerationContext, rawUnits: num
   const flags: LineFlag[] = [...historyFlags(input, ctx)]
   if (n(input.actual_on_hand ?? input.on_hand) <= 0) flags.push('stocked_out')
   if ((input.equivalent_products?.length ?? 0) > 0) flags.push('combined_on_hand')
+  if (n(input.inbound_units) > 0) flags.push('inbound_order')
   if (units > 0 && caps.capacityBound) flags.push('capacity_capped')
   if (rule.vmi_keepfill_enabled) flags.push('vmi_keepfill')
 
@@ -925,8 +926,11 @@ function bestTopUpIndex(
  */
 function projectToDelivery(i: GenerationInput): GenerationInput {
   const lead = n(i.lead_days), u = n(i.daily_usage)
-  if (lead <= 0 || u <= 0 || i.on_hand == null || i.rule.vmi_keepfill_enabled) return i
-  return { ...i, actual_on_hand: i.on_hand, on_hand: Math.max(0, i.on_hand - u * lead) }
+  if (lead <= 0 || i.on_hand == null || i.rule.vmi_keepfill_enabled) return i
+  // An earlier order still on its way lands before this one, so it counts toward what the shop will have on delivery.
+  const inbound = n(i.inbound_units) * gallonsPerUnit(i.rule)
+  if (u <= 0 && inbound <= 0) return i
+  return { ...i, actual_on_hand: i.on_hand, on_hand: Math.max(0, i.on_hand + inbound - u * lead) }
 }
 
 /** Under-minimum flag for a whole group — except a Valvoline drum, which is allowed on its own. */

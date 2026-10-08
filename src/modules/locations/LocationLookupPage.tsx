@@ -253,7 +253,7 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
         const next = nextScheduledDelivery(format(new Date(), 'yyyy-MM-dd'), ctx.rdSchedule, ctx.rdCalendar)
         return {
           value: resolveScheduleDescription(ctx.rdSchedule),
-          note: next ? `next: ${format(new Date(next + 'T00:00:00'), 'M/d/yyyy')}` : 'next date unknown',
+          note: next ? `next: ${format(new Date(next + 'T00:00:00'), 'MMM dd, yyyy')}` : 'next date unknown',
         }
       }
       return { value: ctx.rdDeliveryDay, note: relativeDay(ctx.rdDeliveryDay) ?? undefined }
@@ -262,9 +262,15 @@ const SIDEBAR_FIELDS: SidebarFieldDef[] = [
   { id: 'rd_distributor', label: 'RD Distributor', render: (ctx) => ({ value: ctx.rdDistributor }) },
   {
     id: 'valvoline_schedule', label: 'Valvoline Delivery Schedule',
-    render: (ctx) => (ctx.valvolineSchedule
-      ? { value: resolveScheduleDescription(ctx.valvolineSchedule, { orderDate: format(new Date(), 'yyyy-MM-dd'), calendar: ctx.valvolineCalendar, upcoming: true }) }
-      : null),
+    render: (ctx) => {
+      if (!ctx.valvolineSchedule) return null
+      // The pattern on one line; the upcoming delivery on its own line below (same chip as RD Delivery Day), as MMM dd, yyyy.
+      const next = nextScheduledDelivery(format(new Date(), 'yyyy-MM-dd'), ctx.valvolineSchedule, ctx.valvolineCalendar)
+      return {
+        value: resolveScheduleDescription(ctx.valvolineSchedule),
+        note: next ? `next: ${format(new Date(next + 'T00:00:00'), 'MMM dd, yyyy')}` : 'next date unknown',
+      }
+    },
   },
   { id: 'address', label: 'Address', render: (ctx) => ({ value: ctx.addressStr, mapQuery: ctx.addressStr || undefined }) },
   { id: 'store_phone', label: 'Shop Phone', render: (ctx) => ({ value: locVal(ctx.location, 'store_phone') }) },
