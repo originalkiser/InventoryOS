@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
-import { isReladyne } from './useOrdersV2'
+import { isReladyne, isValvoline } from './useOrdersV2'
 import { resolveDeliveryDate, nextDeliveryDate } from './engine'
 import type { DeliverySchedule, WeekCalendar } from './types'
 import { parseWeekday, orderDayFromDelivery } from '@/lib/orderDay'
@@ -24,6 +24,29 @@ import { computeOnHandPlausibility, deliveredQtyToQuarts, isRecentDelivery, type
 
 const sb = () => supabase as any
 const key = (locationId: string, productId: string) => `${locationId}|${productId}`
+
+async function pageAll<T>(build: () => any, pageSize = 1000): Promise<T[]> {
+  const out: T[] = []
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await build().range(from, from + pageSize - 1)
+    if (error) throw error
+    const batch = (data ?? []) as T[]
+    out.push(...batch)
+    if (batch.length < pageSize) break
+  }
+  return out
+}
+const isoDaysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString()
+// Droptop's purchase UOM on a Valvoline PO line -> the unit key this app displays.
+const droptopUomKey = (u: string | null | undefined): string | null => {
+  const v = (u ?? '').trim().toUpperCase()
+  if (!v) return null
+  if (v === 'BB' || v === 'BB5G') return 'bay_box'
+  if (v === 'DRUM' || v === 'DR') return 'drum'
+  if (v === 'GA' || v === 'GAL') return 'gal'
+  if (v === 'QT') return 'qt'
+  return v.toLowerCase()
+}
 
 interface LastOrderedRow {
   order_date: string
@@ -33,7 +56,12 @@ interface LastOrderedRow {
   quarts_per_unit: number | null
   po_number: string | null
   on_hand: number | null
+  /** Valvoline Order Database rows carry the delivery date requested on the PO. */
+  delivery_date?: string | null
 }
+
+/** The most recent Droptop receipt of a product at a shop (Valvoline, from the PO Status data). */
+interface ReceivedRow { date: string; qty: number; uom: string | null }
 
 interface DeliveredRow {
   invoice_date: string
@@ -49,12 +77,14 @@ export interface LastOrderedInfo {
   lastDeliveredDate: string | null
   lastDeliveredAmount: number | null
   lastDeliveredUnit: 'gal' | null
+  /** Unit key for a delivery that isn't gallons-based (Valvoline: bay_box / drum), shown with uomDisplayLabel. */
+  lastDeliveredUom: string | null
   onHandCheck: OnHandCheckResult | null
 }
 
 const EMPTY_INFO: LastOrderedInfo = {
   lastOrderDate: null, lastOrderQty: null, lastOrderUom: null, eta: null,
-  lastDeliveredDate: null, lastDeliveredAmount: null, lastDeliveredUnit: null, onHandCheck: null,
+  lastDeliveredDate: null, lastDeliveredAmount: null, lastDeliveredUnit: null, lastDeliveredUom: null, onHandCheck: null,
 }
 
 export function useLastOrderedInfo(vendorId: string | null, vendorName: string | null) {
@@ -63,6 +93,7 @@ export function useLastOrderedInfo(vendorId: string | null, vendorName: string |
   const [loading, setLoading] = useState(false)
   const [lastOrdered, setLastOrdered] = useState<Map<string, LastOrderedRow>>(new Map())
   const [delivered, setDelivered] = useState<Map<string, DeliveredRow>>(new Map())
+  const [received, setReceived] = useState<Map<string, ReceivedRow>>(new Map())
   const [soldSince, setSoldSince] = useState<Map<string, number>>(new Map())
   const [schedules, setSchedules] = useState<Map<string, DeliverySchedule>>(new Map())
   const [calendar, setCalendar] = useState<WeekCalendar>(new Map())
@@ -70,7 +101,7 @@ export function useLastOrderedInfo(vendorId: string | null, vendorName: string |
 
   const load = useCallback(async () => {
     if (!companyId || !vendorId) {
-      setLastOrdered(new Map()); setDelivered(new Map()); setSoldSince(new Map())
+      setLastOrdered(new Map()); setDelivered(new Map()); setSoldSince(new Map()); setReceived(new Map())
       setSchedules(new Map()); setCalendar(new Map()); setDeliveryDow(new Map())
       return
     }
@@ -91,6 +122,41 @@ export function useLastOrderedInfo(vendorId: string | null, vendorName: string |
           po_number: r.po_number, on_hand: r.on_hand != null ? Number(r.on_hand) : null,
         })
       }
+      // Valvoline: orders placed outside Orders v2 live in the Valvoline Order Database (and our own finalized orders are copied into it), so
+      // the later of the two sources wins per shop + product. The database speaks base ids + BX/DR (VRP530 + BX = VRP530BB, + DR = VRP530D).
+      const receivedMap = new Map<string, ReceivedRow>()
+      if (isValvoline(vendorName)) {
+        const dbLines = await pageAll<any>(() => sb().schema('inventory').from('valvoline_order_lines')
+          .select('id, location_id, product_id, uom, quantity, po_number, po_date, delivery_date').eq('company_id', companyId)
+          .not('product_id', 'is', null).not('location_id', 'is', null).in('uom', ['BX', 'DR']).gte('po_date', isoDaysAgo(240).slice(0, 10))
+          .order('po_date', { ascending: false }).order('id'))
+        for (const r of dbLines) {
+          const k = key(r.location_id, `${String(r.product_id).toUpperCase()}${r.uom === 'DR' ? 'D' : 'BB'}`)
+          const cur = loMap.get(k)
+          if (cur && cur.order_date >= r.po_date) continue
+          loMap.set(k, { order_date: r.po_date, qty: Number(r.quantity), uom: r.uom === 'DR' ? 'drum' : 'bay_box', order_type: 'package', quarts_per_unit: null, po_number: r.po_number, on_hand: null, delivery_date: r.delivery_date ?? null })
+        }
+        // Recently delivered = the PO Status data: Droptop POs to Valvoline with a received quantity, dated by when the PO's receipt status was last updated.
+        const pos = await pageAll<any>(() => sb().schema('inventory').from('droptop_purchase_orders')
+          .select('id, location_id, delivery_status_updated_timestamp, created_timestamp').eq('company_id', companyId)
+          .ilike('supplier_name', '%valvoline%').gte('created_timestamp', isoDaysAgo(240)).order('created_timestamp', { ascending: false }).order('id'))
+        const poById = new Map<string, any>(pos.map((p) => [p.id, p]))
+        const ids = [...poById.keys()]
+        for (let i = 0; i < ids.length; i += 100) {
+          const items = await pageAll<any>(() => sb().schema('inventory').from('droptop_purchase_order_items')
+            .select('id, purchase_order_id, product_id, received_quantity, purchase_uom').in('purchase_order_id', ids.slice(i, i + 100)).gt('received_quantity', 0).order('id'))
+          for (const it of items) {
+            const po = poById.get(it.purchase_order_id)
+            const stamp: string | null = po?.delivery_status_updated_timestamp ?? po?.created_timestamp ?? null
+            if (!po?.location_id || !it.product_id || !stamp) continue
+            const k = key(po.location_id, String(it.product_id))
+            const date = stamp.slice(0, 10)
+            const cur = receivedMap.get(k)
+            if (!cur || date > cur.date) receivedMap.set(k, { date, qty: Number(it.received_quantity), uom: droptopUomKey(it.purchase_uom) })
+          }
+        }
+      }
+      setReceived(receivedMap)
       setLastOrdered(loMap)
 
       const schedMap = new Map<string, DeliverySchedule>()
@@ -178,8 +244,13 @@ export function useLastOrderedInfo(vendorId: string | null, vendorName: string |
   const infoFor = useCallback((locationId: string, productId: string, currentOnHand: number | null, currentDailyUsage: number | null): LastOrderedInfo => {
     const k = key(locationId, productId)
     const lo = lastOrdered.get(k)
-    if (!lo) return EMPTY_INFO
-    const eta = deliveryFor(locationId, lo.order_date)
+    const rc = received.get(k)
+    if (!lo && !rc) return EMPTY_INFO
+    const recvFields = rc
+      ? { lastDeliveredDate: rc.date, lastDeliveredAmount: rc.qty, lastDeliveredUnit: rc.uom === 'gal' ? ('gal' as const) : null, lastDeliveredUom: rc.uom === 'gal' ? null : rc.uom }
+      : null
+    if (!lo) return { ...EMPTY_INFO, ...recvFields }
+    const eta = lo.delivery_date ?? deliveryFor(locationId, lo.order_date)
     const d = delivered.get(k)
     const sold = soldSince.get(k)
 
@@ -200,9 +271,11 @@ export function useLastOrderedInfo(vendorId: string | null, vendorName: string |
       lastDeliveredDate: d?.invoice_date ?? null,
       lastDeliveredAmount: d ? (lo.order_type === 'bulk' ? d.gallons_shipped : d.qty_shipped) : null,
       lastDeliveredUnit: d && lo.order_type === 'bulk' ? 'gal' : null,
+      lastDeliveredUom: null,
       onHandCheck,
+      ...(recvFields ?? {}),
     }
-  }, [lastOrdered, delivered, soldSince, deliveryFor])
+  }, [lastOrdered, delivered, soldSince, received, deliveryFor])
 
   return { loading, infoFor }
 }

@@ -39,7 +39,9 @@ const COMBINED_MODE_KEY = 'ov2_review_combined_mode'
 const PAGE_SIZE_KEY = 'ov2_review_page_size'
 const TONE_ORDER: RowTone[] = ['below_min', 'over_capacity_target', 'excluded']
 // Row tones are drawn as translucent washes of their color over the plain cream row (alpha 0x2B ≈ 17%).
-const toneWash = (t: RowTone) => `${ROW_TONE_META[t].color}2B`
+// Excluded lines are by far the most common tone (a Valvoline order lists every configured product, most at qty 0), so their wash is
+// kept faint — a heavy gray over most rows buried the per-shop banding. Under-minimum / over-capacity keep the stronger wash.
+const toneWash = (t: RowTone) => `${ROW_TONE_META[t].color}${t === 'excluded' ? '12' : '2B'}`
 
 // ── Small presentational pieces ─────────────────────────────────────────────
 
@@ -261,7 +263,7 @@ export function OrdersV2ReviewTable({
     const lastDeliveredQty = (l: DraftLineRow) => {
       const info = infoOf(l)
       if (!info.lastDeliveredDate) return ''
-      return `${num(info.lastDeliveredAmount, 1)} ${info.lastDeliveredUnit === 'gal' ? 'gal' : uomDisplayLabel(info.lastOrderUom)}`
+      return `${num(info.lastDeliveredAmount, 1)} ${info.lastDeliveredUnit === 'gal' ? 'gal' : uomDisplayLabel(info.lastDeliveredUom ?? info.lastOrderUom)}`
     }
     const lastDeliveredText = (l: DraftLineRow) => {
       const info = infoOf(l)
@@ -640,6 +642,7 @@ export function OrdersV2ReviewTable({
         // shop banding entirely and shows its one tone color across the whole row; every other row is banded per shop.
         getRowTone={(l) => { const t = toneOf(l); return t ? toneWash(t) : null }}
         getRowClassName={(l) => (bandOf.get(l.id) ? SHOP_BAND_CLASS : 'bg-cream')}
+        getRowBottomBorder={(l) => isLastOfShop.get(l.id) === true}
         expandedRowRender={(l) => {
           const locId = l.location_id ?? ''
           if (!isOrderTable || !expanded.has(locId) || !isLastOfShop.get(l.id)) return null

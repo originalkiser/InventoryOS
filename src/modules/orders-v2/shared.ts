@@ -21,7 +21,7 @@ export function statusRoute(d: { id: string; status: DraftStatus }): string {
 }
 
 /** Every other shop's rows on the Review / Final Review tables: a translucent wash of the brand navy — light on cream, lighter on the dark theme. */
-export const SHOP_BAND_CLASS = 'bg-navy/[0.11]'
+export const SHOP_BAND_CLASS = 'bg-navy/[0.16] dark:bg-navy/[0.22]'
 
 export const money = (v: number | null | undefined) =>
   v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })

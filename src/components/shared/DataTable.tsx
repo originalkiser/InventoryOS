@@ -64,6 +64,8 @@ interface DataTableProps<T> {
    * the tint instead of being hidden under its own opaque background.
    */
   getRowClassName?: (original: T) => string
+  /** A heavier line under this row (e.g. the last row of a group) so groups read as separate blocks. */
+  getRowBottomBorder?: (original: T) => boolean
   /**
    * A full-row "tone" (any CSS color, usually translucent) for a row, or null. Unlike getRowClassName, a toned row
    * drops the zebra banding entirely — it sits on a plain opaque cream base with the tone laid over it in EVERY
@@ -189,6 +191,7 @@ export function DataTable<T>({
   dangerZone,
   onRowClick,
   getRowClassName,
+  getRowBottomBorder,
   getRowTone,
   density = 'normal',
   leadingActions,
@@ -641,6 +644,8 @@ export function DataTable<T>({
                 // (selection, status color, ...) is often translucent, so a pinned cell gets the opaque zebra
                 // color as its own background and the tint is laid over it as a click-through overlay.
                 const pinnedOverlay = selected ? 'bg-sky/15' : rawTint
+                const rowBreak = getRowBottomBorder?.(row.original) ?? false
+                const borderB = rowBreak ? 'border-b-2 border-b-navy/45' : 'border-b border-inky/10'
                 const expandedContent = expandedRowRender?.(row.original)
                 return (
                   <Fragment key={row.id}>
@@ -676,7 +681,7 @@ export function DataTable<T>({
                         renders consistently and correctly across every column. */}
                     <td
                       style={{ width: SEL_W, minWidth: SEL_W, position: 'sticky', left: 0, zIndex: 10 }}
-                      className={[density === 'compact' ? 'px-1.5 py-0.5' : 'px-2 py-2', 'text-center border-b border-inky/10', zebraClass].join(' ')}
+                      className={[density === 'compact' ? 'px-1.5 py-0.5' : 'px-2 py-2', `text-center ${borderB}`, zebraClass].join(' ')}
                     >
                       <span aria-hidden className={`pointer-events-none absolute inset-0 -z-10 group-hover:bg-sky/10 ${pinnedOverlay}`} />
                       {tone && <span aria-hidden className="pointer-events-none absolute inset-0 -z-10" style={{ background: tone }} />}
@@ -709,7 +714,7 @@ export function DataTable<T>({
                               : toneOnCell ? { position: 'relative', zIndex: 0 } : {}),
                           }}
                           className={[
-                            padClass, 'text-navy border-b border-inky/10',
+                            padClass, `text-navy ${borderB}`,
                             noClip ? '' : 'whitespace-nowrap',
                             pinnedLeft ? `${zebraClass} border-r-2 border-r-inky/20` : '',
                             toneOnCell ? 'bg-cream' : '',

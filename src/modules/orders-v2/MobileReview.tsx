@@ -140,7 +140,7 @@ export function MobileReview({
         </div>
         <div className="text-[10px] font-mono text-navy/75 leading-snug">
           <div>Last ordered: {info.lastOrderDate ? `${dShort(info.lastOrderDate)} · ${num(info.lastOrderQty, 1)} ${uomDisplayLabel(info.lastOrderUom)}${info.eta ? ` · ETA ${dShort(info.eta)}` : ''}` : '—'}</div>
-          <div>Last delivered: {info.lastDeliveredDate ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)} ${info.lastDeliveredUnit === 'gal' ? 'gal' : uomDisplayLabel(info.lastOrderUom)}` : '—'}</div>
+          <div>Last delivered: {info.lastDeliveredDate ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)} ${info.lastDeliveredUnit === 'gal' ? 'gal' : uomDisplayLabel(info.lastDeliveredUom ?? info.lastOrderUom)}` : '—'}</div>
         </div>
         {t && (t.tags.before.length > 0 || t.tags.after.length > 0) && (
           <div className="flex flex-wrap gap-1">{[...t.tags.before, ...t.tags.after].map((d) => <TagChip key={d.key} tag={d} />)}</div>

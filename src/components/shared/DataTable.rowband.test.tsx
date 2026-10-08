@@ -24,7 +24,8 @@ function Harness() {
   return (
     <DataTable table={table} globalFilter={globalFilter} onGlobalFilterChange={setGlobalFilter}
       getRowTone={(r) => (r.excluded ? 'rgba(124,139,150,0.25)' : null)}
-      getRowClassName={(r) => (r.shop === 'B' ? BAND : 'bg-cream')} />
+      getRowClassName={(r) => (r.shop === 'B' ? BAND : 'bg-cream')}
+      getRowBottomBorder={(r) => r.product === 'p2' || r.product === 'p4'} />
   )
 }
 
@@ -42,6 +43,11 @@ describe('DataTable row banding', () => {
     // shop A rows don't
     expect(band(rows[0])).toBe(false)
     expect(band(rows[1])).toBe(false)
+    // the last row of each shop gets the heavier separator line, the others keep the thin one
+    const bottom = (tr: Element) => (tr.querySelector('td:last-child') as HTMLElement).className
+    expect(bottom(rows[1])).toContain('border-b-2')
+    expect(bottom(rows[3])).toContain('border-b-2')
+    expect(bottom(rows[0])).not.toContain('border-b-2')
     // the pinned shop cell of every banded/tinted row sits on the plain cream base — never the alternating zebra shade
     for (const tr of rows) {
       const pinned = [...tr.querySelectorAll('td')].find((td) => (td as HTMLElement).style.position === 'sticky' && td.textContent !== '')!

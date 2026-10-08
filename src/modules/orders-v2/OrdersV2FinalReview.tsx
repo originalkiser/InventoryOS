@@ -526,13 +526,17 @@ export function OrdersV2FinalReview() {
   // it just won't read as a clean "one band per shop" grouping anymore.
   const pageRows = table.getRowModel().rows
   const bandOf = new Map<string, boolean>()
+  const isLastOfShop = new Map<string, boolean>()
   {
     let prevShop: string | null = null
     let band = false
-    for (const r of pageRows) {
+    for (let i = 0; i < pageRows.length; i++) {
+      const r = pageRows[i]
       const shopId = r.original.location_id
       if (shopId !== prevShop) { band = !band; prevShop = shopId }
       bandOf.set(r.original.id, band)
+      const next = pageRows[i + 1]
+      isLastOfShop.set(r.original.id, !next || next.original.location_id !== shopId)
     }
   }
 
@@ -790,6 +794,7 @@ export function OrdersV2FinalReview() {
         // trade-off since many cell renderers set their own explicit
         // `text-navy`, which a row-level text-opacity class can't reach.
         getRowClassName={(l) => (!l.included ? 'bg-[#E4E4DC] dark:bg-[#16222E]' : bandOf.get(l.id) ? SHOP_BAND_CLASS : '')}
+        getRowBottomBorder={(l) => isLastOfShop.get(l.id) === true}
         hideColumnControl
         actions={
           <div className="flex items-center gap-3">
