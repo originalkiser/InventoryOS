@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { MapPin, Settings, Grip, ChevronDown, Plus } from 'lucide-react'
+import { MapPin, Settings, Grip, ChevronDown, Plus, Info } from 'lucide-react'
 import * as RGL from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -20,10 +20,11 @@ import { LocationCommsModal } from '@/modules/comms/LocationCommsModal'
 import type { LocationComm } from '@/modules/comms/comms'
 import { TankEmailModal } from './TankEmailModal'
 import { ExceptionEditModal } from '@/modules/orders-v2/ExceptionEditModal'
-import { isValvoline, isReladyne } from '@/modules/orders-v2/useOrdersV2'
+import { isValvoline, isReladyne, GLOBAL_EXCEPTION_LOCATION_ID } from '@/modules/orders-v2/useOrdersV2'
 import { resolveScheduleDescription, nextScheduledDelivery, daysBetween } from '@/modules/orders-v2/engine'
 import type { DeliverySchedule, WeekCalendar } from '@/modules/orders-v2/types'
 import { useLastOrderedInfo } from '@/modules/orders-v2/useLastOrderedInfo'
+import { uomDisplayLabel } from '@/modules/orders-v2/types'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue } from './useCustomShopConfig'
@@ -71,7 +72,9 @@ interface ConfigRow {
   usage?: { on_hands: number | null; daily_usage: number | null; updated_at: string | null; equivalent_products?: { product_id: string; on_hand: number; daily_usage: number | null }[] } | null
   // Joined from inventory.ov2_product_exceptions by product_id — Orders v2's
   // shop+product floor/ceiling override, if one's been set for this row.
-  exception?: { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null } | null
+  exception?: { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null; notes?: string | null; scope?: 'shop' | 'global' } | null
+  /** Set by the combined order-config table so each row knows which vendor it belongs to. */
+  vendor_name?: string
 }
 interface IssueRow {
   id: string; title: string | null; status_id: string | null; issue_notes: string | null
@@ -346,6 +349,7 @@ const GRID_WIDGET_LABELS: Record<string, string> = {
 }
 function widgetLabel(id: string): string {
   if (id === 'order_config:__empty') return 'Order Config'
+  if (id === 'order_config:Combined') return 'Order Config'
   if (id.startsWith('order_config:')) return `${id.slice('order_config:'.length)} Order Config`
   return GRID_WIDGET_LABELS[id] ?? id
 }
@@ -371,7 +375,7 @@ const FIXED_DEFAULT_GRID_LAYOUT: RGL.Layout[] = [
 // silently having no fallback spot to show that message.
 function defaultOrderConfigTiles(vendorKeys: string[]): RGL.Layout[] {
   const keys = vendorKeys.length ? vendorKeys : ['__empty']
-  return keys.map((key, i) => ({ i: `order_config:${key}`, x: 4, y: 16 + i * 20, w: 8, h: 20, minW: 3, minH: 4 }))
+  return keys.map((key, i) => ({ i: `order_config:${key}`, x: 4, y: 16 + i * 30, w: 8, h: 30, minW: 3, minH: 4 }))
 }
 
 // Reconciles a persisted layout against the current widget set — a widget
@@ -430,9 +434,12 @@ function useBouncePattern(active: boolean) {
 // Shop Details' own content bled through into the widget below it once its
 // Card was forced to `h-full`, since nothing between that fixed-height Card
 // and its taller content actually clipped the overflow).
-function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleShrink, onContentHeight, children }: {
+function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, hugWidth, onToggleShrink, onContentHeight, children }: {
   editMode: boolean
   label: string
+  // When shrink is on (and not editing) the card itself hugs its content — height always, width too for the table widgets — instead of
+  // filling the whole grid cell, so a card with a short table isn't a big box with empty space around it.
+  hugWidth: boolean
   // "Shrink to Content" (2026-09-28 ask) — only Shop Details/Tank Monitors/
   // each vendor's Order Config tile ever offer this; every other widget's
   // content is naturally variable-length already (Issues/Exceptions/Comms/
@@ -512,6 +519,7 @@ function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleSh
   }, [checkContentHeight])
 
   const showHint = canScroll && !atBottom
+  const hug = shrinkEligible && shrinkOn && !editMode
   const { bounceKey, bounceCount } = useBouncePattern(showHint)
 
   return (
@@ -560,8 +568,8 @@ function GridWidgetShell({ editMode, label, shrinkEligible, shrinkOn, onToggleSh
           place regardless of how far the INNER scrollRef div is scrolled —
           only the content (and each widget's own background TINT, which
           has no "edges" to lose) scrolls. */}
-      <div className={`flex-1 min-h-0 rounded-lg border border-navy/20 bg-cream overflow-hidden ${editMode ? 'ring-2 ring-sky/60 ring-offset-1' : ''}`}>
-        <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-hide">
+      <div className={`min-h-0 rounded-xl border border-navy/15 bg-cream overflow-hidden shadow-[0_1px_2px_rgba(0,0,0,0.12),0_6px_18px_rgba(0,0,0,0.12)] ${hug ? `self-start max-h-full flex flex-col ${hugWidth ? 'w-fit max-w-full' : 'w-full'}` : 'flex-1'} ${editMode ? 'ring-2 ring-sky/60 ring-offset-1' : ''}`}>
+        <div ref={scrollRef} className={hug ? 'min-h-0 overflow-y-auto scrollbar-hide' : 'h-full overflow-y-auto scrollbar-hide'}>
           {/* No height style on this wrapper — deliberately, so it sizes to
               children's own natural content height regardless of scrollRef's
               forced height above (see checkContentHeight/contentRef). */}
@@ -677,17 +685,9 @@ const CONFIG_FIXED: Col<ConfigRow>[] = [
   // Exception, and On Hand/Daily Usage/Days of Supply below), which is
   // where table-auto's leftover-width stretch was actually going to waste.
   { id: 'part', label: 'Part', align: 'left', render: (r) => r.product_id ?? '—', sort: (r) => r.product_id },
+  { id: 'vendor', label: 'Vendor', align: 'left', render: (r) => r.vendor_name ?? '—', sort: (r) => r.vendor_name ?? '' },
   { id: 'uom', label: 'UOM', align: 'left', render: (r) => String((r.metadata as any)?.uom ?? '—'), sort: (r) => String((r.metadata as any)?.uom ?? '') },
   { id: 'capacity', label: 'Capacity', align: 'right', width: 'w-20', render: (r) => num(r.capacity), sort: (r) => r.capacity },
-  {
-    id: 'exception', label: 'Exception', align: 'left', width: 'w-28',
-    render: (r) => {
-      const lines = exceptionCellLines(r.exception)
-      if (lines.length === 0) return <span className="text-inky/30">+ Add</span>
-      return <div className="flex flex-col leading-tight">{lines.map((l) => <span key={l}>{l}</span>)}</div>
-    },
-    sort: (r) => exceptionCellLines(r.exception).join(' ') || null,
-  },
   { id: 'max', label: 'Max', align: 'right', width: 'w-16', render: (r) => num(r.order_limit), sort: (r) => r.order_limit },
   { id: 'vmi', label: 'VMI', align: 'center', width: 'w-14', render: (r) => (isVmiRow(r) ? <Badge color="sky">VMI</Badge> : <span className="text-inky/40">—</span>), sort: (r) => (isVmiRow(r) ? 1 : 0) },
 ]
@@ -764,7 +764,7 @@ const USAGE_TINT = 'bg-[#2ECC71]/10'
 // old fixed Tailwind width classes (w-20/w-28/w-16/w-14/w-24) these columns
 // used before real resizing existed.
 const CONFIG_DEFAULT_WIDTH: Record<string, number> = {
-  part: 150, uom: 90, capacity: 90, exception: 150, max: 80, vmi: 70,
+  part: 170, vendor: 100, uom: 90, capacity: 90, exception: 150, max: 80, vmi: 70,
   on_hand: 90, daily_usage: 100, days_of_supply: 110,
   last_ordered: 150, eta: 150,
 }
@@ -1079,7 +1079,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         sb.schema('inventory').from('tank_variance_baselines').select('product_id, baseline_qty').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
         // Orders v2's shop+product floor/ceiling overrides — see the
         // Exception column below. Best-effort: newer table.
-        sb.schema('inventory').from('ov2_product_exceptions').select('product_id, floor_qty, ceiling_qty, ceiling_unit').eq('company_id', companyId).eq('location_id', shopId).then((r: any) => r).catch(() => ({ data: [] })),
+        sb.schema('inventory').from('ov2_product_exceptions').select('product_id, location_id, floor_qty, ceiling_qty, ceiling_unit, notes').eq('company_id', companyId).in('location_id', [shopId, GLOBAL_EXCEPTION_LOCATION_ID]).then((r: any) => r).catch(() => ({ data: [] })),
         // Valvoline Delivery Schedule sidebar field — best-effort: newer
         // table, and the vendor_id filter needs vendRes (fetched in this
         // same batch) resolved first, so this pulls every schedule row for
@@ -1151,10 +1151,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
       // id missed every product a mapping actually applies to, even when the
       // config and usage rows agreed on the same literal id pre-mapping.
       const resolvedKey = (pid: string) => pkey(resolveMapped(pid))
-      const exceptionByProduct = new Map<string, { floor_qty: number | null; ceiling_qty: number | null; ceiling_unit: string | null }>()
-      for (const e of ((prodExcRes?.data ?? []) as any[])) {
+      // This shop's own exception wins over an all-shops one for the same product (same precedence the engine uses).
+      const exceptionByProduct = new Map<string, NonNullable<ConfigRow['exception']>>()
+      for (const e of ((prodExcRes?.data ?? []) as any[]).sort((a, b) => Number(b.location_id === GLOBAL_EXCEPTION_LOCATION_ID) - Number(a.location_id === GLOBAL_EXCEPTION_LOCATION_ID))) {
         if (!e.product_id) continue
-        exceptionByProduct.set(resolvedKey(e.product_id), { floor_qty: e.floor_qty, ceiling_qty: e.ceiling_qty, ceiling_unit: e.ceiling_unit })
+        exceptionByProduct.set(resolvedKey(e.product_id), { floor_qty: e.floor_qty, ceiling_qty: e.ceiling_qty, ceiling_unit: e.ceiling_unit, notes: e.notes ?? null, scope: e.location_id === GLOBAL_EXCEPTION_LOCATION_ID ? 'global' : 'shop' })
       }
       // Combine on-hand/usage across "equivalent case types" of the same
       // base product (e.g. 5W30D + 5W30BB both resolve to family "5W30") —
@@ -1669,7 +1670,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // items) rather than only on load, so a code change adding/removing a
   // widget id is picked up immediately rather than waiting for the user's
   // next drag.
-  const vendorOrderConfigKeys = useMemo(() => configsByVendor.map(([vendor]) => vendor), [configsByVendor])
+  // One combined Order Config tile (every vendor in one table) — keyed 'Combined' so it can't collide with a vendor's name.
+  const vendorOrderConfigKeys = useMemo(() => (configsByVendor.length ? ['Combined'] : []), [configsByVendor])
   const gridWidgetIds = useMemo(() => [
     ...FIXED_GRID_WIDGET_IDS,
     ...(vendorOrderConfigKeys.length ? vendorOrderConfigKeys : ['__empty']).map((key) => `order_config:${key}`),
@@ -2167,33 +2169,20 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // RelaDyne/Valvoline's tables still line up edge-to-edge there), just
         // without the removed heading text.
         const emptyOrderConfigCard = <Card><CardBody><p className="text-xs font-mono text-inky/60">No order configuration for this shop.</p></CardBody></Card>
-        const orderConfigBlocksByVendor: [string, ReactNode][] = configsByVendor.map(([vendor, rows]) => [
-          vendor,
-          <CombinedDisplayContext.Provider key={vendor} value={prefs.combinedDisplay ?? 'hover'}>
-            <OrderConfigBlock vendor={vendor} vendorId={rows[0]?.vendor_id ?? null} shopId={shopId} rows={rows} order={configShownIds} sizing={configLayout.sizing}
+        const orderConfigCombined: ReactNode = configsByVendor.length === 0 ? null : (
+          <CombinedDisplayContext.Provider value={prefs.combinedDisplay ?? 'hover'}>
+            <OrderConfigBlock
+              groups={configsByVendor.map(([vendor, rows]) => ({ vendor, vendorId: rows[0]?.vendor_id ?? null, rows }))}
+              shopId={shopId} order={configShownIds} sizing={configLayout.sizing}
               onResize={handleConfigResize}
               onOpenConfig={() => navigate('/config?tab=order-config')}
               onExceptionClick={setExceptionModalRow}
             />
-          </CombinedDisplayContext.Provider>,
-        ])
-        widgetContent.order_config = orderConfigBlocksByVendor.length === 0 ? emptyOrderConfigCard : (
-          // w-fit on this wrapper (not each Card) is what makes every
-          // vendor's card share one common width — the widest table's
-          // natural size — instead of each shrinking to its own,
-          // independently-narrower content (RelaDyne vs. Valvoline used to
-          // visibly misalign). Each Card below stretches to fill this
-          // shrink-to-fit container via plain block sizing; the container
-          // itself sizes to the widest child.
-          <div className="w-fit max-w-full flex flex-col gap-4">
-            {orderConfigBlocksByVendor.map(([vendor, node]) => <div key={vendor}>{node}</div>)}
-          </div>
+          </CombinedDisplayContext.Provider>
         )
-        if (orderConfigBlocksByVendor.length === 0) {
-          widgetContent['order_config:__empty'] = emptyOrderConfigCard
-        } else {
-          for (const [vendor, node] of orderConfigBlocksByVendor) widgetContent[`order_config:${vendor}`] = node
-        }
+        widgetContent.order_config = orderConfigCombined ?? emptyOrderConfigCard
+        if (orderConfigCombined == null) widgetContent['order_config:__empty'] = emptyOrderConfigCard
+        else widgetContent['order_config:Combined'] = orderConfigCombined
 
         if (embedded || isMobile) {
           // Fixed single-column stack — unchanged from before this feature,
@@ -2238,6 +2227,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // debounced) via onLayoutChange, so clicking Settings again to "exit"
         // is just turning editing chrome back off, not a separate save step.
         return (
+          <div className="rounded-2xl bg-navy/[0.06] dark:bg-black/25 p-3">
           <ReactGridLayout
             className="layout"
             layout={renderGridLayout}
@@ -2257,6 +2247,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   label={widgetLabel(id)}
                   shrinkEligible={isShrinkEligible(id)}
                   shrinkOn={isShrinkOn(id)}
+                  hugWidth={id === 'tank_monitors' || id.startsWith('order_config:')}
                   onToggleShrink={() => setWidgetShrink((m) => ({ ...m, [id]: !isShrinkOn(id) }))}
                   onContentHeight={(px) => reportContentHeight(id, px)}
                 >
@@ -2265,6 +2256,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               </div>
             ))}
           </ReactGridLayout>
+          </div>
         )
       })()}
 
@@ -2680,73 +2672,114 @@ function CheckGroup({ title, items, hidden, onToggle }: { title: string; items: 
   )
 }
 
-function OrderConfigBlock({ vendor, vendorId, shopId, rows, order, sizing, onResize, onOpenConfig, onExceptionClick }: {
-  vendor: string; vendorId: string | null; shopId: string; rows: ConfigRow[]
+/** One vendor's order-config rows for this shop, as grouped by the page. */
+interface ConfigGroup { vendor: string; vendorId: string | null; rows: ConfigRow[] }
+type InfoForFn = ReturnType<typeof useLastOrderedInfo>['infoFor']
+
+/** Loads one vendor's Last Ordered / delivered data and hands it up — a hook can't be called once per vendor in a loop. */
+function VendorInfoProbe({ vendorId, vendor, onInfo }: { vendorId: string | null; vendor: string; onInfo: (vendorId: string, fn: InfoForFn) => void }) {
+  const { infoFor } = useLastOrderedInfo(vendorId, vendor)
+  useEffect(() => { onInfo(vendorId ?? '', infoFor) }, [vendorId, infoFor, onInfo])
+  return null
+}
+
+/** The product id as a button: click to add or edit this shop's exceptions/notes for it. An icon marks one that has any, with the details on hover. */
+function ConfigPartCell({ row, onClick }: { row: ConfigRow; onClick: () => void }) {
+  const exc = row.exception
+  const lines = exceptionCellLines(exc)
+  const notes = (exc?.notes ?? '').trim()
+  const has = lines.length > 0 || !!notes
+  return (
+    <span className="inline-flex items-center gap-1.5 max-w-full">
+      <button type="button" onClick={onClick} title="Click to add or edit exceptions and notes for this product at this shop"
+        className="text-left truncate hover:text-sky hover:underline decoration-dotted underline-offset-2 transition-colors">
+        {row.product_id ?? '—'}
+      </button>
+      {has && (
+        <HoverTip placement="bottom" content={
+          <div className="flex flex-col gap-1 text-[11px] font-mono max-w-[18rem]">
+            <span className="text-[10px] uppercase tracking-wide text-[#B7E0DE]">{exc?.scope === 'global' ? 'Exception — all shops' : 'Exception — this shop'}</span>
+            {lines.map((l) => <span key={l}>{l}</span>)}
+            {notes && <span className="whitespace-pre-wrap">{notes}</span>}
+            <span className="text-[10px] text-[#B7E0DE]/70">Click the product to edit</span>
+          </div>
+        }>
+          <button type="button" onClick={onClick} aria-label="Exception or notes set" className="flex-shrink-0 text-[#E67E22] hover:text-[#E67E22]/80"><Info className="w-3.5 h-3.5" /></button>
+        </HoverTip>
+      )}
+    </span>
+  )
+}
+
+/**
+ * Every vendor's order config for this shop in ONE table (a Vendor column tells them apart). Click a product to add exceptions/notes for it.
+ * Last Ordered / ETA come from each vendor's own data (one probe per vendor). The VMI legend sorts VMI products to the top when clicked.
+ */
+function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfig, onExceptionClick }: {
+  groups: ConfigGroup[]; shopId: string
   // `order` is the shared, user-customizable, already-hidden-filtered column
-  // id order (see LocationDetailView's configShownIds) — the same order and
-  // hide selections apply across every vendor's own block. `sizing` is the
+  // id order (see LocationDetailView's configShownIds). `sizing` is the
   // shared column-width map (px), dragged via each header's ResizeHandle.
   order: string[]; sizing: Record<string, number>; onResize: (id: string, deltaPx: number) => void
   onOpenConfig: () => void; onExceptionClick: (row: ConfigRow) => void
 }) {
   const navigate = useNavigate()
-  const [sort, setSort] = usePersistedSort(`location-lookup:config-sort:${vendor}`)
-  // "Last Ordered"/"ETA" columns (2026-09-28 ask) — same per-vendor hook
-  // Orders v2 Review/Final Review already use for this exact data, just
-  // rendered as two separate columns here instead of one combined cell.
-  const { infoFor } = useLastOrderedInfo(vendorId, vendor)
+  const [sort, setSort] = usePersistedSort('location-lookup:config-sort:combined')
+  const [vmiFirst, setVmiFirst] = usePersistedJson<boolean>('location_lookup.vmi_first', false)
+  const [infoFns, setInfoFns] = useState<Record<string, InfoForFn>>({})
+  const onInfo = useCallback((id: string, fn: InfoForFn) => setInfoFns((m) => (m[id] === fn ? m : { ...m, [id]: fn })), [])
+  const rows = useMemo<ConfigRow[]>(() => groups.flatMap((g) => g.rows.map((r) => ({ ...r, vendor_name: g.vendor }))), [groups])
+  const infoOf = useCallback((r: ConfigRow) => infoFns[r.vendor_id ?? '']?.(shopId, r.product_id ?? '', r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null) ?? null, [infoFns, shopId])
+  // VMI highlighting is RelaDyne-only (explicit ask) — a Valvoline row flagged VMI isn't highlighted.
+  const isVmiHighlighted = useCallback((r: ConfigRow) => isVmiRow(r) && isReladyne(r.vendor_name ?? ''), [])
+
   const columns = useMemo(() => {
     const metaKeys = new Set<string>()
     for (const r of rows) for (const k of Object.keys(r.metadata ?? {})) if (!CONFIG_META_EXCLUDE.has(k)) metaKeys.add(k)
     const metaCols: Col<ConfigRow>[] = [...metaKeys].sort().map((k) => ({ id: `meta:${k}`, label: metaLabel(k), align: 'left', render: (r) => String((r.metadata as any)?.[k] ?? '—'), sort: (r) => String((r.metadata as any)?.[k] ?? '') }))
+    const todayIso = format(new Date(), 'yyyy-MM-dd')
     const lastOrderedCols: Col<ConfigRow>[] = [
       {
         id: 'last_ordered', label: 'Last Ordered', align: 'left', width: 'w-28',
         render: (r) => {
-          if (!r.product_id) return '—'
-          const info = infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null)
-          if (!info.lastOrderDate) return '—'
+          const info = infoOf(r)
+          if (!info?.lastOrderDate) return '—'
           return (
             <div className="flex flex-col leading-tight">
               <span>{dateShort(info.lastOrderDate)}</span>
-              <span className="text-inky/60">{num(info.lastOrderQty)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</span>
+              <span className="text-inky/60">{num(info.lastOrderQty)}{info.lastOrderUom ? ` ${uomDisplayLabel(info.lastOrderUom)}` : ''}</span>
             </div>
           )
         },
-        sort: (r) => (r.product_id ? infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null).lastOrderDate : null),
+        sort: (r) => infoOf(r)?.lastOrderDate ?? null,
       },
       {
-        // Recently delivered (date + amount) when the last order has
-        // already been received; otherwise the pending order's own ETA —
-        // kept visible (flagged overdue) for a few days past that date
-        // rather than disappearing the moment it passes, since "it hasn't
-        // shown up yet" is itself useful information. RelaDyne-only for the
-        // delivered branch (useLastOrderedInfo's own scope, see that file's
-        // header comment) — other vendors always fall through to the ETA
-        // branch, which is vendor-agnostic.
+        // The delivery that matches the last order when we know it arrived; otherwise the order's own ETA — always shown (red once past,
+        // with how many days overdue), since "it hasn't shown up yet" is itself the useful part. A delivery older than the last order
+        // doesn't count as that order arriving.
         id: 'eta', label: 'ETA', align: 'left', width: 'w-28',
         render: (r) => {
-          if (!r.product_id) return '—'
-          const info = infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null)
-          if (info.lastDeliveredDate) {
+          const info = infoOf(r)
+          if (!info) return '—'
+          if (info.lastDeliveredDate && (!info.lastOrderDate || info.lastDeliveredDate >= info.lastOrderDate)) {
+            const unit = info.lastDeliveredUnit ? ` ${info.lastDeliveredUnit}` : info.lastDeliveredUom ? ` ${uomDisplayLabel(info.lastDeliveredUom)}` : ''
             return (
               <div className="flex flex-col leading-tight">
                 <span className="text-inky/60">Delivered</span>
-                <span>{dateShort(info.lastDeliveredDate)}{info.lastDeliveredAmount != null ? ` · ${num(info.lastDeliveredAmount)}${info.lastDeliveredUnit ? ` ${info.lastDeliveredUnit}` : ''}` : ''}</span>
+                <span>{dateShort(info.lastDeliveredDate)}{info.lastDeliveredAmount != null ? ` · ${num(info.lastDeliveredAmount)}${unit}` : ''}</span>
               </div>
             )
           }
           if (!info.eta) return '—'
-          const daysPast = daysBetween(info.eta, format(new Date(), 'yyyy-MM-dd'))
-          if (daysPast > 3) return '—' // past the grace window — unclear what to show, leave blank
+          const daysPast = daysBetween(info.eta, todayIso)
           return (
             <div className="flex flex-col leading-tight">
               <span className={daysPast > 0 ? 'text-[#C0392B] font-bold' : ''}>{dateShort(info.eta)}</span>
-              {daysPast > 0 && <span className="text-[9px] text-[#C0392B]/80">overdue</span>}
+              {daysPast > 0 && <span className="text-[9px] text-[#C0392B]/80">overdue {daysPast}d</span>}
             </div>
           )
         },
-        sort: (r) => (r.product_id ? (infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null).lastDeliveredDate ?? infoFor(shopId, r.product_id, r.usage?.on_hands ?? null, r.usage?.daily_usage ?? null).eta) : null),
+        sort: (r) => { const i = infoOf(r); return i ? ((i.lastDeliveredDate && (!i.lastOrderDate || i.lastDeliveredDate >= i.lastOrderDate)) ? i.lastDeliveredDate : i.eta) : null },
       },
     ]
     const byId = new Map<string, Col<ConfigRow>>()
@@ -2754,97 +2787,92 @@ function OrderConfigBlock({ vendor, vendorId, shopId, rows, order, sizing, onRes
     for (const c of metaCols) byId.set(c.id, c)
     for (const c of USAGE_COLS) byId.set(c.id, c)
     for (const c of lastOrderedCols) byId.set(c.id, c)
-    // Render exactly the shared, ordered `order` list — but only the ids
-    // this vendor's own rows actually have (a meta column only exists here
-    // if at least one of THIS vendor's rows carries that metadata key;
-    // fixed/usage columns always apply), same per-vendor filtering as
-    // before this feature, just driven by the shared order instead of a
-    // fixed part/uom/capacity/… sequence.
+    // Exactly the shared, ordered `order` list — a meta column only exists here if some row carries that metadata key.
     return order.map((id) => byId.get(id)).filter((c): c is Col<ConfigRow> => !!c)
-  }, [rows, order, infoFor, shopId])
+  }, [rows, order, infoOf])
 
-  const sortedRows = useMemo(() => applySort(rows, columns, sort), [rows, columns, sort])
+  const sortedRows = useMemo(() => {
+    const base = applySort(rows, columns, sort)
+    return vmiFirst ? [...base.filter(isVmiHighlighted), ...base.filter((r) => !isVmiHighlighted(r))] : base
+  }, [rows, columns, sort, vmiFirst, isVmiHighlighted])
   const updated = useMemo(() => lastUpdated(rows as any[], ['updated_at']), [rows])
-  // Newest inventory.product_usage sync among this vendor's products — shown
-  // as its own callout since it's a different source/cadence than the order
-  // config rows themselves.
+  // Newest inventory.product_usage sync among these products — its own callout since it's a different source/cadence than the config rows.
   const usageUpdated = useMemo(() => lastUpdated(rows.map((r) => r.usage).filter(Boolean) as any[], ['updated_at']), [rows])
-  // VMI row highlight — RelaDyne only for now (explicit ask), so a shop's
-  // VMI status stays visible even if the VMI column itself is hidden via
-  // Manage Columns. Shown as a legend rather than a header label since it's
-  // a row-level cue, not a column.
-  const showVmiLegend = isReladyne(vendor)
-  const vmiCount = useMemo(() => rows.filter(isVmiRow).length, [rows])
+  const vmiCount = useMemo(() => rows.filter(isVmiHighlighted).length, [rows, isVmiHighlighted])
+  const hasReladyne = useMemo(() => rows.some((r) => isReladyne(r.vendor_name ?? '')), [rows])
 
   return (
     <Card className="w-full">
-      <CardBody className="flex flex-col gap-2">
-        <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
-          {vendor} Order Config ({rows.length})
-        </span>
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle={`Open ${vendor} Order Config`} />
-          {usageUpdated && (
-            <button onClick={() => navigate('/config?tab=product-usage')} title="Open Product Usage config"
-              className="group inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy hover:bg-[#2ECC71]/35 transition-colors">
-              Updated {usageUpdated}
-              <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
-            </button>
-          )}
-          {showVmiLegend && (
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-mono text-inky/70">
-              <span className="w-8 h-3 rounded-sm bg-sky/40 border border-sky" />
-              = VMI ({vmiCount} Product{vmiCount === 1 ? '' : 's'})
-            </span>
-          )}
-        </div>
-        {columns.length === 0 ? (
-          <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Settings → Manage Columns.</p>
-        ) : (
-          <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
-            <table className="text-xs font-mono table-fixed">
-              <thead>
-                <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
-                  {columns.map((c) => {
-                    const w = configColWidth(c.id, sizing)
-                    return (
-                      <th key={c.id} style={{ width: w, minWidth: w }} className={`relative px-3 py-2 whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>
-                        <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center max-w-full overflow-hidden text-ellipsis">
-                          {c.label}{sortArrow(sort, c.id)}
-                        </button>
-                        <ResizeHandle onResize={(delta) => onResize(c.id, delta)} />
-                      </th>
-                    )
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {sortedRows.map((r) => {
-                  const rowIsVmi = showVmiLegend && isVmiRow(r)
-                  return (
-                  <tr key={r.id} className={`border-b border-navy/20 ${rowIsVmi ? 'bg-sky/10' : ''}`}>
+      <CardBody className="flex flex-col gap-2 items-start">
+        {groups.map((g) => <VendorInfoProbe key={g.vendorId ?? g.vendor} vendorId={g.vendorId} vendor={g.vendor} onInfo={onInfo} />)}
+        {/* Everything below shares the table's own width, so the header row (and the VMI legend at its right end) lines up with the table's edges. */}
+        <div className="w-fit max-w-full flex flex-col gap-2">
+          <span className="text-xs font-mono text-navy uppercase tracking-wide self-start">
+            Order Config ({rows.length}) <span className="text-inky/60 normal-case">· {groups.map((g) => g.vendor).join(' + ')}</span>
+          </span>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
+              <UpdatedCallout date={updated} onOpen={onOpenConfig} openTitle="Open Order Config" />
+              {usageUpdated && (
+                <button onClick={() => navigate('/config?tab=product-usage')} title="Open Product Usage config"
+                  className="group inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono bg-[#2ECC71]/20 text-navy hover:bg-[#2ECC71]/35 transition-colors">
+                  Updated {usageUpdated}
+                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-navy/60">↗</span>
+                </button>
+              )}
+            </div>
+            {hasReladyne && (
+              <button type="button" onClick={() => setVmiFirst(!vmiFirst)}
+                title={vmiFirst ? 'VMI products are listed first — click to go back to the normal order' : 'Click to list VMI products first'}
+                className={`inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors ${vmiFirst ? 'bg-sky/30 text-navy font-bold' : 'text-inky/70 hover:bg-navy/10'}`}>
+                <span className="w-8 h-3 rounded-sm bg-sky/40 border border-sky" />
+                = VMI ({vmiCount} Product{vmiCount === 1 ? '' : 's'}){vmiFirst ? ' ↑' : ''}
+              </button>
+            )}
+          </div>
+          {columns.length === 0 ? (
+            <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Settings → Manage Columns.</p>
+          ) : (
+            <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+              <table className="text-xs font-mono table-fixed">
+                <thead>
+                  <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
                     {columns.map((c) => {
                       const w = configColWidth(c.id, sizing)
-                      return c.id === 'exception' ? (
-                        <td key={c.id}
-                          style={{ width: w, minWidth: w, maxWidth: w }}
-                          className={`px-3 py-1.5 text-navy overflow-hidden ${alignCls(c.align)} cursor-pointer hover:bg-sky/10 transition-colors`}
-                          title="Click to add or edit a floor/ceiling exception for this product"
-                          onClick={() => onExceptionClick(r)}
-                        >
-                          {c.render(r)}
-                        </td>
-                      ) : (
-                        <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>{c.render(r)}</td>
+                      return (
+                        <th key={c.id} style={{ width: w, minWidth: w }} className={`relative px-3 py-2 whitespace-nowrap ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>
+                          <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center max-w-full overflow-hidden text-ellipsis">
+                            {c.label}{sortArrow(sort, c.id)}
+                          </button>
+                          <ResizeHandle onResize={(delta) => onResize(c.id, delta)} />
+                        </th>
                       )
                     })}
                   </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {sortedRows.map((r) => {
+                    const rowIsVmi = isVmiHighlighted(r)
+                    return (
+                      <tr key={`${r.vendor_id}|${r.id}`} className={`border-b border-navy/20 ${rowIsVmi ? 'bg-sky/10' : ''}`}>
+                        {columns.map((c) => {
+                          const w = configColWidth(c.id, sizing)
+                          return c.id === 'part' ? (
+                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden ${alignCls(c.align)}`}>
+                              <ConfigPartCell row={r} onClick={() => onExceptionClick(r)} />
+                            </td>
+                          ) : (
+                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${alignCls(c.align)} ${c.tint ? USAGE_TINT : ''}`}>{c.render(r)}</td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </CardBody>
     </Card>
   )
