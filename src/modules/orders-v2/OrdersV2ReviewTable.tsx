@@ -22,6 +22,7 @@ import type { useProductExceptions } from './useProductExceptions'
 import type { DraftLineRow, DraftRow } from './useOrdersV2'
 import { PoDecisionButtons } from './OrdersV2Review'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
+import { useDateCf } from './dateFormatting'
 import { SHOP_BAND_CLASS, dos, money, num, dShort, OV2_DOS_STYLE_KEY, OV2_SHOWN_QUICK_KEY, OV2_HIDE_DOS_NOW_BUTTONS_KEY, DEFAULT_SHOWN_QUICK, DEFAULT_HIDE_DOS_NOW } from './shared'
 import { uomDisplayLabel, } from './types'
 import { matchesAnyQuick, quickCounts, tagKey, toneKey } from './quickFilters'
@@ -195,6 +196,8 @@ export function OrdersV2ReviewTable({
   const combinedListed = combinedModePref === 'listed'
   const [dosStylePref] = useProfilePref<string>(OV2_DOS_STYLE_KEY, 'badge')
   const dosStyle = dosStylePref === 'text' ? 'text' : 'badge'
+  // The user's own Last Ordered / Last Delivered date formatting for this vendor (Order Settings → User Order Settings).
+  const dateCf = useDateCf(draft.vendor_id)
   const isOrderTable = variant === 'order'
   const defaultPinned = variant === 'shop' ? [] : DEFAULT_PINNED
   const tableKey = variant === 'order' ? TABLE_KEY : `${TABLE_KEY}-${variant}`
@@ -409,7 +412,7 @@ export function OrdersV2ReviewTable({
           const info = infoOf(l)
           return info.lastOrderDate ? (
             <div className="leading-tight">
-              <div>{dShort(info.lastOrderDate)}</div>
+              <div><span style={dateCf.styleFor('ordered', info.lastOrderDate)}>{dShort(info.lastOrderDate)}</span></div>
               <div className="text-[10px] text-navy/75">{lastOrderedQty(l)}</div>
               {info.eta && <div className="text-[9px] text-navy/75">ETA {dShort(info.eta)}</div>}
             </div>
@@ -423,7 +426,7 @@ export function OrdersV2ReviewTable({
           const info = infoOf(l)
           return info.lastDeliveredDate ? (
             <div className="leading-tight">
-              <div>{dShort(info.lastDeliveredDate)}</div>
+              <div><span style={dateCf.styleFor('delivered', info.lastDeliveredDate)}>{dShort(info.lastDeliveredDate)}</span></div>
               <div className="text-[10px] text-navy/75">{lastDeliveredQty(l)}</div>
             </div>
           ) : '—'
@@ -434,10 +437,12 @@ export function OrdersV2ReviewTable({
         // Just the date and weekday — no "(RelaDyne delivery day)" schedule text.
         cell: (i) => <div>{i.getValue()}</div>,
       }),
-      ...(showSchedule ? [col.accessor((l) => describeSchedule(l.location_id) ?? '', {
+      // Every vendor gets this column (the shop's delivery cadence for THIS vendor — a sanity check on the Delivery date above);
+      // it starts visible for Valvoline and hidden elsewhere, and can be added from the column chooser.
+      col.accessor((l) => describeSchedule(l.location_id) ?? '', {
         id: 'delivery_schedule', header: 'Delivery Schedule', enableSorting: false, meta: { noClip: true },
         cell: (i) => <div className="text-[11px] leading-tight text-navy/85 min-w-[11rem]">{i.getValue() || '—'}</div>,
-      })] : []),
+      }),
       col.accessor((l) => Number(l.qty), {
         id: 'qty', header: 'Order Qty', enableSorting: false, size: 196, minSize: 196,
         meta: {
@@ -520,7 +525,7 @@ export function OrdersV2ReviewTable({
     ].filter((c: any) => !(variant === 'shop' && c.id === 'shop'))
   }, [col, shopLabel, ozProductIds, inputByLineKey, lastOrderedInfo, deliveryFor, describeSchedule, showSchedule, draft.order_date,
       patchQty, thresholds, tagsOf, onHandAfterAtDelivery, combinedListed, decidePoOverride, decidePoExclude,
-      decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, variant, lines, tagMap, quick])
+      decidePoCombine, onZeroReason, expanded, onToggleExpand, dosStyle, variant, lines, tagMap, quick, dateCf.styleFor])
 
   // The column definitions above are rebuilt whenever anything they read changes, which used to (a) re-create every
   // cell component on each quantity edit — remounting the quantity box and dropping its focus and any floating +1 —
@@ -547,6 +552,7 @@ export function OrdersV2ReviewTable({
     initialPageSize: initialPageSize.current,
     initialSorting: [{ id: variant === 'shop' ? 'product' : 'shop', desc: false }],
     initialColumnPinning: { left: defaultPinned, right: [] },
+    initialVisibility: showSchedule ? undefined : { delivery_schedule: false },
   })
   useColumnPrefs(tableKey, table, columnVisibility, columnOrder, setColumnOrder)
   const pageSizeNow = table.getState().pagination.pageSize

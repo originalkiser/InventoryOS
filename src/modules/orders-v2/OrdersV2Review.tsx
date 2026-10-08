@@ -35,6 +35,7 @@ import {
   buildGenerationInputs, eligibleLocations, draftOrderDow, draftAdHocLocationIds, shopsPerOrderDay, isOunceUnit, isValvoline,
   GLOBAL_EXCEPTION_LOCATION_ID, type DraftLineRow,
 } from './useOrdersV2'
+import { applyOrderTiming, draftHeldShops } from './orderTiming'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
 import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, OV2_SHOP_EXPAND_KEY, OV2_HIDE_MOBILE_BUTTON_KEY, OV2_DOS_STYLE_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
@@ -297,6 +298,9 @@ export function OrdersV2Review() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [statsModalOpen, setStatsModalOpen] = useState(false)
   const [addNonConfiguredOpen, setAddNonConfiguredOpen] = useState(false)
+  // Shops left out of this order because a later order still reaches their next delivery (Order Settings → Order Timing).
+  const heldShops = useMemo(() => (draft ? draftHeldShops(draft) : []), [draft])
+  const [heldOpen, setHeldOpen] = useState(false)
   const [movingToFinal, setMovingToFinal] = useState(false)
   // Final Review is blocked until the LAST row of the order has been on screen (scrolled to, or its page
   // opened) — direct ask 2026-10-03. The classic table's last row is known right here; the beta table
@@ -486,7 +490,8 @@ export function OrdersV2Review() {
       const eligibleIds = adHocIds
         ? new Set(adHocIds)
         : eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, draftOrderDow(draft))
-      setEligibleLocationIds(eligibleIds)
+      // Shops held until they need to order (Order Settings → Order Timing) are left out, same as at generation.
+      setEligibleLocationIds(applyOrderTiming({ config: settings.order_timing_vendors?.[draft.vendor_id ?? ''], adHoc: !!adHocIds, orderDate: draft.order_date, eligible: eligibleIds, inputLocationIds: inputs.map((i) => i.location_id ?? ''), schedules, calendar }).eligible)
     } catch (e) {
       // Never leave this silent — a failed fetch here previously left
       // allInputs empty with no explanation, reading as "no other products
@@ -562,9 +567,13 @@ export function OrdersV2Review() {
       // else about generation (DOS targets, minimums, smoothing, flags)
       // runs identically; eligibleLocationIds is the one thing that changes.
       const adHocIds = draftAdHocLocationIds(draft)
-      const eligibleIds = adHocIds
+      const baseEligibleIds = adHocIds
         ? new Set(adHocIds)
         : eligibleLocations(days, rulesFor(draft.vendor_id, settings, vendors.byId(draft.vendor_id)?.name).usesOrderDays, draft.order_date, useDow)
+      // Order Timing: shops whose next order would still reach the same delivery wait (never for ad hoc orders). Recorded on the draft so
+      // Review can list who was held and why.
+      const timing = applyOrderTiming({ config: settings.order_timing_vendors?.[draft.vendor_id ?? ''], adHoc: !!adHocIds, orderDate: draft.order_date, eligible: baseEligibleIds, inputLocationIds: inputs.map((i) => i.location_id ?? ''), schedules, calendar })
+      const eligibleIds = timing.eligible
       setEligibleLocationIds(eligibleIds)
       const genCtx = {
         settings: effectiveSettings,
@@ -659,7 +668,7 @@ export function OrdersV2Review() {
           // isn't explicitly carried forward here — __adhoc_location_ids
           // has to be threaded through explicitly or a regenerate silently
           // reverts an ad hoc draft back to the vendor's regular schedule.
-          settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts, __adhoc_location_ids: adHocIds, __vmi_miss_items: vmiItems ?? null },
+          settings_snapshot: { ...effectiveSettings, __shop_count: shops, __order_dow: useDow, __keepfill_alerts: keepfillAlerts, __adhoc_location_ids: adHocIds, __vmi_miss_items: vmiItems ?? null, __held_shops: timing.held },
           // Never downgrade an already-finalized draft back to 'review' —
           // a completed order's own steps are now revisitable (e.g. to
           // regenerate after adding a global product exception, then
@@ -1108,6 +1117,13 @@ export function OrdersV2Review() {
           Ad hoc · {eligibleLocationIds?.size ?? 0} shop{(eligibleLocationIds?.size ?? 0) !== 1 ? 's' : ''}
         </span>
       )}
+      {heldShops.length > 0 && (
+        <HoverTip content={<span className="text-xs font-mono">These shops don't need to order yet — click to see when they will</span>}>
+          <button type="button" onClick={() => setHeldOpen(true)} className="rounded px-1.5 py-0.5 bg-[#E67E22]/15 text-navy border border-[#E67E22]/50 text-xs font-mono hover:bg-[#E67E22]/25">
+            {heldShops.length} shop{heldShops.length !== 1 ? 's' : ''} held
+          </button>
+        </HoverTip>
+      )}
       {/* Direct ask 2026-09-30: matches Order Settings' own button style
           (solid secondary background) instead of the plain bordered-only
           look every other small toolbar button here uses. */}
@@ -1384,6 +1400,30 @@ export function OrdersV2Review() {
           </div>
         </Modal>
       )}
+
+      <Modal open={heldOpen} onClose={() => setHeldOpen(false)} title={`${heldShops.length} shop${heldShops.length !== 1 ? 's' : ''} held`} size="md">
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-mono text-inky">
+            Left off this order on purpose: ordering again on the date shown still reaches the same scheduled delivery, so there's no reason to order
+            today. They're picked up then. (Turn this off, or change the order cadence, in Order Settings → Order Timing; an ad hoc order can still
+            include any of them.)
+          </p>
+          <div className="max-h-[50vh] overflow-auto rounded border border-navy/20">
+            <table className="w-full text-xs font-mono">
+              <thead className="bg-navy text-cream sticky top-0"><tr><th className="text-left px-2 py-1.5">Shop</th><th className="text-left px-2 py-1.5">Delivers</th><th className="text-left px-2 py-1.5">Next order</th></tr></thead>
+              <tbody>
+                {heldShops.map((h) => (
+                  <tr key={h.location_id} className="border-t border-navy/10">
+                    <td className="px-2 py-1">{shopLabel(h.location_id)}</td>
+                    <td className="px-2 py-1">{dShort(h.delivery)}</td>
+                    <td className="px-2 py-1">{dShort(h.next_order_date)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Modal>
 
       <AddNonConfiguredProductModal
         open={popupAddNonConfigOpen}

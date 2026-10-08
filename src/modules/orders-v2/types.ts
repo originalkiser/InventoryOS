@@ -150,6 +150,10 @@ export interface OrderSettings {
   // directly on the engine's OrderSettings (which has no vendor concept at
   // all — engine.ts itself never references a vendor_id).
   allow_exceed_capacity_for_dos_target_vendors: Record<string, boolean>
+  // Per-vendor order timing (see orderTiming.ts): with hold_until_needed on, a shop on a delivery schedule is left out of today's order when
+  // the next order (cadence_days later — 7 for a weekly Thursday run, 1 for daily) would still reach the same delivery date.
+  // vendor_id -> { hold_until_needed, cadence_days }.
+  order_timing_vendors: Record<string, { hold_until_needed?: boolean; cadence_days?: number }>
 }
 
 export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
@@ -170,6 +174,7 @@ export const DEFAULT_ORDER_SETTINGS: OrderSettings = {
   bulk_round_up_threshold_gal: 35,
   bulk_urgent_dos_threshold: 15,
   allow_exceed_capacity_for_dos_target_vendors: {},
+  order_timing_vendors: {},
 }
 
 // Per shop x product ordering rules. Named fields say "gallons" for

@@ -12,6 +12,7 @@ import { VendorPartRulesCard } from './VendorPartRulesCard'
 import { VendorVisibilityCard } from './VendorVisibilityCard'
 import { DeliverySchedulesCard } from './DeliverySchedulesCard'
 import { OrderLogicTab } from './OrderLogicTab'
+import { OV2_DATE_CF_KEY, newDateCfRule, dateRuleStyle, type DateCfByVendor, type DateCfConfig, type DateCfField, type DateCfRule } from './dateFormatting'
 import { RdDistributorTimingCard } from './RdDistributorTimingCard'
 import { ProductExceptionsManager } from './ProductExceptionsManager'
 import { MINIMUM_TYPE_LABELS, type MinimumType, type OrderSettings } from './types'
@@ -113,6 +114,41 @@ export function OrdersV2SettingsBody({ onExceptionChanged }: { onExceptionChange
             </div>
           )}
         </div>
+      </CardBody></Card>
+
+      <Card><CardBody className="flex flex-col gap-3">
+        <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Order Timing — hold shops until they need to order</h3>
+        <p className="text-[11px] font-mono text-inky/60">
+          For shops on a Week A/Week B (or other non-weekly) delivery schedule. With this on for a vendor, an order only includes the shops that
+          need to order <strong>today</strong> to get their next scheduled delivery as soon as possible. If ordering at the next order date would
+          still land on the same delivery day, the shop is held (listed on Review as "held") and picked up then. Off by default.
+        </p>
+        {vendors.options.length === 0 ? (
+          <p className="text-xs font-mono text-inky/40 italic">No vendors configured yet.</p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {vendors.options.map((v) => {
+              const t = draft.order_timing_vendors[v.value] ?? {}
+              const set = (patch: { hold_until_needed?: boolean; cadence_days?: number }) => setDraft((d) => ({ ...d, order_timing_vendors: { ...d.order_timing_vendors, [v.value]: { ...(d.order_timing_vendors[v.value] ?? {}), ...patch } } }))
+              return (
+                <div key={v.value} className="flex items-center gap-3 flex-wrap text-xs font-mono text-navy">
+                  <label className="flex items-center gap-2 w-48">
+                    <Toggle checked={t.hold_until_needed ?? false} onChange={(checked) => set({ hold_until_needed: checked })} size="sm" color="cyan" />
+                    {v.label}
+                  </label>
+                  {t.hold_until_needed && (
+                    <label className="flex items-center gap-1.5 text-inky">
+                      Orders are placed every
+                      <input type="number" min={1} max={28} value={t.cadence_days ?? 7} onChange={(e) => set({ cadence_days: Math.max(1, Math.min(28, Number(e.target.value) || 7)) })}
+                        className="w-14 bg-cream border border-navy/30 rounded px-1.5 py-0.5 text-xs font-mono text-navy" />
+                      day(s) <span className="text-inky/60">(7 = weekly Thursday run, 1 = daily)</span>
+                    </label>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </CardBody></Card>
 
       <Card><CardBody className="flex flex-col gap-3">
@@ -310,6 +346,7 @@ function UserOrderSettings() {
           on hand is written out under the total.
         </p>
       </CardBody></Card>
+      <DateFormattingCard />
       <Card><CardBody className="flex flex-col gap-2">
         <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">DOS Conditional Formatting</h3>
         <label className="flex items-center gap-2 text-xs font-mono text-navy">
@@ -322,6 +359,62 @@ function UserOrderSettings() {
         </p>
       </CardBody></Card>
     </div>
+  )
+}
+
+const CF_FIELDS: { field: DateCfField; label: string }[] = [{ field: 'ordered', label: 'Last Ordered' }, { field: 'delivered', label: 'Last Delivered' }]
+
+/** Your own colors for the Last Ordered / Last Delivered dates on Review, per vendor: by how many days ago, as a background or text color. */
+function DateFormattingCard() {
+  const vendors = useVendors()
+  const [all, setAll] = useProfilePref<DateCfByVendor>(OV2_DATE_CF_KEY, {})
+  const [vendorId, setVendorId] = useState('')
+  const vid = vendorId || vendors.options[0]?.value || ''
+  const cfg: DateCfConfig = all?.[vid] ?? { ordered: [], delivered: [] }
+  const setRules = (field: DateCfField, rules: DateCfRule[]) => setAll({ ...(all ?? {}), [vid]: { ...cfg, [field]: rules } })
+  const patchRule = (field: DateCfField, id: string, patch: Partial<DateCfRule>) => setRules(field, (cfg[field] ?? []).map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  const sel = 'bg-cream border border-navy/30 rounded px-1.5 py-0.5 text-xs font-mono text-navy'
+  return (
+    <Card><CardBody className="flex flex-col gap-3">
+      <h3 className="text-xs font-mono uppercase tracking-wide text-navy font-bold">Last Ordered / Last Delivered Conditional Formatting</h3>
+      <p className="text-[11px] font-mono text-inky/60">
+        Color the Last Ordered and Last Delivered dates on Review and Final Review by how many days ago they were — e.g. highlight anything ordered in the
+        last 7 days. Rules are checked top to bottom and the first match wins. These are yours alone and are set separately for each vendor.
+      </p>
+      {vendors.options.length === 0 ? <p className="text-xs font-mono text-inky/40 italic">No vendors configured yet.</p> : (
+        <>
+          <label className="flex items-center gap-2 text-xs font-mono text-navy">Vendor
+            <select className={sel} value={vid} onChange={(e) => setVendorId(e.target.value)}>{vendors.options.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}</select>
+          </label>
+          {CF_FIELDS.map(({ field, label }) => (
+            <div key={field} className="flex flex-col gap-1.5 rounded border border-navy/15 p-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-navy/75 font-semibold">{label}</span>
+                <Button size="sm" variant="secondary" onClick={() => setRules(field, [...(cfg[field] ?? []), newDateCfRule()])}>Add rule</Button>
+              </div>
+              {(cfg[field] ?? []).length === 0 && <span className="text-[11px] font-mono text-inky/50 italic">No rules — dates show plain.</span>}
+              {(cfg[field] ?? []).map((r) => (
+                <div key={r.id} className="flex items-center gap-2 flex-wrap text-xs font-mono text-navy">
+                  <select className={sel} value={r.op} onChange={(e) => patchRule(field, r.id, { op: e.target.value as DateCfRule['op'] })}>
+                    <option value="within">Within the last</option><option value="older">More than</option>
+                  </select>
+                  <input type="number" min={0} className={`${sel} w-16`} value={r.days} onChange={(e) => patchRule(field, r.id, { days: Math.max(0, Number(e.target.value) || 0) })} />
+                  <span>day(s) ago</span>
+                  <input type="color" value={/^#[0-9a-f]{6}$/i.test(r.color) ? r.color : '#E67E22'} onChange={(e) => patchRule(field, r.id, { color: e.target.value })}
+                    className="w-8 h-6 p-0 border border-navy/30 rounded bg-transparent cursor-pointer" aria-label="Color" />
+                  <select className={sel} value={r.apply} onChange={(e) => patchRule(field, r.id, { apply: e.target.value as DateCfRule['apply'] })}>
+                    <option value="background">as background</option><option value="text">as text color</option>
+                  </select>
+                  <span className="text-[11px] text-inky/60">Preview:</span>
+                  <span style={dateRuleStyle(r)}>Oct 1, 2026</span>
+                  <button type="button" onClick={() => setRules(field, (cfg[field] ?? []).filter((x) => x.id !== r.id))} className="ml-auto text-inky/60 hover:text-[#C0392B]" aria-label="Delete rule">✕</button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+    </CardBody></Card>
   )
 }
 

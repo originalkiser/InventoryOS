@@ -20,6 +20,7 @@ import { useLastOrderedInfo } from './useLastOrderedInfo'
 import { Flags } from './OrdersV2Review'
 import { OrderStepper } from './OrderStepper'
 import { daysOfSupply, daysBetween, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription } from './engine'
+import { useDateCf } from './dateFormatting'
 import { SHOP_BAND_CLASS, OVERRIDE_CELL, dos, dShort, money, num, copyTableToClipboard, exportTableCsv, dosAfterForQty, type TableCol } from './shared'
 import { uomDisplayLabel } from './types'
 import type { LineFlag, OrderType, DeliverySchedule, WeekCalendar } from './types'
@@ -65,6 +66,7 @@ export function OrdersV2FinalReview() {
   // Same Last Ordered/Last Delivered + on-hand plausibility flag as
   // OrdersV2Review — see that hook's own header comment for scope/design.
   const lastOrderedInfo = useLastOrderedInfo(draft?.vendor_id ?? null, vendors.byId(draft?.vendor_id ?? null)?.name ?? null)
+  const dateCf = useDateCf(draft?.vendor_id ?? null)
 
   const [openShop, setOpenShop] = useState<{ locationId: string; orderType: OrderType } | null>(null)
   // Direct ask (2026-09-24) — jump straight to the lines the engine
@@ -405,7 +407,7 @@ export function OrdersV2FinalReview() {
         const info = lastOrderedInfo.infoFor(l.location_id ?? '', l.product_id, l.on_hand, l.daily_usage)
         return info.lastOrderDate ? (
           <>
-            <div>{dShort(info.lastOrderDate)} · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
+            <div><span style={dateCf.styleFor('ordered', info.lastOrderDate)}>{dShort(info.lastOrderDate)}</span> · {num(info.lastOrderQty, 1)}{info.lastOrderUom ? ` ${info.lastOrderUom}` : ''}</div>
             {info.eta && <div className="text-[9px] text-inky/50">ETA {dShort(info.eta)}</div>}
           </>
         ) : '—'
@@ -419,7 +421,7 @@ export function OrdersV2FinalReview() {
         return (
           <>
             {info.lastDeliveredDate
-              ? `${dShort(info.lastDeliveredDate)} · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`
+              ? <><span style={dateCf.styleFor('delivered', info.lastDeliveredDate)}>{dShort(info.lastDeliveredDate)}</span>{` · ${num(info.lastDeliveredAmount, 1)}${info.lastDeliveredUnit === 'gal' ? ' gal' : ''}`}</>
               : '—'}
             {info.onHandCheck && !info.onHandCheck.withinRange && (
               <div className="text-[9px] text-[#C0392B] font-bold"
@@ -480,7 +482,7 @@ export function OrdersV2FinalReview() {
         )
       },
     }),
-  ], [col, shopLabel, lastOrderedInfo, draft, deliveryFor, describeSchedule, patchQty, ozProductIds])
+  ], [col, shopLabel, lastOrderedInfo, draft, deliveryFor, describeSchedule, patchQty, ozProductIds, dateCf.styleFor])
 
   const TABLE_KEY = 'orders-v2.final-review-lines'
   const { table, globalFilter, setGlobalFilter, columnVisibility, columnOrder, setColumnOrder, columnPinning, setColumnPinning } = useTable(dataForTable, columns, {
