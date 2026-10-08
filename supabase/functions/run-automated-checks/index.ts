@@ -1,24 +1,20 @@
-// Automated inventory-movement checks: abnormal adjustment, a sale logged
-// against zero on-hand, and tank monitor variance vs. Droptop's on-hand
-// pull. Flags land in inventory.exception_reports (report_type
-// 'Automated Check', metadata.source = 'automated') — this is part of
-// Exception Reporting, not a parallel system.
+// Automated inventory exceptions — five types, ONE open exception per shop per type that accumulates instead of a new row per product or day
+// (see inventory.shop_exceptions / migration 20261009a and detect.ts for the rules):
+//   PO should have delivered (medium) · Selling at zero on hand (high) · Large positive adjustment (medium)
+//   Large negative adjustment (high) · Duplicate case types on hand (high when the quantities are within 40 qts of each other, else low)
 //
-// Abnormal RECEIPT is intentionally not implemented — Droptop's real
-// change_type for a receiving event isn't confirmed (see
-// droptop-sync-usage's own daily_product_activity comment: anything besides
-// 'sale'/'adjustment*' currently lands in other_qty with the raw type
-// preserved). Run droptop-sync-usage with {"mode":"inspect"} and inspect a
-// real changes_sample before adding this check.
+// Replaces the old per-product flags that landed in inventory.exception_reports (abnormal adjustment, sale with zero on hand, tank variance).
+// Those rows are left alone; nothing new is written there. Tank-variance checking is no longer part of this job.
 //
 // Callable two ways, same dual-auth shape as the other sync functions:
-//  - Unattended, via the Data Connections dispatcher (X-Sync-Token = the
-//    same DATA_CONNECTION_DISPATCH_SECRET the dispatcher itself is called
-//    with — this function is only ever invoked by that dispatcher or by an
-//    admin's own session, so it doesn't need a secret of its own).
-//  - Interactively, from a future "Run Now" button (logged-in user session).
+//  - Unattended, via the Data Connections dispatcher (X-Sync-Token = DATA_CONNECTION_DISPATCH_SECRET).
+//  - Interactively, from a logged-in user's session (the Data Connections "Run Now" button).
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import {
+  BASE_SEVERITY, baseProductId, detectAdjustments, detectDuplicates, detectLatePos, detectZeroSales, isExcluded, parseWeekday, reconcile,
+  type ActivityRow, type Computed, type ExceptionItem, type ExceptionType, type ExistingException, type OpenPo, type Schedule, type WeekCalendar,
+} from './detect.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -30,24 +26,18 @@ function ok(body: unknown) {
 }
 
 interface Config {
-  adjustmentThreshold: number
+  adjustmentThreshold: number      // qts — an adjustment bigger than this in a day is "large"
   zeroOnHandSaleEnabled: boolean
-  tankVarianceThreshold: number
+  duplicateToleranceQts: number    // duplicate case types within this many qts of each other are high severity
+  poGraceDays: number              // days past the expected delivery before a PO is flagged
+  poSuppliers: string[]            // supplier names whose POs are checked
+  categories: string[]             // product categories the ledger-based checks look at (Product Usage's own default scope)
 }
-const DEFAULT_CONFIG: Config = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, tankVarianceThreshold: 50 }
+const DEFAULT_CONFIG: Config = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], categories: ['Engine Oil', 'Engine Oil Additive'] }
+const LOOKBACK_DAYS = 30
 
-const CHECK_LABELS: Record<string, string> = {
-  abnormal_adjustment: 'Abnormal Adjustment',
-  zero_on_hand_sale: 'Sale Logged With Zero On-Hand',
-  tank_variance: 'Tank Monitor Variance vs. Droptop',
-}
-
-interface Flag {
-  location_id: string
-  product_id: string
-  check_type: string
-  details: Record<string, unknown>
-}
+const isoToday = () => new Date().toISOString().slice(0, 10)
+const chunked = <T,>(rows: T[], n: number): T[][] => { const out: T[][] = []; for (let i = 0; i < rows.length; i += n) out.push(rows.slice(i, i + n)); return out }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
@@ -71,155 +61,168 @@ Deno.serve(async (req) => {
     }
     if (!authorized) return ok({ error: 'Not authorized' })
 
-    const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+    const admin = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } }) as any
+    const inv = () => admin.schema('inventory')
 
-    const { data: anyLoc } = await (admin as any).schema('core').from('locations').select('company_id').limit(1).maybeSingle()
+    async function pageAll<T>(build: () => any, size = 1000): Promise<T[]> {
+      const out: T[] = []
+      for (let from = 0; ; ) {
+        const { data, error } = await build().range(from, from + size - 1)
+        if (error) throw new Error(error.message)
+        const batch = (data ?? []) as T[]
+        out.push(...batch)
+        if (batch.length === 0 || batch.length < size) break
+        from += batch.length
+      }
+      return out
+    }
+
+    const { data: anyLoc } = await admin.schema('core').from('locations').select('company_id').limit(1).maybeSingle()
     const companyId: string | null = anyLoc?.company_id ?? null
     if (!companyId) return ok({ error: 'Unable to resolve company' })
 
-    const { data: settingRow } = await (admin as any).schema('platform').from('app_settings')
-      .select('value').eq('company_id', companyId).eq('key', 'automated_checks_config').maybeSingle()
+    const { data: settingRow } = await admin.schema('platform').from('app_settings').select('value').eq('company_id', companyId).eq('key', 'automated_checks_config').maybeSingle()
     const config: Config = { ...DEFAULT_CONFIG, ...(settingRow?.value ?? {}) }
+    if (!Array.isArray(config.poSuppliers)) config.poSuppliers = DEFAULT_CONFIG.poSuppliers
+    if (!Array.isArray(config.categories) || !config.categories.length) config.categories = DEFAULT_CONFIG.categories
 
-    const { data: exclusionRows } = await (admin as any).schema('inventory').from('automated_check_exclusions')
-      .select('location_id, product_id, check_type').eq('company_id', companyId)
+    const today = isoToday()
+    const lookbackFrom = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10)
+
+    // Active corporate shops only — same rule Orders v2 uses (a closed shop or a franchisee isn't ours to chase).
+    const locRows = await pageAll<any>(() => admin.schema('core').from('locations')
+      .select('id, active, location_type, owner, metadata, reladyne_delivery_day').eq('company_id', companyId).order('id'))
+    const shops = locRows.filter((l) => l.active && l.location_type !== 'car_wash' && String(l.owner ?? l.metadata?.owner ?? '').trim().toLowerCase() === 'corporate')
+    const shopIds = new Set<string>(shops.map((l) => l.id))
+    const weekdayByLocation = new Map<string, number | null>(shops.map((l) => [l.id, parseWeekday(l.reladyne_delivery_day)]))
+
+    const { data: exclusionRows } = await inv().from('automated_check_exclusions').select('location_id, product_id, check_type').eq('company_id', companyId)
     const exclusions = (exclusionRows ?? []) as { location_id: string | null; product_id: string | null; check_type: string }[]
-    function isExcluded(checkType: string, locationId: string, productId: string): boolean {
-      return exclusions.some((e) =>
-        e.check_type === checkType
-        && (e.location_id === null || e.location_id === locationId)
-        && (e.product_id === null || e.product_id.toLowerCase() === productId.toLowerCase()),
-      )
+    const excludedFor = (checkType: string) => (loc: string, product: string) => isExcluded(exclusions, checkType, loc, product)
+
+    const computed = new Map<string, Computed>()
+    const put = (type: ExceptionType, byLocation: Map<string, ExceptionItem[]>, severity = BASE_SEVERITY[type]) => {
+      for (const [loc, items] of byLocation) if (shopIds.has(loc) && items.length) computed.set(`${loc}|${type}`, { severity, items })
     }
 
-    const flags: Flag[] = []
+    // Open exceptions (needed first: zero-on-hand items stack on the ones already open).
+    const existing = await pageAll<ExistingException>(() => inv().from('shop_exceptions')
+      .select('id, location_id, type, status, severity, first_seen, items, acked_keys').eq('company_id', companyId).neq('status', 'resolved').order('id'))
 
-    // ── Abnormal adjustment + sale-with-zero-on-hand: latest activity day ──
-    const { data: latestDayRow } = await (admin as any).schema('inventory').from('daily_product_activity')
-      .select('activity_date').eq('company_id', companyId).order('activity_date', { ascending: false }).limit(1).maybeSingle()
-    const activityDate: string | null = latestDayRow?.activity_date ?? null
+    // ── ledger: large adjustments (only the big ones are read — the ledger is ~245k rows a month) ──
+    const t = Math.abs(config.adjustmentThreshold)
+    const bigAdjustments = (await pageAll<ActivityRow>(() => inv().from('daily_product_activity')
+      .select('location_id, product_id, activity_date, sold_qty, adjusted_qty').eq('company_id', companyId)
+      .in('category', config.categories).gte('activity_date', lookbackFrom).or(`adjusted_qty.gt.${t},adjusted_qty.lt.-${t}`).order('id'))).filter((r) => shopIds.has(r.location_id))
 
-    if (activityDate) {
-      const { data: activityRows } = await (admin as any).schema('inventory').from('daily_product_activity')
-        .select('location_id, product_id, sold_qty, adjusted_qty').eq('company_id', companyId).eq('activity_date', activityDate)
-      const activity = (activityRows ?? []) as { location_id: string; product_id: string; sold_qty: number; adjusted_qty: number }[]
+    const adj = detectAdjustments({ activity: bigAdjustments, threshold: config.adjustmentThreshold, excluded: excludedFor('abnormal_adjustment') })
+    put('adj_positive', adj.positive)
+    put('adj_negative', adj.negative)
 
-      for (const row of activity) {
-        if (Math.abs(row.adjusted_qty ?? 0) > config.adjustmentThreshold && !isExcluded('abnormal_adjustment', row.location_id, row.product_id)) {
-          flags.push({
-            location_id: row.location_id, product_id: row.product_id, check_type: 'abnormal_adjustment',
-            details: { activity_date: activityDate, adjusted_qty: row.adjusted_qty, threshold: config.adjustmentThreshold },
+    // Order-config families (what each shop actually orders) and old→new product ids — duplicate detection and the usage lookup both need them.
+    const cfgRows = await pageAll<{ location_id: string; product_id: string }>(() => inv().from('location_order_config').select('location_id, product_id').eq('company_id', companyId).order('id'))
+    const mapRows = await pageAll<{ old_product_id: string; new_product_id: string }>(() => inv().from('product_id_mappings').select('old_product_id, new_product_id').eq('company_id', companyId).order('id'))
+    const mappings = new Map<string, string>(mapRows.filter((m) => m.old_product_id && m.new_product_id).map((m) => [m.old_product_id.trim().toLowerCase(), m.new_product_id]))
+    const configured = new Map<string, Set<string>>()
+    const families = new Set<string>()
+    for (const c of cfgRows) {
+      if (!c.product_id) continue
+      const fam = baseProductId(mappings.get(c.product_id.trim().toLowerCase()) ?? c.product_id).toLowerCase()
+      if (!configured.has(c.location_id)) configured.set(c.location_id, new Set())
+      configured.get(c.location_id)!.add(fam)
+      families.add(fam)
+    }
+    for (const m of mapRows) if (m.old_product_id) families.add(baseProductId(m.old_product_id).toLowerCase())
+    // One set-based call for the on hand of every configured family (duplicate case types).
+    const wanted = [...families].filter(Boolean)
+    const usageRows: { location_id: string; product_id: string; on_hands: number | null }[] = []
+    for (const part of chunked(wanted, 150)) {
+      const { data, error } = await admin.rpc('get_ov2_usage_for_families', { p_families: part })
+      if (error) throw new Error(`Usage lookup failed: ${error.message}`)
+      usageRows.push(...((data ?? []) as any[]))
+    }
+
+    if (config.zeroOnHandSaleEnabled) {
+      // Sales of products at zero on hand that sold in the last 3 days — joined in the database (get_zero_on_hand_sales).
+      const { data: zeroRows, error: zeroErr } = await admin.rpc('get_zero_on_hand_sales', { p_from: lookbackFrom, p_recent_from: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), p_categories: config.categories })
+      if (zeroErr) throw new Error(`Zero-on-hand lookup failed: ${zeroErr.message}`)
+      const zero = ((zeroRows ?? []) as (ActivityRow & { on_hands: number | null })[]).filter((r) => shopIds.has(r.location_id))
+      const onHand = new Map<string, number | null>(zero.map((r) => [`${r.location_id}|${String(r.product_id).toLowerCase()}`, r.on_hands]))
+      const prior = new Map<string, ExceptionItem[]>(existing.filter((e) => e.type === 'zero_sales').map((e) => [e.location_id, e.items ?? []]))
+      put('zero_sales', detectZeroSales({ activity: zero, onHand, prior, today, excluded: excludedFor('zero_on_hand_sale') }))
+    }
+
+    const dups = detectDuplicates({ usage: usageRows.filter((u) => shopIds.has(u.location_id)), configured, mappings, tolerance: config.duplicateToleranceQts, excluded: excludedFor('duplicate_case_types') })
+    for (const [loc, d] of dups) computed.set(`${loc}|duplicate_case`, { severity: d.severity, items: d.items })
+
+    // ── POs that should have delivered ──
+    if (config.poSuppliers.length) {
+      const { data: vendorRows } = await inv().from('vendors').select('id, name').eq('company_id', companyId)
+      const vendors = ((vendorRows ?? []) as { id: string; name: string }[]).filter((v) => config.poSuppliers.some((s) => v.name.toLowerCase().includes(s.toLowerCase())))
+      const vendorOfSupplier = (supplier: string | null) => {
+        const sup = (supplier ?? '').trim().toLowerCase()
+        if (!sup) return null
+        return vendors.find((v) => sup.includes(v.name.toLowerCase()) || v.name.toLowerCase().includes(sup))?.id ?? null
+      }
+      const poFrom = new Date(Date.now() - 60 * 86400000).toISOString()
+      const pos: OpenPo[] = []
+      for (const s of config.poSuppliers) {
+        const rows = await pageAll<any>(() => inv().from('droptop_purchase_orders')
+          .select('id, location_id, po_id, custom_po_id, supplier_name, created_timestamp, to_receive_timestamp').eq('company_id', companyId)
+          .ilike('supplier_name', `%${s}%`).in('po_status', ['draft', 'sent', 'accepted']).gte('created_timestamp', poFrom).order('id'))
+        for (const r of rows) pos.push({ ...r, vendor_id: vendorOfSupplier(r.supplier_name) })
+      }
+      const received = new Set<string>()
+      for (const part of chunked(pos.map((p) => p.id), 150)) {
+        const { data, error } = await inv().from('droptop_purchase_order_items').select('purchase_order_id, received_quantity').in('purchase_order_id', part).gt('received_quantity', 0)
+        if (error) throw new Error(error.message)
+        for (const it of (data ?? []) as any[]) received.add(it.purchase_order_id)
+      }
+      const schedules = new Map<string, Schedule>()
+      const calendars = new Map<string, WeekCalendar>()
+      if (vendors.length) {
+        const vendorIds = vendors.map((v) => v.id)
+        const schedRows = await pageAll<any>(() => inv().from('ov2_location_schedules').select('*').eq('company_id', companyId).in('vendor_id', vendorIds).order('id'))
+        for (const r of schedRows) {
+          schedules.set(`${r.location_id}|${r.vendor_id}`, {
+            type: r.schedule_type, delivery_dow: r.delivery_dow, week_a_dow: r.week_a_dow, week_b_dow: r.week_b_dow,
+            biweekly_anchor_date: r.biweekly_anchor_date ?? null, lead_business_days: Number(r.lead_business_days ?? 4),
           })
         }
-      }
-
-      if (config.zeroOnHandSaleEnabled) {
-        const soldToday = activity.filter((r) => (r.sold_qty ?? 0) > 0)
-        if (soldToday.length > 0) {
-          const locIds = [...new Set(soldToday.map((r) => r.location_id))]
-          const { data: onHandRows } = await (admin as any).schema('inventory').from('product_usage')
-            .select('location_id, product_id, on_hands').eq('company_id', companyId).in('location_id', locIds)
-          const onHandByKey = new Map<string, number | null>()
-          for (const r of (onHandRows ?? []) as { location_id: string; product_id: string; on_hands: number | null }[]) {
-            onHandByKey.set(`${r.location_id}|${String(r.product_id).toLowerCase()}`, r.on_hands)
-          }
-          for (const row of soldToday) {
-            const onHand = onHandByKey.get(`${row.location_id}|${row.product_id.toLowerCase()}`)
-            if (onHand != null && onHand <= 0 && !isExcluded('zero_on_hand_sale', row.location_id, row.product_id)) {
-              flags.push({
-                location_id: row.location_id, product_id: row.product_id, check_type: 'zero_on_hand_sale',
-                details: { activity_date: activityDate, sold_qty: row.sold_qty, on_hand: onHand },
-              })
-            }
-          }
+        const calRows = await pageAll<any>(() => inv().from('ov2_delivery_calendar').select('vendor_id, week_start, week_label').eq('company_id', companyId).in('vendor_id', vendorIds).order('week_start'))
+        for (const r of calRows) {
+          if (!calendars.has(r.vendor_id)) calendars.set(r.vendor_id, new Map())
+          calendars.get(r.vendor_id)!.set(String(r.week_start).slice(0, 10), r.week_label)
         }
       }
+      put('po_late', detectLatePos({
+        pos, received, schedules, calendars, weekdayByLocation, today, graceDays: config.poGraceDays,
+        isReladyne: (s) => /reladyne/i.test(s ?? ''),
+      }))
     }
 
-    // ── Tank monitor variance vs. Droptop on-hand ──
-    const { data: tankRows } = await (admin as any).schema('inventory').from('tank_monitors')
-      .select('location_id, product_id, on_hand, serial_rtu_id').eq('company_id', companyId)
-      .not('location_id', 'is', null).not('product_id', 'is', null)
-    const tanks = (tankRows ?? []) as { location_id: string; product_id: string; on_hand: number | null; serial_rtu_id: string | null }[]
-
-    if (tanks.length) {
-      const { data: mapSetting } = await (admin as any).schema('platform').from('app_settings')
-        .select('value').eq('company_id', companyId).eq('key', 'tank_product_map').maybeSingle()
-      const productMap = (mapSetting?.value ?? {}) as Record<string, string>
-      const { data: overrideRows } = await (admin as any).schema('inventory').from('tank_variance_overrides').select('*').eq('company_id', companyId)
-      const overrides = (overrideRows ?? []) as { location_id: string; product_id: string; tank_serials: string[]; variance_qts: number }[]
-
-      const locIds = [...new Set(tanks.map((t) => t.location_id))]
-      const { data: usageRows } = await (admin as any).schema('inventory').from('product_usage')
-        .select('location_id, product_id, on_hands').eq('company_id', companyId).in('location_id', locIds)
-      const usageByKey = new Map<string, number | null>()
-      for (const r of (usageRows ?? []) as { location_id: string; product_id: string; on_hands: number | null }[]) {
-        usageByKey.set(`${r.location_id}|${String(r.product_id).toLowerCase()}`, r.on_hands)
-      }
-
-      for (const t of tanks) {
-        // Resolve via the manual Tank Monitors -> internal product map
-        // (Config -> Tank Monitors -> Product Mapping) when one exists;
-        // otherwise assume the tank's own product_id is already the
-        // internal one. Does not replicate that page's further Vendor
-        // Parts description/part-number fallback matching.
-        const resolved = productMap[String(t.product_id).toLowerCase().trim()] ?? t.product_id
-        const droptopOnHand = usageByKey.get(`${t.location_id}|${String(resolved).toLowerCase()}`)
-        if (droptopOnHand == null || t.on_hand == null) continue
-        const diff = Math.abs(t.on_hand - droptopOnHand)
-        const override = overrides.find((o) =>
-          o.location_id === t.location_id && o.product_id.toLowerCase() === String(resolved).toLowerCase()
-          && (o.tank_serials.length === 0 || (t.serial_rtu_id != null && o.tank_serials.includes(t.serial_rtu_id))),
-        )
-        const threshold = override?.variance_qts ?? config.tankVarianceThreshold
-        if (diff > threshold && !isExcluded('tank_variance', t.location_id, resolved)) {
-          flags.push({
-            location_id: t.location_id, product_id: resolved, check_type: 'tank_variance',
-            details: {
-              tank_on_hand: t.on_hand, droptop_on_hand: droptopOnHand, variance_qts: diff, threshold,
-              tank_serial: t.serial_rtu_id, raw_tank_product: t.product_id, override_applied: !!override,
-            },
-          })
-        }
-      }
+    // ── combine into the one-per-shop-per-type rows ──
+    const ops = reconcile(existing, computed, today, new Date().toISOString())
+    for (const part of chunked(ops.inserts.map((i) => ({ ...i, company_id: companyId, status: 'pending' })), 200)) {
+      const { error } = await inv().from('shop_exceptions').insert(part)
+      if (error) throw new Error(`Insert failed: ${error.message}`)
+    }
+    for (const part of chunked(ops.updates, 15)) {
+      const results = await Promise.all(part.map((u) => inv().from('shop_exceptions').update(u.patch).eq('id', u.id)))
+      const bad = results.find((r: any) => r.error)
+      if (bad) throw new Error(`Update failed: ${bad.error.message}`)
     }
 
-    // ── Write into exception_reports — skip anything already open for this
-    //    exact (location, product, check_type) so an ongoing issue doesn't
-    //    spawn a new row every run. ──
-    let created = 0
-    for (const f of flags) {
-      const { data: existing } = await (admin as any).schema('inventory').from('exception_reports')
-        .select('id')
-        .eq('company_id', companyId).eq('location_id', f.location_id).eq('report_type', 'Automated Check')
-        .filter('metadata->>check_type', 'eq', f.check_type)
-        .filter('metadata->>product_id', 'eq', f.product_id)
-        .not('status', 'in', '("Closed","Tentatively Closed")')
-        .maybeSingle()
-      if (existing) continue
-
-      const { error } = await (admin as any).schema('inventory').from('exception_reports').insert({
-        company_id: companyId,
-        location_id: f.location_id,
-        report_type: 'Automated Check',
-        issue: CHECK_LABELS[f.check_type] ?? f.check_type,
-        details: JSON.stringify(f.details),
-        date_of_finding: new Date().toISOString().slice(0, 10),
-        contacted: false,
-        status: 'Pending Shop/AM Response',
-        metadata: { source: 'automated', check_type: f.check_type, product_id: f.product_id, ...f.details },
-        last_change_source: 'automated_checks',
-      })
-      if (!error) created++
-    }
-
-    ;(admin as any).schema('inventory').from('data_connection_sync_log').insert({
+    const resolved = ops.updates.filter((u) => u.patch.status === 'resolved').length
+    const byType: Record<string, number> = {}
+    for (const k of computed.keys()) { const t = k.slice(k.indexOf('|') + 1); byType[t] = (byType[t] ?? 0) + 1 }
+    inv().from('data_connection_sync_log').insert({
       company_id: companyId, connection: 'automated_checks', started_at: new Date(startedAt).toISOString(),
-      duration_ms: Date.now() - startedAt, items_updated: created, items_unchanged: flags.length - created,
+      duration_ms: Date.now() - startedAt, items_updated: ops.inserts.length + ops.updates.length - resolved, items_unchanged: 0,
       status: 'success', error_message: null,
     }).then(() => {})
 
-    return ok({ success: true, checked: flags.length, created })
+    return ok({ success: true, shops_with_exceptions: new Set([...computed.keys()].map((k) => k.slice(0, k.indexOf('|')))).size, by_type: byType, created: ops.inserts.length, updated: ops.updates.length - resolved, resolved })
   } catch (err: unknown) {
     return ok({ error: err instanceof Error ? err.message : String(err) })
   }

@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom'
 export interface ComboboxOption {
   value: string
   label: string
+  /** Shown after the label in the list and on the selected value (e.g. status icons). */
+  suffix?: React.ReactNode
 }
 
 interface ComboboxProps {
@@ -204,8 +206,9 @@ export function Combobox({
         onClick={() => setOpen((v) => !v)}
         onKeyDown={handleTriggerKeyDown}
       >
-        <span className={`min-w-0 truncate ${value ? 'text-navy' : 'text-inky/70'}`}>
-          {value ? selectedLabel : placeholder}
+        <span className={`min-w-0 flex items-center gap-2 ${value ? 'text-navy' : 'text-inky/70'}`}>
+          <span className="truncate">{value ? selectedLabel : placeholder}</span>
+          {value && matched?.suffix}
         </span>
         <svg className={`text-inky flex-shrink-0 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -244,7 +247,7 @@ export function Combobox({
                     : 'text-navy',
               ].join(' ')}
             >
-              {opt.label}
+              {opt.suffix ? <span className="flex items-center justify-between gap-4"><span>{opt.label}</span>{opt.suffix}</span> : opt.label}
             </div>
           ))}
           {showCreate && (

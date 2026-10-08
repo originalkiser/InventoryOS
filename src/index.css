@@ -387,3 +387,19 @@ body {
   color: #F2F1E6 !important;
   background-color: #0D3555 !important;
 }
+
+/* Shop exception type colors — from the Exception Icon Set (light + dark variants). */
+:root {
+  --exc-po: #1c6fc2;
+  --exc-zero: #d0430b;
+  --exc-pos: #1b8a5a;
+  --exc-neg: #c2255c;
+  --exc-dup: #6741d9;
+}
+.dark {
+  --exc-po: #74b9ff;
+  --exc-zero: #ff8a5c;
+  --exc-pos: #5fdca0;
+  --exc-neg: #f06595;
+  --exc-dup: #9d7bff;
+}

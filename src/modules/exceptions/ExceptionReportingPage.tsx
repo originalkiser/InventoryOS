@@ -20,7 +20,8 @@ import { usePageRevisit } from '@/hooks/usePageActive'
 import { QuickResponseModal, type QuickResponseSeed } from './QuickResponseModal'
 import { refreshNavBadges } from '@/hooks/useNavBadges'
 import { ExceptionReportModal } from './ExceptionReportModal'
-import { AutomatedChecksPanel } from './AutomatedChecksPanel'
+import { TriagePanel } from './shopExceptions/TriagePanel'
+import { useShopExceptions } from './shopExceptions/useShopExceptions'
 import { PoReceiptAlertsTab } from './PoReceiptAlertsTab'
 // Table rewrite 2026-09-25 moved to its own file (ExceptionTable.tsx) — this
 // re-export keeps AutomatedChecksPanel.tsx's existing
@@ -115,11 +116,9 @@ export function ExceptionReportingPage() {
 
   // System-generated flags from run-automated-checks — same table, marked by
   // metadata.source, kept in their own tab rather than mixed into Reports.
-  const automatedRows = useMemo(() => rowsAll.filter((r) => (r.metadata as any)?.source === 'automated'), [rowsAll])
-  const automatedOpenCount = useMemo(
-    () => automatedRows.filter((r) => !(r.status ?? '').toLowerCase().includes('closed')).length,
-    [automatedRows],
-  )
+  // The Automated Checks tab is now the shop-exception triage (one card per shop per type) — its own table, inventory.shop_exceptions.
+  const { exceptions: shopExceptions } = useShopExceptions()
+  const automatedOpenCount = useMemo(() => shopExceptions.filter((e) => e.status === 'pending').length, [shopExceptions])
 
   // Placeholder tab (2026-09-16) for the RelaDyne open-order/invoice
   // reconciliation check (Orders v2's upload buttons) — its own
@@ -251,10 +250,7 @@ export function ExceptionReportingPage() {
           {loading ? (
             <div className="py-12 flex justify-center"><SbLoader size={36} /></div>
           ) : (
-            <AutomatedChecksPanel
-              rows={automatedRows} config={config} shopLabel={shopLabel} regionalDirector={regionalDirector}
-              companyId={profile?.company_id ?? null} onSet={set} onEdit={openEdit} onQuick={openQuick}
-            />
+            <TriagePanel />
           )}
         </TabsContent>
 

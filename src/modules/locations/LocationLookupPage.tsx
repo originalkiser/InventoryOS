@@ -25,6 +25,9 @@ import { resolveScheduleDescription, nextScheduledDelivery, daysBetween } from '
 import type { DeliverySchedule, WeekCalendar } from '@/modules/orders-v2/types'
 import { useLastOrderedInfo } from '@/modules/orders-v2/useLastOrderedInfo'
 import { uomDisplayLabel } from '@/modules/orders-v2/types'
+import { ShopExceptionsCard } from '@/modules/exceptions/shopExceptions/ShopExceptionsCard'
+import { ExceptionBadges } from '@/modules/exceptions/shopExceptions/shopExceptionTypes'
+import { useShopExceptions } from '@/modules/exceptions/shopExceptions/useShopExceptions'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useCustomShopConfig, useCustomShopConfigPackageOptions, formatFieldValue } from './useCustomShopConfig'
@@ -299,6 +302,7 @@ const LEFT_BOX_LABELS: ColItem[] = [
   { id: 'shop_details', label: 'Shop Details' },
   { id: 'issues', label: 'Issues' },
   { id: 'exceptions', label: 'Exception Reports' },
+  { id: 'inventory_exceptions', label: 'Inventory Exceptions' },
   { id: 'comms', label: 'Location Comms / Issues' },
   { id: 'custom_config', label: 'Custom Shop Config' },
   { id: 'mentioned', label: 'Mentioned In' },
@@ -332,7 +336,7 @@ const GRID_MARGIN: [number, number] = [16, 16]
 // instead of being grouped under one shared "Order Configuration" parent
 // (`order_config:<vendor name>`, computed at render time since the vendor
 // set is per-shop — see orderConfigBlocksByVendor/gridWidgetIds below).
-const FIXED_GRID_WIDGET_IDS = ['shop_details', 'tank_monitors', 'issues', 'exceptions', 'comms', 'custom_config', 'mentioned']
+const FIXED_GRID_WIDGET_IDS = ['shop_details', 'tank_monitors', 'issues', 'exceptions', 'inventory_exceptions', 'comms', 'custom_config', 'mentioned']
 // Human labels shown on each tile while editing (2026-09-28 ask — a blank
 // widget, e.g. an empty Mentioned In tile, is otherwise unidentifiable in
 // edit mode). Dynamic `order_config:<vendor>` ids (see above) aren't in this
@@ -343,6 +347,7 @@ const GRID_WIDGET_LABELS: Record<string, string> = {
   tank_monitors: 'Tank Monitors',
   issues: 'Issues',
   exceptions: 'Exception Reports',
+  inventory_exceptions: 'Inventory Exceptions',
   comms: 'Location Comms / Issues',
   custom_config: 'Custom Shop Config',
   mentioned: 'Mentioned In',
@@ -365,6 +370,7 @@ const FIXED_DEFAULT_GRID_LAYOUT: RGL.Layout[] = [
   { i: 'issues', x: 0, y: 18, w: 4, h: 7, minW: 3, minH: 3 },
   { i: 'exceptions', x: 0, y: 25, w: 4, h: 7, minW: 3, minH: 3 },
   { i: 'comms', x: 0, y: 32, w: 4, h: 7, minW: 3, minH: 3 },
+  { i: 'inventory_exceptions', x: 0, y: 53, w: 4, h: 8, minW: 3, minH: 3 },
   { i: 'custom_config', x: 0, y: 39, w: 4, h: 7, minW: 3, minH: 3 },
   { i: 'mentioned', x: 0, y: 46, w: 4, h: 6, minW: 3, minH: 3 },
   { i: 'tank_monitors', x: 4, y: 0, w: 8, h: 16, minW: 3, minH: 4 },
@@ -1571,10 +1577,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
 
   // Shop display + options use shop_city only ("234-Stockbridge") — no "### —" prefix.
   const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
+  // Each shop in the dropdown carries the icons of its pending inventory exceptions.
+  const { pendingByLocation: pendingExceptions } = useShopExceptions()
   const shopOptions = useMemo(
-    () => loc.locations.filter((l) => l.active && !loc.isExcluded(l)).map((l) => ({ value: l.id, label: l.shop_city || l.name }))
-      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
-    [loc.locations, loc.isExcluded],
+    () => loc.locations.filter((l) => l.active && !loc.isExcluded(l)).map((l) => {
+      const pend = pendingExceptions.get(l.id)
+      return { value: l.id, label: l.shop_city || l.name, suffix: pend?.length ? <ExceptionBadges list={pend} max={4} size={20} /> : undefined }
+    }).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
+    [loc.locations, loc.isExcluded, pendingExceptions],
   )
 
   function openIssues(view: 'pending' | 'resolved') { setModalView(view); setEditIssue(undefined); setIssuesModalOpen(true) }
@@ -2032,6 +2042,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           ),
           issues: <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} framed={!embedded} />,
           exceptions: <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} framed={!embedded} />,
+          inventory_exceptions: <ShopExceptionsCard locationId={shopId} framed={!embedded} />,
           comms: <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} framed={!embedded} />,
           custom_config: <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} framed={!embedded} />,
           mentioned: (
