@@ -30,10 +30,11 @@ const config: Config = {
         },
       },
       fontFamily: {
-        heading: ['"Chakra Petch"', 'sans-serif'],
-        body:    ['"DM Mono"', 'monospace'],
+        // Variable-backed so a user's font group (see src/hooks/useFontGroup.ts / index.css) can swap them; `brand` stays fixed.
+        heading: ['var(--font-heading)'],
+        body:    ['var(--font-body)'],
         brand:   ['"Chakra Petch"', 'sans-serif'],
-        mono:    ['"DM Mono"', 'monospace'],
+        mono:    ['var(--font-body)'],
       },
     },
   },

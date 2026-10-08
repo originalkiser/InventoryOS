@@ -130,6 +130,21 @@
   font-style: italic;
 }
 
+/* Font groups — the default is the brand pair; a user can pick a more readable group (Profile → Appearance, useFontGroup). */
+:root {
+  --font-heading: 'Chakra Petch', sans-serif;
+  --font-body: 'DM Mono', monospace;
+}
+html[data-font='clean'] {
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+html[data-font='plain'] {
+  --font-heading: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+/* Proportional text keeps table digits lined up. */
+html[data-font='clean'] body, html[data-font='plain'] body { font-variant-numeric: tabular-nums; }
+
 /* Brand colour tokens — light mode */
 :root {
   --color-navy:  0 39 69;      /* #002745 */
@@ -193,7 +208,7 @@ body {
   margin: 0;
   background-color: rgb(var(--color-cream));
   color: rgb(var(--color-navy));
-  font-family: 'DM Mono', monospace;
+  font-family: var(--font-body);
 }
 
 /* Scrollbar styling */

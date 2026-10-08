@@ -65,7 +65,7 @@ export const TYPE_META: Record<ShopExceptionType, TypeMeta> = {
   },
   duplicate_case: {
     label: 'Duplicate case types on hand', short: 'Duplicate case types', cssVar: '--exc-dup',
-    blurb: 'The same product is on hand under more than one case type. High when the quantities are within 40 qts of each other (likely the same stock counted twice), low when further apart.',
+    blurb: 'The same product is on hand under more than one case type. Only flagged when the quantities are close to each other (the tolerance in Settings, 40 qts by default) - likely the same stock counted twice.',
     big: '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M15.5 8.5v-2a2 2 0 00-2-2h-7a2 2 0 00-2 2v7a2 2 0 002 2h2"/>',
     small: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0014.5 4h-9A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H8"/>',
   },

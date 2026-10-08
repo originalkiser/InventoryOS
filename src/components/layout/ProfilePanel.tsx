@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
+import { FONT_GROUPS, useFontGroup } from '@/hooks/useFontGroup'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -59,6 +60,7 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   // pattern is applied directly here instead of converting to it.
   const dockedWidth = usePinnedPanelStore((s) => s.dockedWidth)
   const { dark, toggle } = useDarkMode()
+  const { group: fontGroup, setGroup: setFontGroup } = useFontGroup()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const isDev = isDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
@@ -216,6 +218,20 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                     dark ? 'translate-x-[18px]' : 'translate-x-0.5',
                   ].join(' ')} />
                 </button>
+              </div>
+              <div className="mt-3">
+                <div className="text-sm font-body text-navy dark:text-[#F2F1E6] mb-1.5">Font</div>
+                <div className="flex flex-col gap-1">
+                  {FONT_GROUPS.map((g) => (
+                    <label key={g.id} className="flex items-start gap-2 cursor-pointer">
+                      <input type="radio" name="font-group" className="mt-1 accent-sky" checked={fontGroup === g.id} onChange={() => setFontGroup(g.id)} />
+                      <span className="flex flex-col">
+                        <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">{g.label}</span>
+                        <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">{g.sample}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
               </div>
             </div>
 

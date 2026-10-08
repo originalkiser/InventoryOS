@@ -32,8 +32,8 @@ export function exceptionSummary(e: ShopException): string {
     case 'adj_negative': return `${n} adjustment${n === 1 ? '' : 's'} · ${sgn(e.items.reduce((s, i) => s + Number(i.qty ?? 0), 0))} qt`
     case 'po_late': return `${n} PO${n === 1 ? '' : 's'} · oldest ${Math.max(0, ...e.items.map((i) => Number(i.days_late ?? 0)))} days late`
     case 'duplicate_case': {
-      const close = e.items.filter((i) => i.severity === 3).length
-      return `${n} product famil${n === 1 ? 'y' : 'ies'}${close ? ` · ${close} within 40 qts` : ''}`
+      const worst = Math.max(0, ...e.items.map((i) => Number(i.diff ?? 0)))
+      return `${n} product famil${n === 1 ? 'y' : 'ies'} · within ${fmtN(worst)} qts of each other`
     }
   }
 }

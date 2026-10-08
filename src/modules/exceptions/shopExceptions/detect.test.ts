@@ -39,25 +39,32 @@ describe('large adjustments', () => {
     expect(r.negative.get('s1')!.map((i) => i.qty)).toEqual([-90])
     expect(r.positive.get('s2')).toHaveLength(1)
   })
+  it('can use a different threshold for negative adjustments', () => {
+    const rows = [act('s1', 'A', '2026-10-08', 0, -60), act('s1', 'B', '2026-10-08', 0, 60)]
+    const r = detectAdjustments({ activity: rows, threshold: 50, thresholdNegative: 100 })
+    expect(r.negative.size).toBe(0)
+    expect(r.positive.get('s1')).toHaveLength(1)
+  })
 })
 
 describe('duplicate case types on hand', () => {
   const configured = new Map([['s1', new Set(['5w30', 'rot-t4-15w40'])], ['s2', new Set(['5w30'])]])
   const run = (usage: { location_id: string; product_id: string; on_hands: number | null }[], mappings = new Map<string, string>()) =>
     detectDuplicates({ usage, configured, mappings, tolerance: 40 })
-  it('is HIGH when the quantities are within 40 qts of each other', () => {
+  it('flags (high) when the quantities are within 40 qts of each other', () => {
     const r = run([{ location_id: 's1', product_id: '5W30D', on_hands: 220 }, { location_id: 's1', product_id: '5W30BB', on_hands: 190 }])
     expect(r.get('s1')!.severity).toBe(3)
     expect(r.get('s1')!.items[0]).toMatchObject({ family: '5W30', diff: 30 })
   })
-  it('is LOW when they are further apart, and the exception takes its highest item', () => {
-    const low = run([{ location_id: 's1', product_id: '5W30D', on_hands: 400 }, { location_id: 's1', product_id: '5W30BB', on_hands: 100 }])
-    expect(low.get('s1')!.severity).toBe(1)
+  it('does not flag case types that are further apart, and keeps only the close family when a shop has both', () => {
+    const far = run([{ location_id: 's1', product_id: '5W30D', on_hands: 400 }, { location_id: 's1', product_id: '5W30BB', on_hands: 100 }])
+    expect(far.size).toBe(0)
     const mixed = run([
       { location_id: 's1', product_id: '5W30D', on_hands: 400 }, { location_id: 's1', product_id: '5W30BB', on_hands: 100 },
       { location_id: 's1', product_id: 'ROT-T4-15W40BB', on_hands: 50 }, { location_id: 's1', product_id: 'ROT-T4-15W40', on_hands: 60 },
     ])
-    expect(mixed.get('s1')!.items).toHaveLength(2)
+    expect(mixed.get('s1')!.items).toHaveLength(1)
+    expect(mixed.get('s1')!.items[0]).toMatchObject({ family: 'ROT-T4-15W40', diff: 10 })
     expect(mixed.get('s1')!.severity).toBe(3)
   })
   it('ignores a single case type, zero stock, unconfigured families, and folds a retired id into its replacement', () => {

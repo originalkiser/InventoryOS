@@ -5,7 +5,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppSetting } from '@/hooks/useAppSetting'
 import { useLocations } from '@/hooks/useLocations'
-import { Button, Card, CardBody, CardHeader, Combobox, Toggle } from '@/components/ui'
+import { Button, Card, CardBody, CardHeader, Combobox, MultiSelectDropdown, Toggle } from '@/components/ui'
+import { ExceptionTile, TYPE_META, TYPE_ORDER, type ShopExceptionType } from './shopExceptionTypes'
 
 interface ChecksConfig {
   adjustmentThreshold: number
@@ -16,8 +17,15 @@ interface ChecksConfig {
   trackFrom: string
   poMoveDaysLate: number
   poMoveDaysCreated: number
+  adjustmentThresholdNegative?: number
+  zeroOnHandRecentDays: number
+  categories: string[]
+  enabled: Partial<Record<ShopExceptionType, boolean>>
+  severity: Partial<Record<ShopExceptionType, number>>
 }
-const DEFAULT_CONFIG: ChecksConfig = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], trackFrom: '2026-10-07', poMoveDaysLate: 14, poMoveDaysCreated: 0 }
+const DEFAULT_CONFIG: ChecksConfig = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], trackFrom: '2026-10-07', poMoveDaysLate: 14, poMoveDaysCreated: 0, zeroOnHandRecentDays: 3, categories: ['Engine Oil', 'Engine Oil Additive'], enabled: {}, severity: {} }
+// Matches the Edge Function's own defaults (BASE_SEVERITY in detect.ts).
+const DEFAULT_SEVERITY: Record<ShopExceptionType, number> = { po_late: 2, zero_sales: 3, adj_positive: 2, adj_negative: 3, duplicate_case: 3 }
 const SUPPLIERS = ['RelaDyne', 'Valvoline']
 
 // check_type values the Edge Function reads exclusions with.
@@ -64,42 +72,66 @@ export function TriageSettings() {
     void load()
   }
   const num = (k: keyof ChecksConfig, v: string) => save({ ...cfg, [k]: Math.max(0, Number(v) || 0) })
+  const isOn = (t: ShopExceptionType) => cfg.enabled?.[t] ?? (t === 'zero_sales' ? cfg.zeroOnHandSaleEnabled : true)
+  const sevOf = (t: ShopExceptionType) => cfg.severity?.[t] ?? DEFAULT_SEVERITY[t]
+  // The categories on file (plus anything already selected) for the picker.
+  const [allCategories, setAllCategories] = useState<string[]>([])
+  useEffect(() => {
+    if (!companyId) return
+    void (async () => {
+      const { data } = await (supabase as any).rpc('get_product_usage_category_counts')
+      setAllCategories(((data ?? []) as { category: string }[]).map((r) => r.category).filter(Boolean).sort())
+    })()
+  }, [companyId])
+  const categoryOptions = [...new Set([...allCategories, ...(cfg.categories ?? [])])].sort().map((value) => ({ value }))
 
   return (
     <Card>
       <CardHeader><span className="text-xs font-mono text-navy uppercase tracking-wide">Thresholds & ignore list</span></CardHeader>
       <CardBody className="flex flex-col gap-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">Large adjustment (qts)
-            <input type="number" className={fieldCls} value={cfg.adjustmentThreshold} onChange={(e) => num('adjustmentThreshold', e.target.value)} />
-            <span className="normal-case tracking-normal text-inky/60">An adjustment bigger than this in a day, up or down.</span>
-          </label>
-          <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">Duplicate case types — "close" (qts)
-            <input type="number" className={fieldCls} value={cfg.duplicateToleranceQts} onChange={(e) => num('duplicateToleranceQts', e.target.value)} />
-            <span className="normal-case tracking-normal text-inky/60">Within this many qts of each other = high; further apart = low.</span>
-          </label>
-          <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">PO grace (days)
-            <input type="number" className={fieldCls} value={cfg.poGraceDays} onChange={(e) => num('poGraceDays', e.target.value)} />
-            <span className="normal-case tracking-normal text-inky/60">Days past the expected delivery before a PO is flagged.</span>
-          </label>
-          <div className="flex flex-col gap-1.5 text-[10px] font-mono text-inky uppercase tracking-wide">
-            Selling at zero on hand
-            <Toggle checked={cfg.zeroOnHandSaleEnabled} onChange={(v) => save({ ...cfg, zeroOnHandSaleEnabled: v })} color="green" size="sm" label={cfg.zeroOnHandSaleEnabled ? 'On' : 'Off'} />
-            <span className="mt-1">PO suppliers checked</span>
-            <div className="flex gap-3 normal-case tracking-normal">
-              {SUPPLIERS.map((s) => (
-                <label key={s} className="flex items-center gap-1.5 text-xs text-navy cursor-pointer">
-                  <input type="checkbox" className="accent-sky" checked={cfg.poSuppliers.includes(s)} onChange={(e) => save({ ...cfg, poSuppliers: e.target.checked ? [...new Set([...cfg.poSuppliers, s])] : cfg.poSuppliers.filter((x) => x !== s) })} />{s}
-                </label>
-              ))}
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Checks</span>
+          {TYPE_ORDER.map((t) => (
+            <div key={t} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-navy/15 px-3 py-2">
+              <span className="flex items-center gap-2 w-60 flex-none">
+                <ExceptionTile type={t} size={26} />
+                <span className="text-xs font-body font-bold text-navy">{TYPE_META[t].label}</span>
+              </span>
+              <Toggle checked={isOn(t)} onChange={(v) => save({ ...cfg, enabled: { ...cfg.enabled, [t]: v } })} color="green" size="sm" label={isOn(t) ? 'On' : 'Off'} />
+              <label className="flex items-center gap-1.5 text-[10px] font-mono text-inky uppercase tracking-wide">Priority
+                <select className={fieldCls} value={sevOf(t)} onChange={(e) => save({ ...cfg, severity: { ...cfg.severity, [t]: Number(e.target.value) } })}>
+                  <option value={3}>High</option><option value={2}>Medium</option><option value={1}>Low</option>
+                </select>
+              </label>
+              <span className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-navy ${isOn(t) ? '' : 'opacity-40 pointer-events-none'}`}>
+                {t === 'zero_sales' && <label className="flex items-center gap-1.5">Sold within the last <input type="number" className={`${fieldCls} w-16`} value={cfg.zeroOnHandRecentDays} onChange={(e) => num('zeroOnHandRecentDays', e.target.value)} /> days</label>}
+                {t === 'adj_positive' && <label className="flex items-center gap-1.5">More than <input type="number" className={`${fieldCls} w-20`} value={cfg.adjustmentThreshold} onChange={(e) => num('adjustmentThreshold', e.target.value)} /> qts up in a day</label>}
+                {t === 'adj_negative' && <label className="flex items-center gap-1.5">More than <input type="number" className={`${fieldCls} w-20`} value={cfg.adjustmentThresholdNegative ?? cfg.adjustmentThreshold} onChange={(e) => num('adjustmentThresholdNegative', e.target.value)} /> qts down in a day</label>}
+                {t === 'duplicate_case' && <label className="flex items-center gap-1.5">Only when within <input type="number" className={`${fieldCls} w-20`} value={cfg.duplicateToleranceQts} onChange={(e) => num('duplicateToleranceQts', e.target.value)} /> qts of each other</label>}
+                {t === 'po_late' && (
+                  <>
+                    <label className="flex items-center gap-1.5">Flag <input type="number" className={`${fieldCls} w-16`} value={cfg.poGraceDays} onChange={(e) => num('poGraceDays', e.target.value)} /> days after the expected delivery</label>
+                    {SUPPLIERS.map((sp) => (
+                      <label key={sp} className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" className="accent-sky" checked={cfg.poSuppliers.includes(sp)} onChange={(e) => save({ ...cfg, poSuppliers: e.target.checked ? [...new Set([...cfg.poSuppliers, sp])] : cfg.poSuppliers.filter((x) => x !== sp) })} />{sp}
+                      </label>
+                    ))}
+                  </>
+                )}
+              </span>
             </div>
-          </div>
+          ))}
         </div>
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">Track activity from
             <input type="date" className={fieldCls} value={cfg.trackFrom} onChange={(e) => e.target.value && save({ ...cfg, trackFrom: e.target.value })} />
             <span className="normal-case tracking-normal text-inky/60">Nothing dated before this is flagged: adjustments, sales at zero, and POs due before it.</span>
           </label>
+          <div className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">Product categories checked
+            <MultiSelectDropdown options={categoryOptions} selected={cfg.categories} onChange={(v) => v.length && save({ ...cfg, categories: v })} placeholder="Categories" showAllOption={false} countNoun="categories" />
+            <span className="normal-case tracking-normal text-inky/60">Adjustments and sales at zero only look at these (duplicates look at what each shop orders).</span>
+          </div>
           <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">Move a PO to Late POs after (days late)
             <input type="number" className={fieldCls} value={cfg.poMoveDaysLate} onChange={(e) => num('poMoveDaysLate', e.target.value)} />
             <span className="normal-case tracking-normal text-inky/60">0 = off. Counted from the expected delivery day.</span>
@@ -109,7 +141,7 @@ export function TriageSettings() {
             <span className="normal-case tracking-normal text-inky/60">0 = off. Whichever limit is hit first moves it. It leaves the shop's triage and goes to the Late POs - Not Received tab, where you close it.</span>
           </label>
         </div>
-        <p className="text-[10px] font-mono text-inky/60 -mt-2">Changes apply on the next run. Priorities are fixed: zero on hand and large negative adjustments are high, POs and large positive adjustments medium, duplicate case types high or low by quantity.</p>
+        <p className="text-[10px] font-mono text-inky/60 -mt-2">Every change here is read by the checks on their next run (Run checks now, or the Data Connections schedule). Turning a check off resolves its open exceptions on that run.</p>
 
         <div className="border-t border-navy/10 pt-3 flex flex-col gap-3">
           <span className="text-[10px] font-mono text-inky uppercase tracking-wide">Ignore list</span>

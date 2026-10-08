@@ -35,8 +35,12 @@ interface Config {
   trackFrom: string                // nothing dated before this is chased (YYYY-MM-DD)
   poMoveDaysLate: number           // a PO this many days late leaves the triage for the Late POs - Not Received list (0 = off)
   poMoveDaysCreated: number        // ...or this many days after it was created (0 = off)
+  adjustmentThresholdNegative?: number // qts - defaults to adjustmentThreshold
+  zeroOnHandRecentDays: number     // a product must have sold within this many days to count as "selling"
+  enabled: Partial<Record<ExceptionType, boolean>> // per-check on/off (zero_sales falls back to zeroOnHandSaleEnabled)
+  severity: Partial<Record<ExceptionType, number>> // per-check priority 1 low / 2 medium / 3 high
 }
-const DEFAULT_CONFIG: Config = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], categories: ['Engine Oil', 'Engine Oil Additive'], trackFrom: '2026-10-07', poMoveDaysLate: 14, poMoveDaysCreated: 0 }
+const DEFAULT_CONFIG: Config = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], categories: ['Engine Oil', 'Engine Oil Additive'], trackFrom: '2026-10-07', poMoveDaysLate: 14, poMoveDaysCreated: 0, zeroOnHandRecentDays: 3, enabled: {}, severity: {} }
 
 const isoToday = () => new Date().toISOString().slice(0, 10)
 const isoDaysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10)
@@ -88,6 +92,8 @@ Deno.serve(async (req) => {
     const config: Config = { ...DEFAULT_CONFIG, ...(settingRow?.value ?? {}) }
     if (!Array.isArray(config.poSuppliers)) config.poSuppliers = DEFAULT_CONFIG.poSuppliers
     if (!Array.isArray(config.categories) || !config.categories.length) config.categories = DEFAULT_CONFIG.categories
+    const on = (t: ExceptionType): boolean => config.enabled?.[t] ?? (t === 'zero_sales' ? config.zeroOnHandSaleEnabled : true)
+    const sev = (t: ExceptionType): number => { const v = Number(config.severity?.[t]); return v >= 1 && v <= 3 ? Math.round(v) : BASE_SEVERITY[t] }
 
     const today = isoToday()
     const yesterday = isoDaysAgo(1)
@@ -106,7 +112,7 @@ Deno.serve(async (req) => {
     const excludedFor = (checkType: string) => (loc: string, product: string) => isExcluded(exclusions, checkType, loc, product)
 
     const computed = new Map<string, Computed>()
-    const put = (type: ExceptionType, byLocation: Map<string, ExceptionItem[]>, severity = BASE_SEVERITY[type]) => {
+    const put = (type: ExceptionType, byLocation: Map<string, ExceptionItem[]>, severity = sev(type)) => {
       for (const [loc, items] of byLocation) if (shopIds.has(loc) && items.length) computed.set(`${loc}|${type}`, { severity, items })
     }
 
@@ -116,13 +122,14 @@ Deno.serve(async (req) => {
 
     // ── ledger: large adjustments (only the big ones are read — the ledger is ~245k rows a month) ──
     const t = Math.abs(config.adjustmentThreshold)
-    const bigAdjustments = (await pageAll<ActivityRow>(() => inv().from('daily_product_activity')
+    const tNeg = Math.abs(config.adjustmentThresholdNegative ?? config.adjustmentThreshold)
+    const bigAdjustments = !(on('adj_positive') || on('adj_negative')) ? [] : (await pageAll<ActivityRow>(() => inv().from('daily_product_activity')
       .select('location_id, product_id, activity_date, sold_qty, adjusted_qty').eq('company_id', companyId)
-      .in('category', config.categories).gte('activity_date', trackFrom).lte('activity_date', yesterday).or(`adjusted_qty.gt.${t},adjusted_qty.lt.-${t}`).order('id'))).filter((r) => shopIds.has(r.location_id))
+      .in('category', config.categories).gte('activity_date', trackFrom).lte('activity_date', yesterday).or(`adjusted_qty.gt.${t},adjusted_qty.lt.-${tNeg}`).order('id'))).filter((r) => shopIds.has(r.location_id))
 
-    const adj = detectAdjustments({ activity: bigAdjustments, threshold: config.adjustmentThreshold, excluded: excludedFor('abnormal_adjustment') })
-    put('adj_positive', adj.positive)
-    put('adj_negative', adj.negative)
+    const adj = detectAdjustments({ activity: bigAdjustments, threshold: config.adjustmentThreshold, thresholdNegative: config.adjustmentThresholdNegative, excluded: excludedFor('abnormal_adjustment') })
+    if (on('adj_positive')) put('adj_positive', adj.positive)
+    if (on('adj_negative')) put('adj_negative', adj.negative)
 
     // Order-config families (what each shop actually orders) and old→new product ids — duplicate detection and the usage lookup both need them.
     const cfgRows = await pageAll<{ location_id: string; product_id: string }>(() => inv().from('location_order_config').select('location_id, product_id').eq('company_id', companyId).order('id'))
@@ -141,28 +148,28 @@ Deno.serve(async (req) => {
     // One set-based call for the on hand of every configured family (duplicate case types).
     const wanted = [...families].filter(Boolean)
     const usageRows: { location_id: string; product_id: string; on_hands: number | null }[] = []
-    for (const part of chunked(wanted, 150)) {
+    for (const part of on('duplicate_case') ? chunked(wanted, 150) : []) {
       const { data, error } = await admin.rpc('get_ov2_usage_for_families', { p_families: part })
       if (error) throw new Error(`Usage lookup failed: ${error.message}`)
       usageRows.push(...((data ?? []) as any[]))
     }
 
-    if (config.zeroOnHandSaleEnabled) {
+    if (on('zero_sales')) {
       // Sales of products at zero on hand that sold in the last 3 days — joined in the database (get_zero_on_hand_sales).
-      const { data: zeroRows, error: zeroErr } = await admin.rpc('get_zero_on_hand_sales', { p_from: trackFrom, p_recent_from: isoDaysAgo(3) > trackFrom ? isoDaysAgo(3) : trackFrom, p_categories: config.categories })
+      const { data: zeroRows, error: zeroErr } = await admin.rpc('get_zero_on_hand_sales', { p_from: trackFrom, p_recent_from: isoDaysAgo(Math.max(1, config.zeroOnHandRecentDays)) > trackFrom ? isoDaysAgo(Math.max(1, config.zeroOnHandRecentDays)) : trackFrom, p_categories: config.categories })
       if (zeroErr) throw new Error(`Zero-on-hand lookup failed: ${zeroErr.message}`)
       const zero = ((zeroRows ?? []) as (ActivityRow & { on_hands: number | null })[]).filter((r) => shopIds.has(r.location_id))
       const onHand = new Map<string, number | null>(zero.map((r) => [`${r.location_id}|${String(r.product_id).toLowerCase()}`, r.on_hands]))
       const prior = new Map<string, ExceptionItem[]>(existing.filter((e) => e.type === 'zero_sales').map((e) => [e.location_id, e.items ?? []]))
-      put('zero_sales', detectZeroSales({ activity: zero, onHand, prior, today, excluded: excludedFor('zero_on_hand_sale') }))
+      put('zero_sales', detectZeroSales({ activity: zero, onHand, prior, today, recentDays: Math.max(1, config.zeroOnHandRecentDays), excluded: excludedFor('zero_on_hand_sale') }))
     }
 
-    const dups = detectDuplicates({ usage: usageRows.filter((u) => shopIds.has(u.location_id)), configured, mappings, tolerance: config.duplicateToleranceQts, excluded: excludedFor('duplicate_case_types') })
-    for (const [loc, d] of dups) computed.set(`${loc}|duplicate_case`, { severity: d.severity, items: d.items })
+    const dups = !on('duplicate_case') ? new Map() : detectDuplicates({ usage: usageRows.filter((u) => shopIds.has(u.location_id)), configured, mappings, tolerance: config.duplicateToleranceQts, excluded: excludedFor('duplicate_case_types') })
+    for (const [loc, d] of dups) computed.set(`${loc}|duplicate_case`, { severity: sev('duplicate_case'), items: d.items })
 
     // ── POs that should have delivered ──
     let movedToList = 0
-    if (config.poSuppliers.length) {
+    if (on('po_late') && config.poSuppliers.length) {
       const { data: vendorRows } = await inv().from('vendors').select('id, name').eq('company_id', companyId)
       const vendors = ((vendorRows ?? []) as { id: string; name: string }[]).filter((v) => config.poSuppliers.some((s) => v.name.toLowerCase().includes(s.toLowerCase())))
       const vendorOfSupplier = (supplier: string | null) => {

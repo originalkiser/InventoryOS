@@ -4,8 +4,8 @@
 
 export type ExceptionType = 'po_late' | 'zero_sales' | 'adj_positive' | 'adj_negative' | 'duplicate_case'
 export const SEVERITY = { low: 1, medium: 2, high: 3 } as const
-/** Severity a type carries on its own; duplicate_case is decided per item (see detectDuplicates). */
-export const BASE_SEVERITY: Record<ExceptionType, number> = { po_late: 2, zero_sales: 3, adj_positive: 2, adj_negative: 3, duplicate_case: 1 }
+/** The default priority of each type (Settings can override it per type). */
+export const BASE_SEVERITY: Record<ExceptionType, number> = { po_late: 2, zero_sales: 3, adj_positive: 2, adj_negative: 3, duplicate_case: 3 }
 
 export interface ExceptionItem { key: string; [field: string]: unknown }
 export interface Computed { severity: number; items: ExceptionItem[] }
@@ -159,12 +159,12 @@ export function detectZeroSales(input: {
 // ── 2/3. large adjustments ──────────────────────────────────────────────────────────────────────────────────────────
 /** One item per product per day whose adjustment is bigger than the threshold (events, so they accumulate on the one card). */
 export function detectAdjustments(input: {
-  activity: ActivityRow[]; threshold: number; excluded?: (locationId: string, productId: string) => boolean
+  activity: ActivityRow[]; threshold: number; thresholdNegative?: number; excluded?: (locationId: string, productId: string) => boolean
 }): { positive: Map<string, ExceptionItem[]>; negative: Map<string, ExceptionItem[]> } {
   const positive = new Map<string, ExceptionItem[]>(), negative = new Map<string, ExceptionItem[]>()
   for (const r of input.activity) {
     const q = Number(r.adjusted_qty)
-    if (!Number.isFinite(q) || Math.abs(q) <= input.threshold) continue
+    if (!Number.isFinite(q) || Math.abs(q) <= (q < 0 ? input.thresholdNegative ?? input.threshold : input.threshold)) continue
     if (input.excluded?.(r.location_id, r.product_id)) continue
     const target = q > 0 ? positive : negative
     if (!target.has(r.location_id)) target.set(r.location_id, [])
@@ -177,8 +177,8 @@ export function detectAdjustments(input: {
 // ── 4. duplicate case types on hand ─────────────────────────────────────────────────────────────────────────────────
 /**
  * Two or more case types of the same product (5W30D + 5W30BB) holding stock at one shop. Only families the shop actually orders (configured)
- * are checked. High severity when their quantities are within `tolerance` qts of each other (likely the same stock counted twice), low when
- * they're further apart (probably real, but worth knowing). A retired id is folded into its replacement first, same as everywhere else.
+ * are checked, and only when their quantities are within `tolerance` qts of each other (likely the same stock counted twice) - case types
+ * further apart than that are probably real stock and are not flagged. A retired id is folded into its replacement first, same as everywhere else.
  */
 export function detectDuplicates(input: {
   usage: { location_id: string; product_id: string; on_hands: number | null }[]
@@ -208,7 +208,8 @@ export function detectDuplicates(input: {
     const members = [...fam.values()].sort((a, b) => b.on_hand - a.on_hand)
     if (members.some((m) => input.excluded?.(loc, m.product_id))) continue
     const diff = members[0].on_hand - members[members.length - 1].on_hand
-    const severity = diff <= input.tolerance ? SEVERITY.high : SEVERITY.low
+    if (diff > input.tolerance) continue
+    const severity = SEVERITY.high
     const entry = out.get(loc) ?? { severity: 0, items: [] }
     entry.items.push({
       key: family, family: baseProductId(members[0].product_id).toUpperCase(),
