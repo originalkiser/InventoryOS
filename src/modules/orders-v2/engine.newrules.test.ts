@@ -319,6 +319,22 @@ describe('Valvoline: always list configured products + spread case-type minimum 
     expect(res.lines.every((l) => l.included)).toBe(true)
   })
 
+  it('a shop with NOTHING due is never topped up to the case minimum (it only lists its products at qty 0)', () => {
+    const mk = (id: string) => input({ product_id: id, on_hand: 500, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 10000 } })
+    const c = ctx({
+      settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
+      vendor: {
+        vendor_id: 'V1', minimums: { package: dollars(0) }, caseTypeMinimums: { bay_box: 6 },
+        usesOrderDays: false, alwaysListConfiguredProducts: true, spreadCaseTypeMinimum: true,
+      },
+    })
+    const res = generateOrder([mk('A'), mk('B'), mk('C')], c)
+    expect(res.lines.map((l) => l.qty)).toEqual([0, 0, 0])
+    expect(res.lines.every((l) => !l.included)).toBe(true)
+    expect(res.lines.some((l) => l.flags.includes('case_minimum_topup'))).toBe(false)
+    expect(res.groups[0].meetsMinimum).toBe(true)
+  })
+
   it('spreadCaseTypeMinimum: makes no changes at all when the minimum is not reachable, just flags it', () => {
     // Combined hard capacity across all 3 tops out at 3 — 6 is never reachable.
     const a = input({ product_id: 'A', on_hand: 60, daily_usage: 5, rule: { uom: 'bay_box', unit_cost: 50, max_capacity_gallons: 65 } })
@@ -361,6 +377,12 @@ describe('Valvoline: dollar-minimum smoothing does not duplicate an always-liste
     product_id: 'B', on_hand: 100, daily_usage: 5,
     rule: { uom: 'case', unit_cost: 100, units_per_uom_gallons: 5, max_capacity_gallons: 115 },
   })
+  // A genuinely due product already at its capacity (1 case, $100): the shop has a real order to smooth up. A shop with nothing due isn't
+  // smoothed at all (see 'a shop with NOTHING due' above), so these scenarios need one.
+  const dueD = () => input({
+    product_id: 'D', on_hand: 10, daily_usage: 5,
+    rule: { uom: 'case', unit_cost: 100, units_per_uom_gallons: 5, max_capacity_gallons: 15 },
+  })
 
   it('does not create a second line when part (a) maxes the placeholder out and the minimum is still short', () => {
     const c = ctx({
@@ -370,7 +392,7 @@ describe('Valvoline: dollar-minimum smoothing does not duplicate an always-liste
         usesOrderDays: false, alwaysListConfiguredProducts: true,
       },
     })
-    const res = generateOrder([spareB()], c)
+    const res = generateOrder([dueD(), spareB()], c)
     const bLines = res.lines.filter((l) => l.product_id === 'B')
     expect(bLines).toHaveLength(1)
     expect(bLines[0].qty).toBe(3) // capped at capacity, not the fictitious 3+3
@@ -382,11 +404,11 @@ describe('Valvoline: dollar-minimum smoothing does not duplicate an always-liste
     const c = ctx({
       settings: { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 14, days_of_supply_target: 13 },
       vendor: {
-        vendor_id: 'V1', minimums: { package: dollars(150) }, caseTypeMinimums: {},
+        vendor_id: 'V1', minimums: { package: dollars(250) }, caseTypeMinimums: {},
         usesOrderDays: false, alwaysListConfiguredProducts: true,
       },
     })
-    const res = generateOrder([spareB()], c)
+    const res = generateOrder([dueD(), spareB()], c)
     const bLines = res.lines.filter((l) => l.product_id === 'B')
     expect(bLines).toHaveLength(1)
     expect(bLines[0].qty).toBe(2) // partial top-up, below its own capacity of 3

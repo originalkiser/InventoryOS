@@ -94,6 +94,11 @@ async function fetchAllChunkedIn<T>(schema: string, table: string, select: strin
 
 // ── Module settings ─────────────────────────────────────────────────────
 
+// Every useOrderSettings() instance holds its own copy of the settings. Saving from the Order Settings window used to update only that
+// window's copy, so the Review page kept generating with the OLD settings until the page was reloaded (a just-enabled Order Timing hold
+// did nothing on Regenerate). A saved change is now broadcast to every instance.
+const ORDER_SETTINGS_SAVED_EVENT = 'ov2-order-settings-saved'
+
 export function useOrderSettings() {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null
@@ -126,6 +131,11 @@ export function useOrderSettings() {
     setLoading(false)
   }, [companyId])
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const onSaved = (e: Event) => { const d = (e as CustomEvent<OrderSettings>).detail; if (d) setSettings(d) }
+    window.addEventListener(ORDER_SETTINGS_SAVED_EVENT, onSaved)
+    return () => window.removeEventListener(ORDER_SETTINGS_SAVED_EVENT, onSaved)
+  }, [])
 
   const save = useCallback(async (next: OrderSettings) => {
     if (!companyId) return
@@ -134,6 +144,7 @@ export function useOrderSettings() {
       .upsert({ ...next, company_id: companyId, updated_by: profile?.id ?? null, updated_at: new Date().toISOString() },
         { onConflict: 'company_id' })
     if (error) { toast.error(error.message); return }
+    window.dispatchEvent(new CustomEvent(ORDER_SETTINGS_SAVED_EVENT, { detail: next }))
     toast.success('Order settings saved')
   }, [companyId, profile?.id])
 

@@ -10,6 +10,7 @@ const sched = (a: number | null, b: number | null): DeliverySchedule => ({ type:
 const schedules = new Map<string, DeliverySchedule>([
   ['b-tue', sched(null, 2)], // shop 12: B-week Tuesday
   ['a-tue', sched(2, null)], // shop 100: A-week Tuesday
+  ['a-thu', sched(4, null)], // shop 7: A-week Thursday
   ['weekly', { type: 'weekly', delivery_dow: 2, week_a_dow: null, week_b_dow: null, biweekly_anchor_date: null, lead_business_days: 4 }],
 ])
 const run = (orderDate: string, cadenceDays = 7, ids = ['b-tue', 'a-tue', 'weekly', 'none']) => shopsToHold({ orderDate, cadenceDays, schedules, calendar: cal, locationIds: ids })
@@ -20,6 +21,11 @@ describe('shopsToHold', () => {
     expect(held.map((h) => h.location_id)).toEqual(['b-tue'])
     expect(held[0].delivery).toBe('2026-10-27')
     expect(held[0].next_order_date).toBe('2026-10-15')
+  })
+  it('shop 7 (A-week Thursday, delivers 10/22) can be ordered next week and still get 10/22 — held on Thu 10/8', () => {
+    const held = run('2026-10-08', 7, ['a-thu'])
+    expect(held).toHaveLength(1)
+    expect(held[0].delivery).toBe('2026-10-22')
   })
   it('Thu 10/15 is the last chance for 10/27, so the B shop is ordered then', () => {
     // order 10/15 lands 10/27; waiting to 10/22 would slip to 11/10

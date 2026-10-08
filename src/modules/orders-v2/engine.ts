@@ -1130,6 +1130,14 @@ export function generateOrder(rawInputs: GenerationInput[], ctx: GenerationConte
     // minimum in Pass 1, one case only).
     const spares = (eligibleSpare.get(key) ?? []).filter((sp) => resolvedOrderType(sp.rule) === order_type && hasUsage(sp))
 
+    // Nothing due at this shop (the group is only the always-list qty-0 placeholders): there is no order, so no minimum to satisfy and
+    // nothing to smooth toward. Without this the bay-box floor "topped up" every shop with nothing due to 6 boxes — ordering 2-2-2 for
+    // shops sitting at 55-380 days of supply.
+    if (ctx.vendor.alwaysListConfiguredProducts && !lines.some((l) => l.included && n(l.qty) > 0)) {
+      groups.push({ location_id, order_type, lines, dollars: 0, minimum: 0, meetsMinimum: true, smoothingApplied: false })
+      continue
+    }
+
     // Valvoline drum alone: a group whose ordered lines are all drums is complete as it stands — no bay-box floor, no smoothing,
     // no "under minimum" (the bay boxes at this shop simply aren't being ordered).
     if (ctx.vendor.drumOrderedAlone) {
