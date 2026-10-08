@@ -194,7 +194,7 @@ export function ExceptionReportingPage() {
             <TabsTrigger value="reports">Reports</TabsTrigger>
             <TabsTrigger value="automated">Automated Checks{automatedOpenCount > 0 ? ` (${automatedOpenCount})` : ''}</TabsTrigger>
             <TabsTrigger value="test_auto">Test - AutoExceptions{testAutoOpenCount > 0 ? ` (${testAutoOpenCount})` : ''}</TabsTrigger>
-            {config.poAlertsEnabled && <TabsTrigger value="po_alerts">Late PO Receipts</TabsTrigger>}
+            {config.poAlertsEnabled && <TabsTrigger value="po_alerts">Late POs - Not Received</TabsTrigger>}
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </div>
         </div>

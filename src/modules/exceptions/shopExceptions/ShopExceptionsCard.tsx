@@ -5,10 +5,11 @@ import { SbLoader } from '@/components/ui'
 import { exceptionSummary } from './describeException'
 import { SeverityPill } from './ExceptionCard'
 import { ExceptionSequenceModal } from './ExceptionSequenceModal'
+import { ExceptionHoverTip } from './ExceptionHoverTip'
 import { ExceptionTile, TYPE_META, sortExceptions } from './shopExceptionTypes'
 import { useShopExceptions } from './useShopExceptions'
 
-export function ShopExceptionsCard({ locationId, framed }: { locationId: string; framed?: boolean }) {
+export function ShopExceptionsCard({ locationId, framed, view = 'list' }: { locationId: string; framed?: boolean; view?: 'list' | 'icons' }) {
   const { exceptions, loading } = useShopExceptions()
   const [startAt, setStartAt] = useState<number | null>(null)
   const pending = useMemo(() => exceptions.filter((e) => e.location_id === locationId && e.status === 'pending').sort(sortExceptions), [exceptions, locationId])
@@ -34,16 +35,30 @@ export function ShopExceptionsCard({ locationId, framed }: { locationId: string;
           <span className="flex items-center gap-2 text-xs font-body text-inky/60"><Check className="w-4 h-4 text-[#27A860]" />Nothing pending triage{handled ? ` · ${handled} handled` : ''}</span>
         ) : (
           <>
-            {pending.map((e, i) => (
-              <button key={e.id} type="button" onClick={() => setStartAt(i)} title={`${TYPE_META[e.type].label}: ${exceptionSummary(e)}`}
-                className="flex items-center gap-2.5 text-left rounded-lg border border-navy/15 bg-cream/70 hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
-                <ExceptionTile type={e.type} size={30} />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs font-body font-bold text-navy truncate">{TYPE_META[e.type].short}</span>
-                  <span className="block text-[10px] font-mono text-inky truncate">{exceptionSummary(e)}</span>
-                </span>
-                <SeverityPill severity={e.severity} />
-              </button>
+            {view === 'icons' ? (
+              <div className="flex flex-wrap gap-2">
+                {pending.map((e, i) => (
+                  <ExceptionHoverTip key={e.id} e={e}>
+                    <button type="button" onClick={() => setStartAt(i)} aria-label={`${TYPE_META[e.type].label}: ${exceptionSummary(e)}`}
+                      className="relative rounded-lg hover:ring-2 hover:ring-navy/30 transition-shadow">
+                      <ExceptionTile type={e.type} size={38} />
+                      <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-cream ${e.severity === 3 ? 'bg-[#C0392B]' : e.severity === 2 ? 'bg-[#E67E22]' : 'bg-inky'}`} />
+                    </button>
+                  </ExceptionHoverTip>
+                ))}
+              </div>
+            ) : pending.map((e, i) => (
+              <ExceptionHoverTip key={e.id} e={e} className="flex">
+                <button type="button" onClick={() => setStartAt(i)}
+                  className="flex-1 min-w-0 flex items-center gap-2.5 text-left rounded-lg border border-navy/15 bg-cream/70 hover:bg-navy/[0.06] transition-colors px-2 py-1.5">
+                  <ExceptionTile type={e.type} size={30} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs font-body font-bold text-navy truncate">{TYPE_META[e.type].short}</span>
+                    <span className="block text-[10px] font-mono text-inky truncate">{exceptionSummary(e)}</span>
+                  </span>
+                  <SeverityPill severity={e.severity} />
+                </button>
+              </ExceptionHoverTip>
             ))}
             {handled > 0 && <span className="text-[10px] font-mono text-inky/60">{handled} more handled (skipped, excused or logged)</span>}
           </>

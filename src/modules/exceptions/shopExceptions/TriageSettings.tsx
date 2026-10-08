@@ -13,8 +13,11 @@ interface ChecksConfig {
   duplicateToleranceQts: number
   poGraceDays: number
   poSuppliers: string[]
+  trackFrom: string
+  poMoveDaysLate: number
+  poMoveDaysCreated: number
 }
-const DEFAULT_CONFIG: ChecksConfig = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'] }
+const DEFAULT_CONFIG: ChecksConfig = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], trackFrom: '2026-10-07', poMoveDaysLate: 14, poMoveDaysCreated: 0 }
 const SUPPLIERS = ['RelaDyne', 'Valvoline']
 
 // check_type values the Edge Function reads exclusions with.
@@ -91,6 +94,20 @@ export function TriageSettings() {
               ))}
             </div>
           </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">Track activity from
+            <input type="date" className={fieldCls} value={cfg.trackFrom} onChange={(e) => e.target.value && save({ ...cfg, trackFrom: e.target.value })} />
+            <span className="normal-case tracking-normal text-inky/60">Nothing dated before this is flagged: adjustments, sales at zero, and POs due before it.</span>
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">Move a PO to Late POs after (days late)
+            <input type="number" className={fieldCls} value={cfg.poMoveDaysLate} onChange={(e) => num('poMoveDaysLate', e.target.value)} />
+            <span className="normal-case tracking-normal text-inky/60">0 = off. Counted from the expected delivery day.</span>
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] font-mono text-inky uppercase tracking-wide">...or after (days since created)
+            <input type="number" className={fieldCls} value={cfg.poMoveDaysCreated} onChange={(e) => num('poMoveDaysCreated', e.target.value)} />
+            <span className="normal-case tracking-normal text-inky/60">0 = off. Whichever limit is hit first moves it. It leaves the shop's triage and goes to the Late POs - Not Received tab, where you close it.</span>
+          </label>
         </div>
         <p className="text-[10px] font-mono text-inky/60 -mt-2">Changes apply on the next run. Priorities are fixed: zero on hand and large negative adjustments are high, POs and large positive adjustments medium, duplicate case types high or low by quantity.</p>
 

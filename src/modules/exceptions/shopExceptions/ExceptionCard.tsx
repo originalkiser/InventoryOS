@@ -16,7 +16,10 @@ export function StatusPill({ status }: { status: ShopException['status'] }) {
   return <span className={`text-[10px] font-mono font-bold uppercase tracking-wide ${tone}`}>{STATUS_LABEL[status]}</span>
 }
 
-const btn = 'inline-flex items-center justify-center gap-1.5 rounded border border-navy/30 px-2.5 py-1.5 text-[11px] font-mono uppercase tracking-wide text-navy hover:border-navy hover:bg-navy/5 transition-colors flex-1'
+const btnBase = 'inline-flex items-center justify-center gap-1.5 rounded border px-2.5 py-1.5 text-[11px] font-mono uppercase tracking-wide transition-colors flex-1'
+const btn = `${btnBase} border-navy/30 text-navy hover:border-navy hover:bg-navy/5`
+// Static sb-* tokens: the dynamic navy/cream flip in dark mode and left this button's text unreadable.
+const btnPrimary = `${btnBase} bg-sb-sky border-sb-sky text-sb-navy font-bold hover:brightness-95`
 
 export function ExceptionCard({ e, shopLabel, onSkip, onExcuse, onLog, onRestore }: {
   e: ShopException
@@ -64,7 +67,7 @@ export function ExceptionCard({ e, shopLabel, onSkip, onExcuse, onLog, onRestore
           <>
             <button type="button" className={btn} onClick={onSkip}><SkipForward className="w-3.5 h-3.5" />Skip</button>
             <button type="button" className={btn} onClick={onExcuse}><ShieldCheck className="w-3.5 h-3.5" />Excuse</button>
-            <button type="button" className={`${btn} bg-navy text-cream border-navy hover:bg-navy/90`} onClick={onLog}><Mail className="w-3.5 h-3.5" />Log</button>
+            <button type="button" className={btnPrimary} onClick={onLog}><Mail className="w-3.5 h-3.5" />Log</button>
           </>
         )}
         {(e.status === 'skipped' || e.status === 'excused') && (

@@ -90,7 +90,7 @@ interface IssueRow {
 // columns and the other options here are unchanged and stay device-local.
 /** How the order config table shows a combined on hand / usage: the number marked (bold, dotted underline) with the math on hover, or the combined products listed under it. */
 type CombinedDisplay = 'hover' | 'listed'
-interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean; boxesSideBySide?: boolean; combinedDisplay?: CombinedDisplay }
+interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean; boxesSideBySide?: boolean; combinedDisplay?: CombinedDisplay; exceptionsView?: 'list' | 'icons' }
 const CombinedDisplayContext = createContext<CombinedDisplay>('hover')
 
 // A tank monitor not reporting in > 2 days reads as offline (⚠ marker,
@@ -331,6 +331,11 @@ const ReactGridLayout = RGL.WidthProvider(RGLGridLayout)
 const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 24
 const GRID_MARGIN: [number, number] = [16, 16]
+// While NOT editing, the grid renders on a 10x finer row pitch (4px instead of 40px) so a card that hugs its content doesn't leave up to
+// a whole 40px row of empty space beneath it. The 16px gap between cards moves from the grid's margin into each item's own bottom padding.
+// Editing keeps the original coarse grid, which is the unit the saved layout is stored in.
+const FINE_K = 10
+const FINE_ROW_HEIGHT = 4
 // "order_config" is NOT one of these fixed ids (2026-09-28 ask) — each
 // vendor gets its own independent, separately draggable/resizable tile
 // instead of being grouped under one shared "Order Configuration" parent
@@ -935,9 +940,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
     try {
       const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}')
-      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false, boxesSideBySide: p.boxesSideBySide ?? false, combinedDisplay: p.combinedDisplay === 'listed' ? 'listed' : 'hover' }
+      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false, boxesSideBySide: p.boxesSideBySide ?? false, combinedDisplay: p.combinedDisplay === 'listed' ? 'listed' : 'hover', exceptionsView: p.exceptionsView === 'icons' ? 'icons' : 'list' }
     }
-    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false, boxesSideBySide: false, combinedDisplay: 'hover' } }
+    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false, boxesSideBySide: false, combinedDisplay: 'hover', exceptionsView: 'list' } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
   const toggleTankHidden = (id: string) =>
@@ -1729,11 +1734,14 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     setContentHeightPx((m) => (m[id] === px ? m : { ...m, [id]: px }))
   }, [])
   const renderGridLayout = useMemo(() => visibleGridLayout.map((l) => {
-    if (customizeOpen || !isShrinkEligible(l.i) || !isShrinkOn(l.i)) return l
+    if (customizeOpen) return l
+    const fine = { ...l, y: l.y * FINE_K, h: l.h * FINE_K, minH: l.minH != null ? l.minH * FINE_K : undefined, maxH: l.maxH != null ? l.maxH * FINE_K : undefined }
+    if (!isShrinkEligible(l.i) || !isShrinkOn(l.i)) return fine
     const px = contentHeightPx[l.i]
-    if (px == null) return l
-    const neededRows = Math.max(l.minH ?? 1, Math.ceil((px + GRID_MARGIN[1]) / (GRID_ROW_HEIGHT + GRID_MARGIN[1])))
-    return neededRows < l.h ? { ...l, h: neededRows } : l
+    if (px == null) return fine
+    // +2 for the frame's own border, + the gap that now lives in the item's bottom padding
+    const neededRows = Math.max(fine.minH ?? 1, Math.ceil((px + 2 + GRID_MARGIN[1]) / FINE_ROW_HEIGHT))
+    return neededRows < fine.h ? { ...fine, h: neededRows } : fine
   }), [visibleGridLayout, contentHeightPx, customizeOpen, isShrinkEligible, isShrinkOn])
 
   const visibleTankCols = TANK_COLS.filter((c) => !prefs.tank.includes(c.id))
@@ -1979,6 +1987,15 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   </label>
                 ))}
               </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-body text-navy">Inventory exceptions card</span>
+                {([['list', 'List — an icon row per exception with its summary'], ['icons', 'Icons only — hover an icon for the details']] as const).map(([val, text]) => (
+                  <label key={val} className="flex items-center gap-2 text-xs font-body text-navy/80 cursor-pointer pl-2">
+                    <input type="radio" name="exceptions-view" checked={(prefs.exceptionsView ?? 'list') === val} onChange={() => setPrefs((p) => ({ ...p, exceptionsView: val }))} className="accent-sky" />
+                    {text}
+                  </label>
+                ))}
+              </div>
               {(embedded || isMobile) && (
                 <label className="flex items-center gap-2 text-xs font-body text-navy cursor-pointer" title="Show Issues, Exception Reports, and Location Comms / Issues as a row instead of stacked">
                   <input type="checkbox" checked={!!prefs.boxesSideBySide} onChange={() => setPrefs((p) => ({ ...p, boxesSideBySide: !p.boxesSideBySide }))} className="accent-sky" />
@@ -2042,7 +2059,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
           ),
           issues: <IssuesColumn pending={pendingIssues} resolved={resolvedIssues} onManage={openIssues} framed={!embedded} />,
           exceptions: <ExceptionsBox exceptions={exceptions} onAdd={openAddException} onEdit={openEditException} framed={!embedded} />,
-          inventory_exceptions: <ShopExceptionsCard locationId={shopId} framed={!embedded} />,
+          inventory_exceptions: <ShopExceptionsCard locationId={shopId} framed={!embedded} view={prefs.exceptionsView ?? 'list'} />,
           comms: <CommsBox comms={comms} onAdd={openAddComm} onEdit={openEditComm} framed={!embedded} />,
           custom_config: <CustomConfigBox locationId={shopId} locationLabel={loc.labelOf(shopId)} framed={!embedded} />,
           mentioned: (
@@ -2241,8 +2258,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             className="layout"
             layout={renderGridLayout}
             cols={GRID_COLS}
-            rowHeight={GRID_ROW_HEIGHT}
-            margin={GRID_MARGIN}
+            rowHeight={customizeOpen ? GRID_ROW_HEIGHT : FINE_ROW_HEIGHT}
+            margin={customizeOpen ? GRID_MARGIN : [GRID_MARGIN[0], 0]}
             isDraggable={customizeOpen}
             isResizable={customizeOpen}
             draggableHandle=".widget-drag-handle"
@@ -2250,7 +2267,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             onLayoutChange={(l) => { if (customizeOpen) setPageGridLayout(l) }}
           >
             {visibleGridWidgetIds.map((id) => (
-              <div key={id} className="h-full">
+              <div key={id} className="h-full box-border" style={{ paddingBottom: customizeOpen ? 0 : GRID_MARGIN[1] }}>
                 <GridWidgetShell
                   editMode={customizeOpen}
                   label={widgetLabel(id)}

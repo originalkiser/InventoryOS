@@ -226,8 +226,21 @@ export interface OpenPo {
   id: string; location_id: string | null; po_id: string; custom_po_id: string | null; supplier_name: string | null
   created_timestamp: string | null; to_receive_timestamp: string | null; vendor_id: string | null
 }
-/** Open POs past their expected delivery by `graceDays` with no receipt activity on any line. */
+/** A late PO that has aged out of the shop's triage and belongs on the "Late POs - not received" list instead. */
+export interface MovedPo {
+  po_row_id: string; location_id: string; po_id: string; custom_po_id: string | null; supplier_name: string | null
+  created_timestamp: string | null; expected: string; days_late: number
+}
+/**
+ * Open POs past their expected delivery by `graceDays` with no receipt activity on any line. `notBefore` ignores POs expected before that
+ * date (nothing older is chased). A PO that is `moveAfterDaysLate` days late, or `moveAfterDaysCreated` days past its created date (0 = off),
+ * is pushed to `moved` instead of the triage.
+ */
 export function detectLatePos(input: {
+  notBefore?: string
+  moveAfterDaysLate?: number
+  moveAfterDaysCreated?: number
+  moved?: MovedPo[]
   pos: OpenPo[]
   received: Set<string>                          // PO row ids with any received quantity
   schedules: Map<string, Schedule>               // `${location_id}|${vendor_id}`
@@ -251,7 +264,13 @@ export function detectLatePos(input: {
     }
     if (!expected) continue // can't work out a delivery day — never guess
     const late = daysBetween(expected, input.today)
+    if (input.notBefore && expected < input.notBefore) continue
     if (late < input.graceDays) continue
+    const age = createdIso ? daysBetween(createdIso, input.today) : 0
+    if ((input.moveAfterDaysLate && late >= input.moveAfterDaysLate) || (input.moveAfterDaysCreated && age >= input.moveAfterDaysCreated)) {
+      input.moved?.push({ po_row_id: po.id, location_id: po.location_id, po_id: po.po_id, custom_po_id: po.custom_po_id, supplier_name: po.supplier_name, created_timestamp: po.created_timestamp, expected, days_late: late })
+      continue
+    }
     if (!out.has(po.location_id)) out.set(po.location_id, [])
     out.get(po.location_id)!.push({
       key: `${po.po_id}`, po: po.custom_po_id || po.po_id, po_row_id: po.id, supplier: po.supplier_name, ordered_on: orderedOn, expected, days_late: late,

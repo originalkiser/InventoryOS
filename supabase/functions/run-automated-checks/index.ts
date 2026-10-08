@@ -13,7 +13,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
   BASE_SEVERITY, baseProductId, detectAdjustments, detectDuplicates, detectLatePos, detectZeroSales, isExcluded, parseWeekday, reconcile,
-  type ActivityRow, type Computed, type ExceptionItem, type ExceptionType, type ExistingException, type OpenPo, type Schedule, type WeekCalendar,
+  type ActivityRow, type Computed, type ExceptionItem, type ExceptionType, type ExistingException, type MovedPo, type OpenPo, type Schedule, type WeekCalendar,
 } from './detect.ts'
 
 const CORS = {
@@ -32,11 +32,14 @@ interface Config {
   poGraceDays: number              // days past the expected delivery before a PO is flagged
   poSuppliers: string[]            // supplier names whose POs are checked
   categories: string[]             // product categories the ledger-based checks look at (Product Usage's own default scope)
+  trackFrom: string                // nothing dated before this is chased (YYYY-MM-DD)
+  poMoveDaysLate: number           // a PO this many days late leaves the triage for the Late POs - Not Received list (0 = off)
+  poMoveDaysCreated: number        // ...or this many days after it was created (0 = off)
 }
-const DEFAULT_CONFIG: Config = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], categories: ['Engine Oil', 'Engine Oil Additive'] }
-const LOOKBACK_DAYS = 30
+const DEFAULT_CONFIG: Config = { adjustmentThreshold: 50, zeroOnHandSaleEnabled: true, duplicateToleranceQts: 40, poGraceDays: 2, poSuppliers: ['RelaDyne', 'Valvoline'], categories: ['Engine Oil', 'Engine Oil Additive'], trackFrom: '2026-10-07', poMoveDaysLate: 14, poMoveDaysCreated: 0 }
 
 const isoToday = () => new Date().toISOString().slice(0, 10)
+const isoDaysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10)
 const chunked = <T,>(rows: T[], n: number): T[][] => { const out: T[][] = []; for (let i = 0; i < rows.length; i += n) out.push(rows.slice(i, i + n)); return out }
 
 Deno.serve(async (req) => {
@@ -87,7 +90,9 @@ Deno.serve(async (req) => {
     if (!Array.isArray(config.categories) || !config.categories.length) config.categories = DEFAULT_CONFIG.categories
 
     const today = isoToday()
-    const lookbackFrom = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10)
+    const yesterday = isoDaysAgo(1)
+    // Nothing before trackFrom is chased, so the adjustment / zero-sale windows start there (and a PO has to be due on or after it).
+    const trackFrom = /^d{4}-d{2}-d{2}$/.test(String(config.trackFrom)) ? String(config.trackFrom) : DEFAULT_CONFIG.trackFrom
 
     // Active corporate shops only — same rule Orders v2 uses (a closed shop or a franchisee isn't ours to chase).
     const locRows = await pageAll<any>(() => admin.schema('core').from('locations')
@@ -113,7 +118,7 @@ Deno.serve(async (req) => {
     const t = Math.abs(config.adjustmentThreshold)
     const bigAdjustments = (await pageAll<ActivityRow>(() => inv().from('daily_product_activity')
       .select('location_id, product_id, activity_date, sold_qty, adjusted_qty').eq('company_id', companyId)
-      .in('category', config.categories).gte('activity_date', lookbackFrom).or(`adjusted_qty.gt.${t},adjusted_qty.lt.-${t}`).order('id'))).filter((r) => shopIds.has(r.location_id))
+      .in('category', config.categories).gte('activity_date', trackFrom).lte('activity_date', yesterday).or(`adjusted_qty.gt.${t},adjusted_qty.lt.-${t}`).order('id'))).filter((r) => shopIds.has(r.location_id))
 
     const adj = detectAdjustments({ activity: bigAdjustments, threshold: config.adjustmentThreshold, excluded: excludedFor('abnormal_adjustment') })
     put('adj_positive', adj.positive)
@@ -144,7 +149,7 @@ Deno.serve(async (req) => {
 
     if (config.zeroOnHandSaleEnabled) {
       // Sales of products at zero on hand that sold in the last 3 days — joined in the database (get_zero_on_hand_sales).
-      const { data: zeroRows, error: zeroErr } = await admin.rpc('get_zero_on_hand_sales', { p_from: lookbackFrom, p_recent_from: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), p_categories: config.categories })
+      const { data: zeroRows, error: zeroErr } = await admin.rpc('get_zero_on_hand_sales', { p_from: trackFrom, p_recent_from: isoDaysAgo(3) > trackFrom ? isoDaysAgo(3) : trackFrom, p_categories: config.categories })
       if (zeroErr) throw new Error(`Zero-on-hand lookup failed: ${zeroErr.message}`)
       const zero = ((zeroRows ?? []) as (ActivityRow & { on_hands: number | null })[]).filter((r) => shopIds.has(r.location_id))
       const onHand = new Map<string, number | null>(zero.map((r) => [`${r.location_id}|${String(r.product_id).toLowerCase()}`, r.on_hands]))
@@ -156,6 +161,7 @@ Deno.serve(async (req) => {
     for (const [loc, d] of dups) computed.set(`${loc}|duplicate_case`, { severity: d.severity, items: d.items })
 
     // ── POs that should have delivered ──
+    let movedToList = 0
     if (config.poSuppliers.length) {
       const { data: vendorRows } = await inv().from('vendors').select('id, name').eq('company_id', companyId)
       const vendors = ((vendorRows ?? []) as { id: string; name: string }[]).filter((v) => config.poSuppliers.some((s) => v.name.toLowerCase().includes(s.toLowerCase())))
@@ -195,10 +201,22 @@ Deno.serve(async (req) => {
           calendars.get(r.vendor_id)!.set(String(r.week_start).slice(0, 10), r.week_label)
         }
       }
+      // A PO already on the Late POs list is done with the triage for good (people close those themselves).
+      const { data: listed } = await inv().from('po_receipt_alerts').select('location_id, po_id').eq('company_id', companyId)
+      const onList = new Set(((listed ?? []) as any[]).map((r) => `${r.location_id ?? ''}|${r.po_id}`))
+      const moved: MovedPo[] = []
       put('po_late', detectLatePos({
-        pos, received, schedules, calendars, weekdayByLocation, today, graceDays: config.poGraceDays,
-        isReladyne: (s) => /reladyne/i.test(s ?? ''),
+        pos: pos.filter((p) => !onList.has(`${p.location_id ?? ''}|${p.po_id}`)), received, schedules, calendars, weekdayByLocation, today, graceDays: config.poGraceDays,
+        isReladyne: (s) => /reladyne/i.test(s ?? ''), notBefore: trackFrom, moveAfterDaysLate: config.poMoveDaysLate, moveAfterDaysCreated: config.poMoveDaysCreated, moved,
       }))
+      for (const part of chunked(moved.filter((m) => shopIds.has(m.location_id)), 200)) {
+        const { error } = await inv().from('po_receipt_alerts').upsert(part.map((m) => ({
+          company_id: companyId, location_id: m.location_id, po_id: m.po_id, custom_po_id: m.custom_po_id, supplier_name: m.supplier_name,
+          po_created_at: m.created_timestamp, expected_delivery_date: m.expected, days_late: m.days_late, status: 'Pending Shop/AM Response', last_change_source: 'auto',
+        })), { onConflict: 'company_id,location_id,po_id', ignoreDuplicates: true })
+        if (error) throw new Error(`Late PO list insert failed: ${error.message}`)
+      }
+      movedToList = moved.length
     }
 
     // ── combine into the one-per-shop-per-type rows ──
@@ -222,7 +240,7 @@ Deno.serve(async (req) => {
       status: 'success', error_message: null,
     }).then(() => {})
 
-    return ok({ success: true, shops_with_exceptions: new Set([...computed.keys()].map((k) => k.slice(0, k.indexOf('|')))).size, by_type: byType, created: ops.inserts.length, updated: ops.updates.length - resolved, resolved })
+    return ok({ success: true, shops_with_exceptions: new Set([...computed.keys()].map((k) => k.slice(0, k.indexOf('|')))).size, by_type: byType, created: ops.inserts.length, updated: ops.updates.length - resolved, resolved, moved_to_late_po_list: movedToList })
   } catch (err: unknown) {
     return ok({ error: err instanceof Error ? err.message : String(err) })
   }

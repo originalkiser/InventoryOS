@@ -86,6 +86,26 @@ describe('POs that should have delivered', () => {
     const r = detectLatePos({ ...base, pos, received: new Set(['p3']) })
     expect(r.get('s1')!.map((i) => i.key).sort()).toEqual(['PO1', 'PO2'])
   })
+  it('ignores POs due before the track-from date', () => {
+    // expected 10/6, so a 10/7 floor drops it entirely
+    expect(detectLatePos({ ...base, notBefore: '2026-10-07', pos: [po({})] }).size).toBe(0)
+    expect(detectLatePos({ ...base, notBefore: '2026-10-06', pos: [po({})] }).get('s1')).toHaveLength(1)
+  })
+  it('moves a PO to the late list once it is N days late or N days old, instead of the triage', () => {
+    const moved: any[] = []
+    // 3 days late: a 3-day limit moves it; the triage gets nothing
+    expect(detectLatePos({ ...base, moveAfterDaysLate: 3, moved, pos: [po({})] }).size).toBe(0)
+    expect(moved).toHaveLength(1)
+    expect(moved[0]).toMatchObject({ po_id: 'PO1', location_id: 's1', expected: '2026-10-06', days_late: 3 })
+    // created 9/25, today 10/9 = 14 days old
+    const m2: any[] = []
+    expect(detectLatePos({ ...base, moveAfterDaysCreated: 14, moved: m2, pos: [po({})] }).size).toBe(0)
+    expect(m2).toHaveLength(1)
+    // limits not reached (or off) -> stays in the triage
+    const m3: any[] = []
+    expect(detectLatePos({ ...base, moveAfterDaysLate: 10, moveAfterDaysCreated: 30, moved: m3, pos: [po({})] }).get('s1')).toHaveLength(1)
+    expect(m3).toHaveLength(0)
+  })
   it('falls back to the RelaDyne weekday when the shop has no schedule', () => {
     const r = detectLatePos({ ...base, schedules: new Map(), pos: [po({ supplier_name: 'RelaDyne', custom_po_id: '1-09242026P' })] })
     expect(r.get('s1')![0]).toMatchObject({ expected: '2026-09-30' }) // next Wednesday after 9/24
