@@ -182,6 +182,7 @@ html[data-font='clean'] body, html[data-font='plain'] body { font-variant-numeri
   --color-page:  242 241 230;  /* #F2F1E6 */
   --color-pop:   255 255 255;  /* #FFFFFF */
   --color-soft:  232 231 216;  /* #E8E7D8 */
+  --color-band:  245 244 232;  /* #F5F4E8 — alternate table row */
   /* App chrome (Sidebar/TopBar) — kept as its own token (not folded back
      into the literal hex it replaced) in case a future light-mode variant
      is wanted again, but for now deliberately identical to .dark's values
@@ -200,6 +201,7 @@ html[data-font='clean'] body, html[data-font='plain'] body { font-variant-numeri
   --color-page:  0 26 47;      /* #001A2F — page */
   --color-pop:   5 48 79;      /* #05304F */
   --color-soft:  3 51 86;      /* #033356 */
+  --color-band:  3 47 82;      /* #032F52 */
   --color-inky:  143 184 200;  /* #8FB8C8 — secondary text, ~7:1 on the card surface */
   /* sky stays the same (#B7E0DE) — works as accent on both backgrounds */
   --chrome-bg: 0 39 69;       /* #002745 — same as :root's, chrome doesn't flip */
@@ -209,12 +211,14 @@ html[data-font='clean'] body, html[data-font='plain'] body { font-variant-numeri
 
 /* Legacy colors — the original palette, selected in Profile → Appearance → Colors. */
 html[data-colors='legacy'] {
+  --color-band:  236 235 216;
   --color-cream: 242 241 230;
   --color-page:  242 241 230;
   --color-pop:   255 255 255;
   --color-soft:  232 231 216;
 }
 html.dark[data-colors='legacy'] {
+  --color-band:  13 32 53;
   --color-navy:  196 218 230;
   --color-cream: 10 24 38;
   --color-page:  10 24 38;
@@ -222,6 +226,13 @@ html.dark[data-colors='legacy'] {
   --color-soft:  6 17 29;
   --color-inky:  106 154 178;
 }
+
+/* Scrollbars inside the new table grid: thin rounded thumb, no track. */
+.sb-grid-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
+.sb-grid-scroll::-webkit-scrollbar-track { background: transparent; }
+.sb-grid-scroll::-webkit-scrollbar-thumb { background: rgb(var(--color-inky) / 0.55); border-radius: 99px; border: 3.5px solid transparent; background-clip: padding-box; }
+.sb-grid-scroll::-webkit-scrollbar-thumb:hover { background: rgb(var(--color-inky)); background-clip: padding-box; }
+.sb-grid-scroll::-webkit-scrollbar-corner { background: transparent; }
 
 /* Hide native scrollbar on the app shell's main scroll container */
 .app-scroll::-webkit-scrollbar { display: none; }

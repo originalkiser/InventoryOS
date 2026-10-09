@@ -108,7 +108,7 @@ function SmartRedirect() {
     }
   }
 
-  return <Navigate to="/dashboard" replace />
+  return <Navigate to="/home" replace />
 }
 
 function RequireAdminOrDev({ children }: { children: React.ReactNode }) {

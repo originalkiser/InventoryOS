@@ -143,7 +143,7 @@ export function ColumnFilter<T>({ column }: { column: Column<T, unknown> }) {
         <div
           onClick={(e) => e.stopPropagation()}
           style={{ position: 'fixed', top: coords.top, left: coords.left }}
-          className="z-50 w-60 bg-cream border border-navy/30 rounded shadow-xl flex flex-col normal-case tracking-normal font-normal"
+          className="z-50 w-60 bg-pop border border-navy/25 rounded-xl shadow-[0_16px_40px_rgba(0,0,0,0.28)] flex flex-col normal-case tracking-normal font-normal"
         >
           {meta.numeric && (
             <div className="p-2 border-b border-navy/30 flex flex-col gap-1.5">

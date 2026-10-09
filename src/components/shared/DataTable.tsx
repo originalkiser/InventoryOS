@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { flexRender, type Row, type Table as TTable } from '@tanstack/react-table'
 import { Button, Input, Modal, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
+import { useTableStyle } from '@/hooks/useTableStyle'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -94,6 +95,18 @@ interface DataTableProps<T> {
    * "controlled component" shape as everything else here.
    */
   expandedRowRender?: (original: T) => React.ReactNode
+}
+
+/** Page buttons to show: first, last and the ones around the current page, with gaps as null. */
+function pageNumbers(current: number, count: number): (number | null)[] {
+  if (count <= 7) return Array.from({ length: count }, (_, i) => i)
+  const out: (number | null)[] = [0]
+  const from = Math.max(1, current - 1), to = Math.min(count - 2, current + 1)
+  if (from > 1) out.push(null)
+  for (let i = from; i <= to; i++) out.push(i)
+  if (to < count - 2) out.push(null)
+  out.push(count - 1)
+  return out
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -327,6 +340,8 @@ export function DataTable<T>({
 
   // ── Export dropdown ──────────────────────────────────────────────────────────
   const [exportOpen, setExportOpen] = useState(false)
+  const { style: tableStyle } = useTableStyle()
+  const grid = tableStyle === 'grid'
   const [exporting, setExporting] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
 
@@ -415,7 +430,7 @@ export function DataTable<T>({
           placeholder="Search..."
           value={globalFilter}
           onChange={(e) => onGlobalFilterChange(e.target.value)}
-          className={searchClassName ?? 'w-full sm:w-52'}
+          className={`${searchClassName ?? 'w-full sm:w-52'}${grid ? ' !rounded-full' : ''}`}
         />
 
         {/* Manage Columns — drag-reorder/pin/reset modal, same as Orders v2's
@@ -553,7 +568,7 @@ export function DataTable<T>({
       )}
 
       {/* Table */}
-      <div className={`overflow-auto rounded border border-inky/20 ${bodyMaxHeightClass ?? 'max-h-[calc(100vh-300px)]'}${mobileCards ? ' hidden sm:block' : ''}`}>
+      <div className={`overflow-auto ${grid ? 'sb-grid-scroll rounded-[14px] border-[1.5px] border-navy/20 bg-cream' : 'rounded border border-inky/20'} ${bodyMaxHeightClass ?? 'max-h-[calc(100vh-300px)]'}${mobileCards ? ' hidden sm:block' : ''}`}>
         <table
           className={`text-xs font-body table-fixed border-separate border-spacing-0${hasFill ? ' w-full' : ''}`}
           style={hasFill ? { minWidth: table.getTotalSize() + SEL_W } : { width: table.getTotalSize() + SEL_W }}
@@ -587,7 +602,7 @@ export function DataTable<T>({
                         : { position: 'relative' }),
                     }}
                     className={[
-                      'px-3 py-2 text-left text-[#F2F1E6] font-heading text-sm uppercase tracking-wide overflow-hidden border-b border-b-inky/20',
+                      grid ? 'px-3 py-2 text-left text-[#F2F1E6] font-heading text-[12px] font-semibold uppercase tracking-[0.09em] overflow-hidden border-b border-b-inky/20 border-r border-r-[#F2F1E6]/15' : 'px-3 py-2 text-left text-[#F2F1E6] font-heading text-sm uppercase tracking-wide overflow-hidden border-b border-b-inky/20',
                       header.column.getIsPinned() === 'left' ? 'bg-[#002745] border-r-2 border-r-inky/40' : '',
                     ].join(' ')}
                   >
@@ -637,15 +652,15 @@ export function DataTable<T>({
                 const tint = tone ? '' : rawTint
                 // A row with its own tint sits on a plain base: the zebra shade alternates by row, and a translucent tint
                 // over an alternating base would shift color row to row (visibly in the pinned columns).
-                const zebraClass = tone || rawTint || i % 2 === 0 ? 'bg-cream' : 'bg-[#ECEBD8] dark:bg-[#0D2035]'
-                const bandClass = selected ? 'bg-sky/15' : tone ? 'bg-cream' : tint || zebraClass
+                const zebraClass = tone || rawTint || i % 2 === 0 ? 'bg-cream' : (grid ? 'bg-band' : 'bg-[#ECEBD8] dark:bg-[#0D2035]')
+                const bandClass = selected ? (grid ? 'bg-sky/30' : 'bg-sky/15') : tone ? 'bg-cream' : tint || zebraClass
                 const padClass = density === 'compact' ? 'px-2 py-0.5' : 'px-3 py-2'
                 // Pinned cells must be fully opaque or scrolled columns show through them. The row's tint
                 // (selection, status color, ...) is often translucent, so a pinned cell gets the opaque zebra
                 // color as its own background and the tint is laid over it as a click-through overlay.
-                const pinnedOverlay = selected ? 'bg-sky/15' : rawTint
+                const pinnedOverlay = selected ? (grid ? 'bg-sky/30' : 'bg-sky/15') : rawTint
                 const rowBreak = getRowBottomBorder?.(row.original) ?? false
-                const borderB = rowBreak ? 'border-b-2 border-b-navy/45' : 'border-b border-inky/10'
+                const borderB = rowBreak ? 'border-b-2 border-b-navy/45' : (grid ? 'border-b border-b-navy/10' : 'border-b border-inky/10')
                 const expandedContent = expandedRowRender?.(row.original)
                 return (
                   <Fragment key={row.id}>
@@ -664,7 +679,7 @@ export function DataTable<T>({
                     } : undefined}
                     style={rowMinHeight ? { height: rowMinHeight } : undefined}
                     className={[
-                      'group hover:bg-sky/10 transition-colors',
+                      grid ? 'group hover:bg-sky/25 transition-colors' : 'group hover:bg-sky/10 transition-colors',
                       onRowClick ? 'cursor-pointer' : '',
                       bandClass,
                     ].join(' ')}
@@ -714,7 +729,7 @@ export function DataTable<T>({
                               : toneOnCell ? { position: 'relative', zIndex: 0 } : {}),
                           }}
                           className={[
-                            padClass, `text-navy ${borderB}`,
+                            padClass, `text-navy ${borderB}`, grid && !pinnedLeft ? 'border-r border-r-navy/10' : '',
                             noClip ? '' : 'whitespace-nowrap',
                             pinnedLeft ? `${zebraClass} border-r-2 border-r-inky/20` : '',
                             toneOnCell ? 'bg-cream' : '',
@@ -753,6 +768,31 @@ export function DataTable<T>({
             <span className="text-sky ml-2">· {selectedCount} selected</span>
           )}
         </span>
+        {grid ? (
+          <div className="flex items-center gap-3 flex-wrap">
+            <select
+              value={table.getState().pagination.pageSize >= 999999 ? 'all' : table.getState().pagination.pageSize}
+              onChange={(e) => { const v = e.target.value; table.setPageSize(v === 'all' ? 999999 : Number(v)); table.setPageIndex(0) }}
+              className="border-[1.5px] border-navy/25 rounded-lg px-2 py-1 text-xs font-body text-navy bg-cream focus:outline-none focus:border-inky"
+              aria-label="Rows per page"
+            >
+              {[25, 50, 100, 150, 200].map((n) => <option key={n} value={n}>{n} per page</option>)}
+              <option value="all">All</option>
+            </select>
+            <div className="flex items-center gap-1">
+              <button onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()} aria-label="Previous page"
+                className="h-7 min-w-[28px] px-2 rounded-full border-[1.5px] border-transparent text-xs hover:border-navy/25 disabled:opacity-35 disabled:hover:border-transparent">‹</button>
+              {pageNumbers(table.getState().pagination.pageIndex, table.getPageCount() || 1).map((p, k) => p === null
+                ? <span key={`g${k}`} className="px-1 text-inky">…</span>
+                : (
+                  <button key={p} onClick={() => table.setPageIndex(p)} aria-current={p === table.getState().pagination.pageIndex ? 'page' : undefined}
+                    className={`h-7 min-w-[28px] px-2 rounded-full border-[1.5px] text-xs ${p === table.getState().pagination.pageIndex ? 'bg-navy text-cream border-navy' : 'border-transparent hover:border-navy/25'}`}>{p + 1}</button>
+                ))}
+              <button onClick={() => table.nextPage()} disabled={!table.getCanNextPage()} aria-label="Next page"
+                className="h-7 min-w-[28px] px-2 rounded-full border-[1.5px] border-transparent text-xs hover:border-navy/25 disabled:opacity-35 disabled:hover:border-transparent">›</button>
+            </div>
+          </div>
+        ) : (
         <div className="flex items-center gap-2 flex-wrap">
           <select
             value={table.getState().pagination.pageSize >= 999999 ? 'all' : table.getState().pagination.pageSize}
@@ -786,6 +826,7 @@ export function DataTable<T>({
             Next ›
           </button>
         </div>
+        )}
       </div>
 
       {/* Danger zone — kept below the table (and away from the everyday toolbar)

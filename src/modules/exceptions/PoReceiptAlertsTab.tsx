@@ -35,6 +35,7 @@ import { DataTable } from '@/components/shared/DataTable'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { Button, SbLoader, Modal, Input, Toggle } from '@/components/ui'
 import { EditSelect, EditText } from '@/components/shared/InlineCells'
+import { StagedEdits } from '@/components/shared/StagedEdits'
 import { parseWeekday } from '@/lib/orderDay'
 import { nextDeliveryDate, daysBetween } from '@/modules/orders-v2/engine'
 import { EXCEPTION_STATUSES, DEFAULT_STATUS, type ExceptionConfig } from './exceptions'
@@ -228,11 +229,11 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
     }),
     col.accessor('status', {
       header: 'Status',
-      cell: (i) => <EditSelect value={i.getValue()} options={[...EXCEPTION_STATUSES]} onSave={(v) => update(i.row.original.id, { status: v ?? DEFAULT_STATUS })} />,
+      cell: (i) => <EditSelect value={i.getValue()} options={[...EXCEPTION_STATUSES]} stage={{ row: i.row.original.id, rowLabel: i.row.original.custom_po_id || i.row.original.po_id, field: 'Status' }} onSave={(v) => update(i.row.original.id, { status: v ?? DEFAULT_STATUS })} />,
     }),
     col.accessor('notes', {
       header: 'Notes',
-      cell: (i) => <EditText value={i.getValue()} onSave={(v) => update(i.row.original.id, { notes: v })} placeholder="Add a note…" />,
+      cell: (i) => <EditText value={i.getValue()} stage={{ row: i.row.original.id, rowLabel: i.row.original.custom_po_id || i.row.original.po_id, field: 'Notes' }} onSave={(v) => update(i.row.original.id, { notes: v })} placeholder="Add a note…" />,
     }),
     col.accessor('excluded', {
       header: 'Excluded', cell: (i) => i.getValue() ? <span className="text-inky/50">Yes</span> : '—',
@@ -280,6 +281,7 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
   if (!companyId) return null
 
   return (
+    <StagedEdits noun="edit">
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs font-body text-inky">
@@ -374,6 +376,7 @@ export function PoReceiptAlertsTab({ config }: { config: ExceptionConfig }) {
         onPinChange={(left) => setColumnPinning({ left, right: [] })}
       />
     </div>
+    </StagedEdits>
   )
 }
 

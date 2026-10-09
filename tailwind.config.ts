@@ -15,6 +15,7 @@ const config: Config = {
         page:  'rgb(var(--color-page) / <alpha-value>)',
         pop:   'rgb(var(--color-pop) / <alpha-value>)',
         soft:  'rgb(var(--color-soft) / <alpha-value>)',
+        band:  'rgb(var(--color-band) / <alpha-value>)',
         onyx:  '#000000',
         // App chrome (Sidebar/TopBar) — sky-blue bg/dark text in light mode,
         // the original always-dark navy bg/cream text under .dark. See

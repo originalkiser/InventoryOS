@@ -8,6 +8,7 @@ import { FONT_GROUPS, useFontGroup } from '@/hooks/useFontGroup'
 import { COLOR_THEMES, useColorTheme } from '@/hooks/useColorTheme'
 import { NAV_LAYOUTS, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
 import { PAGE_ANIMATIONS, usePageAnimation } from '@/hooks/usePageAnimation'
+import { TABLE_STYLES, useTableStyle } from '@/hooks/useTableStyle'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -68,6 +69,7 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { layout: navLayout, setLayout: setNavLayout } = useNavLayout()
   const [navAccordion, setNavAccordion] = useNavAccordion()
   const { animation: pageAnim, setAnimation: setPageAnim } = usePageAnimation()
+  const { style: tableStyle, setStyle: setTableStyle } = useTableStyle()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const isDev = isDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
@@ -251,6 +253,20 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                   {PAGE_ANIMATIONS.map((g) => (
                     <label key={g.id} className="flex items-start gap-2 cursor-pointer">
                       <input type="radio" name="page-anim" className="mt-1 accent-sky" checked={pageAnim === g.id} onChange={() => setPageAnim(g.id)} />
+                      <span className="flex flex-col">
+                        <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">{g.label}</span>
+                        <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">{g.sample}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-3">
+                <div className="text-sm font-body text-navy dark:text-[#F2F1E6] mb-1.5">Tables</div>
+                <div className="flex flex-col gap-1">
+                  {TABLE_STYLES.map((g) => (
+                    <label key={g.id} className="flex items-start gap-2 cursor-pointer">
+                      <input type="radio" name="table-style" className="mt-1 accent-sky" checked={tableStyle === g.id} onChange={() => setTableStyle(g.id)} />
                       <span className="flex flex-col">
                         <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">{g.label}</span>
                         <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">{g.sample}</span>
