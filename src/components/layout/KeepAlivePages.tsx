@@ -3,6 +3,7 @@ import { Routes, useLocation, type Location } from 'react-router-dom'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { APP_ROUTE_ELEMENTS } from '@/routes/appRoutes'
 import { PageActiveContext } from '@/hooks/usePageActive'
+import type { PageAnimMode } from '@/hooks/usePageAnimation'
 
 // "A small cache keyed by path, probably just the last few visited pages" —
 // matches the Recent Pages carousel's own group-of-3 convention.
@@ -39,13 +40,15 @@ interface CachedEntry {
  * from the cache (pushed past the 3rd-most-recent slot) and freshly
  * mounted next time.
  */
-export function KeepAlivePages({ animClass, animTick, slideDirection }: {
+export function KeepAlivePages({ animClass, animTick, slideDirection, animMode }: {
   animClass: string
   animTick: number
   /** Set only for actual arrow-key Recent Pages cycling (not a plain click
       or sidebar nav) — triggers the full dual-page push transition below
       instead of the plain single-page fade/offset `animClass` handles. */
   slideDirection: 'left' | 'right' | null
+  /** The user's page animation for this navigation: push and flip run through the dual-page transition below, cascade through animClass. */
+  animMode: PageAnimMode | null
 }) {
   const location = useLocation()
   // Query string included: several pages (Location Lookup, Issues, Config,
@@ -85,7 +88,8 @@ export function KeepAlivePages({ animClass, animTick, slideDirection }: {
   // as a buffer so the JS cleanup never fires before the animation visually
   // finishes.
   const TRANSITION_MS = 280
-  const [transition, setTransition] = useState<{ fromKey: string; toKey: string; direction: 'left' | 'right' } | null>(null)
+  const FLIP_MS = 500
+  const [transition, setTransition] = useState<{ fromKey: string; toKey: string; direction: 'left' | 'right'; mode: 'push' | 'flip' } | null>(null)
   const lastTickRef = useRef(animTick)
   const containerRef = useRef<HTMLDivElement>(null)
   const [transitionHeight, setTransitionHeight] = useState<number | null>(null)
@@ -98,15 +102,19 @@ export function KeepAlivePages({ animClass, animTick, slideDirection }: {
     // transition animates what's on screen, and this also sidesteps having
     // to measure a not-yet-visible cached page's own natural height.
     const el = containerRef.current
+    // Both pages stack at the top of this container, so start from the top of the scroller (a page scrolled down would otherwise animate off screen).
+    const scroller = el?.closest('.app-scroll') as HTMLElement | null
+    if (scroller) scroller.scrollTop = 0
     if (el) setTransitionHeight(Math.max(240, window.innerHeight - el.getBoundingClientRect().top))
-    setTransition({ fromKey: prevKeyRef.current, toKey: currentKey, direction: slideDirection })
-    const t = setTimeout(() => setTransition(null), TRANSITION_MS)
+    const kind: 'push' | 'flip' = animMode === 'flip' ? 'flip' : 'push'
+    setTransition({ fromKey: prevKeyRef.current, toKey: currentKey, direction: slideDirection, mode: kind })
+    const t = setTimeout(() => setTransition(null), kind === 'flip' ? FLIP_MS : TRANSITION_MS)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animTick])
 
   return (
-    <div ref={containerRef} className="relative" style={transition ? { height: transitionHeight ?? undefined, overflow: 'hidden' } : undefined}>
+    <div ref={containerRef} className="relative" style={transition ? { height: transitionHeight ?? undefined, overflow: 'hidden', perspective: transition.mode === 'flip' ? 1300 : undefined } : undefined}>
       {entries.map((entry) => {
         const isActive = entry.key === currentKey
         const isFrom = transition?.fromKey === entry.key
@@ -129,9 +137,10 @@ export function KeepAlivePages({ animClass, animTick, slideDirection }: {
           // visually-forward motion users expect from pressing Right is the
           // opposite of what a literal direction === 'right' mapping gives.
           const enterFromRight = transition!.direction === 'left'
+          const flip = transition!.mode === 'flip'
           slideClass = isTo
-            ? (enterFromRight ? 'sb-page-slide-in-right' : 'sb-page-slide-in-left')
-            : (enterFromRight ? 'sb-page-slide-out-left' : 'sb-page-slide-out-right')
+            ? (flip ? (enterFromRight ? 'sb-page-flip-in-right' : 'sb-page-flip-in-left') : (enterFromRight ? 'sb-page-slide-in-right' : 'sb-page-slide-in-left'))
+            : (flip ? (enterFromRight ? 'sb-page-flip-out-left' : 'sb-page-flip-out-right') : (enterFromRight ? 'sb-page-slide-out-left' : 'sb-page-slide-out-right'))
         }
 
         return (

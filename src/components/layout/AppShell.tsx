@@ -9,6 +9,7 @@ import { MegaNav } from './MegaNav'
 import { NavDock } from './NavDock'
 import { NavPalette } from './NavSearch'
 import { useNavLayout } from '@/hooks/useNavLayout'
+import { resolvePageAnimMode, usePageAnimation, type PageAnimMode } from '@/hooks/usePageAnimation'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useNavBadge } from '@/hooks/useNavBadges'
@@ -78,6 +79,9 @@ export function AppShell() {
   // triggers KeepAlivePages' full dual-page slide transition instead of the
   // plain single-page fade/offset pageAnimClass otherwise handles.
   const [slideDirection, setSlideDirection] = useState<'left' | 'right' | null>(null)
+  // The page animation the user picked (push / cascade / flip / shuffle / none) and what this navigation resolved to.
+  const { animation: pageAnimPref } = usePageAnimation()
+  const [animMode, setAnimMode] = useState<PageAnimMode | null>(null)
   // Bumped alongside pageAnimClass so KeepAlivePages' animator restarts the
   // CSS animation even when two navigations in a row resolve to the exact
   // same class string (e.g. two consecutive "back" hops) — a class
@@ -90,11 +94,11 @@ export function AppShell() {
     const viaWidget = lastCycleNav && lastCycleNav.path === location.pathname && Date.now() - lastCycleNav.at < 800
     const dir = viaWidget ? lastCycleNav!.direction : null
     const isArrowCycle = dir === 'left' || dir === 'right'
-    setSlideDirection(isArrowCycle ? dir : null)
-    setPageAnimClass(
-      !viaWidget || isArrowCycle ? '' // arrow-key cycles get the full slide instead, below
-        : 'animate-[fadeIn_180ms_ease-out]',
-    )
+    const mode = resolvePageAnimMode(pageAnimPref)
+    setAnimMode(mode)
+    // Push and flip animate two pages at once (direction matters); an arrow-key cycle keeps its own direction, anything else moves forward.
+    setSlideDirection(mode === 'push' || mode === 'flip' ? (isArrowCycle ? dir : 'left') : null)
+    setPageAnimClass(mode === 'cascade' ? 'sb-cascade-in' : '')
     setAnimTick((t) => t + 1)
   }, [location.pathname, lastCycleNav])
 
@@ -235,7 +239,7 @@ export function AppShell() {
         >
           {isInventoryRoute && <InventoryNavBar onHeightChange={setNavBarHeight} />}
           <main className="p-3 sm:p-6">
-            <KeepAlivePages animClass={pageAnimClass} animTick={animTick} slideDirection={slideDirection} />
+            <KeepAlivePages animClass={pageAnimClass} animTick={animTick} slideDirection={slideDirection} animMode={animMode} />
           </main>
           {/* Spacer so scrolled-to-bottom content clears the FAB row */}
           <div className="h-16" />

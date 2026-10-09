@@ -7,6 +7,7 @@ import { useDarkMode } from '@/hooks/useDarkMode'
 import { FONT_GROUPS, useFontGroup } from '@/hooks/useFontGroup'
 import { COLOR_THEMES, useColorTheme } from '@/hooks/useColorTheme'
 import { NAV_LAYOUTS, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
+import { PAGE_ANIMATIONS, usePageAnimation } from '@/hooks/usePageAnimation'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -66,6 +67,7 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { theme: colorTheme, setTheme: setColorTheme } = useColorTheme()
   const { layout: navLayout, setLayout: setNavLayout } = useNavLayout()
   const [navAccordion, setNavAccordion] = useNavAccordion()
+  const { animation: pageAnim, setAnimation: setPageAnim } = usePageAnimation()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const isDev = isDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
@@ -241,6 +243,20 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                     <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">Sidebar: keep one section open at a time</span>
                   </label>
                   <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">Ctrl K searches pages and actions in any layout. Phones always use the sidebar drawer.</span>
+                </div>
+              </div>
+              <div className="mt-3">
+                <div className="text-sm font-body text-navy dark:text-[#F2F1E6] mb-1.5">Page animation</div>
+                <div className="flex flex-col gap-1">
+                  {PAGE_ANIMATIONS.map((g) => (
+                    <label key={g.id} className="flex items-start gap-2 cursor-pointer">
+                      <input type="radio" name="page-anim" className="mt-1 accent-sky" checked={pageAnim === g.id} onChange={() => setPageAnim(g.id)} />
+                      <span className="flex flex-col">
+                        <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">{g.label}</span>
+                        <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">{g.sample}</span>
+                      </span>
+                    </label>
+                  ))}
                 </div>
               </div>
               <div className="mt-3">
