@@ -44,7 +44,7 @@ import { GrDatabase, GrMap } from 'react-icons/gr'
 import { ICONS, SECTION_ICONS } from './navIcons'
 import { NavResultList, NavSearchInput, useNavSearch } from './NavSearch'
 import { HOME_ITEM, useNavModel } from './useNavModel'
-import { SECTION_ITEMS, SECTION_META, UTILITY_ITEMS, ASSIGNABLE_SECTIONS, type NavItem } from './navData'
+import { SECTION_ITEMS, SECTION_META, UTILITY_ITEMS, ASSIGNABLE_SECTIONS, visibleSectionItems, type NavItem } from './navData'
 
 // Re-exported so existing imports from './Sidebar' keep working.
 export { ICONS, SECTION_ITEMS, ASSIGNABLE_SECTIONS }
@@ -62,7 +62,7 @@ const SECTION_ACCENT: Record<string, string> = {
   // Reuses Inventory's sky accent (this section was split out of Inventory
   // Config, and every other brand color is already spoken for) rather than
   // sitting inky-on-inky next to Droptop above it.
-  'data-connections': 'bg-sky/15 border-l-2 border-sky',
+  wip: 'bg-[#E67E22]/10 border-l-2 border-[#E67E22]/60',
   'shop-tools': 'bg-sky/15 border-l-2 border-sky',
   // Same reuse-sky precedent as data-connections above — reladyne-logo.svg
   // already carries its own brand color (blue/orange), so this section's
@@ -75,7 +75,6 @@ const SECTION_ACCENT: Record<string, string> = {
   'global-config': 'bg-chrome-fg/[0.08] border-l-2 border-chrome-fg/40',
   operations: 'bg-[#E67E22]/15 border-l-2 border-[#E67E22]',
   finance: 'bg-[#2ECC71]/15 border-l-2 border-[#2ECC71]',
-  accounting: 'bg-inky/25 border-l-2 border-inky',
   marketing: 'bg-[#C0392B]/15 border-l-2 border-[#C0392B]',
 }
 
@@ -1167,12 +1166,7 @@ function ExpandedSidebar({
   }
 
   const visibleSectionOrder = useMemo(
-    () => sectionOrder.filter((k) => {
-      if (hiddenSections.includes(k)) return false
-      if (k === 'global-config') return isAdmin
-      if (allowedSections !== null) return allowedSections.has(k)
-      return true
-    }),
+    () => sectionOrder.filter((k) => !hiddenSections.includes(k) && visibleSectionItems(k, isAdmin, allowedSections).length > 0),
     [sectionOrder, isAdmin, allowedSections, hiddenSections]
   )
 
@@ -1260,7 +1254,7 @@ function ExpandedSidebar({
                 onToggleCollapse={() => toggleOrOpen(sectionKey)}
                 onNavClick={onNavClick}
                 itemOrder={itemOrder[sectionKey] ?? []}
-                overrideItems={undefined}
+                overrideItems={visibleSectionItems(sectionKey, isAdmin, allowedSections)}
                 onSetItemOrder={setItemOrder}
               />
             ))}

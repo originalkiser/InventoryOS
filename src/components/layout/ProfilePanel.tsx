@@ -6,7 +6,7 @@ import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { FONT_GROUPS, useFontGroup } from '@/hooks/useFontGroup'
 import { COLOR_THEMES, useColorTheme } from '@/hooks/useColorTheme'
-import { NAV_LAYOUTS, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
+import { NAV_LAYOUTS, useDockPrefs, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
 import { PAGE_ANIMATIONS, usePageAnimation } from '@/hooks/usePageAnimation'
 import { TABLE_STYLES, useTableStyle } from '@/hooks/useTableStyle'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
@@ -15,6 +15,7 @@ import { useAppSetting } from '@/hooks/useAppSetting'
 import { isAdminOrDeveloper, isDeveloper, getRoleLabel } from '@/lib/roles'
 import { normalizeBlockedDays, formatBlockedDayLabel, upsertBlockedDay, removeBlockedDay } from '@/utils/blockedDays'
 import { LocationExclusionsConfig } from './LocationExclusionsConfig'
+import { visibleSectionItems } from './navData'
 import { ICONS, SECTION_ITEMS, QUICK_FAB_META, QUICK_FAB_DEFAULT, type QuickFabPosition } from './Sidebar'
 import type { NotifPrefs, NotifType } from '@/hooks/useNotifications'
 
@@ -67,6 +68,7 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { group: fontGroup, setGroup: setFontGroup } = useFontGroup()
   const { theme: colorTheme, setTheme: setColorTheme } = useColorTheme()
   const { layout: navLayout, setLayout: setNavLayout } = useNavLayout()
+  const { prefs: dockPrefs, update: updateDock } = useDockPrefs()
   const [navAccordion, setNavAccordion] = useNavAccordion()
   const [pinnedMode, setPinnedMode] = useProfilePref<'section' | 'always'>('nav:pinnedMode', 'section')
   const { animation: pageAnim, setAnimation: setPageAnim } = usePageAnimation()
@@ -88,7 +90,7 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const [enabledFabs, setEnabledFabs] = useProfilePref<string[]>('quickfab:enabled', QUICK_FAB_DEFAULT)
   const [fabPosition, setFabPosition] = useProfilePref<QuickFabPosition>('quickfab:position', 'bottom-right')
   const [hiddenSections, setHiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
-  const accessibleSections = Object.keys(SECTION_ITEMS).filter((k) => (k === 'global-config' ? isAdmin : allowedSections !== null ? allowedSections.has(k) : true))
+  const accessibleSections = Object.keys(SECTION_ITEMS).filter((k) => visibleSectionItems(k, isAdmin, allowedSections).length > 0)
   const sectionLabel = (k: string) => k.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
   // Schedule state — initialized from profile
@@ -241,6 +243,30 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                       </span>
                     </label>
                   ))}
+                  <div className={`mt-1 flex flex-col gap-1 pl-0.5 ${navLayout === 'dock' ? '' : 'opacity-50'}`}>
+                    <span className="text-[11px] font-body text-navy dark:text-[#F2F1E6]">Floating dock: position</span>
+                    <div className="flex flex-wrap gap-1">
+                      {([['none', 'Floating'], ['left', 'Snap left'], ['right', 'Snap right'], ['top', 'Snap top'], ['bottom', 'Snap bottom']] as const).map(([val, text]) => (
+                        <button key={val} type="button" disabled={navLayout !== 'dock'}
+                          onClick={() => updateDock(val === 'none' ? { snap: 'none', x: null, y: null } : { snap: val, orient: val === 'left' || val === 'right' ? 'v' : 'h', mini: false })}
+                          className={`rounded-full border px-2 py-0.5 text-[11px] font-body transition-colors ${dockPrefs.snap === val ? 'bg-sb-navy text-sb-cream border-sb-navy' : 'border-navy/30 text-navy dark:text-[#F2F1E6] hover:bg-sky/30'}`}>{text}</button>
+                      ))}
+                    </div>
+                    <label className={`flex items-center gap-2 cursor-pointer ${dockPrefs.snap === 'none' ? '' : 'opacity-50'}`}>
+                      <input type="checkbox" className="accent-sky" disabled={navLayout !== 'dock' || dockPrefs.snap !== 'none'} checked={dockPrefs.orient === 'h'}
+                        onChange={(e) => updateDock({ orient: e.target.checked ? 'h' : 'v', x: null, y: null })} />
+                      <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">Horizontal (floating only — a snapped dock follows its edge)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" className="accent-sky" disabled={navLayout !== 'dock'} checked={dockPrefs.autoCollapse} onChange={(e) => updateDock({ autoCollapse: e.target.checked })} />
+                      <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">Collapse to the SB logo when I click away</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" className="accent-sky" disabled={navLayout !== 'dock'} checked={dockPrefs.search} onChange={(e) => updateDock({ search: e.target.checked })} />
+                      <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">Show the search button</span>
+                    </label>
+                    <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">A snapped dock keeps the page clear of it. Click the logo bubble to bring the dock back.</span>
+                  </div>
                   <label className={`flex items-center gap-2 cursor-pointer mt-1 ${navLayout === 'sidebar' ? '' : 'opacity-50'}`}>
                     <input type="checkbox" className="accent-sky" checked={navAccordion} onChange={(e) => setNavAccordion(e.target.checked)} />
                     <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">Sidebar: keep one section open at a time</span>

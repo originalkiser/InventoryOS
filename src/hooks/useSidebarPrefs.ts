@@ -11,7 +11,7 @@ import { useAuthStore } from '@/stores/authStore'
 // `visibleSectionKeys`/`allowedSections` in Sidebar.tsx, which both filter
 // FROM `sectionOrder` rather than from SECTION_ITEMS' own keys). Any key
 // added to SECTION_ITEMS must be added here too.
-export const DEFAULT_SECTION_ORDER = ['inventory', 'droptop', 'shop-tools', 'data-connections', 'reladyne', 'global-config', 'operations', 'finance', 'accounting', 'marketing']
+export const DEFAULT_SECTION_ORDER = ['inventory', 'wip', 'droptop', 'shop-tools', 'reladyne', 'global-config', 'operations', 'finance', 'marketing']
 export const DEFAULT_UTILITY_ORDER = ['calendar', 'issues', 'meetings', 'feature-requests', 'tasks']
 
 interface SidebarPrefs {

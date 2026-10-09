@@ -53,12 +53,12 @@ export function NavResultList({ results, hl, setHl, run, query, tone }: {
             <li>
               <button type="button" role="option" aria-selected={on} onMouseEnter={() => setHl(i)} onClick={() => run(e)}
                 className={`w-full flex items-center gap-2.5 text-left rounded-[10px] px-2.5 py-2 transition-colors ${on
-                  ? (chrome ? 'bg-chrome-fg/15 text-chrome-fg' : 'bg-navy text-cream')
+                  ? (chrome ? 'bg-chrome-fg/15 text-chrome-fg' : 'bg-sb-navy text-sb-cream')
                   : (chrome ? 'text-chrome-fg/85 hover:bg-chrome-fg/10' : 'text-navy hover:bg-soft')}`}>
                 <span className="flex-shrink-0 opacity-90">{e.itemKey ? (ICONS[e.itemKey] ?? ICONS.dashboard) : <CornerDownLeft className="w-4 h-4" />}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] font-body truncate">{e.label}</span>
-                  {e.desc && <span className={`block text-[11px] font-body truncate ${on ? (chrome ? 'text-sky' : 'text-sky') : (chrome ? 'text-chrome-fg/55' : 'text-inky')}`}>{e.desc}</span>}
+                  {e.desc && <span className={`block text-[11px] font-body truncate ${on ? (chrome ? 'text-chrome-fg/75' : 'text-sb-sky') : (chrome ? 'text-chrome-fg/55' : 'text-inky')}`}>{e.desc}</span>}
                 </span>
                 {on && <CornerDownLeft className="w-3.5 h-3.5 flex-shrink-0 opacity-80" />}
               </button>

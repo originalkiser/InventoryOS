@@ -2,7 +2,7 @@
 // generation engine (engine.ts) stays a pure, testable module.
 
 export type OrderType = 'package' | 'bulk'
-export type DraftStatus = 'generating' | 'review' | 'final_review' | 'exported' | 'cancelled'
+export type DraftStatus = 'generating' | 'review' | 'final_review' | 'exported' | 'closed' | 'cancelled'
 
 // Bulk is dispensed and can be ordered fractionally; everything else ships
 // in discrete units and must be whole.

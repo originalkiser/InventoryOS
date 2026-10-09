@@ -1,5 +1,5 @@
 import {
-  Package, Settings, Building2, DollarSign, TrendingUp, Megaphone, Wrench, QrCode,
+  Package, Hammer, Settings, Building2, DollarSign, TrendingUp, Megaphone, Wrench, QrCode,
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
   Database, Users, AlertTriangle, MessageSquare, Lightbulb,
   CheckCircle2, FileText, MapPin, GripVertical, Car, SlidersHorizontal, Home,
@@ -70,10 +70,9 @@ export const SECTION_ICONS: Record<string, JSX.Element> = {
   droptop: <img src={droptopLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
   'shop-tools': <Wrench className="w-5 h-5 flex-shrink-0 text-sky" />,
   reladyne: <img src={reladyneLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
-  'data-connections': <GrDatabase className="w-5 h-5 flex-shrink-0 text-sky" />,
+  wip: <Hammer className="w-5 h-5 flex-shrink-0 text-[#E67E22]" />,
   'global-config': <Settings className="w-5 h-5 flex-shrink-0 text-chrome-fg/70" />,
   operations: <Building2 className="w-5 h-5 flex-shrink-0 text-[#E67E22]" />,
   finance: <DollarSign className="w-5 h-5 flex-shrink-0 text-[#2ECC71]" />,
-  accounting: <TrendingUp className="w-5 h-5 flex-shrink-0 text-inky" />,
   marketing: <Megaphone className="w-5 h-5 flex-shrink-0 text-[#C0392B]" />,
 }

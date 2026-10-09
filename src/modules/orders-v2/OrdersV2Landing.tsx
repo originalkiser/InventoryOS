@@ -49,6 +49,7 @@ const STATUS_COLOR: Record<DraftStatus, string> = {
   review: 'bg-sky/25 text-navy',
   final_review: 'bg-[#E67E22]/20 text-[#E67E22]',
   exported: 'bg-[#2ECC71]/20 text-[#2ECC71]',
+  closed: 'bg-inky/20 text-inky',
   cancelled: 'bg-[#C0392B]/20 text-[#C0392B]',
 }
 
@@ -66,7 +67,7 @@ export function OrdersV2Landing() {
   const { profile } = useAuthStore()
   const loc = useLocations()
   const { settings } = useOrderSettings()
-  const { drafts, loading, createDraft, deleteDraft, cancelDraft, uncancelDraft, reload: reloadDrafts } = useDrafts()
+  const { drafts, loading, createDraft, deleteDraft, cancelDraft, uncancelDraft, setStatusMany, reload: reloadDrafts } = useDrafts()
   const deleted = useDeletedDrafts(() => reloadDrafts())
   const [deleteTarget, setDeleteTarget] = useState<DraftRow | null>(null)
   const vendors = useVendors()
@@ -169,6 +170,16 @@ export function OrdersV2Landing() {
   // same table as everything else.
   const draftIds = useMemo(() => drafts.map((d) => d.id), [drafts])
   const aggregates = useDraftAggregates(draftIds)
+
+  // Bulk status change: tick orders in the table, then set one status for all of them.
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set())
+  const [clearSelToken, setClearSelToken] = useState(0)
+  async function bulkSet(status: DraftStatus) {
+    const ids = [...selectedOrderIds]
+    if (ids.length === 0) return
+    await setStatusMany(ids, status)
+    setClearSelToken((n) => n + 1)
+  }
 
   const vendorName = (id: string | null) => vendors.byId(id)?.name ?? '—'
 
@@ -292,13 +303,28 @@ export function OrdersV2Landing() {
                 and pick it back up here.
               </p>
             ) : (
+              <>
+              {selectedOrderIds.size > 0 && (
+                <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky/40 bg-soft px-3 py-1.5 text-xs font-mono text-navy">
+                  <span className="font-bold">{selectedOrderIds.size} selected</span>
+                  <span className="text-inky">Mark as:</span>
+                  <Button size="sm" variant="secondary" onClick={() => void bulkSet('closed')} title="Done without exporting — takes it off the open order lists">Closed</Button>
+                  <Button size="sm" variant="secondary" onClick={() => void bulkSet('exported')}>Exported</Button>
+                  <Button size="sm" variant="secondary" onClick={() => void bulkSet('final_review')}>Final Review</Button>
+                  <Button size="sm" variant="secondary" onClick={() => void bulkSet('review')}>Review</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setClearSelToken((n) => n + 1)}>Clear</Button>
+                </div>
+              )}
               <DataTable
                 table={table}
                 globalFilter={globalFilter}
                 onGlobalFilterChange={setGlobalFilter}
+                onSelectionChange={setSelectedOrderIds}
+                clearSelectionToken={clearSelToken}
                 onRowClick={(d) => setStatsDraft(d)}
                 getRowTone={(d) => (d.status === 'cancelled' ? '#C0392B26' : null)}
               />
+              </>
             )}
         </TabsContent>
 

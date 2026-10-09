@@ -6,7 +6,7 @@ import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useSidebarPrefs } from '@/hooks/useSidebarPrefs'
 import { isAdminOrDeveloper } from '@/lib/roles'
-import { SECTION_ITEMS, SECTION_META, UTILITY_ITEMS, type NavItem } from './navData'
+import { SECTION_META, UTILITY_ITEMS, visibleSectionItems, type NavItem } from './navData'
 import { NAV_META, SECTION_BLURB } from './navMeta'
 
 export const HOME_ITEM: NavItem = { key: 'home', label: 'Home', to: '/home' }
@@ -37,9 +37,7 @@ export function useNavModel() {
     const out: NavSection[] = []
     for (const k of sectionOrder) {
       if (hiddenSections.includes(k)) continue
-      if (k === 'global-config' && !isAdmin) continue
-      if (k !== 'global-config' && allowed !== null && !allowed.has(k)) continue
-      const base = (SECTION_ITEMS[k] ?? []).filter((i) => i.to)
+      const base = visibleSectionItems(k, isAdmin, allowed).filter((i) => i.to)
       const saved = itemOrder[k] ?? []
       const items = saved.length
         ? [...saved.map((key) => base.find((i) => i.key === key)).filter((i): i is NavItem => !!i), ...base.filter((i) => !saved.includes(i.key))]

@@ -406,7 +406,17 @@ export function useDrafts() {
     toast.success('Order un-cancelled'); load()
   }
 
-  return { drafts, loading, createDraft, deleteDraft, cancelDraft, uncancelDraft, reload: load }
+  /** Set one status on several orders at once (the landing page's bulk bar). Cancelled orders are left alone — un-cancel them first. */
+  async function setStatusMany(ids: string[], status: DraftStatus) {
+    const targets = ids.filter((id) => drafts.find((x) => x.id === id)?.status !== 'cancelled')
+    if (targets.length === 0) { toast.error('Nothing to update — cancelled orders keep their status'); return }
+    const { error } = await sb().schema('inventory').from('ov2_order_drafts')
+      .update({ status, last_edited_by: profile?.id ?? null, updated_at: new Date().toISOString() }).in('id', targets)
+    if (error) { toast.error(error.message); return }
+    toast.success(`${targets.length} order${targets.length === 1 ? '' : 's'} marked ${status.replace('_', ' ')}`); load()
+  }
+
+  return { drafts, loading, createDraft, deleteDraft, cancelDraft, uncancelDraft, setStatusMany, reload: load }
 }
 
 /** Orders deleted in the last 90 days (see useDrafts().deleteDraft), newest first, with a restore action. */

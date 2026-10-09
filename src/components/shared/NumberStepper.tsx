@@ -4,14 +4,23 @@
 // has table-specific behavior (Enter moves to the next row, zero-reason buttons).
 import { useEffect, useRef, useState } from 'react'
 
-function spawnFloat(dir: 1 | -1, label: string, x: number, y: number) {
-  const el = document.createElement('span')
-  el.textContent = label
-  el.setAttribute('aria-hidden', 'true')
-  el.className = `pointer-events-none rounded-full px-2 py-px font-heading text-[13px] font-bold tracking-wide shadow-[0_3px_8px_rgba(0,0,0,0.25)] ${dir > 0 ? 'bg-sb-green text-sb-navy sb-float-up' : 'bg-sb-red text-white sb-float-down'}`
-  el.style.cssText = `position:fixed;left:${x - 8}px;top:${y - 10}px;z-index:500`
-  document.body.appendChild(el)
-  window.setTimeout(() => el.remove(), 800)
+/**
+ * The floating +1 / −1. A plus pill grows out of the click point from its BOTTOM-LEFT corner and drifts up-right; a minus pill hangs from its
+ * TOP-RIGHT corner and drifts down-left — so the pill never sits on top of the cursor. Plain DOM on <body>, removed after the animation.
+ */
+export function spawnStepFloat(dir: 1 | -1, label: string, x: number, y: number) {
+  const wrap = document.createElement('span')
+  wrap.setAttribute('aria-hidden', 'true')
+  wrap.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:0;height:0;z-index:500;pointer-events:none`
+  const pill = document.createElement('span')
+  pill.textContent = label
+  pill.className = `rounded-full px-2 py-px font-heading text-[13px] font-bold tracking-wide shadow-[0_3px_8px_rgba(0,0,0,0.25)] ${dir > 0 ? 'bg-sb-green text-sb-navy sb-float-up' : 'bg-sb-red text-white sb-float-down'}`
+  pill.style.cssText = dir > 0
+    ? 'position:absolute;left:0;bottom:0;white-space:nowrap;transform-origin:bottom left'
+    : 'position:absolute;right:0;top:0;white-space:nowrap;transform-origin:top right'
+  wrap.appendChild(pill)
+  document.body.appendChild(wrap)
+  window.setTimeout(() => wrap.remove(), 800)
 }
 
 const BTN = 'w-6 h-7 flex-shrink-0 flex items-center justify-center rounded-lg border-[1.5px] border-navy/30 bg-cream text-navy text-base leading-none select-none hover:bg-sky hover:text-sb-navy hover:border-inky active:scale-90 disabled:opacity-30 disabled:hover:bg-cream'
@@ -54,7 +63,7 @@ export function NumberStepper({ value, onCommit, step = 1, min, max, decimals = 
     const next = clamp(Number((base + dir * step).toFixed(decimals)))
     if (next === base) return
     setText(fmt(next, decimals))
-    if (e) spawnFloat(dir, `${dir > 0 ? '+' : '−'}${fmt(step, decimals)}`, e.clientX, e.clientY)
+    if (e) spawnStepFloat(dir, `${dir > 0 ? '+' : '−'}${fmt(step, decimals)}`, e.clientX, e.clientY)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => commit(fmt(next, decimals)), 450)
   }

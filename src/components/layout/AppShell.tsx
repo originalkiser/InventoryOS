@@ -8,7 +8,7 @@ import { TopBar } from './TopBar'
 import { MegaNav } from './MegaNav'
 import { NavDock } from './NavDock'
 import { NavPalette } from './NavSearch'
-import { useNavLayout } from '@/hooks/useNavLayout'
+import { dockReserve, useDockPrefs, useNavLayout } from '@/hooks/useNavLayout'
 import { resolvePageAnimMode, usePageAnimation, type PageAnimMode } from '@/hooks/usePageAnimation'
 import { StickyTitleBar } from './StickyTitleBar'
 import { StickyHScroll } from '@/components/shared/StickyHScroll'
@@ -60,6 +60,9 @@ export function AppShell() {
   const { layout: navLayoutPref } = useNavLayout()
   // Phones always get the sidebar drawer; the mega menu and floating dock are desktop layouts.
   const navLayout = mobile ? 'sidebar' : navLayoutPref
+  // A dock snapped to a screen edge takes that strip from the workspace so nothing on the page sits under it.
+  const { prefs: dockPrefs } = useDockPrefs()
+  const reserve = dockReserve(navLayout, dockPrefs)
   const [paletteOpen, setPaletteOpen] = useState(false)
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((o) => !o) } }
@@ -186,7 +189,7 @@ export function AppShell() {
   // comment for why a tiny shared store instead of prop drilling.
   useEffect(() => { usePinnedPanelStore.getState().setDockedWidth(pushWidth) }, [pushWidth])
   // w-14 collapsed (56px), w-64 expanded (256px)
-  const sidebarWidth = mobile || navLayout !== 'sidebar' ? 0 : sidebarCollapsed ? 56 : 256
+  const sidebarWidth = (mobile || navLayout !== 'sidebar' ? 0 : sidebarCollapsed ? 56 : 256) + reserve.left
 
   // Shared item list behind all 3 Quick Access positions (Profile → Quick
   // Access Buttons → Position) — built once, rendered by QuickAccessBar
@@ -199,7 +202,7 @@ export function AppShell() {
   ].filter((f) => enabledFabs.includes(f.key))
 
   return (
-    <div className="flex h-screen overflow-hidden bg-page font-body">
+    <div className="flex h-screen overflow-hidden bg-page font-body" style={{ paddingLeft: reserve.left, paddingRight: reserve.right, paddingTop: reserve.top, paddingBottom: reserve.bottom }}>
       {navLayout === 'sidebar' && (
         <Sidebar
           collapsed={sidebarCollapsed}
@@ -217,15 +220,15 @@ export function AppShell() {
             onMobileMenuOpen={() => setMobileNavOpen((v) => !v)}
             tasksMode={tasksMode}
             tasksWidth={tasksWidth}
-            tasksTopOffset={topBarHeight}
+            tasksTopOffset={topBarHeight + reserve.top}
             tasksSidebarWidth={sidebarWidth}
+            navSlot={navLayout === 'mega' ? <MegaNav /> : null}
             onTasksModeChange={setTasksModeP}
             onTasksWidthChange={setTasksWidthP}
             onToggleTasks={toggleTasks}
             onOpenTasks={openTasks}
             quickAccessSlot={!mobile && fabPosition === 'topbar-left' ? <QuickAccessBar variant="topbar" items={quickAccessItems} /> : null}
           />
-          {navLayout === 'mega' && <MegaNav />}
         </div>
         {/* Only the scrollable content area shifts right for docked panels —
             TopBar always spans full width above the panel. */}
@@ -256,7 +259,7 @@ export function AppShell() {
         <QuickAccessBar
           variant="floating"
           anchor={fabPosition === 'bottom-left' ? 'left' : 'right'}
-          offset={fabPosition === 'bottom-left' ? sidebarWidth + 16 : (pushWidth || 0) + 16}
+          offset={fabPosition === 'bottom-left' ? sidebarWidth + 16 : (pushWidth || 0) + reserve.right + 16}
           items={quickAccessItems}
           collapsed={fabCollapsed}
           onToggleCollapsed={() => setFabCollapsedP(!fabCollapsed)}
@@ -271,19 +274,19 @@ export function AppShell() {
           history for the incident this guards against. */}
       <ErrorBoundary>
         <LocationLookupOverlay
-          mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
+          mode={lookupMode} width={lookupWidth} mobile={mobile} topOffset={topBarHeight + reserve.top} sidebarWidth={sidebarWidth}
           onModeChange={setLookupModeP} onToggle={() => setLookupModeP(lookupMode === 'hidden' ? lastLookup.current : 'hidden')} onWidthChange={setLookupWidthP}
         />
       </ErrorBoundary>
       <ErrorBoundary>
         <InventoryOverlay
-          mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
+          mode={invMode} width={invWidth} mobile={mobile} topOffset={topBarHeight + reserve.top} sidebarWidth={sidebarWidth}
           onModeChange={setInvModeP} onToggle={() => setInvModeP(invMode === 'hidden' ? lastInv.current : 'hidden')} onWidthChange={setInvWidthP}
         />
       </ErrorBoundary>
       <ErrorBoundary>
         <MeetingOverlay
-          mode={meetingMode} width={meetingWidth} mobile={mobile} topOffset={topBarHeight} sidebarWidth={sidebarWidth}
+          mode={meetingMode} width={meetingWidth} mobile={mobile} topOffset={topBarHeight + reserve.top} sidebarWidth={sidebarWidth}
           onModeChange={setMeetingModeP} onWidthChange={setMeetingWidthP}
         />
       </ErrorBoundary>

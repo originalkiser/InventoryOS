@@ -8,14 +8,19 @@ export const STATUS_LABEL: Record<DraftStatus, string> = {
   review: 'Review',
   final_review: 'Final Review',
   exported: 'Exported',
+  closed: 'Closed',
   cancelled: 'Cancelled',
 }
+
+/** A finished order: exported, or closed without exporting. Both leave the open-order lists and are never pulled back a step by revisiting. */
+export const isDoneStatus = (s: DraftStatus | string | null | undefined) => s === 'exported' || s === 'closed'
 
 /** Reopen a draft at the step it was left on. */
 export function statusRoute(d: { id: string; status: DraftStatus }): string {
   switch (d.status) {
     case 'final_review': return `/orders-v2/draft/${d.id}/final`
-    case 'exported': return `/orders-v2/draft/${d.id}/export`
+    case 'exported':
+    case 'closed': return `/orders-v2/draft/${d.id}/export`
     default: return `/orders-v2/draft/${d.id}`
   }
 }

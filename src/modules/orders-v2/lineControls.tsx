@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DraftLineRow } from './useOrdersV2'
+import { spawnStepFloat } from '@/components/shared/NumberStepper'
 
 // ── Qty stepper ─────────────────────────────────────────────────────────
 
@@ -23,13 +24,7 @@ const STEP_BTN = 'w-10 flex-shrink-0 flex items-center justify-center rounded-lg
  * quantity changes, which used to throw away a React-state-driven float before it could be seen.
  */
 function spawnFloat(dir: 1 | -1, x: number, y: number) {
-  const el = document.createElement('span')
-  el.textContent = dir > 0 ? '+1' : '−1'
-  el.setAttribute('aria-hidden', 'true')
-  el.className = `pointer-events-none rounded-full px-2 py-px font-heading text-[13px] font-bold tracking-wide shadow-[0_3px_8px_rgba(0,0,0,0.25)] ${dir > 0 ? 'bg-sb-green text-sb-navy sb-float-up' : 'bg-sb-red text-white sb-float-down'}`
-  el.style.cssText = `position:fixed;left:${x - 8}px;top:${y - 10}px;z-index:500`
-  document.body.appendChild(el)
-  window.setTimeout(() => el.remove(), 800)
+  spawnStepFloat(dir, dir > 0 ? '+1' : '−1', x, y)
 }
 
 /** Enter in a qty box moves to the next row's qty box (Shift+Enter goes back up) within the same table. */

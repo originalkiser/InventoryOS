@@ -126,6 +126,8 @@ interface TopBarProps {
   // Quick Access buttons, rendered inline here instead of a floating corner
   // stack when Profile → Quick Access Buttons → Position is "Top bar - left".
   quickAccessSlot?: ReactNode
+  /** The mega menu's section buttons, which share this row with the small buttons on the right. */
+  navSlot?: ReactNode
 }
 
 type TaskRange = 'today' | 'week' | 'month'
@@ -140,6 +142,7 @@ export function TopBar({
   tasksMode, tasksWidth, tasksTopOffset, tasksSidebarWidth,
   onTasksModeChange, onTasksWidthChange, onToggleTasks, onOpenTasks,
   quickAccessSlot,
+  navSlot,
 }: TopBarProps) {
   const navigate = useNavigate()
   const { profile } = useAuthStore()
@@ -634,13 +637,17 @@ export function TopBar({
       ) : null}
 
       {quickAccessSlot}
+      {navSlot}
 
       {/* Stat pills — scrollable on mobile, centered + wrapping on desktop */}
       {PILLS_ENABLED && (
-        <div className={[
-          'flex items-center gap-2 flex-1 min-w-0',
-          mobile ? 'overflow-x-auto flex-nowrap' : 'flex-wrap justify-center',
-        ].join(' ')}>
+        <div
+          // With the mega menu sharing the first row, the stat pills drop to a row of their own.
+          style={navSlot ? { flexBasis: '100%', order: 99 } : undefined}
+          className={[
+            'flex items-center gap-2 flex-1 min-w-0',
+            mobile ? 'overflow-x-auto flex-nowrap' : 'flex-wrap justify-center',
+          ].join(' ')}>
           {visiblePills.map((pill) => (
             <button
               key={pill.key}
@@ -656,7 +663,7 @@ export function TopBar({
           ))}
         </div>
       )}
-      {!PILLS_ENABLED && <div className="flex-1 min-w-0" />}
+      {!PILLS_ENABLED && !navSlot && <div className="flex-1 min-w-0" />}
 
       {/* Recent Pages is the leftmost of this trailing group; Sync Status
           sits directly next to End Day. */}

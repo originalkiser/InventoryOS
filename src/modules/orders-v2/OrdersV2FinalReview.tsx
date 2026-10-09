@@ -261,7 +261,7 @@ export function OrdersV2FinalReview() {
     const sched = scheduleLookup.schedules.get(locationId ?? '')
     if (sched) return resolveScheduleDescription(sched)
     const dow = deliveryDowOf(locationId)
-    return dow != null ? `${DOW[dow]} (Reladyne delivery day)` : null
+    return dow != null ? DOW[dow] : null
   }, [scheduleLookup, deliveryDowOf])
 
   const outOfStock = useMemo(() => {

@@ -42,7 +42,13 @@ const TONE_ORDER: RowTone[] = ['below_min', 'over_capacity_target', 'excluded']
 // Row tones are drawn as translucent washes of their color over the plain cream row (alpha 0x2B ≈ 17%).
 // Excluded lines are by far the most common tone (a Valvoline order lists every configured product, most at qty 0), so their wash is
 // kept faint — a heavy gray over most rows buried the per-shop banding. Under-minimum / over-capacity keep the stronger wash.
-const toneWash = (t: RowTone) => `${ROW_TONE_META[t].color}${t === 'excluded' ? '12' : '2B'}`
+// A row's tone now colors its TEXT (the row keeps the steady shop banding). The descendant rule lets secondary lines that set their own
+// text-navy shade follow the row color too; colored flag glyphs and DOS chips set their own colors inline/by style and are left alone.
+const TONE_TEXT_CLASS: Record<RowTone, string> = {
+  excluded: '!text-inky/60 [&_[class*=text-navy]]:!text-inherit',
+  below_min: '!text-sb-red [&_[class*=text-navy]]:!text-inherit',
+  over_capacity_target: '!text-sb-orange [&_[class*=text-navy]]:!text-inherit',
+}
 
 // ── Small presentational pieces ─────────────────────────────────────────────
 
@@ -440,8 +446,8 @@ export function OrdersV2ReviewTable({
       // Every vendor gets this column (the shop's delivery cadence for THIS vendor — a sanity check on the Delivery date above);
       // it starts visible for Valvoline and hidden elsewhere, and can be added from the column chooser.
       col.accessor((l) => describeSchedule(l.location_id) ?? '', {
-        id: 'delivery_schedule', header: 'Delivery Schedule', enableSorting: false, meta: { noClip: true },
-        cell: (i) => <div className="text-[11px] leading-tight text-navy/85 min-w-[11rem]">{i.getValue() || '—'}</div>,
+        id: 'delivery_schedule', header: 'Delivery Schedule', enableSorting: false, size: 170, meta: { noClip: true },
+        cell: (i) => <div className="text-[11px] leading-tight text-navy/85 break-words">{i.getValue() || '—'}</div>,
       }),
       col.accessor((l) => Number(l.qty), {
         id: 'qty', header: 'Order Qty', enableSorting: false, size: 196, minSize: 196,
@@ -654,10 +660,10 @@ export function OrdersV2ReviewTable({
         onRowRef={onRowRef}
         onLastRowKey={onLastRowKey}
         hideColumnControl
-        // A toned row (excluded / under order minimum / over capacity to reach the DOS target) drops the zebra and
-        // shop banding entirely and shows its one tone color across the whole row; every other row is banded per shop.
-        getRowTone={(l) => { const t = toneOf(l); return t ? toneWash(t) : null }}
+        // Rows are always banded per shop. What used to recolor a row (excluded / under order minimum / over capacity to reach the DOS
+        // target) now colors the row's text instead, so the banding stays steady.
         getRowClassName={(l) => (bandOf.get(l.id) ? SHOP_BAND_CLASS : 'bg-cream')}
+        getRowTextClass={(l) => { const t = toneOf(l); return t ? TONE_TEXT_CLASS[t] : '' }}
         getRowBottomBorder={(l) => isLastOfShop.get(l.id) === true}
         expandedRowRender={(l) => {
           const locId = l.location_id ?? ''

@@ -25,7 +25,7 @@ import toast from 'react-hot-toast'
 import { useDraft, draftAdHocLocationIds, draftMightySettings, type DraftLineRow } from './useOrdersV2'
 import { OrderStepper } from './OrderStepper'
 import { getMightyUomConversion, calcMightyOrder, mightyDaysOfSupply } from './mightyEngine'
-import { dosAfterForQty, money, dos, OVERRIDE_CELL } from './shared'
+import { dosAfterForQty, money, dos, OVERRIDE_CELL, isDoneStatus } from './shared'
 import type { GeneratedLine } from './types'
 
 const sb = () => supabase as any
@@ -100,7 +100,7 @@ export function MightyOrderReview() {
       await replaceLines(generated)
       // Never downgrade an already-finalized draft back to 'review' — see
       // OrdersV2Review.tsx's runGeneration for the same guard/reasoning.
-      if (draft.status !== 'exported') await setStatus('review')
+      if (!isDoneStatus(draft.status)) await setStatus('review')
     } finally {
       setGenerating(false)
     }
@@ -142,7 +142,7 @@ export function MightyOrderReview() {
         <Button size="sm" loading={movingToFinal} disabled={lines.length === 0} onClick={async () => {
           setMovingToFinal(true)
           // See runGeneration's own guard/comment above.
-          if (draft.status !== 'exported') await setStatus('final_review')
+          if (!isDoneStatus(draft.status)) await setStatus('final_review')
           navigate(`/orders-v2/draft/${draft.id}/final`)
         }}>
           Final Review →

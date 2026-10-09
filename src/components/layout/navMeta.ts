@@ -54,11 +54,10 @@ export const SECTION_BLURB: Record<string, string> = {
   inventory: 'Counts, ordering, shops and exceptions',
   droptop: 'Sales, vehicles, packages and staffing from Droptop',
   'shop-tools': 'Tools shared with shops',
-  'data-connections': 'Keep data flowing in',
+  wip: 'Pages still being shaped',
   reladyne: 'RelaDyne reporting',
   'global-config': 'Company-wide settings',
   operations: 'Outlier reporting and operations',
   finance: 'Month-end accruals and pricing checks',
-  accounting: 'Coming soon',
   marketing: 'Campaigns and menu boards',
 }

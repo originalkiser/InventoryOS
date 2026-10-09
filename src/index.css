@@ -49,8 +49,8 @@
 .qty-float-down { animation: qtyFloatDown 1000ms ease-out forwards }
 @media (prefers-reduced-motion: reduce) { .qty-float-up, .qty-float-down { animation: none; opacity: 0 } }
 /* The data-grid stepper's +1 / −1: a small pill that drifts up-right / down-left and fades. */
-@keyframes sbFloatUp { 0% { opacity: 0; transform: translate(0, 6px) scale(0.8) } 20% { opacity: 1 } 100% { opacity: 0; transform: translate(16px, -26px) scale(1.05) } }
-@keyframes sbFloatDown { 0% { opacity: 0; transform: translate(0, -6px) scale(0.8) } 20% { opacity: 1 } 100% { opacity: 0; transform: translate(-16px, 26px) scale(1.05) } }
+@keyframes sbFloatUp { 0% { opacity: 0; transform: translate(0, 0) scale(0.8) } 20% { opacity: 1 } 100% { opacity: 0; transform: translate(16px, -26px) scale(1.05) } }
+@keyframes sbFloatDown { 0% { opacity: 0; transform: translate(0, 0) scale(0.8) } 20% { opacity: 1 } 100% { opacity: 0; transform: translate(-16px, 26px) scale(1.05) } }
 .sb-float-up { animation: sbFloatUp 700ms ease-out forwards }
 .sb-float-down { animation: sbFloatDown 700ms ease-out forwards }
 @media (prefers-reduced-motion: reduce) { .sb-float-up, .sb-float-down { animation: none; opacity: 0 } }
@@ -92,16 +92,17 @@
 
 /* Page animation "cascade": the new page's blocks drop in one after another. Applied to the wrapper KeepAlivePages puts around the page — if the
    page is one root element its children cascade, otherwise the roots do. */
-@keyframes sb-cascade-block { from { opacity: 0; transform: translateY(-16px) } to { opacity: 1; transform: none } }
+/* Slower and smoother than before: a short, soft glide (small travel, long ease-out, GPU-friendly translate3d) with an even stagger. */
+@keyframes sb-cascade-block { from { opacity: 0; transform: translate3d(0, -7px, 0) } to { opacity: 1; transform: translate3d(0, 0, 0) } }
 .sb-cascade-in > :only-child > *,
-.sb-cascade-in > :not(:only-child) { animation: sb-cascade-block 620ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards; }
-.sb-cascade-in > :only-child > :nth-child(2), .sb-cascade-in > :not(:only-child):nth-child(2) { animation-delay: 90ms; }
-.sb-cascade-in > :only-child > :nth-child(3), .sb-cascade-in > :not(:only-child):nth-child(3) { animation-delay: 180ms; }
-.sb-cascade-in > :only-child > :nth-child(4), .sb-cascade-in > :not(:only-child):nth-child(4) { animation-delay: 270ms; }
-.sb-cascade-in > :only-child > :nth-child(5), .sb-cascade-in > :not(:only-child):nth-child(5) { animation-delay: 360ms; }
-.sb-cascade-in > :only-child > :nth-child(6), .sb-cascade-in > :not(:only-child):nth-child(6) { animation-delay: 450ms; }
-.sb-cascade-in > :only-child > :nth-child(7), .sb-cascade-in > :not(:only-child):nth-child(7) { animation-delay: 540ms; }
-.sb-cascade-in > :only-child > :nth-child(n+8), .sb-cascade-in > :not(:only-child):nth-child(n+8) { animation-delay: 630ms; }
+.sb-cascade-in > :not(:only-child) { animation: sb-cascade-block 900ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards; will-change: transform, opacity; }
+.sb-cascade-in > :only-child > :nth-child(2), .sb-cascade-in > :not(:only-child):nth-child(2) { animation-delay: 110ms; }
+.sb-cascade-in > :only-child > :nth-child(3), .sb-cascade-in > :not(:only-child):nth-child(3) { animation-delay: 220ms; }
+.sb-cascade-in > :only-child > :nth-child(4), .sb-cascade-in > :not(:only-child):nth-child(4) { animation-delay: 330ms; }
+.sb-cascade-in > :only-child > :nth-child(5), .sb-cascade-in > :not(:only-child):nth-child(5) { animation-delay: 440ms; }
+.sb-cascade-in > :only-child > :nth-child(6), .sb-cascade-in > :not(:only-child):nth-child(6) { animation-delay: 550ms; }
+.sb-cascade-in > :only-child > :nth-child(7), .sb-cascade-in > :not(:only-child):nth-child(7) { animation-delay: 660ms; }
+.sb-cascade-in > :only-child > :nth-child(n+8), .sb-cascade-in > :not(:only-child):nth-child(n+8) { animation-delay: 770ms; }
 
 /* LoadingProgress's rotating status line: slides in from the LEFT across
    the full bar width, settles at center for 4s, slides back OUT to the
@@ -482,8 +483,9 @@ body {
 @keyframes sbCascade { from { opacity: 0; transform: translateY(-10px) } to { opacity: 1; transform: none } }
 @keyframes sbReveal { from { opacity: 0; clip-path: inset(0 0 100% 0) } to { opacity: 1; clip-path: inset(0 0 0 0) } }
 @keyframes sbPopIn { from { opacity: 0; transform: scale(0.3) } to { opacity: 1; transform: none } }
+@keyframes sbPopOut { from { opacity: 1; transform: none } to { opacity: 0; transform: scale(0.3) } }
 @keyframes sbEmerge { from { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.2) } 55% { opacity: 1 } to { opacity: 1; transform: none } }
-@media (prefers-reduced-motion: reduce) { [class*='animate-[sbCascade'], [class*='animate-[sbReveal'], [class*='animate-[sbPopIn'], [class*='animate-[sbEmerge'] { animation: none !important } }
+@media (prefers-reduced-motion: reduce) { [class*='animate-[sbCascade'], [class*='animate-[sbReveal'], [class*='animate-[sbPopIn'], [class*='animate-[sbEmerge'], [class*='animate-[sbPopOut'] { animation: none !important } }
 
 /* Sidebar section item drop-in animation */
 @keyframes sb-drop-in {

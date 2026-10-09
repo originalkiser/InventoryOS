@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { flexRender, type Row, type Table as TTable } from '@tanstack/react-table'
+import { flexRender, type Header, type Row, type Table as TTable } from '@tanstack/react-table'
 import { Button, Input, Modal, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
 import { useTableStyle } from '@/hooks/useTableStyle'
@@ -66,6 +66,8 @@ interface DataTableProps<T> {
    * the tint instead of being hidden under its own opaque background.
    */
   getRowClassName?: (original: T) => string
+  /** Text color classes for a row's cells (the row keeps its normal background) — e.g. grey for "not ordered". Use `!` utilities so they win over cell defaults. */
+  getRowTextClass?: (original: T) => string
   /** A heavier line under this row (e.g. the last row of a group) so groups read as separate blocks. */
   getRowBottomBorder?: (original: T) => boolean
   /**
@@ -184,6 +186,41 @@ const SEL_W = 36
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+/**
+ * Column resize without lag: dragging only moves a guide line (straight DOM, no React render, no table relayout per mouse move); the new width is
+ * applied once, on release. (TanStack's own 'onChange' mode re-rendered every row and re-laid-out the table on every pixel of movement.)
+ */
+function startColumnResize(e: React.MouseEvent | React.TouchEvent, header: Header<any, unknown>, table: TTable<any>, scroller: HTMLElement | null) {
+  e.preventDefault()
+  e.stopPropagation()
+  const touch = 'touches' in e
+  const pointX = (ev: MouseEvent | TouchEvent) => ('touches' in ev ? ev.touches[0]?.clientX ?? ev.changedTouches[0]?.clientX ?? 0 : ev.clientX)
+  const startX = touch ? e.touches[0].clientX : (e as React.MouseEvent).clientX
+  const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement
+  const startW = header.getSize()
+  const min = header.column.columnDef.minSize ?? 40
+  const max = header.column.columnDef.maxSize ?? 800
+  const rect = (scroller ?? th).getBoundingClientRect()
+  const thRight = th.getBoundingClientRect().right
+  const line = document.createElement('div')
+  line.style.cssText = `position:fixed;z-index:9999;pointer-events:none;width:2px;background:#00e5ff;box-shadow:0 0 6px rgba(0,229,255,0.7);top:${rect.top}px;height:${rect.height}px;left:${thRight - 1}px`
+  document.body.appendChild(line)
+  const prevCursor = document.body.style.cursor
+  document.body.style.cursor = 'col-resize'
+  const clampDelta = (dx: number) => Math.min(max, Math.max(min, startW + dx)) - startW
+  const move = (ev: MouseEvent | TouchEvent) => { line.style.left = `${thRight - 1 + clampDelta(pointX(ev) - startX)}px` }
+  const up = (ev: MouseEvent | TouchEvent) => {
+    document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+    document.removeEventListener('touchmove', move); document.removeEventListener('touchend', up); document.removeEventListener('touchcancel', up)
+    line.remove()
+    document.body.style.cursor = prevCursor
+    const size = Math.round(startW + clampDelta(pointX(ev) - startX))
+    if (size !== startW) table.setColumnSizing((old: Record<string, number>) => ({ ...old, [header.column.id]: size }))
+  }
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  document.addEventListener('touchmove', move); document.addEventListener('touchend', up); document.addEventListener('touchcancel', up)
+}
+
 export function DataTable<T>({
   table,
   globalFilter,
@@ -205,6 +242,7 @@ export function DataTable<T>({
   dangerZone,
   onRowClick,
   getRowClassName,
+  getRowTextClass,
   getRowBottomBorder,
   getRowTone,
   density = 'normal',
@@ -619,12 +657,9 @@ export function DataTable<T>({
                     {header.column.getCanFilter() && <ColumnFilter column={header.column} />}
                     {header.column.getCanResize() && (
                       <div
-                        onMouseDown={header.getResizeHandler()}
-                        onTouchStart={header.getResizeHandler()}
-                        className={[
-                          'absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none',
-                          header.column.getIsResizing() ? 'bg-[#00e5ff]' : 'bg-[#F2F1E6]/10 hover:bg-[#00e5ff]/60',
-                        ].join(' ')}
+                        onMouseDown={(e) => startColumnResize(e, header, table, tableScrollRef.current)}
+                        onTouchStart={(e) => startColumnResize(e, header, table, tableScrollRef.current)}
+                        className="absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none bg-[#F2F1E6]/10 hover:bg-[#00e5ff]/60"
                       />
                     )}
                   </th>
@@ -651,6 +686,7 @@ export function DataTable<T>({
                 // The caller's row class (e.g. Orders v2's per-shop band) is kept even under a full-row tone, so a toned row
                 // (excluded, under minimum, ...) still sits in its shop's band — the tone is laid over it, not instead of it.
                 const rawTint = getRowClassName?.(row.original) ?? ''
+                const textClass = getRowTextClass?.(row.original) ?? ''
                 const tint = tone ? '' : rawTint
                 // A row with its own tint sits on a plain base: the zebra shade alternates by row, and a translucent tint
                 // over an alternating base would shift color row to row (visibly in the pinned columns).
@@ -732,9 +768,10 @@ export function DataTable<T>({
                           }}
                           className={[
                             padClass, `text-navy ${borderB}`, grid && !pinnedLeft ? 'border-r border-r-navy/10' : '',
-                            noClip ? '' : 'whitespace-nowrap',
+                            noClip ? 'break-words' : 'whitespace-nowrap',
                             pinnedLeft ? `${zebraClass} border-r-2 border-r-inky/20` : '',
                             toneOnCell ? 'bg-cream' : '',
+                            textClass,
                             extraCellClass,
                           ].join(' ')}
                         >

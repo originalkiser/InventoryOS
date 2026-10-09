@@ -39,7 +39,7 @@ import { applyOrderTiming, draftHeldShops, addDaysIso } from './orderTiming'
 import { computeInbound, fetchValvolineInboundSources } from './valvolineInbound'
 import { useVendors } from './useLookups'
 import { generateOrder, nextDeliveryDate, resolveDeliveryDate, resolveScheduleDescription, dosAfterDelivery, gallonsPerUnit, resolvedOrderType, daysOfSupply, daysBetween, unitsToTarget, capsFor, roundQty } from './engine'
-import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, OV2_SHOP_EXPAND_KEY, OV2_HIDE_MOBILE_BUTTON_KEY, OV2_DOS_STYLE_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort } from './shared'
+import { FLAG_CLASS, FLAG_META, OVERRIDE_CELL, OV2_USE_OLD_TABLE_KEY, OV2_SHOP_EXPAND_KEY, OV2_HIDE_MOBILE_BUTTON_KEY, OV2_DOS_STYLE_KEY, DOS_COLOR_LEGEND, dos, money, num, dosAfterForQty, dShort, isDoneStatus } from './shared'
 import { OrdersV2ReviewTable } from './OrdersV2ReviewTable'
 import { ShopConfiguredProductsDataTable } from './ShopConfiguredProductsDataTable'
 import { uomDisplayLabel } from './types'
@@ -257,7 +257,7 @@ export function OrdersV2Review() {
     // back to the RelaDyne weekday straight off the location list, same
     // source deliveryFor's own else-branch (nextDeliveryDate) uses.
     const dow = deliveryLookup.deliveryDow.get(locationId ?? '')
-    return dow != null ? `${DOW[dow]} (Reladyne delivery day)` : null
+    return dow != null ? DOW[dow] : null
   }, [deliveryLookup])
   // Main table column customize modal — hide/reorder, see MAIN_COLUMNS.
   const [columnPrefs, setColumnPrefs] = useState(loadColumnPrefs)
@@ -696,7 +696,7 @@ export function OrdersV2Review() {
           // reformat/re-download the export), and this write would
           // otherwise silently misfile it into the Review tab on the
           // landing page while it's ALSO still sitting in Completed.
-          status: draft.status === 'exported' ? 'exported' : 'review',
+          status: isDoneStatus(draft.status) ? draft.status : 'review',
         })
         .eq('id', draft.id)
       await reload()
@@ -1086,7 +1086,7 @@ export function OrdersV2Review() {
     setMovingToFinal(true)
     // See runGeneration's own comment — a completed order stays 'exported', it never gets pulled back into the
     // Final Review tab just because someone stepped through to revisit it.
-    if (draft && draft.status !== 'exported') await setStatus('final_review')
+    if (draft && !isDoneStatus(draft.status)) await setStatus('final_review')
     navigate(`/orders-v2/draft/${draft!.id}/final`)
   }
   function goBackToFirstUnseen() {

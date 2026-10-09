@@ -558,7 +558,7 @@ export function OrdersV2Export() {
             if (confettiOnExport) fireConfettiCannon(e.clientX, e.clientY, { simple: confettiSimple })
             download()
           }}>
-            {draft.status === 'exported' ? `Re-download ${tpl.format.toUpperCase()}` : `Download ${tpl.format.toUpperCase()}`}
+            {draft.status === 'exported' || draft.status === 'closed' ? `Re-download ${tpl.format.toUpperCase()}` : `Download ${tpl.format.toUpperCase()}`}
           </Button>
         </div>
       </div>
@@ -569,9 +569,9 @@ export function OrdersV2Export() {
         <h1 className="text-lg font-bold text-navy tracking-wide uppercase flex items-center gap-2">
           Export
           {isAdHoc && <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-sky/40 text-navy">Ad Hoc</span>}
-          {draft.status === 'exported' && (
+          {(draft.status === 'exported' || draft.status === 'closed') && (
             <span className="text-[10px] font-mono normal-case tracking-normal rounded px-1.5 py-0.5 bg-[#2ECC71]/15 text-[#2ECC71] border border-[#2ECC71]/40">
-              ✓ Complete
+              ✓ {draft.status === 'closed' ? 'Closed' : 'Complete'}
             </span>
           )}
         </h1>
