@@ -305,11 +305,18 @@ function FavoritesSection({
   onToggleFavorite,
   onNavClick,
   setFavoritesOrder,
+  collapsible = false,
+  collapsed = false,
+  onToggleCollapse,
 }: {
   favorites: string[]
   showLabels: boolean
   onToggleFavorite: (key: string) => void
   onNavClick?: () => void
+  /** Pinned behaves like a section: a header that folds it shut (Profile → Navigation → Pinned pages). Off = always expanded. */
+  collapsible?: boolean
+  collapsed?: boolean
+  onToggleCollapse?: () => void
   /** Previously the Pinned section could only ever grow in pin-order — no
    * UI ever called this. Now sortable via the same global Rearrange mode
    * as regular section items (see RearrangeCtx above). */
@@ -336,11 +343,21 @@ function FavoritesSection({
 
   return (
     <div className="pb-1">
-      {showLabels && (
+      {showLabels && (collapsible ? (
+        <button type="button" onClick={onToggleCollapse} aria-expanded={!collapsed}
+          className="mx-1 mt-1 flex w-[calc(100%-8px)] items-center gap-1.5 rounded-[11px] px-2 py-2 text-left transition-colors hover:bg-chrome-fg/10">
+          <Pin className="w-3.5 h-3.5 flex-shrink-0 text-sky" fill="currentColor" />
+          <span className="flex-1 text-[11px] font-heading font-semibold uppercase tracking-[0.14em] text-chrome-fg/90">Pinned</span>
+          {collapsed && <span className="rounded-full bg-chrome-fg/15 px-1.5 text-[10px] font-mono text-chrome-fg/80">{favItems.length}</span>}
+          <ChevronRight className={`w-3 h-3 flex-shrink-0 text-chrome-fg/40 transition-transform duration-150 ${collapsed ? '' : 'rotate-90'}`} />
+        </button>
+      ) : (
         <div className="px-3 pt-3 pb-1 text-[10px] font-heading text-chrome-fg/45 uppercase tracking-widest flex items-center gap-1">
           <Pin className="w-3 h-3" fill="currentColor" /> Pinned
         </div>
-      )}
+      ))}
+      <div className={['grid transition-[grid-template-rows] duration-300 ease-in-out', collapsible && collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'].join(' ')}>
+       <div className="overflow-hidden">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={favItems.map((i) => i.key)} strategy={verticalListSortingStrategy}>
           {favItems.map((item) => (
@@ -356,6 +373,8 @@ function FavoritesSection({
           ))}
         </SortableContext>
       </DndContext>
+       </div>
+      </div>
       {showLabels && <div className="mx-3 mt-2 border-t border-chrome-fg/8" />}
     </div>
   )
@@ -957,7 +976,7 @@ function CollapsedNav({
       <div className="flex-1 overflow-y-auto app-scroll py-2">
         <button
           onClick={() => window.dispatchEvent(new Event('sb-open-palette'))}
-          onMouseEnter={(e) => showFlyout(e, 'Search (Ctrl K)')} onMouseLeave={() => setFlyout(null)}
+          onMouseEnter={(e) => showFlyout(e, 'Search')} onMouseLeave={() => setFlyout(null)}
           aria-label="Search pages and actions"
           className="w-[calc(100%-8px)] flex items-center justify-center py-2.5 mx-1 rounded-[11px] text-chrome-fg/70 hover:text-chrome-fg hover:bg-chrome-fg/10 transition-colors"
         >
@@ -1106,6 +1125,9 @@ function ExpandedSidebar({
   const [homePage, setHomePage] = useProfilePref<string | null>('home_page', null)
   // A-style accordion: opening a section folds the others (Profile → Appearance → Navigation).
   const [accordion] = useProfilePref<boolean>('nav:accordion', true)
+  // Pinned pages as a section that folds like the others ('section', default) or always shown ('always').
+  const [pinnedMode] = useProfilePref<'section' | 'always'>('nav:pinnedMode', 'section')
+  const pinnedCollapsible = pinnedMode !== 'always'
   const { pathname } = useLocation()
   const [query, setQuery] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
@@ -1157,13 +1179,13 @@ function ExpandedSidebar({
   const toggleOrOpen = (k: string) => {
     if (!accordion) { toggleSection(k); return }
     if (!sectionCollapsed[k]) toggleSection(k)
-    else openOnlySection(k, visibleSectionOrder)
+    else openOnlySection(k, pinnedCollapsible ? [...visibleSectionOrder, 'pinned'] : visibleSectionOrder)
   }
   // Navigating to a page (any way) opens the section it lives in, so the current page is always visible in the accordion.
   useEffect(() => {
     if (!accordion) return
     const owner = visibleSectionOrder.find((k) => (SECTION_ITEMS[k] ?? []).some((i) => i.to && (pathname === i.to || pathname.startsWith(`${i.to}/`))))
-    if (owner && sectionCollapsed[owner]) openOnlySection(owner, visibleSectionOrder)
+    if (owner && sectionCollapsed[owner]) openOnlySection(owner, pinnedCollapsible ? [...visibleSectionOrder, 'pinned'] : visibleSectionOrder)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname, accordion])
 
@@ -1216,6 +1238,9 @@ function ExpandedSidebar({
           onToggleFavorite={toggleFavorite}
           onNavClick={onNavClick}
           setFavoritesOrder={setFavoritesOrder}
+          collapsible={pinnedCollapsible}
+          collapsed={pinnedCollapsible && !!sectionCollapsed['pinned']}
+          onToggleCollapse={() => toggleOrOpen('pinned')}
         />
 
         <DndContext

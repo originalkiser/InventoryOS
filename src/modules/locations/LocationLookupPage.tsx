@@ -1916,7 +1916,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         </div>
       )}
       {!embedded && (
-        <div className="sticky z-30 bg-cream pt-1 pb-2 flex items-end justify-between flex-wrap gap-3" style={{ top: 'var(--inv-navbar-h, 0px)' }}>
+        <div className="sticky z-30 bg-page pt-1 pb-2" style={{ top: 'var(--inv-navbar-h, 0px)' }}>
+        <div className="sb-page-head relative flex items-end justify-between flex-wrap gap-3 !pb-3">
           {/* Shop picker replaces the shop-name text here (2026-09-25 ask) —
               it's now always a live dropdown, not just text, and lives in
               this sticky header so it's reachable without scrolling back up
@@ -1936,10 +1937,11 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
             <button onClick={() => setCustomizeOpen((o) => !o)}
               title={customizeOpen ? 'Save & exit layout editing' : 'Customize columns / edit page layout'}
               aria-label={customizeOpen ? 'Save & exit layout editing' : 'Customize columns / edit page layout'}
-              className={`absolute top-1 -right-1 flex items-center justify-center rounded-full p-2 shadow-lg transition-colors ${customizeOpen ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
+              className={`absolute top-3 right-3 flex items-center justify-center rounded-full p-2 shadow-lg transition-colors ${customizeOpen ? 'bg-sky text-navy hover:bg-sky/80' : 'bg-navy/80 text-cream hover:bg-navy'}`}>
               <Settings className="w-4 h-4" />
             </button>
           )}
+        </div>
         </div>
       )}
 

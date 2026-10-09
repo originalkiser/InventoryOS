@@ -134,7 +134,8 @@ export function LocationCommsPage() {
   return (
     <div className="flex flex-col">
       <Tabs defaultValue="summary">
-        <div className="sticky top-0 z-40 bg-cream pt-1 pb-2">
+        <div className="sticky top-0 z-40 bg-page pt-1 pb-2">
+         <div className="sb-page-head sb-page-head-tabs">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Location Comms</h1>
@@ -150,6 +151,7 @@ export function LocationCommsPage() {
             <TabsTrigger value="reports">Reports</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </div>
+         </div>
         </div>
 
         {/* Exactly the rows behind the sidebar badge: not resolved, old

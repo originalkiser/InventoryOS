@@ -68,6 +68,7 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { theme: colorTheme, setTheme: setColorTheme } = useColorTheme()
   const { layout: navLayout, setLayout: setNavLayout } = useNavLayout()
   const [navAccordion, setNavAccordion] = useNavAccordion()
+  const [pinnedMode, setPinnedMode] = useProfilePref<'section' | 'always'>('nav:pinnedMode', 'section')
   const { animation: pageAnim, setAnimation: setPageAnim } = usePageAnimation()
   const { style: tableStyle, setStyle: setTableStyle } = useTableStyle()
   const isAdmin = isAdminOrDeveloper(profile?.role)
@@ -244,6 +245,15 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                     <input type="checkbox" className="accent-sky" checked={navAccordion} onChange={(e) => setNavAccordion(e.target.checked)} />
                     <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">Sidebar: keep one section open at a time</span>
                   </label>
+                  <div className={`mt-1 flex flex-col gap-1 pl-0.5 ${navLayout === 'sidebar' ? '' : 'opacity-50'}`}>
+                    <span className="text-[11px] font-body text-navy dark:text-[#F2F1E6]">Sidebar: pinned pages</span>
+                    {([['section', 'Fold like the other sections'], ['always', 'Always expanded']] as const).map(([val, text]) => (
+                      <label key={val} className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="pinned-mode" className="accent-sky" checked={pinnedMode === val} onChange={() => setPinnedMode(val)} />
+                        <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">{text}</span>
+                      </label>
+                    ))}
+                  </div>
                   <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">Ctrl K searches pages and actions in any layout. Phones always use the sidebar drawer.</span>
                 </div>
               </div>

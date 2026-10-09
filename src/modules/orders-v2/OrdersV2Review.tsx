@@ -1200,7 +1200,7 @@ export function OrdersV2Review() {
           block below. */}
       {/* 1px sentinel: once it scrolls out of view the pinned header hides the step labels to save room. */}
       <div ref={headerSentinelRef} aria-hidden className="h-px -mb-4" />
-      <div className="sticky top-0 z-40 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
+      <div className="sticky top-0 z-40 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-page flex flex-col gap-3">
       {/* Back button + page-level actions live above the step bar (direct
           ask 2026-09-29) — the step bar itself is centered below, and the
           page's own title/subtext moved further down, past the DOS-targets

@@ -80,11 +80,7 @@ export function NavSearchInput({ value, onChange, onKeyDown, inputRef, onClear }
       <input ref={inputRef} type="text" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown}
         placeholder="Search pages & actions" aria-label="Search pages and actions"
         className="w-full bg-transparent outline-none text-xs font-body text-chrome-fg placeholder:text-chrome-fg/45" />
-      {value ? (
-        <button type="button" onClick={onClear} aria-label="Clear search" className="text-chrome-fg/60 hover:text-chrome-fg"><X className="w-3.5 h-3.5" /></button>
-      ) : (
-        <kbd className="hidden sm:inline text-[9px] font-body text-chrome-fg/50 border border-chrome-fg/25 rounded px-1">Ctrl K</kbd>
-      )}
+      {value && <button type="button" onClick={onClear} aria-label="Clear search" className="text-chrome-fg/60 hover:text-chrome-fg"><X className="w-3.5 h-3.5" /></button>}
     </label>
   )
 }

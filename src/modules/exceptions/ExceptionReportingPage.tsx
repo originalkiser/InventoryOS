@@ -178,7 +178,8 @@ export function ExceptionReportingPage() {
     <div className="flex flex-col">
       <Tabs defaultValue="summary">
         {/* Pinned header + tabs */}
-        <div className="sticky top-0 z-40 bg-cream pt-1 pb-2">
+        <div className="sticky top-0 z-40 bg-page pt-1 pb-2">
+         <div className="sb-page-head sb-page-head-tabs">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Exception Reporting</h1>
@@ -197,6 +198,7 @@ export function ExceptionReportingPage() {
             {config.poAlertsEnabled && <TabsTrigger value="po_alerts">Late POs - Not Received</TabsTrigger>}
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </div>
+         </div>
         </div>
 
         {/* Exactly the rows behind the sidebar badge: open, old enough to be

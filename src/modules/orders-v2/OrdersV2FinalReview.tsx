@@ -570,7 +570,7 @@ export function OrdersV2FinalReview() {
           regardless of scroll position — see OrdersV2Review.tsx's own
           identical wrapper for the full reasoning. "← Orders v2" reaches
           the landing page directly from here too, not just "← Review". */}
-      <div className="sticky top-0 z-20 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-cream dark:bg-[#0A1826] flex flex-col gap-3">
+      <div className="sticky top-0 z-20 -mt-4 pt-4 -mx-4 px-4 pb-2 bg-page flex flex-col gap-3">
       {/* Direct ask 2026-09-30 (revised): back buttons share a row with
           the next-step action (Continue to Export), and the stepper sits
           directly below that with nothing between — same arrangement as

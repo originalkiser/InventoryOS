@@ -91,7 +91,7 @@ export function MegaNav() {
         <div className="flex-1 min-w-[12px]" />
         <button type="button" onClick={() => window.dispatchEvent(new Event('sb-open-palette'))}
           className="flex flex-shrink-0 items-center gap-2 rounded-full border border-chrome-fg/45 px-3.5 py-1.5 text-xs font-body text-chrome-fg hover:border-chrome-fg hover:bg-inky/35 transition-colors">
-          <Search className="w-3.5 h-3.5" /> Go to…<kbd className="ml-2 text-[9px] border border-chrome-fg/45 rounded px-1">Ctrl K</kbd>
+          <Search className="w-3.5 h-3.5" /> Search
         </button>
       </nav>
       {current && (
