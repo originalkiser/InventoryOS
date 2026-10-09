@@ -577,7 +577,9 @@ function applyBulkPerProductMinimum(
     if (l.qty >= floorUnits) { kept.push(l); continue }
 
     const calc = l.qty
-    const urgent = l.dos_before != null && l.dos_before < urgentDos
+    // A product at/below its critical minimum is as urgent as it gets (it can have no usage at all, so DOS says nothing) - it goes out as
+    // the full minimum rather than being dropped, or worse, ordered at the one gallon the critical-minimum sizing gives.
+    const urgent = (l.dos_before != null && l.dos_before < urgentDos) || l.flags.includes('critical_minimum')
     if (calc < roundUpThreshold && !urgent) {
       skipped.push({ location_id: l.location_id, product_id: l.product_id, reason: 'below_bulk_minimum' })
       continue

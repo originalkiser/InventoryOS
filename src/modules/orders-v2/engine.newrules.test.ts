@@ -193,6 +193,18 @@ describe('bulk minimum round-up threshold (2026-09-16)', () => {
   })
 })
 
+describe('bulk critical minimum meets the per-product floor (2026-10-09)', () => {
+  it('a bulk product at its critical minimum with no usage orders the full 55 gallons, not 1 (and is not dropped)', () => {
+    const a = input({ on_hand: 0, daily_usage: 0, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 20, min_on_hand_qty: 4, max_capacity_gallons: 800 } })
+    const c = ctx({ vendor: { vendor_id: 'V1', caseTypeMinimums: {}, usesOrderDays: false, minimums: { bulk: { type: 'gallons_per_product' as const, dollars: 0, qty: 55 } } } })
+    const res = generateOrder([a], c)
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].qty).toBe(55)
+    expect(res.lines[0].flags).toContain('critical_minimum')
+    expect(res.lines[0].flags).toContain('rounded_to_bulk_minimum')
+  })
+})
+
 describe('vendor case-type minimums', () => {
   it('tops the order up to at least the case-type minimum across products', () => {
     // DOS 12 with a target of 13 => 1 bay box due on each product, 2 in total.

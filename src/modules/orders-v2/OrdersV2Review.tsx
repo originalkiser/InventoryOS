@@ -125,7 +125,7 @@ export function OrdersV2Review() {
   const loc = useLocations()
   const vendors = useVendors()
   const { settings, loading: settingsLoading, save: saveOrderSettings } = useOrderSettings()
-  const { rulesFor } = useVendorRules()
+  const { rulesFor, loading: vendorRulesLoading } = useVendorRules()
   const { fetchInputs, fetchDeliveryLookup } = useGenerationData()
   const { draft, lines, loading, reload, replaceLines, patchLine, addLine, removeLine, setStatus } = useDraft(draftId || null)
   // This page sits behind KeepAlivePages once visited more than once (see
@@ -548,7 +548,10 @@ export function OrdersV2Review() {
     // delay, was the reliable trigger). Every caller (auto-generate, the
     // order-day dropdown, manual Regenerate) goes through this one
     // function, so guarding here protects all of them at once.
-    if (vendors.loading) { toast.error('Still loading vendor data — try again in a moment'); return }
+    // Same race for the vendor minimums/case limits (found 2026-10-09): until they load, rulesFor() silently falls back to the company
+    // default minimum (dollars), so a RelaDyne run that raced ahead of them had no 55-gallon per-product bulk floor at all and suggested
+    // 1-gallon / 27-gallon bulk lines.
+    if (vendors.loading || vendorRulesLoading) { toast.error('Still loading vendor data — try again in a moment'); return }
     const useDow = dow ?? draftOrderDow(draft)
     setGenerating(true)
     setGenProgress({ loaded: 0, total: 0 })
@@ -704,7 +707,7 @@ export function OrdersV2Review() {
     } finally {
       setGenerating(false)
     }
-  }, [draft, profile?.company_id, fetchInputs, settings, effectiveSettings, rulesFor, replaceLines, reload, vendors])
+  }, [draft, profile?.company_id, fetchInputs, settings, effectiveSettings, rulesFor, replaceLines, reload, vendors, vendorRulesLoading])
 
   // Generate automatically the first time a fresh draft is opened. Guarded
   // by autoGenAttemptedRef (not just draft.status) — found live 2026-09-21:
@@ -724,11 +727,11 @@ export function OrdersV2Review() {
     // this should just wait and re-fire once the fetch resolves (this
     // effect re-runs on every vendors.loading change since it's a dep),
     // not count as "already attempted" the way a real generation failure does.
-    if (!draft || draft.status !== 'generating' || loading || lines.length !== 0 || generating || vendors.loading) return
+    if (!draft || draft.status !== 'generating' || loading || lines.length !== 0 || generating || vendors.loading || vendorRulesLoading) return
     if (autoGenAttemptedRef.current === draft.id) return
     autoGenAttemptedRef.current = draft.id
     void runGeneration()
-  }, [draft, loading, lines.length, generating, runGeneration, vendors.loading])
+  }, [draft, loading, lines.length, generating, runGeneration, vendors.loading, vendorRulesLoading])
 
   // ---- grouping + derived numbers -----------------------------------------
   const groups = useMemo(() => {
