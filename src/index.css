@@ -48,6 +48,12 @@
 .qty-float-up { animation: qtyFloatUp 1000ms ease-out forwards }
 .qty-float-down { animation: qtyFloatDown 1000ms ease-out forwards }
 @media (prefers-reduced-motion: reduce) { .qty-float-up, .qty-float-down { animation: none; opacity: 0 } }
+/* The data-grid stepper's +1 / −1: a small pill that drifts up-right / down-left and fades. */
+@keyframes sbFloatUp { 0% { opacity: 0; transform: translate(0, 6px) scale(0.8) } 20% { opacity: 1 } 100% { opacity: 0; transform: translate(16px, -26px) scale(1.05) } }
+@keyframes sbFloatDown { 0% { opacity: 0; transform: translate(0, -6px) scale(0.8) } 20% { opacity: 1 } 100% { opacity: 0; transform: translate(-16px, 26px) scale(1.05) } }
+.sb-float-up { animation: sbFloatUp 700ms ease-out forwards }
+.sb-float-down { animation: sbFloatDown 700ms ease-out forwards }
+@media (prefers-reduced-motion: reduce) { .sb-float-up, .sb-float-down { animation: none; opacity: 0 } }
 @keyframes fabRise { from { opacity: 0; transform: translateY(10px) scale(0.9) } to { opacity: 1; transform: translateY(0) scale(1) } }
 @keyframes panelIn { from { opacity: 0; transform: translateY(8px) scale(0.98) } to { opacity: 1; transform: translateY(0) scale(1) } }
 @keyframes swipeRight { from { opacity: 0; transform: translateX(-14px) } to { opacity: 1; transform: translateX(0) } }
@@ -68,34 +74,34 @@
 /* 265ms — 20% slower than the original 220ms (2026-09-26 ask). Keep this in
    sync with KeepAlivePages.tsx's own TRANSITION_MS, which clears the
    transition state shortly after this finishes. */
-.sb-page-slide-in-right { position: absolute; inset: 0; animation: sb-page-slide-in-right 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-.sb-page-slide-in-left { position: absolute; inset: 0; animation: sb-page-slide-in-left 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-.sb-page-slide-out-left { position: absolute; inset: 0; animation: sb-page-slide-out-left 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-.sb-page-slide-out-right { position: absolute; inset: 0; animation: sb-page-slide-out-right 265ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sb-page-slide-in-right { position: absolute; inset: 0; animation: sb-page-slide-in-right 560ms cubic-bezier(0.22, 1, 0.36, 1) both; will-change: transform; }
+.sb-page-slide-in-left { position: absolute; inset: 0; animation: sb-page-slide-in-left 560ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sb-page-slide-out-left { position: absolute; inset: 0; animation: sb-page-slide-out-left 560ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sb-page-slide-out-right { position: absolute; inset: 0; animation: sb-page-slide-out-right 560ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 
 /* Page animation "flip": the old page turns away, then the new one turns in (Profile → Appearance → Page animation). Same absolute-stack
-   mechanics as the push above; KeepAlivePages' FLIP_MS must stay a little above the in-animation's end (180ms delay + 280ms). */
+   mechanics as the push above; KeepAlivePages' FLIP_MS must stay a little above the in-animation's end (300ms delay + 460ms). */
 @keyframes sb-flip-out-l { from { transform: none; opacity: 1 } to { transform: rotateY(-80deg); opacity: 0 } }
 @keyframes sb-flip-out-r { from { transform: none; opacity: 1 } to { transform: rotateY(80deg); opacity: 0 } }
 @keyframes sb-flip-in-r  { from { transform: rotateY(80deg); opacity: 0 } to { transform: none; opacity: 1 } }
 @keyframes sb-flip-in-l  { from { transform: rotateY(-80deg); opacity: 0 } to { transform: none; opacity: 1 } }
-.sb-page-flip-out-left  { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-out-l 200ms ease-in both; }
-.sb-page-flip-out-right { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-out-r 200ms ease-in both; }
-.sb-page-flip-in-right  { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-in-r 280ms ease-out 180ms both; }
-.sb-page-flip-in-left   { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-in-l 280ms ease-out 180ms both; }
+.sb-page-flip-out-left  { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-out-l 340ms ease-in both; will-change: transform, opacity; }
+.sb-page-flip-out-right { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-out-r 340ms ease-in both; will-change: transform, opacity; }
+.sb-page-flip-in-right  { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-in-r 460ms ease-out 300ms both; will-change: transform, opacity; }
+.sb-page-flip-in-left   { position: absolute; inset: 0; backface-visibility: hidden; animation: sb-flip-in-l 460ms ease-out 300ms both; will-change: transform, opacity; }
 
 /* Page animation "cascade": the new page's blocks drop in one after another. Applied to the wrapper KeepAlivePages puts around the page — if the
    page is one root element its children cascade, otherwise the roots do. */
 @keyframes sb-cascade-block { from { opacity: 0; transform: translateY(-16px) } to { opacity: 1; transform: none } }
 .sb-cascade-in > :only-child > *,
-.sb-cascade-in > :not(:only-child) { animation: sb-cascade-block 420ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards; }
-.sb-cascade-in > :only-child > :nth-child(2), .sb-cascade-in > :not(:only-child):nth-child(2) { animation-delay: 60ms; }
-.sb-cascade-in > :only-child > :nth-child(3), .sb-cascade-in > :not(:only-child):nth-child(3) { animation-delay: 120ms; }
-.sb-cascade-in > :only-child > :nth-child(4), .sb-cascade-in > :not(:only-child):nth-child(4) { animation-delay: 180ms; }
-.sb-cascade-in > :only-child > :nth-child(5), .sb-cascade-in > :not(:only-child):nth-child(5) { animation-delay: 240ms; }
-.sb-cascade-in > :only-child > :nth-child(6), .sb-cascade-in > :not(:only-child):nth-child(6) { animation-delay: 300ms; }
-.sb-cascade-in > :only-child > :nth-child(7), .sb-cascade-in > :not(:only-child):nth-child(7) { animation-delay: 360ms; }
-.sb-cascade-in > :only-child > :nth-child(n+8), .sb-cascade-in > :not(:only-child):nth-child(n+8) { animation-delay: 420ms; }
+.sb-cascade-in > :not(:only-child) { animation: sb-cascade-block 620ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards; }
+.sb-cascade-in > :only-child > :nth-child(2), .sb-cascade-in > :not(:only-child):nth-child(2) { animation-delay: 90ms; }
+.sb-cascade-in > :only-child > :nth-child(3), .sb-cascade-in > :not(:only-child):nth-child(3) { animation-delay: 180ms; }
+.sb-cascade-in > :only-child > :nth-child(4), .sb-cascade-in > :not(:only-child):nth-child(4) { animation-delay: 270ms; }
+.sb-cascade-in > :only-child > :nth-child(5), .sb-cascade-in > :not(:only-child):nth-child(5) { animation-delay: 360ms; }
+.sb-cascade-in > :only-child > :nth-child(6), .sb-cascade-in > :not(:only-child):nth-child(6) { animation-delay: 450ms; }
+.sb-cascade-in > :only-child > :nth-child(7), .sb-cascade-in > :not(:only-child):nth-child(7) { animation-delay: 540ms; }
+.sb-cascade-in > :only-child > :nth-child(n+8), .sb-cascade-in > :not(:only-child):nth-child(n+8) { animation-delay: 630ms; }
 
 /* LoadingProgress's rotating status line: slides in from the LEFT across
    the full bar width, settles at center for 4s, slides back OUT to the
@@ -236,6 +242,21 @@ html.dark[data-colors='legacy'] {
   padding: 12px 16px 8px;
 }
 .sb-page-head.sb-page-head-tabs { padding-bottom: 0; }
+
+/* Location picker (Location Lookup): panel drop-open, row cascade, slim sky scrollbar. */
+@keyframes sbPickerPanelIn { from { clip-path: inset(0 0 100% 0 round 14px); opacity: 0.5 } to { clip-path: inset(0 0 0 0 round 14px); opacity: 1 } }
+.sb-picker-panel-in { animation: sbPickerPanelIn 260ms ease-out both; }
+@keyframes sbRowIn { from { opacity: 0; transform: translateY(-12px) } to { opacity: 1; transform: none } }
+.sb-picker-casc .sb-picker-row { animation: sbRowIn 300ms cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: calc(var(--i, 0) * 30ms + 70ms); }
+.sb-picker-scroll { overscroll-behavior: contain; }
+.sb-picker-scroll::-webkit-scrollbar { width: 12px; }
+.sb-picker-scroll::-webkit-scrollbar-track { background: transparent; margin: 4px 0; }
+.sb-picker-scroll::-webkit-scrollbar-thumb { background: rgba(183, 224, 222, 0.38); border-radius: 99px; border: 3.5px solid transparent; background-clip: padding-box; }
+.sb-picker-scroll::-webkit-scrollbar-thumb:hover { background: rgba(183, 224, 222, 0.7); background-clip: padding-box; }
+@media (prefers-reduced-motion: reduce) { .sb-picker-panel-in, .sb-picker-casc .sb-picker-row { animation: none; } }
+
+/* A frame whose horizontal scrollbar is shown by StickyHScroll instead (Chrome / Edge): hide its own. */
+.sb-hide-x-scroll::-webkit-scrollbar:horizontal { height: 0; display: none; }
 
 /* Scrollbars inside the new table grid: thin rounded thumb, no track. */
 .sb-grid-scroll::-webkit-scrollbar { width: 12px; height: 12px; }

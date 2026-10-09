@@ -12,10 +12,10 @@ import type { DraftLineRow } from './useOrdersV2'
 // Same height as the number box (the row is items-stretch) and twice the old 20px width, so they're easy to hit.
 // Fluid variant (the Review table's Order Qty column): the box and both buttons shrink with the column instead of
 // spilling over their neighbors — buttons share 1 part each, the box 2 parts, with small floors.
-const FLUID_BTN = 'flex-1 basis-0 min-w-[0.9rem] max-w-[2.5rem] flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none overflow-hidden'
+const FLUID_BTN = 'flex-1 basis-0 min-w-[0.9rem] max-w-[2.5rem] flex items-center justify-center overflow-hidden rounded-lg border-[1.5px] border-navy/30 bg-cream text-navy text-base leading-none font-semibold hover:bg-sky hover:text-sb-navy hover:border-inky active:scale-90 transition-[background,transform] select-none disabled:opacity-30 disabled:hover:bg-cream disabled:hover:text-navy disabled:active:scale-100'
 // Compact variant (the Review table's Order Qty column): fixed, narrower buttons so every row's box lines up.
-const COMPACT_BTN = 'w-7 flex-shrink-0 flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none'
-const STEP_BTN = 'w-10 flex-shrink-0 flex items-center justify-center rounded border border-navy/25 text-inky text-base leading-none hover:border-navy hover:text-navy disabled:opacity-30 disabled:hover:border-navy/25 select-none'
+const COMPACT_BTN = 'w-7 flex-shrink-0 flex items-center justify-center rounded-lg border-[1.5px] border-navy/30 bg-cream text-navy text-base leading-none font-semibold hover:bg-sky hover:text-sb-navy hover:border-inky active:scale-90 transition-[background,transform] select-none disabled:opacity-30 disabled:hover:bg-cream disabled:hover:text-navy disabled:active:scale-100'
+const STEP_BTN = 'w-10 flex-shrink-0 flex items-center justify-center rounded-lg border-[1.5px] border-navy/30 bg-cream text-navy text-base leading-none font-semibold hover:bg-sky hover:text-sb-navy hover:border-inky active:scale-90 transition-[background,transform] select-none disabled:opacity-30 disabled:hover:bg-cream disabled:hover:text-navy disabled:active:scale-100'
 
 /**
  * Faint "+1" drifting up / "−1" drifting down from where the cursor clicked (see .qty-float-* in index.css). Plain DOM
@@ -26,10 +26,10 @@ function spawnFloat(dir: 1 | -1, x: number, y: number) {
   const el = document.createElement('span')
   el.textContent = dir > 0 ? '+1' : '−1'
   el.setAttribute('aria-hidden', 'true')
-  el.className = `pointer-events-none text-xs font-mono font-bold ${dir > 0 ? 'text-sb-green qty-float-up' : 'text-sb-red qty-float-down'}`
+  el.className = `pointer-events-none rounded-full px-2 py-px font-heading text-[13px] font-bold tracking-wide shadow-[0_3px_8px_rgba(0,0,0,0.25)] ${dir > 0 ? 'bg-sb-green text-sb-navy sb-float-up' : 'bg-sb-red text-white sb-float-down'}`
   el.style.cssText = `position:fixed;left:${x - 8}px;top:${y - 10}px;z-index:500`
   document.body.appendChild(el)
-  window.setTimeout(() => el.remove(), 1100)
+  window.setTimeout(() => el.remove(), 800)
 }
 
 /** Enter in a qty box moves to the next row's qty box (Shift+Enter goes back up) within the same table. */
@@ -113,7 +113,7 @@ export function QtyStepper({ value, onChange, bulk = false, commitOn = 'change',
         onBlur={() => {
           if (commitOn === 'blur' && (Number(text) || 0) !== lastCommittedRef.current) commit(Number(text) || 0)
         }}
-        className={`${fluid ? 'flex-[2] w-0 min-w-[1.4rem]' : inputClassName} ${align} ${NO_SPINNER} bg-transparent border rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-sky ${muted ? 'border-navy/20 text-inky/60' : 'border-navy/25 text-navy'}`} />
+        className={`${fluid ? 'flex-[2] w-0 min-w-[1.4rem]' : inputClassName} ${align} ${NO_SPINNER} bg-transparent border-[1.5px] rounded-lg px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-sky ${muted ? 'border-navy/20 text-inky/60' : 'border-navy/30 hover:border-inky text-navy'}`} />
       <button type="button" title="Increase by 1" onClick={(e) => bump(1, e)} className={fluid ? FLUID_BTN : compact ? COMPACT_BTN : STEP_BTN}>+</button>
     </div>
   )

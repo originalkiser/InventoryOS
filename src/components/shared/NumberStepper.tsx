@@ -8,10 +8,10 @@ function spawnFloat(dir: 1 | -1, label: string, x: number, y: number) {
   const el = document.createElement('span')
   el.textContent = label
   el.setAttribute('aria-hidden', 'true')
-  el.className = `pointer-events-none text-xs font-mono font-bold ${dir > 0 ? 'text-sb-green qty-float-up' : 'text-sb-red qty-float-down'}`
+  el.className = `pointer-events-none rounded-full px-2 py-px font-heading text-[13px] font-bold tracking-wide shadow-[0_3px_8px_rgba(0,0,0,0.25)] ${dir > 0 ? 'bg-sb-green text-sb-navy sb-float-up' : 'bg-sb-red text-white sb-float-down'}`
   el.style.cssText = `position:fixed;left:${x - 8}px;top:${y - 10}px;z-index:500`
   document.body.appendChild(el)
-  window.setTimeout(() => el.remove(), 1100)
+  window.setTimeout(() => el.remove(), 800)
 }
 
 const BTN = 'w-6 h-7 flex-shrink-0 flex items-center justify-center rounded-lg border-[1.5px] border-navy/30 bg-cream text-navy text-base leading-none select-none hover:bg-sky hover:text-sb-navy hover:border-inky active:scale-90 disabled:opacity-30 disabled:hover:bg-cream'

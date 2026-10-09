@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { CheckCircle2, MapPin, Package } from 'lucide-react'
 import { BiCalendarPlus } from 'react-icons/bi'
-import { Sidebar, SECTION_ITEMS, QUICK_FAB_DEFAULT, type QuickFabPosition } from './Sidebar'
+import { Sidebar, QUICK_FAB_DEFAULT, type QuickFabPosition } from './Sidebar'
 import { QuickAccessBar, type QuickAccessItem } from './QuickAccessBar'
 import { TopBar } from './TopBar'
 import { MegaNav } from './MegaNav'
@@ -10,7 +10,8 @@ import { NavDock } from './NavDock'
 import { NavPalette } from './NavSearch'
 import { useNavLayout } from '@/hooks/useNavLayout'
 import { resolvePageAnimMode, usePageAnimation, type PageAnimMode } from '@/hooks/usePageAnimation'
-import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
+import { StickyTitleBar } from './StickyTitleBar'
+import { StickyHScroll } from '@/components/shared/StickyHScroll'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useNavBadge } from '@/hooks/useNavBadges'
 import { LocationLookupOverlay } from '@/modules/locations/LocationLookupOverlay'
@@ -50,7 +51,7 @@ export function AppShell() {
   const [fabPosition] = useProfilePref<QuickFabPosition>('quickfab:position', 'bottom-right')
   const [topBarHeight, setTopBarHeight] = useState(48)
   const topBarRef = useRef<HTMLDivElement>(null)
-  const [navBarHeight, setNavBarHeight] = useState(0)
+  const scrollerRef = useRef<HTMLDivElement>(null)
   const lastLookup = useRef<Exclude<PanelMode, 'hidden'>>(lookupMode === 'docked' ? 'docked' : 'floating')
   const lastInv = useRef<Exclude<PanelMode, 'hidden'>>(invMode === 'docked' ? 'docked' : 'floating')
   const lastTasks = useRef<Exclude<PanelMode, 'hidden'>>(tasksMode === 'docked' ? 'docked' : 'floating')
@@ -187,11 +188,6 @@ export function AppShell() {
   // w-14 collapsed (56px), w-64 expanded (256px)
   const sidebarWidth = mobile || navLayout !== 'sidebar' ? 0 : sidebarCollapsed ? 56 : 256
 
-  // Show the inventory quick-nav bar on inventory-section routes — except the
-  // Dashboard, which has its own large shortcut buttons.
-  const isInventoryRoute = location.pathname !== '/dashboard' &&
-    SECTION_ITEMS.inventory.some((i) => i.to && (location.pathname === i.to || location.pathname.startsWith(`${i.to}/`)))
-
   // Shared item list behind all 3 Quick Access positions (Profile → Quick
   // Access Buttons → Position) — built once, rendered by QuickAccessBar
   // either as a floating bottom-corner stack or an inline TopBar row.
@@ -234,13 +230,16 @@ export function AppShell() {
         {/* Only the scrollable content area shifts right for docked panels —
             TopBar always spans full width above the panel. */}
         <div
+          ref={scrollerRef}
           className="flex-1 overflow-auto app-scroll transition-[margin] duration-150"
-          style={{ marginRight: pushWidth || undefined, ['--inv-navbar-h' as any]: `${navBarHeight}px` }}
+          style={{ marginRight: pushWidth || undefined, ['--inv-navbar-h' as any]: '0px' }}
         >
-          {isInventoryRoute && <InventoryNavBar onHeightChange={setNavBarHeight} />}
+          <StickyTitleBar />
           <main className="p-3 sm:p-6">
             <KeepAlivePages animClass={pageAnimClass} animTick={animTick} slideDirection={slideDirection} animMode={animMode} />
           </main>
+          {/* The page itself can scroll sideways (its own scrollbar is hidden): keep a bar at the bottom of the screen. */}
+          <StickyHScroll targetRef={scrollerRef} pinLeft />
           {/* Spacer so scrolled-to-bottom content clears the FAB row */}
           <div className="h-16" />
         </div>

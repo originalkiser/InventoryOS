@@ -87,8 +87,8 @@ export function KeepAlivePages({ animClass, animTick, slideDirection, animMode }
   // ask) — kept a few ms above index.css's own 265ms sb-page-slide-* classes
   // as a buffer so the JS cleanup never fires before the animation visually
   // finishes.
-  const TRANSITION_MS = 280
-  const FLIP_MS = 500
+  const TRANSITION_MS = 600
+  const FLIP_MS = 820
   const [transition, setTransition] = useState<{ fromKey: string; toKey: string; direction: 'left' | 'right'; mode: 'push' | 'flip' } | null>(null)
   const lastTickRef = useRef(animTick)
   const containerRef = useRef<HTMLDivElement>(null)

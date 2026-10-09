@@ -43,6 +43,7 @@ export function TabsTrigger({ value, children }: { value: string; children: Reac
   const isActive = active === value
   return (
     <button
+      role="tab" aria-selected={isActive}
       onClick={() => setActive(value)}
       className={[
         'px-3 py-2 text-xs font-heading font-bold uppercase tracking-wide transition-all border-b-2 -mb-px whitespace-nowrap flex-shrink-0',

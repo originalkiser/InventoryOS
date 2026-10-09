@@ -3,6 +3,7 @@ import { flexRender, type Row, type Table as TTable } from '@tanstack/react-tabl
 import { Button, Input, Modal, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
 import { useTableStyle } from '@/hooks/useTableStyle'
+import { StickyHScroll } from '@/components/shared/StickyHScroll'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -340,6 +341,7 @@ export function DataTable<T>({
 
   // ── Export dropdown ──────────────────────────────────────────────────────────
   const [exportOpen, setExportOpen] = useState(false)
+  const tableScrollRef = useRef<HTMLDivElement>(null)
   const { style: tableStyle } = useTableStyle()
   const grid = tableStyle === 'grid'
   const [exporting, setExporting] = useState(false)
@@ -568,7 +570,7 @@ export function DataTable<T>({
       )}
 
       {/* Table */}
-      <div className={`overflow-auto ${grid ? 'sb-grid-scroll rounded-[14px] border-[1.5px] border-navy/20 bg-cream' : 'rounded border border-inky/20'} ${bodyMaxHeightClass ?? 'max-h-[calc(100vh-300px)]'}${mobileCards ? ' hidden sm:block' : ''}`}>
+      <div ref={tableScrollRef} className={`sb-hide-x-scroll overflow-auto ${grid ? 'sb-grid-scroll rounded-[14px] border-[1.5px] border-navy/20 bg-cream' : 'rounded border border-inky/20'} ${bodyMaxHeightClass ?? 'max-h-[calc(100vh-300px)]'}${mobileCards ? ' hidden sm:block' : ''}`}>
         <table
           className={`text-xs font-body table-fixed border-separate border-spacing-0${hasFill ? ' w-full' : ''}`}
           style={hasFill ? { minWidth: table.getTotalSize() + SEL_W } : { width: table.getTotalSize() + SEL_W }}
@@ -759,6 +761,8 @@ export function DataTable<T>({
           </tbody>
         </table>
       </div>
+
+      <StickyHScroll targetRef={tableScrollRef} />
 
       {/* Pagination + row count */}
       <div className="flex items-center justify-between text-xs font-body text-inky flex-wrap gap-2">

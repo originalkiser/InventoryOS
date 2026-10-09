@@ -26,7 +26,9 @@ import type { DeliverySchedule, WeekCalendar } from '@/modules/orders-v2/types'
 import { useLastOrderedInfo } from '@/modules/orders-v2/useLastOrderedInfo'
 import { uomDisplayLabel } from '@/modules/orders-v2/types'
 import { ShopExceptionsCard } from '@/modules/exceptions/shopExceptions/ShopExceptionsCard'
-import { ExceptionBadges } from '@/modules/exceptions/shopExceptions/shopExceptionTypes'
+import { ExceptionBadge, ExceptionBadges, TYPE_META, TYPE_ORDER } from '@/modules/exceptions/shopExceptions/shopExceptionTypes'
+import { LocationPicker, type PickerShop } from './LocationPicker'
+import { useTableStyle } from '@/hooks/useTableStyle'
 import { useShopExceptions } from '@/modules/exceptions/shopExceptions/useShopExceptions'
 import { TANK_EMAIL_DEFAULT, type TankEmailKind, type TankEmailTemplate, buildMonitorEmailLog, backfillTodayBlanket, buildPendingCommSet, backfillPendingBlanket } from './tankEmail'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -90,8 +92,22 @@ interface IssueRow {
 // columns and the other options here are unchanged and stay device-local.
 /** How the order config table shows a combined on hand / usage: the number marked (bold, dotted underline) with the math on hover, or the combined products listed under it. */
 type CombinedDisplay = 'hover' | 'listed'
-interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean; boxesSideBySide?: boolean; combinedDisplay?: CombinedDisplay; exceptionsView?: 'list' | 'icons' }
+interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'configuration' | 'onhand'; onHandIgnoreVmi?: boolean; boxesSideBySide?: boolean; combinedDisplay?: CombinedDisplay; exceptionsView?: 'list' | 'icons'; pickerIcons?: boolean; pickerFilters?: boolean; pickerColored?: boolean }
 const CombinedDisplayContext = createContext<CombinedDisplay>('hover')
+
+/** Class sets for this page's hand-built tables: the new grid look (rounded frame, navy header, banded rows) or the classic one (Profile → Tables). */
+function llTable(grid: boolean) {
+  return {
+    frame: grid
+      ? 'w-fit max-w-full self-start overflow-x-auto sb-grid-scroll rounded-[14px] border-[1.5px] border-navy/20 bg-cream'
+      : 'w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30',
+    headRow: grid ? 'bg-sb-navy text-sb-cream font-heading font-semibold uppercase tracking-[0.09em]' : 'border-b border-navy/30 bg-cream text-inky uppercase tracking-wide',
+    th: grid ? 'border-r border-r-sb-cream/15 last:border-r-0' : '',
+    sortBtn: grid ? 'hover:text-sky' : 'hover:text-navy',
+    row: (i: number, extra = '') => (grid ? `${i % 2 ? 'bg-band' : 'bg-cream'} border-b border-navy/10 hover:bg-sky/25 transition-colors ${extra}` : `border-b border-navy/20 ${extra}`),
+    td: grid ? 'border-r border-r-navy/10 last:border-r-0' : '',
+  }
+}
 
 // A tank monitor not reporting in > 2 days reads as offline (⚠ marker,
 // offline-email eligibility, and the On Hand view's per-product callout).
@@ -940,9 +956,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const [prefs, setPrefs] = useState<ViewPrefs>(() => {
     try {
       const p = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}')
-      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false, boxesSideBySide: p.boxesSideBySide ?? false, combinedDisplay: p.combinedDisplay === 'listed' ? 'listed' : 'hover', exceptionsView: p.exceptionsView === 'icons' ? 'icons' : 'list' }
+      return { tank: p.tank ?? [], nonVmiOfflineBtn: p.nonVmiOfflineBtn ?? false, tankView: p.tankView === 'onhand' ? 'onhand' : 'configuration', onHandIgnoreVmi: p.onHandIgnoreVmi ?? false, boxesSideBySide: p.boxesSideBySide ?? false, combinedDisplay: p.combinedDisplay === 'listed' ? 'listed' : 'hover', exceptionsView: p.exceptionsView === 'icons' ? 'icons' : 'list', pickerIcons: p.pickerIcons ?? true, pickerFilters: p.pickerFilters ?? true, pickerColored: p.pickerColored ?? true }
     }
-    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false, boxesSideBySide: false, combinedDisplay: 'hover', exceptionsView: 'list' } }
+    catch { return { tank: [], nonVmiOfflineBtn: false, tankView: 'configuration', onHandIgnoreVmi: false, boxesSideBySide: false, combinedDisplay: 'hover', exceptionsView: 'list', pickerIcons: true, pickerFilters: true, pickerColored: true } }
   })
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(prefs)) } catch { /* ignore */ } }, [prefs])
   const toggleTankHidden = (id: string) =>
@@ -1584,12 +1600,29 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   const shopLabel = (id: string | null) => loc.fieldValue(id, 'shop_city') || (id ? loc.codeOf(id) : '') || '—'
   // Each shop in the dropdown carries the icons of its pending inventory exceptions.
   const { pendingByLocation: pendingExceptions } = useShopExceptions()
+  const llt = llTable(useTableStyle().style === 'grid')
   const shopOptions = useMemo(
     () => loc.locations.filter((l) => l.active && !loc.isExcluded(l)).map((l) => {
       const pend = pendingExceptions.get(l.id)
       return { value: l.id, label: l.shop_city || l.name, suffix: pend?.length ? <ExceptionBadges list={pend} max={4} size={20} /> : undefined }
     }).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
     [loc.locations, loc.isExcluded, pendingExceptions],
+  )
+
+  // The shop picker's rows: number, name, area manager, director and the exception types pending at the shop.
+  const pickerShops = useMemo<PickerShop[]>(
+    () => loc.locations.filter((l) => l.active && !loc.isExcluded(l)).map((l) => {
+      const num = loc.codeOf(l.id)
+      const label = l.shop_city || l.name
+      return {
+        id: l.id, num,
+        name: label.replace(/^\s*[\w.]+\s*[-–]\s*/, '') || label,
+        am: loc.fieldValue(l.id, 'area_manager') || '',
+        director: loc.fieldValue(l.id, 'regional_director') || loc.fieldValue(l.id, 'director') || '',
+        types: (pendingExceptions.get(l.id) ?? []).map((e) => e.type),
+      }
+    }),
+    [loc.locations, loc.isExcluded, loc.codeOf, loc.fieldValue, pendingExceptions],
   )
 
   function openIssues(view: 'pending' | 'resolved') { setModalView(view); setEditIssue(undefined); setIssuesModalOpen(true) }
@@ -1912,7 +1945,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
     <div className="flex flex-col gap-4">
       {embedded && (
         <div className="sticky top-0 z-30 bg-cream dark:bg-[#0e2638] border-b border-navy/20 shadow-sm -mt-2 -mx-2 px-2 pt-2 pb-2">
-          <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" />
+          <LocationPicker shops={pickerShops} value={shopId} onChange={setShopId} showIcons={prefs.pickerIcons ?? true} showFilters={prefs.pickerFilters ?? true} colored={prefs.pickerColored ?? true} className="!w-full" />
         </div>
       )}
       {!embedded && (
@@ -1924,8 +1957,8 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
               past a (now potentially very tall) Shop Details card. */}
           <div className="flex flex-col gap-1 min-w-[220px]">
             <h1 className="text-lg font-bold text-navy tracking-wide uppercase">Inventory Location Lookup</h1>
-            <div className="w-64 max-w-full">
-              <Combobox options={shopOptions} value={shopId} onChange={setShopId} placeholder="Search a shop…" />
+            <div className="w-[22rem] max-w-full">
+              <LocationPicker shops={pickerShops} value={shopId} onChange={setShopId} showIcons={prefs.pickerIcons ?? true} showFilters={prefs.pickerFilters ?? true} colored={prefs.pickerColored ?? true} />
             </div>
             {!shopId && <p className="text-xs text-inky mt-0.5">Pick a shop to see its tanks, order configuration, and issues.</p>}
           </div>
@@ -1980,6 +2013,28 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                 <input type="checkbox" checked={!!prefs.nonVmiOfflineBtn} onChange={() => setPrefs((p) => ({ ...p, nonVmiOfflineBtn: !p.nonVmiOfflineBtn }))} className="accent-sky" />
                 Use non-VMI tanks for offline email button
               </label>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-body text-navy">Location picker</span>
+                <label className="flex items-center gap-2 text-xs font-body text-navy/80 cursor-pointer pl-2">
+                  <input type="checkbox" checked={prefs.pickerIcons ?? true} onChange={(e) => setPrefs((p) => ({ ...p, pickerIcons: e.target.checked }))} className="accent-sky" />Show exception icons beside shop names
+                </label>
+                <label className="flex items-center gap-2 text-xs font-body text-navy/80 cursor-pointer pl-2">
+                  <input type="checkbox" checked={prefs.pickerFilters ?? true} onChange={(e) => setPrefs((p) => ({ ...p, pickerFilters: e.target.checked }))} className="accent-sky" />Show exception filters in the list
+                </label>
+                <div className="flex items-center gap-2 pl-2">
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky">Icon color</span>
+                  <div className="inline-flex overflow-hidden rounded-full border border-navy/40">
+                    {([[false, 'Brand'], [true, 'By type']] as const).map(([val, text]) => (
+                      <button key={text} type="button" aria-pressed={(prefs.pickerColored ?? true) === val} onClick={() => setPrefs((p) => ({ ...p, pickerColored: val }))}
+                        className={`px-3 py-1 text-[11px] font-heading font-semibold uppercase tracking-wide ${(prefs.pickerColored ?? true) === val ? 'bg-navy text-cream' : 'text-navy hover:bg-navy/10'}`}>{text}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1 pl-2">
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-inky">Icon key</span>
+                  {TYPE_ORDER.map((t) => (<span key={t} className="flex items-center gap-2 text-xs font-body text-navy/80"><ExceptionBadge type={t} size={20} />{TYPE_META[t].label}</span>))}
+                </div>
+              </div>
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-body text-navy">Combined on hand / usage (order config)</span>
                 {([['hover', 'Bold with dots — show the combined products on hover'], ['listed', 'Show the combined products under the number']] as const).map(([val, text]) => (
@@ -2112,13 +2167,13 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                   ) : visibleTankCols.length === 0 ? (
                     <p className="text-xs font-mono text-inky/60">All tank columns hidden — enable some under Customize.</p>
                   ) : (
-                    <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+                    <div className={llt.frame}>
                       <table className="text-xs font-mono">
                         <thead>
-                          <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+                          <tr className={llt.headRow}>
                             {visibleTankCols.map((c) => (
-                              <th key={c.id} className={`px-3 py-2 align-bottom max-w-[10ch] ${alignCls(c.align)}`}>
-                                <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-start gap-0.5 text-left leading-tight">
+                              <th key={c.id} className={`px-3 py-2 align-bottom max-w-[10ch] ${llt.th} ${alignCls(c.align)}`}>
+                                <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className={`uppercase tracking-wide ${llt.sortBtn} transition-colors inline-flex items-start gap-0.5 text-left leading-tight`}>
                                   <span className="[overflow-wrap:normal]">{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</span>{sortArrow(tankSort, c.id)}
                                 </button>
                               </th>
@@ -2126,9 +2181,9 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                           </tr>
                         </thead>
                         <tbody>
-                          {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t) => (
-                            <tr key={t.id} className="border-b border-navy/20">
-                              {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${alignCls(c.align)}`}>{c.id === 'updated' ? renderUpdatedCell(t) : c.render(t)}</td>)}
+                          {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t, ti) => (
+                            <tr key={t.id} className={llt.row(ti)}>
+                              {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${llt.td} ${alignCls(c.align)}`}>{c.id === 'updated' ? renderUpdatedCell(t) : c.render(t)}</td>)}
                             </tr>
                           ))}
                         </tbody>
@@ -2141,21 +2196,21 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                       {onHandIgnoreVmi ? 'No tank monitors for this shop.' : 'No keep-fill/VMI tank monitors for this shop — try "Ignore VMI" to compare every tank.'}
                     </p>
                   ) : (
-                    <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+                    <div className={llt.frame}>
                       <table className="text-xs font-mono">
                         <thead>
-                          <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+                          <tr className={llt.headRow}>
                             {['Product ID', 'On Hand (Qts)', 'Droptop On Hand', 'Variance', 'Droptop Usage', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update'].map((h) => (
-                              <th key={h} className="px-3 py-2 align-bottom max-w-[10ch] [overflow-wrap:normal] leading-tight text-right first:text-left last:text-left">{h}</th>
+                              <th key={h} className={`px-3 py-2 align-bottom max-w-[10ch] [overflow-wrap:normal] leading-tight text-right first:text-left last:text-left ${llt.th}`}>{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
-                          {onHandRows.map((r) => {
+                          {onHandRows.map((r, ri) => {
                             const threshold = varianceThreshold(r.totalCapacityQt)
                             const flagged = r.netVariance != null && Math.abs(r.netVariance) > threshold
                             return (
-                              <tr key={r.productId} className="border-b border-navy/20">
+                              <tr key={r.productId} className={llt.row(ri)}>
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap text-left">{r.productId}{r.tankCount > 1 && <span className="text-inky/50"> ({r.tankCount} tanks)</span>}</td>
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{num(r.tankOnHandQt)}</td>
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap text-right">{r.droptopOnHand == null ? '—' : num(r.droptopOnHand)}</td>
@@ -2255,7 +2310,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
         // debounced) via onLayoutChange, so clicking Settings again to "exit"
         // is just turning editing chrome back off, not a separate save step.
         return (
-          <div className="rounded-2xl bg-navy/[0.06] dark:bg-black/25 p-3">
+          <div className="p-3">
           <ReactGridLayout
             className="layout"
             layout={renderGridLayout}
@@ -2761,6 +2816,7 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
   order: string[]; sizing: Record<string, number>; onResize: (id: string, deltaPx: number) => void
   onOpenConfig: () => void; onExceptionClick: (row: ConfigRow) => void
 }) {
+  const llt = llTable(useTableStyle().style === 'grid')
   const navigate = useNavigate()
   const [sort, setSort] = usePersistedJson<SortState>('location_lookup.config_sort', null)
   const [vmiFirst, setVmiFirst] = usePersistedJson<boolean>('location_lookup.vmi_first', false)
@@ -2871,15 +2927,15 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
           {columns.length === 0 ? (
             <p className="text-xs font-mono text-inky/60">All config columns hidden — enable some under Settings → Manage Columns.</p>
           ) : (
-            <div className="w-fit max-w-full self-start overflow-x-auto rounded border border-navy/30">
+            <div className={llt.frame}>
               <table className="text-xs font-mono table-fixed">
                 <thead>
-                  <tr className="border-b border-navy/30 bg-cream text-inky uppercase tracking-wide">
+                  <tr className={llt.headRow}>
                     {columns.map((c) => {
                       const w = configColWidth(c.id, sizing)
                       return (
-                        <th key={c.id} style={{ width: w, minWidth: w }} className={`relative px-3 py-2 whitespace-nowrap ${alignCls(c.align)}`}>
-                          <button onClick={() => setSort((s) => nextSort(s, c.id))} className="uppercase tracking-wide hover:text-navy transition-colors inline-flex items-center max-w-full overflow-hidden text-ellipsis">
+                        <th key={c.id} style={{ width: w, minWidth: w }} className={`relative px-3 py-2 whitespace-nowrap ${llt.th} ${alignCls(c.align)}`}>
+                          <button onClick={() => setSort((s) => nextSort(s, c.id))} className={`uppercase tracking-wide ${llt.sortBtn} transition-colors inline-flex items-center max-w-full overflow-hidden text-ellipsis`}>
                             {c.label}{sortArrow(sort, c.id)}
                           </button>
                           <ResizeHandle onResize={(delta) => onResize(c.id, delta)} />
@@ -2889,18 +2945,18 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows.map((r) => {
+                  {sortedRows.map((r, ri) => {
                     const rowIsVmi = isVmiHighlighted(r)
                     return (
-                      <tr key={`${r.vendor_id}|${r.id}`} className={`border-b border-navy/20 ${rowIsVmi ? 'bg-sky/10' : ''}`}>
+                      <tr key={`${r.vendor_id}|${r.id}`} className={llt.row(ri, rowIsVmi ? '!bg-sky/25' : '')}>
                         {columns.map((c) => {
                           const w = configColWidth(c.id, sizing)
                           return c.id === 'part' ? (
-                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden ${alignCls(c.align)}`}>
+                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden ${llt.td} ${alignCls(c.align)}`}>
                               <ConfigPartCell row={r} onClick={() => onExceptionClick(r)} />
                             </td>
                           ) : (
-                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${alignCls(c.align)}`}>{c.render(r)}</td>
+                            <td key={c.id} style={{ width: w, minWidth: w, maxWidth: w }} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${llt.td} ${alignCls(c.align)}`}>{c.render(r)}</td>
                           )
                         })}
                       </tr>
